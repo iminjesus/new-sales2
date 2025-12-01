@@ -1,4 +1,4 @@
-DD,Sold_To,Ship_To,Line1,Product Name,Pattern,Material,Inch,Qty,Amt(CUR)
+day,sold_to,ship_to,Line,product_group,pattern,material,inch,qty,amt
 3,100142,100142,PCLT,Vantra/Light truck,RA18,2020158,14,2,97
 3,100142,100142,TBR,TBR,AM09,3002649,22.5,10,4012
 3,100142,100142,TBR,TBR,AH35,3002657,17.5,2,409
