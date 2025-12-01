@@ -1,0 +1,1045 @@
+[33mcommit 78341022f59e189fcca5989b7bf89661e0b08b8b[m
+Author: unknown <jooseok.bnag@gmail.com>
+Date:   Wed Nov 26 11:52:25 2025 +1100
+
+    Local changes2
+
+ addresses.csv                                      | 11250 [32m++++[m
+ addresses.txt                                      |    24 [31m-[m
+ addresses_1.csv                                    |    23 [32m+[m
+ addresses_1_geocoded.csv                           |    23 [32m+[m
+ addresses_geocoded.csv                             |     4 [32m+[m
+ app.py                                             |   756 [32m+[m[31m-[m
+ geocode.py                                         |   397 [32m+[m[31m-[m
+ geocode_1_cache.csv                                |    23 [32m+[m
+ geocode_cache.csv                                  | 11250 [32m++++[m
+ geocoded.csv                                       |    25 [31m-[m
+ geocoded.log                                       |    47 [32m+[m[31m-[m
+ node_modules/.bin/figlet                           |    16 [32m+[m
+ node_modules/.bin/figlet.cmd                       |    17 [32m+[m
+ node_modules/.bin/figlet.ps1                       |    28 [32m+[m
+ node_modules/.package-lock.json                    |    31 [32m+[m
+ node_modules/commander/LICENSE                     |    22 [32m+[m
+ node_modules/commander/Readme.md                   |  1159 [32m+[m
+ node_modules/commander/esm.mjs                     |    16 [32m+[m
+ node_modules/commander/index.js                    |    24 [32m+[m
+ node_modules/commander/lib/argument.js             |   150 [32m+[m
+ node_modules/commander/lib/command.js              |  2777 [32m+[m
+ node_modules/commander/lib/error.js                |    39 [32m+[m
+ node_modules/commander/lib/help.js                 |   747 [32m+[m
+ node_modules/commander/lib/option.js               |   380 [32m+[m
+ node_modules/commander/lib/suggestSimilar.js       |   101 [32m+[m
+ node_modules/commander/package-support.json        |    16 [32m+[m
+ node_modules/commander/package.json                |    82 [32m+[m
+ node_modules/commander/typings/esm.d.mts           |     3 [32m+[m
+ node_modules/commander/typings/index.d.ts          |  1113 [32m+[m
+ node_modules/figlet/LICENSE.txt                    |    21 [32m+[m
+ node_modules/figlet/README.md                      |   462 [32m+[m
+ node_modules/figlet/bin/index.js                   |    96 [32m+[m
+ node_modules/figlet/dist/figlet.cjs                |  1294 [32m+[m
+ node_modules/figlet/dist/figlet.mjs                |  1295 [32m+[m
+ node_modules/figlet/dist/node-figlet.cjs           |   100 [32m+[m
+ node_modules/figlet/dist/node-figlet.mjs           |    82 [32m+[m
+ node_modules/figlet/dist/types/cjs/figlet.d.cts    |   119 [32m+[m
+ .../figlet/dist/types/cjs/node-figlet.d.cts        |   119 [32m+[m
+ node_modules/figlet/dist/types/esm/figlet.d.ts     |    82 [32m+[m
+ .../figlet/dist/types/esm/node-figlet.d.ts         |    82 [32m+[m
+ node_modules/figlet/fonts/1Row.flf                 |   218 [32m+[m
+ node_modules/figlet/fonts/3-D.flf                  |   823 [32m+[m
+ node_modules/figlet/fonts/3D Diagonal.flf          |  1670 [32m+[m
+ node_modules/figlet/fonts/3D-ASCII.flf             |  1028 [32m+[m
+ node_modules/figlet/fonts/3x5.flf                  |   617 [32m+[m
+ node_modules/figlet/fonts/4Max.flf                 |   411 [32m+[m
+ node_modules/figlet/fonts/5 Line Oblique.flf       |   617 [32m+[m
+ node_modules/figlet/fonts/AMC 3 Line.flf           |   427 [32m+[m
+ node_modules/figlet/fonts/AMC 3 Liv1.flf           |   427 [32m+[m
+ node_modules/figlet/fonts/AMC AAA01.flf            |  1549 [32m+[m
+ node_modules/figlet/fonts/AMC Neko.flf             |  1043 [32m+[m
+ node_modules/figlet/fonts/AMC Razor.flf            |   733 [32m+[m
+ node_modules/figlet/fonts/AMC Razor2.flf           |   937 [32m+[m
+ node_modules/figlet/fonts/AMC Slash.flf            |  1039 [32m+[m
+ node_modules/figlet/fonts/AMC Slider.flf           |   631 [32m+[m
+ node_modules/figlet/fonts/AMC Thin.flf             |   733 [32m+[m
+ node_modules/figlet/fonts/AMC Tubes.flf            |   835 [32m+[m
+ node_modules/figlet/fonts/AMC Untitled.flf         |   835 [32m+[m
+ node_modules/figlet/fonts/ANSI Regular.flf         |   722 [32m+[m
+ node_modules/figlet/fonts/ANSI Shadow.flf          |   722 [32m+[m
+ node_modules/figlet/fonts/ASCII 12.flf             | 32804 [32m++++++++++[m
+ node_modules/figlet/fonts/ASCII 9.flf              | 26822 [32m+++++++++[m
+ node_modules/figlet/fonts/ASCII New Roman.flf      |   421 [32m+[m
+ node_modules/figlet/fonts/Acrobatic.flf            |  1240 [32m+[m
+ node_modules/figlet/fonts/Alligator.flf            |   718 [32m+[m
+ node_modules/figlet/fonts/Alligator2.flf           |   719 [32m+[m
+ node_modules/figlet/fonts/Alpha.flf                |  2272 [32m+[m
+ node_modules/figlet/fonts/Alphabet.flf             |   732 [32m+[m
+ node_modules/figlet/fonts/Arrows.flf               |   825 [32m+[m
+ node_modules/figlet/fonts/Avatar.flf               |   629 [32m+[m
+ node_modules/figlet/fonts/B1FF.flf                 |   375 [32m+[m
+ node_modules/figlet/fonts/Babyface Lame.flf        |   514 [32m+[m
+ node_modules/figlet/fonts/Babyface Leet.flf        |   514 [32m+[m
+ node_modules/figlet/fonts/Banner.flf               |  2494 [32m+[m
+ node_modules/figlet/fonts/Banner3-D.flf            |   820 [32m+[m
+ node_modules/figlet/fonts/Banner3.flf              |   718 [32m+[m
+ node_modules/figlet/fonts/Banner4.flf              |   718 [32m+[m
+ node_modules/figlet/fonts/Barbwire.flf             |   825 [32m+[m
+ node_modules/figlet/fonts/Basic.flf                |   825 [32m+[m
+ node_modules/figlet/fonts/Bear.flf                 |   930 [32m+[m
+ node_modules/figlet/fonts/Bell.flf                 |   636 [32m+[m
+ node_modules/figlet/fonts/Benjamin.flf             |   143 [32m+[m
+ node_modules/figlet/fonts/Big ASCII 12.flf         | 59723 [32m++++++++++++++++++[m
+ node_modules/figlet/fonts/Big ASCII 9.flf          | 47759 [32m+++++++++++++++[m
+ node_modules/figlet/fonts/Big Chief.flf            |   819 [32m+[m
+ node_modules/figlet/fonts/Big Money-ne.flf         |  1148 [32m+[m
+ node_modules/figlet/fonts/Big Money-nw.flf         |  1148 [32m+[m
+ node_modules/figlet/fonts/Big Money-se.flf         |  1250 [32m+[m
+ node_modules/figlet/fonts/Big Money-sw.flf         |  1250 [32m+[m
+ node_modules/figlet/fonts/Big Mono 12.flf          | 59723 [32m++++++++++++++++++[m
+ node_modules/figlet/fonts/Big Mono 9.flf           | 47759 [32m+++++++++++++++[m
+ node_modules/figlet/fonts/Big.flf                  |  2204 [32m+[m
+ node_modules/figlet/fonts/Bigfig.flf               |   334 [32m+[m
+ node_modules/figlet/fonts/Binary.flf               |   372 [32m+[m
+ node_modules/figlet/fonts/Block.flf                |  1691 [32m+[m
+ node_modules/figlet/fonts/Blocks.flf               |  1134 [32m+[m
+ node_modules/figlet/fonts/Bloody.flf               |  1024 [32m+[m
+ node_modules/figlet/fonts/BlurVision ASCII.flf     |   922 [32m+[m
+ node_modules/figlet/fonts/Bolger.flf               |   722 [32m+[m
+ node_modules/figlet/fonts/Braced.flf               |   527 [32m+[m
+ node_modules/figlet/fonts/Bright.flf               |   616 [32m+[m
+ node_modules/figlet/fonts/Broadway KB.flf          |   324 [32m+[m
+ node_modules/figlet/fonts/Broadway.flf             |  1152 [32m+[m
+ node_modules/figlet/fonts/Bubble.flf               |  1630 [32m+[m
+ node_modules/figlet/fonts/Bulbhead.flf             |   434 [32m+[m
+ node_modules/figlet/fonts/Caligraphy.flf           |  2157 [32m+[m
+ node_modules/figlet/fonts/Caligraphy2.flf          |  2113 [32m+[m
+ node_modules/figlet/fonts/Calvin S.flf             |   314 [32m+[m
+ node_modules/figlet/fonts/Cards.flf                |   627 [32m+[m
+ node_modules/figlet/fonts/Catwalk.flf              |   824 [32m+[m
+ node_modules/figlet/fonts/Chiseled.flf             |   935 [32m+[m
+ node_modules/figlet/fonts/Chunky.flf               |   517 [32m+[m
+ node_modules/figlet/fonts/Circle.flf               |   186 [32m+[m
+ node_modules/figlet/fonts/Coinstak.flf             |   824 [32m+[m
+ node_modules/figlet/fonts/Cola.flf                 |   624 [32m+[m
+ node_modules/figlet/fonts/Colossal.flf             |  1140 [32m+[m
+ node_modules/figlet/fonts/Computer.flf             |   717 [32m+[m
+ node_modules/figlet/fonts/Contessa.flf             |   411 [32m+[m
+ node_modules/figlet/fonts/Contrast.flf             |   615 [32m+[m
+ node_modules/figlet/fonts/Cosmike.flf              |   616 [32m+[m
+ node_modules/figlet/fonts/Cosmike2.flf             |   922 [32m+[m
+ node_modules/figlet/fonts/Crawford.flf             |   842 [32m+[m
+ node_modules/figlet/fonts/Crawford2.flf            |   842 [32m+[m
+ node_modules/figlet/fonts/Crazy.flf                |  1343 [32m+[m
+ node_modules/figlet/fonts/Cricket.flf              |   842 [32m+[m
+ node_modules/figlet/fonts/Cursive.flf              |   624 [32m+[m
+ node_modules/figlet/fonts/Cyberlarge.flf           |   429 [32m+[m
+ node_modules/figlet/fonts/Cybermedium.flf          |   429 [32m+[m
+ node_modules/figlet/fonts/Cybersmall.flf           |   225 [32m+[m
+ node_modules/figlet/fonts/Cygnet.flf               |   558 [32m+[m
+ node_modules/figlet/fonts/DANC4.flf                |   429 [32m+[m
+ node_modules/figlet/fonts/DOS Rebel.flf            |  1137 [32m+[m
+ node_modules/figlet/fonts/DWhistled.flf            |  1033 [32m+[m
+ node_modules/figlet/fonts/Dancing Font.flf         |   731 [32m+[m
+ node_modules/figlet/fonts/Decimal.flf              |   373 [32m+[m
+ node_modules/figlet/fonts/Def Leppard.flf          |  5537 [32m++[m
+ node_modules/figlet/fonts/Delta Corps Priest 1.flf |   922 [32m+[m
+ node_modules/figlet/fonts/DiamFont.flf             |   718 [32m+[m
+ node_modules/figlet/fonts/Diamond.flf              |   824 [32m+[m
+ node_modules/figlet/fonts/Diet Cola.flf            |   624 [32m+[m
+ node_modules/figlet/fonts/Digital.flf              |  1286 [32m+[m
+ node_modules/figlet/fonts/Doh.flf                  |  2554 [32m+[m
+ node_modules/figlet/fonts/Doom.flf                 |   833 [32m+[m
+ node_modules/figlet/fonts/Dot Matrix.flf           |  1024 [32m+[m
+ node_modules/figlet/fonts/Double Shorts.flf        |   341 [32m+[m
+ node_modules/figlet/fonts/Double.flf               |   532 [32m+[m
+ node_modules/figlet/fonts/Dr Pepper.flf            |   569 [32m+[m
+ node_modules/figlet/fonts/Efti Chess.flf           |   519 [32m+[m
+ node_modules/figlet/fonts/Efti Font.flf            |   885 [32m+[m
+ node_modules/figlet/fonts/Efti Italic.flf          |   885 [32m+[m
+ node_modules/figlet/fonts/Efti Piti.flf            |   547 [32m+[m
+ node_modules/figlet/fonts/Efti Robot.flf           |   625 [32m+[m
+ node_modules/figlet/fonts/Efti Wall.flf            |   417 [32m+[m
+ node_modules/figlet/fonts/Efti Water.flf           |   417 [32m+[m
+ node_modules/figlet/fonts/Electronic.flf           |  1232 [32m+[m
+ node_modules/figlet/fonts/Elite.flf                |   518 [32m+[m
+ node_modules/figlet/fonts/Emboss 2.flf             |   325 [32m+[m
+ node_modules/figlet/fonts/Emboss.flf               |   325 [32m+[m
+ node_modules/figlet/fonts/Epic.flf                 |   935 [32m+[m
+ node_modules/figlet/fonts/Fender.flf               |   727 [32m+[m
+ node_modules/figlet/fonts/Filter.flf               |   547 [32m+[m
+ node_modules/figlet/fonts/Fire Font-k.flf          |   947 [32m+[m
+ node_modules/figlet/fonts/Fire Font-s.flf          |   947 [32m+[m
+ node_modules/figlet/fonts/Flipped.flf              |   420 [32m+[m
+ node_modules/figlet/fonts/Flower Power.flf         |  1043 [32m+[m
+ node_modules/figlet/fonts/Four Tops.flf            |   423 [32m+[m
+ node_modules/figlet/fonts/Fraktur.flf              |  1533 [32m+[m
+ node_modules/figlet/fonts/Fun Face.flf             |   731 [32m+[m
+ node_modules/figlet/fonts/Fun Faces.flf            |   731 [32m+[m
+ node_modules/figlet/fonts/Future.flf               |   457 [32m+[m
+ node_modules/figlet/fonts/Fuzzy.flf                |   722 [32m+[m
+ node_modules/figlet/fonts/Georgi16.flf             |  3744 [32m++[m
+ node_modules/figlet/fonts/Georgia11.flf            |  4073 [32m++[m
+ node_modules/figlet/fonts/Ghost.flf                |   949 [32m+[m
+ node_modules/figlet/fonts/Ghoulish.flf             |   731 [32m+[m
+ node_modules/figlet/fonts/Glenyn.flf               |   441 [32m+[m
+ node_modules/figlet/fonts/Goofy.flf                |   635 [32m+[m
+ node_modules/figlet/fonts/Gothic.flf               |   935 [32m+[m
+ node_modules/figlet/fonts/Graceful.flf             |   753 [32m+[m
+ node_modules/figlet/fonts/Gradient.flf             |   922 [32m+[m
+ node_modules/figlet/fonts/Graffiti.flf             |   630 [32m+[m
+ node_modules/figlet/fonts/Greek.flf                |   950 [32m+[m
+ node_modules/figlet/fonts/Heart Left.flf           |   424 [32m+[m
+ node_modules/figlet/fonts/Heart Right.flf          |   423 [32m+[m
+ node_modules/figlet/fonts/Henry 3D.flf             |   829 [32m+[m
+ node_modules/figlet/fonts/Hex.flf                  |   373 [32m+[m
+ node_modules/figlet/fonts/Hieroglyphs.flf          |   457 [32m+[m
+ node_modules/figlet/fonts/Hollywood.flf            |  1028 [32m+[m
+ node_modules/figlet/fonts/Horizontal Left.flf      |   624 [32m+[m
+ node_modules/figlet/fonts/Horizontal Right.flf     |   624 [32m+[m
+ node_modules/figlet/fonts/ICL-1900.flf             |  1345 [32m+[m
+ node_modules/figlet/fonts/Impossible.flf           |  1236 [32m+[m
+ node_modules/figlet/fonts/Invita.flf               |   615 [32m+[m
+ node_modules/figlet/fonts/Isometric1.flf           |  1146 [32m+[m
+ node_modules/figlet/fonts/Isometric2.flf           |  1146 [32m+[m
+ node_modules/figlet/fonts/Isometric3.flf           |  1146 [32m+[m
+ node_modules/figlet/fonts/Isometric4.flf           |  1146 [32m+[m
+ node_modules/figlet/fonts/Italic.flf               |   412 [32m+[m
+ node_modules/figlet/fonts/Ivrit.flf                |   900 [32m+[m
+ node_modules/figlet/fonts/JS Block Letters.flf     |   310 [32m+[m
+ node_modules/figlet/fonts/JS Bracket Letters.flf   |   412 [32m+[m
+ node_modules/figlet/fonts/JS Capital Curves.flf    |   420 [32m+[m
+ node_modules/figlet/fonts/JS Cursive.flf           |   616 [32m+[m
+ node_modules/figlet/fonts/JS Stick Letters.flf     |   412 [32m+[m
+ node_modules/figlet/fonts/Jacky.flf                |   874 [32m+[m
+ node_modules/figlet/fonts/Jazmine.flf              |  1030 [32m+[m
+ node_modules/figlet/fonts/Jerusalem.flf            |   746 [32m+[m
+ node_modules/figlet/fonts/Katakana.flf             |   823 [32m+[m
+ node_modules/figlet/fonts/Kban.flf                 |   718 [32m+[m
+ node_modules/figlet/fonts/Keyboard.flf             |   932 [32m+[m
+ node_modules/figlet/fonts/Knob.flf                 |   420 [32m+[m
+ node_modules/figlet/fonts/Konto Slant.flf          |   232 [32m+[m
+ node_modules/figlet/fonts/Konto.flf                |   232 [32m+[m
+ node_modules/figlet/fonts/LCD.flf                  |   615 [32m+[m
+ node_modules/figlet/fonts/Larry 3D 2.flf           |   924 [32m+[m
+ node_modules/figlet/fonts/Larry 3D.flf             |   924 [32m+[m
+ node_modules/figlet/fonts/Lean.flf                 |  1691 [32m+[m
+ node_modules/figlet/fonts/Letter.flf               |   840 [32m+[m
+ node_modules/figlet/fonts/Letters.flf              |   624 [32m+[m
+ node_modules/figlet/fonts/Lil Devil.flf            |   833 [32m+[m
+ node_modules/figlet/fonts/Line Blocks.flf          |   522 [32m+[m
+ node_modules/figlet/fonts/Linux.flf                |   422 [32m+[m
+ node_modules/figlet/fonts/Lockergnome.flf          |   412 [32m+[m
+ node_modules/figlet/fonts/Madrid.flf               |   416 [32m+[m
+ node_modules/figlet/fonts/Marquee.flf              |   824 [32m+[m
+ node_modules/figlet/fonts/Maxfour.flf              |   423 [32m+[m
+ node_modules/figlet/fonts/Merlin1.flf              |   841 [32m+[m
+ node_modules/figlet/fonts/Merlin2.flf              |   943 [32m+[m
+ node_modules/figlet/fonts/Mike.flf                 |   310 [32m+[m
+ node_modules/figlet/fonts/Mini.flf                 |   899 [32m+[m
+ node_modules/figlet/fonts/Mirror.flf               |  1303 [32m+[m
+ node_modules/figlet/fonts/Mnemonic.flf             |  3702 [32m++[m
+ node_modules/figlet/fonts/Modular.flf              |   732 [32m+[m
+ node_modules/figlet/fonts/Mono 12.flf              | 32804 [32m++++++++++[m
+ node_modules/figlet/fonts/Mono 9.flf               | 26822 [32m+++++++++[m
+ node_modules/figlet/fonts/Morse.flf                |   189 [32m+[m
+ node_modules/figlet/fonts/Morse2.flf               |   189 [32m+[m
+ node_modules/figlet/fonts/Moscow.flf               |   623 [32m+[m
+ node_modules/figlet/fonts/Mshebrew210.flf          |   422 [32m+[m
+ node_modules/figlet/fonts/Muzzle.flf               |   420 [32m+[m
+ node_modules/figlet/fonts/NScript.flf              |  1654 [32m+[m
+ node_modules/figlet/fonts/NT Greek.flf             |   949 [32m+[m
+ node_modules/figlet/fonts/NV Script.flf            |  2107 [32m+[m
+ node_modules/figlet/fonts/Nancyj-Fancy.flf         |   828 [32m+[m
+ node_modules/figlet/fonts/Nancyj-Improved.flf      |   826 [32m+[m
+ node_modules/figlet/fonts/Nancyj-Underlined.flf    |   826 [32m+[m
+ node_modules/figlet/fonts/Nancyj.flf               |   826 [32m+[m
+ node_modules/figlet/fonts/Nipples.flf              |   824 [32m+[m
+ node_modules/figlet/fonts/O8.flf                   |   627 [32m+[m
+ node_modules/figlet/fonts/OS2.flf                  |   734 [32m+[m
+ node_modules/figlet/fonts/Octal.flf                |   373 [32m+[m
+ node_modules/figlet/fonts/Ogre.flf                 |   626 [32m+[m
+ node_modules/figlet/fonts/Old Banner.flf           |   721 [32m+[m
+ node_modules/figlet/fonts/Pagga.flf                |   534 [32m+[m
+ node_modules/figlet/fonts/Patorjk's Cheese.flf     |  1437 [32m+[m
+ node_modules/figlet/fonts/Patorjk-HeX.flf          |  1235 [32m+[m
+ node_modules/figlet/fonts/Pawp.flf                 |   923 [32m+[m
+ node_modules/figlet/fonts/Peaks Slant.flf          |   622 [32m+[m
+ node_modules/figlet/fonts/Peaks.flf                |   824 [32m+[m
+ node_modules/figlet/fonts/Pebbles.flf              |  1028 [32m+[m
+ node_modules/figlet/fonts/Pepper.flf               |   418 [32m+[m
+ node_modules/figlet/fonts/Poison.flf               |  1239 [32m+[m
+ node_modules/figlet/fonts/Puffy.flf                |   820 [32m+[m
+ node_modules/figlet/fonts/Puzzle.flf               |   522 [32m+[m
+ node_modules/figlet/fonts/Pyramid.flf              |   836 [32m+[m
+ node_modules/figlet/fonts/Rammstein.flf            |   726 [32m+[m
+ node_modules/figlet/fonts/Rebel.flf                |  1138 [32m+[m
+ node_modules/figlet/fonts/Rectangles.flf           |   614 [32m+[m
+ node_modules/figlet/fonts/Red Phoenix.flf          |   734 [32m+[m
+ node_modules/figlet/fonts/Relief.flf               |   717 [32m+[m
+ node_modules/figlet/fonts/Relief2.flf              |   717 [32m+[m
+ node_modules/figlet/fonts/Reverse.flf              |  1125 [32m+[m
+ node_modules/figlet/fonts/Roman.flf                |  1028 [32m+[m
+ node_modules/figlet/fonts/Rot13.flf                |   367 [32m+[m
+ node_modules/figlet/fonts/Rotated.flf              |   323 [32m+[m
+ node_modules/figlet/fonts/Rounded.flf              |   717 [32m+[m
+ node_modules/figlet/fonts/Rowan Cap.flf            |   634 [32m+[m
+ node_modules/figlet/fonts/Rozzo.flf                |   717 [32m+[m
+ node_modules/figlet/fonts/RubiFont.flf             |   718 [32m+[m
+ node_modules/figlet/fonts/Runic.flf                |   632 [32m+[m
+ node_modules/figlet/fonts/Runyc.flf                |   633 [32m+[m
+ node_modules/figlet/fonts/S Blood.flf              |   634 [32m+[m
+ node_modules/figlet/fonts/SL Script.flf            |   626 [32m+[m
+ node_modules/figlet/fonts/Santa Clara.flf          |   615 [32m+[m
+ node_modules/figlet/fonts/Script.flf               |  1493 [32m+[m
+ node_modules/figlet/fonts/Serifcap.flf             |   411 [32m+[m
+ node_modules/figlet/fonts/Shaded Blocky.flf        |   618 [32m+[m
+ node_modules/figlet/fonts/Shadow.flf               |  1101 [32m+[m
+ node_modules/figlet/fonts/Shimrod.flf              |   626 [32m+[m
+ node_modules/figlet/fonts/Short.flf                |   315 [32m+[m
+ node_modules/figlet/fonts/Slant Relief.flf         |   934 [32m+[m
+ node_modules/figlet/fonts/Slant.flf                |  1295 [32m+[m
+ node_modules/figlet/fonts/Slide.flf                |   623 [32m+[m
+ node_modules/figlet/fonts/Small ASCII 12.flf       | 32804 [32m++++++++++[m
+ node_modules/figlet/fonts/Small ASCII 9.flf        | 26822 [32m+++++++++[m
+ node_modules/figlet/fonts/Small Block.flf          |  1200 [32m+[m
+ node_modules/figlet/fonts/Small Braille.flf        |   220 [32m+[m
+ node_modules/figlet/fonts/Small Caps.flf           |   522 [32m+[m
+ node_modules/figlet/fonts/Small Isometric1.flf     |   733 [32m+[m
+ node_modules/figlet/fonts/Small Keyboard.flf       |   466 [32m+[m
+ node_modules/figlet/fonts/Small Mono 12.flf        | 32804 [32m++++++++++[m
+ node_modules/figlet/fonts/Small Mono 9.flf         | 26822 [32m+++++++++[m
+ node_modules/figlet/fonts/Small Poison.flf         |   729 [32m+[m
+ node_modules/figlet/fonts/Small Script.flf         |  1097 [32m+[m
+ node_modules/figlet/fonts/Small Shadow.flf         |   899 [32m+[m
+ node_modules/figlet/fonts/Small Slant.flf          |  1097 [32m+[m
+ node_modules/figlet/fonts/Small Tengwar.flf        |   312 [32m+[m
+ node_modules/figlet/fonts/Small.flf                |  1097 [32m+[m
+ node_modules/figlet/fonts/Soft.flf                 |   742 [32m+[m
+ node_modules/figlet/fonts/Speed.flf                |  1301 [32m+[m
+ node_modules/figlet/fonts/Spliff.flf               |   527 [32m+[m
+ node_modules/figlet/fonts/Stacey.flf               |   739 [32m+[m
+ node_modules/figlet/fonts/Stampate.flf             |   722 [32m+[m
+ node_modules/figlet/fonts/Stampatello.flf          |  1380 [32m+[m
+ node_modules/figlet/fonts/Standard.flf             |  2237 [32m+[m
+ node_modules/figlet/fonts/Star Strips.flf          |   935 [32m+[m
+ node_modules/figlet/fonts/Star Wars.flf            |   719 [32m+[m
+ node_modules/figlet/fonts/Stellar.flf              |   824 [32m+[m
+ node_modules/figlet/fonts/Stforek.flf              |   423 [32m+[m
+ node_modules/figlet/fonts/Stick Letters.flf        |   412 [32m+[m
+ node_modules/figlet/fonts/Stop.flf                 |   718 [32m+[m
+ node_modules/figlet/fonts/Straight.flf             |   413 [32m+[m
+ node_modules/figlet/fonts/Stronger Than All.flf    |   924 [32m+[m
+ node_modules/figlet/fonts/Sub-Zero.flf             |   629 [32m+[m
+ node_modules/figlet/fonts/Swamp Land.flf           |   828 [32m+[m
+ node_modules/figlet/fonts/Swan.flf                 |   990 [32m+[m
+ node_modules/figlet/fonts/Sweet.flf                |  1339 [32m+[m
+ node_modules/figlet/fonts/THIS.flf                 |   720 [32m+[m
+ node_modules/figlet/fonts/Tanja.flf                |   819 [32m+[m
+ node_modules/figlet/fonts/Tengwar.flf              |  1037 [32m+[m
+ node_modules/figlet/fonts/Term.flf                 |   600 [32m+[m
+ node_modules/figlet/fonts/Terrace.flf              |  1026 [32m+[m
+ node_modules/figlet/fonts/Test1.flf                |   420 [32m+[m
+ node_modules/figlet/fonts/The Edge.flf             |   720 [32m+[m
+ node_modules/figlet/fonts/Thick.flf                |   525 [32m+[m
+ node_modules/figlet/fonts/Thin.flf                 |   625 [32m+[m
+ node_modules/figlet/fonts/Thorned.flf              |   522 [32m+[m
+ node_modules/figlet/fonts/Three Point.flf          |   321 [32m+[m
+ node_modules/figlet/fonts/Ticks Slant.flf          |   622 [32m+[m
+ node_modules/figlet/fonts/Ticks.flf                |   622 [32m+[m
+ node_modules/figlet/fonts/Tiles.flf                |   824 [32m+[m
+ node_modules/figlet/fonts/Tinker-Toy.flf           |   727 [32m+[m
+ node_modules/figlet/fonts/Tmplr.flf                |   412 [32m+[m
+ node_modules/figlet/fonts/Tombstone.flf            |   523 [32m+[m
+ node_modules/figlet/fonts/Train.flf                |   626 [32m+[m
+ node_modules/figlet/fonts/Trek.flf                 |   643 [32m+[m
+ node_modules/figlet/fonts/Tsalagi.flf              |   564 [32m+[m
+ node_modules/figlet/fonts/Tubular.flf              |   824 [32m+[m
+ node_modules/figlet/fonts/Twisted.flf              |   829 [32m+[m
+ node_modules/figlet/fonts/Two Point.flf            |   219 [32m+[m
+ node_modules/figlet/fonts/USA Flag.flf             |   632 [32m+[m
+ node_modules/figlet/fonts/Univers.flf              |  1137 [32m+[m
+ node_modules/figlet/fonts/Upside Down Text.flf     |   117 [32m+[m
+ node_modules/figlet/fonts/Varsity.flf              |   726 [32m+[m
+ node_modules/figlet/fonts/Wavescape.flf            |  1636 [32m+[m
+ node_modules/figlet/fonts/Wavy.flf                 |   903 [32m+[m
+ node_modules/figlet/fonts/Weird.flf                |   626 [32m+[m
+ node_modules/figlet/fonts/Wet Letter.flf           |   726 [32m+[m
+ node_modules/figlet/fonts/Whimsy.flf               |  1041 [32m+[m
+ node_modules/figlet/fonts/WideTerm.flf             |   132 [32m+[m
+ node_modules/figlet/fonts/Wow.flf                  |   116 [32m+[m
+ node_modules/figlet/fonts/miniwi.flf               |   414 [32m+[m
+ node_modules/figlet/importable-fonts/1Row.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/1Row.js       |   219 [32m+[m
+ node_modules/figlet/importable-fonts/3-D.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/3-D.js        |   824 [32m+[m
+ .../figlet/importable-fonts/3D Diagonal.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/3D Diagonal.js         |  1670 [32m+[m
+ node_modules/figlet/importable-fonts/3D-ASCII.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/3D-ASCII.js   |  1028 [32m+[m
+ node_modules/figlet/importable-fonts/3x5.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/3x5.js        |   618 [32m+[m
+ node_modules/figlet/importable-fonts/4Max.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/4Max.js       |   412 [32m+[m
+ .../figlet/importable-fonts/5 Line Oblique.d.ts    |     2 [32m+[m
+ .../figlet/importable-fonts/5 Line Oblique.js      |   617 [32m+[m
+ .../figlet/importable-fonts/AMC 3 Line.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC 3 Line.js |   428 [32m+[m
+ .../figlet/importable-fonts/AMC 3 Liv1.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC 3 Liv1.js |   428 [32m+[m
+ .../figlet/importable-fonts/AMC AAA01.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC AAA01.js  |  1550 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Neko.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Neko.js   |  1044 [32m+[m
+ .../figlet/importable-fonts/AMC Razor.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Razor.js  |   734 [32m+[m
+ .../figlet/importable-fonts/AMC Razor2.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Razor2.js |   938 [32m+[m
+ .../figlet/importable-fonts/AMC Slash.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Slash.js  |  1040 [32m+[m
+ .../figlet/importable-fonts/AMC Slider.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Slider.js |   632 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Thin.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Thin.js   |   734 [32m+[m
+ .../figlet/importable-fonts/AMC Tubes.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/AMC Tubes.js  |   836 [32m+[m
+ .../figlet/importable-fonts/AMC Untitled.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/AMC Untitled.js        |   836 [32m+[m
+ .../figlet/importable-fonts/ANSI Regular.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/ANSI Regular.js        |   722 [32m+[m
+ .../figlet/importable-fonts/ANSI Shadow.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/ANSI Shadow.js         |   722 [32m+[m
+ node_modules/figlet/importable-fonts/ASCII 12.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/ASCII 12.js   | 32805 [32m++++++++++[m
+ node_modules/figlet/importable-fonts/ASCII 9.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/ASCII 9.js    | 26823 [32m+++++++++[m
+ .../figlet/importable-fonts/ASCII New Roman.d.ts   |     2 [32m+[m
+ .../figlet/importable-fonts/ASCII New Roman.js     |   422 [32m+[m
+ .../figlet/importable-fonts/Acrobatic.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Acrobatic.js  |  1241 [32m+[m
+ .../figlet/importable-fonts/Alligator.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Alligator.js  |   719 [32m+[m
+ .../figlet/importable-fonts/Alligator2.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Alligator2.js |   720 [32m+[m
+ node_modules/figlet/importable-fonts/Alpha.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Alpha.js      |  2273 [32m+[m
+ node_modules/figlet/importable-fonts/Alphabet.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Alphabet.js   |   733 [32m+[m
+ node_modules/figlet/importable-fonts/Arrows.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Arrows.js     |   826 [32m+[m
+ node_modules/figlet/importable-fonts/Avatar.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Avatar.js     |   630 [32m+[m
+ node_modules/figlet/importable-fonts/B1FF.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/B1FF.js       |   376 [32m+[m
+ .../figlet/importable-fonts/Babyface Lame.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Babyface Lame.js       |   515 [32m+[m
+ .../figlet/importable-fonts/Babyface Leet.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Babyface Leet.js       |   515 [32m+[m
+ node_modules/figlet/importable-fonts/Banner.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Banner.js     |  2495 [32m+[m
+ .../figlet/importable-fonts/Banner3-D.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Banner3-D.js  |   821 [32m+[m
+ node_modules/figlet/importable-fonts/Banner3.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Banner3.js    |   719 [32m+[m
+ node_modules/figlet/importable-fonts/Banner4.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Banner4.js    |   719 [32m+[m
+ node_modules/figlet/importable-fonts/Barbwire.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Barbwire.js   |   826 [32m+[m
+ node_modules/figlet/importable-fonts/Basic.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Basic.js      |   826 [32m+[m
+ node_modules/figlet/importable-fonts/Bear.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bear.js       |   930 [32m+[m
+ node_modules/figlet/importable-fonts/Bell.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bell.js       |   637 [32m+[m
+ node_modules/figlet/importable-fonts/Benjamin.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Benjamin.js   |   144 [32m+[m
+ .../figlet/importable-fonts/Big ASCII 12.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Big ASCII 12.js        | 59724 [32m+++++++++++++++++++[m
+ .../figlet/importable-fonts/Big ASCII 9.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Big ASCII 9.js         | 47760 [32m+++++++++++++++[m
+ .../figlet/importable-fonts/Big Chief.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Big Chief.js  |   820 [32m+[m
+ .../figlet/importable-fonts/Big Money-ne.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Big Money-ne.js        |  1149 [32m+[m
+ .../figlet/importable-fonts/Big Money-nw.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Big Money-nw.js        |  1149 [32m+[m
+ .../figlet/importable-fonts/Big Money-se.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Big Money-se.js        |  1251 [32m+[m
+ .../figlet/importable-fonts/Big Money-sw.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Big Money-sw.js        |  1251 [32m+[m
+ .../figlet/importable-fonts/Big Mono 12.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Big Mono 12.js         | 59724 [32m+++++++++++++++++++[m
+ .../figlet/importable-fonts/Big Mono 9.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Big Mono 9.js | 47760 [32m+++++++++++++++[m
+ node_modules/figlet/importable-fonts/Big.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Big.js        |  2205 [32m+[m
+ node_modules/figlet/importable-fonts/Bigfig.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bigfig.js     |   335 [32m+[m
+ node_modules/figlet/importable-fonts/Binary.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Binary.js     |   373 [32m+[m
+ node_modules/figlet/importable-fonts/Block.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Block.js      |  1692 [32m+[m
+ node_modules/figlet/importable-fonts/Blocks.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Blocks.js     |  1135 [32m+[m
+ node_modules/figlet/importable-fonts/Bloody.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bloody.js     |  1024 [32m+[m
+ .../figlet/importable-fonts/BlurVision ASCII.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/BlurVision ASCII.js    |   923 [32m+[m
+ node_modules/figlet/importable-fonts/Bolger.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bolger.js     |   723 [32m+[m
+ node_modules/figlet/importable-fonts/Braced.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Braced.js     |   527 [32m+[m
+ node_modules/figlet/importable-fonts/Bright.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bright.js     |   617 [32m+[m
+ .../figlet/importable-fonts/Broadway KB.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Broadway KB.js         |   325 [32m+[m
+ node_modules/figlet/importable-fonts/Broadway.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Broadway.js   |  1153 [32m+[m
+ node_modules/figlet/importable-fonts/Bubble.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bubble.js     |  1631 [32m+[m
+ node_modules/figlet/importable-fonts/Bulbhead.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Bulbhead.js   |   435 [32m+[m
+ .../figlet/importable-fonts/Caligraphy.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Caligraphy.js |  2158 [32m+[m
+ .../figlet/importable-fonts/Caligraphy2.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Caligraphy2.js         |  2114 [32m+[m
+ node_modules/figlet/importable-fonts/Calvin S.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Calvin S.js   |   314 [32m+[m
+ node_modules/figlet/importable-fonts/Cards.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cards.js      |   628 [32m+[m
+ node_modules/figlet/importable-fonts/Catwalk.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Catwalk.js    |   825 [32m+[m
+ node_modules/figlet/importable-fonts/Chiseled.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Chiseled.js   |   935 [32m+[m
+ node_modules/figlet/importable-fonts/Chunky.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Chunky.js     |   518 [32m+[m
+ node_modules/figlet/importable-fonts/Circle.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Circle.js     |   187 [32m+[m
+ node_modules/figlet/importable-fonts/Coinstak.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Coinstak.js   |   825 [32m+[m
+ node_modules/figlet/importable-fonts/Cola.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cola.js       |   624 [32m+[m
+ node_modules/figlet/importable-fonts/Colossal.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Colossal.js   |  1141 [32m+[m
+ node_modules/figlet/importable-fonts/Computer.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Computer.js   |   718 [32m+[m
+ node_modules/figlet/importable-fonts/Contessa.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Contessa.js   |   412 [32m+[m
+ node_modules/figlet/importable-fonts/Contrast.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Contrast.js   |   616 [32m+[m
+ node_modules/figlet/importable-fonts/Cosmike.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cosmike.js    |   617 [32m+[m
+ node_modules/figlet/importable-fonts/Cosmike2.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cosmike2.js   |   923 [32m+[m
+ node_modules/figlet/importable-fonts/Crawford.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Crawford.js   |   843 [32m+[m
+ .../figlet/importable-fonts/Crawford2.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Crawford2.js  |   843 [32m+[m
+ node_modules/figlet/importable-fonts/Crazy.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Crazy.js      |  1344 [32m+[m
+ node_modules/figlet/importable-fonts/Cricket.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cricket.js    |   843 [32m+[m
+ node_modules/figlet/importable-fonts/Cursive.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cursive.js    |   625 [32m+[m
+ .../figlet/importable-fonts/Cyberlarge.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cyberlarge.js |   430 [32m+[m
+ .../figlet/importable-fonts/Cybermedium.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Cybermedium.js         |   430 [32m+[m
+ .../figlet/importable-fonts/Cybersmall.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cybersmall.js |   226 [32m+[m
+ node_modules/figlet/importable-fonts/Cygnet.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Cygnet.js     |   558 [32m+[m
+ node_modules/figlet/importable-fonts/DANC4.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/DANC4.js      |   430 [32m+[m
+ .../figlet/importable-fonts/DOS Rebel.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/DOS Rebel.js  |  1138 [32m+[m
+ .../figlet/importable-fonts/DWhistled.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/DWhistled.js  |  1034 [32m+[m
+ .../figlet/importable-fonts/Dancing Font.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Dancing Font.js        |   732 [32m+[m
+ node_modules/figlet/importable-fonts/Decimal.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Decimal.js    |   374 [32m+[m
+ .../figlet/importable-fonts/Def Leppard.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Def Leppard.js         |  5538 [32m++[m
+ .../importable-fonts/Delta Corps Priest 1.d.ts     |     2 [32m+[m
+ .../importable-fonts/Delta Corps Priest 1.js       |   923 [32m+[m
+ node_modules/figlet/importable-fonts/DiamFont.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/DiamFont.js   |   719 [32m+[m
+ node_modules/figlet/importable-fonts/Diamond.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Diamond.js    |   825 [32m+[m
+ .../figlet/importable-fonts/Diet Cola.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Diet Cola.js  |   624 [32m+[m
+ node_modules/figlet/importable-fonts/Digital.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Digital.js    |  1287 [32m+[m
+ node_modules/figlet/importable-fonts/Doh.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Doh.js        |  2555 [32m+[m
+ node_modules/figlet/importable-fonts/Doom.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Doom.js       |   834 [32m+[m
+ .../figlet/importable-fonts/Dot Matrix.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Dot Matrix.js |  1025 [32m+[m
+ .../figlet/importable-fonts/Double Shorts.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Double Shorts.js       |   342 [32m+[m
+ node_modules/figlet/importable-fonts/Double.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Double.js     |   533 [32m+[m
+ .../figlet/importable-fonts/Dr Pepper.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Dr Pepper.js  |   570 [32m+[m
+ .../figlet/importable-fonts/Efti Chess.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Efti Chess.js |   520 [32m+[m
+ .../figlet/importable-fonts/Efti Font.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Efti Font.js  |   886 [32m+[m
+ .../figlet/importable-fonts/Efti Italic.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Efti Italic.js         |   886 [32m+[m
+ .../figlet/importable-fonts/Efti Piti.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Efti Piti.js  |   548 [32m+[m
+ .../figlet/importable-fonts/Efti Robot.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Efti Robot.js |   626 [32m+[m
+ .../figlet/importable-fonts/Efti Wall.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Efti Wall.js  |   418 [32m+[m
+ .../figlet/importable-fonts/Efti Water.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Efti Water.js |   418 [32m+[m
+ .../figlet/importable-fonts/Electronic.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Electronic.js |  1232 [32m+[m
+ node_modules/figlet/importable-fonts/Elite.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Elite.js      |   518 [32m+[m
+ node_modules/figlet/importable-fonts/Emboss 2.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Emboss 2.js   |   326 [32m+[m
+ node_modules/figlet/importable-fonts/Emboss.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Emboss.js     |   326 [32m+[m
+ node_modules/figlet/importable-fonts/Epic.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Epic.js       |   936 [32m+[m
+ node_modules/figlet/importable-fonts/Fender.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Fender.js     |   728 [32m+[m
+ node_modules/figlet/importable-fonts/Filter.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Filter.js     |   547 [32m+[m
+ .../figlet/importable-fonts/Fire Font-k.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Fire Font-k.js         |   947 [32m+[m
+ .../figlet/importable-fonts/Fire Font-s.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Fire Font-s.js         |   947 [32m+[m
+ node_modules/figlet/importable-fonts/Flipped.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Flipped.js    |   420 [32m+[m
+ .../figlet/importable-fonts/Flower Power.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Flower Power.js        |  1043 [32m+[m
+ .../figlet/importable-fonts/Four Tops.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Four Tops.js  |   424 [32m+[m
+ node_modules/figlet/importable-fonts/Fraktur.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Fraktur.js    |  1534 [32m+[m
+ node_modules/figlet/importable-fonts/Fun Face.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Fun Face.js   |   732 [32m+[m
+ .../figlet/importable-fonts/Fun Faces.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Fun Faces.js  |   732 [32m+[m
+ node_modules/figlet/importable-fonts/Future.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Future.js     |   458 [32m+[m
+ node_modules/figlet/importable-fonts/Fuzzy.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Fuzzy.js      |   723 [32m+[m
+ node_modules/figlet/importable-fonts/Georgi16.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Georgi16.js   |  3745 [32m++[m
+ .../figlet/importable-fonts/Georgia11.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Georgia11.js  |  4074 [32m++[m
+ node_modules/figlet/importable-fonts/Ghost.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Ghost.js      |   949 [32m+[m
+ node_modules/figlet/importable-fonts/Ghoulish.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Ghoulish.js   |   731 [32m+[m
+ node_modules/figlet/importable-fonts/Glenyn.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Glenyn.js     |   441 [32m+[m
+ node_modules/figlet/importable-fonts/Goofy.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Goofy.js      |   636 [32m+[m
+ node_modules/figlet/importable-fonts/Gothic.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Gothic.js     |   936 [32m+[m
+ node_modules/figlet/importable-fonts/Graceful.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Graceful.js   |   754 [32m+[m
+ node_modules/figlet/importable-fonts/Gradient.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Gradient.js   |   923 [32m+[m
+ node_modules/figlet/importable-fonts/Graffiti.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Graffiti.js   |   630 [32m+[m
+ node_modules/figlet/importable-fonts/Greek.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Greek.js      |   951 [32m+[m
+ .../figlet/importable-fonts/Heart Left.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Heart Left.js |   425 [32m+[m
+ .../figlet/importable-fonts/Heart Right.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Heart Right.js         |   424 [32m+[m
+ node_modules/figlet/importable-fonts/Henry 3D.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Henry 3D.js   |   829 [32m+[m
+ node_modules/figlet/importable-fonts/Hex.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Hex.js        |   374 [32m+[m
+ .../figlet/importable-fonts/Hieroglyphs.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Hieroglyphs.js         |   457 [32m+[m
+ .../figlet/importable-fonts/Hollywood.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Hollywood.js  |  1029 [32m+[m
+ .../figlet/importable-fonts/Horizontal Left.d.ts   |     2 [32m+[m
+ .../figlet/importable-fonts/Horizontal Left.js     |   625 [32m+[m
+ .../figlet/importable-fonts/Horizontal Right.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/Horizontal Right.js    |   625 [32m+[m
+ node_modules/figlet/importable-fonts/ICL-1900.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/ICL-1900.js   |  1346 [32m+[m
+ .../figlet/importable-fonts/Impossible.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Impossible.js |  1236 [32m+[m
+ node_modules/figlet/importable-fonts/Invita.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Invita.js     |   616 [32m+[m
+ .../figlet/importable-fonts/Isometric1.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Isometric1.js |  1147 [32m+[m
+ .../figlet/importable-fonts/Isometric2.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Isometric2.js |  1147 [32m+[m
+ .../figlet/importable-fonts/Isometric3.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Isometric3.js |  1147 [32m+[m
+ .../figlet/importable-fonts/Isometric4.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Isometric4.js |  1147 [32m+[m
+ node_modules/figlet/importable-fonts/Italic.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Italic.js     |   413 [32m+[m
+ node_modules/figlet/importable-fonts/Ivrit.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Ivrit.js      |   901 [32m+[m
+ .../figlet/importable-fonts/JS Block Letters.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/JS Block Letters.js    |   311 [32m+[m
+ .../importable-fonts/JS Bracket Letters.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/JS Bracket Letters.js  |   413 [32m+[m
+ .../figlet/importable-fonts/JS Capital Curves.d.ts |     2 [32m+[m
+ .../figlet/importable-fonts/JS Capital Curves.js   |   420 [32m+[m
+ .../figlet/importable-fonts/JS Cursive.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/JS Cursive.js |   617 [32m+[m
+ .../figlet/importable-fonts/JS Stick Letters.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/JS Stick Letters.js    |   413 [32m+[m
+ node_modules/figlet/importable-fonts/Jacky.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Jacky.js      |   875 [32m+[m
+ node_modules/figlet/importable-fonts/Jazmine.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Jazmine.js    |  1031 [32m+[m
+ .../figlet/importable-fonts/Jerusalem.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Jerusalem.js  |   747 [32m+[m
+ node_modules/figlet/importable-fonts/Katakana.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Katakana.js   |   824 [32m+[m
+ node_modules/figlet/importable-fonts/Kban.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Kban.js       |   719 [32m+[m
+ node_modules/figlet/importable-fonts/Keyboard.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Keyboard.js   |   933 [32m+[m
+ node_modules/figlet/importable-fonts/Knob.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Knob.js       |   420 [32m+[m
+ .../figlet/importable-fonts/Konto Slant.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Konto Slant.js         |   233 [32m+[m
+ node_modules/figlet/importable-fonts/Konto.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Konto.js      |   233 [32m+[m
+ node_modules/figlet/importable-fonts/LCD.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/LCD.js        |   616 [32m+[m
+ .../figlet/importable-fonts/Larry 3D 2.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Larry 3D 2.js |   925 [32m+[m
+ node_modules/figlet/importable-fonts/Larry 3D.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Larry 3D.js   |   925 [32m+[m
+ node_modules/figlet/importable-fonts/Lean.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Lean.js       |  1692 [32m+[m
+ node_modules/figlet/importable-fonts/Letter.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Letter.js     |   841 [32m+[m
+ node_modules/figlet/importable-fonts/Letters.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Letters.js    |   625 [32m+[m
+ .../figlet/importable-fonts/Lil Devil.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Lil Devil.js  |   834 [32m+[m
+ .../figlet/importable-fonts/Line Blocks.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Line Blocks.js         |   522 [32m+[m
+ node_modules/figlet/importable-fonts/Linux.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Linux.js      |   423 [32m+[m
+ .../figlet/importable-fonts/Lockergnome.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Lockergnome.js         |   413 [32m+[m
+ node_modules/figlet/importable-fonts/Madrid.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Madrid.js     |   417 [32m+[m
+ node_modules/figlet/importable-fonts/Marquee.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Marquee.js    |   825 [32m+[m
+ node_modules/figlet/importable-fonts/Maxfour.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Maxfour.js    |   424 [32m+[m
+ node_modules/figlet/importable-fonts/Merlin1.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Merlin1.js    |   841 [32m+[m
+ node_modules/figlet/importable-fonts/Merlin2.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Merlin2.js    |   943 [32m+[m
+ node_modules/figlet/importable-fonts/Mike.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Mike.js       |   311 [32m+[m
+ node_modules/figlet/importable-fonts/Mini.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Mini.js       |   900 [32m+[m
+ node_modules/figlet/importable-fonts/Mirror.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Mirror.js     |  1304 [32m+[m
+ node_modules/figlet/importable-fonts/Mnemonic.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Mnemonic.js   |  3703 [32m++[m
+ node_modules/figlet/importable-fonts/Modular.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Modular.js    |   733 [32m+[m
+ node_modules/figlet/importable-fonts/Mono 12.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Mono 12.js    | 32805 [32m++++++++++[m
+ node_modules/figlet/importable-fonts/Mono 9.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Mono 9.js     | 26823 [32m+++++++++[m
+ node_modules/figlet/importable-fonts/Morse.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Morse.js      |   190 [32m+[m
+ node_modules/figlet/importable-fonts/Morse2.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Morse2.js     |   190 [32m+[m
+ node_modules/figlet/importable-fonts/Moscow.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Moscow.js     |   624 [32m+[m
+ .../figlet/importable-fonts/Mshebrew210.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Mshebrew210.js         |   423 [32m+[m
+ node_modules/figlet/importable-fonts/Muzzle.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Muzzle.js     |   421 [32m+[m
+ node_modules/figlet/importable-fonts/NScript.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/NScript.js    |  1655 [32m+[m
+ node_modules/figlet/importable-fonts/NT Greek.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/NT Greek.js   |   950 [32m+[m
+ .../figlet/importable-fonts/NV Script.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/NV Script.js  |  2108 [32m+[m
+ .../figlet/importable-fonts/Nancyj-Fancy.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Nancyj-Fancy.js        |   829 [32m+[m
+ .../figlet/importable-fonts/Nancyj-Improved.d.ts   |     2 [32m+[m
+ .../figlet/importable-fonts/Nancyj-Improved.js     |   827 [32m+[m
+ .../figlet/importable-fonts/Nancyj-Underlined.d.ts |     2 [32m+[m
+ .../figlet/importable-fonts/Nancyj-Underlined.js   |   827 [32m+[m
+ node_modules/figlet/importable-fonts/Nancyj.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Nancyj.js     |   827 [32m+[m
+ node_modules/figlet/importable-fonts/Nipples.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Nipples.js    |   825 [32m+[m
+ node_modules/figlet/importable-fonts/O8.d.ts       |     2 [32m+[m
+ node_modules/figlet/importable-fonts/O8.js         |   628 [32m+[m
+ node_modules/figlet/importable-fonts/OS2.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/OS2.js        |   735 [32m+[m
+ node_modules/figlet/importable-fonts/Octal.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Octal.js      |   374 [32m+[m
+ node_modules/figlet/importable-fonts/Ogre.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Ogre.js       |   627 [32m+[m
+ .../figlet/importable-fonts/Old Banner.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Old Banner.js |   722 [32m+[m
+ node_modules/figlet/importable-fonts/Pagga.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Pagga.js      |   535 [32m+[m
+ .../figlet/importable-fonts/Patorjk's Cheese.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/Patorjk's Cheese.js    |  1437 [32m+[m
+ .../figlet/importable-fonts/Patorjk-HeX.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Patorjk-HeX.js         |  1235 [32m+[m
+ node_modules/figlet/importable-fonts/Pawp.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Pawp.js       |   924 [32m+[m
+ .../figlet/importable-fonts/Peaks Slant.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Peaks Slant.js         |   623 [32m+[m
+ node_modules/figlet/importable-fonts/Peaks.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Peaks.js      |   825 [32m+[m
+ node_modules/figlet/importable-fonts/Pebbles.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Pebbles.js    |  1029 [32m+[m
+ node_modules/figlet/importable-fonts/Pepper.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Pepper.js     |   419 [32m+[m
+ node_modules/figlet/importable-fonts/Poison.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Poison.js     |  1240 [32m+[m
+ node_modules/figlet/importable-fonts/Puffy.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Puffy.js      |   821 [32m+[m
+ node_modules/figlet/importable-fonts/Puzzle.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Puzzle.js     |   523 [32m+[m
+ node_modules/figlet/importable-fonts/Pyramid.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Pyramid.js    |   837 [32m+[m
+ .../figlet/importable-fonts/Rammstein.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rammstein.js  |   726 [32m+[m
+ node_modules/figlet/importable-fonts/Rebel.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rebel.js      |  1139 [32m+[m
+ .../figlet/importable-fonts/Rectangles.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rectangles.js |   615 [32m+[m
+ .../figlet/importable-fonts/Red Phoenix.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Red Phoenix.js         |   735 [32m+[m
+ node_modules/figlet/importable-fonts/Relief.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Relief.js     |   718 [32m+[m
+ node_modules/figlet/importable-fonts/Relief2.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Relief2.js    |   718 [32m+[m
+ node_modules/figlet/importable-fonts/Reverse.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Reverse.js    |  1126 [32m+[m
+ node_modules/figlet/importable-fonts/Roman.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Roman.js      |  1029 [32m+[m
+ node_modules/figlet/importable-fonts/Rot13.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rot13.js      |   368 [32m+[m
+ node_modules/figlet/importable-fonts/Rotated.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rotated.js    |   323 [32m+[m
+ node_modules/figlet/importable-fonts/Rounded.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rounded.js    |   718 [32m+[m
+ .../figlet/importable-fonts/Rowan Cap.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rowan Cap.js  |   635 [32m+[m
+ node_modules/figlet/importable-fonts/Rozzo.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Rozzo.js      |   718 [32m+[m
+ node_modules/figlet/importable-fonts/RubiFont.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/RubiFont.js   |   719 [32m+[m
+ node_modules/figlet/importable-fonts/Runic.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Runic.js      |   633 [32m+[m
+ node_modules/figlet/importable-fonts/Runyc.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Runyc.js      |   634 [32m+[m
+ node_modules/figlet/importable-fonts/S Blood.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/S Blood.js    |   635 [32m+[m
+ .../figlet/importable-fonts/SL Script.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/SL Script.js  |   627 [32m+[m
+ .../figlet/importable-fonts/Santa Clara.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Santa Clara.js         |   616 [32m+[m
+ node_modules/figlet/importable-fonts/Script.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Script.js     |  1494 [32m+[m
+ node_modules/figlet/importable-fonts/Serifcap.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Serifcap.js   |   412 [32m+[m
+ .../figlet/importable-fonts/Shaded Blocky.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Shaded Blocky.js       |   619 [32m+[m
+ node_modules/figlet/importable-fonts/Shadow.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Shadow.js     |  1102 [32m+[m
+ node_modules/figlet/importable-fonts/Shimrod.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Shimrod.js    |   627 [32m+[m
+ node_modules/figlet/importable-fonts/Short.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Short.js      |   316 [32m+[m
+ .../figlet/importable-fonts/Slant Relief.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Slant Relief.js        |   935 [32m+[m
+ node_modules/figlet/importable-fonts/Slant.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Slant.js      |  1296 [32m+[m
+ node_modules/figlet/importable-fonts/Slide.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Slide.js      |   624 [32m+[m
+ .../figlet/importable-fonts/Small ASCII 12.d.ts    |     2 [32m+[m
+ .../figlet/importable-fonts/Small ASCII 12.js      | 32805 [32m++++++++++[m
+ .../figlet/importable-fonts/Small ASCII 9.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Small ASCII 9.js       | 26823 [32m+++++++++[m
+ .../figlet/importable-fonts/Small Block.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Small Block.js         |  1201 [32m+[m
+ .../figlet/importable-fonts/Small Braille.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Small Braille.js       |   221 [32m+[m
+ .../figlet/importable-fonts/Small Caps.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Small Caps.js |   522 [32m+[m
+ .../figlet/importable-fonts/Small Isometric1.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/Small Isometric1.js    |   734 [32m+[m
+ .../figlet/importable-fonts/Small Keyboard.d.ts    |     2 [32m+[m
+ .../figlet/importable-fonts/Small Keyboard.js      |   467 [32m+[m
+ .../figlet/importable-fonts/Small Mono 12.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Small Mono 12.js       | 32805 [32m++++++++++[m
+ .../figlet/importable-fonts/Small Mono 9.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Small Mono 9.js        | 26823 [32m+++++++++[m
+ .../figlet/importable-fonts/Small Poison.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Small Poison.js        |   730 [32m+[m
+ .../figlet/importable-fonts/Small Script.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Small Script.js        |  1098 [32m+[m
+ .../figlet/importable-fonts/Small Shadow.d.ts      |     2 [32m+[m
+ .../figlet/importable-fonts/Small Shadow.js        |   900 [32m+[m
+ .../figlet/importable-fonts/Small Slant.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Small Slant.js         |  1098 [32m+[m
+ .../figlet/importable-fonts/Small Tengwar.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Small Tengwar.js       |   313 [32m+[m
+ node_modules/figlet/importable-fonts/Small.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Small.js      |  1098 [32m+[m
+ node_modules/figlet/importable-fonts/Soft.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Soft.js       |   742 [32m+[m
+ node_modules/figlet/importable-fonts/Speed.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Speed.js      |  1302 [32m+[m
+ node_modules/figlet/importable-fonts/Spliff.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Spliff.js     |   527 [32m+[m
+ node_modules/figlet/importable-fonts/Stacey.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Stacey.js     |   740 [32m+[m
+ node_modules/figlet/importable-fonts/Stampate.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Stampate.js   |   723 [32m+[m
+ .../figlet/importable-fonts/Stampatello.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Stampatello.js         |  1381 [32m+[m
+ node_modules/figlet/importable-fonts/Standard.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Standard.js   |  2237 [32m+[m
+ .../figlet/importable-fonts/Star Strips.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Star Strips.js         |   936 [32m+[m
+ .../figlet/importable-fonts/Star Wars.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Star Wars.js  |   720 [32m+[m
+ node_modules/figlet/importable-fonts/Stellar.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Stellar.js    |   825 [32m+[m
+ node_modules/figlet/importable-fonts/Stforek.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Stforek.js    |   424 [32m+[m
+ .../figlet/importable-fonts/Stick Letters.d.ts     |     2 [32m+[m
+ .../figlet/importable-fonts/Stick Letters.js       |   413 [32m+[m
+ node_modules/figlet/importable-fonts/Stop.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Stop.js       |   719 [32m+[m
+ node_modules/figlet/importable-fonts/Straight.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Straight.js   |   414 [32m+[m
+ .../figlet/importable-fonts/Stronger Than All.d.ts |     2 [32m+[m
+ .../figlet/importable-fonts/Stronger Than All.js   |   924 [32m+[m
+ node_modules/figlet/importable-fonts/Sub-Zero.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Sub-Zero.js   |   630 [32m+[m
+ .../figlet/importable-fonts/Swamp Land.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Swamp Land.js |   829 [32m+[m
+ node_modules/figlet/importable-fonts/Swan.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Swan.js       |   990 [32m+[m
+ node_modules/figlet/importable-fonts/Sweet.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Sweet.js      |  1340 [32m+[m
+ node_modules/figlet/importable-fonts/THIS.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/THIS.js       |   721 [32m+[m
+ node_modules/figlet/importable-fonts/Tanja.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tanja.js      |   820 [32m+[m
+ node_modules/figlet/importable-fonts/Tengwar.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tengwar.js    |  1038 [32m+[m
+ node_modules/figlet/importable-fonts/Term.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Term.js       |   601 [32m+[m
+ node_modules/figlet/importable-fonts/Terrace.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Terrace.js    |  1027 [32m+[m
+ node_modules/figlet/importable-fonts/Test1.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Test1.js      |   421 [32m+[m
+ node_modules/figlet/importable-fonts/The Edge.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/The Edge.js   |   721 [32m+[m
+ node_modules/figlet/importable-fonts/Thick.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Thick.js      |   526 [32m+[m
+ node_modules/figlet/importable-fonts/Thin.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Thin.js       |   626 [32m+[m
+ node_modules/figlet/importable-fonts/Thorned.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Thorned.js    |   523 [32m+[m
+ .../figlet/importable-fonts/Three Point.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Three Point.js         |   322 [32m+[m
+ .../figlet/importable-fonts/Ticks Slant.d.ts       |     2 [32m+[m
+ .../figlet/importable-fonts/Ticks Slant.js         |   623 [32m+[m
+ node_modules/figlet/importable-fonts/Ticks.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Ticks.js      |   623 [32m+[m
+ node_modules/figlet/importable-fonts/Tiles.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tiles.js      |   825 [32m+[m
+ .../figlet/importable-fonts/Tinker-Toy.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tinker-Toy.js |   728 [32m+[m
+ .../figlet/importable-fonts/Tombstone.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tombstone.js  |   524 [32m+[m
+ node_modules/figlet/importable-fonts/Train.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Train.js      |   627 [32m+[m
+ node_modules/figlet/importable-fonts/Trek.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Trek.js       |   644 [32m+[m
+ node_modules/figlet/importable-fonts/Tsalagi.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tsalagi.js    |   565 [32m+[m
+ node_modules/figlet/importable-fonts/Tubular.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Tubular.js    |   825 [32m+[m
+ node_modules/figlet/importable-fonts/Twisted.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Twisted.js    |   829 [32m+[m
+ .../figlet/importable-fonts/Two Point.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Two Point.js  |   220 [32m+[m
+ node_modules/figlet/importable-fonts/USA Flag.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/USA Flag.js   |   633 [32m+[m
+ node_modules/figlet/importable-fonts/Univers.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Univers.js    |  1138 [32m+[m
+ .../figlet/importable-fonts/Upside Down Text.d.ts  |     2 [32m+[m
+ .../figlet/importable-fonts/Upside Down Text.js    |   118 [32m+[m
+ node_modules/figlet/importable-fonts/Varsity.d.ts  |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Varsity.js    |   726 [32m+[m
+ .../figlet/importable-fonts/Wavescape.d.ts         |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Wavescape.js  |  1636 [32m+[m
+ node_modules/figlet/importable-fonts/Wavy.d.ts     |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Wavy.js       |   904 [32m+[m
+ node_modules/figlet/importable-fonts/Weird.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Weird.js      |   627 [32m+[m
+ .../figlet/importable-fonts/Wet Letter.d.ts        |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Wet Letter.js |   727 [32m+[m
+ node_modules/figlet/importable-fonts/Whimsy.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Whimsy.js     |  1042 [32m+[m
+ node_modules/figlet/importable-fonts/WideTerm.d.ts |     2 [32m+[m
+ node_modules/figlet/importable-fonts/WideTerm.js   |   133 [32m+[m
+ node_modules/figlet/importable-fonts/Wow.d.ts      |     2 [32m+[m
+ node_modules/figlet/importable-fonts/Wow.js        |   117 [32m+[m
+ .../figlet/importable-fonts/babyface-lame.d.ts     |     3 [32m+[m
+ .../figlet/importable-fonts/babyface-lame.js       |   515 [32m+[m
+ .../figlet/importable-fonts/babyface-leet.d.ts     |     3 [32m+[m
+ .../figlet/importable-fonts/babyface-leet.js       |   515 [32m+[m
+ node_modules/figlet/importable-fonts/miniwi.d.ts   |     2 [32m+[m
+ node_modules/figlet/importable-fonts/miniwi.js     |   415 [32m+[m
+ node_modules/figlet/importable-fonts/tmplr.d.ts    |     2 [32m+[m
+ node_modules/figlet/importable-fonts/tmplr.js      |   413 [32m+[m
+ node_modules/figlet/package.json                   |   126 [32m+[m
+ package-lock.json                                  |    36 [32m+[m
+ package.json                                       |     5 [32m+[m
+ .../Customer Master Complete_20251117_LongLat.xlsx |   Bin [31m0[m -> [32m5887423[m bytes
+ rawdata/customer.csv                               |   Bin [31m0[m -> [32m289145[m bytes
+ server.js                                          |    14 [32m+[m
+ static/app.js                                      |   526 [32m+[m[31m-[m
+ static/index.html                                  |    46 [32m+[m[31m-[m
+ static/map.html                                    |   589 [32m+[m
+ static/style.css                                   |    41 [32m+[m[31m-[m
+ static/test.js                                     |   128 [31m-[m
+ static/test.py                                     |    37 [32m+[m
+ temp.py                                            |    37 [32m+[m
+ 1023 files changed, 1455902 insertions(+), 839 deletions(-)
+# Ignore DB files
+snapshot.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Node
+node_modules/
+
+# Temp
+temp.py
+rawdata/

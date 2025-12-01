@@ -1,0 +1,197 @@
+body { font-family: Arial, sans-serif; margin:16px; background:#f4f4f4; }
+h1, h2 { margin: 6px 0; color:#333; }
+
+.controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:10px 0 14px; }
+.btn { padding:2px 4px; border:1px solid #ccc; background:#fafafa; border-radius:6px; cursor:pointer; }
+.btn.active { background:#0a66ff; color:#fff; border-color:#0a66ff; }
+select { padding:6px 10px; }
+label { font-size:12px; color:#666; margin-right:4px;}
+.chart-row { display:flex; gap:4px; flex-wrap:nowrap; }
+.box { background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.06); padding:12px; flex:1 1 calc(25% - 12px); min-width:0; }
+
+/* Region row: region card at left, its salesmen at right */
+/* rows that contain a left KPI, a grid of cards and trailing quarter chips */
+.region-row,
+#overallAchvRow {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin: 10px 0;
+}
+/* --- KPI table (charts stay as-is) --- */
+.kpi-table{
+  width:30%;
+  border-collapse:separate;
+  border-spacing:0;
+  background:#fff;
+  border-radius:3px;
+  box-shadow:0 1px 3px rgba(0,0,0,.06);
+  overflow:hidden;
+}
+.kpi-table thead th{
+  text-align:right;
+  font-weight:200;
+  padding:1px 2px;
+  background:#f6f7f8;
+  border-bottom:1px solid #ececec;
+}
+.kpi-table .name{ width:80px; }
+.kpi-table tbody td{
+  padding:1px 2px;
+  border-bottom:1px solid #f2f2f2;
+  vertical-align:middle;
+}
+.kpi-table tbody tr:hover{ background:#fafafa; }
+.kpi-table .num{ text-align:right; white-space:nowrap; }
+.kpi-table .pct{ font-weight:700; }
+.kpi-table .mini{ font-size:12px; color:#6b7280; }
+
+tr.is-overall > td{ background:#fbfcff; font-weight:600; }
+tr.is-region  > td{ border-top:2px solid #ececec; }
+.pct.good{ color:#10b981; }   /* ≥ 80% */
+.pct.ok  { color:#f59e0b; }   /* 60–80% */
+.pct.bad { color:#ef4444; }   /* < 60% */
+.muted{ color:#888; font-size:10px; padding:3px; }
+
+
+
+/* Responsive: let it stretch on small screens */
+@media (max-width: 640px) {
+  #achvCard.kpi-card {
+    flex:1 1 100%;
+    max-width:100%;
+  }
+  .kpi-value { font-size:32px; } /* optional scale-down on phones */
+}
+
+/* Region ➜ Salesmen sections */
+.region-block { margin: 6px 0 14px; }
+.region-title { font-size: 10px; font-weight: 300; color: #444; margin: 4px 0 6px 2px; }
+/* reuse your .kpi-grid but make sure spacing is pleasant */
+.region-block .kpi-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
+
+
+/* Salesman KPI grid */
+.kpi-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:5px; margin-bottom: 20px; }
+.kpi-card.tight { padding:2px; text-align:left; }
+.kpi-card .kpi-name { font-size:12px; font-weight:600; color:#333; margin-bottom:6px; }
+.kpi-card .kpi-mini { font-size:8px; color:#666; }
+
+/* === KPI side-by-side (region) === */
+#kpiRegionGridWrap { margin-top: 8px; }
+#kpiRegionGridWrap .kpi-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: #fff;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+#kpiRegionGridWrap .kpi-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f7f7f9;
+  font-weight: 600;
+  font-size: 13px;
+  color: #333;
+}
+#kpiRegionGridWrap .kpi-table th,
+#kpiRegionGridWrap .kpi-table td {
+  padding: 1px 2px;
+  border-bottom: 1px solid #eee;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#kpiRegionGridWrap .kpi-table tr:last-child td { border-bottom: none; }
+#kpiRegionGridWrap .kpi-table .name-col { width: 50px; }
+
+/* Overall (single mini-table above the grid) */
+#kpiRegionGridWrap .kpi-table.overall { margin-bottom: 14px; }
+
+/* Region grid */
+#kpiRegionGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+/* Row layout */
+.chart-row { display:flex; gap:8px; flex-wrap:nowrap; }
+.box { background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.06);
+       padding:12px; flex:1 1 0; min-width:0; }
+
+/* Fix the chart height */
+.chart-fixed {
+  position: relative;
+  height: 320px;      /* tweak this value to change chart height */
+  max-height: 320px;
+  width: 100%;
+}
+
+/* Optional label above each region mini-table */
+.region-table-box { display: flex; flex-direction: column; gap: 6px; }
+.region-caption   { font-weight: 700; color: #1f2937; padding-left: 4px; }
+
+/* small helpers for % color if you use them */
+.kpi-good { color:#10b981; }
+.kpi-ok   { color:#f59e0b; }
+.kpi-bad  { color:#ef4444; }
+
+/* error bar */
+.errbar{
+  position:fixed; left:12px; bottom:12px; z-index:9999;
+  background:#fee2e2; color:#991b1b; border:1px solid #fecaca;
+  border-radius:10px; padding:10px 12px; box-shadow:0 2px 10px rgba(0,0,0,.1);
+  max-width:85%;
+  font-size:13px;
+}
+/* First column text size in the KPI table */
+#kpiRegionGridWrap .kpi-table th:first-child,
+#kpiRegionGridWrap .kpi-table td:first-child {
+  font-size:12px;     /* <- change this to the size you want */
+  width:100px;         /* optional: control how wide the name column is */
+  white-space:nowrap;
+}
+
+/* Make the small “actual / target” line smaller */
+#kpiRegionGridWrap .kpi-table .mini { font-size:10px; }
+#mapLayout {
+  display: flex;
+  height: calc(100vh - 80px); /* adjust to your header height */
+}
+
+#mapWrapper {
+  flex: 2;              /* map: ~2/3 width */
+}
+
+#salesMap {
+  width: 100%;
+  height: 100%;
+}
+
+#mapWrapper {
+  flex: 1;                 /* map takes remaining space */
+}
+
+#mapSidePanel {
+  flex: 0 0 480px;         /* fixed ~480px wide pane (make 500, 520, etc if you want more) */
+  max-width: none;         /* remove the 420px cap */
+  padding: 8px 12px;
+  background: #f9fafb;
+  overflow-y: auto;
+}
+
+/* Wrap each canvas in a container */
+.chartPane {
+  flex: 1 1 0;      /* each takes half of the panel height */
+  min-height: 140px;
+}
+
+/* Canvas fills its pane (and is not taller than it) */
+.chartPane canvas {
+  width: 100%;
+  height: 100% !important;
+}
