@@ -9,33 +9,61 @@ USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_PATH = os.path.join(BASE_DIR, "snapshot.db")
 
+import sqlite3  # make sure this is at the top of app.py
+
 class SQLiteCursorWrapper:
     def __init__(self, cursor):
         self._cursor = cursor
+        self._empty_result = False  # flag for demo mode
 
     def execute(self, sql, params=None):
         # Replace MySQL-style "%s" with SQLite "?" placeholders
         if "%s" in sql:
             sql = sql.replace("%s", "?")
-        if params is None:
-            return self._cursor.execute(sql)
-        return self._cursor.execute(sql, params)
+
+        self._empty_result = False
+        try:
+            if params is None:
+                return self._cursor.execute(sql)
+            return self._cursor.execute(sql, params)
+        except sqlite3.OperationalError as e:
+            # DEMO MODE: if a table is missing, just pretend query returned nothing
+            if "no such table" in str(e):
+                print(f"[WARN] {e} -- returning empty result (demo mode)")
+                self._empty_result = True
+                # return self so caller can still call fetchall()/fetchone()
+                return self
+            # other SQLite errors still bubble up
+            raise
 
     def executemany(self, sql, seq_of_params):
         if "%s" in sql:
             sql = sql.replace("%s", "?")
-        return self._cursor.executemany(sql, seq_of_params)
+        self._empty_result = False
+        try:
+            return self._cursor.executemany(sql, seq_of_params)
+        except sqlite3.OperationalError as e:
+            if "no such table" in str(e):
+                print(f"[WARN] {e} -- ignoring executemany (demo mode)")
+                self._empty_result = True
+                return self
+            raise
 
     def fetchall(self):
+        if self._empty_result:
+            return []  # no data instead of error
         rows = self._cursor.fetchall()
-        # convert sqlite3.Row → dict for jsonify
         return [dict(r) for r in rows]
 
     def fetchone(self):
+        if self._empty_result:
+            return None
         r = self._cursor.fetchone()
         return dict(r) if r is not None else None
 
     def __iter__(self):
+        if self._empty_result:
+            return iter([])
         for r in self._cursor:
             yield dict(r)
 
