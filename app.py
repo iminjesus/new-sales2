@@ -56,23 +56,7 @@ class SQLiteConnectionWrapper:
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
-# --------------------------- tiny cache (unchanged) ---------------------------
-_KPI_CACHE = {}
-def cache_get(namespace: str, key: str, ttl: int = 60):
-    entry = _KPI_CACHE.get((namespace, key))
-    if not entry:
-        return None
-    payload, ts = entry
-    if time() - ts > ttl:
-        try:
-            del _KPI_CACHE[(namespace, key)]
-        finally:
-            return None
-    return payload
 
-def cache_set(namespace: str, key: str, payload):
-    _KPI_CACHE[(namespace, key)] = (payload, time())
-    
 def parse_filters(req):
     """Uniform filter extraction."""
     return {
@@ -317,191 +301,6 @@ def daily_kpi():
     day_map = {int(r["day_num"]): float(r["daily_kpi"] or 0) for r in rows}
     return jsonify([{"day": m, "value": day_map.get(m, 0)} for m in range(1, 31)])    
 
-# ------------------------------- KPI SNAPSHOT --------------------------------
-@app.get("/api/kpi_snapshot")
-def kpi_snapshot():
-
-    # -------- inputs
-    metric   = request.args.get("metric", "qty") or "qty"
-    value_day = "Qty" if metric == "qty" else "Amt"                  
-    value_month = "Qty" if metric == "qty" else "Amt"
-    value_year = "Qty" if metric == "qty" else "Amt"   
-    qa       = "Q" if metric == "qty" else "A"
-
-    category      = request.args.get("category", "ALL") or "ALL"
-    region        = request.args.get("region", "ALL") or "ALL"
-    salesman      = request.args.get("salesman", "ALL") or "ALL"
-    sold_to_group = request.args.get("sold_to_group", "ALL") or "ALL"
-    sold_to       = request.args.get("sold_to", "ALL") or "ALL"
-    product_group = request.args.get("product_group", "ALL") or "ALL"
-    ship_to       = request.args.get("ship_to", "ALL") or "ALL"
-    pattern       = request.args.get("pattern", "ALL") or "ALL"
-
-    
-
-    # -------- normalized mapping joins (customer)
-    bm_join_yr = """
-        JOIN customer cus
-          ON cus.ship_to = s.ship_to
-    """
-    bm_join_js = """
-        JOIN customer cus
-          ON cus.ship_to = j.ship_to
-    """
-
-    # -------- helper filters (against customer)
-    def add_common_mapping_filters(where, params, alias_cus="cus"):
-        # Region (state of ship-to)
-        if region and region != "ALL":
-            where.append(f"{alias_cus}.bde_state = %s"); params.append(region)
-        # Salesman name
-        if salesman and salesman != "ALL":
-            where.append(f"UPPER(TRIM({alias_cus}.Salesman_Name)) = UPPER(TRIM(%s))"); params.append(salesman)
-        # Sold-to Group (sold_to_group)
-        if sold_to_group and sold_to_group != "ALL":
-            where.append(f"{alias_cus}.sold_to_group = %s"); params.append(sold_to_group)
-
-    def add_sold_to_filters(where, params, alias_s, is_num_table=True):
-        # sold_to can be id or name
-        if sold_to and sold_to != "ALL":
-            sv = sold_to.strip()
-            if sv.isdigit() or sv.upper().startswith("A"):
-                where.append(
-                    f"REGEXP_REPLACE(UPPER(TRIM(CAST({alias_s}.Sold_To AS CHAR))), '[^A-Z0-9]', '') = "
-                    f"REGEXP_REPLACE(UPPER(TRIM(%s)), '[^A-Z0-9]', '')"
-                )
-                params.append(sv)
-            else:
-                col = "Sold_To_Name" if alias_s == "s" else "sold_to_name"
-                where.append(f"{alias_s}.{col} = %s"); params.append(sv)
-
-    def add_other_filters(where, params, alias_s, has_product=True, has_pattern=True, ship_col="ship_to_name"):
-        if product_group and product_group != "ALL" and has_product:
-            col = "Product_Group" if alias_s == "s" else "product_group"   # note: 'j' has no product_group column
-            where.append(f"{alias_s}.{col} = %s"); params.append(product_group)
-        if ship_to and ship_to != "ALL":
-            col = ship_col if alias_s == "s" else "ship_to_name"
-            where.append(f"{alias_s}.{col} = %s"); params.append(ship_to)
-        if pattern and pattern != "ALL" and has_pattern:
-            col = "Pattern" if alias_s == "s" else "pattern"
-            where.append(f"{alias_s}.{col} = %s"); params.append(pattern)
-
-    wanted_regions = ["NSW","QLD","VIC","WA"] if (not region or region == "ALL") else [region]
-
-    # helpers
-    def months12(): return [0.0]*12  # 1..12
-
-    actual = {}  # (region, salesman) -> month array
-    target = {}
-
-    # -------- Q1/Q2 actuals from sales2025
-    wh_m, prm_m = [], []
-    wh_m.append("s.Month BETWEEN 1 AND 10")
-    add_common_mapping_filters(wh_m, prm_m, "cus")
-    add_sold_to_filters(wh_m, prm_m, "s", is_num_table=True)
-    add_other_filters(wh_m, prm_m, "s", has_product=True, has_pattern=True, ship_col="ship_to_name")
-    wh_m.extend(cat_where_m)
-
-    sql_m = f"""
-        SELECT cus.bde_state                      AS region,
-               UPPER(TRIM(cus.salesman_name))         AS salesman,
-               s.Month                                AS mth,
-               SUM(s.{value_year})                      AS v
-          FROM sales2025 s
-          {bm_join_yr}
-          {cat_join_m}
-         WHERE {" AND ".join(wh_m)}
-         GROUP BY cus.bde_state, UPPER(TRIM(cus.salesman_name)), s.Month
-    """
-    @app.get("/api/top_customers")
-    def top_customers():
-        f = parse_filters(request)   # you already use this
-        value = "qty" if f["metric"] == "qty" else "amt"
-        limit = int(request.args.get("limit", 10))
-
-        joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-        cat_joins, cat_where = category_filters("s", f["category"])
-        joins += cat_joins
-        wh    += cat_where
-
-        where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
-
-        sql = f"""
-        SELECT
-            s.ship_to,
-            s.ship_to_name,
-            SUM(s.{value}) AS total_metric
-        FROM sales2025 s
-        {' '.join(joins)}
-        {where_sql}
-        GROUP BY s.ship_to, s.ship_to_name
-        ORDER BY total_metric DESC
-        LIMIT %s
-        """
-        params.append(limit)
-
-        conn = get_connection(); cur = conn.cursor(dictionary=True)
-        try:
-            cur.execute(sql, tuple(params))
-            rows = cur.fetchall()
-        finally:
-            cur.close(); conn.close()
-
-        return jsonify([
-            {
-                "ship_to": r["ship_to"],
-                "name": r["ship_to_name"],
-                "value": float(r["total_metric"] or 0)
-            }
-            for r in rows
-        ])
-
-
-
-
-    
-
-    # -------- packers
-    def pack(arr_a, arr_t):
-        q1a = sum(arr_a[1:4]);  q1t = sum(arr_t[1:4])
-        q2a = sum(arr_a[4:7]);  q2t = sum(arr_t[4:7])
-        jla = arr_a[7];         jlt = arr_t[7]
-        def p(a,t): return (a/t*100.0) if t>0 else 0.0
-        return {
-          "jul": {"a": jla, "t": jlt, "p": p(jla,jlt)},
-          "q1":  {"a": q1a, "t": q1t, "p": p(q1a,q1t)},
-          "q2":  {"a": q2a, "t": q2t, "p": p(q2a,q2t)},
-          "q3":  {"a": jla, "t": jlt, "p": p(jla,jlt)}  # July-to-date
-        }
-
-    keys = set(actual.keys()) | set(target.keys())
-    out_regions = []
-    overall_a = months12()
-    overall_t = months12()
-
-    for reg in (["NSW","QLD","VIC","WA"] if (not region or region == "ALL") else [region]):
-        salesmen_rows = []
-        region_a = months12()
-        region_t = months12()
-        region_keys = [k for k in keys if k[0] == reg]
-
-        for key in region_keys:
-            a = actual.get(key, months12())
-            t = target.get(key, months12())
-            if sum(a[1:8]) == 0 and sum(t[1:8]) == 0:
-                continue
-            salesmen_rows.append({"name": key[1], **pack(a, t)})
-            for i in range(1, 8):
-                region_a[i] += a[i];  region_t[i] += t[i]
-                overall_a[i] += a[i]; overall_t[i] += t[i]
-
-        if sum(region_a[1:8]) == 0 and sum(region_t[1:8]) == 0 and (region not in (None, "", "ALL")):
-            continue
-
-        out_regions.append({"region": reg, "kpi": pack(region_a, region_t), "salesmen": salesmen_rows})
-
-    return jsonify({"overall": pack(overall_a, overall_t), "regions": out_regions})
-
 # ----------------------------- Daily Sales ---------------------------------
 @app.get("/api/daily_sales")
 def daily_sales():
@@ -537,7 +336,7 @@ def daily_sales():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales202511 s
+                FROM sales_2511 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -565,7 +364,7 @@ def daily_sales():
 
         daily_sql = f"""
           SELECT s.day AS day_num, SUM(s.{value}) AS daily_total
-            FROM sales202511 s
+            FROM sales_2511 s
             {' '.join(joins)}
             {where_sql2}
            GROUP BY s.day
@@ -596,9 +395,9 @@ def daily_breakdown():
     group_cols = {
         "product_group": "s.product_group",
         "region":        "cus.bde_state",
-        "salesman":      "cus.salesman_Name",
+        "salesman":      "cus.salesman_name",
         "sold_to_group": "cus.sold_to_group",
-        "sold_to":       "cus.Sold_to_Name",
+        "sold_to":       "cus.sold_to_name",
         "pattern":       "s.pattern",
     }
     if group_by not in group_cols:
@@ -628,7 +427,7 @@ def daily_breakdown():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales202511 s
+                FROM sales_2511 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -659,7 +458,7 @@ def daily_breakdown():
           SELECT s.day AS day,
                  {group_col} AS group_label,
                  SUM(s.{value}) AS value
-            FROM sales202511 s
+            FROM sales_2511 s
             {' '.join(joins)}
             {where_sql2}
            GROUP BY s.day, {group_col}
@@ -802,7 +601,7 @@ def monthly_sales():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales20250111 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -830,7 +629,7 @@ def monthly_sales():
 
         monthly_sql = f"""
           SELECT s.month AS month_num, SUM(s.{value}) AS monthly_total
-            FROM sales20250111 s
+            FROM sales_2501_11 s
             {' '.join(joins)}
             {where_sql2}
            GROUP BY s.month
@@ -861,9 +660,9 @@ def monthly_breakdown():
     group_cols = {
         "product_group": "s.product_group",
         "region":        "cus.bde_state",
-        "salesman":      "cus.salesman_Name",
+        "salesman":      "cus.salesman_name",
         "sold_to_group": "cus.sold_to_group",
-        "sold_to":       "cus.Sold_to_Name",
+        "sold_to":       "cus.sold_to_name",
         "pattern":       "s.pattern",
     }
     if group_by not in group_cols:
@@ -893,7 +692,7 @@ def monthly_breakdown():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales20250111 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -924,7 +723,7 @@ def monthly_breakdown():
           SELECT s.Month AS month,
                  {group_col} AS group_label,
                  SUM(s.{value}) AS value
-            FROM sales20250111 s
+            FROM sales_2501_11 s
             {' '.join(joins)}
             {where_sql2}
            GROUP BY s.Month, {group_col}
@@ -1057,7 +856,7 @@ def yearly_sales():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales212511 s
+                FROM sales_21_2511 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -1085,7 +884,7 @@ def yearly_sales():
 
         yearly_sql = f"""
           SELECT s.year AS year_num, SUM(s.{value}) AS yearly_total
-            FROM sales212511 s
+            FROM sales_21_2511 s
             {' '.join(joins)}
             {where_sql2}
            GROUP BY s.year
@@ -1148,7 +947,7 @@ def yearly_breakdown():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales212511 s
+                FROM sales_21_2511 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -1179,7 +978,7 @@ def yearly_breakdown():
           SELECT s.year AS year,
                  {group_col} AS group_label,
                  SUM(s.{value}) AS value
-            FROM sales212511 s
+            FROM sales_21_2511 s
             {' '.join(joins)}
             {where_sql2}
            GROUP BY s.year, {group_col}
@@ -1219,7 +1018,7 @@ def sold_to_names():
     parent = request.args.get("sold_to_group", "ALL")
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
-    # If no top_limit -> old behaviour using customer table
+    # ----------------- 1) No top_limit -> old behaviour -----------------
     if top_limit <= 0:
         try:
             conn = get_connection(); cur = conn.cursor()
@@ -1244,9 +1043,10 @@ def sold_to_names():
             cur.close(); conn.close()
             return jsonify(names)
         except Exception as e:
+            import traceback; traceback.print_exc()
             return jsonify({"error": str(e)}), 500
 
-    # top_limit > 0 -> use sales2025 and filters to get top N sold-to by sales
+    # --------------- 2) top_limit > 0 -> Top N by sales -----------------
     try:
         f = parse_filters(request)
         value = "qty" if f["metric"] == "qty" else "amt"
@@ -1258,12 +1058,12 @@ def sold_to_names():
         joins += cat_joins
         wh    += cat_where
 
-        # sold_to_group from parent
+        # sold_to_group from parent – apply to *customer* table (cus)
         if parent != "ALL":
-            wh.append("s.sold_to_group = %s")
+            wh.append("cus.sold_to_group = %s")
             params.append(parent)
 
-        # direct fields
+        # direct fields on sales table
         if f["product_group"] != "ALL":
             wh.append("s.product_group = %s")
             params.append(f["product_group"])
@@ -1275,27 +1075,31 @@ def sold_to_names():
 
         sql = f"""
           SELECT
-              TRIM(s.sold_to_name) AS name,
-              SUM(s.{value})   AS total_val
-          FROM sales20250111 s
+              TRIM(cus.sold_to_name) AS name,
+              SUM(s.{value})         AS total_val
+          FROM sales_2501_11 s
+          
           {' '.join(joins)}
           {where_sql}
-          GROUP BY TRIM(s.sold_to_name)
+          GROUP BY cus.sold_to, TRIM(cus.sold_to_name)
           HAVING name IS NOT NULL AND name <> ''
           ORDER BY total_val DESC
           LIMIT %s
         """
         params2 = params + [top_limit]
 
-        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        # plain cursor (works for MySQL and SQLite wrapper)
+        conn = get_connection(); cur = conn.cursor()
         cur.execute(sql, tuple(params2))
         rows = cur.fetchall()
         cur.close(); conn.close()
 
-        names = [r["name"] for r in rows]
+        # first column is name
+        names = [r[0] for r in rows]
         return jsonify(names)
 
     except Exception as e:
+        import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.get("/api/ship_to_names")
@@ -1356,14 +1160,14 @@ def patterns():
         if product_group and product_group != "ALL":
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern)
-                FROM sales20250111
+                FROM sales_2501_11
                 WHERE product_group = %s
                 ORDER BY TRIM(pattern)
             """, (product_group,))
         else:
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern)
-                FROM sales20250111
+                FROM sales_2501_11
                 ORDER BY TRIM(pattern)
             """)
         names = [r[0] for r in cur.fetchall()]
@@ -1461,7 +1265,7 @@ def sales_map():
           MAX(c.bde_state)   AS region,      -- make sure this line exists
           MAX(c.salesman_name)      AS bde,         -- and this one
           SUM(s.{value})  AS total_value
-        FROM sales20250111 s
+        FROM sales_2501_11 s
         {' '.join(joins)}
         {where_sql}
        GROUP BY
