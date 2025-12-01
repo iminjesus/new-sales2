@@ -1,47 +1,50 @@
-# make_sqlite_snapshot.py
 import os
-import mysql.connector
 import sqlite3
 import pandas as pd
 
-# 1) MySQL connection info (same as you use in app.py)
-MYSQL_CONFIG = {
-    "host": os.getenv("DB_HOST", "127.0.0.1"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASS", ""),
-    "database": os.getenv("DB_NAME", "my_new_database"),
-    "autocommit": True,
-    }
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "snapshot.db")
+RAW_BASE = os.path.join(BASE_DIR, "rawdata", "unlock")
 
-# 2) Tables your Flask app uses
-TABLES = [
-    "sales20250111",
-    "sales212511",
-    "sales202511",
-    "target2025",
-    "customer",
-    "hm",
-    "iseg",
-    "lowprofile",
-    "strategic_commercial",
-    "suv",
-    "profit"
-    # add any other tables that appear in your SQL in app.py
-]
+CSV_TABLES = {
+    "customer":              "customer.csv",
+    "hm":                    "hm.csv",
+    "iseg":                  "iseg.csv",
+    "lowprofile":            "lowprofile.csv",
+    "sales212511":           "sales_21_2511.csv",
+    "sales20250111":         "sales_2501_11.csv",
+    "sales2511":             "sales_2511.csv",
+    "strategic_commercial":  "strategic_commercial.csv",
+    "suv":                   "suv.csv",
+    "target2025":            "target2025.csv",
+}
+
+def load_csv_to_table(conn, table_name, csv_filename):
+    csv_path = os.path.join(RAW_BASE, csv_filename)
+    if not os.path.exists(csv_path):
+        print(f"[WARN] CSV not found for {table_name}: {csv_path}")
+        return
+
+    print(f"Loading {table_name} from {csv_path}...")
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        print("  UTF-8 decode failed, trying cp949...")
+        df = pd.read_csv(csv_path, encoding="cp949")
+
+    df.to_sql(table_name, conn, if_exists="replace", index=False)
 
 def main():
-    mysql_conn = mysql.connector.connect(**MYSQL_CONFIG)
-    sqlite_conn = sqlite3.connect("snapshot.db")  # created in project root
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
 
-    for table in TABLES:
-        print(f"Copying {table}...")
-        df = pd.read_sql(f"SELECT * FROM {table}", mysql_conn)
-        df.to_sql(table, sqlite_conn, index=False, if_exists="replace")
+    conn = sqlite3.connect(DB_PATH)
 
-    sqlite_conn.close()
-    mysql_conn.close()
-    print("Done. snapshot.db created.")
+    for table_name, csv_file in CSV_TABLES.items():
+        load_csv_to_table(conn, table_name, csv_file)
+
+    conn.close()
+    print("Done. snapshot.db created from rawdata/unlock CSVs.")
 
 if __name__ == "__main__":
     main()
