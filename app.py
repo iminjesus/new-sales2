@@ -130,34 +130,6 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
 
     return joins, wh, p
 
-def build_product_filters(alias_fact: str, f):
-    """
-    Adds optional EXISTS against carrying_july only when needed.
-    Uses equality on M_CODE + Product_Group/Pattern for index usage.
-    """
-    wh, p = [], []
-    exists_pg = exists_pt = ""
-    if f["product_group"] != "ALL":
-        exists_pg = f"""
-          AND EXISTS (
-                SELECT 1
-                  FROM carrying_july cj_pg
-                 WHERE cj_pg.M_CODE = {alias_fact}.Material
-                   AND cj_pg.Product_Group = %s
-          )
-        """
-        p.append(f["product_group"])
-    if f["pattern"] != "ALL":
-        exists_pt = f"""
-          AND EXISTS (
-                SELECT 1
-                  FROM carrying_july cj_pt
-                 WHERE cj_pt.M_CODE = {alias_fact}.Material
-                   AND cj_pt.Pattern = %s
-          )
-        """
-        p.append(f["pattern"])
-    return exists_pg + exists_pt, p
 
 def category_filters(alias: str, category: str):
     """
@@ -1136,7 +1108,7 @@ def ship_to_names():
 def product_group():
     try:
         conn = get_connection(); cur = conn.cursor()
-        cur.execute("SELECT DISTINCT product_group FROM carrying_july")
+        cur.execute("SELECT DISTINCT product_group FROM sales_2501_11")
         groups = sorted(r[0] for r in cur.fetchall())
         cur.close(); conn.close()
         return jsonify(groups)
