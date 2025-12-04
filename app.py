@@ -300,7 +300,7 @@ def daily_sales():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales_2511 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -391,7 +391,7 @@ def daily_breakdown():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales_2511 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -820,7 +820,7 @@ def yearly_sales():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales_21_2511 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -911,7 +911,7 @@ def yearly_breakdown():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales_21_2511 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -1139,7 +1139,7 @@ def patterns():
         return jsonify(names)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
+    
 @app.get("/api/profit_monthly")
 def profit_monthly():
     import traceback
@@ -1147,68 +1147,80 @@ def profit_monthly():
     try:
         f = parse_filters(request)
 
-        # optional: ?top_limit=10 -> top 10 sold_to by profit
+        # same metric logic as daily_sales
+        value = "qty" if f.get("metric") == "qty" else "amt"
+
+        # optional: ?top_limit=10 -> top 10 sold_to by sales (from sales_2501_11)
         top_limit = int(request.args.get("top_limit", 0) or 0)
-
-        joins  = []
-        wh     = []
-        params = []
-
-        # category filters (PCLT / TBR / 18PLUS etc.)
-        # category_filters only needs the alias, and uses material etc.,
-        # which exist in profit_2501_10
-        cat_joins, cat_where = category_filters("p", f.get("category", "ALL"))
-        joins += cat_joins
-        wh    += cat_where
-
-        # direct filters on profit_2501_10
-        if f.get("product_group", "ALL") != "ALL":
-            wh.append("p.product_group = %s")
-            params.append(f["product_group"])
-
-        if f.get("pattern", "ALL") != "ALL":
-            wh.append("p.pattern = %s")
-            params.append(f["pattern"])
 
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
         try:
             top_sold_to = None
 
-            # 1) Top N sold_to by profit (optional)
+            # 1) Get top N sold_to from YTD sales_2501_11
             if top_limit > 0:
-                where_top = ("WHERE " + " AND ".join(wh)) if wh else ""
+                joins_s, wh_s, params_s = build_customer_filters("s", f, use_sold_to_name=False)
+
+                cat_joins_s, cat_where_s = category_filters("s", f.get("category", "ALL"))
+                joins_s += cat_joins_s
+                wh_s    += cat_where_s
+
+                if f.get("product_group", "ALL") != "ALL":
+                    wh_s.append("s.product_group = %s")
+                    params_s.append(f["product_group"])
+
+                if f.get("pattern", "ALL") != "ALL":
+                    wh_s.append("s.pattern = %s")
+                    params_s.append(f["pattern"])
+
+                where_top = ("WHERE " + " AND ".join(wh_s)) if wh_s else ""
                 top_sql = f"""
-                    SELECT p.sold_to,
-                           SUM(p.profit) AS total_profit
-                      FROM profit_2501_10 p
-                      {' '.join(joins)}
+                    SELECT s.sold_to,
+                           SUM(s.{value}) AS total_value
+                      FROM sales_2501_11 s
+                      {' '.join(joins_s)}
                       {where_top}
-                     GROUP BY p.sold_to
-                     ORDER BY total_profit DESC
+                     GROUP BY s.sold_to
+                     ORDER BY total_value DESC
                      LIMIT %s
                 """
-                cur.execute(top_sql, tuple(params) + (top_limit,))
+                cur.execute(top_sql, tuple(params_s) + (top_limit,))
                 top_rows = cur.fetchall()
                 top_sold_to = [r["sold_to"] for r in top_rows]
 
-                # nothing found -> all zeros
                 if not top_sold_to:
+                    # nothing found -> all months = 0
                     return jsonify([
                         dict(month=m, gross=0, sd=0, cogs=0, op_cost=0)
                         for m in range(1, 13)
                     ])
 
-            # 2) Monthly totals, optionally restricted to those top sold_to
-            wh2     = list(wh)
-            params2 = list(params)
+            # 2) Monthly profit totals from profit_2501_10,
+            #    restricted to those top sold_to (if any)
+            joins_p  = []
+            wh_p     = []
+            params_p = []
+
+            # category filters on profit table
+            cat_joins_p, cat_where_p = category_filters("p", f.get("category", "ALL"))
+            joins_p += cat_joins_p
+            wh_p    += cat_where_p
+
+            if f.get("product_group", "ALL") != "ALL":
+                wh_p.append("p.product_group = %s")
+                params_p.append(f["product_group"])
+
+            if f.get("pattern", "ALL") != "ALL":
+                wh_p.append("p.pattern = %s")
+                params_p.append(f["pattern"])
 
             if top_sold_to:
                 placeholders = ",".join(["%s"] * len(top_sold_to))
-                wh2.append(f"p.sold_to IN ({placeholders})")
-                params2.extend(top_sold_to)
+                wh_p.append(f"p.sold_to IN ({placeholders})")
+                params_p.extend(top_sold_to)
 
-            where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
+            where_sql2 = ("WHERE " + " AND ".join(wh_p)) if wh_p else ""
             monthly_sql = f"""
                 SELECT CAST(p.month AS UNSIGNED) AS month,
                        SUM(p.gross)           AS gross,
@@ -1216,13 +1228,14 @@ def profit_monthly():
                        SUM(p.cogs)            AS cogs,
                        SUM(p.operating_cost)  AS op_cost
                   FROM profit_2501_10 p
-                  {' '.join(joins)}
+                  {' '.join(joins_p)}
                   {where_sql2}
                  GROUP BY CAST(p.month AS UNSIGNED)
                  ORDER BY CAST(p.month AS UNSIGNED)
             """
-            cur.execute(monthly_sql, tuple(params2))
+            cur.execute(monthly_sql, tuple(params_p))
             rows = cur.fetchall()
+
         finally:
             cur.close()
             conn.close()
@@ -1232,7 +1245,7 @@ def profit_monthly():
         for r in rows:
             m = int(r["month"] or 0)
             if 1 <= m <= 12:
-                out[m-1].update(
+                out[m - 1].update(
                     gross=float(r["gross"] or 0),
                     sd=float(r["sd"] or 0),
                     cogs=float(r["cogs"] or 0),
@@ -1242,7 +1255,6 @@ def profit_monthly():
         return jsonify(out)
 
     except Exception as e:
-        # you’ll see the full traceback in the Flask terminal
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
