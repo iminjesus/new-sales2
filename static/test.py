@@ -1,9 +1,9 @@
-@app.get("/api/daily_sales")
-def daily_sales():
+@app.get("/api/monthly_sales")
+def monthly_sales():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
-    # 0 or missing = no top filter
+    # 0 or missing = no top filter, same behaviour as before
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
@@ -32,7 +32,7 @@ def daily_sales():
         if top_limit > 0:
             top_sql = f"""
               SELECT s.sold_to AS sold_to
-                FROM sales2510 s
+                FROM sales_2501_11 s
                 {' '.join(joins)}
                 {base_where_sql}
                GROUP BY s.sold_to
@@ -43,11 +43,11 @@ def daily_sales():
             top_rows = cur.fetchall()
             top_sold_to = [r["sold_to"] for r in top_rows]
 
+            # If nothing found, just return zeros for all 12 months
             if not top_sold_to:
-                # no matching customers – all days = 0
-                return jsonify([{"day": d, "value": 0} for d in range(1, 31)])
+                return jsonify([{"month": m, "value": 0} for m in range(1, 12)])
 
-        # 2) Daily totals, optionally restricted to top N sold_to
+        # 2) Monthly totals, optionally restricted to the top N sold_to
         wh2 = list(wh)
         params2 = list(params)
 
@@ -58,32 +58,20 @@ def daily_sales():
 
         where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
 
-        daily_sql = f"""
-          SELECT s.day AS day_num, SUM(s.{value}) AS daily_total
-            FROM sales2510 s
+        monthly_sql = f"""
+          SELECT s.month AS month_num, SUM(s.{value}) AS monthly_total
+            FROM sales_2501_11 s
             {' '.join(joins)}
             {where_sql2}
-           GROUP BY s.day
-           ORDER BY s.day
+           GROUP BY s.month
+           ORDER BY s.month
         """
-        cur.execute(daily_sql, tuple(params2))
+        cur.execute(monthly_sql, tuple(params2))
         rows = cur.fetchall()
 
     finally:
         cur.close()
         conn.close()
 
-    day_map = {int(r["day_num"]): float(r["daily_total"] or 0) for r in rows}
-    return jsonify([{"day": d, "value": day_map.get(d, 0)} for d in range(1, 31)])
-
-
-
-
-
-SELECT {group_col} AS sold_nm, SUM(s.{value}) AS tot
-              FROM sales2510 s
-              {' '.join(joins)}
-              {where_sql}
-             GROUP BY {group_col}
-             ORDER BY tot DESC
-             LIMIT %s
+    month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
+    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 12)])

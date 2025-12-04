@@ -291,43 +291,7 @@ def index():
 def map_page():
     return app.send_static_file("map.html")
 
-#----------------kpi---------------------------
-@app.get("/api/daily_kpi")
-def daily_kpi():
-    f = parse_filters(request)
-    value = "Qty" if f["metric"] == "qty" else "amt"
 
-    joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-
-    # category
-    cat_joins, cat_where = category_filters("s", f["category"])
-    joins += cat_joins
-    wh    += cat_where
-
-    # direct fields (indexable)
-    if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s"); params.append(f["product_group"])
-    if f["pattern"] != "ALL":
-        wh.append("s.Pattern = %s"); params.append(f["pattern"])
-
-    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
-    sql = f"""
-      SELECT s.Day AS day_num, SUM(s.{value}) AS daily_kpi
-        {' '.join(joins)}
-        {where_sql}
-       GROUP BY s.Day
-       ORDER BY s.Day
-    """
-
-    conn = get_connection(); cur = conn.cursor(dictionary=True)
-    try:
-        cur.execute(sql, tuple(params))
-        rows = cur.fetchall()
-    finally:
-        cur.close(); conn.close()
-
-    day_map = {int(r["day_num"]): float(r["daily_kpi"] or 0) for r in rows}
-    return jsonify([{"day": m, "value": day_map.get(m, 0)} for m in range(1, 31)])    
 
 # ----------------------------- Daily Sales ---------------------------------
 @app.get("/api/daily_sales")
@@ -1204,53 +1168,111 @@ def patterns():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-    
-
 @app.get("/api/profit_monthly")
 def profit_monthly():
-    f = parse_filters(request)
+    import traceback
 
-    joins, wh, params = build_customer_filters("p", f, use_sold_to_name=False)
-    cat_joins, cat_where = category_filters("p", f["category"])
-    joins += cat_joins
-    wh    += cat_where
-
-    # optional Product_Group / Pattern via EXISTS on carrying only if set
-    exists_sql, exists_params = build_product_filters("p", f)
-
-    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
-    sql = f"""
-      SELECT CAST(p.Month AS UNSIGNED) AS month,
-             SUM(p.Gross)           AS gross,
-             SUM(p.Sales_Deduction) AS sd,
-             SUM(p.COGS)            AS cogs,
-             SUM(p.Op_Cost)         AS op_cost
-        FROM profit p
-        {' '.join(joins)}
-        {where_sql}
-        {exists_sql}
-       GROUP BY CAST(p.Month AS UNSIGNED)
-       ORDER BY CAST(p.Month AS UNSIGNED)
-    """
-
-    conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
-        cur.execute(sql, tuple(params + exists_params))
-        rows = cur.fetchall()
-    finally:
-        cur.close(); conn.close()
+        f = parse_filters(request)
 
-    out = [dict(month=m, gross=0, sd=0, cogs=0, op_cost=0) for m in range(1,12)]
-    for r in rows:
-        i = max(1, min(12, int(r["month"]))) - 1
-        out[i].update({
-          "gross": float(r["gross"] or 0),
-          "sd":    float(r["sd"] or 0),
-          "cogs":  float(r["cogs"] or 0),
-          "op_cost": float(r["op_cost"] or 0)
-        })
-    return jsonify(out)
+        # optional: ?top_limit=10 -> top 10 sold_to by profit
+        top_limit = int(request.args.get("top_limit", 0) or 0)
+
+        joins  = []
+        wh     = []
+        params = []
+
+        # category filters (PCLT / TBR / 18PLUS etc.)
+        # category_filters only needs the alias, and uses material etc.,
+        # which exist in profit_2501_10
+        cat_joins, cat_where = category_filters("p", f.get("category", "ALL"))
+        joins += cat_joins
+        wh    += cat_where
+
+        # direct filters on profit_2501_10
+        if f.get("product_group", "ALL") != "ALL":
+            wh.append("p.product_group = %s")
+            params.append(f["product_group"])
+
+        if f.get("pattern", "ALL") != "ALL":
+            wh.append("p.pattern = %s")
+            params.append(f["pattern"])
+
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        try:
+            top_sold_to = None
+
+            # 1) Top N sold_to by profit (optional)
+            if top_limit > 0:
+                where_top = ("WHERE " + " AND ".join(wh)) if wh else ""
+                top_sql = f"""
+                    SELECT p.sold_to,
+                           SUM(p.profit) AS total_profit
+                      FROM profit_2501_10 p
+                      {' '.join(joins)}
+                      {where_top}
+                     GROUP BY p.sold_to
+                     ORDER BY total_profit DESC
+                     LIMIT %s
+                """
+                cur.execute(top_sql, tuple(params) + (top_limit,))
+                top_rows = cur.fetchall()
+                top_sold_to = [r["sold_to"] for r in top_rows]
+
+                # nothing found -> all zeros
+                if not top_sold_to:
+                    return jsonify([
+                        dict(month=m, gross=0, sd=0, cogs=0, op_cost=0)
+                        for m in range(1, 13)
+                    ])
+
+            # 2) Monthly totals, optionally restricted to those top sold_to
+            wh2     = list(wh)
+            params2 = list(params)
+
+            if top_sold_to:
+                placeholders = ",".join(["%s"] * len(top_sold_to))
+                wh2.append(f"p.sold_to IN ({placeholders})")
+                params2.extend(top_sold_to)
+
+            where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
+            monthly_sql = f"""
+                SELECT CAST(p.month AS UNSIGNED) AS month,
+                       SUM(p.gross)           AS gross,
+                       SUM(p.sales_deduction) AS sd,
+                       SUM(p.cogs)            AS cogs,
+                       SUM(p.operating_cost)  AS op_cost
+                  FROM profit_2501_10 p
+                  {' '.join(joins)}
+                  {where_sql2}
+                 GROUP BY CAST(p.month AS UNSIGNED)
+                 ORDER BY CAST(p.month AS UNSIGNED)
+            """
+            cur.execute(monthly_sql, tuple(params2))
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+            conn.close()
+
+        # Build output for months 1..12
+        out = [dict(month=m, gross=0, sd=0, cogs=0, op_cost=0) for m in range(1, 13)]
+        for r in rows:
+            m = int(r["month"] or 0)
+            if 1 <= m <= 12:
+                out[m-1].update(
+                    gross=float(r["gross"] or 0),
+                    sd=float(r["sd"] or 0),
+                    cogs=float(r["cogs"] or 0),
+                    op_cost=float(r["op_cost"] or 0),
+                )
+
+        return jsonify(out)
+
+    except Exception as e:
+        # you’ll see the full traceback in the Flask terminal
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.get("/api/sales_map")
 def sales_map():

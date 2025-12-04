@@ -1289,7 +1289,7 @@ function renderProfitCombined(rows) {
   const cogs  = byMonth.map(r => +r.cogs || 0);
   const op    = byMonth.map(r => +r.op_cost || 0);
 
-  const totalCost = sd.map((v, i) => v + cogs[i] + op[i]);
+  const totalCost = sd.map((v, i) => sd[i] + cogs[i] + op[i]);
   const profitPct = gross.map((g, i) => (g > 0 ? ((g - totalCost[i]) / g) * 100 : 0));
 
   profitComboInst = new Chart(el, {
@@ -1326,7 +1326,6 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "G",
           backgroundColor: "#93c5fd",
-          borderColor: "#60a5fa",
           borderWidth: 1,
           categoryPercentage: 0.9,
           barPercentage: 0.9
