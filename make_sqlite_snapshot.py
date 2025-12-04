@@ -17,7 +17,7 @@ CSV_TABLES = {
     "strategic_commercial":  "strategic_commercial.csv",
     "suv":                   "suv.csv",
     "target2025":            "target2025.csv",
-    "profit" :              "profit_2501_10.csv"
+    "profit_2501_10" :              "profit_2501_10.csv"
 }
 
 def load_csv_to_table(conn, table_name, csv_filename):
