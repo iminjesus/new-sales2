@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Sales Map</title>
 
-  <!-- Optional: reuse your main CSS so buttons look the same -->
+  <!-- Main CSS -->
   <link rel="stylesheet" href="/static/style.css">
 
   <!-- Leaflet CSS -->
@@ -15,610 +15,115 @@
     crossorigin=""
   />
 
-
+  <!-- Chart.js + datalabels (for side charts) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  <script>
+    Chart.register(ChartDataLabels);
+  </script>
 </head>
 <body>
   <h2>Sales Map</h2>
 
-<div id="topRow" class="controls"
-     style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+  <div id="topRow" class="controls"
+       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
 
-  <!-- Category buttons -->
-  <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
-    <button class="btn active" data-val="ALL">All</button>
-    <button class="btn" data-val="PCLT">PCLT</button>
-    <button class="btn" data-val="TBR">TBR</button>
-    <button class="btn" data-val="18PLUS">18+ Inch</button>
-    <button class="btn" data-val="ISEG">EV/iSeg</button>
-    <button class="btn" data-val="SUV">SUV</button>
-    <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
-    <button class="btn" data-val="HM">HM</button>
+    <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
+      <button class="btn active" data-val="ALL">All</button>
+      <button class="btn" data-val="PCLT">PCLT</button>
+      <button class="btn" data-val="TBR">TBR</button>
+      <button class="btn" data-val="18PLUS">18+ Inch</button>
+      <button class="btn" data-val="ISEG">EV/iSeg</button>
+      <button class="btn" data-val="SUV">SUV</button>
+      <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
+      <button class="btn" data-val="HM">HM</button>
+    </div>
+
+    <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
+      <button class="btn" data-metric="qty">Qty</button>
+      <button class="btn" data-metric="amount">Amount</button>
+    </div>
+
+    <label style="margin-left:50px;">Group By:</label>
+    <select id="group_by">
+      <option value="region" selected>Region</option>
+      <option value="salesman">Salesman</option>
+      <option value="sold_to_group">Sold-to Group</option>
+      <option value="sold_to">Sold-to</option>
+      <option value="product_group">Product Group</option>
+    </select>
+
+    <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
+      <button class="btn" onclick="window.location.href='/'">Graph View</button>
+      <button class="btn active">Map View</button>
+    </div>
   </div>
 
-  <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
-    <button class="btn" data-metric="qty">Qty</button>
-    <button class="btn" data-metric="amount">Amount</button>
+  <div class="controls">
+    <div id="regionBtns" class="controls" style="gap:6px;">
+      <button class="btn" data-val="ALL">ALL</button>
+      <button class="btn" data-val="NSW">NSW</button>
+      <button class="btn" data-val="QLD">QLD</button>
+      <button class="btn" data-val="VIC">VIC</button>
+      <button class="btn" data-val="WA">WA</button>
+    </div>
+
+    <label>Salesman:</label>
+    <select id="salesman_name"><option value="ALL">ALL</option></select>
+
+    <label>Sold-to Group:</label>
+    <select id="sold_to_group"><option value="ALL">ALL</option></select>
+
+    <div id="topCustomerControls" class="controls">
+      <button class="btn active" data-limit="0">All</button>
+      <button class="btn" data-limit="10">Top 10</button>
+      <button class="btn" data-limit="20">Top 20</button>
+      <button class="btn" data-limit="30">Top 30</button>
+    </div>
+
+    <label for="sold_to">Sold-to:</label>
+    <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
+    <datalist id="sold_to_list"></datalist>
+
+    <label style="margin-left:8px;">Ship-to:</label>
+    <input list="ship_to_list" id="ship_to" placeholder="Search Ship-to..." />
+    <datalist id="ship_to_list"></datalist>
+
+    <label>Product Group:</label>
+    <select id="product_group"><option value="ALL">ALL</option></select>
+
+    <label style="margin-left:8px;">Pattern:</label>
+    <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
+    <datalist id="pattern_list"></datalist>
   </div>
 
-  <div id="viewSwitch"
-       style="margin-left:auto; display:flex; gap:6px;">
-    <button class="btn" onclick="window.location.href='/'">Graph View</button>
-    <button class="btn active">Map View</button>
-  </div>
-</div>
-
-<div class="controls">
-  <label>Group By:</label>
-  <select id="group_by">
-    <option value="region" selected>Region</option>
-    <option value="salesman">Salesman</option>
-    <option value="sold_to_group">Sold-to Group</option>
-    <option value="sold_to">Sold-to</option>
-    <option value="product_group">Product Group</option>
-  </select>
-
-  <div id="regionBtns" class="controls" style="gap:6px;">
-    <button class="btn" data-val="ALL">ALL</button>
-    <button class="btn" data-val="NSW">NSW</button>
-    <button class="btn" data-val="QLD">QLD</button>
-    <button class="btn" data-val="VIC">VIC</button>
-    <button class="btn" data-val="WA">WA</button>
-  </div>
-
-  <label>Salesman:</label>
-  <select id="salesman_name"><option value="ALL">ALL</option></select>
-
-  <label>Sold-to Group:</label>
-  <select id="sold_to_group"><option value="ALL">ALL</option></select>
-
-  <div id="topCustomerControls" class="controls">
-    <button class="btn active" data-limit="0">All</button>
-    <button class="btn" data-limit="10">Top 10</button>
-    <button class="btn" data-limit="20">Top 20</button>
-    <button class="btn" data-limit="30">Top 30</button>
-  </div>
-
-  <label for="sold_to">Sold-to:</label>
-  <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
-  <datalist id="sold_to_list"></datalist>
-
-  <label style="margin-left:8px;">Ship-to:</label>
-  <input list="ship_to_list" id="ship_to" placeholder="Search Ship-to..." />
-  <datalist id="ship_to_list"></datalist>
-
-  <label>Product Group:</label>
-  <select id="product_group"><option value="ALL">ALL</option></select>
-
-  <label style="margin-left:8px;">Pattern:</label>
-  <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
-  <datalist id="pattern_list"></datalist>
-</div>
-
-
-  <div id="mapLayout">
-    <div id="mapWrapper">
+  <div id="mapLayout" class="chart-row" style="margin-top:4px;">
+    <div id="mapWrapper" class="box" style="flex:2;">
       <div id="salesMap"></div>
     </div>
 
-  <div id="mapSidePanel">
-    <h3 id="shopTitle">Click a shop on the map</h3>
-
-    <div class="chartPane">
-      <canvas id="monthlyChart"></canvas>
+    <div id="mapSidePanel" class="box" style="flex:1;">
+      <h3 id="shopTitle">Click a shop on the map</h3>
+      <div class="chartPane">
+        <canvas id="monthlyChart"></canvas>
+      </div>
+      <div class="chartPane">
+        <canvas id="yearlyChart"></canvas>
+      </div>
     </div>
-
-    <div class="chartPane">
-      <canvas id="yearlyChart"></canvas>
-    </div>
-</div>
   </div>
 
-  <!-- Leaflet JS -->
+  <div id="errbar" class="errbar" hidden></div>
+
   <script
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
     crossorigin=""
   ></script>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
-<script>
-  Chart.register(ChartDataLabels);
-</script>
-
-<script>
-  // ========== CONFIG / HELPERS ==========
-
-  const REGION_SALESMEN = {
-    NSW:["Hamid Jallis","LUTTRELL STEVE","Cummings Mark","Lee Don"],
-    QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
-    VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-    WA:["Fruci Davide","Gilbert Michael"]
-  };
-
-  const BDE_COLOR_PALETTE = [
-    "#4c6fff", "#ff4d6a", "#00b894", "#fdcb6e",
-    "#6c5ce7", "#0984e3", "#d63031", "#00cec9",
-    "#e84393", "#2d3436"
-  ];
-  const bdeColorMap = {};
-  let bdeColorIndex = 0;
-
-  function getBdeColor(bdeName) {
-    if (!bdeName) return "#999999";
-    const key = String(bdeName).trim();
-    if (!bdeColorMap[key]) {
-      const c = BDE_COLOR_PALETTE[bdeColorIndex % BDE_COLOR_PALETTE.length];
-      bdeColorMap[key] = c;
-      bdeColorIndex += 1;
-    }
-    return bdeColorMap[key];
-  }
-
-  // read shared filters from index.html (if any)
-  let saved = {};
-  try {
-    saved = JSON.parse(localStorage.getItem("salesFilters") || "{}");
-  } catch (e) {
-    saved = {};
-  }
-
-  const mapFilters = {
-    metric:        saved.metric        || "qty",
-    group_by:      "region",                  // map-only, default
-    region:        saved.region        || "ALL",
-    salesman:      saved.salesman      || "ALL",
-    sold_to_group: saved.sold_to_group || "ALL",
-    sold_to:       saved.sold_to       || "ALL",
-    ship_to:       saved.ship_to       || "ALL",
-    product_group: saved.product_group || "ALL",
-    pattern:       saved.pattern       || "ALL",
-    category:      saved.category      || "ALL",
-    category_target:saved.category_target || "ALL",
-    top_limit:     saved.top_limit     || 0
-  };
-
-
-  function setActive(wrap, attr, val) {
-    if (!wrap) return;
-    [...wrap.querySelectorAll(".btn")].forEach(b =>
-      b.classList.toggle("active", b.dataset[attr] === val)
-    );
-  }
-
-  function populateSelect(el, arr, includeAll = true) {
-    if (!el) return;
-    el.innerHTML = "";
-    if (includeAll) {
-      const o = document.createElement("option");
-      o.value = "ALL";
-      o.textContent = "ALL";
-      el.appendChild(o);
-    }
-    arr.forEach(v => {
-      const o = document.createElement("option");
-      o.value = v;
-      o.textContent = v;
-      el.appendChild(o);
-    });
-  }
-
-  function populateDatalist(id, values) {
-    const list = document.getElementById(id);
-    if (!list) return;
-    list.innerHTML = "";
-    values.forEach(v => {
-      const o = document.createElement("option");
-      o.value = v;
-      list.appendChild(o);
-    });
-  }
-
-  async function fetchJSON(url) {
-    try {
-      const r = await fetch(url, { credentials: "same-origin" });
-      if (!r.ok) throw new Error(r.status + " " + r.statusText);
-      return await r.json();
-    } catch (e) {
-      console.error("Fetch fail:", url, e);
-      return [];
-    }
-  }
-
-  const MONTH_LABELS = ["Ja","Fe","Ma","Ap","Ma","Ju","Ju","Au","Se","Oc","No","De"];
-
-  function monthlyChartOptions() {
-    return {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { position: "right" },
-        tooltip: { mode: "index", intersect: false }
-      },
-      scales: {
-        x: { stacked: false },
-        y: {
-          position: "left",
-          beginAtZero: true
-        },
-        y1: {
-          position: "right",
-          beginAtZero: true,
-          max: 200,   
-          grid: { drawOnChartArea: false },
-          ticks: { callback: v => v + "%" }
-        }
-      }
-    };
-  }
-
-  function yearlyChartOptions() {
-    return {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: "right" },
-        tooltip: { mode: "index", intersect: false }
-      },
-      scales: {
-        x: { stacked: false },
-        y: { beginAtZero: true }
-      }
-    };
-  }
-
-  // ========== MAP ==========
-
-  let salesMap = null;
-  let salesMapLayer = null;
-
-  function initSalesMap() {
-    if (salesMap) return;
-
-    salesMap = L.map("salesMap", {
-      minZoom: 4
-    }).setView([-27.0, 134.0], 5);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 18,
-      attribution: "&copy; OpenStreetMap contributors"
-    }).addTo(salesMap);
-
-    salesMapLayer = L.layerGroup().addTo(salesMap);
-  }
-
-  async function loadSalesMap() {
-    initSalesMap();
-    salesMapLayer.clearLayers();
-
-    const qs = new URLSearchParams({
-      metric:        mapFilters.metric,
-      category:      mapFilters.category,
-      group_by:      mapFilters.group_by,
-      region:        mapFilters.region,
-      salesman:      mapFilters.salesman,
-      sold_to_group: mapFilters.sold_to_group,
-      sold_to:       mapFilters.sold_to,
-      ship_to:       mapFilters.ship_to,
-      product_group: mapFilters.product_group,
-      pattern:       mapFilters.pattern,
-      top_limit:     mapFilters.top_limit
-    }).toString();
-
-    const data = await fetchJSON("/api/sales_map?" + qs);
-    if (!Array.isArray(data) || data.length === 0) {
-      salesMap.setView([-25.0, 133.0], 4);
-      return;
-    }
-
-    const points = [];
-
-    data.forEach(row => {
-      const lat = row.lat ?? row.latitude ?? row.Latitude;
-      const lng = row.lng ?? row.longitude ?? row.Longitude;
-      if (lat == null || lng == null) return;
-
-      const total  = row.total_value ?? row.total ?? 0;
-      const radius = 4 + Math.log10(total + 1) * 3;
-
-      const regionVal = row.region ?? row.Region;
-      const shipTo = row.ship_to ?? row.Ship_To ?? "";
-      const shipNm = row.ship_to_name ?? row.Ship_To_Name ?? "";
-      const bde    = row.bde ?? row.BDE ?? row.BDE_Name ?? "";
-
-      const color = getBdeColor(bde);
-
-      const latNum = +lat;
-      const lngNum = +lng;
-
-      const marker = L.circleMarker([latNum, lngNum], {
-        radius,
-        color,
-        fillColor: color,
-        fillOpacity: 0.7,
-        weight: 1
-      });
-
-      marker.bindPopup(
-        `${shipTo} - ${shipNm}<br>` +
-        `Region: ${regionVal || "-"}<br>` +
-        `BDE: ${bde || "-"}<br>` +
-        `Total: ${Number(total || 0).toLocaleString()}`
-      );
-
-      marker.on("click", () => {
-        const titleEl = document.getElementById("shopTitle");
-        if (titleEl) titleEl.textContent = (shipNm || shipTo) + " – Monthly / Yearly";
-        drawShopCharts(shipTo, shipNm);
-      });
-
-      marker.addTo(salesMapLayer);
-      points.push([latNum, lngNum]);
-    });
-
-    if (points.length === 1) {
-      salesMap.setView(points[0], 10);
-    } else if (points.length > 1) {
-      const bounds = L.latLngBounds(points);
-      salesMap.fitBounds(bounds.pad(0.1));
-    } else {
-      salesMap.setView([-25.0, 133.0], 4);
-    }
-  }
-
-  // ========== SIDE CHARTS ==========
-
-  let shopMonthlyInst = null;
-  let shopYearlyInst  = null;
-
-  async function drawShopCharts(shipToCode, shipToName) {
-    const params = new URLSearchParams({
-      metric:        mapFilters.metric,
-      category:      mapFilters.category,
-      region:        mapFilters.region,
-      salesman:      mapFilters.salesman,
-      sold_to_group: mapFilters.sold_to_group,
-      sold_to:       mapFilters.sold_to,
-      ship_to:       shipToCode,
-      product_group: mapFilters.product_group,
-      pattern:       mapFilters.pattern
-    });
-
-    const [salesRows, targetRows, yearlyRows] = await Promise.all([
-      fetchJSON("/api/monthly_sales?" + params.toString()),
-      fetchJSON("/api/monthly_target?" + params.toString()),
-      fetchJSON("/api/yearly_sales?" + params.toString())
-    ]);
-
-    const labels  = MONTH_LABELS;
-    const sales   = labels.map((_, i) => Number((salesRows[i]?.value)  || 0));
-    const targets = labels.map((_, i) => Number((targetRows[i]?.value) || 0));
-    const achieve = labels.map((_, i) =>
-      targets[i] > 0 ? (sales[i] / targets[i]) * 100 : 0
-    );
-
-    if (shopMonthlyInst) shopMonthlyInst.destroy();
-    const mCtx = document.getElementById("monthlyChart");
-    if (mCtx) {
-      shopMonthlyInst = new Chart(mCtx, {
-        type: "bar",
-        data: {
-          labels,
-          datasets: [
-            {
-              label: "Achievement(%)",
-              type: "line",
-              data: achieve,
-              yAxisID: "y1",
-              borderWidth: 2,
-              pointRadius: 0,
-              borderColor: "#ef4444",
-              order: 99,
-              datalabels: {
-                display: true,
-                align: "top",
-                anchor: "end",
-                formatter: v => (v == null ? "" : v.toFixed(1) + "%")
-              }
-            },
-            {
-              label: mapFilters.metric === "amount" ? "Sales Amount" : "SalesQty",
-              data: sales,
-              backgroundColor: "#ABDEE6",
-              categoryPercentage: 0.9,
-              barPercentage: 0.9,
-              datalabels: { display: false }
-            },
-            {
-              label: "Target",
-              type: "bar",
-              data: targets,
-              borderWidth: 2,
-              borderColor: "#ABDEE6",
-              datalabels: { display: false }
-            }
-            
-          ]
-        },
-        options: monthlyChartOptions()
-      });
-    }
-
-    if (shopYearlyInst) shopYearlyInst.destroy();
-    const yCtx = document.getElementById("yearlyChart");
-    if (yCtx) {
-      const yLabels = yearlyRows.map(r => r.year);
-      const yVals   = yearlyRows.map(r => Number(r.value || 0));
-
-      shopYearlyInst = new Chart(yCtx, {
-        type: "bar",
-        data: {
-          labels: yLabels,
-          datasets: [
-            {
-              label: "Yearly Qty",
-              data: yVals,
-              backgroundColor: "#ABDEE6",
-              categoryPercentage: 0.9,
-              barPercentage: 0.9,
-              datalabels: {
-                display: true,
-                align: "center",
-                anchor: "center",
-                formatter: v => v.toLocaleString()
-              }
-            }
-          ]
-        },
-        options: yearlyChartOptions()
-      });
-    }
-  }
-
-  // ========== CONTROLS ==========
-
-  async function initControls() {
-    setActive(document.getElementById("metricBtns"), "metric", mapFilters.metric);
-    setActive(document.getElementById("regionBtns"), "val", mapFilters.region);
-    setActive(
-      document.getElementById("topCustomerControls"),
-      "limit",
-      String(mapFilters.top_limit)
-    );
-
-    const allSales = [...new Set(Object.values(REGION_SALESMEN).flat())].sort();
-    populateSelect(document.getElementById("salesman_name"), allSales, true);
-
-    const groups = await fetchJSON("/api/product_group");
-    populateSelect(document.getElementById("product_group"), groups, true);
-
-    const stGroups = await fetchJSON("/api/sold_to_groups");
-    populateSelect(document.getElementById("sold_to_group"), stGroups, true);
-    document.getElementById("sold_to_group").value = "ALL";
-
-    const soldTo = await fetchJSON("/api/sold_to_names?sold_to_group=ALL");
-    populateDatalist("sold_to_list", soldTo);
-
-    await refreshShipTo();
-    await refreshPatterns();
-  }
-
-  async function refreshShipTo() {
-    const stg3 = document.getElementById("sold_to_group").value || "ALL";
-    const sold = document.getElementById("sold_to").value || "ALL";
-    const qs = new URLSearchParams({ sold_to_group: stg3, sold_to: sold }).toString();
-    const names = await fetchJSON("/api/ship_to_names?" + qs);
-    populateDatalist("ship_to_list", names);
-  }
-
-  async function refreshPatterns() {
-    const pg = document.getElementById("product_group").value || "ALL";
-    const names = await fetchJSON("/api/patterns?product_group=" + encodeURIComponent(pg));
-    populateDatalist("pattern_list", names);
-  }
-
-  function setupEvents() {
-    document.getElementById("topCustomerControls").addEventListener("click", e => {
-      if (!e.target.classList.contains("btn")) return;
-
-      const limit = Number(e.target.dataset.limit || 0);
-      mapFilters.top_limit = limit;
-
-      setActive(
-        document.getElementById("topCustomerControls"),
-        "limit",
-        String(limit)
-      );
-
-      loadSalesMap();
-    });
-    document.getElementById("catBtns").addEventListener("click", e => {
-      if (!e.target.classList.contains("btn")) return;
-      mapFilters.category = e.target.dataset.val;
-      setActive(document.getElementById("catBtns"), "val", mapFilters.category);
-      loadSalesMap();
-    });
-
-    document.getElementById("metricBtns").addEventListener("click", e => {
-      if (!e.target.classList.contains("btn")) return;
-      mapFilters.metric = e.target.dataset.metric;
-      setActive(document.getElementById("metricBtns"), "metric", mapFilters.metric);
-      loadSalesMap();
-    });
-
-    document.getElementById("group_by").addEventListener("change", () => {
-      mapFilters.group_by = document.getElementById("group_by").value;
-      loadSalesMap();
-    });
-
-    document.getElementById("regionBtns").addEventListener("click", e => {
-      if (!e.target.classList.contains("btn")) return;
-      mapFilters.region = e.target.dataset.val;
-      setActive(document.getElementById("regionBtns"), "val", mapFilters.region);
-
-      const all = Object.values(REGION_SALESMEN).flat();
-      const list = mapFilters.region === "ALL" ? all : (REGION_SALESMEN[mapFilters.region] || []);
-      populateSelect(document.getElementById("salesman_name"), [...new Set(list)].sort(), true);
-      mapFilters.salesman = "ALL";
-      document.getElementById("salesman_name").value = "ALL";
-
-      loadSalesMap();
-    });
-
-    document.getElementById("salesman_name").addEventListener("change", e => {
-      mapFilters.salesman = e.target.value || "ALL";
-      loadSalesMap();
-    });
-
-    document.getElementById("sold_to_group").addEventListener("change", async e => {
-      mapFilters.sold_to_group = e.target.value || "ALL";
-      mapFilters.sold_to = "ALL";
-      document.getElementById("sold_to").value = "";
-      const qs = new URLSearchParams({ sold_to_group: mapFilters.sold_to_group }).toString();
-      const soldTo = await fetchJSON("/api/sold_to_names?" + qs);
-      populateDatalist("sold_to_list", soldTo);
-      await refreshShipTo();
-      loadSalesMap();
-    });
-
-    document.getElementById("sold_to").addEventListener("input", async e => {
-      mapFilters.sold_to = e.target.value || "ALL";
-      await refreshShipTo();
-      loadSalesMap();
-    });
-
-    document.getElementById("ship_to").addEventListener("input", e => {
-      mapFilters.ship_to = e.target.value || "ALL";
-      loadSalesMap();
-    });
-
-        document.getElementById("product_group").addEventListener("change", async () => {
-      mapFilters.product_group = document.getElementById("product_group").value || "ALL";
-      await refreshPatterns();
-      loadSalesMap();
-    });
-
-    document.getElementById("pattern").addEventListener("input", e => {
-      mapFilters.pattern = e.target.value || "ALL";
-      loadSalesMap();
-    });
-  }
-
-  document.addEventListener("DOMContentLoaded", async () => {
-    initSalesMap();
-    await initControls();
-    setupEvents();
-    await loadSalesMap();
-  });
-</script>
-
-  <!-- Chart.js + datalabels + main dashboard charts (drawMonthlyTotals etc.) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
-  <script>
-    Chart.register(ChartDataLabels);
-  </script>
-  
+  <!-- shared dashboard logic -->
+  <script src="/static/app.js" defer></script>
+  <!-- small map-specific layer that reuses app.js -->
+  <script src="/static/map.js" defer></script>
 </body>
 </html>

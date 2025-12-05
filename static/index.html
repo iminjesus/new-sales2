@@ -32,28 +32,28 @@
       <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
       <button class="btn" data-val="HM">HM</button>
     </div>
+    
     <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
       <button class="btn" data-metric="qty">Qty</button>
       <button class="btn" data-metric="amount">Amount</button>
     </div>
+    <label style="gap:6px; margin-left:50px;">Group By:</label>
+      <select id="group_by">
+        <option value="region" selected>Region</option>
+        <option value="salesman">Salesman</option>
+        <option value="sold_to_group">Sold-to Group</option>
+        <option value="sold_to">Sold-to</option>
+        <option value="product_group">Product Group</option>
+      </select>
     <div id="viewSwitch"
         style="margin-left:auto; display:flex; gap:6px;">
-      <button class="btn active">Graph View</button>
+      <button class="btn active ">Graph View</button>
       <button class="btn" onclick="window.location.href='/map'">Map View</button>
     </div>
+   
   </div>
 
   <div class="controls">
-    <label>Group By:</label>
-    <select id="group_by">
-      <option value="region" selected>Region</option>
-      <option value="salesman">Salesman</option>
-      <option value="sold_to_group">Sold-to Group</option>
-      <option value="sold_to">Sold-to</option>
-      <option value="product_group">Product Group</option>
-    </select>
-
-    
     <div id="regionBtns" class="controls" style="gap:6px;">
       <button class="btn" data-val="ALL">ALL</button>
       <button class="btn" data-val="NSW">NSW</button>
@@ -73,10 +73,8 @@
       <button class="btn" data-limit="10">Top 10</button>
       <button class="btn" data-limit="20">Top 20</button>
       <button class="btn" data-limit="30">Top 30</button>
-  </div>
+    </div>
 
-
-    
     <label for="sold_to">Sold-to:</label>
     <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
     <datalist id="sold_to_list"></datalist>

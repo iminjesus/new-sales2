@@ -1260,64 +1260,102 @@ def profit_monthly():
 
 @app.get("/api/sales_map")
 def sales_map():
-    # 1) Same filter parsing as other APIs
     f = parse_filters(request)
-    value = "Qty" if f["metric"] == "qty" else "amt"
+    value = "qty" if f["metric"] == "qty" else "amt"
 
-    # 2) Customer / region / salesman / product filters
+    # 0 or missing = no top filter
+    top_limit = int(request.args.get("top_limit", 0) or 0)
+
+    # 1) Customer / region / salesman filters
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
+    # join to customer table for lat/lng + region + salesman
     joins.append("""
-    JOIN customer c
-      ON c.ship_to = s.ship_to   -- CHANGE s.ship_to to your real sales key column
-""")
-    # 3) Category filters (PCLT/TBR/18+ etc.)
+      JOIN customer c
+        ON c.ship_to = s.ship_to
+    """)
+
+    # 2) Category filters (PCLT / TBR / 18PLUS etc.)
     cat_joins, cat_where = category_filters("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
-    # 4) Direct fields
+    # 3) Direct fields (indexable) – SAME STYLE AS daily_sales
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s"); params.append(f["product_group"])
-    if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s"); params.append(f["pattern"])
+        wh.append("s.product_group = %s")
+        params.append(f["product_group"])
 
-    # 5) Only customers that have coordinates
-    #    (lat/lng are on the customer table that build_customer_filters joined, here assumed alias c)
+    if f["pattern"] != "ALL":
+        wh.append("s.pattern = %s")
+        params.append(f["pattern"])
+
+    # Only customers that have coordinates
     wh.append("c.latitude IS NOT NULL")
     wh.append("c.longitude IS NOT NULL")
 
-    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
-    # 6) Aggregate by customer/location instead of by day
-    sql = f"""
-      SELECT
-          c.ship_to       AS ship_to,
-          c.ship_to_name  AS ship_to_name,
-          c.latitude           AS latitude,
-          c.longitude           AS longitude,
-          MAX(c.bde_state)   AS region,      -- make sure this line exists
-          MAX(c.salesman_name)      AS bde,         -- and this one
-          SUM(s.{value})  AS total_value
-        FROM sales_2501_11 s
-        {' '.join(joins)}
-        {where_sql}
-       GROUP BY
-          c.ship_to,
-          c.ship_to_name,
-          c.latitude,
-          c.longitude
-       ORDER BY total_value DESC
-    """
-
-    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
     try:
-        cur.execute(sql, tuple(params))
+        top_sold_to = None
+
+        # 4) If top_limit > 0, get top N sold_to first (same pattern as daily_sales)
+        if top_limit > 0:
+            top_sql = f"""
+              SELECT s.sold_to AS sold_to
+                FROM sales_2501_11 s
+                {' '.join(joins)}
+                {base_where_sql}
+               GROUP BY s.sold_to
+               ORDER BY SUM(s.{value}) DESC
+               LIMIT %s
+            """
+            cur.execute(top_sql, tuple(params) + (top_limit,))
+            top_rows = cur.fetchall()
+            top_sold_to = [r["sold_to"] for r in top_rows]
+
+            # no matching customers – nothing to plot
+            if not top_sold_to:
+                return jsonify([])
+
+        # 5) Map totals, optionally restricted to top N sold_to
+        wh2     = list(wh)
+        params2 = list(params)
+
+        if top_sold_to:
+            placeholders = ",".join(["%s"] * len(top_sold_to))
+            wh2.append(f"s.sold_to IN ({placeholders})")
+            params2.extend(top_sold_to)
+
+        where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
+
+        map_sql = f"""
+          SELECT
+              c.ship_to       AS ship_to,
+              c.ship_to_name  AS ship_to_name,
+              c.latitude      AS latitude,
+              c.longitude     AS longitude,
+              MAX(c.bde_state)      AS region,
+              MAX(c.salesman_name)  AS bde,
+              SUM(s.{value})        AS total_value
+            FROM sales_2501_11 s
+            {' '.join(joins)}
+            {where_sql2}
+           GROUP BY
+              c.ship_to,
+              c.ship_to_name,
+              c.latitude,
+              c.longitude
+           ORDER BY total_value DESC
+        """
+        cur.execute(map_sql, tuple(params2))
         rows = cur.fetchall()
     finally:
-        cur.close(); conn.close()
+        cur.close()
+        conn.close()
 
-    # 7) For the map we just return the rows directly (no day_map)
+    # For the map we just return rows directly
     return jsonify(rows)
 
 # ------------------------------------------------------------------------------

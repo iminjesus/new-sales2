@@ -1425,7 +1425,26 @@ async function loadProfit() {
 
 async function refreshAllWithKpi(){
   // save current filters so map.html can read them
+   // save current filters so other views (e.g. map) can read them
   localStorage.setItem("salesFilters", JSON.stringify(filters));
+
+  const hasMap       = document.getElementById('salesMap');
+  const hasDashboard = document.getElementById('dailyChart');
+
+  // If we are on the map page and map.js has defined loadSalesMap,
+  // delegate to that instead of drawing all the graphs.
+  if (hasMap) {
+    if (typeof loadSalesMap === "function") {
+      await loadSalesMap();
+    }
+    // on map view we don't need to run the big dashboard stack
+    return;
+  }
+
+  // If we don't even have the main dashboard canvases, do nothing.
+  if (!hasDashboard) {
+    return;
+  }
   await drawDailyTotals(),          // now uses October data internally
   await drawDailyStacked(),
   await drawMonthlyKPI();
