@@ -3,9 +3,9 @@ import time
 import os
 import requests
 
-INPUT_FILE = "addresses_1.csv"             # your exported CSV from Excel
-OUTPUT_FILE = "addresses_1_geocoded.csv"   # final output
-CACHE_FILE = "geocode_1_cache.csv"         # progress cache
+INPUT_FILE = "address_add_2.csv"             # your exported CSV from Excel
+OUTPUT_FILE = "address_add_geocoded.csv"   # final output
+CACHE_FILE = "geocode_add_cache.csv"         # progress cache
 
 # Column names (as they appear in your CSV header)
 ADDRESS1_COL = "Address 1"
@@ -76,7 +76,7 @@ def geocode(address, session):
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {
         "address": address,
-        "key": "",  # <-- put your key here
+        "key": "AIzaSyCXBVpgrLEc_iCheZxAQ4TXu_kzYoAotmw",  # <-- put your key here
     }
 
     resp = session.get(url, params=params, timeout=10)

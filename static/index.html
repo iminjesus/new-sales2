@@ -6,20 +6,67 @@
 
   <!-- CDN for Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
   <script>
     Chart.register(ChartDataLabels);
   </script>
 
-  <!-- Absolute paths since index.html is served from "/" -->
+  <!-- Served from Flask: /static -->
   <link rel="stylesheet" href="/static/style.css">
+
+  <style>
+    /* KPI table column widths + prevent squishing */
+    .kpi-profit-row{ width:100%; }
+    #kpiByRegion{ width:100%; border-collapse:collapse; table-layout:fixed; }
+    #kpiByRegion th, #kpiByRegion td{
+      padding:3px 4px;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      font-size:20px;
+    }
+    #kpiByRegion th:nth-child(1), #kpiByRegion td:nth-child(1){ width:70px; text-align:center; }
+    #kpiByRegion th:nth-child(2), #kpiByRegion td:nth-child(2){ width:200px; text-align:center; }
+    #kpiByRegion th:nth-child(3), #kpiByRegion td:nth-child(3){ width:95px; }
+    #kpiByRegion th:nth-child(4), #kpiByRegion td:nth-child(4){ width:70px; }
+    #kpiByRegion th:nth-child(5), #kpiByRegion td:nth-child(5){ width:70px; }
+    #kpiByRegion th:nth-child(6), #kpiByRegion td:nth-child(6){ width:70px; }
+    #kpiByRegion th:nth-child(7), #kpiByRegion td:nth-child(7){ width:70px; }
+
+    /* Make KPI box truly wide */
+    .kpi-profit-row > .box:first-child{ width:640px; min-width:640px; }
+  
+    /* custom dropdown (searchable) */
+    .dd { position: relative; display: inline-block; margin-left: 8px; }
+    .dd-wrap { display:flex; align-items:center; gap:4px; }
+    .dd-wrap input { width: 140px; }
+    .dd-btn { padding: 2px 6px; cursor: pointer; }
+    .dd-menu {
+      position: absolute;
+      top: calc(100% + 2px);
+      left: 0;
+      width: 240px;
+      max-height: 260px;
+      overflow: auto;
+      background: #fff;
+      border: 1px solid #bbb;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+      z-index: 9999;
+      display: none;
+    }
+    .dd-item { padding: 6px 8px; cursor: pointer; white-space: nowrap; }
+    .dd-item:hover { background: #f0f0f0; }
+    .dd-empty { padding: 8px; color: #777; }
+
+  </style>
+
 </head>
+
 <body>
   <h2>Sales Dashboard</h2>
 
   <div id="topRow" class="controls"
-     style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
 
     <!-- Category buttons -->
     <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
@@ -31,26 +78,28 @@
       <button class="btn" data-val="SUV">SUV</button>
       <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
       <button class="btn" data-val="HM">HM</button>
+      <button class="btn" data-val="443">443</button>
     </div>
-    
+
     <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
       <button class="btn" data-metric="qty">Qty</button>
       <button class="btn" data-metric="amount">Amount</button>
     </div>
+
     <label style="gap:6px; margin-left:50px;">Group By:</label>
-      <select id="group_by">
-        <option value="region" selected>Region</option>
-        <option value="salesman">Salesman</option>
-        <option value="sold_to_group">Sold-to Group</option>
-        <option value="sold_to">Sold-to</option>
-        <option value="product_group">Product Group</option>
-      </select>
-    <div id="viewSwitch"
-        style="margin-left:auto; display:flex; gap:6px;">
-      <button class="btn active ">Graph View</button>
-      <button class="btn" onclick="window.location.href='/map'">Map View</button>
+    <select id="group_by">
+      <option value="region" selected>Region</option>
+      <option value="salesman">Salesman</option>
+      <option value="sold_to_group">Sold-to Group</option>
+      <option value="sold_to">Sold-to</option>
+      <option value="product_group">Product Group</option>
+    </select>
+
+    <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
+      <button class="btn active">Graph View</button>
+      <button class="btn" onclick="window.location.href='/map'+ window.location.search">Map View</button>
+      <button class="btn" onclick="window.location.href='/stock'+ window.location.search">stock</button>
     </div>
-   
   </div>
 
   <div class="controls">
@@ -74,34 +123,99 @@
       <button class="btn" data-limit="20">Top 20</button>
       <button class="btn" data-limit="30">Top 30</button>
     </div>
+    <button id="btnDownloadExcel" class="btn" style="margin-left:12px;">Excel Download</button>
+    <!-- Sold-to (custom dropdown) -->
+    <div class="dd">
+      <label for="sold_to">Sold-to:</label>
+      <div class="dd-wrap">
+        <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
+        <button type="button" class="dd-btn" id="soldToBtn">▼</button>
+        <button type="button" class="dd-btn" id="soldToClear">✕</button>
+      </div>
+      <div class="dd-menu" id="soldToMenu"></div>
+    </div>
 
-    <label for="sold_to">Sold-to:</label>
-    <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
-    <datalist id="sold_to_list"></datalist>
-
-    <!-- NEW: Ship-to (enabled only after Sold-to is chosen) -->
-    <label style="margin-left:8px;">Ship-to:</label>
-    <input list="ship_to_list" id="ship_to" placeholder="Search Ship-to..." />
-    <datalist id="ship_to_list"></datalist>
-
+    <!-- Ship-to (custom dropdown) -->
+    <div class="dd">
+      <label for="ship_to">Ship-to:</label>
+      <div class="dd-wrap">
+        <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
+        <button type="button" class="dd-btn" id="shipToBtn">▼</button>
+        <button type="button" class="dd-btn" id="shipToClear">✕</button>
+      </div>
+      <div class="dd-menu" id="shipToMenu"></div>
+    </div>
 
     <label>Product Group:</label>
     <select id="product_group"><option value="ALL">ALL</option></select>
 
-    <!-- NEW: Pattern (list filtered by Product Group) -->
-    <label style="margin-left:8px;">Pattern:</label>
-    <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
-    <datalist id="pattern_list"></datalist>
-    
-</body>
-</html>  
-
-
-  <!-- region/BDE KPI table -->
-  <table id="kpiByRegion" class="kpi-table"></table>
-  <div class="box"><h3>Profit (Monthly)</h3><div class="chart-fixed"><canvas id="profitComboChart"></canvas></div></div></div>
+    <!-- Pattern (custom dropdown) -->
+  <div class="dd">
+    <label for="pattern">Pattern:</label>
+    <div class="dd-wrap">
+      <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+      <button type="button" class="dd-btn" id="patternBtn">▼</button>
+      <button type="button" class="dd-btn" id="patternClear">✕</button>
+    </div>
+    <div class="dd-menu" id="patternMenu"></div>
   </div>
-    
+
+  <!-- Material (custom dropdown) -->
+  <div class="dd">
+    <label for="material">Material:</label>
+    <div class="dd-wrap">
+      <input id="material" type="text" placeholder="Search Material" autocomplete="off">
+      <button type="button" class="dd-btn" id="materialBtn">▼</button>
+      <button type="button" class="dd-btn" id="materialClear">✕</button>
+    </div>
+    <div class="dd-menu" id="materialMenu"></div>
+  </div>
+  </div>
+
+  <!-- KPI + Profit row (same row, no overlap) -->
+  <div class="kpi-profit-row" style="
+    margin-top:4px;
+    display:grid;
+    grid-template-columns: 640px minmax(0, 1fr);
+    gap:12px;
+    align-items:start;
+    width:100%;
+    box-sizing:border-box;
+  ">
+    <!-- KPI -->
+    <div class="box" style="
+      width:640px;
+      box-sizing:border-box;
+      overflow:hidden;
+    ">
+      <table id="kpiByRegion" class="kpi-table" style="
+        width:100%;
+        table-layout:fixed;
+        border-collapse:collapse;
+      "></table>
+    </div>
+
+    <!-- Profit -->
+    <div class="box" style="
+      width:100%;
+      min-width:0;              /* 중요: 이거 없으면 차트가 튀면서 겹칠 수 있음 */
+      box-sizing:border-box;
+      overflow:hidden;          /* 중요: 캔버스가 밖으로 나가는걸 막음 */
+    ">
+      <h3>Profit (Monthly)</h3>
+      <div class="chart-fixed" style="
+        position:relative;
+        width:100%;
+        overflow:hidden;
+      ">
+        <canvas id="profitComboChart" style="
+          display:block;
+          width:100% !important;
+          height:320px !important;
+        "></canvas>
+      </div>
+    </div>
+  </div>
   <!-- ROW 1: Daily -->
   <div class="chart-row" style="margin-top:4px;">
     <div class="box"><h3 id="dailyTitle">Daily Sales</h3><canvas id="dailyChart"></canvas></div>
@@ -116,16 +230,14 @@
     <div class="box"><h3>Stacked Cumulative %</h3><canvas id="stackedDailyCumPercentChart"></canvas></div>
   </div>
 
-
-
-  <!-- ROW 3: base 2 charts Monthly -->
+  <!-- ROW 3: Monthly -->
   <div class="chart-row" style="margin-top:4px;">
     <div class="box"><h3>Monthly Sales</h3><canvas id="monthlyChart"></canvas></div>
     <div class="box"><h3>Stacked Monthly</h3><canvas id="stackedMonthlyChart"></canvas></div>
-    <div class="box"><h3>Stacked Monthly %</h3><canvas id="stackedMonthlyPercentChart"></canvas></div>  
+    <div class="box"><h3>Stacked Monthly %</h3><canvas id="stackedMonthlyPercentChart"></canvas></div>
   </div>
 
-  <!-- ROW 4: stacked 2 charts Monthly -->
+  <!-- ROW 4: Monthly cumulative -->
   <div class="chart-row" style="margin-top:4px;">
     <div class="box"><h3>Cumulative by Month</h3><canvas id="monthlyCumChart"></canvas></div>
     <div class="box"><h3>Stacked Cumulative by Month</h3><canvas id="stackedMonthlyCumChart"></canvas></div>
@@ -139,14 +251,55 @@
     <div class="box"><h3>Stacked Yearly %</h3><canvas id="stackedYearlyPercentChart"></canvas></div>
   </div>
 
-  <!-- tiny error bar to surface API issues -->
   <div id="errbar" class="errbar" hidden></div>
 
+  <!-- Leaflet is used by /map page; safe to keep here -->
   <script
-  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-  crossorigin=""
-></script>
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
   <script src="/static/app.js" defer></script>
+<script>
+(function () {
+
+  function downloadExcel() {
+
+    const activeBtn = document.querySelector("#topCustomerControls .btn.active");
+    const top_limit = activeBtn ? activeBtn.dataset.limit : "0";
+
+    const salesman = document.getElementById("salesman_name")?.value || "ALL";
+    const group = document.getElementById("sold_to_group")?.value || "ALL";
+    const soldto = document.getElementById("sold_to")?.value || "";
+
+    const params = new URLSearchParams();
+    params.set("top_limit", top_limit);
+
+    if (salesman !== "ALL") params.set("salesman_name", salesman);
+    if (group !== "ALL") params.set("sold_to_group", group);
+    if (soldto) params.set("sold_to", soldto);
+
+    const url = "/api/export_excel?" + params.toString();
+
+    console.log("Download:", url);
+
+    // ⭐ Direct download (no fetch)
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "export.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  window.addEventListener("load", () => {
+    const btn = document.getElementById("btnDownloadExcel");
+    if (!btn) return;
+    btn.onclick = downloadExcel;
+  });
+
+})();
+</script>
 </body>
 </html>

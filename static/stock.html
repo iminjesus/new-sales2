@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Stock</title>
+
+  <link rel="stylesheet" href="/static/style.css">
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    #stockMap{ height: 1200px; min-height: 760px; }
+
+    .status{
+      position:absolute;left:12px;bottom:12px;z-index:800;
+      background:rgba(255,255,255,0.92);
+      border:1px solid #ddd;border-radius:8px;
+      padding:8px 10px;font-size:12px;max-width:520px
+    }
+    .legend{margin-top:6px;border-top:1px dashed #ddd;padding-top:6px;color:#555}
+    .legend .row{display:flex;gap:10px;align-items:center;margin-top:4px}
+    .swatch{width:10px;height:10px;border-radius:50%}
+    .swatch.stock{background:#1e78ff}
+    .swatch.orders{background:#999}
+    .swatch.incoming{background:#8b5cf6}
+  </style>
+</head>
+
+<body>
+  <h2>Stock</h2>
+
+  <div id="topRow" class="controls"
+       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+
+    <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
+      <button class="btn active" data-val="ALL">All</button>
+      <button class="btn" data-val="PCLT">PCLT</button>
+      <button class="btn" data-val="TBR">TBR</button>
+      <button class="btn" data-val="18PLUS">18+ Inch</button>
+      <button class="btn" data-val="ISEG">EV/iSeg</button>
+      <button class="btn" data-val="SUV">SUV</button>
+      <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
+      <button class="btn" data-val="HM">HM</button>
+    </div>
+
+    <div id="ordersMetricBtns" class="controls" style="gap:6px; margin-left:20px;">
+      <button class="btn active" data-metric="po">Orders PO</button>
+      <button class="btn" data-metric="confirm">Orders Confirm</button>
+    </div>
+
+    <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
+      <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
+      <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>
+      <button class="btn active">Stock</button>
+    </div>
+  </div>
+
+  <div class="controls">
+    <label>Product Group:</label>
+    <select id="product_group"><option value="ALL">ALL</option></select>
+
+    <label style="margin-left:8px;">Pattern:</label>
+    <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
+    <datalist id="pattern_list"></datalist>
+
+    <label style="margin-left:8px;">Material:</label>
+    <input list="material_list" id="material" placeholder="Search Material" />
+    <datalist id="material_list"></datalist>
+
+    <button id="btnApply" class="btn" style="margin-left:12px;">Apply</button>
+    <button id="btnClear" class="btn">Clear</button>
+    <button id="btnRefresh" class="btn">Refresh</button>
+  </div>
+
+  <div id="errbar" class="errbar" hidden></div>
+
+  <div style="position:relative; margin-top:4px;">
+    <div id="stockMap"></div>
+
+    <div class="status">
+      <div id="statusLine">Ready.</div>
+      <div class="legend">
+        <div>Same filters applied to all layers.</div>
+        <div class="row"><span class="swatch stock"></span><span>Stock (Plant)</span></div>
+        <div class="row"><span class="swatch orders"></span><span>Orders (Origin)</span></div>
+        <div class="row"><span class="swatch incoming"></span><span>Incoming (in transit)</span></div>
+      </div>
+    </div>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+
+  <script src="/static/stock.js" defer></script>
+</body>
+</html>

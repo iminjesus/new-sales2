@@ -60,7 +60,8 @@ async function loadSalesMap() {
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
     pattern:       filters.pattern,
-    top_limit:     filters.top_limit || 0
+    material:      filters.material,
+    top_limit:     filters.top_limit || 0 
   }).toString();
 
   const data = await fetchJSON(`/api/sales_map?${qs}`);
@@ -72,49 +73,61 @@ async function loadSalesMap() {
   const points = [];
 
   data.forEach(row => {
-    const lat = row.lat ?? row.latitude ?? row.Latitude;
-    const lng = row.lng ?? row.longitude ?? row.Longitude;
-    if (lat == null || lng == null) return;
+  // DEBUG: log first row once
+  // (you'll see target_value and total_value in the console)
+  if (!window.__loggedSalesMapRow) {
+    console.log("sales_map row:", row);
+    window.__loggedSalesMapRow = true;
+  }
 
-    const total  = row.total_value ?? row.total ?? 0;
-    const radius = 4 + Math.log10(total + 1) * 3;
+  const lat = row.lat ?? row.latitude ?? row.Latitude;
+  const lng = row.lng ?? row.longitude ?? row.Longitude;
+  if (lat == null || lng == null) return;
 
-    const regionVal = row.region ?? row.Region;
-    const shipTo = row.ship_to ?? row.Ship_To ?? "";
-    const shipNm = row.ship_to_name ?? row.Ship_To_Name ?? "";
-    const bde    = row.bde ?? row.BDE ?? row.BDE_Name ?? "";
+  // we KNOW from /api/sales_map that keys are total_value and target_value
+  const total  = Number(row.total_value || 0);
+  const target = Number(row.target_value || 0);
+  const ach    = target > 0 ? (total / target) * 100 : 0;
 
-    const color = getBdeColor(bde);
+  const radius = 4 + Math.log10(total + 1) * 3;
 
-    const latNum = +lat;
-    const lngNum = +lng;
+  const regionVal = row.region ?? row.Region;
+  const shipTo = row.ship_to ?? row.Ship_To ?? "";
+  const shipNm = row.ship_to_name ?? row.Ship_To_Name ?? "";
+  const bde    = row.bde ?? row.BDE ?? row.BDE_Name ?? "";
 
-    const marker = L.circleMarker([latNum, lngNum], {
-      radius,
-      color,
-      fillColor: color,
-      fillOpacity: 0.7,
-      weight: 1
-    });
+  const color = getBdeColor(bde);
 
-    marker.bindPopup(
-      `${shipTo} - ${shipNm}<br>` +
-      `Region: ${regionVal || "-"}<br>` +
-      `BDE: ${bde || "-"}<br>` +
-      `Total: ${Number(total || 0).toLocaleString()}`
-    );
+  const latNum = +lat;
+  const lngNum = +lng;
 
-    marker.on("click", () => {
-      const titleEl = document.getElementById("shopTitle");
-      if (titleEl) {
-        titleEl.textContent = (shipNm || shipTo) + " – Monthly / Yearly";
-      }
-      drawShopCharts(shipTo);
-    });
-
-    marker.addTo(salesMapLayer);
-    points.push([latNum, lngNum]);
+  const marker = L.circleMarker([latNum, lngNum], {
+    radius,
+    color,
+    fillColor: color,
+    fillOpacity: 0.7,
+    weight: 1
   });
+
+  marker.bindPopup(
+  `${shipTo} - ${shipNm}<br>` +
+  `Region: ${regionVal || "-"}<br>` +
+  `BDE: ${bde || "-"}<br>` +
+  `Total (2025): ${(total ?? 0).toLocaleString()}`
+  );
+
+  marker.on("click", () => {
+    const titleEl = document.getElementById("shopTitle");
+    if (titleEl) {
+      titleEl.textContent = (shipNm || shipTo) + " – Monthly / Yearly";
+    }
+    drawShopCharts(shipTo);
+  });
+
+  marker.addTo(salesMapLayer);
+  points.push([latNum, lngNum]);
+});
+
 
   if (points.length === 1) {
     salesMap.setView(points[0], 10);
@@ -179,17 +192,23 @@ async function drawShopCharts(shipToCode) {
     pattern:       filters.pattern
   });
 
-  const [salesRows, targetRows, yearlyRows] = await Promise.all([
-    fetchJSON("/api/monthly_sales?" + params.toString()),
-    fetchJSON("/api/monthly_target?" + params.toString()),
-    fetchJSON("/api/yearly_sales?" + params.toString())
+  const params25 = new URLSearchParams(params); params25.set("year", "2025");
+  const params26 = new URLSearchParams(params); params26.set("year", "2026");
+
+  const [sales25Rows, sales26Rows, target26Rows, yearlyRows] = await Promise.all([
+  fetchJSON("/api/monthly_sales?" + params25.toString()),
+  fetchJSON("/api/monthly_sales?" + params26.toString()),
+  fetchJSON("/api/monthly_target?" + params26.toString()),
+  fetchJSON("/api/yearly_sales?" + params.toString())
   ]);
 
   const monthLabels  = ["Ja","Fe","Ma","Ap","Ma","Ju","Ju","Au","Se","Oc","No","De"];
-  const sales   = monthLabels.map((_, i) => Number((salesRows[i]?.value)  || 0));
-  const targets = monthLabels.map((_, i) => Number((targetRows[i]?.value) || 0));
-  const achieve = monthLabels.map((_, i) =>
-    targets[i] > 0 ? (sales[i] / targets[i]) * 100 : 0
+  const sales25 = monthLabels.map((_, i) => Number((sales25Rows[i]?.value) || 0));
+  const sales26 = monthLabels.map((_, i) => Number((sales26Rows[i]?.value) || 0));
+  const targets26 = monthLabels.map((_, i) => Number((target26Rows[i]?.value) || 0));
+
+  const achieve26 = monthLabels.map((_, i) =>
+  targets26[i] > 0 ? (sales26[i] / targets26[i]) * 100 : 0
   );
 
   // monthly side chart
@@ -201,39 +220,29 @@ async function drawShopCharts(shipToCode) {
       data: {
         labels: monthLabels,
         datasets: [
+          
           {
-            label: "Achievement(%)",
-            type: "line",
-            data: achieve,
-            yAxisID: "y1",
-            borderWidth: 2,
-            pointRadius: 0,
-            borderColor: "#ef4444",
-            order: 99,
-            datalabels: {
-              display: true,
-              align: "top",
-              anchor: "end",
-              formatter: v => (v == null ? "" : v.toFixed(1) + "%")
-            }
+          label: filters.metric === "amount" ? "Sales Amount (2025)" : "SalesQty (2025)",
+          type: "bar",
+          data: sales25,
+          backgroundColor: "#7dc4a3",
+          datalabels: { display: false }
           },
           {
-            label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
-            data: sales,
-            backgroundColor: "#ABDEE6",
-            categoryPercentage: 0.9,
-            barPercentage: 0.9,
-            datalabels: { display: false }
+          label: filters.metric === "amount" ? "Sales Amount (2026)" : "SalesQty (2026)",
+          type: "bar",
+          data: sales26,
+          backgroundColor: "#5fbcd3",
+          datalabels: { display: false }
           },
           {
-            label: "Target",
-            type: "bar",
-            data: targets,
-            borderWidth: 2,
-            borderColor: "#ABDEE6",
-            datalabels: { display: false }
+          label: "Target (2026)",
+          type: "bar",
+          data: targets26,
+          backgroundColor: "#4d8897",
+          datalabels: { display: false }
           }
-        ]
+          ]
       },
       options: monthlyMapOptions()
     });
@@ -295,4 +304,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Category, metric, region buttons will already have listeners from app.js.
   // Just trigger one initial refresh.
   await loadSalesMap();
+  if (salesMap) setTimeout(() => salesMap.invalidateSize(), 0);
 });
+

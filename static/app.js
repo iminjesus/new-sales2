@@ -1,31 +1,56 @@
 // --- fast defaults ---
 
-Chart.defaults.animation = false;               // no animations
+// --- fast defaults (safe) ---
+// Put this AFTER Chart.js is loaded (and AFTER ChartDataLabels if you use it).
+
+Chart.defaults.animation = false;                 // Disable animations for speed
 Chart.defaults.responsiveAnimationDuration = 0;
-Chart.defaults.normalized = true;               // faster parsing
+Chart.defaults.normalized = true;                 // Faster parsing for large datasets
 Chart.defaults.elements.bar.borderWidth = 0;
 
-// turn value labels OFF (they’re expensive to draw)
+// --- Optional: custom value-drawing plugin (expensive) ---
 const SHOW_BAR_VALUES = false;
-if (SHOW_BAR_VALUES && !Chart.registry.plugins.get("showDataValues")) {
-  Chart.register(showDataValuesPlugin);
-}
-// DataLabels: show only for line datasets (no labels on bars)
-Chart.defaults.plugins = Chart.defaults.plugins || {};
-Chart.defaults.plugins.datalabels = {
-  display: (ctx) => {
-    const type = ctx.dataset.type || ctx.chart.config.type;
-    return type === "line";          // true for lines, false for bars
+if (SHOW_BAR_VALUES && typeof showDataValuesPlugin !== "undefined") {
+  // Register only once
+  if (!Chart.registry.plugins.get("showDataValues")) {
+    Chart.register(showDataValuesPlugin);
   }
-};
+}
+
+// --- DataLabels: show ONLY for line datasets ---
+// This requires chartjs-plugin-datalabels to be loaded and registered.
+(function enableLineOnlyDataLabels(){
+  // If ChartDataLabels is not available, just skip safely.
+  if (typeof ChartDataLabels === "undefined") return;
+
+  // Register only once
+  if (!Chart.registry.plugins.get("datalabels")) {
+    Chart.register(ChartDataLabels);
+  }
+
+  // IMPORTANT:
+  // Do NOT overwrite Chart.defaults.plugins.
+  // Only set the datalabels sub-config.
+  Chart.defaults.plugins.datalabels = {
+    display: (ctx) => {
+      // Dataset type wins; otherwise chart type.
+      const dsType = ctx.dataset?.type;
+      const chartType = ctx.chart?.config?.type;
+      const type = dsType || chartType;
+      return type === "line";                     // True for lines, false for bars
+    }
+  };
+})();
+
 const REGION_STACK_ORDER = ["NSW", "QLD", "VIC", "SA", "WA", "COMMON"];
+  
 /* -------------------------- state & helpers -------------------------- */
 const COLORS=["#374388ff","#90359cff","#3e9150ff","#93b14dff","#d6c635ff","#95E4E5","#275ccfff","#175d96ff","#366592ff","#667c91ff","#FF968A","#FFAEA6"];
 const REGION_SALESMEN={
-  NSW:["Hamid Jallis","LUTTRELL STEVE","Cummings Mark","Lee Don"],
+  NSW:["LUTTRELL STEVE","Borghese Alessio","NSW SM"],
   QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
   VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-  WA:["Fruci Davide","Gilbert Michael"]
+  WA:["DAIS Jim","WA SM"]
 };
 const fmt = (n) => (+n || 0).toLocaleString();
 
@@ -46,7 +71,8 @@ const filters={
   sold_to:"ALL",
   ship_to:"ALL",          
   product_group:"ALL",
-  pattern:"ALL",          
+  pattern:"ALL",    
+  material:"ALL",      
   category:"ALL",
   category_target:"ALL",
   top_limit: 0   
@@ -62,6 +88,7 @@ const mapFilters = {
   ship_to:"ALL",          
   product_group:"ALL",
   pattern:"ALL",          
+  material:"ALL",
   category:"ALL",
   category_target:"ALL",
   top_limit: 0   
@@ -91,6 +118,19 @@ const fetchJSON = async (u) => {
     return [];
   }
 };
+const fetchJSON_DIRECT = async (u) => {
+  // Bypass any v2 shim/caching (used for KPI table accuracy)
+  try {
+    const r = await fetch(u, {credentials:'same-origin'});
+    if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    return await r.json();
+  } catch (e) {
+    console.error('Fetch fail (DIRECT):', u, e);
+    showError(`Failed: ${u} — ${e.message}`);
+    return [];
+  }
+};
+
 const setActive = (wrap, attr, val) => {
   if (!wrap) return;
   wrap.querySelectorAll(".btn").forEach(b => {
@@ -111,6 +151,7 @@ const labelForRow = (r) => r.group_label || 'UNKNOWN';
 
 function populateDatalist(listId, items){
   const list = document.getElementById(listId);
+  if (!list) return;
   list.innerHTML = '';
   (items||[]).forEach(v=>{
     const o = document.createElement('option');
@@ -119,29 +160,11 @@ function populateDatalist(listId, items){
 }
 
 async function refreshSoldToList() {
-  const qs = new URLSearchParams({
-    sold_to_group: filters.sold_to_group || "ALL",
-    metric:        filters.metric,
-    category:      filters.category,
-    region:        filters.region,
-    salesman:      filters.salesman,
-    sold_to:       filters.sold_to,
-    ship_to:       filters.ship_to,
-    product_group: filters.product_group,
-    pattern:       filters.pattern,
-    top_limit:     filters.top_limit || 0   // 0 = show all
-  }).toString();
-
-  const soldTo = await fetchJSON("/api/sold_to_names?" + qs);
-  const list   = document.getElementById("sold_to_list");
-  if (!list) return;
-
-  list.innerHTML = "";
-  soldTo.forEach(n => {
-    const o = document.createElement("option");
-    o.value = n;
-    list.appendChild(o);
-  });
+  // NOTE:
+  // We intentionally DO NOT send current sold_to/ship_to/pattern/material as filters here.
+  // If we do, the list can "lock" to the current value and you can't re-open other options.
+  await refreshSoldToCustom();
+  await refreshShipToCustom();
 }
 async function ensureTopSet(){
   const k = keyForTopSet();
@@ -294,7 +317,7 @@ function getCommonOptions(stacked=false, yMax, yTitle){
 // Collect the exact params your APIs expect
 function getFilterParams() {
   // If you already have a global getFilterParams(), keep using it.
-  // This fallback matches your APIs: metric, category, region, salesman, sold_to_group, sold_to, product_group, ship_to, pattern
+  // This fallback matches your APIs: metric, category, region, salesman, sold_to_group, sold_to, product_group, ship_to, pattern, material
   const $ = (sel) => document.querySelector(sel);
 
   // Adjust selectors only if yours differ.
@@ -307,29 +330,32 @@ function getFilterParams() {
   const product_group = ($('#productGroup')?.value || 'ALL');
   const ship_to       = ($('#shipTo')?.value || 'ALL');
   const pattern       = ($('#patternInput')?.value || 'ALL');
-
-  return { metric, category, region, salesman, sold_to_group, sold_to, product_group, ship_to, pattern };
+  const material      = ($('#material')?.value || 'ALL');
+  return { metric, category, region, salesman, sold_to_group, sold_to, product_group, ship_to, pattern, material };
 }
 
 
 /* -------------------------- UI wiring -------------------------- */
+
 document.getElementById('catBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
   filters.category=e.target.dataset.val;
   [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
-  refreshAllWithKpi();
+  refreshAllDebounced();
 });
 document.getElementById('metricBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
   filters.metric=e.target.dataset.metric;
   setActive(document.getElementById('metricBtns'),"metric",filters.metric);
-  document.getElementById('dailyTitle').textContent = filters.metric==="amount"?"Daily Amount":"Daily Sales";
-  document.getElementById('cumTitle').textContent   = filters.metric==="amount"?"Cumulative Amount":"Cumulative Sales";
-  refreshAllWithKpi();
+  const dt = document.getElementById('dailyTitle');
+  if (dt) dt.textContent = filters.metric==="amount"?"Daily Amount":"Daily Sales";
+  const ct = document.getElementById('cumTitle');
+  if (ct) ct.textContent = filters.metric==="amount"?"Cumulative Amount":"Cumulative Sales";
+  refreshAllDebounced();
 });
 document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
-  refreshAllWithKpi();
+  refreshAllDebounced();
 });
 document.getElementById('regionBtns').addEventListener("click",e=>{
   if(!e.target.classList.contains("btn"))return;
@@ -339,62 +365,78 @@ document.getElementById('regionBtns').addEventListener("click",e=>{
   populateSelect(document.getElementById('salesman_name'),[...new Set(list)].sort());
   filters.salesman = 'ALL';
   document.getElementById('salesman_name').value = 'ALL';
-  refreshAllWithKpi();
+  refreshAllDebounced();
 });
 
 document.getElementById('salesman_name').addEventListener('change', (e)=>{
   filters.salesman = e.target.value || 'ALL';
-  refreshAllWithKpi();
+  refreshAllDebounced();
 });
-document.getElementById('sold_to_group').addEventListener('change', async ()=>{  filters.sold_to_group = document.getElementById('sold_to_group').value || 'ALL';
 
-  const names = await fetchJSON(`/api/sold_to_names?sold_to_group=${document.getElementById('sold_to_group').value}`);
-  populateDatalist('sold_to_list', names);
-  await refreshShipTo(); // NEW: keep ship-to list in sync with group
-  refreshAllWithKpi();
+document.getElementById('sold_to_group').addEventListener('change', async ()=>{
+  filters.sold_to_group = document.getElementById('sold_to_group').value || 'ALL';
+
+  // reset dependent filters
+  const soldEl = document.getElementById('sold_to');
+  const shipEl = document.getElementById('ship_to');
+  if (soldEl) soldEl.value = "";
+  if (shipEl) shipEl.value = "";
+  filters.sold_to = "ALL";
+  filters.ship_to = "ALL";
+
+  // refresh dropdown option caches
+  await refreshSoldToCustom();
+  await refreshShipToCustom();
+
+  refreshAllDebounced();
 });
+
 
 // When SOLD_TO_GROUP changes you already reload sold_to options — keep as is.
 
 // SOLD-TO -> fetch Ship-to names under that Sold-to, enable input
-document.getElementById('sold_to').addEventListener('input', async (e) => {
-  filters.sold_to = e.target.value || 'ALL';
-   await refreshShipTo();
-  const shipInput = document.getElementById('ship_to');
-  const listId = 'ship_to_list';
 
-  if (filters.sold_to && filters.sold_to !== 'ALL') {
-    const qs = new URLSearchParams({ sold_to: filters.sold_to }).toString();
-    const names = await fetchJSON(`/api/ship_to_names?${qs}`);
-    populateDatalist(listId, names);
-    shipInput.disabled = false;
-  } else {
-    populateDatalist(listId, []);
-    shipInput.value = '';
-    shipInput.disabled = true;
-    filters.ship_to = 'ALL';
-  }
-  refreshAllWithKpi();
-});
+
+/* removed old handler: document.getElementById('sold_to').addEventListener('input' */
+
+
 
 // Ship-to input -> mirror into filters
-document.getElementById('ship_to').addEventListener('input', (e)=>{
-  filters.ship_to = document.getElementById('ship_to').value || 'ALL';
-  refreshAllWithKpi();
-});
+
+/* removed old handler: document.getElementById('ship_to').addEventListener('input' */
+
 
 // PRODUCT GROUP -> existing code… plus refresh patterns
+
 document.getElementById('product_group').addEventListener('change', async ()=>{
   filters.product_group = document.getElementById('product_group').value || 'ALL';
-  await refreshPatterns();     // NEW
-  refreshAllWithKpi();
+
+  // reset dependent filters
+  const patEl = document.getElementById('pattern');
+  const matEl = document.getElementById('material');
+  if (patEl) patEl.value = "";
+  if (matEl) matEl.value = "";
+  filters.pattern = "ALL";
+  filters.material = "ALL";
+
+  await refreshPatternsCustom();
+  await refreshMaterialsCustom();
+  await refreshSoldToCustom();
+  await refreshShipToCustom();
+
+  refreshAllDebounced();
 });
 
+
+
 // PATTERN input -> mirror into filters
-document.getElementById('pattern').addEventListener('input', (e)=>{
-  filters.pattern = e.target.value || 'ALL';
-  refreshAllWithKpi();
-});
+
+/* removed old handler: document.getElementById('pattern').addEventListener('input' */
+
+
+
+/* removed old handler: const __mat = document.getElementById('material'); */
+
 
 document.getElementById("topCustomerControls").addEventListener("click", e => {
   if (!e.target.classList.contains("btn")) return;
@@ -413,27 +455,27 @@ document.getElementById("topCustomerControls").addEventListener("click", e => {
   refreshSoldToList();
 
   // redraw charts / KPI
-  refreshAllWithKpi();
+  refreshAllDebounced();
 });
 
 async function refreshShipTo(){
-  const stg3 = document.getElementById('sold_to_group').value || 'ALL';
-  const sold = document.getElementById('sold_to').value || 'ALL';
-  const qs = new URLSearchParams({ sold_to_group: stg3, sold_to: sold }).toString();
-  const names = await fetchJSON(`/api/ship_to_names?${qs}`);
-  populateDatalist('ship_to_list', names);
-  refreshAllWithKpi();
+  // kept for backward-compat with existing init flows
+  await refreshShipToCustom();
 }
 
 // Load patterns for current product group
-async function refreshPatterns(){
-  const pg = document.getElementById('product_group').value || 'ALL';
-  const names = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
-  populateDatalist('pattern_list', names);
-  refreshAllWithKpi();
+async function refreshPatterns(){ await refreshPatternsCustom(); }
+
+async function refreshMaterials(){ await refreshMaterialsCustom(); }
+
+function cutoffIdxFromBreakdown(rows, N){
+  let cutoffIdx = -1;
+  for (const r of (rows || [])){
+    const d = parseInt(r.day, 10);
+    if (d >= 1 && d <= N) cutoffIdx = Math.max(cutoffIdx, d - 1);
+  }
+  return cutoffIdx;
 }
-
-
 
 
 
@@ -444,34 +486,34 @@ async function fetchDailySales(){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
   }).toString();
-  return fetchJSON(`/api/daily_sales?${qs}`);
+  return fetchJSON_DIRECT(`/api/daily_sales?${qs}`);
 }
 
 async function fetchDailyKPIActual(region,BDE){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
   }).toString();
-  return fetchJSON(`/api/daily_sales?${qs}`);
+  return fetchJSON_DIRECT(`/api/daily_sales?${qs}`);
 }
 
 async function fetchDailyKPITarget(region,BDE){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
   }).toString();
-  return fetchJSON(`/api/daily_target?${qs}`);
+  return fetchJSON_DIRECT(`/api/daily_target?${qs}`);
 }
 
 async function fetchDailyBreakdownWithGroup(groupBy){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: groupBy, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/daily_breakdown?${qs}`);
 }
@@ -479,109 +521,127 @@ async function fetchDailyBreakdownWithGroup(groupBy){
 
 // totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
-  const [salesRows,targetRows]=await Promise.all([
+  const [salesRows, targetRows, cutRows] = await Promise.all([
     fetchDailySales(),
     fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
-    }).toString()}`)
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
+    }).toString()}`),
+    // Use breakdown as the cutoff source (same reason stacked stops correctly)
+    fetchDailyBreakdownWithGroup("region")
   ]);
-    const labels = daysLabels();
-  const sales  = salesRows.map(r => +r.value || 0);
-  const targets = targetRows.map(r => +r.value || 0);
 
-  const salesCum  = toCumulative(sales);
-  const targetCum = toCumulative(targets);
+  const labels = daysLabels();
+  const N = labels.length;
 
-  const achievement = [];
-  const cumAchievement = [];
-
-  let lastAch = null;
-  let lastCumAch = null;
-
-  for (let i = 0; i < labels.length; i++) {
-    const s  = sales[i]   || 0;
-    const t  = targets[i] || 0;
-    const sc = salesCum[i]   || 0;
-    const tc = targetCum[i]  || 0;
-
-    // daily %
-    if (t > 0 && s > 0) {
-      lastAch = (s / t) * 100;
-      achievement.push(lastAch);
-    } else if (t > 0 && s === 0 && lastAch != null) {
-      // no sales today -> keep previous value
-      achievement.push(lastAch);
-    } else {
-      achievement.push(null);
+  // cutoffIdx from breakdown: max day present (1-based) -> 0-based index
+  let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
+  // If breakdown is empty for some reason, fallback to last non-zero in salesRows
+  // (still simple; avoids "31 rows with future zeros" problem)
+  if (cutoffIdx < 0){
+    const tmp = salesRows.map(r => (+r.value || 0));
+    for (let i = 0; i < Math.min(tmp.length, N); i++){
+      if (tmp[i] !== 0) cutoffIdx = i;
     }
-
-    // cumulative %
-    if (tc > 0 && sc > 0) {
-      lastCumAch = (sc / tc) * 100;
-      cumAchievement.push(lastCumAch);
-    } else if (tc > 0 && sc === 0 && lastCumAch != null) {
-      // no additional sales -> keep previous cumulative %
-      cumAchievement.push(lastCumAch);
-    } else {
-      cumAchievement.push(null);
-    }
+    if (cutoffIdx < 0) cutoffIdx = Math.min(salesRows.length, N) - 1;
   }
 
+  // Sales: fill up to cutoffIdx, then null
+  const sales = new Array(N).fill(null);
+  for (let i = 0; i <= cutoffIdx; i++){
+    sales[i] = (+salesRows[i]?.value || 0);
+  }
 
-  [dailyInst,dailyCumInst].forEach(c=>c&&c.destroy());
-  //if (!Chart.registry.plugins.get("showDataValues")) {
-  //  Chart.register(showDataValuesPlugin);
-  //}
-  
-  
-  dailyInst=new Chart(document.getElementById("dailyChart"),{
-      type:"bar",
-      data:{labels,datasets:[
-        {label:"Achievement(%)",type:"line", data: achievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444",  datalabels: {
-            display: (ctx) => {
+  // Targets: if you want the chart to visually stop, also null after cutoff
+  const targets = new Array(N).fill(null);
+  for (let i = 0; i <= cutoffIdx; i++){
+    targets[i] = (+targetRows[i]?.value || 0);
+  }
+
+  // Cumulative: stop at cutoffIdx
+  const salesCum  = new Array(N).fill(null);
+  const targetCum = new Array(N).fill(null);
+
+  let sRun = 0, tRun = 0;
+  for (let i = 0; i <= cutoffIdx; i++){
+    sRun += (+sales[i] || 0);
+    tRun += (+targets[i] || 0);
+    salesCum[i]  = sRun;
+    targetCum[i] = tRun;
+  }
+
+  // Achievement: stop at cutoffIdx
+  const achievement    = new Array(N).fill(null);
+  const cumAchievement = new Array(N).fill(null);
+
+  for (let i = 0; i <= cutoffIdx; i++){
+    const s  = (+sales[i] || 0);
+    const t  = (+targets[i] || 0);
+    const sc = (+salesCum[i] || 0);
+    const tc = (+targetCum[i] || 0);
+
+    if (t  > 0) achievement[i]    = +((s  / t ) * 100).toFixed(1);
+    if (tc > 0) cumAchievement[i] = +((sc / tc) * 100).toFixed(1);
+  }
+
+  [dailyInst, dailyCumInst].forEach(c => c && c.destroy());
+
+  dailyInst = new Chart(document.getElementById("dailyChart"), {
+    type: "bar",
+    data: { labels, datasets: [
+      { label: "Ach(%)", type: "line", data: achievement, yAxisID: "y1",
+        borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
+        datalabels: {
+          display: (ctx) => {
             const i = ctx.dataIndex;
-            return (i % 2 === 0) && (sales[i] > 0);
+            return (i % 2 === 0) && (sales[i] !== null) && (sales[i] > 0);
           },
-          align: "top",
-          anchor: "end",
+          align: "top", anchor: "end",
           formatter: v => v == null ? "" : v.toFixed(1) + "%"
-          }
-        },
-        {label:filters.metric==="amount"?"Sales Amount":"SalesQty",data:sales, backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, z:0, datalabels: {
-            display: false}},
-        {label:"Target",type:"bar",data:targets, borderWidth:2, borderColor:"#ABDEE6",datalabels: {
-            display: false}}
-        
-      ]},
-      options:getCommonOptions(false)
-    });
-    
-  dailyCumInst=new Chart(document.getElementById("dailyCumChart"),{
-    type:"bar",
-    data:{labels,datasets:[
-      {label:"Achievement(%)",type:"line", data: cumAchievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444", datalabels: {
-        display: (ctx) => {
-          const i = ctx.dataIndex;
-          return (i % 2 === 0) && (sales[i] > 0);
-        },
-        align: "top",
-        anchor: "end",
-        formatter: v => v == null ? "" : v.toFixed(1) + "%"
-      }},
-      {label:filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",data:salesCum,backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
-          display: false}},
-      {label:"Cumulative Target",type:"bar",data:targetCum,borderWidth:2,borderWidth:2, borderColor:"#ABDEE6", datalabels: {
-          display: false}}      
+        }
+      },
+      { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
+        type: "bar", data: sales, backgroundColor: "#ABDEE6",
+        categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+      },
+      { label: "Target", type: "bar", data: targets,
+        borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+      }
     ]},
-    options:getCommonOptions(false)
+    options: getCommonOptions(false)
+  });
+
+  dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
+    type: "bar",
+    data: { labels, datasets: [
+      { label: "Ach(%)", type: "line", data: cumAchievement, yAxisID: "y1",
+        borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
+        datalabels: {
+          display: (ctx) => {
+            const i = ctx.dataIndex;
+            return (i % 2 === 0) && (sales[i] !== null) && (sales[i] > 0);
+          },
+          align: "top", anchor: "end",
+          formatter: v => v == null ? "" : v.toFixed(1) + "%"
+        }
+      },
+      { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
+        type: "bar", data: salesCum, backgroundColor: "#ABDEE6",
+        categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+      },
+      { label: "Cumulative Target", type: "bar", data: targetCum,
+        borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+      }
+    ]},
+    options: getCommonOptions(false)
   });
 }
 
+
 function buildDailyStacks(rows){
-  const labels = daysLabels();;
-  // ignore null / empty groups
+  const labels = daysLabels();
+
   // ignore null / empty groups
   let groups = [...new Set(
     rows.map(r => r.group_label).filter(g => g != null && g !== "")
@@ -589,37 +649,71 @@ function buildDailyStacks(rows){
 
   // force region stack order NSW, QLD, VIC, SA, WA, COMMON
   const ordered = [];
-  REGION_STACK_ORDER.forEach(name => {
-    if (groups.includes(name)) ordered.push(name);
-  });
-  groups.forEach(g => {
-    if (!REGION_STACK_ORDER.includes(g)) ordered.push(g);
-  });
+  REGION_STACK_ORDER.forEach(name => { if (groups.includes(name)) ordered.push(name); });
+  groups.forEach(g => { if (!REGION_STACK_ORDER.includes(g)) ordered.push(g); });
   groups = ordered;
 
+  // Determine last day where actual exists (based on rows)
+  // - If a day appears in rows (even value 0), treat it as "actual exists"
+  let lastActualIdx = -1;
+  rows.forEach(r => {
+    const d = parseInt(r.day, 10);
+    if (d >= 1 && d <= labels.length) {
+      lastActualIdx = Math.max(lastActualIdx, d - 1);
+    }
+  });
+
+  const N = labels.length;
+
   const byGroup = {};
-  groups.forEach(g => byGroup[g] = Array(31).fill(0));
+  groups.forEach(g => byGroup[g] = Array(N).fill(null));
+
+  // Initialize days up to lastActualIdx as 0 so stacks can sum properly (including 0-actual weekends)
+  groups.forEach(g => {
+    for (let i = 0; i <= lastActualIdx; i++) byGroup[g][i] = 0;
+  });
+
+  // Fill values
   rows.forEach(r => {
     const g = r.group_label;
-    if (g == null || g === "") return;          // skip null group
+    if (g == null || g === "") return;
     const d = parseInt(r.day, 10);
-    if (d>=1 && d<=31) byGroup[r.group_label][d-1] += (+r.value || 0);
+    if (d >= 1 && d <= N && (d - 1) <= lastActualIdx) {
+      byGroup[g][d - 1] += (+r.value || 0);
+    }
   });
+
   const datasets = groups.map((g,i)=>({
-    label:g,
-    data:byGroup[g],
-    backgroundColor:COLORS[i%COLORS.length],
-    stack:"S", categoryPercentage:0.9, barPercentage:0.9
+    label: g,
+    data: byGroup[g],
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "S",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9
   }));
-  return { labels, groups, byGroup, datasets };
+
+  return { labels, groups, byGroup, datasets, lastActualIdx };
 }
 
-function toPercentStacksN(byKey, N){
+
+function toPercentStacksN(byKey, N, lastActualIdx){
   const keys = Object.keys(byKey);
-  const pct = {}; keys.forEach(k => pct[k] = Array(N).fill(0));
-  for (let i=0; i<N; i++){
-    const tot = keys.reduce((a,k)=> a + (+byKey[k][i]||0), 0) || 1;
-    keys.forEach(k => pct[k][i] = +((byKey[k][i] / tot) * 100).toFixed(2));
+  const pct = {}; keys.forEach(k => pct[k] = Array(N).fill(null));
+
+  for (let i = 0; i < N; i++){
+    if (lastActualIdx != null && i > lastActualIdx) {
+      keys.forEach(k => pct[k][i] = null);
+      continue;
+    }
+
+    const tot = keys.reduce((a,k)=> a + (+byKey[k][i] || 0), 0);
+
+    if (!tot) {
+      // If total is 0, show 0% for each (still a valid actual day)
+      keys.forEach(k => pct[k][i] = 0);
+    } else {
+      keys.forEach(k => pct[k][i] = +(( (+byKey[k][i] || 0) / tot) * 100).toFixed(2));
+    }
   }
   return pct;
 }
@@ -630,44 +724,90 @@ async function drawDailyStacked(){
   const effectiveGroup = filters.group_by;
   const rows = await fetchDailyBreakdownWithGroup(effectiveGroup);
   
-  if (!rows || !rows.length){
-    
+    if (!rows || !rows.length){
+
     const totals = await fetchDailySales();
-    const labels = daysLabels();;
-    const data=totals.map(r=>+r.value||0);
-    const cum = toCumulative(data);
+    const labels = daysLabels();
+
+    // Build sales aligned to labels; future days = null, 0 is valid
+    const data = new Array(labels.length).fill(null);
+    for (let i = 0; i < Math.min(totals.length, labels.length); i++){
+      data[i] = (+totals[i].value || 0);
+    }
+
+    // Find last actual index (0 is valid; only null means future)
+    let lastActualIdx = -1;
+    for (let i = 0; i < data.length; i++){
+      if (data[i] !== null) lastActualIdx = i;
+    }
+
+    // Cumulative data: stop drawing after lastActualIdx
+    const cum = new Array(labels.length).fill(null);
+    let run = 0;
+    for (let i = 0; i < labels.length; i++){
+      if (i <= lastActualIdx){
+        run += (+data[i] || 0);
+        cum[i] = run;
+      } else {
+        cum[i] = null;
+      }
+    }
+
     stackedDailyInst = makeStacked("stackedDailyChart", labels, [
       { label:"Total", data, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Daily");
 
+    // Percent: only up to lastActualIdx, then null
+    const pct100 = labels.map((_,i)=> (i <= lastActualIdx ? 100 : null));
     stackedDailyPctInst = makeStacked("stackedDailyPercentChart", labels, [
-      { label:"Total %", data: labels.map(()=>100), backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+      { label:"Total %", data: pct100, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Daily %", 100);
 
-    
-    // IMPORTANT: write to the same IDs you use in HTML
     stackedDailyCumInst = makeStacked("stackedDailyCumChart", labels, [
-      { label:"Total", data:cum, backgroundColor:"#10b981", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+      { label:"Total", data: cum, backgroundColor:"#10b981", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Cumulative by Day");
 
     stackedDailyCumPctInst = makeStacked("stackedDailyCumPercentChart", labels, [
-      { label:"Total %", data: labels.map(()=>100), backgroundColor:"#10b981", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
+      { label:"Total %", data: pct100, backgroundColor:"#10b981", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Cumulative %", 100);
 
     return;
   }
 
+
   // Build stacks
-  let { labels, groups, byGroup, datasets } = buildDailyStacks(rows);
-
-
+   let { labels, groups, byGroup, datasets, lastActualIdx } = buildDailyStacks(rows);
 
   const byGroupCum   = cumPerGroup(byGroup);
-  const datasetsCum  = groups.map((g,i)=>({ label:g, data:byGroupCum[g], backgroundColor:COLORS[i%COLORS.length], stack:"S", categoryPercentage:0.9, barPercentage:0.9 }));
-  const pct          = toPercentStacksN(byGroup, 31);
-  const pctCum       = toPercentStacksN(byGroupCum, 31);
-  const datasetsPct  = groups.map((g,i)=>({ label:g, data:pct[g],    backgroundColor:COLORS[i%COLORS.length], stack:"S", categoryPercentage:0.9, barPercentage:0.9 }));
-  const datasetsPctC = groups.map((g,i)=>({ label:g, data:pctCum[g], backgroundColor:COLORS[i%COLORS.length], stack:"S", categoryPercentage:0.9, barPercentage:0.9 }));
+
+  // After lastActualIdx, force cumulative stacks to null so they don't draw
+  groups.forEach(g => {
+    for (let i = lastActualIdx + 1; i < labels.length; i++){
+      byGroupCum[g][i] = null;
+    }
+  });
+
+  const datasetsCum  = groups.map((g,i)=>({
+    label:g, data:byGroupCum[g],
+    backgroundColor:COLORS[i%COLORS.length],
+    stack:"S", categoryPercentage:0.9, barPercentage:0.9
+  }));
+
+  const pct          = toPercentStacksN(byGroup,    labels.length, lastActualIdx);
+  const pctCum       = toPercentStacksN(byGroupCum, labels.length, lastActualIdx);
+
+  const datasetsPct  = groups.map((g,i)=>({
+    label:g, data:pct[g],
+    backgroundColor:COLORS[i%COLORS.length],
+    stack:"S", categoryPercentage:0.9, barPercentage:0.9
+  }));
+
+  const datasetsPctC = groups.map((g,i)=>({
+    label:g, data:pctCum[g],
+    backgroundColor:COLORS[i%COLORS.length],
+    stack:"S", categoryPercentage:0.9, barPercentage:0.9
+  }));
+
 
   [stackedDailyInst, stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst]
     .forEach(c=>c&&c.destroy());
@@ -688,69 +828,86 @@ async function drawDailyStacked(){
 }
 
 /* -------------------------- monthly charts -------------------------- */
-async function fetchMonthlySales(){
+async function fetchMonthlySales(year=2025){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0,
+    year: year
   }).toString();
-  return fetchJSON(`/api/monthly_sales?${qs}`);
+  return fetchJSON_DIRECT(`/api/monthly_sales?${qs}`);
 }
 
 // helpers
 const quarterOf = m => Math.floor(m/3); // 0..3 for Jan..Dec
 
 // KPI by quarter, calculated only up to the previous month
+// KPI by quarter, calculated up to the current month (YTD within the year)
 function kpiByQuarter(sales, targets){
   const s = [0,0,0,0];
   const t = [0,0,0,0];
 
-  // previous month index (0=Jan, 11=Dec)
-  const now = new Date();
-  let lastMonth = now.getMonth() - 1;   // previous month
-  if (lastMonth < 0) lastMonth = 0;     // guard for January
+  // Find last month index where actual exists (use non-zero as "exists")
+  // If your actual can be 0 but still valid, replace this rule with a better cutoff source.
+  let lastIdx = -1;
+  for (let i = 0; i < 12; i++){
+    if ((+sales[i] || 0) !== 0) lastIdx = i;
+  }
+  if (lastIdx < 0) lastIdx = 0;
 
-  for (let m = 0; m <= lastMonth && m < 12; m++){
-    const q = quarterOf(m);
-    s[q] += +sales[m]   || 0;
-    t[q] += +targets[m] || 0;
+  // Sum only up to lastIdx (YTD by data, not by calendar)
+  for (let m = 0; m <= lastIdx && m < 12; m++){
+    const q = Math.floor(m / 3);
+    s[q] += (+sales[m]   || 0);
+    t[q] += (+targets[m] || 0);
   }
 
-  return t.map((tv, i) => tv > 0 ? +(s[i] / tv * 100).toFixed(1) : null);
+  const currentQ = Math.floor(lastIdx / 3);
+  return t.map((tv, i) => {
+    if (i > currentQ) return null;
+    return tv > 0 ? +(s[i] / tv * 100).toFixed(1) : null;
+  });
 }
 
-// last cumulative achievement (%) from daily series
-function dailyKPIFromSeries(sales, targets){
-  const n = Math.max(sales.length, targets.length);
-  let sCum = 0, tCum = 0;
-  let last = null;
-  for (let i = 0; i < n; i++){
-    const s = +sales[i]   || 0;
-    const t = +targets[i] || 0;
-    sCum += s;
-    tCum += t;
-    if (tCum > 0){
-      last = sCum / tCum * 100;
-    }
+
+// Daily KPI = cumulative achievement (%) up to the last date where Actual exists
+// - 0 is considered a valid actual (e.g., weekends)
+// - null / undefined / "" means "no data yet" (future date) and should be excluded
+function dailyKPIFromSeries(sales, targets, cutoffIdx){
+  if (cutoffIdx == null || cutoffIdx < 0) return null;
+
+  const N = Math.min(sales.length, targets.length, cutoffIdx + 1);
+  if (N <= 0) return null;
+
+  let sCum = 0;
+  let tCum = 0;
+
+  for (let i = 0; i < N; i++){
+    sCum += (+sales[i]   || 0);
+    tCum += (+targets[i] || 0);
   }
-  return last != null ? +last.toFixed(1) : null;
+
+  if (tCum <= 0) return null;
+
+  return +((sCum / tCum) * 100).toFixed(1);
 }
 
-async function fetchMonthlyKPIActual(region,BDE){
+
+async function fetchMonthlyKPIActual(region,BDE, year=2026){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year: year
   }).toString();
-  return fetchJSON(`/api/monthly_sales?${qs}`);
+  return fetchJSON_DIRECT(`/api/monthly_sales?${qs}`);
 }
-async function fetchMonthlyKPITarget(region,BDE){
+async function fetchMonthlyKPITarget(region,BDE, year=2026){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year: year 
   }).toString();
-  return fetchJSON(`/api/monthly_target?${qs}`);
+  return fetchJSON_DIRECT(`/api/monthly_target?${qs}`);
 }
 
 // build & render table
@@ -762,13 +919,13 @@ async function drawMonthlyKPI(){
     const qsSales = new URLSearchParams({
       metric: filters.metric, category: filters.category, region: "ALL", salesman:"ALL",
       sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, top_limit:filters.top_limit ||0
+      product_group: filters.product_group, pattern: filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year:2026
     }).toString();
     const qsTarget = new URLSearchParams({
       metric: filters.metric,
       category: filters.category, region: "ALL", salesman:"ALL",
       sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, top_limit:filters.top_limit ||0
+      product_group: filters.product_group, pattern: filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year:2026
     }).toString();
 
      // monthly + daily in parallel
@@ -776,21 +933,24 @@ async function drawMonthlyKPI(){
       salesRows,
       targetRows,
       dailySalesRows,
-      dailyTargetRows
+      dailyTargetRows,
+      cutRows
     ] = await Promise.all([
       fetchJSON(`/api/monthly_sales?${qsSales}`),
       fetchJSON(`/api/monthly_target?${qsTarget}`),
       fetchJSON(`/api/daily_sales?${qsSales}`),
-      fetchJSON(`/api/daily_target?${qsTarget}`)
+      fetchJSON(`/api/daily_target?${qsTarget}`),
+      fetchDailyBreakdownWithGroup("region")
     ]);
 
     const sales    = salesRows.map(r => +r.value || 0);
     const targets  = targetRows.map(r => +r.value || 0);
     const q        = kpiByQuarter(sales, targets);
-
+    const N = daysLabels().length;
+    let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
     const dailySales   = dailySalesRows.map(r => +r.value || 0);
     const dailyTargets = dailyTargetRows.map(r => +r.value || 0);
-    const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets);
+    const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets, cutoffIdx);
 
     rows.push({
       region: "All",
@@ -802,8 +962,44 @@ async function drawMonthlyKPI(){
 
   // Region / BDE rows
   for (const region of ["NSW","QLD","VIC","WA"]) {
+    {
+    const yearKpi = 2026;
+
+    const [
+      salesRows,
+      targetRows,
+      dailySalesRows,
+      dailyTargetRows,
+      cutRows
+    ] = await Promise.all([
+      fetchMonthlyKPIActual(region, "ALL", yearKpi),
+      fetchMonthlyKPITarget(region, "ALL", yearKpi),
+      fetchDailyKPIActual(region, "ALL"),
+      fetchDailyKPITarget(region, "ALL"),
+      fetchDailyBreakdownWithGroup("region") // used only for cutoffIdx
+    ]);
+
+    const sales   = salesRows.map(r => +r.value || 0);
+    const targets = targetRows.map(r => +r.value || 0);
+    const q       = kpiByQuarter(sales, targets);
+
+    const N = daysLabels().length;
+    const cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
+
+    const dSales   = dailySalesRows.map(r => +r.value || 0);
+    const dTargets = dailyTargetRows.map(r => +r.value || 0);
+    const dailyKPI = dailyKPIFromSeries(dSales, dTargets, cutoffIdx);
+
+    rows.push({
+      region: region,
+      bde: "All",          // Region total row label
+      Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
+      dailyKPI: dailyKPI
+    });
+  }
     const bdes = REGION_SALESMEN[region] || []; // e.g. ["BDE2","BDE3"] or ids
     // fetch each BDE pair in parallel, then append in order
+    const yearKpi=2026;
     const perBDE = await Promise.all(bdes.map(async (bde) => {
       const [
         salesRows,
@@ -811,8 +1007,8 @@ async function drawMonthlyKPI(){
         dailySalesRows,
         dailyTargetRows
       ] = await Promise.all([
-        fetchMonthlyKPIActual(region, bde),
-        fetchMonthlyKPITarget(region, bde),
+        fetchMonthlyKPIActual(region, bde, yearKpi),
+        fetchMonthlyKPITarget(region, bde, yearKpi),
         fetchDailyKPIActual(region, bde),
         fetchDailyKPITarget(region, bde)
       ]);
@@ -820,11 +1016,12 @@ async function drawMonthlyKPI(){
       const sales    = salesRows.map(r => +r.value || 0);
       const targets  = targetRows.map(r => +r.value || 0);
       const q        = kpiByQuarter(sales, targets);
-
+      const cutRows = await fetchDailyBreakdownWithGroup("region");
+      const N = daysLabels().length;
+      let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
       const dailySales   = dailySalesRows.map(r => +r.value || 0);
       const dailyTargets = dailyTargetRows.map(r => +r.value || 0);
-      const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets);
-
+      const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets, cutoffIdx);
       return {
         region: `${region}`,
         bde: `${bde}`,
@@ -888,77 +1085,189 @@ async function drawMonthlyKPI(){
       </tr>`).join("")}
   </tbody>`;
 }
-async function fetchMonthlyBreakdownWithGroup(groupBy){
+async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
   const params = {
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, group_by: groupBy, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: groupBy, top_limit:filters.top_limit ||0,
+    year: year
   };
   const qs=new URLSearchParams(params).toString();
   return fetchJSON(`/api/monthly_breakdown?${qs}`);
 }
 
+async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
+  const qs = new URLSearchParams({
+    metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+    group_by: groupBy, top_limit:filters.top_limit || 0,
+    year: year
+  }).toString();
+
+  return fetchJSON(`/api/monthly_target_breakdown?${qs}`); // <-- you need this endpoint
+}
+
 async function drawMonthlyTotals(){
-  const [salesRows,targetRows]=await Promise.all([
-    fetchMonthlySales(),
+  const [
+    sales25Rows,
+    sales26Rows,
+    target26Rows
+  ] = await Promise.all([
+    fetchMonthlySales(2025),
+    fetchMonthlySales(2026),
     fetchJSON(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, top_limit:filters.top_limit ||0
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      top_limit:filters.top_limit ||0,
+      year: 2026
     }).toString()}`)
   ]);
-  const labels=monthsLabels();
-  const sales = salesRows.map(r=>+r.value||0);
-  const targets= targetRows.map(r=>+r.value||0);
-  
-   // % achievement per month
-  const achievement = labels.map((_, i) =>
-    targets[i] > 0 ? (sales[i] / targets[i]) * 100 : null
-  );
-  const salesCum=toCumulative(sales), targetCum=toCumulative(targets);
-  const cumAchievement = labels.map((_, i) =>
-    targets[i] > 0 ? (salesCum[i] / targetCum[i]) * 100 : null
-  );
 
-  [monthlyInst,monthlyCumInst].forEach(c=>c&&c.destroy());
-  //if (!Chart.registry.plugins.get("showDataValues")) {
-  //  Chart.register(showDataValuesPlugin);
-  //}
-  monthlyInst=new Chart(document.getElementById("monthlyChart"),{
+  const labels = monthsLabels();
+
+  const sales25   = labels.map((_,i)=> +sales25Rows[i]?.value || 0);
+
+  // 2026 actual/target
+  let sales26     = labels.map((_,i)=> +sales26Rows[i]?.value || 0);
+  let target26    = labels.map((_,i)=> +target26Rows[i]?.value || 0);
+
+  // 2026 YTD cut (null after last non-zero actual)
+  let last26 = -1;
+  for (let i=0;i<sales26.length;i++){
+    if ((+sales26[i]||0) !== 0) last26 = i;
+  }
+  for (let i=last26+1;i<12;i++){
+    sales26[i]  = null;
+    target26[i] = null;
+  }
+
+  // 2026 achievement (monthly)
+  const ach26 = labels.map((_,i)=>{
+    const s = sales26[i];
+    const t = target26[i];
+    if (s == null || t == null || t <= 0) return null;
+    return +((s/t)*100).toFixed(1);
+  });
+
+  // cumulative (2025 actual cum always full year)
+  const salesCum25 = toCumulative(sales25);
+
+  // cumulative 2026 actual/target stop at last26
+  const salesCum26 = Array(12).fill(null);
+  const targetCum26= Array(12).fill(null);
+  let sRun=0, tRun=0;
+  for (let i=0;i<12;i++){
+    if (sales26[i] == null || target26[i] == null) break;
+    sRun += (+sales26[i]||0);
+    tRun += (+target26[i]||0);
+    salesCum26[i]  = sRun;
+    targetCum26[i] = tRun;
+  }
+
+  const achCum26 = labels.map((_,i)=>{
+    const sc = salesCum26[i];
+    const tc = targetCum26[i];
+    if (sc == null || tc == null || tc <= 0) return null;
+    return +((sc/tc)*100).toFixed(1);
+  });
+
+  [monthlyInst, monthlyCumInst].forEach(c => c && c.destroy());
+
+  monthlyInst = new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
-    data:{labels,datasets:[
-      {label:"Achievement(%)",type:"line", data: achievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444",  datalabels: {
-          display: true,
-          align: "top",
-          anchor: "end",
-          formatter: v => v == null ? "" : v.toFixed(1) + "%"
-        }
+    data:{ labels, datasets:[
+      // 2026 Ach line
+      {
+        label:"Ach(%) (2026)",
+        type:"line",
+        data: ach26,
+        yAxisID:"y1",
+        borderWidth:2,
+        pointRadius:0,
+        borderColor:"#ef4444",
+        datalabels:{ display:true, align:"top", anchor:"end",
+          formatter: v => v==null ? "" : v.toFixed(1) + "%" }
       },
-      {label:filters.metric==="amount"?"Sales Amount":"SalesQty",data:sales, backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, z:0, datalabels: {
-          display: false}},
-      {label:"Target",type:"bar",data:targets, borderWidth:2, borderColor:"#ABDEE6",datalabels: {
-          display: false}}
+      // 2025 Actual only
+      {
+        label: (filters.metric==="amount" ? "Sales Amount (2025)" : "SalesQty (2025)"),
+        type:"bar",
+        data:sales25,
+        backgroundColor:"#ABDEE6",
+        categoryPercentage:0.8,
+        barPercentage:0.9,
+        datalabels:{ display:false }
+      },
+      // 2026 Actual
+      {
+        label: (filters.metric==="amount" ? "Sales Amount (2026)" : "SalesQty (2026)"),
+        type:"bar",
+        data:sales26,
+        backgroundColor:"#93c5fd",
+        categoryPercentage:0.8,
+        barPercentage:0.9,
+        datalabels:{ display:false }
+      },
+      // 2026 Target
+      {
+        label:"Target (2026)",
+        type:"bar",
+        data:target26,
+        borderWidth:2,
+        borderColor:"#93c5fd",
+        datalabels:{ display:false }
+      }
     ]},
     options:getCommonOptions(false)
   });
-  monthlyCumInst=new Chart(document.getElementById("monthlyCumChart"),{
+
+  monthlyCumInst = new Chart(document.getElementById("monthlyCumChart"),{
     type:"bar",
-    data:{labels,datasets:[
-      {label:"Achievement(%)",type:"line", data: cumAchievement,  yAxisID: "y1", borderWidth:2,pointRadius:0,borderColor:"#ef4444", datalabels: {
-          display: true,
-          align: "top",
-          anchor: "end",
-          formatter: v => v == null ? "" : v.toFixed(1) + "%"
-        }},
-      {label:filters.metric==="amount"?"Cumulative Amount":"Cumulative Qty",data:salesCum,backgroundColor:"#ABDEE6", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
-          display: false}},
-      {label:"Cumulative Target",type:"bar",data:targetCum,borderWidth:2,borderWidth:2, borderColor:"#ABDEE6", datalabels: {
-          display: false}} 
+    data:{ labels, datasets:[
+      {
+        label:"Ach(%) (2026)",
+        type:"line",
+        data: achCum26,
+        yAxisID:"y1",
+        borderWidth:2,
+        pointRadius:0,
+        borderColor:"#ef4444",
+        datalabels:{ display:true, align:"top", anchor:"end",
+          formatter: v => v==null ? "" : v.toFixed(1) + "%" }
+      },
+      {
+        label: (filters.metric==="amount" ? "Cumulative Amount (2025)" : "Cumulative Qty (2025)"),
+        type:"bar",
+        data:salesCum25,
+        backgroundColor:"#ABDEE6",
+        categoryPercentage:0.8,
+        barPercentage:0.9,
+        datalabels:{ display:false }
+      },
+      {
+        label: (filters.metric==="amount" ? "Cumulative Amount (2026)" : "Cumulative Qty (2026)"),
+        type:"bar",
+        data:salesCum26,
+        backgroundColor:"#93c5fd",
+        categoryPercentage:0.8,
+        barPercentage:0.9,
+        datalabels:{ display:false }
+      },
+      {
+        label:"Cumulative Target (2026)",
+        type:"bar",
+        data:targetCum26,
+        borderWidth:2,
+        borderColor:"#93c5fd",
+        datalabels:{ display:false }
+      }
     ]},
     options:getCommonOptions(false)
   });
 }
-  
+
 function buildMonthlyStacks(rows){
   const labels=monthsLabels();
   let groups = [...new Set(
@@ -998,41 +1307,411 @@ function toPercentStacks(byKey){
 
 
 async function drawMonthlyStacked(){
-  // Respect user’s Group By; only reduce when Group By = sold_to and Top10 active
   const effectiveGroup = filters.group_by;
-  const rows = await fetchMonthlyBreakdownWithGroup(effectiveGroup);
 
-  if(!rows || !rows.length){
-    [stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst]
-      .forEach(c=>c&&c.destroy());
-    const totals=await fetchMonthlySales();
-    const labels=monthsLabels();
-    const data=totals.map(r=>+r.value||0);
-    stackedMonthlyInst=makeStacked("stackedMonthlyChart",labels,[{label:"Total",data,backgroundColor:"#a78bfa",stack:"S", categoryPercentage:0.9, barPercentage:0.9}],"Monthly");
-    stackedMonthlyPctInst=makeStacked("stackedMonthlyPercentChart",labels,[{label:"Total %",data:labels.map(()=>100),backgroundColor:"#a78bfa",stack:"S", categoryPercentage:0.9, barPercentage:0.9}],"Monthly %",100);
-    const cum=toCumulative(data);
-    stackedMonthlyCumInst=makeStacked("stackedMonthlyCumChart",labels,[{label:"Total",data:cum,backgroundColor:"#10b981",stack:"S", categoryPercentage:0.9, barPercentage:0.9}],"Cumulative by Month");
-    stackedMonthlyCumPctInst=makeStacked("stackedMonthlyCumPercentChart",labels,[{label:"Total %",data:labels.map(()=>100),backgroundColor:"#10b981",stack:"S", categoryPercentage:0.9, barPercentage:0.9}],"Cumulative %",100);
-    return;
+  // Fetch:
+  // - 2025 actual breakdown (for comparison stack)
+  // - 2026 actual breakdown
+  // - 2026 target breakdown (NEW endpoint)
+  // - 2026 actual totals (used for cutoff + consistency)
+  const [rows25, rows26, rowsT26, sales26TotalRows] = await Promise.all([
+    fetchMonthlyBreakdownWithGroup(effectiveGroup, 2025),
+    fetchMonthlyBreakdownWithGroup(effectiveGroup, 2026),
+    fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
+    fetchMonthlySales(2026)
+  ]);
+  // Legend: show only the stack key (group label), not year/actual/target suffixes
+  function withStackKeyLegend(baseOpts){
+    return {
+      ...baseOpts,
+      plugins: {
+        ...(baseOpts.plugins || {}),
+        legend: {
+          ...(baseOpts.plugins?.legend || {}),
+          labels: {
+            ...(baseOpts.plugins?.legend?.labels || {}),
+            generateLabels(chart){
+              const seen = new Set();
+              const out = [];
+
+              // Keep the first occurrence of each group key (NSW/QLD/... or Salesman name, etc.)
+              for (let i = 0; i < chart.data.datasets.length; i++){
+                const ds = chart.data.datasets[i];
+                if (!ds) continue;
+                if (ds.type === "line") continue; // ignore Ach line
+
+                // Your labels are like: "NSW (2025)" or "NSW (2026 Target)"
+                // Stack key is the part before " ("
+                const key = String(ds.label || "").split(" (")[0].trim();
+                if (!key || seen.has(key)) continue;
+
+                seen.add(key);
+                out.push({
+                  text: key,
+                  fillStyle: ds.backgroundColor,
+                  strokeStyle: ds.borderColor || ds.backgroundColor,
+                  lineWidth: 0,
+                  hidden: false,
+                  // Toggle visibility of the first dataset that represents this key
+                  datasetIndex: i
+                });
+              }
+
+              return out;
+            }
+          }
+        }
+      }
+    };
   }
 
-  let {labels,groups,byGroup,datasets}=buildMonthlyStacks(rows);
 
+  const labels = monthsLabels();
 
-  const byGroupCum=cumPerGroup(byGroup);
-  const datasetsCum=groups.map((g,i)=>({label:g,data:byGroupCum[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9}));
-  const pct=toPercentStacks(byGroup);
-  const datasetsPct=groups.map((g,i)=>({label:g,data:pct[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9}));
-  const pctCum=toPercentStacks(byGroupCum);
-  const datasetsPctCum=groups.map((g,i)=>({label:g,data:pctCum[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9}));
+  // Build {groups, byGroup} for month=1..12
+  function buildMonthlyStacksForRows(rows){
+    let groups = [...new Set(
+      (rows||[]).map(r => r.group_label).filter(g => g != null && g !== "")
+    )];
 
+    // region ordering
+    const ordered = [];
+    REGION_STACK_ORDER.forEach(name => { if (groups.includes(name)) ordered.push(name); });
+    groups.forEach(g => { if (!REGION_STACK_ORDER.includes(g)) ordered.push(g); });
+    groups = ordered;
+
+    const byGroup = {};
+    groups.forEach(g => byGroup[g] = Array(12).fill(0));
+
+    (rows||[]).forEach(r => {
+      const g = r.group_label;
+      if (!g) return;
+      const m = parseInt(r.month, 10);
+      if (m >= 1 && m <= 12) byGroup[g][m-1] += (+r.value || 0);
+    });
+
+    return { groups, byGroup };
+  }
+
+  // Actual stacks
+  const { groups: groups25, byGroup: by25raw } = buildMonthlyStacksForRows(rows25);
+  const { groups: groups26, byGroup: by26raw } = buildMonthlyStacksForRows(rows26);
+
+  // Target stacks (2026)
+  const { groups: groupsT26, byGroup: byT26raw } = buildMonthlyStacksForRows(rowsT26);
+
+  // Union groups across 2025 actual, 2026 actual, 2026 target
+  const groups = [
+    ...groups25,
+    ...groups26.filter(g => !groups25.includes(g)),
+    ...groupsT26.filter(g => !groups25.includes(g) && !groups26.includes(g))
+  ];
+
+  // Normalize maps to the union groups
+  const by25  = Object.fromEntries(groups.map(g => [g, (by25raw[g]  || Array(12).fill(0))]));
+  const by26  = Object.fromEntries(groups.map(g => [g, (by26raw[g]  || Array(12).fill(0))]));
+  const byT26 = Object.fromEntries(groups.map(g => [g, (byT26raw[g] || Array(12).fill(0))]));
+
+  // 2026 actual totals (for cutoff)
+  let sales26Total = labels.map((_,i)=> +sales26TotalRows[i]?.value || 0);
+
+  // Cutoff: last non-zero month in 2026 actual totals
+  let last26 = -1;
+  for (let i=0;i<12;i++){
+    if ((+sales26Total[i]||0) !== 0) last26 = i;
+  }
+  if (last26 < 0) last26 = 0;
+
+  // Null out future months for 2026 series only (actual + target + totals)
+  function nullAfterLastActual(arr, lastIdx){
+    const out = arr.slice();
+    for (let i=lastIdx+1;i<out.length;i++) out[i] = null;
+    return out;
+  }
+
+  groups.forEach(g=>{
+    by26[g]  = nullAfterLastActual(by26[g],  last26);
+    byT26[g] = nullAfterLastActual(byT26[g], last26);
+  });
+  sales26Total = nullAfterLastActual(sales26Total, last26);
+
+  // Build 2026 target total from target stacks (sum across groups)
+  let target26Total = labels.map((_,i)=>{
+    if (i > last26) return null;
+    let t = 0;
+    for (const g of groups) t += (+byT26[g][i] || 0);
+    return t;
+  });
+
+  // Cumulative maps
+  const by25Cum = cumPerGroup(by25);
+
+  const by26Cum = cumPerGroup(Object.fromEntries(groups.map(g => [
+    g,
+    (by26[g] || Array(12).fill(null)).map(v => (v==null ? 0 : +v||0))
+  ])));
+
+  const byT26Cum = cumPerGroup(Object.fromEntries(groups.map(g => [
+    g,
+    (byT26[g] || Array(12).fill(null)).map(v => (v==null ? 0 : +v||0))
+  ])));
+
+  // Null out cumulative after cutoff for 2026 series
+  groups.forEach(g=>{
+    by26Cum[g]  = nullAfterLastActual(by26Cum[g]  || Array(12).fill(0), last26);
+    byT26Cum[g] = nullAfterLastActual(byT26Cum[g] || Array(12).fill(0), last26);
+  });
+
+  // Cumulative totals for 2026 actual + 2026 target
+  const sales26CumTotal  = Array(12).fill(null);
+  const target26CumTotal = Array(12).fill(null);
+
+  let sRun=0, tRun=0;
+  for (let i=0;i<12;i++){
+    if (i > last26) break;
+    sRun += (+sales26Total[i]  || 0);
+    tRun += (+target26Total[i] || 0);
+    sales26CumTotal[i]  = sRun;
+    target26CumTotal[i] = tRun;
+  }
+
+  // Achievement lines (2026)
+  const ach26 = labels.map((_,i)=>{
+    const s = sales26Total[i];
+    const t = target26Total[i];
+    if (s == null || t == null || t <= 0) return null;
+    return +((s/t)*100).toFixed(1);
+  });
+
+  const achCum26 = labels.map((_,i)=>{
+    const s = sales26CumTotal[i];
+    const t = target26CumTotal[i];
+    if (s == null || t == null || t <= 0) return null;
+    return +((s/t)*100).toFixed(1);
+  });
+
+  // Percent helpers (for % charts: keep your original meaning = composition comparison)
+  function toPercentStacksYear(byKey, lastIdxOrNull){
+    const keys = Object.keys(byKey);
+    const pct = {}; keys.forEach(k => pct[k] = Array(12).fill(null));
+
+    for (let i=0;i<12;i++){
+      if (lastIdxOrNull != null && i > lastIdxOrNull){
+        keys.forEach(k => pct[k][i] = null);
+        continue;
+      }
+      const tot = keys.reduce((a,k)=> a + (+byKey[k][i] || 0), 0);
+      if (!tot){
+        keys.forEach(k => pct[k][i] = 0);
+      } else {
+        keys.forEach(k => pct[k][i] = +(((+byKey[k][i]||0)/tot)*100).toFixed(2));
+      }
+    }
+    return pct;
+  }
+
+  const pct25    = toPercentStacksYear(by25, null);
+  const pct26    = toPercentStacksYear(
+    Object.fromEntries(groups.map(g => [g, (by26[g]||Array(12).fill(null)).map(v => v==null ? 0 : +v||0)])),
+    last26
+  );
+
+  const pct25Cum = toPercentStacksYear(by25Cum, null);
+  const pct26Cum = toPercentStacksYear(
+    Object.fromEntries(groups.map(g => [g, (by26Cum[g]||Array(12).fill(null)).map(v => v==null ? 0 : +v||0)])),
+    last26
+  );
+
+  // Datasets:
+  // - 2025 actual stack: Y2025
+  // - 2026 actual stack: Y2026
+  // - 2026 target stack: T2026 (stacked by group like actual)
+  const ds25 = groups.map((g,i)=>({
+    label: `${g} (2025)`,
+    data: by25[g] || Array(12).fill(0),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2025",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds26 = groups.map((g,i)=>({
+    label: `${g} (2026 Actual)`,
+    data: by26[g] || Array(12).fill(null),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2026",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  // Target stack uses the same group colors; it will appear as another stacked bar group
+  const dsT26 = groups.map((g,i)=>({
+    label: `${g} (2026 Target)`,
+    data: byT26[g] || Array(12).fill(null),
+    // same color as actual but lighter (alpha)
+    backgroundColor: COLORS[i%COLORS.length].replace('ff', '80'),
+    stack: "T2026",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds25Cum = groups.map((g,i)=>({
+    label: `${g} (2025)`,
+    data: by25Cum[g] || Array(12).fill(0),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2025",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds26Cum = groups.map((g,i)=>({
+    label: `${g} (2026 Actual)`,
+    data: by26Cum[g] || Array(12).fill(null),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2026",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const dsT26Cum = groups.map((g,i)=>({
+    label: `${g} (2026 Target)`,
+    data: byT26Cum[g] || Array(12).fill(null),
+    backgroundColor: COLORS[i%COLORS.length],
+    // same color as actual but lighter (alpha)
+    backgroundColor: COLORS[i%COLORS.length].replace('ff', '80'),
+    stack: "T2026",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds25Pct = groups.map((g,i)=>({
+    label: `${g} (2025)`,
+    data: pct25[g] || Array(12).fill(0),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2025",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds26Pct = groups.map((g,i)=>({
+    label: `${g} (2026)`,
+    data: pct26[g] || Array(12).fill(null),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2026",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds25PctCum = groups.map((g,i)=>({
+    label: `${g} (2025)`,
+    data: pct25Cum[g] || Array(12).fill(0),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2025",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  const ds26PctCum = groups.map((g,i)=>({
+    label: `${g} (2026)`,
+    data: pct26Cum[g] || Array(12).fill(null),
+    backgroundColor: COLORS[i%COLORS.length],
+    stack: "Y2026",
+    categoryPercentage: 0.9,
+    barPercentage: 0.9,
+    datalabels: { display:false }
+  }));
+
+  // Ach lines only (no target line)
+  const achLine26 = {
+    type:"line",
+    label:"Ach(%) (2026)",
+    data: ach26,
+    yAxisID:"y1",
+    borderWidth:2,
+    pointRadius:0,
+    borderColor:"#ef4444",
+    datalabels:{ display:false }
+  };
+
+  const achCumLine26 = {
+    type:"line",
+    label:"Ach(%) Cum (2026)",
+    data: achCum26,
+    yAxisID:"y1",
+    borderWidth:2,
+    pointRadius:0,
+    borderColor:"#ef4444",
+    datalabels:{ display:false }
+  };
+
+  // Destroy old
   [stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst]
-    .forEach(c=>c&&c.destroy());
+    .forEach(c=>c && c.destroy());
 
-  stackedMonthlyInst       = new Chart(document.getElementById("stackedMonthlyChart"), { type:"bar", data:{ labels, datasets }, options:getCommonOptions(true, undefined, "Monthly") });
-  stackedMonthlyCumInst    = new Chart(document.getElementById("stackedMonthlyCumChart"), { type:"bar", data:{ labels, datasets: datasetsCum }, options:getCommonOptions(true, undefined, "Cumulative by Month") });
-  stackedMonthlyPctInst    = new Chart(document.getElementById("stackedMonthlyPercentChart"), { type:"bar", data:{ labels, datasets: datasetsPct }, options:getCommonOptions(true, 100, "Monthly %") });
-  stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), { type:"bar", data:{ labels, datasets: datasetsPctCum }, options:getCommonOptions(true, 100, "Cumulative %") });
+  // Options with y1 axis for achievement
+  function withY1(opts, y1Max){
+    return {
+      ...opts,
+      scales: {
+        ...opts.scales,
+        y1: {
+          position:"right",
+          beginAtZero:true,
+          suggestedMax: y1Max ?? 120,
+          grid:{ drawOnChartArea:false },
+          ticks:{ callback: v => `${v}%` }
+        }
+      }
+    };
+  }
+
+  // Main stacked monthly:
+  // - 2025 actual stack
+  // - 2026 actual stack
+  // - 2026 target stack (NEW)
+  // - Ach% line (2026)
+  stackedMonthlyInst = new Chart(document.getElementById("stackedMonthlyChart"), {
+    type:"bar",
+    data:{ labels, datasets:[...ds25, ...ds26, ...dsT26, achLine26] },
+    options: withStackKeyLegend(
+      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
+    )
+  });
+
+  // Cumulative stacked monthly:
+  stackedMonthlyCumInst = new Chart(document.getElementById("stackedMonthlyCumChart"), {
+    type:"bar",
+    data:{ labels, datasets:[...ds25Cum, ...ds26Cum, ...dsT26Cum, achCumLine26] },
+    options: withStackKeyLegend(
+      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
+    )
+  });
+
+  // % charts keep your original meaning (2025 vs 2026 composition) + Ach line
+  stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
+    type:"bar",
+    data:{ labels, datasets:[...ds25Pct, ...ds26Pct, achLine26] },
+    options: withStackKeyLegend(
+      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
+    )
+  });
+
+  stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), {
+    type:"bar",
+    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum, achCumLine26] },
+    options: withStackKeyLegend(
+      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
+    )
+  });
 }
 
 
@@ -1053,6 +1732,8 @@ async function fetchYearlySales() {
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
     pattern:       filters.pattern,
+    material:      filters.material,
+    material:      filters.material,
     top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/yearly_sales?${qs}`);
@@ -1069,6 +1750,7 @@ async function fetchYearlyBreakdownWithGroup(groupBy) {
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
     pattern:       filters.pattern,
+    material:      filters.material,
     top_limit:filters.top_limit ||0,
     group_by:      groupBy
   }).toString();
@@ -1385,7 +2067,7 @@ function renderProfitCombined(rows) {
         }
       },
       plugins: {
-        datalabels: true,
+        datalabels: { display: false },
         legend: { display: true },
         tooltip: {
           callbacks: {
@@ -1413,6 +2095,7 @@ async function loadProfit() {
     ship_to:       filters.ship_to,
     product_group: filters.product_group,
     pattern:       filters.pattern,
+    material:      filters.material,
     top_limit:filters.top_limit ||0
   }).toString();
 
@@ -1445,15 +2128,22 @@ async function refreshAllWithKpi(){
   if (!hasDashboard) {
     return;
   }
-  await drawDailyTotals(),          // now uses October data internally
-  await drawDailyStacked(),
+  // Profit first (so it appears quickly)
+  await loadProfit();
+  // Then the heavier dashboard charts
+  await drawDailyTotals();
+  await drawDailyStacked();
   await drawMonthlyKPI();
   await drawMonthlyTotals();
   await drawMonthlyStacked();
-  await loadProfit();
   await drawYearlyTotals();
   await drawYearlyStacked();
   
+}
+let refreshTimer = null;
+function refreshAllDebounced(){
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refreshAllWithKpi(), 250);
 }
 
 (async function start(){
@@ -1465,3 +2155,248 @@ async function refreshAllWithKpi(){
   await refreshPatterns();                 // make pattern list available on load
   document.getElementById('ship_to').disabled = false; // locked until Sold-to is chosen
 })();
+// Global capture-based select-all for datalist/text inputs (most reliable)
+// This overrides browser caret placement even when the input is already focused.
+(function enableGlobalSelectAllForFilters(){
+  const IDS = new Set(['sold_to', 'ship_to', 'pattern', 'material']);
+
+  const isTarget = (el) => el && el.id && IDS.has(el.id);
+
+  const selectAll = (el) => {
+    if (!el) return;
+    const v = el.value || "";
+    if (!v.length) return;
+    try {
+      el.setSelectionRange(0, v.length);
+    } catch (_) {
+      el.select();
+    }
+  };
+
+  // Capture mousedown before the browser places the caret
+  document.addEventListener('mousedown', (e) => {
+    const el = e.target;
+    if (!isTarget(el)) return;
+    if ((el.value || "").length === 0) return;
+    if (e.button === 2) return; // allow right-click context menu
+
+    e.preventDefault();          // stop caret placement
+    el.focus();
+    // Re-apply selection after focus settles
+    setTimeout(() => selectAll(el), 0);
+  }, true);
+
+  // Some browsers collapse selection on mouseup; force it again
+  document.addEventListener('mouseup', (e) => {
+    const el = e.target;
+    if (!isTarget(el)) return;
+    if ((el.value || "").length === 0) return;
+
+    e.preventDefault();
+    setTimeout(() => selectAll(el), 0);
+  }, true);
+
+  // Keyboard focus (Tab) should also select all
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (!isTarget(el)) return;
+    setTimeout(() => selectAll(el), 0);
+  }, true);
+})();
+// ------------------------------
+// Pattern / Material custom dropdown redesign (NO datalist)
+// ------------------------------
+let __PATTERN_OPTIONS = [];
+let __MATERIAL_OPTIONS = [];
+
+
+let __SOLD_TO_OPTIONS = [];
+let __SHIP_TO_OPTIONS = [];
+
+async function refreshSoldToCustom(){
+  const stg = document.getElementById("sold_to_group")?.value || "ALL";
+  const res = await fetchJSON(`/api/sold_to_names?sold_to_group=${encodeURIComponent(stg)}`);
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  __SOLD_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+}
+
+async function refreshShipToCustom(){
+  const stg = document.getElementById("sold_to_group")?.value || "ALL";
+  const soldTo = (document.getElementById("sold_to")?.value || "").trim();
+  const qs = new URLSearchParams({
+    sold_to_group: stg,
+    sold_to: soldTo ? soldTo : "ALL"
+  }).toString();
+
+  const res = await fetchJSON(`/api/ship_to_names?${qs}`);
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  __SHIP_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+}
+
+function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
+function ddClose(menuEl){ if (menuEl) menuEl.style.display = "none"; }
+
+function ddRender(menuEl, items, onPick){
+  if (!menuEl) return;
+  menuEl.innerHTML = "";
+  if (!items || items.length === 0){
+    const div = document.createElement("div");
+    div.className = "dd-empty";
+    div.textContent = "No results";
+    menuEl.appendChild(div);
+    return;
+  }
+  items.forEach(v => {
+    const div = document.createElement("div");
+    div.className = "dd-item";
+    div.textContent = v;
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault(); // keep focus
+      onPick(v);
+    });
+    menuEl.appendChild(div);
+  });
+}
+
+function ddFilter(options, q){
+  const s = (q || "").trim().toLowerCase();
+  if (!s) return options.slice(0, 500);
+  return options.filter(x => String(x).toLowerCase().includes(s)).slice(0, 500);
+}
+
+function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
+  const inp = document.getElementById(inputId);
+  const btn = document.getElementById(btnId);
+  const clr = document.getElementById(clearId);
+  const menu = document.getElementById(menuId);
+  if (!inp || !btn || !clr || !menu) return;
+
+  function openWithCurrent(){
+    const opts = getOptions();
+    ddRender(menu, ddFilter(opts, inp.value), onPick);
+    ddOpen(menu);
+  }
+
+  // button always opens full list (no need to clear)
+  btn.addEventListener("click", () => openWithCurrent());
+
+  // focus also opens list
+  inp.addEventListener("focus", () => openWithCurrent());
+
+  // typing filters list (still allows reselect without clearing via ▼)
+  inp.addEventListener("input", () => openWithCurrent());
+
+  // clear
+  clr.addEventListener("click", () => {
+    inp.value = "";
+    onPick("ALL");
+    ddClose(menu);
+    inp.focus();
+  });
+
+  // close when clicking outside
+  document.addEventListener("mousedown", (e) => {
+    if (!menu.contains(e.target) && e.target !== inp && e.target !== btn && e.target !== clr){
+      ddClose(menu);
+    }
+  });
+}
+
+// fetch helpers you already have: fetchJSON(url)
+
+async function refreshPatternsCustom(){
+  const pg = document.getElementById("product_group")?.value || "ALL";
+  const res = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
+  // your backend sometimes returns {rows:[...]} or [...]
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  __PATTERN_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+}
+
+async function refreshMaterialsCustom(){
+  const pg = document.getElementById("product_group")?.value || "ALL";
+  const pat = (document.getElementById("pattern")?.value || "").trim();
+  const qs = new URLSearchParams({
+    product_group: pg,
+    // pattern이 있으면 material을 더 좁히고, 없으면 전체 material
+    ...(pat ? { pattern: pat } : {})
+  }).toString();
+
+  const res = await fetchJSON(`/api/materials?${qs}`);
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  __MATERIAL_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+}
+
+// bind once on load
+window.addEventListener("load", async () => {
+  // initial load
+  await refreshPatternsCustom();
+  await refreshMaterialsCustom();
+
+
+  bindDropdown({
+    inputId: "sold_to",
+    btnId: "soldToBtn",
+    clearId: "soldToClear",
+    menuId: "soldToMenu",
+    getOptions: () => __SOLD_TO_OPTIONS,
+    onPick: async (val) => {
+      const v = (val === "ALL") ? "" : val;
+      const soldEl = document.getElementById("sold_to");
+      const shipEl = document.getElementById("ship_to");
+      if (soldEl) soldEl.value = v;
+      filters.sold_to = v || "ALL";
+
+      // sold-to changes -> reset ship-to + reload ship-to list
+      if (shipEl) shipEl.value = "";
+      filters.ship_to = "ALL";
+      await refreshShipToCustom();
+
+      refreshAllDebounced();
+    }
+  });
+
+  bindDropdown({
+    inputId: "ship_to",
+    btnId: "shipToBtn",
+    clearId: "shipToClear",
+    menuId: "shipToMenu",
+    getOptions: () => __SHIP_TO_OPTIONS,
+    onPick: (val) => {
+      const v = (val === "ALL") ? "" : val;
+      const shipEl = document.getElementById("ship_to");
+      if (shipEl) shipEl.value = v;
+      filters.ship_to = v || "ALL";
+      refreshAllDebounced();
+    }
+  });
+
+  bindDropdown({
+    inputId: "pattern",
+    btnId: "patternBtn",
+    clearId: "patternClear",
+    menuId: "patternMenu",
+    getOptions: () => __PATTERN_OPTIONS,
+    onPick: async (val) => {
+      const v = (val === "ALL") ? "" : val;
+      document.getElementById("pattern").value = v;
+      filters.pattern = v || "ALL";
+      await refreshMaterialsCustom(); // pattern 바뀌면 material 옵션 갱신
+      refreshAllDebounced();
+    }
+  });
+
+  bindDropdown({
+    inputId: "material",
+    btnId: "materialBtn",
+    clearId: "materialClear",
+    menuId: "materialMenu",
+    getOptions: () => __MATERIAL_OPTIONS,
+    onPick: (val) => {
+      const v = (val === "ALL") ? "" : val;
+      document.getElementById("material").value = v;
+      filters.material = v || "ALL";
+      refreshAllDebounced();
+    }
+  });
+});
+

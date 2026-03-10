@@ -21,6 +21,11 @@
   <script>
     Chart.register(ChartDataLabels);
   </script>
+
+  <!-- Leaflet needs an explicit height -->
+  <style>
+    #salesMap{ height: 720px; min-height: 720px; }
+  </style>
 </head>
 <body>
   <h2>Sales Map</h2>
@@ -56,6 +61,8 @@
     <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
       <button class="btn" onclick="window.location.href='/'">Graph View</button>
       <button class="btn active">Map View</button>
+      <button class="btn" onclick="window.location.href='/stock'+ window.location.search">stock</button>
+    </div>
     </div>
   </div>
 
@@ -95,6 +102,11 @@
     <label style="margin-left:8px;">Pattern:</label>
     <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
     <datalist id="pattern_list"></datalist>
+
+
+    <label style="margin-left:8px;">Material:</label>
+    <input list="material_list" id="material" placeholder="Search Material" />
+    <datalist id="material_list"></datalist>
   </div>
 
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
