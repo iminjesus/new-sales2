@@ -160,7 +160,7 @@
 
   // ---------------- Leaflet ----------------
   const map = L.map("stockMap", { zoomSnap: 0.1 });
-  map.setView([-5.0, 180.0], 4.2); // fixed view
+  map.setView([-20, 125], 4); // Asia-Pacific default; will fitBounds after data loads
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
 
   const layerStock         = L.layerGroup().addTo(map);
@@ -363,6 +363,19 @@
     drawOrders(ordersRes?.rows || []);
     drawIncoming(incomingRes?.rows || []);
 
+    // Fit map to all visible data points
+    const allRows = [
+      ...(stockRes?.rows || []),
+      ...(ordersRes?.rows || []),
+      ...(incomingRes?.rows || [])
+    ];
+    const validPts = allRows
+      .map(r => [Number(r.lat), Number(r.lon)])
+      .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo));
+    if (validPts.length > 0) {
+      map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 8 });
+    }
+
     await fetchAndRenderSales();
 
     setStatus(
@@ -486,7 +499,9 @@
       }
     });
 
-    setTimeout(() => { try{ map.invalidateSize(); }catch(_e){} }, 50);
+    // Let the browser paint the flex layout before Leaflet measures the map div
+    await new Promise(r => setTimeout(r, 100));
+    try { map.invalidateSize(); } catch(_e) {}
 
     await fetchAndRender();
   });
