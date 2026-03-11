@@ -2057,7 +2057,7 @@ def monthly_sales():
     joins += cat_joins
     wh    += cat_where
 
-    if f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL":
         _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
@@ -2066,7 +2066,7 @@ def monthly_sales():
         wh.append("mat.pattern = %s")
         params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
 
     # year condition
@@ -2385,7 +2385,7 @@ def yearly_sales():
         joins += cat_joins
         wh    += cat_where
 
-    if f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL":
         _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
@@ -2394,7 +2394,7 @@ def yearly_sales():
         wh.append("mat.pattern = %s")
         params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
