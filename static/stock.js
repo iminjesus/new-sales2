@@ -15,6 +15,70 @@
 
   const $ = (s) => document.querySelector(s);
 
+  // custom dropdown option arrays
+  let __PATTERN_OPTIONS  = [];
+  let __MATERIAL_OPTIONS = [];
+
+  // custom dropdown helpers
+  function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
+  function ddClose(menuEl){ if (menuEl) menuEl.style.display = "none"; }
+
+  function ddRender(menuEl, items, onPick){
+    if (!menuEl) return;
+    menuEl.innerHTML = "";
+    if (!items || items.length === 0){
+      const div = document.createElement("div");
+      div.className = "dd-empty";
+      div.textContent = "No results";
+      menuEl.appendChild(div);
+      return;
+    }
+    items.forEach(v => {
+      const div = document.createElement("div");
+      div.className = "dd-item";
+      div.textContent = v;
+      div.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        onPick(v);
+      });
+      menuEl.appendChild(div);
+    });
+  }
+
+  function ddFilter(options, q){
+    const s = (q || "").trim().toLowerCase();
+    if (!s) return options.slice(0, 500);
+    return options.filter(x => String(x).toLowerCase().includes(s)).slice(0, 500);
+  }
+
+  function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
+    const inp  = document.getElementById(inputId);
+    const btn  = document.getElementById(btnId);
+    const clr  = document.getElementById(clearId);
+    const menu = document.getElementById(menuId);
+    if (!inp || !btn || !clr || !menu) return;
+
+    function openWithCurrent(){
+      ddRender(menu, ddFilter(getOptions(), inp.value), onPick);
+      ddOpen(menu);
+    }
+
+    btn.addEventListener("click", () => openWithCurrent());
+    inp.addEventListener("focus", () => openWithCurrent());
+    inp.addEventListener("input", () => openWithCurrent());
+    clr.addEventListener("click", () => {
+      inp.value = "";
+      onPick("ALL");
+      ddClose(menu);
+      inp.focus();
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (!menu.contains(e.target) && e.target !== inp && e.target !== btn && e.target !== clr){
+        ddClose(menu);
+      }
+    });
+  }
+
   const state = {
     category: "ALL",
     product_group: "ALL",
@@ -363,22 +427,23 @@
   }
 
   async function refreshPatterns(){
-    const pg = $("#product_group")?.value || "ALL";
-    const names = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
-    populateDatalist("pattern_list", (names && names.rows) ? names.rows : (names || []));
+    const pg  = $("#product_group")?.value || "ALL";
+    const res = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
+    const rows = Array.isArray(res) ? res : (res?.rows || []);
+    __PATTERN_OPTIONS = rows.map(x => String(x)).filter(Boolean);
   }
 
   async function refreshMaterials(){
     const pg  = $("#product_group")?.value || "ALL";
-    const pat = ($("#pattern")?.value || "ALL").trim() || "ALL";
-
-    const qs = new URLSearchParams({
+    const pat = ($("#pattern")?.value || "").trim();
+    const qs  = new URLSearchParams({
       product_group: pg,
-      pattern: (pat && pat !== "" ? pat : "ALL")
+      ...(pat ? { pattern: pat } : {})
     }).toString();
 
-    const names = await fetchJSON(`/api/materials?${qs}`);
-    populateDatalist("material_list", (names && names.rows) ? names.rows : (names || []));
+    const res = await fetchJSON(`/api/materials?${qs}`);
+    const rows = Array.isArray(res) ? res : (res?.rows || []);
+    __MATERIAL_OPTIONS = rows.map(x => String(x)).filter(Boolean);
   }
 
   function readUIToState(){
@@ -390,13 +455,16 @@
   }
 
   function clearUI(){
-    $("#product_group").value = "ALL";
-    $("#pattern").value = "";
-    $("#material").value = "";
-    state.category = "ALL";
+    const pg  = document.getElementById("product_group");
+    const pat = document.getElementById("pattern");
+    const mat = document.getElementById("material");
+    if (pg)  pg.value  = "ALL";
+    if (pat) pat.value = "";
+    if (mat) mat.value = "";
+    state.category     = "ALL";
     state.product_group = "ALL";
-    state.pattern = "ALL";
-    state.material = "ALL";
+    state.pattern      = "ALL";
+    state.material     = "ALL";
     state.orders_metric = "po";
 
     setActiveButtons("catBtns", "val", "ALL");
@@ -427,33 +495,6 @@
     await fetchAndRender();
   });
 
-  $("#pattern")?.addEventListener("input", async () => {
-    readUIToState();
-    await refreshMaterials();
-    if (window.__stockPatTimer) clearTimeout(window.__stockPatTimer);
-    window.__stockPatTimer = setTimeout(fetchAndRender, 250);
-  });
-
-  $("#material")?.addEventListener("input", async () => {
-    readUIToState();
-    if (window.__stockMatTimer) clearTimeout(window.__stockMatTimer);
-    window.__stockMatTimer = setTimeout(fetchAndRender, 250);
-  });
-
-  document.getElementById("btnApply")?.addEventListener("click", async () => {
-    readUIToState();
-    await fetchAndRender();
-  });
-
-  document.getElementById("btnClear")?.addEventListener("click", async () => {
-    clearUI();
-    await refreshPatterns();
-    await refreshMaterials();
-    await fetchAndRender();
-  });
-
-  document.getElementById("btnRefresh")?.addEventListener("click", fetchAndRender);
-
   // ---------------------- init ----------------------
   window.addEventListener("load", async () => {
     setActiveButtons("catBtns", "val", state.category);
@@ -462,6 +503,35 @@
     await refreshProductGroups();
     await refreshPatterns();
     await refreshMaterials();
+
+    bindDropdown({
+      inputId: "pattern",
+      btnId: "patternBtn",
+      clearId: "patternClear",
+      menuId: "patternMenu",
+      getOptions: () => __PATTERN_OPTIONS,
+      onPick: async (val) => {
+        const v = (val === "ALL") ? "" : val;
+        document.getElementById("pattern").value = v;
+        state.pattern = v || "ALL";
+        await refreshMaterials();
+        await fetchAndRender();
+      }
+    });
+
+    bindDropdown({
+      inputId: "material",
+      btnId: "materialBtn",
+      clearId: "materialClear",
+      menuId: "materialMenu",
+      getOptions: () => __MATERIAL_OPTIONS,
+      onPick: async (val) => {
+        const v = (val === "ALL") ? "" : val;
+        document.getElementById("material").value = v;
+        state.material = v || "ALL";
+        await fetchAndRender();
+      }
+    });
 
     setTimeout(() => { try{ map.invalidateSize(); }catch(_e){} }, 50);
 
