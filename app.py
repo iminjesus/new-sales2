@@ -157,6 +157,26 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     return joins, wh, p
 
 
+def build_target_filters(alias: str, f):
+    """
+    Returns (joins, wheres, params) for target_26 table.
+    target_26 has state, bde, ship_to, sold_to directly — no customer JOIN needed.
+    """
+    joins = []
+    wh, p = [], []
+
+    if f["region"] != "ALL":
+        wh.append(f"{alias}.state = %s"); p.append(f["region"])
+    if f["salesman"] != "ALL":
+        wh.append(f"UPPER(TRIM({alias}.bde)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
+    if f["sold_to"] != "ALL":
+        wh.append(f"{alias}.sold_to = %s"); p.append(f["sold_to"])
+    if f["ship_to"] != "ALL":
+        wh.append(f"{alias}.ship_to = %s"); p.append(f["ship_to"])
+
+    return joins, wh, p
+
+
 def category_filters(alias: str, category: str):
     """
     Return (joins, wheres) for monthly-schema facts (sales2025, profit).
@@ -1236,10 +1256,9 @@ def v2_dashboard():
     }
     group_cols_target = {
         "product_group": "t.product_group",
-        "region":        "cus.bde_state",
-        "salesman":      "cus.salesman_name",
-        "sold_to_group": "cus.sold_to_group",
-        "sold_to":       "cus.sold_to_name",
+        "region":        "t.state",
+        "salesman":      "t.bde",
+        "sold_to":       "t.sold_to",
         "pattern":       "t.pattern",
     }
     if group_by not in group_cols_sales:
@@ -1326,7 +1345,7 @@ def v2_dashboard():
         d_pct_cum_by = _pct_by_bucket(d_cum_by)
 
         # daily target for selected month (target_26)
-        joins_t, wh_t, params_t = build_customer_filters("t", f, use_sold_to_name=False)
+        joins_t, wh_t, params_t = build_target_filters("t", f)
         tj, tw = category_target_filters("t", f["category"])
         joins_t += tj; wh_t += tw
         wh_t.append("t.month = %s"); params_t.append(month)
@@ -1422,7 +1441,7 @@ def v2_dashboard():
 
         # monthly target totals & breakdown (target_26)
         # Build fresh for all months (don't reuse params_t because it includes a specific month)
-        joins_mt, wh_mt, params_mt = build_customer_filters("t", f, use_sold_to_name=False)
+        joins_mt, wh_mt, params_mt = build_target_filters("t", f)
         tj2, tw2 = category_target_filters("t", f["category"])
         joins_mt += tj2; wh_mt += tw2
         if f["product_group"] != "ALL":
@@ -1787,7 +1806,7 @@ def daily_target():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
-    joins, wh, params = build_customer_filters("t", f, use_sold_to_name=False)
+    joins, wh, params = build_target_filters("t", f)
 
     # category filters for target table
     cat_joins, cat_where = category_target_filters("t", f["category"])
@@ -2223,7 +2242,7 @@ def monthly_target():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
-    joins, wh, params = build_customer_filters("t", f, use_sold_to_name=False)
+    joins, wh, params = build_target_filters("t", f)
 
     # category filters for target table
     cat_joins, cat_where = category_target_filters("t", f["category"])
@@ -2290,17 +2309,16 @@ def monthly_target_breakdown():
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
         "product_group": "t.product_group",
-        "region":        "cus.bde_state",
-        "salesman":      "cus.salesman_name",
-        "sold_to_group": "cus.sold_to_group",
-        "sold_to":       "cus.sold_to_name",
+        "region":        "t.state",
+        "salesman":      "t.bde",
+        "sold_to":       "t.sold_to",
         "pattern":       "t.pattern",
     }
     if group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
     group_col = group_cols[group_by]
 
-    joins, wh, params = build_customer_filters("t", f, use_sold_to_name=False)
+    joins, wh, params = build_target_filters("t", f)
 
     cat_joins, cat_where = category_target_filters("t", f["category"])
     joins += cat_joins
