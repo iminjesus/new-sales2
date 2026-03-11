@@ -2020,16 +2020,17 @@ async function refreshAllWithKpi(){
   if (!hasDashboard) {
     return;
   }
-  // Profit first (so it appears quickly)
-  await loadProfit();
-  // Then the heavier dashboard charts
-  await drawDailyTotals();
-  await drawDailyStacked();
-  await drawMonthlyKPI();
-  await drawMonthlyTotals();
-  await drawMonthlyStacked();
-  await drawYearlyTotals();
-  await drawYearlyStacked();
+  // Run all chart sections in parallel
+  await Promise.all([
+    loadProfit(),
+    drawDailyTotals(),
+    drawDailyStacked(),
+    drawMonthlyKPI(),
+    drawMonthlyTotals(),
+    drawMonthlyStacked(),
+    drawYearlyTotals(),
+    drawYearlyStacked(),
+  ]);
   
 }
 let refreshTimer = null;
