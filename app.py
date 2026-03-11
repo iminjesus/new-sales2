@@ -624,7 +624,7 @@ def api_stock():
         # material search
         if material:
             # allow partial
-            wh.append("c.m_desc LIKE %s")
+            wh.append("c.size LIKE %s")
             params.append(f"%{material}%")
 
         # category chip handling
@@ -742,7 +742,7 @@ def api_orders():
         # prod_group / pattern / material filters
         if needs_carrying:
             if material:
-                wh.append("c.m_desc LIKE %s")
+                wh.append("c.size LIKE %s")
                 params.append(f"%{material}%")
             if prod_group and prod_group != "ALL":
                 wh.append("c.product_group = %s")
@@ -861,7 +861,7 @@ def api_incoming():
         joins += cat_joins
 
         if material:
-            wh.append("c.m_desc LIKE %s")
+            wh.append("c.size LIKE %s")
             params.append(f"%{material}%")
 
         if needs_carrying:
@@ -1161,10 +1161,10 @@ def v2_dimensions():
             w2.append("pattern = %s"); p2.append(pat)
         w2_sql = ("WHERE " + " AND ".join(w2)) if w2 else ""
         cur.execute(f"""
-            SELECT DISTINCT m_desc AS v
+            SELECT DISTINCT size AS v
             FROM carrying_2602
             {w2_sql}
-            ORDER BY m_desc
+            ORDER BY size
         """, tuple(p2))
         materials = [r["v"] for r in cur.fetchall() if r.get("v") is not None]
 
@@ -2735,10 +2735,10 @@ def materials():
             where_sql = "WHERE " + " AND ".join(where)
 
         cur.execute(f"""
-            SELECT DISTINCT m_desc
+            SELECT DISTINCT size
             FROM carrying_2602
             {where_sql}
-            ORDER BY m_desc
+            ORDER BY size
         """, tuple(params))
 
         names = [r[0] for r in cur.fetchall()]
