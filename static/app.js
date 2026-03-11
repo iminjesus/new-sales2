@@ -1437,6 +1437,7 @@ async function drawMonthlyStacked(){
     target26CumTotal[i] = tRun;
   }
 
+
   // Percent helpers (for % charts: keep your original meaning = composition comparison)
   function toPercentStacksYear(byKey, lastIdxOrNull){
     const keys = Object.keys(byKey);
@@ -1584,25 +1585,33 @@ async function drawMonthlyStacked(){
   stackedMonthlyInst = new Chart(document.getElementById("stackedMonthlyChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25, ...ds26, ...dsT26] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 
   stackedMonthlyCumInst = new Chart(document.getElementById("stackedMonthlyCumChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25Cum, ...ds26Cum, ...dsT26Cum] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 
   stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25Pct, ...ds26Pct] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 }
 
