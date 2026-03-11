@@ -182,7 +182,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 }
 #stockMap { width: 100%; height: 100% !important; }
 #stockSidePanel {
-  flex: 0 0 420px;
+  flex: 0 0 480px;
   height: 100%;
   display: flex;
   flex-direction: column;

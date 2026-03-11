@@ -160,7 +160,7 @@
 
   // ---------------- Leaflet ----------------
   const map = L.map("stockMap", { zoomSnap: 0.1 });
-  map.setView([-20, 125], 4); // Asia-Pacific default; will fitBounds after data loads
+  map.setView([5, 120], 4); // Asia default; fitBounds after data loads
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
 
   const layerStock         = L.layerGroup().addTo(map);
