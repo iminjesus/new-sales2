@@ -1276,7 +1276,7 @@ def v2_dashboard():
                 _cache_set(_V2_CACHE_DASH, key, payload, ttl_sec=int(os.getenv("DASH_CACHE_TTL", "30")))
                 return jsonify(payload)
 
-        # ---------------- daily (sales_2601 + target_26 month) ----------------
+        # ---------------- daily (sales_thismonth + target_26 month) ----------------
         joins_d, wh_d, params_d = build_customer_filters("s", f, use_sold_to_name=False)
         if f["category"] != "443":
             cj, cw = category_filters_sales("s", f["category"])
@@ -1298,7 +1298,7 @@ def v2_dashboard():
 
         cur.execute(f"""
             SELECT s.day AS k, SUM(s.{value}) AS v
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins_d)}
             {where_d}
             GROUP BY s.day
@@ -1313,7 +1313,7 @@ def v2_dashboard():
         group_col_d = group_cols_sales[group_by]
         cur.execute(f"""
             SELECT s.day AS day, {group_col_d} AS group_label, SUM(s.{value}) AS value
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins_d)}
             {where_d}
             GROUP BY s.day, {group_col_d}
@@ -1663,7 +1663,7 @@ def daily_sales():
 
         daily_sql = f"""
         SELECT s.day AS day_num, SUM(s.{value}) AS daily_total
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.day
@@ -1755,7 +1755,7 @@ def daily_breakdown():
         SELECT s.day AS day,
                 {group_col} AS group_label,
                 SUM(s.{value}) AS value
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.day, {group_col}
@@ -1972,7 +1972,7 @@ def fetch_table_rows(top_limit: int):
             s.ship_to AS ship_to_code,
 
             {day_cols}
-        FROM sales_2601 s
+        FROM sales_thismonth s
         {' '.join(joins)}
         {where_sql}
         GROUP BY
@@ -2014,7 +2014,7 @@ def export_excel():
 
         wb = build_excel(
             rows,
-            sheet_name="sales_2601_by_day",
+            sheet_name="sales_thismonth_by_day",
             header_order=header_order,
             meta_lines=meta_lines
         )
@@ -2024,7 +2024,7 @@ def export_excel():
         bio.seek(0)
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
-        filename = f"sales_2601_top{top_limit if top_limit else 'ALL'}_{metric}_{stamp}.xlsx"
+        filename = f"sales_thismonth_top{top_limit if top_limit else 'ALL'}_{metric}_{stamp}.xlsx"
 
         return send_file(
             bio,
