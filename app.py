@@ -442,6 +442,7 @@ def _pct_by_bucket(by_group: Dict[str, List[float]]) -> Dict[str, List[float]]:
 _V2_CACHE_DASH: Dict[str, Tuple[float, Any]] = {}
 _V2_CACHE_DIMS: Dict[str, Tuple[float, Any]] = {}
 _TOP_SOLD_TO_CACHE: Dict[str, Tuple[float, Any]] = {}
+_API_CACHE: Dict[str, Tuple[float, Any]] = {}   # shared cache for old v1 endpoints
 
 # ---- Fixed Top list computed once at startup (Top 10/20/30) ----
 # Key: (top_limit, value) where value is 'qty' or 'amt'
@@ -1607,6 +1608,10 @@ def v2_dashboard():
 # ----------------------------- Daily Sales ---------------------------------
 @app.get("/api/daily_sales")
 def daily_sales():
+    _ck = _make_v2_key("daily_sales", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -1677,14 +1682,19 @@ def daily_sales():
         conn.close()
 
     day_map = {int(r["day_num"]): float(r["daily_total"] or 0) for r in rows}
-    return jsonify([{"day": d, "value": day_map.get(d, 0)} for d in range(1, 32)])
+    result = [{"day": d, "value": day_map.get(d, 0)} for d in range(1, 32)]
+    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
+    return jsonify(result)
      
 
 #
 # -------------------- Daily breakdown (stacked by group) -------------------
 @app.get("/api/daily_breakdown")
 def daily_breakdown():
-
+    _ck = _make_v2_key("daily_breakdown", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
     # 0 or missing = no top filter
@@ -1771,6 +1781,7 @@ def daily_breakdown():
         except:
             pass
 
+    _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
     return jsonify(rows)
 
 
@@ -1778,6 +1789,10 @@ def daily_breakdown():
 import calendar
 @app.get("/api/daily_target")
 def daily_target():
+    _ck = _make_v2_key("daily_target", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -1853,10 +1868,9 @@ def daily_target():
     daily_value   = monthly_total / days_in_month if days_in_month else 0
 
     # return one entry per day: 1..N
-    return jsonify([
-        {"day": d, "value": daily_value}
-        for d in range(1, days_in_month + 1)
-    ])
+    result = [{"day": d, "value": daily_value} for d in range(1, days_in_month + 1)]
+    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
+    return jsonify(result)
 
 def autosize_columns(ws, max_width=60):
     """
@@ -2041,6 +2055,10 @@ def export_excel():
         # ----------------------------- Monthly Sales ---------------------------------
 @app.get("/api/monthly_sales")
 def monthly_sales():
+    _ck = _make_v2_key("monthly_sales", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2115,12 +2133,18 @@ def monthly_sales():
         conn.close()
 
     month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
-    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
+    result = [{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)]
+    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
+    return jsonify(result)
 
 
 # -------------------- Monthly breakdown (stacked by group) -------------------
 @app.get("/api/monthly_breakdown")
 def monthly_breakdown():
+    _ck = _make_v2_key("monthly_breakdown", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2210,12 +2234,17 @@ def monthly_breakdown():
         except:
             pass
 
+    _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
     return jsonify(rows)
 
 
 # ----------------------------- Monthly Target ---------------------------------
 @app.get("/api/monthly_target")
 def monthly_target():
+    _ck = _make_v2_key("monthly_target", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2273,7 +2302,9 @@ def monthly_target():
         conn.close()
 
     month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
-    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
+    result = [{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)]
+    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
+    return jsonify(result)
 
 
 # ------------------------- Monthly Target Breakdown --------------------------
@@ -2281,6 +2312,10 @@ from mysql.connector import Error as MySQLError
 
 @app.get("/api/monthly_target_breakdown")
 def monthly_target_breakdown():
+    _ck = _make_v2_key("monthly_target_breakdown", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2345,7 +2380,9 @@ def monthly_target_breakdown():
         """
 
         cur.execute(sql, tuple(params2))
-        return jsonify(cur.fetchall())
+        rows = cur.fetchall()
+        _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
+        return jsonify(rows)
 
     except MySQLError as e:
         # 프론트에서 바로 원인 보이도록 내려줌 (운영이면 msg만 제거하고 로그로만 남기기)
@@ -2371,6 +2408,10 @@ def monthly_target_breakdown():
 # ----------------------------- Yearly Sales ---------------------------------
 @app.get("/api/yearly_sales")
 def yearly_sales():
+    _ck = _make_v2_key("yearly_sales", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2439,13 +2480,18 @@ def yearly_sales():
         conn.close()
 
     year_map = {int(r["year_num"]): float(r["yearly_total"] or 0) for r in rows}
-    return jsonify([{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2026)])
+    result = [{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2026)]
+    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
+    return jsonify(result)
 
 
 # -------------------- Yearly breakdown (stacked by group) -------------------
 @app.get("/api/yearly_breakdown")
 def yearly_breakdown():
-
+    _ck = _make_v2_key("yearly_breakdown", request)
+    _hit = _cache_get(_API_CACHE, _ck)
+    if _hit is not None:
+        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2531,6 +2577,7 @@ def yearly_breakdown():
         except:
             pass
 
+    _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
     return jsonify(rows)
 
 

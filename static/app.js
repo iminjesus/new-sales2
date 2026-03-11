@@ -1143,14 +1143,6 @@ async function drawMonthlyTotals(){
     target26[i] = null;
   }
 
-  // 2026 achievement (monthly)
-  const ach26 = labels.map((_,i)=>{
-    const s = sales26[i];
-    const t = target26[i];
-    if (s == null || t == null || t <= 0) return null;
-    return +((s/t)*100).toFixed(1);
-  });
-
   // cumulative (2025 actual cum always full year)
   const salesCum25 = toCumulative(sales25);
 
@@ -1166,30 +1158,11 @@ async function drawMonthlyTotals(){
     targetCum26[i] = tRun;
   }
 
-  const achCum26 = labels.map((_,i)=>{
-    const sc = salesCum26[i];
-    const tc = targetCum26[i];
-    if (sc == null || tc == null || tc <= 0) return null;
-    return +((sc/tc)*100).toFixed(1);
-  });
-
   [monthlyInst, monthlyCumInst].forEach(c => c && c.destroy());
 
   monthlyInst = new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
     data:{ labels, datasets:[
-      // 2026 Ach line
-      {
-        label:"Ach(%) (2026)",
-        type:"line",
-        data: ach26,
-        yAxisID:"y1",
-        borderWidth:2,
-        pointRadius:0,
-        borderColor:"#ef4444",
-        datalabels:{ display:true, align:"top", anchor:"end",
-          formatter: v => v==null ? "" : v.toFixed(1) + "%" }
-      },
       // 2025 Actual only
       {
         label: (filters.metric==="amount" ? "Sales Amount (2025)" : "SalesQty (2025)"),
@@ -1226,17 +1199,6 @@ async function drawMonthlyTotals(){
   monthlyCumInst = new Chart(document.getElementById("monthlyCumChart"),{
     type:"bar",
     data:{ labels, datasets:[
-      {
-        label:"Ach(%) (2026)",
-        type:"line",
-        data: achCum26,
-        yAxisID:"y1",
-        borderWidth:2,
-        pointRadius:0,
-        borderColor:"#ef4444",
-        datalabels:{ display:true, align:"top", anchor:"end",
-          formatter: v => v==null ? "" : v.toFixed(1) + "%" }
-      },
       {
         label: (filters.metric==="amount" ? "Cumulative Amount (2025)" : "Cumulative Qty (2025)"),
         type:"bar",
@@ -1475,21 +1437,6 @@ async function drawMonthlyStacked(){
     target26CumTotal[i] = tRun;
   }
 
-  // Achievement lines (2026)
-  const ach26 = labels.map((_,i)=>{
-    const s = sales26Total[i];
-    const t = target26Total[i];
-    if (s == null || t == null || t <= 0) return null;
-    return +((s/t)*100).toFixed(1);
-  });
-
-  const achCum26 = labels.map((_,i)=>{
-    const s = sales26CumTotal[i];
-    const t = target26CumTotal[i];
-    if (s == null || t == null || t <= 0) return null;
-    return +((s/t)*100).toFixed(1);
-  });
-
   // Percent helpers (for % charts: keep your original meaning = composition comparison)
   function toPercentStacksYear(byKey, lastIdxOrNull){
     const keys = Object.keys(byKey);
@@ -1630,87 +1577,32 @@ async function drawMonthlyStacked(){
     datalabels: { display:false }
   }));
 
-  // Ach lines only (no target line)
-  const achLine26 = {
-    type:"line",
-    label:"Ach(%) (2026)",
-    data: ach26,
-    yAxisID:"y1",
-    borderWidth:2,
-    pointRadius:0,
-    borderColor:"#ef4444",
-    datalabels:{ display:false }
-  };
-
-  const achCumLine26 = {
-    type:"line",
-    label:"Ach(%) Cum (2026)",
-    data: achCum26,
-    yAxisID:"y1",
-    borderWidth:2,
-    pointRadius:0,
-    borderColor:"#ef4444",
-    datalabels:{ display:false }
-  };
-
   // Destroy old
   [stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst]
     .forEach(c=>c && c.destroy());
 
-  // Options with y1 axis for achievement
-  function withY1(opts, y1Max){
-    return {
-      ...opts,
-      scales: {
-        ...opts.scales,
-        y1: {
-          position:"right",
-          beginAtZero:true,
-          suggestedMax: y1Max ?? 120,
-          grid:{ drawOnChartArea:false },
-          ticks:{ callback: v => `${v}%` }
-        }
-      }
-    };
-  }
-
-  // Main stacked monthly:
-  // - 2025 actual stack
-  // - 2026 actual stack
-  // - 2026 target stack (NEW)
-  // - Ach% line (2026)
   stackedMonthlyInst = new Chart(document.getElementById("stackedMonthlyChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25, ...ds26, ...dsT26, achLine26] },
-    options: withStackKeyLegend(
-      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
-    )
+    data:{ labels, datasets:[...ds25, ...ds26, ...dsT26] },
+    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
   });
 
-  // Cumulative stacked monthly:
   stackedMonthlyCumInst = new Chart(document.getElementById("stackedMonthlyCumChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25Cum, ...ds26Cum, ...dsT26Cum, achCumLine26] },
-    options: withStackKeyLegend(
-      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
-    )
+    data:{ labels, datasets:[...ds25Cum, ...ds26Cum, ...dsT26Cum] },
+    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
   });
 
-  // % charts keep your original meaning (2025 vs 2026 composition) + Ach line
   stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25Pct, ...ds26Pct, achLine26] },
-    options: withStackKeyLegend(
-      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
-    )
+    data:{ labels, datasets:[...ds25Pct, ...ds26Pct] },
+    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
   });
 
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum, achCumLine26] },
-    options: withStackKeyLegend(
-      withY1(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target + Ach%)"), 120)
-    )
+    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum] },
+    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
   });
 }
 
@@ -2128,16 +2020,17 @@ async function refreshAllWithKpi(){
   if (!hasDashboard) {
     return;
   }
-  // Profit first (so it appears quickly)
-  await loadProfit();
-  // Then the heavier dashboard charts
-  await drawDailyTotals();
-  await drawDailyStacked();
-  await drawMonthlyKPI();
-  await drawMonthlyTotals();
-  await drawMonthlyStacked();
-  await drawYearlyTotals();
-  await drawYearlyStacked();
+  // Run all chart sections in parallel
+  await Promise.all([
+    loadProfit(),
+    drawDailyTotals(),
+    drawDailyStacked(),
+    drawMonthlyKPI(),
+    drawMonthlyTotals(),
+    drawMonthlyStacked(),
+    drawYearlyTotals(),
+    drawYearlyStacked(),
+  ]);
   
 }
 let refreshTimer = null;
