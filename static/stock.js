@@ -11,7 +11,6 @@
   const API_STOCK    = "/api/stock";
   const API_ORDERS   = "/api/orders";
   const API_INCOMING = "/api/incoming";
-  const API_DASH     = "/api/v2/dashboard";
 
   const $ = (s) => document.querySelector(s);
 
@@ -161,7 +160,7 @@
 
   // ---------------- Leaflet ----------------
   const map = L.map("stockMap", { zoomSnap: 0.1 });
-  map.setView([-5.0, 180.0], 4.2); // fixed view
+  map.setView([5, 120], 4); // Asia default; fitBounds after data loads
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
 
   const layerStock         = L.layerGroup().addTo(map);
@@ -259,60 +258,45 @@
   let monthlyChart = null;
   let yearlyChart  = null;
 
-  function destroyCharts(){
-    try{ monthlyChart?.destroy(); }catch(_e){}
-    try{ yearlyChart?.destroy(); }catch(_e){}
-    monthlyChart = null;
-    yearlyChart = null;
-  }
-
   function monthsLabels(){
     return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   }
 
-  function drawMonthlySales(monthRows){
+  function drawMonthlySales(rows25, rows26){
     const canvas = document.getElementById("salesMonthlyChart");
     if (!canvas || typeof Chart === "undefined") return;
 
     const labels = monthsLabels();
-    const data = Array(12).fill(0);
+    const data25 = Array(12).fill(0);
+    const data26 = Array(12).fill(0);
 
-    (monthRows || []).forEach(r => {
-      // accept "month" int 1-12 or "billing_month" like "2026-01"
-      let m = r.month ?? r.billing_month ?? r.m;
-      let mi = -1;
-      if (typeof m === "number") mi = m - 1;
-      else if (typeof m === "string"){
-        const mm = m.slice(-2);
-        const n = parseInt(mm, 10);
-        if (!isNaN(n)) mi = n - 1;
-      }
-      if (mi >= 0 && mi < 12){
-        const v = r.value ?? r.qty ?? r.amt ?? r.total_value ?? r.total ?? 0;
-        data[mi] += Number(v) || 0;
-      }
-    });
+    function fillData(rows, arr){
+      (rows || []).forEach(r => {
+        const mi = (r.month ?? r.m ?? 0) - 1;
+        if (mi >= 0 && mi < 12) arr[mi] += Number(r.value || r.qty || 0);
+      });
+    }
+    fillData(rows25, data25);
+    fillData(rows26, data26);
 
-    const ctx = canvas.getContext("2d");
-    monthlyChart = new Chart(ctx, {
+    if (monthlyChart) { monthlyChart.destroy(); monthlyChart = null; }
+    monthlyChart = new Chart(canvas.getContext("2d"), {
       type: "bar",
       data: {
         labels,
-        datasets: [{
-          label: "Sales (Monthly)",
-          data
-        }]
+        datasets: [
+          { label: "Sales (2025)", data: data25, backgroundColor: "#ABDEE6", categoryPercentage: 0.8, barPercentage: 0.9 },
+          { label: "Sales (2026)", data: data26, backgroundColor: "#93c5fd", categoryPercentage: 0.8, barPercentage: 0.9 }
+        ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: false },
-          tooltip: { callbacks: { label: (c) => fmt(c.parsed.y) } }
+          legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt(c.parsed.y)}` } }
         },
-        scales: {
-          y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } }
-        }
+        scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } } }
       }
     });
   }
@@ -321,27 +305,22 @@
     const canvas = document.getElementById("salesYearlyChart");
     if (!canvas || typeof Chart === "undefined") return;
 
-    // expect rows like: [{year:2025,value:...},{year:2026,value:...}] or similar
     const byYear = {};
     (yearRows || []).forEach(r => {
-      const y = r.year ?? r.y ?? r.billing_year;
-      if (y == null) return;
-      const v = r.value ?? r.qty ?? r.amt ?? r.total_value ?? r.total ?? 0;
-      byYear[String(y)] = (byYear[String(y)] || 0) + (Number(v)||0);
+      const y = String(r.year ?? r.y ?? "");
+      if (!y) return;
+      byYear[y] = (byYear[y] || 0) + Number(r.value || r.qty || 0);
     });
 
     const labels = Object.keys(byYear).sort();
     const data = labels.map(k => byYear[k]);
 
-    const ctx = canvas.getContext("2d");
-    yearlyChart = new Chart(ctx, {
+    if (yearlyChart) { yearlyChart.destroy(); yearlyChart = null; }
+    yearlyChart = new Chart(canvas.getContext("2d"), {
       type: "bar",
       data: {
         labels,
-        datasets: [{
-          label: "Sales (Yearly)",
-          data
-        }]
+        datasets: [{ label: "Yearly Sales", data, backgroundColor: "#ABDEE6", categoryPercentage: 0.8, barPercentage: 0.9 }]
       },
       options: {
         responsive: true,
@@ -350,47 +329,21 @@
           legend: { display: false },
           tooltip: { callbacks: { label: (c) => fmt(c.parsed.y) } }
         },
-        scales: {
-          y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } }
-        }
+        scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } } }
       }
     });
   }
 
   async function fetchAndRenderSales(){
-    // Pull only sales summaries from the existing dashboard endpoint.
-    // We keep it light: monthly + yearly for the selected filters.
-    // metric: qty by default; change to amt if you want.
     const qs = buildQueryParams({ metric: "qty" });
+    const [rows25, rows26, yearRows] = await Promise.all([
+      fetchJSON(`/api/monthly_sales?${qs}&year=2025`),
+      fetchJSON(`/api/monthly_sales?${qs}&year=2026`),
+      fetchJSON(`/api/yearly_sales?${qs}`)
+    ]);
 
-    const dash = await fetchJSON(`${API_DASH}?${qs}`);
-    if (!dash) return;
-
-    // Try common field names (depends on your backend implementation)
-    const monthRows =
-      dash.sales_monthly ||
-      dash.monthly_sales ||
-      dash.monthly ||
-      dash.monthly_rows ||
-      [];
-
-    const yearRows =
-      dash.sales_yearly ||
-      dash.yearly_sales ||
-      dash.yearly ||
-      dash.yearly_rows ||
-      [];
-
-    destroyCharts();
-    drawMonthlySales(monthRows);
-    drawYearlySales(yearRows);
-
-    const title = document.getElementById("salesTitle");
-    if (title){
-      title.textContent = `Sales (qty) — ${state.category} / ${state.product_group}` +
-        (state.pattern !== "ALL" ? ` / ${state.pattern}` : "") +
-        (state.material !== "ALL" ? ` / ${state.material}` : "");
-    }
+    drawMonthlySales(rows25 || [], rows26 || []);
+    drawYearlySales(yearRows || []);
   }
 
   // ---------------------- main fetch ----------------------
@@ -409,6 +362,19 @@
     drawStock(stockRes?.rows || []);
     drawOrders(ordersRes?.rows || []);
     drawIncoming(incomingRes?.rows || []);
+
+    // Fit map to all visible data points
+    const allRows = [
+      ...(stockRes?.rows || []),
+      ...(ordersRes?.rows || []),
+      ...(incomingRes?.rows || [])
+    ];
+    const validPts = allRows
+      .map(r => [Number(r.lat), Number(r.lon)])
+      .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo));
+    if (validPts.length > 0) {
+      map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 8 });
+    }
 
     await fetchAndRenderSales();
 
@@ -533,7 +499,9 @@
       }
     });
 
-    setTimeout(() => { try{ map.invalidateSize(); }catch(_e){} }, 50);
+    // Let the browser paint the flex layout before Leaflet measures the map div
+    await new Promise(r => setTimeout(r, 100));
+    try { map.invalidateSize(); } catch(_e) {}
 
     await fetchAndRender();
   });

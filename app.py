@@ -210,10 +210,10 @@ def category_filters(alias: str, category: str):
                 FROM `443_25` p443
                 WHERE p443.month         = {alias}.month
                 AND p443.product_group = {alias}.product_group
-                
+
             )
             """)
-        
+
     return joins, wh
 
 
@@ -348,8 +348,8 @@ def category_filters_stock(alias: str, category: str):
         joins.append("JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) = s.material")
 
     elif cat == "SUV":
-        # stock에는 pattern이 없을 수 있으니 carrying_2601로부터 pattern 가져와야 함
-        joins.append("JOIN carrying_2601 c ON c.m_code = s.material")
+        # stock에는 pattern이 없을 수 있으니 carrying_2602로부터 pattern 가져와야 함
+        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
         joins.append("JOIN suv suv ON suv.Pattern = c.pattern")
 
     elif cat == "LOWPROFILE":
@@ -442,7 +442,6 @@ def _pct_by_bucket(by_group: Dict[str, List[float]]) -> Dict[str, List[float]]:
 _V2_CACHE_DASH: Dict[str, Tuple[float, Any]] = {}
 _V2_CACHE_DIMS: Dict[str, Tuple[float, Any]] = {}
 _TOP_SOLD_TO_CACHE: Dict[str, Tuple[float, Any]] = {}
-_API_CACHE: Dict[str, Tuple[float, Any]] = {}   # shared cache for old v1 endpoints
 
 # ---- Fixed Top list computed once at startup (Top 10/20/30) ----
 # Key: (top_limit, value) where value is 'qty' or 'amt'
@@ -606,7 +605,7 @@ def api_stock():
         """
 
         # carrying join (for prod_group/pattern filters, and for PCLT/TBR if you implement via product_group)
-        joins.append("JOIN carrying_2601 c ON c.m_code = s.material")
+        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
 
         # plant filter
         wh.append(f"s.plant IN ({','.join(['%s']*len(plants))})")
@@ -625,7 +624,7 @@ def api_stock():
         # material search
         if material:
             # allow partial
-            wh.append("c.m_desc LIKE %s")
+            wh.append("c.size LIKE %s")
             params.append(f"%{material}%")
 
         # category chip handling
@@ -633,11 +632,11 @@ def api_stock():
             t = CATEGORY_TABLE[category]
             joins.append(f"JOIN {t} cat ON cat.Material = s.material")  # column name 맞춰서 Material/m_code로 변경
         elif category == "PCLT":
-            # 예시: carrying_2601.product_group 기준 (너 데이터에 맞게 조정)
+            # 예시: carrying_2602.product_group 기준 (너 데이터에 맞게 조정)
             # wh.append("c.some_segment = 'PCLT'")
             pass
         elif category == "TBR":
-            # 예시: carrying_2601.product_group 기준 (너 데이터에 맞게 조정)
+            # 예시: carrying_2602.product_group 기준 (너 데이터에 맞게 조정)
             # wh.append("c.some_segment = 'TBR'")
             pass
         else:
@@ -726,7 +725,7 @@ def api_orders():
         """
 
         if needs_carrying:
-            joins.append("JOIN carrying_2601 c ON c.m_code = o.material")
+            joins.append("JOIN carrying_2602 c ON c.m_code = o.material")
 
         joins += cat_joins
 
@@ -743,7 +742,7 @@ def api_orders():
         # prod_group / pattern / material filters
         if needs_carrying:
             if material:
-                wh.append("c.m_desc LIKE %s")
+                wh.append("c.size LIKE %s")
                 params.append(f"%{material}%")
             if prod_group and prod_group != "ALL":
                 wh.append("c.product_group = %s")
@@ -857,12 +856,12 @@ def api_incoming():
         """
 
         if needs_carrying:
-            joins.append("JOIN carrying_2601 c ON c.m_code = o.material")
+            joins.append("JOIN carrying_2602 c ON c.m_code = o.material")
 
         joins += cat_joins
 
         if material:
-            wh.append("c.m_desc LIKE %s")
+            wh.append("c.size LIKE %s")
             params.append(f"%{material}%")
 
         if needs_carrying:
@@ -1001,16 +1000,19 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
 
     joins, wh, params = build_customer_filters("sTop", f, use_sold_to_name=False)
 
-    # category filter (same rule as sales)
+    # category filter (same rule as sales) — use normalised version
     if f.get("category") != "443":
-        cat_joins, cat_where = category_filters("sTop", f.get("category"))
+        cat_joins, cat_where = category_filters_sales("sTop", f.get("category"))
         joins += cat_joins
         wh    += cat_where
 
+    # product_group / pattern now live in carrying_2602
+    if f.get("product_group") != "ALL" or f.get("pattern") != "ALL":
+        _ensure_carrying_join("sTop", joins)
     if f.get("product_group") != "ALL":
-        wh.append("sTop.product_group = %s"); params.append(f["product_group"])
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f.get("pattern") != "ALL":
-        wh.append("sTop.pattern = %s"); params.append(f["pattern"])
+        wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material") != "ALL":
         wh.append("sTop.material = %s"); params.append(f["material"])
 
@@ -1124,22 +1126,29 @@ def v2_dimensions():
         """, tuple(params))
         ship_to_names = [r["v"] for r in cur.fetchall()]
 
-        # Product groups
-        cur.execute("SELECT DISTINCT TRIM(product_group) AS v FROM sales_2025 ORDER BY TRIM(product_group)")
+        # Product groups — from material master (carrying_2602)
+        cur.execute("""
+            SELECT DISTINCT TRIM(product_group) AS v
+            FROM carrying_2602
+            WHERE product_group IS NOT NULL AND TRIM(product_group) <> ''
+            ORDER BY TRIM(product_group)
+        """)
         product_groups = [r["v"] for r in cur.fetchall() if r.get("v") is not None]
 
-        # Patterns (filtered by product_group)
+        # Patterns (filtered by product_group) — from material master
         if pg and pg != "ALL":
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern) AS v
-                FROM sales_2025
+                FROM carrying_2602
                 WHERE product_group = %s
+                  AND pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
             """, (pg,))
         else:
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern) AS v
-                FROM sales_2025
+                FROM carrying_2602
+                WHERE pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
             """)
         patterns = [r["v"] for r in cur.fetchall() if r.get("v") is not None]
@@ -1152,10 +1161,10 @@ def v2_dimensions():
             w2.append("pattern = %s"); p2.append(pat)
         w2_sql = ("WHERE " + " AND ".join(w2)) if w2 else ""
         cur.execute(f"""
-            SELECT DISTINCT m_desc AS v
-            FROM carrying_2601
+            SELECT DISTINCT size AS v
+            FROM carrying_2602
             {w2_sql}
-            ORDER BY m_desc
+            ORDER BY size
         """, tuple(p2))
         materials = [r["v"] for r in cur.fetchall() if r.get("v") is not None]
 
@@ -1216,14 +1225,14 @@ def v2_dashboard():
             "yearly_stacked",
         }
 
-    # group columns
+    # group columns — product_group/pattern now come from carrying_2602 (alias: mat)
     group_cols_sales = {
-        "product_group": "s.product_group",
+        "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "cus.sold_to_name",
-        "pattern":       "s.pattern",
+        "pattern":       "mat.pattern",
     }
     group_cols_target = {
         "product_group": "t.product_group",
@@ -1267,15 +1276,18 @@ def v2_dashboard():
                 _cache_set(_V2_CACHE_DASH, key, payload, ttl_sec=int(os.getenv("DASH_CACHE_TTL", "30")))
                 return jsonify(payload)
 
-        # ---------------- daily (sales_2601 + target_26 month) ----------------
+        # ---------------- daily (sales_thismonth + target_26 month) ----------------
         joins_d, wh_d, params_d = build_customer_filters("s", f, use_sold_to_name=False)
         if f["category"] != "443":
-            cj, cw = category_filters("s", f["category"])
+            cj, cw = category_filters_sales("s", f["category"])
             joins_d += cj; wh_d += cw
+        # Ensure carrying join when product_group/pattern filter or group_by needs it
+        if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+            _ensure_carrying_join("s", joins_d)
         if f["product_group"] != "ALL":
-            wh_d.append("s.product_group = %s"); params_d.append(f["product_group"])
+            wh_d.append("mat.product_group = %s"); params_d.append(f["product_group"])
         if f["pattern"] != "ALL":
-            wh_d.append("s.pattern = %s"); params_d.append(f["pattern"])
+            wh_d.append("mat.pattern = %s"); params_d.append(f["pattern"])
         if f["material"] != "ALL":
             wh_d.append("s.material = %s"); params_d.append(f["material"])
         if top_sold_to:
@@ -1286,7 +1298,7 @@ def v2_dashboard():
 
         cur.execute(f"""
             SELECT s.day AS k, SUM(s.{value}) AS v
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins_d)}
             {where_d}
             GROUP BY s.day
@@ -1301,7 +1313,7 @@ def v2_dashboard():
         group_col_d = group_cols_sales[group_by]
         cur.execute(f"""
             SELECT s.day AS day, {group_col_d} AS group_label, SUM(s.{value}) AS value
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins_d)}
             {where_d}
             GROUP BY s.day, {group_col_d}
@@ -1346,12 +1358,14 @@ def v2_dashboard():
 
         # ---------------- monthly (sales_25_2602 years 2025/2026 + target_26) ----------------
         joins_m, wh_m, params_m = build_customer_filters("s", f, use_sold_to_name=False)
-        mj, mw = category_filters("s", f["category"])
+        mj, mw = category_filters_sales("s", f["category"])
         joins_m += mj; wh_m += mw
+        if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+            _ensure_carrying_join("s", joins_m)
         if f["product_group"] != "ALL":
-            wh_m.append("s.product_group = %s"); params_m.append(f["product_group"])
+            wh_m.append("mat.product_group = %s"); params_m.append(f["product_group"])
         if f["pattern"] != "ALL":
-            wh_m.append("s.pattern = %s"); params_m.append(f["pattern"])
+            wh_m.append("mat.pattern = %s"); params_m.append(f["pattern"])
         if f["material"] != "ALL":
             wh_m.append("s.material = %s"); params_m.append(f["material"])
         wh_m.append("s.year IN (2025, 2026)")
@@ -1457,12 +1471,14 @@ def v2_dashboard():
         # ---------------- yearly (sales_21_25) ----------------
         joins_y, wh_y, params_y = build_customer_filters("s", f, use_sold_to_name=False)
         if f["category"] != "443":
-            yj, yw = category_filters("s", f["category"])
+            yj, yw = category_filters_sales("s", f["category"])
             joins_y += yj; wh_y += yw
+        if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+            _ensure_carrying_join("s", joins_y)
         if f["product_group"] != "ALL":
-            wh_y.append("s.product_group = %s"); params_y.append(f["product_group"])
+            wh_y.append("mat.product_group = %s"); params_y.append(f["product_group"])
         if f["pattern"] != "ALL":
-            wh_y.append("s.pattern = %s"); params_y.append(f["pattern"])
+            wh_y.append("mat.pattern = %s"); params_y.append(f["pattern"])
         if f["material"] != "ALL":
             wh_y.append("s.material = %s"); params_y.append(f["material"])
         if top_sold_to:
@@ -1591,10 +1607,6 @@ def v2_dashboard():
 # ----------------------------- Daily Sales ---------------------------------
 @app.get("/api/daily_sales")
 def daily_sales():
-    _ck = _make_v2_key("daily_sales", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -1603,20 +1615,20 @@ def daily_sales():
 
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
-    # category
-    
-    # Only apply category_filters for categories other than 443
+    # category — use normalised version for sales tables
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"])
         joins += cat_joins
         wh    += cat_where
 
-    # direct fields (indexable)
+    # product_group / pattern now in carrying_2602
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s")
+        wh.append("mat.product_group = %s")
         params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s")
+        wh.append("mat.pattern = %s")
         params.append(f["pattern"])
     if f["material"] != "ALL":
         wh.append("s.material = %s")
@@ -1632,7 +1644,7 @@ def daily_sales():
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
-            )                                               # CHANGED
+            )
 
             if not top_sold_to:
                 # no matching customers – all days = 0
@@ -1651,7 +1663,7 @@ def daily_sales():
 
         daily_sql = f"""
         SELECT s.day AS day_num, SUM(s.{value}) AS daily_total
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.day
@@ -1665,19 +1677,14 @@ def daily_sales():
         conn.close()
 
     day_map = {int(r["day_num"]): float(r["daily_total"] or 0) for r in rows}
-    result = [{"day": d, "value": day_map.get(d, 0)} for d in range(1, 32)]
-    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
-    return jsonify(result)
+    return jsonify([{"day": d, "value": day_map.get(d, 0)} for d in range(1, 32)])
      
 
 #
 # -------------------- Daily breakdown (stacked by group) -------------------
 @app.get("/api/daily_breakdown")
 def daily_breakdown():
-    _ck = _make_v2_key("daily_breakdown", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
+
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
     # 0 or missing = no top filter
@@ -1686,12 +1693,12 @@ def daily_breakdown():
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
-        "product_group": "s.product_group",
+        "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "cus.sold_to_name",
-        "pattern":       "s.pattern",
+        "pattern":       "mat.pattern",
     }
     if group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
@@ -1699,17 +1706,19 @@ def daily_breakdown():
 
     # ---- Build base JOINs / WHEREs (same as daily_sales) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-    
+
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"])
         joins += cat_joins
         wh    += cat_where
 
-    # Direct, index-friendly filters that live on sales202601
+    # Carrying join needed for group_by or product_group/pattern filter
+    if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s"); params.append(f["product_group"])
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s");       params.append(f["pattern"])
+        wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
         wh.append("s.material = %s")
         params.append(f["material"])
@@ -1724,7 +1733,7 @@ def daily_breakdown():
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
-            )                                               # CHANGED
+            )
 
             # no matching customers – nothing to show
             if not top_sold_to:
@@ -1746,7 +1755,7 @@ def daily_breakdown():
         SELECT s.day AS day,
                 {group_col} AS group_label,
                 SUM(s.{value}) AS value
-            FROM sales_2601 s
+            FROM sales_thismonth s
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.day, {group_col}
@@ -1762,7 +1771,6 @@ def daily_breakdown():
         except:
             pass
 
-    _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
     return jsonify(rows)
 
 
@@ -1770,10 +1778,6 @@ def daily_breakdown():
 import calendar
 @app.get("/api/daily_target")
 def daily_target():
-    _ck = _make_v2_key("daily_target", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -1849,9 +1853,10 @@ def daily_target():
     daily_value   = monthly_total / days_in_month if days_in_month else 0
 
     # return one entry per day: 1..N
-    result = [{"day": d, "value": daily_value} for d in range(1, days_in_month + 1)]
-    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
-    return jsonify(result)
+    return jsonify([
+        {"day": d, "value": daily_value}
+        for d in range(1, days_in_month + 1)
+    ])
 
 def autosize_columns(ws, max_width=60):
     """
@@ -1927,16 +1932,18 @@ def fetch_table_rows(top_limit: int):
     # ---------- STEP 2: build filters (same as daily_sales) ----------
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
-    # category (same rule: skip 443)
+    # category (same rule: skip 443) — use normalised version
     if f.get("category", "ALL") != "443":
-        cat_joins, cat_where = category_filters("s", f.get("category", "ALL"))
+        cat_joins, cat_where = category_filters_sales("s", f.get("category", "ALL"))
         joins += cat_joins
         wh    += cat_where
 
+    if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL":
+        _ensure_carrying_join("s", joins)
     if f.get("product_group", "ALL") != "ALL":
-        wh.append("s.product_group = %s"); params.append(f["product_group"])
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f.get("pattern", "ALL") != "ALL":
-        wh.append("s.pattern = %s"); params.append(f["pattern"])
+        wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material", "ALL") != "ALL":
         wh.append("s.material = %s"); params.append(f["material"])
 
@@ -1965,7 +1972,7 @@ def fetch_table_rows(top_limit: int):
             s.ship_to AS ship_to_code,
 
             {day_cols}
-        FROM sales_2601 s
+        FROM sales_thismonth s
         {' '.join(joins)}
         {where_sql}
         GROUP BY
@@ -2007,7 +2014,7 @@ def export_excel():
 
         wb = build_excel(
             rows,
-            sheet_name="sales_2601_by_day",
+            sheet_name="sales_thismonth_by_day",
             header_order=header_order,
             meta_lines=meta_lines
         )
@@ -2017,7 +2024,7 @@ def export_excel():
         bio.seek(0)
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M")
-        filename = f"sales_2601_top{top_limit if top_limit else 'ALL'}_{metric}_{stamp}.xlsx"
+        filename = f"sales_thismonth_top{top_limit if top_limit else 'ALL'}_{metric}_{stamp}.xlsx"
 
         return send_file(
             bio,
@@ -2034,10 +2041,6 @@ def export_excel():
         # ----------------------------- Monthly Sales ---------------------------------
 @app.get("/api/monthly_sales")
 def monthly_sales():
-    _ck = _make_v2_key("monthly_sales", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2049,20 +2052,21 @@ def monthly_sales():
 
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
-    # category
-    cat_joins, cat_where = category_filters("s", f["category"])
+    # category — normalised version
+    cat_joins, cat_where = category_filters_sales("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
-    # direct fields (indexable)
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s")
+        wh.append("mat.product_group = %s")
         params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s")
+        wh.append("mat.pattern = %s")
         params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
 
     # year condition
@@ -2080,7 +2084,7 @@ def monthly_sales():
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
-            )                                               # CHANGED
+            )
 
             if not top_sold_to:
                 return jsonify([{"month": m, "value": 0} for m in range(1, 13)])
@@ -2112,18 +2116,12 @@ def monthly_sales():
         conn.close()
 
     month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
-    result = [{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)]
-    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
-    return jsonify(result)
+    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
 
 
 # -------------------- Monthly breakdown (stacked by group) -------------------
 @app.get("/api/monthly_breakdown")
 def monthly_breakdown():
-    _ck = _make_v2_key("monthly_breakdown", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2136,12 +2134,12 @@ def monthly_breakdown():
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
-        "product_group": "s.product_group",
+        "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "cus.sold_to_name",
-        "pattern":       "s.pattern",
+        "pattern":       "mat.pattern",
     }
     if group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
@@ -2149,17 +2147,18 @@ def monthly_breakdown():
 
     # ---- Build base JOINs / WHEREs (same pattern as monthly_sales) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
-    cat_joins, cat_where = category_filters("s", f["category"])
+    cat_joins, cat_where = category_filters_sales("s", f["category"])
     joins += cat_joins
     wh    += cat_where
 
-    # Direct, index-friendly filters
+    if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s"); params.append(f["product_group"])
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s");       params.append(f["pattern"])
+        wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s");      params.append(f["material"])
+        wh.append("s.material = %s");        params.append(f["material"])
 
     # Year condition
     wh.append("s.year = %s"); params.append(year)
@@ -2212,17 +2211,12 @@ def monthly_breakdown():
         except:
             pass
 
-    _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
     return jsonify(rows)
 
 
 # ----------------------------- Monthly Target ---------------------------------
 @app.get("/api/monthly_target")
 def monthly_target():
-    _ck = _make_v2_key("monthly_target", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2280,9 +2274,7 @@ def monthly_target():
         conn.close()
 
     month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
-    result = [{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)]
-    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
-    return jsonify(result)
+    return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
 
 
 # ------------------------- Monthly Target Breakdown --------------------------
@@ -2290,10 +2282,6 @@ from mysql.connector import Error as MySQLError
 
 @app.get("/api/monthly_target_breakdown")
 def monthly_target_breakdown():
-    _ck = _make_v2_key("monthly_target_breakdown", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2358,9 +2346,7 @@ def monthly_target_breakdown():
         """
 
         cur.execute(sql, tuple(params2))
-        rows = cur.fetchall()
-        _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
-        return jsonify(rows)
+        return jsonify(cur.fetchall())
 
     except MySQLError as e:
         # 프론트에서 바로 원인 보이도록 내려줌 (운영이면 msg만 제거하고 로그로만 남기기)
@@ -2386,10 +2372,6 @@ def monthly_target_breakdown():
 # ----------------------------- Yearly Sales ---------------------------------
 @app.get("/api/yearly_sales")
 def yearly_sales():
-    _ck = _make_v2_key("yearly_sales", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2399,19 +2381,20 @@ def yearly_sales():
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"])
         joins += cat_joins
         wh    += cat_where
 
-    # direct fields (indexable)
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s")
+        wh.append("mat.product_group = %s")
         params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s")
+        wh.append("mat.pattern = %s")
         params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
@@ -2424,11 +2407,11 @@ def yearly_sales():
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
-            )  # CHANGED
+            )
 
             if not top_sold_to:
                 # no data – return zeros for all years in range
-                return jsonify([{"year": y, "value": 0} for y in range(2021, 2026)])  # CHANGED (range fix)
+                return jsonify([{"year": y, "value": 0} for y in range(2021, 2026)])
 
         # 2) Yearly totals, optionally restricted to those sold_to
         wh2 = list(wh)
@@ -2457,18 +2440,13 @@ def yearly_sales():
         conn.close()
 
     year_map = {int(r["year_num"]): float(r["yearly_total"] or 0) for r in rows}
-    result = [{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2026)]
-    _cache_set(_API_CACHE, _ck, result, ttl_sec=60)
-    return jsonify(result)
+    return jsonify([{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2026)])
 
 
 # -------------------- Yearly breakdown (stacked by group) -------------------
 @app.get("/api/yearly_breakdown")
 def yearly_breakdown():
-    _ck = _make_v2_key("yearly_breakdown", request)
-    _hit = _cache_get(_API_CACHE, _ck)
-    if _hit is not None:
-        return jsonify(_hit)
+
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
 
@@ -2478,12 +2456,12 @@ def yearly_breakdown():
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
-        "product_group": "s.product_group",
+        "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "cus.sold_to_name",
-        "pattern":       "s.pattern",
+        "pattern":       "mat.pattern",
     }
     if group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
@@ -2492,15 +2470,16 @@ def yearly_breakdown():
     # ---- Build base JOINs / WHEREs (same pattern as yearly_sales) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"])
         joins += cat_joins
         wh    += cat_where
 
-    # Direct, index-friendly filters that live on sales212510
+    if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s"); params.append(f["product_group"])
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s");       params.append(f["pattern"])
+        wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
         wh.append("s.material = %s")
         params.append(f["material"])
@@ -2515,11 +2494,11 @@ def yearly_breakdown():
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
-            )  # CHANGED
+            )
 
             # no data – nothing to show
             if not top_sold_to:
-                return jsonify([])  # same behavior
+                return jsonify([])
 
         # 2) Yearly breakdown, restricted to those top customers,
         #    but stacked by group_col
@@ -2553,7 +2532,6 @@ def yearly_breakdown():
         except:
             pass
 
-    _cache_set(_API_CACHE, _ck, rows, ttl_sec=60)
     return jsonify(rows)
 
 
@@ -2690,14 +2668,19 @@ def ship_to_names():
 def product_group():
     try:
         conn = get_connection(); cur = conn.cursor()
-        cur.execute("SELECT DISTINCT product_group FROM sales_2025")
-        groups = sorted(r[0] for r in cur.fetchall())
+        cur.execute("""
+            SELECT DISTINCT TRIM(product_group)
+            FROM carrying_2602
+            WHERE product_group IS NOT NULL AND TRIM(product_group) <> ''
+            ORDER BY TRIM(product_group)
+        """)
+        groups = [r[0] for r in cur.fetchall()]
         cur.close(); conn.close()
         return jsonify(groups)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    
+
 @app.get("/api/patterns")
 def patterns():
     product_group = request.args.get("product_group", "ALL")
@@ -2706,14 +2689,16 @@ def patterns():
         if product_group and product_group != "ALL":
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern)
-                FROM sales_2025
+                FROM carrying_2602
                 WHERE product_group = %s
+                  AND pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
             """, (product_group,))
         else:
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern)
-                FROM sales_2025
+                FROM carrying_2602
+                WHERE pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
             """)
         names = [r[0] for r in cur.fetchall()]
@@ -2750,10 +2735,10 @@ def materials():
             where_sql = "WHERE " + " AND ".join(where)
 
         cur.execute(f"""
-            SELECT DISTINCT m_desc
-            FROM carrying_2601
+            SELECT DISTINCT size
+            FROM carrying_2602
             {where_sql}
-            ORDER BY m_desc
+            ORDER BY size
         """, tuple(params))
 
         names = [r[0] for r in cur.fetchall()]
@@ -2873,19 +2858,20 @@ def sales_map():
         JOIN customer c ON c.ship_to = s.ship_to
     """)
 
-    # category
+    # category — normalised version
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"])
         joins += cat_joins
         wh    += cat_where
 
-    # direct filters (same as other APIs)
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
-        wh.append("s.product_group = %s")
+        wh.append("mat.product_group = %s")
         params.append(f["product_group"])
 
     if f["pattern"] != "ALL":
-        wh.append("s.pattern = %s")
+        wh.append("mat.pattern = %s")
         params.append(f["pattern"])
 
     if f["material"] != "ALL":
