@@ -160,19 +160,37 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
 def build_target_filters(alias: str, f):
     """
     Returns (joins, wheres, params) for target_26 table.
-    target_26 has state, bde, ship_to, sold_to directly — no customer JOIN needed.
+    target_26 has state, bde, ship_to, sold_to directly.
+    When sold_to/ship_to is a name (not ID), joins customer table to resolve.
     """
     joins = []
     wh, p = [], []
+    needs_cus = False
 
     if f["region"] != "ALL":
         wh.append(f"{alias}.state = %s"); p.append(f["region"])
     if f["salesman"] != "ALL":
         wh.append(f"UPPER(TRIM({alias}.bde)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
+    if f["sold_to_group"] != "ALL":
+        needs_cus = True
+        wh.append("cus.sold_to_group = %s"); p.append(f["sold_to_group"])
     if f["sold_to"] != "ALL":
-        wh.append(f"{alias}.sold_to = %s"); p.append(f["sold_to"])
+        sv = f["sold_to"]
+        if sv.isdigit() or sv.upper().startswith("A"):
+            wh.append(f"{alias}.sold_to = %s"); p.append(sv)
+        else:
+            needs_cus = True
+            wh.append("cus.sold_to_name = %s"); p.append(sv)
     if f["ship_to"] != "ALL":
-        wh.append(f"{alias}.ship_to = %s"); p.append(f["ship_to"])
+        st = f["ship_to"].strip()
+        if st.isdigit() or st.upper().startswith("A"):
+            wh.append(f"{alias}.ship_to = %s"); p.append(st)
+        else:
+            needs_cus = True
+            wh.append("UPPER(TRIM(cus.ship_to_name)) = UPPER(TRIM(%s))"); p.append(st)
+
+    if needs_cus:
+        joins.append(f"LEFT JOIN customer cus ON cus.ship_to = {alias}.ship_to")
 
     return joins, wh, p
 
