@@ -116,43 +116,43 @@ def parse_filters(req):
     }
 def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     """
-    Returns (joins, wheres, params) to apply Region/Salesman/Group/Sold_to on a fact table
-    by joining customer once on equality:
-        JOIN customer cus ON cus.ship_to = <fact>.ship_to
+    Returns (joins, wheres, params) to apply Region/Salesman/Group/Sold_to on a fact table.
+    Customer JOIN is added only when needed (name-based filters or customer-dimension filters).
     If use_sold_to_name=True, 'sold_to' will match customer.Sold_to_Name instead of id.
     """
-    
-    joins = [f"left JOIN customer cus ON cus.ship_to = {alias_fact}.ship_to"]
+    joins = []
     wh, p = [], []
+    needs_cus = False
 
     if f["region"] != "ALL":
+        needs_cus = True
         wh.append("cus.bde_state = %s"); p.append(f["region"])
     if f["salesman"] != "ALL":
+        needs_cus = True
         wh.append("UPPER(TRIM(cus.salesman_name)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
     if f["sold_to_group"] != "ALL":
+        needs_cus = True
         wh.append("cus.sold_to_group = %s"); p.append(f["sold_to_group"])
 
-    # sold_to: id (A.. / digits) or match by name via customer
+    # sold_to: id (A.. / digits) → filter directly on fact table; name → customer JOIN
     if f["sold_to"] != "ALL":
         sv = f["sold_to"]
         if not use_sold_to_name and (sv.isdigit() or sv.upper().startswith("A")):
-            wh.append(f"{alias_fact}.ship_to = %s"); p.append(sv)
+            wh.append(f"{alias_fact}.sold_to = %s"); p.append(sv)
         else:
+            needs_cus = True
             wh.append("cus.sold_to_name = %s"); p.append(sv)
 
-    # explicit ship_to id filter if given
-    # explicit ship_to filter if given
     if f["ship_to"] != "ALL":
         st = f["ship_to"].strip()
-
-        # If ship_to looks like an ID/code, filter by the fact table ship_to
         if st.isdigit() or st.upper().startswith("A"):
-            wh.append(f"{alias_fact}.ship_to = %s")
-            p.append(st)
+            wh.append(f"{alias_fact}.ship_to = %s"); p.append(st)
         else:
-            # Otherwise treat it as a ship_to_name coming from customer master
-            wh.append("UPPER(TRIM(cus.ship_to_name)) = UPPER(TRIM(%s))")
-            p.append(st)
+            needs_cus = True
+            wh.append("UPPER(TRIM(cus.ship_to_name)) = UPPER(TRIM(%s))"); p.append(st)
+
+    if needs_cus:
+        joins.append(_customer_join(alias_fact))
 
     return joins, wh, p
 
@@ -265,6 +265,18 @@ def _carrying_join(alias: str) -> str:
 def _ensure_carrying_join(alias: str, joins: list) -> None:
     """Adds the carrying_2602 join to 'joins' if it is not already present."""
     j = _carrying_join(alias)
+    if j not in joins:
+        joins.append(j)
+
+
+def _customer_join(alias: str) -> str:
+    """Returns the LEFT JOIN clause for customer table using alias 'cus'."""
+    return f"LEFT JOIN customer cus ON cus.ship_to = {alias}.ship_to"
+
+
+def _ensure_customer_join(alias: str, joins: list) -> None:
+    """Adds the customer join to 'joins' if it is not already present."""
+    j = _customer_join(alias)
     if j not in joins:
         joins.append(j)
 
@@ -1321,6 +1333,8 @@ def v2_dashboard():
         # Ensure carrying join when product_group/pattern filter or group_by needs it
         if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
             _ensure_carrying_join("s", joins_d)
+        if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+            _ensure_customer_join("s", joins_d)
         if f["product_group"] != "ALL":
             wh_d.append("mat.product_group = %s"); params_d.append(f["product_group"])
         if f["pattern"] != "ALL":
@@ -1399,6 +1413,8 @@ def v2_dashboard():
         joins_m += mj; wh_m += mw
         if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
             _ensure_carrying_join("s", joins_m)
+        if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+            _ensure_customer_join("s", joins_m)
         if f["product_group"] != "ALL":
             wh_m.append("mat.product_group = %s"); params_m.append(f["product_group"])
         if f["pattern"] != "ALL":
@@ -1512,6 +1528,8 @@ def v2_dashboard():
             joins_y += yj; wh_y += yw
         if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
             _ensure_carrying_join("s", joins_y)
+        if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+            _ensure_customer_join("s", joins_y)
         if f["product_group"] != "ALL":
             wh_y.append("mat.product_group = %s"); params_y.append(f["product_group"])
         if f["pattern"] != "ALL":
@@ -1749,9 +1767,11 @@ def daily_breakdown():
         joins += cat_joins
         wh    += cat_where
 
-    # Carrying join needed for group_by or product_group/pattern filter
+    # Carrying/customer join needed for group_by or filter
     if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
         _ensure_carrying_join("s", joins)
+    if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+        _ensure_customer_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
@@ -1968,6 +1988,7 @@ def fetch_table_rows(top_limit: int):
 
     # ---------- STEP 2: build filters (same as daily_sales) ----------
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
+    _ensure_customer_join("s", joins)  # always needed: SELECT uses cus.* columns
 
     # category (same rule: skip 443) — use normalised version
     if f.get("category", "ALL") != "443":
@@ -2190,6 +2211,8 @@ def monthly_breakdown():
 
     if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
         _ensure_carrying_join("s", joins)
+    if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+        _ensure_customer_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
@@ -2512,6 +2535,8 @@ def yearly_breakdown():
 
     if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
         _ensure_carrying_join("s", joins)
+    if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+        _ensure_customer_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
