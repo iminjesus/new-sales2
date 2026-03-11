@@ -13,10 +13,22 @@
     crossorigin=""
   />
 
-  <style>
-    #stockMap{ height: 1200px; min-height: 760px; }
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
-    /* custom dropdown (searchable) — same as index.html */
+  <style>
+    /* layout */
+    #stockLayout { display:flex; gap:8px; margin-top:4px; align-items:flex-start; }
+    #stockMapWrapper { flex:2; min-width:0; position:relative; }
+    #stockMap { height: 780px; min-height: 600px; }
+    #stockSidePanel { flex:1; min-width:280px; display:flex; flex-direction:column; gap:8px; }
+    .stockChartPane {
+      background:#fff; border:1px solid #ddd; border-radius:6px;
+      padding:10px; height:360px; position:relative;
+    }
+    .stockChartPane h4 { margin:0 0 6px; font-size:13px; color:#444; }
+
+    /* custom dropdown (searchable) */
     .dd { position: relative; display: inline-block; margin-left: 8px; }
     .dd-wrap { display:flex; align-items:center; gap:4px; }
     .dd-wrap input { width: 140px; }
@@ -112,16 +124,30 @@
 
   <div id="errbar" class="errbar" hidden></div>
 
-  <div style="position:relative; margin-top:4px;">
-    <div id="stockMap"></div>
+  <div id="stockLayout">
+    <!-- Left: map -->
+    <div id="stockMapWrapper">
+      <div id="stockMap"></div>
+      <div class="status">
+        <div id="statusLine">Ready.</div>
+        <div class="legend">
+          <div>Same filters applied to all layers.</div>
+          <div class="row"><span class="swatch stock"></span><span>Stock (Plant)</span></div>
+          <div class="row"><span class="swatch orders"></span><span>Orders (Origin)</span></div>
+          <div class="row"><span class="swatch incoming"></span><span>Incoming (in transit)</span></div>
+        </div>
+      </div>
+    </div>
 
-    <div class="status">
-      <div id="statusLine">Ready.</div>
-      <div class="legend">
-        <div>Same filters applied to all layers.</div>
-        <div class="row"><span class="swatch stock"></span><span>Stock (Plant)</span></div>
-        <div class="row"><span class="swatch orders"></span><span>Orders (Origin)</span></div>
-        <div class="row"><span class="swatch incoming"></span><span>Incoming (in transit)</span></div>
+    <!-- Right: sales charts -->
+    <div id="stockSidePanel">
+      <div class="stockChartPane">
+        <h4>Monthly Sales</h4>
+        <canvas id="salesMonthlyChart"></canvas>
+      </div>
+      <div class="stockChartPane">
+        <h4>Yearly Sales</h4>
+        <canvas id="salesYearlyChart"></canvas>
       </div>
     </div>
   </div>
