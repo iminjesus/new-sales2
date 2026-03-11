@@ -22,9 +22,30 @@
     Chart.register(ChartDataLabels);
   </script>
 
-  <!-- Leaflet needs an explicit height -->
   <style>
     #salesMap{ height: 720px; min-height: 720px; }
+
+    /* custom dropdown (searchable) — same as index.html */
+    .dd { position: relative; display: inline-block; margin-left: 8px; }
+    .dd-wrap { display:flex; align-items:center; gap:4px; }
+    .dd-wrap input { width: 140px; }
+    .dd-btn { padding: 2px 6px; cursor: pointer; }
+    .dd-menu {
+      position: absolute;
+      top: calc(100% + 2px);
+      left: 0;
+      width: 240px;
+      max-height: 260px;
+      overflow: auto;
+      background: #fff;
+      border: 1px solid #bbb;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+      z-index: 9999;
+      display: none;
+    }
+    .dd-item { padding: 6px 8px; cursor: pointer; white-space: nowrap; }
+    .dd-item:hover { background: #f0f0f0; }
+    .dd-empty { padding: 8px; color: #777; }
   </style>
 </head>
 <body>
@@ -42,6 +63,7 @@
       <button class="btn" data-val="SUV">SUV</button>
       <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
       <button class="btn" data-val="HM">HM</button>
+      <button class="btn" data-val="443">443</button>
     </div>
 
     <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
@@ -49,7 +71,7 @@
       <button class="btn" data-metric="amount">Amount</button>
     </div>
 
-    <label style="margin-left:50px;">Group By:</label>
+    <label style="gap:6px; margin-left:50px;">Group By:</label>
     <select id="group_by">
       <option value="region" selected>Region</option>
       <option value="salesman">Salesman</option>
@@ -59,10 +81,9 @@
     </select>
 
     <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
-      <button class="btn" onclick="window.location.href='/'">Graph View</button>
+      <button class="btn" onclick="window.location.href='/'+ window.location.search">Graph View</button>
       <button class="btn active">Map View</button>
       <button class="btn" onclick="window.location.href='/stock'+ window.location.search">stock</button>
-    </div>
     </div>
   </div>
 
@@ -88,25 +109,52 @@
       <button class="btn" data-limit="30">Top 30</button>
     </div>
 
-    <label for="sold_to">Sold-to:</label>
-    <input type="text" id="sold_to" placeholder="Search Sold-to..." list="sold_to_list" />
-    <datalist id="sold_to_list"></datalist>
+    <!-- Sold-to (custom dropdown) -->
+    <div class="dd">
+      <label for="sold_to">Sold-to:</label>
+      <div class="dd-wrap">
+        <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
+        <button type="button" class="dd-btn" id="soldToBtn">▼</button>
+        <button type="button" class="dd-btn" id="soldToClear">✕</button>
+      </div>
+      <div class="dd-menu" id="soldToMenu"></div>
+    </div>
 
-    <label style="margin-left:8px;">Ship-to:</label>
-    <input list="ship_to_list" id="ship_to" placeholder="Search Ship-to..." />
-    <datalist id="ship_to_list"></datalist>
+    <!-- Ship-to (custom dropdown) -->
+    <div class="dd">
+      <label for="ship_to">Ship-to:</label>
+      <div class="dd-wrap">
+        <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
+        <button type="button" class="dd-btn" id="shipToBtn">▼</button>
+        <button type="button" class="dd-btn" id="shipToClear">✕</button>
+      </div>
+      <div class="dd-menu" id="shipToMenu"></div>
+    </div>
 
     <label>Product Group:</label>
     <select id="product_group"><option value="ALL">ALL</option></select>
 
-    <label style="margin-left:8px;">Pattern:</label>
-    <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
-    <datalist id="pattern_list"></datalist>
+    <!-- Pattern (custom dropdown) -->
+    <div class="dd">
+      <label for="pattern">Pattern:</label>
+      <div class="dd-wrap">
+        <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+        <button type="button" class="dd-btn" id="patternBtn">▼</button>
+        <button type="button" class="dd-btn" id="patternClear">✕</button>
+      </div>
+      <div class="dd-menu" id="patternMenu"></div>
+    </div>
 
-
-    <label style="margin-left:8px;">Material:</label>
-    <input list="material_list" id="material" placeholder="Search Material" />
-    <datalist id="material_list"></datalist>
+    <!-- Material (custom dropdown) -->
+    <div class="dd">
+      <label for="material">Material:</label>
+      <div class="dd-wrap">
+        <input id="material" type="text" placeholder="Search Material" autocomplete="off">
+        <button type="button" class="dd-btn" id="materialBtn">▼</button>
+        <button type="button" class="dd-btn" id="materialClear">✕</button>
+      </div>
+      <div class="dd-menu" id="materialMenu"></div>
+    </div>
   </div>
 
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
