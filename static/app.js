@@ -463,6 +463,36 @@ function cutoffIdxFromBreakdown(rows, N){
   return cutoffIdx;
 }
 
+// Compute working-days info from total company daily breakdown rows.
+// A "working day" is any calendar day where total company sales >= 10.
+// Future days (beyond the last data day) are estimated at 5/7 ratio.
+function computeWorkingDaysInfo(cutRows) {
+  const today = new Date();
+  const calendarDays = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+
+  // Sum values per day across all group labels
+  const totalPerDay = {};
+  for (const r of (cutRows || [])) {
+    const d = parseInt(r.day, 10);
+    if (d >= 1 && d <= 31) totalPerDay[d] = (totalPerDay[d] || 0) + (+r.value || 0);
+  }
+
+  const maxDay = Object.keys(totalPerDay).length > 0
+    ? Math.max(...Object.keys(totalPerDay).map(Number)) : 0;
+
+  let workingDaysElapsed = 0;
+  let lastWorkingDay = 0; // 1-based
+  for (let d = 1; d <= maxDay; d++) {
+    if ((totalPerDay[d] || 0) >= 10) { workingDaysElapsed++; lastWorkingDay = d; }
+  }
+
+  const lastWorkingDayIdx = lastWorkingDay > 0 ? lastWorkingDay - 1 : -1; // 0-based index
+  const remainingDays = Math.max(0, calendarDays - maxDay);
+  const totalWorkingDays = workingDaysElapsed + remainingDays * (5 / 7);
+
+  return { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays, calendarDays };
+}
+
 
 
 
@@ -856,6 +886,53 @@ function kpiByQuarter(sales, targets){
 }
 
 
+// Q1 KPI with working-days proration for the current (partial) month.
+// Completed months use monthly actual/target directly.
+// Current month: actual = sum of daily sales up to lastWorkingDayIdx;
+//                target = fullMonthTarget * workingDaysElapsed / totalWorkingDays.
+function kpiByQuarterProrated(monthlySales, monthlyTargets, dailySales, workingInfo) {
+  const { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays } = workingInfo;
+  const currentMonthIdx = new Date().getMonth(); // 0-based
+  const currentQ = Math.floor(currentMonthIdx / 3);
+
+  const qActual = [0, 0, 0, 0];
+  const qTarget = [0, 0, 0, 0];
+
+  for (let m = 0; m <= currentMonthIdx && m < 12; m++) {
+    const q = Math.floor(m / 3);
+    if (m < currentMonthIdx) {
+      qActual[q] += (+monthlySales[m] || 0);
+      qTarget[q] += (+monthlyTargets[m] || 0);
+    } else {
+      // Current month: use daily actuals up to last working day
+      let curActual = 0;
+      for (let i = 0; i <= lastWorkingDayIdx && i < dailySales.length; i++)
+        curActual += (+dailySales[i] || 0);
+      qActual[q] += curActual;
+      const fullTarget = +monthlyTargets[m] || 0;
+      qTarget[q] += totalWorkingDays > 0 ? fullTarget * workingDaysElapsed / totalWorkingDays : 0;
+    }
+  }
+
+  return qTarget.map((tv, i) => i > currentQ ? null : tv > 0 ? +(qActual[i] / tv * 100).toFixed(1) : null);
+}
+
+// "This Month" KPI on a working-days basis.
+// actual = sum of daily sales up to lastWorkingDayIdx
+// target = fullMonthTarget * workingDaysElapsed / totalWorkingDays
+function dailyKPIWorkingDays(dailySales, fullMonthTarget, workingInfo) {
+  const { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays } = workingInfo;
+  if (lastWorkingDayIdx < 0 || workingDaysElapsed <= 0 || totalWorkingDays <= 0) return null;
+
+  let actual = 0;
+  for (let i = 0; i <= lastWorkingDayIdx && i < dailySales.length; i++)
+    actual += (+dailySales[i] || 0);
+
+  const proratedTarget = fullMonthTarget * workingDaysElapsed / totalWorkingDays;
+  if (proratedTarget <= 0) return null;
+  return +(actual / proratedTarget * 100).toFixed(1);
+}
+
 // Daily KPI = cumulative achievement (%) up to the last date where Actual exists
 // - 0 is considered a valid actual (e.g., weekends)
 // - null / undefined / "" means "no data yet" (future date) and should be excluded
@@ -899,121 +976,78 @@ async function fetchMonthlyKPITarget(region,BDE, year=2026){
 // build & render table
 async function drawMonthlyKPI(){
   const rows = [];
+  const currentMonthIdx = new Date().getMonth(); // 0-based
+
+  // Fetch total company daily breakdown (ALL/ALL) once for working-days computation.
+  // This is intentionally always ALL/ALL regardless of current filters so that
+  // working days reflect actual company-wide activity.
+  const totalBreakdownRows = await fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
+    metric: filters.metric, category: filters.category, region: "ALL", salesman: "ALL",
+    sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
+    product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
+    group_by: "region", top_limit: filters.top_limit || 0
+  }).toString()}`);
+  const workingInfo = computeWorkingDaysInfo(totalBreakdownRows);
 
   // All row (no region/salesman filter)
   {
-    const qsSales = new URLSearchParams({
-      metric: filters.metric, category: filters.category, region: "ALL", salesman:"ALL",
+    const qs = new URLSearchParams({
+      metric: filters.metric, category: filters.category, region: "ALL", salesman: "ALL",
       sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year:2026
-    }).toString();
-    const qsTarget = new URLSearchParams({
-      metric: filters.metric,
-      category: filters.category, region: "ALL", salesman:"ALL",
-      sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year:2026
+      product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
+      top_limit: filters.top_limit || 0, year: 2026
     }).toString();
 
-     // monthly + daily in parallel
-    const [
-      salesRows,
-      targetRows,
-      dailySalesRows,
-      dailyTargetRows,
-      cutRows
-    ] = await Promise.all([
-      fetchJSON(`/api/monthly_sales?${qsSales}`),
-      fetchJSON(`/api/monthly_target?${qsTarget}`),
-      fetchJSON(`/api/daily_sales?${qsSales}`),
-      fetchJSON(`/api/daily_target?${qsTarget}`),
-      fetchDailyBreakdownWithGroup("region")
+    const [salesRows, targetRows, dailySalesRows] = await Promise.all([
+      fetchJSON(`/api/monthly_sales?${qs}`),
+      fetchJSON(`/api/monthly_target?${qs}`),
+      fetchJSON(`/api/daily_sales?${qs}`)
     ]);
 
-    const sales    = salesRows.map(r => +r.value || 0);
-    const targets  = targetRows.map(r => +r.value || 0);
-    const q        = kpiByQuarter(sales, targets);
-    const N = daysLabels().length;
-    let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-    const dailySales   = dailySalesRows.map(r => +r.value || 0);
-    const dailyTargets = dailyTargetRows.map(r => +r.value || 0);
-    const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets, cutoffIdx);
+    const sales      = salesRows.map(r => +r.value || 0);
+    const targets    = targetRows.map(r => +r.value || 0);
+    const dailySales = dailySalesRows.map(r => +r.value || 0);
+    const q          = kpiByQuarterProrated(sales, targets, dailySales, workingInfo);
+    const dailyKPI   = dailyKPIWorkingDays(dailySales, +targets[currentMonthIdx] || 0, workingInfo);
 
-    rows.push({
-      region: "All",
-      bde: "All",
-      Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
-      dailyKPI: dailyKPI
-    });
+    rows.push({ region: "All", bde: "All", Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI });
   }
 
   // Region / BDE rows
   for (const region of ["NSW","QLD","VIC","WA"]) {
     {
+      const yearKpi = 2026;
+      const [salesRows, targetRows, dailySalesRows] = await Promise.all([
+        fetchMonthlyKPIActual(region, "ALL", yearKpi),
+        fetchMonthlyKPITarget(region, "ALL", yearKpi),
+        fetchDailyKPIActual(region, "ALL")
+      ]);
+
+      const sales      = salesRows.map(r => +r.value || 0);
+      const targets    = targetRows.map(r => +r.value || 0);
+      const dSales     = dailySalesRows.map(r => +r.value || 0);
+      const q          = kpiByQuarterProrated(sales, targets, dSales, workingInfo);
+      const dailyKPI   = dailyKPIWorkingDays(dSales, +targets[currentMonthIdx] || 0, workingInfo);
+
+      rows.push({ region, bde: "All", Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI });
+    }
+
+    const bdes   = REGION_SALESMEN[region] || [];
     const yearKpi = 2026;
-
-    const [
-      salesRows,
-      targetRows,
-      dailySalesRows,
-      dailyTargetRows,
-      cutRows
-    ] = await Promise.all([
-      fetchMonthlyKPIActual(region, "ALL", yearKpi),
-      fetchMonthlyKPITarget(region, "ALL", yearKpi),
-      fetchDailyKPIActual(region, "ALL"),
-      fetchDailyKPITarget(region, "ALL"),
-      fetchDailyBreakdownWithGroup("region") // used only for cutoffIdx
-    ]);
-
-    const sales   = salesRows.map(r => +r.value || 0);
-    const targets = targetRows.map(r => +r.value || 0);
-    const q       = kpiByQuarter(sales, targets);
-
-    const N = daysLabels().length;
-    const cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-
-    const dSales   = dailySalesRows.map(r => +r.value || 0);
-    const dTargets = dailyTargetRows.map(r => +r.value || 0);
-    const dailyKPI = dailyKPIFromSeries(dSales, dTargets, cutoffIdx);
-
-    rows.push({
-      region: region,
-      bde: "All",          // Region total row label
-      Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
-      dailyKPI: dailyKPI
-    });
-  }
-    const bdes = REGION_SALESMEN[region] || []; // e.g. ["BDE2","BDE3"] or ids
-    // fetch each BDE pair in parallel, then append in order
-    const yearKpi=2026;
     const perBDE = await Promise.all(bdes.map(async (bde) => {
-      const [
-        salesRows,
-        targetRows,
-        dailySalesRows,
-        dailyTargetRows
-      ] = await Promise.all([
+      const [salesRows, targetRows, dailySalesRows] = await Promise.all([
         fetchMonthlyKPIActual(region, bde, yearKpi),
         fetchMonthlyKPITarget(region, bde, yearKpi),
-        fetchDailyKPIActual(region, bde),
-        fetchDailyKPITarget(region, bde)
+        fetchDailyKPIActual(region, bde)
       ]);
 
       const sales    = salesRows.map(r => +r.value || 0);
       const targets  = targetRows.map(r => +r.value || 0);
-      const q        = kpiByQuarter(sales, targets);
-      const cutRows = await fetchDailyBreakdownWithGroup("region");
-      const N = daysLabels().length;
-      let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-      const dailySales   = dailySalesRows.map(r => +r.value || 0);
-      const dailyTargets = dailyTargetRows.map(r => +r.value || 0);
-      const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets, cutoffIdx);
-      return {
-        region: `${region}`,
-        bde: `${bde}`,
-        Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
-        dailyKPI: dailyKPI
-      };
+      const dSales   = dailySalesRows.map(r => +r.value || 0);
+      const q        = kpiByQuarterProrated(sales, targets, dSales, workingInfo);
+      const dailyKPI = dailyKPIWorkingDays(dSales, +targets[currentMonthIdx] || 0, workingInfo);
+
+      return { region, bde, Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI };
     }));
     rows.push(...perBDE);
   }
