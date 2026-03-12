@@ -338,43 +338,51 @@ def category_filters_sales(alias: str, category: str):
 
 def category_target_filters(alias: str, category: str):
     """
-    Return (joins, wheres) for monthly-schema facts (sales2025, profit).
-    - alias: table alias for the fact (e.g., "s" for sales2025, "p" for profit)
-    - All predicates are index-friendly (equality / LIKE prefix).
-    - Add optional JOINs only when that category needs them.
+    Returns (joins, wheres) for target_26 table.
+    target_26 has a material column; line/inch/pattern attributes live in
+    carrying_2602 so we JOIN that table (alias: mat) for category filtering,
+    exactly like category_filters_sales() does for sales fact tables.
     """
     joins, wh = [], []
     cat = (category or "ALL").upper()
 
-    
+    if cat == "ALL":
+        return joins, wh
+
+    carrying_join = f"LEFT JOIN carrying_2602 mat ON mat.m_code = {alias}.material"
 
     if cat == "PCLT":
-        # material codes starting with 1 or 2
-        wh.append(f"{alias}.line = 'PCLT'")
+        joins.append(carrying_join)
+        wh.append("mat.line = 'PCLT'")
 
     elif cat == "TBR":
-        # example logic: material codes starting with 3 (adjust to your real rule)
-        wh.append(f"{alias}.line = 'TBR'")
-        
-     # NEW: 18+ Inch means PCLT & inch > 18
+        joins.append(carrying_join)
+        wh.append("mat.line = 'TBR'")
+
     elif cat == "18PLUS":
-        wh.append(f"{alias}.high_inch = 'High Inch'")
-       
-        
+        joins.append(carrying_join)
+        wh.append("mat.line = 'PCLT'")
+        wh.append("CAST(SUBSTRING_INDEX(mat.size, 'R', -1) AS DECIMAL(5,2)) >= 18.0")
+
     elif cat == "ISEG":
-        wh.append(f"{alias}.ev = 'EV'")
+        joins.append(f"JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) = {alias}.material")
 
     elif cat == "SUV":
-        
-        wh.append(f"{alias}.suv_pup = 'SUV/PUP'")
+        joins.append(carrying_join)
+        joins.append("JOIN suv suv ON suv.Pattern = mat.pattern")
 
     elif cat == "LOWPROFILE":
-       wh.append(f"{alias}.low_profile = 'LowProfileTBR'")
+        joins.append(f"JOIN lowprofile lp ON CAST(TRIM(lp.Material) AS UNSIGNED) = {alias}.material")
 
     elif cat == "HM":
-        # HM by Sold-To (use your customer join for Ship_To ⇒ Sold_To; keep simple)
-        # If your HM rule is customer-list based, prefer EXISTS against a keyed table.
-        wh.append(f"{alias}.hm = 'HM'")
+        joins.append(f"JOIN hm hm ON hm.sold_to = {alias}.sold_to")
+
+    elif cat == "443":
+        wh.append(f"""EXISTS (
+            SELECT 1 FROM `443_25` p443
+            WHERE p443.month = {alias}.month
+            AND p443.product_group = {alias}.product_group
+        )""")
 
     return joins, wh
 
@@ -1389,6 +1397,8 @@ def v2_dashboard():
 
         # daily target for selected month (target_26)
         joins_t, wh_t, params_t = build_target_filters("t", f)
+        tj, tw = category_target_filters("t", f["category"])
+        joins_t += tj; wh_t += tw
         wh_t.append("t.month = %s"); params_t.append(month)
         if f["product_group"] != "ALL":
             wh_t.append("t.product_group = %s"); params_t.append(f["product_group"])
@@ -1485,6 +1495,8 @@ def v2_dashboard():
         # monthly target totals & breakdown (target_26)
         # Build fresh for all months (don't reuse params_t because it includes a specific month)
         joins_mt, wh_mt, params_mt = build_target_filters("t", f)
+        tj2, tw2 = category_target_filters("t", f["category"])
+        joins_mt += tj2; wh_mt += tw2
         if f["product_group"] != "ALL":
             wh_mt.append("t.product_group = %s"); params_mt.append(f["product_group"])
         if f["pattern"] != "ALL":
@@ -1852,6 +1864,9 @@ def daily_target():
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
     joins, wh, params = build_target_filters("t", f)
+    cat_joins, cat_where = category_target_filters("t", f["category"])
+    joins += cat_joins
+    wh    += cat_where
 
     # restrict to the chosen month only
     wh.append("t.month = %s")
@@ -2286,6 +2301,9 @@ def monthly_target():
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
     joins, wh, params = build_target_filters("t", f)
+    cat_joins, cat_where = category_target_filters("t", f["category"])
+    joins += cat_joins
+    wh    += cat_where
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -2355,6 +2373,9 @@ def monthly_target_breakdown():
     group_col = group_cols[group_by]
 
     joins, wh, params = build_target_filters("t", f)
+    cat_joins, cat_where = category_target_filters("t", f["category"])
+    joins += cat_joins
+    wh    += cat_where
 
     if f["product_group"] != "ALL":
         wh.append("t.product_group = %s"); params.append(f["product_group"])
