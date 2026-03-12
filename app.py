@@ -47,12 +47,6 @@ class SQLiteCursorWrapper:
                 self._empty_result = True
                 return self
             raise
-                print(f"[WARN] {e} -- returning empty result (demo mode)")
-                self._empty_result = True
-                # return self so caller can still call fetchall()/fetchone()
-                return self
-            # other SQLite errors still bubble up
-            raise
 
     def executemany(self, sql, seq_of_params):
         if "%s" in sql:
