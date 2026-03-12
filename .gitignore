@@ -1029,7 +1029,7 @@ Date:   Wed Nov 26 11:52:25 2025 +1100
  temp.py                                            |    37 [32m+[m
  1023 files changed, 1455902 insertions(+), 839 deletions(-)
 # Ignore DB files
-snapshot.db
+# snapshot.db
 *.db
 
 # Python
