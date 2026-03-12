@@ -40,8 +40,13 @@ class SQLiteCursorWrapper:
                 return self._cursor.execute(sql)
             return self._cursor.execute(sql, params)
         except sqlite3.OperationalError as e:
-            # DEMO MODE: if a table is missing, just pretend query returned nothing
-            if "no such table" in str(e):
+            # DEMO MODE: missing table or column → pretend query returned nothing
+            _e = str(e).lower()
+            if "no such table" in _e or "no such column" in _e or "ambiguous column" in _e:
+                print(f"[WARN] {e} -- returning empty result (demo mode)")
+                self._empty_result = True
+                return self
+            raise
                 print(f"[WARN] {e} -- returning empty result (demo mode)")
                 self._empty_result = True
                 # return self so caller can still call fetchall()/fetchone()
@@ -56,7 +61,8 @@ class SQLiteCursorWrapper:
         try:
             return self._cursor.executemany(sql, seq_of_params)
         except sqlite3.OperationalError as e:
-            if "no such table" in str(e):
+            _e = str(e).lower()
+            if "no such table" in _e or "no such column" in _e or "ambiguous column" in _e:
                 print(f"[WARN] {e} -- ignoring executemany (demo mode)")
                 self._empty_result = True
                 return self
@@ -380,6 +386,17 @@ def category_target_filters(alias: str, category: str):
 
 app = Flask(__name__, static_folder="static")
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+@app.after_request
+def add_cache_headers(response):
+    """Prevent Cloudflare / CDN from caching API responses."""
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+    else:
+        # Static assets: allow browser cache but force CDN revalidation
+        response.headers.setdefault('Cache-Control', 'public, max-age=300, must-revalidate')
+    return response
 
 def category_filters_stock(alias: str, category: str):
     joins, wh = [], []
