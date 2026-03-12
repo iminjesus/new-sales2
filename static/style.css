@@ -340,6 +340,17 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   line-height: 1.4;
 }
 .dd-btn:hover { background: #e5e7eb; }
+/* last button in the wrap (no clear btn after it) */
+.dd-btn.dd-last {
+  border-right: 1.5px solid #d1d5db;
+  border-radius: 0 7px 7px 0;
+}
+.dd.dd-active .dd-btn.dd-last {
+  border-right-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+.dd.dd-active .dd-btn.dd-last:hover { background: #1d4ed8; }
 .dd-btn.dd-clear-btn {
   border-right: 1.5px solid #d1d5db;
   border-radius: 0 7px 7px 0;

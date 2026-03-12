@@ -411,26 +411,7 @@ document.getElementById('sold_to_group').addEventListener('change', async ()=>{
 
 // PRODUCT GROUP -> existing code… plus refresh patterns
 
-document.getElementById('product_group').addEventListener('change', async ()=>{
-  const pgEl = document.getElementById('product_group');
-  filters.product_group = pgEl.value || 'ALL';
-  pgEl.classList.toggle('sel-active', pgEl.value !== 'ALL');
-
-  // reset dependent filters
-  const patEl = document.getElementById('pattern');
-  const matEl = document.getElementById('material');
-  if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
-  if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
-  filters.pattern = "ALL";
-  filters.material = "ALL";
-
-  await refreshPatternsCustom();
-  await refreshMaterialsCustom();
-  await refreshSoldToCustom();
-  await refreshShipToCustom();
-
-  refreshAllDebounced();
-});
+// product_group handled via bindDropdown (see window load listener below)
 
 
 
@@ -1840,7 +1821,8 @@ async function initControls(){
   setActive(document.getElementById('regionBtns'),"val",filters.region);
   populateSelect(document.getElementById('salesman_name'),[...new Set(Object.values(REGION_SALESMEN).flat())].sort());
 
-  const groups=await fetchJSON("/api/product_group"); populateSelect(document.getElementById('product_group'),groups);
+  const groups = await fetchJSON("/api/product_group");
+  __PRODUCT_GROUP_OPTIONS = Array.isArray(groups) ? groups : (groups?.rows || []);
 
   const stg3 = await fetchJSON("/api/sold_to_groups");
   populateSelect(document.getElementById('sold_to_group'), stg3, true);
@@ -2113,6 +2095,7 @@ function refreshAllDebounced(){
 // ------------------------------
 // Pattern / Material custom dropdown redesign (NO datalist)
 // ------------------------------
+let __PRODUCT_GROUP_OPTIONS = [];
 let __PATTERN_OPTIONS = [];
 let __MATERIAL_OPTIONS = [];
 
@@ -2179,9 +2162,9 @@ function ddUpdateActive(inp) {
 function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
   const inp = document.getElementById(inputId);
   const btn = document.getElementById(btnId);
-  const clr = document.getElementById(clearId);
+  const clr = clearId ? document.getElementById(clearId) : null;
   const menu = document.getElementById(menuId);
-  if (!inp || !btn || !clr || !menu) return;
+  if (!inp || !btn || !menu) return;
 
   function openWithCurrent(){
     const opts = getOptions();
@@ -2201,14 +2184,16 @@ function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
   // update active state whenever input value changes
   inp.addEventListener("input", () => ddUpdateActive(inp));
 
-  // clear
-  clr.addEventListener("click", () => {
-    inp.value = "";
-    ddUpdateActive(inp);
-    onPick("ALL");
-    ddClose(menu);
-    inp.focus();
-  });
+  // clear (optional)
+  if (clr) {
+    clr.addEventListener("click", () => {
+      inp.value = "";
+      ddUpdateActive(inp);
+      onPick("ALL");
+      ddClose(menu);
+      inp.focus();
+    });
+  }
 
   // close when clicking outside
   document.addEventListener("mousedown", (e) => {
@@ -2248,6 +2233,29 @@ window.addEventListener("load", async () => {
   await refreshPatternsCustom();
   await refreshMaterialsCustom();
 
+  bindDropdown({
+    inputId: "product_group",
+    btnId: "pgBtn",
+    menuId: "pgMenu",
+    getOptions: () => __PRODUCT_GROUP_OPTIONS,
+    onPick: async (val) => {
+      const v = (val === "ALL") ? "" : val;
+      const pgEl = document.getElementById("product_group");
+      if (pgEl) { pgEl.value = v; ddUpdateActive(pgEl); }
+      filters.product_group = v || "ALL";
+      const patEl = document.getElementById('pattern');
+      const matEl = document.getElementById('material');
+      if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
+      if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
+      filters.pattern = "ALL";
+      filters.material = "ALL";
+      await refreshPatternsCustom();
+      await refreshMaterialsCustom();
+      await refreshSoldToCustom();
+      await refreshShipToCustom();
+      refreshAllDebounced();
+    }
+  });
 
   bindDropdown({
     inputId: "sold_to",

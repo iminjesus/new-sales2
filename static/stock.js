@@ -15,12 +15,17 @@
   const $ = (s) => document.querySelector(s);
 
   // custom dropdown option arrays
+  let __PRODUCT_GROUP_OPTIONS = [];
   let __PATTERN_OPTIONS  = [];
   let __MATERIAL_OPTIONS = [];
 
   // custom dropdown helpers
   function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
   function ddClose(menuEl){ if (menuEl) menuEl.style.display = "none"; }
+  function ddUpdateActive(inp){
+    const dd = inp?.closest('.dd');
+    if (dd) dd.classList.toggle('dd-active', (inp.value || '').trim() !== '');
+  }
 
   function ddRender(menuEl, items, onPick){
     if (!menuEl) return;
@@ -53,9 +58,9 @@
   function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
     const inp  = document.getElementById(inputId);
     const btn  = document.getElementById(btnId);
-    const clr  = document.getElementById(clearId);
+    const clr  = clearId ? document.getElementById(clearId) : null;
     const menu = document.getElementById(menuId);
-    if (!inp || !btn || !clr || !menu) return;
+    if (!inp || !btn || !menu) return;
 
     function openWithCurrent(){
       ddRender(menu, ddFilter(getOptions(), inp.value), onPick);
@@ -64,13 +69,16 @@
 
     btn.addEventListener("click", () => openWithCurrent());
     inp.addEventListener("focus", () => openWithCurrent());
-    inp.addEventListener("input", () => openWithCurrent());
-    clr.addEventListener("click", () => {
-      inp.value = "";
-      onPick("ALL");
-      ddClose(menu);
-      inp.focus();
-    });
+    inp.addEventListener("input", () => { openWithCurrent(); ddUpdateActive(inp); });
+    if (clr) {
+      clr.addEventListener("click", () => {
+        inp.value = "";
+        ddUpdateActive(inp);
+        onPick("ALL");
+        ddClose(menu);
+        inp.focus();
+      });
+    }
     document.addEventListener("mousedown", (e) => {
       if (!menu.contains(e.target) && e.target !== inp && e.target !== btn && e.target !== clr){
         ddClose(menu);
@@ -388,19 +396,18 @@
   // ---------------------- dropdown/datalist loaders ----------------------
   async function refreshProductGroups(){
     const d = await fetchJSON("/api/v2/dimensions");
-    const pgs = d?.product_groups || [];
-    populateSelect($("#product_group"), pgs, true);
+    __PRODUCT_GROUP_OPTIONS = d?.product_groups || [];
   }
 
   async function refreshPatterns(){
-    const pg  = $("#product_group")?.value || "ALL";
+    const pg  = state.product_group;
     const res = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
     const rows = Array.isArray(res) ? res : (res?.rows || []);
     __PATTERN_OPTIONS = rows.map(x => String(x)).filter(Boolean);
   }
 
   async function refreshMaterials(){
-    const pg  = $("#product_group")?.value || "ALL";
+    const pg  = state.product_group;
     const pat = ($("#pattern")?.value || "").trim();
     const qs  = new URLSearchParams({
       product_group: pg,
@@ -413,7 +420,8 @@
   }
 
   function readUIToState(){
-    state.product_group = $("#product_group")?.value || "ALL";
+    const pgVal = ($("#product_group")?.value || "").trim();
+    state.product_group = pgVal || "ALL";
     const pat = ($("#pattern")?.value || "").trim();
     const mat = ($("#material")?.value || "").trim();
     state.pattern = pat ? pat : "ALL";
@@ -424,9 +432,9 @@
     const pg  = document.getElementById("product_group");
     const pat = document.getElementById("pattern");
     const mat = document.getElementById("material");
-    if (pg)  pg.value  = "ALL";
-    if (pat) pat.value = "";
-    if (mat) mat.value = "";
+    if (pg)  { pg.value  = ""; ddUpdateActive(pg); }
+    if (pat) { pat.value = ""; ddUpdateActive(pat); }
+    if (mat) { mat.value = ""; ddUpdateActive(mat); }
     state.category     = "ALL";
     state.product_group = "ALL";
     state.pattern      = "ALL";
@@ -454,13 +462,6 @@
     await fetchAndRender();
   });
 
-  $("#product_group")?.addEventListener("change", async () => {
-    readUIToState();
-    await refreshPatterns();
-    await refreshMaterials();
-    await fetchAndRender();
-  });
-
   // ---------------------- init ----------------------
   window.addEventListener("load", async () => {
     setActiveButtons("catBtns", "val", state.category);
@@ -471,6 +472,28 @@
     await refreshMaterials();
 
     bindDropdown({
+      inputId: "product_group",
+      btnId: "pgBtn",
+      menuId: "pgMenu",
+      getOptions: () => __PRODUCT_GROUP_OPTIONS,
+      onPick: async (val) => {
+        const v = (val === "ALL") ? "" : val;
+        const pgEl = document.getElementById("product_group");
+        if (pgEl) { pgEl.value = v; ddUpdateActive(pgEl); }
+        state.product_group = v || "ALL";
+        const patEl = document.getElementById("pattern");
+        const matEl = document.getElementById("material");
+        if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
+        if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
+        state.pattern = "ALL";
+        state.material = "ALL";
+        await refreshPatterns();
+        await refreshMaterials();
+        await fetchAndRender();
+      }
+    });
+
+    bindDropdown({
       inputId: "pattern",
       btnId: "patternBtn",
       clearId: "patternClear",
@@ -478,7 +501,8 @@
       getOptions: () => __PATTERN_OPTIONS,
       onPick: async (val) => {
         const v = (val === "ALL") ? "" : val;
-        document.getElementById("pattern").value = v;
+        const patEl = document.getElementById("pattern");
+        patEl.value = v; ddUpdateActive(patEl);
         state.pattern = v || "ALL";
         await refreshMaterials();
         await fetchAndRender();
@@ -493,7 +517,8 @@
       getOptions: () => __MATERIAL_OPTIONS,
       onPick: async (val) => {
         const v = (val === "ALL") ? "" : val;
-        document.getElementById("material").value = v;
+        const matEl = document.getElementById("material");
+        matEl.value = v; ddUpdateActive(matEl);
         state.material = v || "ALL";
         await fetchAndRender();
       }

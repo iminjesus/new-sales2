@@ -145,9 +145,14 @@
       <div class="dd-menu" id="shipToMenu"></div>
     </div>
 
-    <div style="display:flex; align-items:center; gap:5px;">
-      <label>Product Group:</label>
-      <select id="product_group"><option value="ALL">ALL</option></select>
+    <!-- Product Group (custom dropdown, no clear) -->
+    <div class="dd" id="ddProductGroup">
+      <label for="product_group">Product Group</label>
+      <div class="dd-wrap">
+        <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
+        <button type="button" class="dd-btn dd-last" id="pgBtn">▼</button>
+      </div>
+      <div class="dd-menu" id="pgMenu"></div>
     </div>
 
     <!-- Pattern (custom dropdown) -->
