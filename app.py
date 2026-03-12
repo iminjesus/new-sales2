@@ -1389,8 +1389,6 @@ def v2_dashboard():
 
         # daily target for selected month (target_26)
         joins_t, wh_t, params_t = build_target_filters("t", f)
-        tj, tw = category_target_filters("t", f["category"])
-        joins_t += tj; wh_t += tw
         wh_t.append("t.month = %s"); params_t.append(month)
         if f["product_group"] != "ALL":
             wh_t.append("t.product_group = %s"); params_t.append(f["product_group"])
@@ -1487,8 +1485,6 @@ def v2_dashboard():
         # monthly target totals & breakdown (target_26)
         # Build fresh for all months (don't reuse params_t because it includes a specific month)
         joins_mt, wh_mt, params_mt = build_target_filters("t", f)
-        tj2, tw2 = category_target_filters("t", f["category"])
-        joins_mt += tj2; wh_mt += tw2
         if f["product_group"] != "ALL":
             wh_mt.append("t.product_group = %s"); params_mt.append(f["product_group"])
         if f["pattern"] != "ALL":
@@ -1856,11 +1852,6 @@ def daily_target():
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
     joins, wh, params = build_target_filters("t", f)
-
-    # category filters for target table
-    cat_joins, cat_where = category_target_filters("t", f["category"])
-    joins += cat_joins
-    wh    += cat_where
 
     # restrict to the chosen month only
     wh.append("t.month = %s")
@@ -2296,13 +2287,6 @@ def monthly_target():
 
     joins, wh, params = build_target_filters("t", f)
 
-    # category filters for target table
-    cat_joins, cat_where = category_target_filters("t", f["category"])
-    joins += cat_joins
-    wh    += cat_where
-
-
-
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
@@ -2371,10 +2355,6 @@ def monthly_target_breakdown():
     group_col = group_cols[group_by]
 
     joins, wh, params = build_target_filters("t", f)
-
-    cat_joins, cat_where = category_target_filters("t", f["category"])
-    joins += cat_joins
-    wh    += cat_where
 
     if f["product_group"] != "ALL":
         wh.append("t.product_group = %s"); params.append(f["product_group"])
