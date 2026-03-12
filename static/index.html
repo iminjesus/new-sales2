@@ -36,40 +36,18 @@
     /* Make KPI box truly wide */
     .kpi-profit-row > .box:first-child{ width:640px; min-width:640px; }
   
-    /* custom dropdown (searchable) */
-    .dd { position: relative; display: inline-block; margin-left: 8px; }
-    .dd-wrap { display:flex; align-items:center; gap:4px; }
-    .dd-wrap input { width: 140px; }
-    .dd-btn { padding: 2px 6px; cursor: pointer; }
-    .dd-menu {
-      position: absolute;
-      top: calc(100% + 2px);
-      left: 0;
-      width: 240px;
-      max-height: 260px;
-      overflow: auto;
-      background: #fff;
-      border: 1px solid #bbb;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
-      z-index: 9999;
-      display: none;
-    }
-    .dd-item { padding: 6px 8px; cursor: pointer; white-space: nowrap; }
-    .dd-item:hover { background: #f0f0f0; }
-    .dd-empty { padding: 8px; color: #777; }
-
   </style>
 
 </head>
 
 <body>
-  <h2>Sales Dashboard</h2>
+  <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Dashboard</h2>
 
-  <div id="topRow" class="controls"
-       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+  <!-- ── Top filter bar ── -->
+  <div id="topRow" class="filter-bar">
 
     <!-- Category buttons -->
-    <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
+    <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
       <button class="btn active" data-val="ALL">All</button>
       <button class="btn" data-val="PCLT">PCLT</button>
       <button class="btn" data-val="TBR">TBR</button>
@@ -81,95 +59,118 @@
       <button class="btn" data-val="443">443</button>
     </div>
 
-    <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
+    <div class="filter-sep"></div>
+
+    <div id="metricBtns" style="display:flex; gap:5px;">
       <button class="btn" data-metric="qty">Qty</button>
       <button class="btn" data-metric="amount">Amount</button>
     </div>
 
-    <label style="gap:6px; margin-left:50px;">Group By:</label>
-    <select id="group_by">
-      <option value="region" selected>Region</option>
-      <option value="salesman">Salesman</option>
-      <option value="sold_to_group">Sold-to Group</option>
-      <option value="sold_to">Sold-to</option>
-      <option value="product_group">Product Group</option>
-    </select>
+    <div class="filter-sep"></div>
+
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Group By:</label>
+      <select id="group_by">
+        <option value="region" selected>Region</option>
+        <option value="salesman">Salesman</option>
+        <option value="sold_to_group">Sold-to Group</option>
+        <option value="sold_to">Sold-to</option>
+        <option value="product_group">Product Group</option>
+      </select>
+    </div>
 
     <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
       <button class="btn active">Graph View</button>
       <button class="btn" onclick="window.location.href='/map'+ window.location.search">Map View</button>
-      <button class="btn" onclick="window.location.href='/stock'+ window.location.search">stock</button>
+      <button class="btn" onclick="window.location.href='/stock'+ window.location.search">Stock</button>
     </div>
   </div>
 
-  <div class="controls">
-    <div id="regionBtns" class="controls" style="gap:6px;">
-      <button class="btn" data-val="ALL">ALL</button>
+  <!-- ── Second filter bar ── -->
+  <div class="filter-bar">
+
+    <!-- Region buttons -->
+    <div id="regionBtns" style="display:flex; gap:5px;">
+      <button class="btn active" data-val="ALL">ALL</button>
       <button class="btn" data-val="NSW">NSW</button>
       <button class="btn" data-val="QLD">QLD</button>
       <button class="btn" data-val="VIC">VIC</button>
       <button class="btn" data-val="WA">WA</button>
     </div>
 
-    <label>Salesman:</label>
-    <select id="salesman_name"><option value="ALL">ALL</option></select>
+    <div class="filter-sep"></div>
 
-    <label>Sold-to Group:</label>
-    <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Salesman:</label>
+      <select id="salesman_name"><option value="ALL">ALL</option></select>
+    </div>
 
-    <div id="topCustomerControls" class="controls">
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Sold-to Group:</label>
+      <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    </div>
+
+    <div class="filter-sep"></div>
+
+    <div id="topCustomerControls" style="display:flex; gap:5px;">
       <button class="btn active" data-limit="0">All</button>
       <button class="btn" data-limit="10">Top 10</button>
       <button class="btn" data-limit="20">Top 20</button>
       <button class="btn" data-limit="30">Top 30</button>
     </div>
-    <button id="btnDownloadExcel" class="btn" style="margin-left:12px;">Excel Download</button>
+
+    <button id="btnDownloadExcel" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Excel</button>
+
+    <div class="filter-sep"></div>
+
     <!-- Sold-to (custom dropdown) -->
-    <div class="dd">
-      <label for="sold_to">Sold-to:</label>
+    <div class="dd" id="ddSoldTo">
+      <label for="sold_to">Sold-to</label>
       <div class="dd-wrap">
         <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
         <button type="button" class="dd-btn" id="soldToBtn">▼</button>
-        <button type="button" class="dd-btn" id="soldToClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="soldToClear">✕</button>
       </div>
       <div class="dd-menu" id="soldToMenu"></div>
     </div>
 
     <!-- Ship-to (custom dropdown) -->
-    <div class="dd">
-      <label for="ship_to">Ship-to:</label>
+    <div class="dd" id="ddShipTo">
+      <label for="ship_to">Ship-to</label>
       <div class="dd-wrap">
         <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
         <button type="button" class="dd-btn" id="shipToBtn">▼</button>
-        <button type="button" class="dd-btn" id="shipToClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="shipToClear">✕</button>
       </div>
       <div class="dd-menu" id="shipToMenu"></div>
     </div>
 
-    <label>Product Group:</label>
-    <select id="product_group"><option value="ALL">ALL</option></select>
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Product Group:</label>
+      <select id="product_group"><option value="ALL">ALL</option></select>
+    </div>
 
     <!-- Pattern (custom dropdown) -->
-  <div class="dd">
-    <label for="pattern">Pattern:</label>
-    <div class="dd-wrap">
-      <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
-      <button type="button" class="dd-btn" id="patternBtn">▼</button>
-      <button type="button" class="dd-btn" id="patternClear">✕</button>
+    <div class="dd" id="ddPattern">
+      <label for="pattern">Pattern</label>
+      <div class="dd-wrap">
+        <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+        <button type="button" class="dd-btn" id="patternBtn">▼</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+      </div>
+      <div class="dd-menu" id="patternMenu"></div>
     </div>
-    <div class="dd-menu" id="patternMenu"></div>
-  </div>
 
-  <!-- Material (custom dropdown) -->
-  <div class="dd">
-    <label for="material">Size:</label>
-    <div class="dd-wrap">
-      <input id="material" type="text" placeholder="Search Size" autocomplete="off">
-      <button type="button" class="dd-btn" id="materialBtn">▼</button>
-      <button type="button" class="dd-btn" id="materialClear">✕</button>
+    <!-- Size (custom dropdown) -->
+    <div class="dd" id="ddMaterial">
+      <label for="material">Size</label>
+      <div class="dd-wrap">
+        <input id="material" type="text" placeholder="Search Size" autocomplete="off">
+        <button type="button" class="dd-btn" id="materialBtn">▼</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+      </div>
+      <div class="dd-menu" id="materialMenu"></div>
     </div>
-    <div class="dd-menu" id="materialMenu"></div>
-  </div>
   </div>
 
   <!-- KPI + Profit row (same row, no overlap) -->

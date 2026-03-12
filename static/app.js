@@ -370,17 +370,20 @@ document.getElementById('regionBtns').addEventListener("click",e=>{
 
 document.getElementById('salesman_name').addEventListener('change', (e)=>{
   filters.salesman = e.target.value || 'ALL';
+  e.target.classList.toggle('sel-active', e.target.value !== 'ALL');
   refreshAllDebounced();
 });
 
 document.getElementById('sold_to_group').addEventListener('change', async ()=>{
-  filters.sold_to_group = document.getElementById('sold_to_group').value || 'ALL';
+  const el = document.getElementById('sold_to_group');
+  filters.sold_to_group = el.value || 'ALL';
+  el.classList.toggle('sel-active', el.value !== 'ALL');
 
   // reset dependent filters
   const soldEl = document.getElementById('sold_to');
   const shipEl = document.getElementById('ship_to');
-  if (soldEl) soldEl.value = "";
-  if (shipEl) shipEl.value = "";
+  if (soldEl) { soldEl.value = ""; ddUpdateActive(soldEl); }
+  if (shipEl) { shipEl.value = ""; ddUpdateActive(shipEl); }
   filters.sold_to = "ALL";
   filters.ship_to = "ALL";
 
@@ -409,13 +412,15 @@ document.getElementById('sold_to_group').addEventListener('change', async ()=>{
 // PRODUCT GROUP -> existing code… plus refresh patterns
 
 document.getElementById('product_group').addEventListener('change', async ()=>{
-  filters.product_group = document.getElementById('product_group').value || 'ALL';
+  const pgEl = document.getElementById('product_group');
+  filters.product_group = pgEl.value || 'ALL';
+  pgEl.classList.toggle('sel-active', pgEl.value !== 'ALL');
 
   // reset dependent filters
   const patEl = document.getElementById('pattern');
   const matEl = document.getElementById('material');
-  if (patEl) patEl.value = "";
-  if (matEl) matEl.value = "";
+  if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
+  if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
   filters.pattern = "ALL";
   filters.material = "ALL";
 
@@ -2166,6 +2171,11 @@ function ddFilter(options, q){
   return options.filter(x => String(x).toLowerCase().includes(s)).slice(0, 500);
 }
 
+function ddUpdateActive(inp) {
+  const dd = inp.closest('.dd');
+  if (dd) dd.classList.toggle('dd-active', inp.value.trim() !== '');
+}
+
 function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
   const inp = document.getElementById(inputId);
   const btn = document.getElementById(btnId);
@@ -2188,9 +2198,13 @@ function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
   // typing filters list (still allows reselect without clearing via ▼)
   inp.addEventListener("input", () => openWithCurrent());
 
+  // update active state whenever input value changes
+  inp.addEventListener("input", () => ddUpdateActive(inp));
+
   // clear
   clr.addEventListener("click", () => {
     inp.value = "";
+    ddUpdateActive(inp);
     onPick("ALL");
     ddClose(menu);
     inp.focus();
@@ -2245,11 +2259,11 @@ window.addEventListener("load", async () => {
       const v = (val === "ALL") ? "" : val;
       const soldEl = document.getElementById("sold_to");
       const shipEl = document.getElementById("ship_to");
-      if (soldEl) soldEl.value = v;
+      if (soldEl) { soldEl.value = v; ddUpdateActive(soldEl); }
       filters.sold_to = v || "ALL";
 
       // sold-to changes -> reset ship-to + reload ship-to list
-      if (shipEl) shipEl.value = "";
+      if (shipEl) { shipEl.value = ""; ddUpdateActive(shipEl); }
       filters.ship_to = "ALL";
       await refreshShipToCustom();
 
@@ -2266,7 +2280,7 @@ window.addEventListener("load", async () => {
     onPick: (val) => {
       const v = (val === "ALL") ? "" : val;
       const shipEl = document.getElementById("ship_to");
-      if (shipEl) shipEl.value = v;
+      if (shipEl) { shipEl.value = v; ddUpdateActive(shipEl); }
       filters.ship_to = v || "ALL";
       refreshAllDebounced();
     }
@@ -2280,9 +2294,10 @@ window.addEventListener("load", async () => {
     getOptions: () => __PATTERN_OPTIONS,
     onPick: async (val) => {
       const v = (val === "ALL") ? "" : val;
-      document.getElementById("pattern").value = v;
+      const patEl = document.getElementById("pattern");
+      patEl.value = v; ddUpdateActive(patEl);
       filters.pattern = v || "ALL";
-      await refreshMaterialsCustom(); // pattern 바뀌면 material 옵션 갱신
+      await refreshMaterialsCustom();
       refreshAllDebounced();
     }
   });
@@ -2295,7 +2310,8 @@ window.addEventListener("load", async () => {
     getOptions: () => __MATERIAL_OPTIONS,
     onPick: (val) => {
       const v = (val === "ALL") ? "" : val;
-      document.getElementById("material").value = v;
+      const matEl = document.getElementById("material");
+      matEl.value = v; ddUpdateActive(matEl);
       filters.material = v || "ALL";
       refreshAllDebounced();
     }
