@@ -396,8 +396,8 @@ def add_cache_headers(response):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
     else:
-        # Static assets: allow browser cache but force CDN revalidation
-        response.headers.setdefault('Cache-Control', 'public, max-age=300, must-revalidate')
+        # Static assets: tell CDN/cloudflare to always revalidate
+        response.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return response
 
 def category_filters_stock(alias: str, category: str):
@@ -602,10 +602,16 @@ def get_connection():
         return _MYSQL_POOL.get_connection()
     except mysql.connector.Error as e:
         print("DB connection failed:", e)
-        return None
+        raise RuntimeError(f"DB connection unavailable: {e}") from e
+
 @app.get("/api/ping")
 def ping():
-    return {"ok": True}
+    try:
+        conn = get_connection()
+        conn.close()
+        return {"ok": True}
+    except Exception:
+        return {"ok": False}, 503
 
 # ------------------------------------------------------------------------------
 
@@ -2334,8 +2340,10 @@ def monthly_sales():
         rows = cur.fetchall()
 
     finally:
-        cur.close()
-        conn.close()
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
 
     month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
     return jsonify([{"month": m, "value": month_map.get(m, 0)} for m in range(1, 13)])
@@ -2654,8 +2662,10 @@ def yearly_sales():
         rows = cur.fetchall()
 
     finally:
-        cur.close()
-        conn.close()
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
 
     year_map = {int(r["year_num"]): float(r["yearly_total"] or 0) for r in rows}
     return jsonify([{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2026)])
@@ -3162,4 +3172,4 @@ build_global_top_once()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
