@@ -477,15 +477,13 @@ def _stacks_from_rows(rows: List[Dict[str, Any]], idx_key: str, idx_count: int, 
     returns: (groups, value_by_group)
       value_by_group[group] = [len idx_count]
     """
-    groups = sorted({(r.get("group_label") or "").strip() for r in (rows or []) if (r.get("group_label") or "").strip()})
+    groups = sorted({(r.get("group_label") or "").strip() or "COMMON" for r in (rows or [])})
     if group_sort == "region":
         groups = sorted(groups, key=lambda g: (_region_order_key(g), g))
 
     by_group: Dict[str, List[float]] = {g: [0.0] * idx_count for g in groups}
     for r in (rows or []):
-        g = (r.get("group_label") or "").strip()
-        if not g:
-            continue
+        g = (r.get("group_label") or "").strip() or "COMMON"
         i = int(r.get(idx_key) or 0) - 1
         if 0 <= i < idx_count:
             by_group[g][i] += float(r.get("value") or 0)
@@ -1584,13 +1582,11 @@ def v2_dashboard():
         """, tuple(params_y))
         y_break = cur.fetchall()
         # NOTE: years are not 1..N indexes; map manually
-        y_groups = sorted({(r.get("group_label") or "").strip() for r in y_break if (r.get("group_label") or "").strip()}, key=lambda g: (_region_order_key(g), g) if group_by=="region" else (g.upper(), g))
+        y_groups = sorted({(r.get("group_label") or "").strip() or "COMMON" for r in y_break}, key=lambda g: (_region_order_key(g), g) if group_by=="region" else (g.upper(), g))
         y_by2: Dict[str, List[float]] = {g: [0.0]*len(yearly_labels) for g in y_groups}
         year_idx = {y:i for i,y in enumerate(yearly_labels)}
         for r in y_break:
-            g = (r.get("group_label") or "").strip()
-            if not g:
-                continue
+            g = (r.get("group_label") or "").strip() or "COMMON"
             yy = int(r.get("year") or 0)
             if yy not in year_idx:
                 continue
