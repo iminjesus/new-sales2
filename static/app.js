@@ -1253,7 +1253,7 @@ async function drawMonthlyTotals(){
 function buildMonthlyStacks(rows){
   const labels=monthsLabels();
   let groups = [...new Set(
-    rows.map(r => r.group_label).filter(g => g != null && g !== "")
+    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
   )];
 
   const ordered = [];
@@ -1268,10 +1268,9 @@ function buildMonthlyStacks(rows){
   const byGroup = {};
   groups.forEach(g => byGroup[g] = Array(12).fill(0));
   // ...
-  rows.forEach(r=>{ 
-    const g = r.group_label;
-    if (g == null || g === "") return;
-    const m=parseInt(r.month,10); if(m>=1 && m<=12){ byGroup[r.group_label][m-1]+= (+r.value||0); } });
+  rows.forEach(r=>{
+    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+    const m=parseInt(r.month,10); if(m>=1 && m<=12){ byGroup[g][m-1]+= (+r.value||0); } });
   const datasets=groups.map((g,i)=>({label:g,data:byGroup[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
           display: false}}));
   return {labels,groups,byGroup,datasets};
@@ -1715,7 +1714,7 @@ async function drawYearlyTotals() {
 function buildYearlyStacks(rows) {
   const labels = yearsLabels();
   let groups = [...new Set(
-    rows.map(r => r.group_label).filter(g => g != null && g !== "")
+    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
   )];
 
   const ordered = [];
@@ -1730,8 +1729,7 @@ function buildYearlyStacks(rows) {
   const byGroup = {};
   groups.forEach(g => (byGroup[g] = Array(labels.length).fill(0)));
   rows.forEach(r => {
-  const g = r.group_label;
-  if (g == null || g === "") return;       // skip null / empty groups
+  const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
 
   const y = parseInt(r.year, 10);
   const idx = labels.indexOf(y);

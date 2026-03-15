@@ -2417,12 +2417,12 @@ def monthly_breakdown():
         # NOTE: use s.month consistently (same as monthly_sales)
         sql = f"""
         SELECT s.month AS month,
-                {group_col} AS group_label,
+                COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON') AS group_label,
                 SUM(s.{value}) AS value
             FROM sales_25_2602 s
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.month, {group_col}
+        GROUP BY s.month, COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')
         ORDER BY s.month
         """
         cur.execute(sql, tuple(params2))
@@ -2734,12 +2734,12 @@ def yearly_breakdown():
 
         sql = f"""
         SELECT s.year AS year,
-                {group_col} AS group_label,
+                COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON') AS group_label,
                 SUM(s.{value}) AS value
             FROM sales_21_25 s
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.year, {group_col}
+        GROUP BY s.year, COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')
         ORDER BY s.year
         """
         cur.execute(sql, tuple(params2))
