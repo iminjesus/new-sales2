@@ -2034,27 +2034,19 @@ def fetch_table_rows(top_limit: int):
 
     sql = f"""
         SELECT
-            cus.bde_state AS region,
-            cus.salesman_name AS bde,
-            cus.sold_to_group AS sold_to_group,
-
-            -- 코드 대신 이름 우선, 없으면 코드 fallback
+            COALESCE(NULLIF(TRIM(cus.bde_state),''), 'COMMON') AS region,
+            COALESCE(NULLIF(TRIM(cus.salesman_name),''), '') AS bde,
+            COALESCE(NULLIF(TRIM(cus.sold_to_group),''), '') AS sold_to_group,
             COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to) AS sold_to_name,
             COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
-
-            -- 추가 컬럼 (원하면 유지)
             s.sold_to AS sold_to_code,
             s.ship_to AS ship_to_code,
-
             {day_cols}
         FROM sales_thismonth s
         {' '.join(joins)}
         {where_sql}
-        GROUP BY
-            cus.bde_state, cus.salesman_name, cus.sold_to_group,
-            sold_to_name, ship_to_name,
-            s.sold_to, s.ship_to
-        ORDER BY SUM(s.{value_col}) DESC
+        GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+        ORDER BY region DESC, bde DESC
     """
 
     cur.execute(sql, params)
@@ -2072,10 +2064,13 @@ def export_excel():
 
         rows = fetch_table_rows(top_limit=top_limit)
 
-        # 헤더 순서 고정 (원하는 컬럼 더 추가 가능)
+        day_labels = [str(d) for d in range(1, 32)]
+        for r in rows:
+            r["Total"] = sum(float(r.get(c) or 0) for c in day_labels)
+
         header_order = (
             ["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name", "sold_to_code", "ship_to_code"]
-            + [str(d) for d in range(1, 32)]
+            + day_labels + ["Total"]
         )
 
         # 맨 위에 어떤 선택으로 이 데이터가 나왔는지 표시
@@ -2112,7 +2107,163 @@ def export_excel():
         print("export_excel error:", repr(e))
         print(traceback.format_exc())
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-        
+
+
+def _build_export_common_filters(f, joins, wh, params, alias="s"):
+    """Apply category, product_group, pattern, material filters shared by all export endpoints."""
+    if f.get("category", "ALL") != "ALL":
+        cat_joins, cat_where = category_filters_sales(alias, f.get("category", "ALL"))
+        joins += cat_joins
+        wh    += cat_where
+
+    if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL":
+        _ensure_carrying_join(alias, joins)
+    if f.get("product_group", "ALL") != "ALL":
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f.get("pattern", "ALL") != "ALL":
+        wh.append("mat.pattern = %s"); params.append(f["pattern"])
+    if f.get("material", "ALL") != "ALL":
+        wh.append(f"{alias}.material = %s"); params.append(f["material"])
+
+
+@app.get("/api/export_excel/sales2526")
+def export_excel_sales2526():
+    """Export 25/26 monthly sales pivoted by YYMM (2501..2512, 2601..2612)."""
+    try:
+        f = parse_filters(request)
+        metric = f.get("metric", "qty")
+        value_col = "qty" if metric == "qty" else "amt"
+
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+
+        joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
+        _ensure_customer_join("s", joins)
+        _build_export_common_filters(f, joins, wh, params)
+
+        # pivot columns: year*100+month → label YYMM e.g. 2501
+        pivot_cols = ",\n".join([
+            f"SUM(CASE WHEN s.year={y} AND s.month={m} THEN s.{value_col} ELSE 0 END) AS `{y % 100:02d}{m:02d}`"
+            for y in [2025, 2026]
+            for m in range(1, 13)
+        ])
+        col_labels = [f"{y % 100:02d}{m:02d}" for y in [2025, 2026] for m in range(1, 13)]
+
+        where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+        sql = f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(cus.bde_state),''), 'COMMON') AS region,
+                COALESCE(NULLIF(TRIM(cus.salesman_name),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(cus.sold_to_group),''), '') AS sold_to_group,
+                COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to) AS sold_to_name,
+                COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
+                s.sold_to AS sold_to_code,
+                s.ship_to AS ship_to_code,
+                {pivot_cols}
+            FROM sales_25_2602 s
+            {' '.join(joins)}
+            {where_sql}
+            GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+            ORDER BY region DESC, bde DESC
+        """
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+
+        # add Total column
+        for r in rows:
+            r["Total"] = sum(float(r.get(c) or 0) for c in col_labels)
+
+        header_order = ["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
+                        "sold_to_code", "ship_to_code"] + col_labels + ["Total"]
+
+        meta_lines = [
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"metric={metric}, category={f.get('category','ALL')}, region={f.get('region','ALL')}",
+            f"salesman={f.get('salesman','ALL')}, sold_to_group={f.get('sold_to_group','ALL')}",
+            f"product_group={f.get('product_group','ALL')}, pattern={f.get('pattern','ALL')}, material={f.get('material','ALL')}",
+            f"sold_to={f.get('sold_to','ALL')}, ship_to={f.get('ship_to','ALL')}",
+        ]
+
+        wb = build_excel(rows, sheet_name="25_26_Sales", header_order=header_order, meta_lines=meta_lines)
+        bio = BytesIO(); wb.save(bio); bio.seek(0)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        return send_file(bio, as_attachment=True,
+                         download_name=f"sales_25_26_{metric}_{stamp}.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        print("export_excel_sales2526 error:", repr(e)); print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/export_excel/yearly")
+def export_excel_yearly():
+    """Export yearly sales (2021-2025) pivoted by year."""
+    try:
+        f = parse_filters(request)
+        metric = f.get("metric", "qty")
+        value_col = "qty" if metric == "qty" else "amt"
+
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+
+        joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
+        _ensure_customer_join("s", joins)
+        _build_export_common_filters(f, joins, wh, params)
+
+        years = [2021, 2022, 2023, 2024, 2025]
+        col_labels = [str(y % 100) for y in years]
+        pivot_cols = ",\n".join([
+            f"SUM(CASE WHEN s.year={y} THEN s.{value_col} ELSE 0 END) AS `{y % 100}`"
+            for y in years
+        ])
+
+        where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+        sql = f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(cus.bde_state),''), 'COMMON') AS region,
+                COALESCE(NULLIF(TRIM(cus.salesman_name),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(cus.sold_to_group),''), '') AS sold_to_group,
+                COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to) AS sold_to_name,
+                COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
+                s.sold_to AS sold_to_code,
+                s.ship_to AS ship_to_code,
+                {pivot_cols}
+            FROM sales_21_25 s
+            {' '.join(joins)}
+            {where_sql}
+            GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+            ORDER BY region DESC, bde DESC
+        """
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+
+        for r in rows:
+            r["Total"] = sum(float(r.get(c) or 0) for c in col_labels)
+
+        header_order = ["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
+                        "sold_to_code", "ship_to_code"] + col_labels + ["Total"]
+
+        meta_lines = [
+            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"metric={metric}, category={f.get('category','ALL')}, region={f.get('region','ALL')}",
+            f"salesman={f.get('salesman','ALL')}, sold_to_group={f.get('sold_to_group','ALL')}",
+            f"product_group={f.get('product_group','ALL')}, pattern={f.get('pattern','ALL')}, material={f.get('material','ALL')}",
+            f"sold_to={f.get('sold_to','ALL')}, ship_to={f.get('ship_to','ALL')}",
+        ]
+
+        wb = build_excel(rows, sheet_name="Yearly_Sales", header_order=header_order, meta_lines=meta_lines)
+        bio = BytesIO(); wb.save(bio); bio.seek(0)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        return send_file(bio, as_attachment=True,
+                         download_name=f"sales_yearly_{metric}_{stamp}.xlsx",
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        print("export_excel_yearly error:", repr(e)); print(traceback.format_exc())
+        return jsonify({"error": str(e)}), 500
+
+
         # ----------------------------- Monthly Sales ---------------------------------
 @app.get("/api/monthly_sales")
 def monthly_sales():

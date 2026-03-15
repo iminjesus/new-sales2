@@ -119,7 +119,9 @@
       <button class="btn" data-limit="30">Top 30</button>
     </div>
 
-    <button id="btnDownloadExcel" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Excel</button>
+    <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
+    <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
+    <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
 
     <div class="filter-sep"></div>
 
@@ -270,39 +272,62 @@
 <script>
 (function () {
 
-  function downloadExcel() {
+  function collectFilters() {
+    // metric
+    const metricBtn = document.querySelector("#metricBtns .btn.active");
+    const metric = metricBtn ? metricBtn.dataset.metric : "qty";
 
-    const activeBtn = document.querySelector("#topCustomerControls .btn.active");
-    const top_limit = activeBtn ? activeBtn.dataset.limit : "0";
+    // category
+    const catBtn = document.querySelector("#catBtns .btn.active");
+    const category = catBtn ? (catBtn.dataset.val || catBtn.dataset.cat || "ALL") : "ALL";
 
-    const salesman = document.getElementById("salesman_name")?.value || "ALL";
-    const group = document.getElementById("sold_to_group")?.value || "ALL";
-    const soldto = document.getElementById("sold_to")?.value || "";
+    // region
+    const regionBtn = document.querySelector("#regionBtns .btn.active");
+    const region = regionBtn ? (regionBtn.dataset.val || "ALL") : "ALL";
 
-    const params = new URLSearchParams();
-    params.set("top_limit", top_limit);
+    // top_limit
+    const topBtn = document.querySelector("#topCustomerControls .btn.active");
+    const top_limit = topBtn ? (topBtn.dataset.limit || "0") : "0";
 
-    if (salesman !== "ALL") params.set("salesman_name", salesman);
-    if (group !== "ALL") params.set("sold_to_group", group);
-    if (soldto) params.set("sold_to", soldto);
+    const salesman    = document.getElementById("salesman_name")?.value || "ALL";
+    const sold_to_grp = document.getElementById("sold_to_group")?.value || "ALL";
+    const sold_to     = document.getElementById("sold_to")?.value || "";
+    const ship_to     = document.getElementById("ship_to")?.value || "";
+    const prod_group  = document.getElementById("product_group")?.value || "";
+    const pattern     = document.getElementById("pattern")?.value || "";
+    const material    = document.getElementById("material")?.value || "";
 
-    const url = "/api/export_excel?" + params.toString();
+    const p = new URLSearchParams();
+    p.set("metric", metric);
+    if (category !== "ALL") p.set("category", category);
+    if (region !== "ALL")   p.set("region", region);
+    if (salesman !== "ALL") p.set("salesman", salesman);
+    if (sold_to_grp !== "ALL") p.set("sold_to_group", sold_to_grp);
+    if (sold_to)    p.set("sold_to", sold_to);
+    if (ship_to)    p.set("ship_to", ship_to);
+    if (prod_group) p.set("product_group", prod_group);
+    if (pattern)    p.set("pattern", pattern);
+    if (material)   p.set("material", material);
+    p.set("top_limit", top_limit);
+    return p;
+  }
 
-    console.log("Download:", url);
-
-    // ⭐ Direct download (no fetch)
+  function triggerDownload(url) {
     const a = document.createElement("a");
     a.href = url;
-    a.download = "export.xlsx";
     document.body.appendChild(a);
     a.click();
     a.remove();
   }
 
   window.addEventListener("load", () => {
-    const btn = document.getElementById("btnDownloadExcel");
-    if (!btn) return;
-    btn.onclick = downloadExcel;
+    const btnThisMonth = document.getElementById("btnExcelThisMonth");
+    const btn2526      = document.getElementById("btnExcel2526");
+    const btnYearly    = document.getElementById("btnExcelYearly");
+
+    if (btnThisMonth) btnThisMonth.onclick = () => triggerDownload("/api/export_excel?" + collectFilters().toString());
+    if (btn2526)      btn2526.onclick      = () => triggerDownload("/api/export_excel/sales2526?" + collectFilters().toString());
+    if (btnYearly)    btnYearly.onclick    = () => triggerDownload("/api/export_excel/yearly?" + collectFilters().toString());
   });
 
 })();
