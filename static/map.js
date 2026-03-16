@@ -84,8 +84,8 @@ async function loadSalesMap() {
   const lng = row.lng ?? row.longitude ?? row.Longitude;
   if (lat == null || lng == null) return;
 
-  // we KNOW from /api/sales_map that keys are total_value and target_value
-  const total  = Number(row.total_value || 0);
+  // use 2026 total for bubble size and popup
+  const total  = Number(row.total_2026 || 0);
   const target = Number(row.target_value || 0);
   const ach    = target > 0 ? (total / target) * 100 : 0;
 
@@ -113,7 +113,7 @@ async function loadSalesMap() {
   `${shipTo} - ${shipNm}<br>` +
   `Region: ${regionVal || "-"}<br>` +
   `BDE: ${bde || "-"}<br>` +
-  `Total (2025): ${(total ?? 0).toLocaleString()}`
+  `Total (2026): ${(total ?? 0).toLocaleString()}`
   );
 
   marker.on("click", () => {

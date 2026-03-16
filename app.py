@@ -3162,7 +3162,8 @@ def sales_map():
                 c.longitude,
                 MAX(c.bde_state)      AS region,
                 MAX(c.salesman_name)  AS bde,
-                SUM(s.{value})        AS total_value
+                SUM(s.{value})        AS total_value,
+                SUM(CASE WHEN s.year = 2026 THEN s.{value} ELSE 0 END) AS total_2026
             FROM sales_25_2602 s
             {' '.join(joins)}
             {where_sql2}
@@ -3171,7 +3172,7 @@ def sales_map():
                 c.ship_to_name,
                 c.latitude,
                 c.longitude
-            ORDER BY total_value DESC
+            ORDER BY total_2026 DESC
         """
 
         cur.execute(map_sql, tuple(params2))
