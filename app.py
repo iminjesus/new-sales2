@@ -584,31 +584,41 @@ def get_connection():
         "use_pure": True,
     }
 
-    # Lazily create pool once (thread-safe).
-    # NOTE: pool_size should be >= (gunicorn workers * threads) in production.
-    pool_size = int(os.getenv("DB_POOL_SIZE", "8"))
+    # pool_size 25: page load fires ~15 concurrent API calls with threaded=True,
+    # so pool must be larger than peak concurrency to avoid PoolError.
+    pool_size = int(os.getenv("DB_POOL_SIZE", "25"))
     pool_name = os.getenv("DB_POOL_NAME", "hka_pool")
 
-    try:
-        if _MYSQL_POOL is None:
-            with _MYSQL_POOL_LOCK:
-                if _MYSQL_POOL is None:
-                    _MYSQL_POOL = pooling.MySQLConnectionPool(
-                        pool_name=pool_name,
-                        pool_size=pool_size,
-                        pool_reset_session=True,
-                        **cfg,
-                    )
-        conn = _MYSQL_POOL.get_connection()
-        # Verify the connection is alive (handles stale/timed-out connections)
+    if _MYSQL_POOL is None:
+        with _MYSQL_POOL_LOCK:
+            if _MYSQL_POOL is None:
+                _MYSQL_POOL = pooling.MySQLConnectionPool(
+                    pool_name=pool_name,
+                    pool_size=pool_size,
+                    pool_reset_session=True,
+                    **cfg,
+                )
+
+    # Retry up to 5 times: pool may be momentarily exhausted under burst load
+    last_err = None
+    for attempt in range(5):
         try:
-            conn.ping(reconnect=True, attempts=3, delay=1)
-        except Exception:
-            pass
-        return conn
-    except mysql.connector.Error as e:
-        print("DB connection failed:", e)
-        raise RuntimeError(f"DB connection unavailable: {e}") from e
+            conn = _MYSQL_POOL.get_connection()
+            try:
+                conn.ping(reconnect=True, attempts=2, delay=1)
+            except Exception:
+                pass
+            return conn
+        except mysql.connector.errors.PoolError as e:
+            last_err = e
+            import time as _time
+            _time.sleep(0.2 * (attempt + 1))   # 0.2s, 0.4s, 0.6s, 0.8s, 1.0s
+        except mysql.connector.Error as e:
+            last_err = e
+            break
+
+    print("DB connection failed:", last_err)
+    raise RuntimeError(f"DB connection unavailable: {last_err}") from last_err
 
 @app.get("/api/ping")
 def ping():
