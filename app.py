@@ -599,7 +599,13 @@ def get_connection():
                         pool_reset_session=True,
                         **cfg,
                     )
-        return _MYSQL_POOL.get_connection()
+        conn = _MYSQL_POOL.get_connection()
+        # Verify the connection is alive (handles stale/timed-out connections)
+        try:
+            conn.ping(reconnect=True, attempts=3, delay=1)
+        except Exception:
+            pass
+        return conn
     except mysql.connector.Error as e:
         print("DB connection failed:", e)
         raise RuntimeError(f"DB connection unavailable: {e}") from e
@@ -1831,12 +1837,12 @@ def daily_breakdown():
 
         sql = f"""
         SELECT s.day AS day,
-                {group_col} AS group_label,
+                COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON') AS group_label,
                 SUM(s.{value}) AS value
             FROM sales_thismonth s
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.day, {group_col}
+        GROUP BY s.day, COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')
         ORDER BY s.day
         """
         cur.execute(sql, tuple(params2))

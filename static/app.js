@@ -658,9 +658,8 @@ async function drawDailyTotals(){
 function buildDailyStacks(rows){
   const labels = daysLabels();
 
-  // ignore null / empty groups
   let groups = [...new Set(
-    rows.map(r => r.group_label).filter(g => g != null && g !== "")
+    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
   )];
 
   // force region stack order NSW, QLD, VIC, SA, WA, COMMON
@@ -691,8 +690,7 @@ function buildDailyStacks(rows){
 
   // Fill values
   rows.forEach(r => {
-    const g = r.group_label;
-    if (g == null || g === "") return;
+    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
     const d = parseInt(r.day, 10);
     if (d >= 1 && d <= N && (d - 1) <= lastActualIdx) {
       byGroup[g][d - 1] += (+r.value || 0);
@@ -1352,7 +1350,7 @@ async function drawMonthlyStacked(){
   // Build {groups, byGroup} for month=1..12
   function buildMonthlyStacksForRows(rows){
     let groups = [...new Set(
-      (rows||[]).map(r => r.group_label).filter(g => g != null && g !== "")
+      (rows||[]).map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
     )];
 
     // region ordering
@@ -1365,8 +1363,7 @@ async function drawMonthlyStacked(){
     groups.forEach(g => byGroup[g] = Array(12).fill(0));
 
     (rows||[]).forEach(r => {
-      const g = r.group_label;
-      if (!g) return;
+      const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
       const m = parseInt(r.month, 10);
       if (m >= 1 && m <= 12) byGroup[g][m-1] += (+r.value || 0);
     });
