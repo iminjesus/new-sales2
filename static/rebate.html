@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rebate Calculator</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111827;font-size:13px}
+header{background:#1e3a5f;color:#fff;padding:12px 20px;display:flex;align-items:center;gap:16px}
+header h1{font-size:16px;font-weight:700}
+.filters{background:#fff;padding:10px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;border-bottom:1px solid #e5e7eb}
+.filters label{font-size:11px;color:#6b7280;margin-bottom:2px;display:block}
+.filters select,.filters input{border:1px solid #d1d5db;border-radius:6px;padding:5px 8px;font-size:12px;min-width:120px}
+.btn-primary{background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600}
+.btn-primary:hover{background:#1d4ed8}
+#loading{padding:20px;text-align:center;color:#6b7280}
+.container{padding:12px 16px}
+.summary-row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+.stat-card{background:#fff;border-radius:8px;padding:10px 16px;border:1px solid #e5e7eb;min-width:140px}
+.stat-card .label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px}
+.stat-card .value{font-size:20px;font-weight:700;color:#1e3a5f;margin-top:2px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:8px 10px;text-align:left;border-bottom:1px solid #e5e7eb;white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{background:#f1f5f9}
+th .sort-arrow{margin-left:4px;opacity:.4}
+th.sorted .sort-arrow{opacity:1}
+td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:hover td{background:#f8fafc}
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600}
+.badge-hk{background:#dbeafe;color:#1d4ed8}
+.badge-lf{background:#dcfce7;color:#16a34a}
+.badge-A{background:#fef3c7;color:#92400e}
+.badge-Q{background:#ede9fe;color:#5b21b6}
+.progress-wrap{width:100px;background:#e5e7eb;border-radius:4px;height:7px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:5px}
+.progress-bar{height:7px;border-radius:4px}
+.tier-list{display:flex;gap:3px;flex-wrap:wrap}
+.tier-dot{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;border:2px solid transparent}
+.tier-dot.past{background:#d1fae5;color:#065f46;border-color:#6ee7b7}
+.tier-dot.current{background:#fef9c3;color:#713f12;border-color:#fbbf24}
+.tier-dot.future{background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb}
+.needed{color:#dc2626;font-weight:600}
+.no-next{color:#16a34a;font-weight:600}
+.rate-current{color:#1d4ed8;font-weight:700}
+.rate-next{color:#dc2626;font-size:11px}
+.empty{text-align:center;padding:40px;color:#9ca3af}
+.unit-label{font-size:9px;color:#6b7280}
+</style>
+</head>
+<body>
+<header>
+  <h1>Rebate Calculator</h1>
+  <span style="font-size:11px;opacity:.7">Sales Year-to-Date vs. Rebate Tiers</span>
+</header>
+
+<div class="filters">
+  <div>
+    <label>Year</label>
+    <select id="f_year"><option value="2026">2026</option><option value="2025">2025</option></select>
+  </div>
+  <div>
+    <label>Up to Month</label>
+    <select id="f_month"></select>
+  </div>
+  <div>
+    <label>Brand</label>
+    <select id="f_brand">
+      <option value="ALL">HK + LF</option>
+      <option value="HK">Hankook (HK)</option>
+      <option value="LF">Laufenn (LF)</option>
+    </select>
+  </div>
+  <div>
+    <label>Customer Group</label>
+    <select id="f_stg">
+      <option value="ALL">All Groups</option>
+    </select>
+  </div>
+  <div>
+    <label>Search</label>
+    <input type="text" id="f_search" placeholder="Name or sold-to..." style="min-width:180px">
+  </div>
+  <div>
+    <label>Show</label>
+    <select id="f_show">
+      <option value="ALL">All</option>
+      <option value="NEXT">Has next tier</option>
+      <option value="MAX">Already max tier</option>
+    </select>
+  </div>
+  <div style="margin-top:16px">
+    <button class="btn-primary" onclick="load()">Refresh</button>
+  </div>
+</div>
+
+<div id="loading" style="display:none">Loading rebate data…</div>
+
+<div class="container">
+  <div class="summary-row" id="summary"></div>
+  <div id="table-wrap"></div>
+</div>
+
+<script>
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// populate month dropdown
+const selMonth = document.getElementById("f_month");
+for(let i=1;i<=12;i++){
+  const o=document.createElement("option");
+  o.value=i; o.textContent=`${i} - ${MONTHS[i-1]}`;
+  if(i===new Date().getMonth()+1) o.selected=true;
+  selMonth.appendChild(o);
+}
+
+let ALL_DATA = [];
+let sortCol = "sold_to_name", sortDir = 1;
+
+async function load(){
+  const year  = document.getElementById("f_year").value;
+  const month = document.getElementById("f_month").value;
+  const brand = document.getElementById("f_brand").value;
+  const stg   = document.getElementById("f_stg").value;
+  document.getElementById("loading").style.display="block";
+  document.getElementById("table-wrap").innerHTML="";
+  document.getElementById("summary").innerHTML="";
+  try{
+    const qs = new URLSearchParams({year,month,brand,sold_to_group:stg});
+    const res = await fetch(`/api/rebate_data?${qs}`);
+    const json = await res.json();
+    if(json.error){
+      document.getElementById("table-wrap").innerHTML=`<div class="empty" style="color:#dc2626">Error: ${json.error}<br><small>Run <code>python rebate_data.py</code> on the server first.</small></div>`;
+      return;
+    }
+    ALL_DATA = json;
+    // populate stg filter
+    const stgs = [...new Set(json.map(r=>r.sold_to_group).filter(Boolean))].sort();
+    const sel = document.getElementById("f_stg");
+    const cur = sel.value;
+    sel.innerHTML='<option value="ALL">All Groups</option>';
+    stgs.forEach(s=>{
+      const o=document.createElement("option");
+      o.value=s;o.textContent=s;if(s===cur)o.selected=true;
+      sel.appendChild(o);
+    });
+    renderTable();
+  }catch(e){
+    document.getElementById("table-wrap").innerHTML=`<div class="empty">Failed to load: ${e}</div>`;
+  }finally{
+    document.getElementById("loading").style.display="none";
+  }
+}
+
+function filtered(){
+  const search = document.getElementById("f_search").value.toLowerCase();
+  const show   = document.getElementById("f_show").value;
+  return ALL_DATA.filter(r=>{
+    if(search && !r.sold_to_name.toLowerCase().includes(search) && !r.sold_to.toLowerCase().includes(search)) return false;
+    if(show==="NEXT" && r.next_rate==null) return false;
+    if(show==="MAX"  && r.next_rate!=null) return false;
+    return true;
+  });
+}
+
+function sorted(data){
+  return [...data].sort((a,b)=>{
+    let av=a[sortCol], bv=b[sortCol];
+    if(av==null) av=sortDir>0?1e18:-1e18;
+    if(bv==null) bv=sortDir>0?1e18:-1e18;
+    if(typeof av==="string") return av.localeCompare(bv)*sortDir;
+    return (av-bv)*sortDir;
+  });
+}
+
+function renderTable(){
+  const data = sorted(filtered());
+
+  // summary cards
+  const withNext = data.filter(r=>r.next_rate!=null);
+  const maxTier  = data.filter(r=>r.next_rate==null && r.curr_rate>0);
+  document.getElementById("summary").innerHTML=`
+    <div class="stat-card"><div class="label">Total Customers</div><div class="value">${data.length}</div></div>
+    <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${withNext.length}</div></div>
+    <div class="stat-card"><div class="label">Max Tier Reached</div><div class="value" style="color:#16a34a">${maxTier.length}</div></div>
+  `;
+
+  if(!data.length){
+    document.getElementById("table-wrap").innerHTML='<div class="empty">No data</div>';
+    return;
+  }
+
+  const cols = [
+    {key:"sold_to_name",   label:"Customer"},
+    {key:"sold_to",        label:"Sold-to"},
+    {key:"sold_to_group",  label:"Gr"},
+    {key:"region",         label:"Region"},
+    {key:"brand",          label:"Brand"},
+    {key:"period",         label:"Period"},
+    {key:"actual",         label:"YTD Sales"},
+    {key:"curr_rate",      label:"Current Rebate"},
+    {key:"next_rate",      label:"Next Tier"},
+    {key:"needed",         label:"Need to Buy"},
+    {key:"tiers",          label:"Tier Progress"},
+  ];
+
+  const ths = cols.map(c=>{
+    const isSorted = sortCol===c.key;
+    const arrow = isSorted ? (sortDir>0?'▲':'▼') : '▲';
+    return `<th class="${isSorted?'sorted':''}" onclick="setSort('${c.key}')">${c.label} <span class="sort-arrow">${arrow}</span></th>`;
+  }).join("");
+
+  const rows = data.map(r=>{
+    const unitLabel = r.unit==="Q" ? "units" : "$";
+    const fmtActual = r.unit==="Q" ? fmtN(r.actual) : "$"+fmtN(r.actual);
+
+    // progress bar
+    const tiers = r.tiers.filter(t=>t.rate>0);
+    const maxT  = tiers.length ? tiers[tiers.length-1].threshold : 1;
+    const pct   = Math.min(100, maxT>0 ? (r.actual/maxT*100) : 0);
+    const barColor = r.next_rate==null ? "#16a34a" : (pct>=50?"#f59e0b":"#3b82f6");
+
+    // tier dots
+    const tierDots = tiers.map(t=>{
+      let cls = "future";
+      if(t.threshold <= r.actual && t.rate>0) cls="past";
+      if(t === tiers.find(x=>x.threshold>r.actual && x.rate>0)) cls="current";
+      return `<span class="tier-dot ${cls}" title="${unitLabel}${fmtN(t.threshold)} → ${t.rate}%">${t.rate}%</span>`;
+    }).join("");
+
+    const needed = r.needed!=null
+      ? `<span class="needed">+${r.unit==="Q"?fmtN(r.needed):"$"+fmtN(r.needed)} ${unitLabel}</span>`
+      : `<span class="no-next">MAX ✓</span>`;
+
+    return `<tr>
+      <td>${escHtml(r.sold_to_name)}</td>
+      <td style="font-family:monospace;font-size:11px">${r.sold_to}</td>
+      <td>${escHtml(r.sold_to_group)}</td>
+      <td>${r.region}</td>
+      <td><span class="badge badge-${r.brand}">${r.brand}</span></td>
+      <td><span class="badge badge-${r.period}">${r.period==="A"?"Annual":"Quarterly"}</span></td>
+      <td>
+        <div class="progress-wrap"><div class="progress-bar" style="width:${pct}%;background:${barColor}"></div></div>
+        ${fmtActual} <span class="unit-label">${unitLabel}</span>
+      </td>
+      <td><span class="rate-current">${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
+      <td><span class="rate-next">${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
+      <td>${needed}</td>
+      <td><div class="tier-list">${tierDots}</div></td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("table-wrap").innerHTML=`
+    <table>
+      <thead><tr>${ths}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function setSort(col){
+  if(sortCol===col) sortDir*=-1;
+  else{sortCol=col;sortDir=1;}
+  renderTable();
+}
+
+function fmtN(n){
+  if(n==null) return "-";
+  return Number(n).toLocaleString(undefined,{maximumFractionDigits:1});
+}
+function escHtml(s){
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// search filter live
+document.getElementById("f_search").addEventListener("input", renderTable);
+document.getElementById("f_show").addEventListener("change", renderTable);
+
+// initial load
+load();
+</script>
+</body>
+</html>

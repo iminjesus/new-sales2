@@ -3183,6 +3183,170 @@ def sales_map():
         conn.close()
 
     return jsonify(rows)
+# ==============================================================================
+# REBATE CALCULATOR
+# ==============================================================================
+
+@app.get("/rebate")
+def rebate_page():
+    return send_from_directory("static", "rebate.html")
+
+@app.get("/api/rebate_data")
+def api_rebate_data():
+    """
+    Return rebate status for all customers that have a rebate structure.
+    Query params:
+      year  (default 2026)
+      month (default current month, used as YTD end)
+      brand (HK | LF | ALL, default ALL)
+      sold_to_group (default ALL)
+    """
+    year  = int(request.args.get("year",  2026))
+    month = int(request.args.get("month", datetime.now().month))
+    brand_filter = request.args.get("brand", "ALL").upper()
+    stg_filter   = request.args.get("sold_to_group", "ALL").upper()
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        # ── 1. Get all rebate-mapped customers ──────────────────────────────
+        cur.execute("""
+            SELECT
+                m.sold_to,
+                m.brand,
+                m.structure_name,
+                rs.period,
+                rs.unit,
+                c.sold_to_name,
+                c.sold_to_group,
+                c.bde_state AS region
+            FROM rebate_customer_map m
+            JOIN (
+                SELECT structure_name, period, unit
+                FROM rebate_structure
+                GROUP BY structure_name, period, unit
+            ) rs ON rs.structure_name = m.structure_name
+            LEFT JOIN customer c ON c.sold_to = m.sold_to
+            WHERE (%s = 'ALL' OR m.brand = %s)
+              AND (%s = 'ALL' OR c.sold_to_group = %s)
+        """, (brand_filter, brand_filter, stg_filter, stg_filter))
+        customers = cur.fetchall()
+
+        if not customers:
+            return jsonify([])
+
+        # ── 2. Get YTD sales per sold_to / brand ────────────────────────────
+        # For period=Q we use the current quarter; for A use full YTD
+        # unit=Q → sum qty; unit=A → sum amt
+        # We fetch both qty and amt, then select per customer below.
+        cur.execute("""
+            SELECT
+                s.sold_to,
+                mat.brand,
+                SUM(s.qty) AS total_qty,
+                SUM(s.amt) AS total_amt
+            FROM sales_25_2602 s
+            JOIN carrying_2602 mat ON mat.m_code = s.material
+            WHERE s.year = %s AND s.month <= %s
+              AND mat.brand IN ('HK','LF')
+            GROUP BY s.sold_to, mat.brand
+        """, (year, month))
+        sales_map = {}
+        for r in cur.fetchall():
+            sales_map[(str(r["sold_to"]), r["brand"])] = {
+                "qty": float(r["total_qty"] or 0),
+                "amt": float(r["total_amt"] or 0),
+            }
+
+        # Quarter start month for quarterly period
+        q_start = ((month - 1) // 3) * 3 + 1
+        cur.execute("""
+            SELECT
+                s.sold_to,
+                mat.brand,
+                SUM(s.qty) AS total_qty,
+                SUM(s.amt) AS total_amt
+            FROM sales_25_2602 s
+            JOIN carrying_2602 mat ON mat.m_code = s.material
+            WHERE s.year = %s AND s.month >= %s AND s.month <= %s
+              AND mat.brand IN ('HK','LF')
+            GROUP BY s.sold_to, mat.brand
+        """, (year, q_start, month))
+        sales_q_map = {}
+        for r in cur.fetchall():
+            sales_q_map[(str(r["sold_to"]), r["brand"])] = {
+                "qty": float(r["total_qty"] or 0),
+                "amt": float(r["total_amt"] or 0),
+            }
+
+        # ── 3. Get tier thresholds ───────────────────────────────────────────
+        cur.execute("""
+            SELECT structure_name, tier_order, threshold, rate
+            FROM rebate_structure
+            ORDER BY structure_name, tier_order
+        """)
+        tiers_map = {}
+        for r in cur.fetchall():
+            tiers_map.setdefault(r["structure_name"], []).append(
+                {"tier": r["tier_order"],
+                 "threshold": float(r["threshold"]),
+                 "rate": float(r["rate"])}
+            )
+
+        # ── 4. Build result rows ─────────────────────────────────────────────
+        rows = []
+        for c in customers:
+            struct  = c["structure_name"]
+            brand   = c["brand"]
+            period  = c["period"]   # A or Q
+            unit    = c["unit"]     # A(amount) or Q(qty)
+            tiers   = tiers_map.get(struct, [])
+            if not tiers:
+                continue
+
+            key    = (str(c["sold_to"]), brand)
+            sd     = (sales_q_map if period == "Q" else sales_map).get(key, {"qty":0,"amt":0})
+            actual = sd["qty"] if unit == "Q" else sd["amt"]
+
+            # Find current tier (highest threshold <= actual with rate>0)
+            curr_tier  = {"tier": 0, "threshold": 0, "rate": 0}
+            next_tier  = None
+            for t in tiers:
+                if t["threshold"] <= actual and t["rate"] > 0:
+                    curr_tier = t
+                elif t["threshold"] > actual and t["rate"] > 0 and next_tier is None:
+                    next_tier = t
+
+            needed = round(next_tier["threshold"] - actual, 2) if next_tier else None
+
+            rows.append({
+                "sold_to":        c["sold_to"],
+                "sold_to_name":   c["sold_to_name"] or c["sold_to"],
+                "sold_to_group":  c["sold_to_group"] or "-",
+                "region":         c["region"] or "-",
+                "brand":          brand,
+                "structure_name": struct,
+                "period":         period,
+                "unit":           unit,
+                "actual":         round(actual, 2),
+                "curr_rate":      curr_tier["rate"],
+                "curr_threshold": curr_tier["threshold"],
+                "next_threshold": next_tier["threshold"] if next_tier else None,
+                "next_rate":      next_tier["rate"] if next_tier else None,
+                "needed":         needed,
+                "tiers":          tiers,
+            })
+
+        rows.sort(key=lambda r: (r["sold_to_group"], r["sold_to_name"]))
+        return jsonify(rows)
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close()
+        conn.close()
+
 # ------------------------------------------------------------------------------
 # Build fixed Top 10/20/30 once at startup (after functions are defined)
 build_global_top_once()
