@@ -515,51 +515,83 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 
   /* ── Map page ── */
   #mapLayout {
-    flex-direction: column;
+    flex-direction: column !important;
     height: auto !important;
     min-height: 0 !important;
+    gap: 4px;
   }
+  /* map takes full width, fixed pixel height so Leaflet renders */
   #mapWrapper {
     flex: none !important;
-    width: 100%;
-    height: 320px;
-  }
-  #salesMap {
-    height: 320px !important;
+    width: 100% !important;
+    height: 300px !important;
     min-height: 0 !important;
   }
+  #salesMap {
+    width: 100% !important;
+    height: 300px !important;
+    min-height: 0 !important;
+  }
+  /* side panel becomes a full-width block below the map */
   #mapSidePanel {
     flex: none !important;
-    width: 100%;
-    max-width: none;
-    height: auto;
-    padding: 8px;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    padding: 8px 4px !important;
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: visible;
   }
-  .chartPane { min-height: 180px; }
+  /* chart panes: fixed px height so canvas 100% resolves correctly */
+  .chartPane {
+    flex: none !important;
+    height: 200px !important;
+    min-height: 0 !important;
+  }
+  .chartPane canvas {
+    width: 100% !important;
+    height: 200px !important;
+  }
 
   /* ── Stock page ── */
   #stockLayout {
-    flex-direction: column;
+    flex-direction: column !important;
     height: auto !important;
     min-height: 0 !important;
+    gap: 4px;
   }
+  /* stock map: fixed pixel height so Leaflet renders */
   #stockMapWrapper {
     flex: none !important;
-    width: 100%;
-    height: 320px;
+    width: 100% !important;
+    height: 300px !important;
+    min-height: 0 !important;
+    position: relative;
   }
   #stockMap {
-    height: 320px !important;
+    width: 100% !important;
+    height: 300px !important;
   }
+  /* chart panel stacks below the map */
   #stockSidePanel {
     flex: none !important;
-    width: 100%;
-    height: auto;
-    max-height: none;
-    overflow: visible;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible;
   }
+  /* fixed px height on each pane so canvas 100% resolves */
   .stockChartPane {
-    min-height: 200px;
-    max-height: 240px;
+    flex: none !important;
+    height: 220px !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+  .stockChartPane canvas {
+    height: 180px !important;
+    flex: none !important;
+    min-height: 0 !important;
   }
 }
