@@ -512,4 +512,54 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 
   /* Filter bar: tighter padding */
   .filter-bar { padding: 6px 10px; gap: 6px; }
+
+  /* ── Map page ── */
+  #mapLayout {
+    flex-direction: column;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+  #mapWrapper {
+    flex: none !important;
+    width: 100%;
+    height: 320px;
+  }
+  #salesMap {
+    height: 320px !important;
+    min-height: 0 !important;
+  }
+  #mapSidePanel {
+    flex: none !important;
+    width: 100%;
+    max-width: none;
+    height: auto;
+    padding: 8px;
+  }
+  .chartPane { min-height: 180px; }
+
+  /* ── Stock page ── */
+  #stockLayout {
+    flex-direction: column;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+  #stockMapWrapper {
+    flex: none !important;
+    width: 100%;
+    height: 320px;
+  }
+  #stockMap {
+    height: 320px !important;
+  }
+  #stockSidePanel {
+    flex: none !important;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    overflow: visible;
+  }
+  .stockChartPane {
+    min-height: 200px;
+    max-height: 240px;
+  }
 }

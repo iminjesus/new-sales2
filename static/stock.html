@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stock</title>
 
-  <link rel="stylesheet" href="/static/style.css?v=20260312">
+  <link rel="stylesheet" href="/static/style.css?v=20260317">
 
   <link
     rel="stylesheet"
@@ -20,6 +21,13 @@
 
 <body>
   <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Stock</h2>
+
+  <!-- Mobile: toggle button for filter panel -->
+  <button id="filterToggleBtn" class="filter-toggle-btn">
+    <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
+  </button>
+
+  <div id="filterPanel">
 
   <!-- ── Top filter bar ── -->
   <div id="topRow" class="filter-bar">
@@ -84,6 +92,8 @@
     </div>
   </div>
 
+  </div><!-- end #filterPanel -->
+
   <div id="errbar" class="errbar" hidden></div>
 
   <div id="stockLayout">
@@ -111,6 +121,19 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/stock.js?v=20260312" defer></script>
+  <script>
+  (function () {
+    var btn = document.getElementById("filterToggleBtn");
+    var panel = document.getElementById("filterPanel");
+    if (btn && panel) {
+      btn.addEventListener("click", function () {
+        var open = panel.classList.toggle("open");
+        btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+      });
+    }
+  })();
+  </script>
+
+  <script src="/static/stock.js?v=20260317" defer></script>
 </body>
 </html>

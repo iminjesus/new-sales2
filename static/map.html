@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sales Map</title>
 
   <!-- Main CSS -->
-  <link rel="stylesheet" href="/static/style.css?v=20260312">
+  <link rel="stylesheet" href="/static/style.css?v=20260317">
 
   <!-- Leaflet CSS -->
   <link
@@ -28,6 +29,13 @@
 </head>
 <body>
   <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Map</h2>
+
+  <!-- Mobile: toggle button for filter panel -->
+  <button id="filterToggleBtn" class="filter-toggle-btn">
+    <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
+  </button>
+
+  <div id="filterPanel">
 
   <!-- ── Top filter bar ── -->
   <div id="topRow" class="filter-bar">
@@ -158,6 +166,8 @@
     </div>
   </div>
 
+  </div><!-- end #filterPanel -->
+
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
     <div id="mapWrapper" class="box" style="flex:2;">
       <div id="salesMap"></div>
@@ -182,9 +192,22 @@
     crossorigin=""
   ></script>
 
+  <script>
+  (function () {
+    var btn = document.getElementById("filterToggleBtn");
+    var panel = document.getElementById("filterPanel");
+    if (btn && panel) {
+      btn.addEventListener("click", function () {
+        var open = panel.classList.toggle("open");
+        btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+      });
+    }
+  })();
+  </script>
+
   <!-- shared dashboard logic -->
-  <script src="/static/app.js?v=20260312" defer></script>
+  <script src="/static/app.js?v=20260317" defer></script>
   <!-- small map-specific layer that reuses app.js -->
-  <script src="/static/map.js?v=20260312" defer></script>
+  <script src="/static/map.js?v=20260317" defer></script>
 </body>
 </html>
