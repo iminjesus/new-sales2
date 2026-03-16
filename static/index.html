@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sales Dashboard</title>
 
   <!-- CDN for Chart.js -->
@@ -12,11 +13,10 @@
   </script>
 
   <!-- Served from Flask: /static -->
-  <link rel="stylesheet" href="/static/style.css?v=20260316">
+  <link rel="stylesheet" href="/static/style.css?v=20260317">
 
   <style>
     /* KPI table column widths + prevent squishing */
-    .kpi-profit-row{ width:100%; }
     #kpiByRegion{ width:100%; border-collapse:collapse; table-layout:fixed; }
     #kpiByRegion th, #kpiByRegion td{
       padding:3px 4px;
@@ -32,16 +32,19 @@
     #kpiByRegion th:nth-child(5), #kpiByRegion td:nth-child(5){ width:70px; }
     #kpiByRegion th:nth-child(6), #kpiByRegion td:nth-child(6){ width:70px; }
     #kpiByRegion th:nth-child(7), #kpiByRegion td:nth-child(7){ width:70px; }
-
-    /* Make KPI box truly wide */
-    .kpi-profit-row > .box:first-child{ width:640px; min-width:640px; }
-  
   </style>
 
 </head>
 
 <body>
   <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Dashboard</h2>
+
+  <!-- Mobile: toggle button for filter panel -->
+  <button id="filterToggleBtn" class="filter-toggle-btn">
+    <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
+  </button>
+
+  <div id="filterPanel">
 
   <!-- ── Top filter bar ── -->
   <div id="topRow" class="filter-bar">
@@ -180,47 +183,20 @@
     </div>
   </div>
 
+  </div><!-- end #filterPanel -->
+
   <!-- KPI + Profit row (same row, no overlap) -->
-  <div class="kpi-profit-row" style="
-    margin-top:4px;
-    display:grid;
-    grid-template-columns: 640px minmax(0, 1fr);
-    gap:12px;
-    align-items:start;
-    width:100%;
-    box-sizing:border-box;
-  ">
+  <div class="kpi-profit-row">
     <!-- KPI -->
-    <div class="box" style="
-      width:640px;
-      box-sizing:border-box;
-      overflow:hidden;
-    ">
-      <table id="kpiByRegion" class="kpi-table" style="
-        width:100%;
-        table-layout:fixed;
-        border-collapse:collapse;
-      "></table>
+    <div class="box kpi-box">
+      <table id="kpiByRegion" class="kpi-table" style="width:100%; table-layout:fixed; border-collapse:collapse;"></table>
     </div>
 
     <!-- Profit -->
-    <div class="box" style="
-      width:100%;
-      min-width:0;              /* 중요: 이거 없으면 차트가 튀면서 겹칠 수 있음 */
-      box-sizing:border-box;
-      overflow:hidden;          /* 중요: 캔버스가 밖으로 나가는걸 막음 */
-    ">
+    <div class="box profit-box">
       <h3>Profit (Monthly)</h3>
-      <div class="chart-fixed" style="
-        position:relative;
-        width:100%;
-        overflow:hidden;
-      ">
-        <canvas id="profitComboChart" style="
-          display:block;
-          width:100% !important;
-          height:320px !important;
-        "></canvas>
+      <div style="position:relative; width:100%; overflow:hidden;">
+        <canvas id="profitComboChart" class="profit-chart-canvas"></canvas>
       </div>
     </div>
   </div>
@@ -268,7 +244,21 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/app.js?v=20260316" defer></script>
+  <script src="/static/app.js?v=20260317" defer></script>
+<script>
+// Mobile filter panel toggle
+(function () {
+  var btn = document.getElementById("filterToggleBtn");
+  var panel = document.getElementById("filterPanel");
+  if (btn && panel) {
+    btn.addEventListener("click", function () {
+      var open = panel.classList.toggle("open");
+      btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+    });
+  }
+})();
+</script>
+
 <script>
 (function () {
 
