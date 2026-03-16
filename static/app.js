@@ -973,81 +973,86 @@ async function fetchMonthlyKPITarget(region,BDE, year=2026){
 
 // build & render table
 async function drawMonthlyKPI(){
-  const rows = [];
   const currentMonthIdx = new Date().getMonth(); // 0-based
+  const REGIONS = ["NSW","QLD","VIC","WA"];
 
-  // Fetch total company daily breakdown (ALL/ALL) once for working-days computation.
-  // This is intentionally always ALL/ALL regardless of current filters so that
-  // working days reflect actual company-wide activity.
-  const totalBreakdownRows = await fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
+  // Fire ALL requests at once — no sequential awaits
+  const workingDaysP = fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
     metric: filters.metric, category: filters.category, region: "ALL", salesman: "ALL",
     sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
     product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
     group_by: "region", top_limit: filters.top_limit || 0
   }).toString()}`);
+
+  const allAllP = Promise.all([
+    fetchMonthlyKPIActual("ALL", "ALL", 2026),
+    fetchMonthlyKPITarget("ALL", "ALL", 2026),
+    fetchDailyKPIActual("ALL", "ALL")
+  ]);
+
+  const regionAllP = REGIONS.map(region => Promise.all([
+    fetchMonthlyKPIActual(region, "ALL", 2026),
+    fetchMonthlyKPITarget(region, "ALL", 2026),
+    fetchDailyKPIActual(region, "ALL")
+  ]));
+
+  const bdeP = REGIONS.map(region =>
+    (REGION_SALESMEN[region] || []).map(bde => Promise.all([
+      fetchMonthlyKPIActual(region, bde, 2026),
+      fetchMonthlyKPITarget(region, bde, 2026),
+      fetchDailyKPIActual(region, bde)
+    ]))
+  );
+
+  // Single await for everything
+  const [
+    totalBreakdownRows,
+    allAllResult,
+    regionAllResults,
+    bdeResults
+  ] = await Promise.all([
+    workingDaysP,
+    allAllP,
+    Promise.all(regionAllP),
+    Promise.all(REGIONS.map((_, i) => Promise.all(bdeP[i])))
+  ]);
+
   const workingInfo = computeWorkingDaysInfo(totalBreakdownRows);
+  const rows = [];
 
-  // All row (no region/salesman filter)
+  // All/All row
   {
-    const qs = new URLSearchParams({
-      metric: filters.metric, category: filters.category, region: "ALL", salesman: "ALL",
-      sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
-      top_limit: filters.top_limit || 0, year: 2026
-    }).toString();
-
-    const [salesRows, targetRows, dailySalesRows] = await Promise.all([
-      fetchJSON(`/api/monthly_sales?${qs}`),
-      fetchJSON(`/api/monthly_target?${qs}`),
-      fetchJSON(`/api/daily_sales?${qs}`)
-    ]);
-
+    const [salesRows, targetRows, dailySalesRows] = allAllResult;
     const sales      = salesRows.map(r => +r.value || 0);
     const targets    = targetRows.map(r => +r.value || 0);
     const dailySales = dailySalesRows.map(r => +r.value || 0);
     const q          = kpiByQuarterProrated(sales, targets, dailySales, workingInfo);
     const dailyKPI   = dailyKPIWorkingDays(dailySales, +targets[currentMonthIdx] || 0, workingInfo);
-
     rows.push({ region: "All", bde: "All", Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI });
   }
 
   // Region / BDE rows
-  for (const region of ["NSW","QLD","VIC","WA"]) {
-    {
-      const yearKpi = 2026;
-      const [salesRows, targetRows, dailySalesRows] = await Promise.all([
-        fetchMonthlyKPIActual(region, "ALL", yearKpi),
-        fetchMonthlyKPITarget(region, "ALL", yearKpi),
-        fetchDailyKPIActual(region, "ALL")
-      ]);
-
-      const sales      = salesRows.map(r => +r.value || 0);
-      const targets    = targetRows.map(r => +r.value || 0);
-      const dSales     = dailySalesRows.map(r => +r.value || 0);
-      const q          = kpiByQuarterProrated(sales, targets, dSales, workingInfo);
-      const dailyKPI   = dailyKPIWorkingDays(dSales, +targets[currentMonthIdx] || 0, workingInfo);
-
-      rows.push({ region, bde: "All", Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI });
-    }
-
+  for (let ri = 0; ri < REGIONS.length; ri++) {
+    const region = REGIONS[ri];
     const bdes   = REGION_SALESMEN[region] || [];
-    const yearKpi = 2026;
-    const perBDE = await Promise.all(bdes.map(async (bde) => {
-      const [salesRows, targetRows, dailySalesRows] = await Promise.all([
-        fetchMonthlyKPIActual(region, bde, yearKpi),
-        fetchMonthlyKPITarget(region, bde, yearKpi),
-        fetchDailyKPIActual(region, bde)
-      ]);
 
-      const sales    = salesRows.map(r => +r.value || 0);
-      const targets  = targetRows.map(r => +r.value || 0);
-      const dSales   = dailySalesRows.map(r => +r.value || 0);
-      const q        = kpiByQuarterProrated(sales, targets, dSales, workingInfo);
-      const dailyKPI = dailyKPIWorkingDays(dSales, +targets[currentMonthIdx] || 0, workingInfo);
+    const [rSalesRows, rTargetRows, rDailySalesRows] = regionAllResults[ri];
+    const rSales   = rSalesRows.map(r => +r.value || 0);
+    const rTargets = rTargetRows.map(r => +r.value || 0);
+    const rDailySales = rDailySalesRows.map(r => +r.value || 0);
+    const rQ       = kpiByQuarterProrated(rSales, rTargets, rDailySales, workingInfo);
+    const rDailyKPI = dailyKPIWorkingDays(rDailySales, +rTargets[currentMonthIdx] || 0, workingInfo);
+    rows.push({ region, bde: "All", Q1: rQ[0], Q2: rQ[1], Q3: rQ[2], Q4: rQ[3], dailyKPI: rDailyKPI });
 
-      return { region, bde, Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI };
-    }));
-    rows.push(...perBDE);
+    for (let bi = 0; bi < bdes.length; bi++) {
+      const [bSalesRows, bTargetRows, bDailySalesRows] = bdeResults[ri][bi];
+      const bSales   = bSalesRows.map(r => +r.value || 0);
+      const bTargets = bTargetRows.map(r => +r.value || 0);
+      const bDailySales = bDailySalesRows.map(r => +r.value || 0);
+      const bQ       = kpiByQuarterProrated(bSales, bTargets, bDailySales, workingInfo);
+      const bDailyKPI = dailyKPIWorkingDays(bDailySales, +bTargets[currentMonthIdx] || 0, workingInfo);
+      rows.push({ region, bde: bdes[bi], Q1: bQ[0], Q2: bQ[1], Q3: bQ[2], Q4: bQ[3], dailyKPI: bDailyKPI });
+    }
   }
 
   // render table
