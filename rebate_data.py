@@ -64,8 +64,8 @@ def unit_from_name(name: str) -> str:
 
 def parse_customer_csv(path: str) -> list[tuple[str, str, str]]:
     """
-    Returns list of (sold_to, territory, structure_name).
-    territory: 'TTL' | 'HK' | 'LF'
+    Returns list of (sold_to, brand, structure_name).
+    brand: 'TTL' | 'HK' | 'LF'
     """
     rows = []
     with open(path, newline="", encoding="utf-8-sig") as f:
@@ -91,9 +91,12 @@ def parse_customer_csv(path: str) -> list[tuple[str, str, str]]:
 # 2. Parse category tier CSV
 # ──────────────────────────────────────────────────────────────
 
-def parse_category_csv(path: str) -> list[tuple[str, str, int, float, float]]:
+def parse_category_csv(path: str) -> list[tuple[str, str, int, int, float, float]]:
     """
-    Returns list of (structure_name, unit, tier_order, threshold, rate).
+    Returns list of (structure_name, unit, tier_order, top_order, threshold, rate).
+
+    top_order: last meaningful tier index — tiers beyond this repeat the
+               same threshold/rate and should be ignored in calculations.
 
     CSV 구조: 카테고리마다 2행
       행 1: category_code, t0, t1, ..., t14   (15개 임계값)
@@ -140,8 +143,17 @@ def parse_category_csv(path: str) -> list[tuple[str, str, int, float, float]]:
 
                 unit = unit_from_name(pending_name)
                 n = min(len(pending_thresholds), len(rates))
+
+                # Compute top_order: last tier where threshold or rate increased
+                top_order = 0
+                for i in range(1, n):
+                    if (pending_thresholds[i] > pending_thresholds[i - 1] or
+                            rates[i] > rates[i - 1]):
+                        top_order = i
+
                 for i in range(n):
-                    tiers.append((pending_name, unit, i, pending_thresholds[i], rates[i]))
+                    tiers.append((pending_name, unit, i, top_order,
+                                  pending_thresholds[i], rates[i]))
 
                 pending_name = None
                 pending_thresholds = []
@@ -185,7 +197,7 @@ def main():
     # ── rebate_customer_map ──────────────────────────────────
     cur.execute("DELETE FROM rebate_customer_map")
     cur.executemany(
-        "INSERT IGNORE INTO rebate_customer_map (sold_to, territory, structure_name) "
+        "INSERT IGNORE INTO rebate_customer_map (sold_to, brand, structure_name) "
         "VALUES (%s, %s, %s)",
         customer_rows,
     )
@@ -195,8 +207,8 @@ def main():
     cur.execute("DELETE FROM rebate_structure")
     cur.executemany(
         "INSERT IGNORE INTO rebate_structure "
-        "(structure_name, unit, tier_order, threshold, rate) "
-        "VALUES (%s, %s, %s, %s, %s)",
+        "(structure_name, unit, tier_order, top_order, threshold, rate) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
         tier_rows,
     )
     print(f"  → rebate_structure inserted: {cur.rowcount} rows")

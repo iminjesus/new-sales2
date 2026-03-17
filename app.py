@@ -3206,10 +3206,10 @@ def api_rebate_data():
       page_size     groups per page (default 40)
     unit=A → measure in $ amount
     unit=Q → measure in qty
-    territory=TTL → sum HK + LF sales
+    brand=TTL → sum HK + LF sales
     """
-    terr_filter = request.args.get("territory",     "ALL").upper()
-    stg_filter  = request.args.get("sold_to_group", "ALL")
+    brand_filter = request.args.get("territory",     "ALL").upper()  # UI still sends 'territory'
+    stg_filter   = request.args.get("sold_to_group", "ALL")
     search      = request.args.get("search",  "").strip().lower()
     show        = request.args.get("show",    "ALL").upper()
     sort_col    = request.args.get("sort",    "actual")
@@ -3225,13 +3225,13 @@ def api_rebate_data():
     try:
         # ── 1. Rebate-mapped customers (sold_to level) ───────────────────────
         cur.execute("""
-            SELECT m.sold_to, m.territory, m.structure_name,
+            SELECT m.sold_to, m.brand, m.structure_name,
                    c.sold_to_name, c.sold_to_group, c.bde_state AS region
             FROM rebate_customer_map m
             LEFT JOIN customer c ON c.sold_to = m.sold_to
-            WHERE (%s = 'ALL' OR m.territory = %s)
+            WHERE (%s = 'ALL' OR m.brand = %s)
               AND (%s = 'ALL' OR c.sold_to_group = %s)
-        """, (terr_filter, terr_filter, stg_filter, stg_filter))
+        """, (brand_filter, brand_filter, stg_filter, stg_filter))
         customers = cur.fetchall()
         if not customers:
             return jsonify([])
@@ -3259,22 +3259,29 @@ def api_rebate_data():
         name_map = {str(r["sold_to"]): (r["sold_to_name"] or str(r["sold_to"]))
                     for r in cur.fetchall()}
 
-        # ── 4. Tier definitions ──────────────────────────────────────────────
+        # ── 4. Tier definitions (only up to top_order) ───────────────────────
         cur.execute("""
-            SELECT structure_name, unit, tier_order, threshold, rate
+            SELECT structure_name, unit, tier_order, top_order, threshold, rate
             FROM rebate_structure
             ORDER BY structure_name, tier_order
         """)
         tiers_map = {}
         for r in cur.fetchall():
             sd = tiers_map.setdefault(r["structure_name"],
-                                      {"unit": r["unit"], "tiers": []})
-            sd["tiers"].append({"tier":      r["tier_order"],
-                                 "threshold": float(r["threshold"]),
-                                 "rate":      float(r["rate"])})
+                                      {"unit": r["unit"], "top_order": int(r["top_order"]), "tiers": []})
+            # Only keep tiers up to and including top_order
+            if r["tier_order"] <= r["top_order"]:
+                sd["tiers"].append({"tier":      r["tier_order"],
+                                     "threshold": float(r["threshold"]),
+                                     "rate":      float(r["rate"])})
 
         # ── 5. Build result – one row per SHIP_TO ────────────────────────────
-        def _calc_tier(actual, tiers):
+        def _calc_tier(actual, tiers, top_order):
+            """
+            Returns (curr_tier, next_tier).
+            next_tier is None if actual has reached top_order tier.
+            tiers list is already trimmed to top_order entries.
+            """
             curr = {"tier": 0, "threshold": 0, "rate": 0}
             nxt  = None
             for t in tiers:
@@ -3282,39 +3289,43 @@ def api_rebate_data():
                     curr = t
                 elif t["threshold"] > actual and t["rate"] > 0 and nxt is None:
                     nxt = t
+            # If curr tier has reached top_order, there is no next tier
+            if curr["tier"] >= top_order:
+                nxt = None
             return curr, nxt
 
         rows = []
         for c in customers:
-            struct    = c["structure_name"]
-            territory = c["territory"]
-            sold_to   = str(c["sold_to"])
-            sd        = tiers_map.get(struct)
+            struct  = c["structure_name"]
+            brand   = c["brand"]
+            sold_to = str(c["sold_to"])
+            sd      = tiers_map.get(struct)
             if not sd:
                 continue
-            unit  = sd["unit"]   # A=Amount, Q=Qty
-            tiers = sd["tiers"]
+            unit      = sd["unit"]       # A=Amount, Q=Qty
+            tiers     = sd["tiers"]
+            top_order = sd["top_order"]
 
-            # Collect ship_tos via pre-built index (O(1) per brand)
-            if territory == "TTL":
+            # Collect ship_tos via pre-built index joined with carrying_2602.brand
+            if brand == "TTL":
                 ship_set = (ship_idx.get((sold_to, "HK"), set()) |
                             ship_idx.get((sold_to, "LF"), set()))
             else:
-                ship_set = ship_idx.get((sold_to, territory), set()).copy()
+                ship_set = ship_idx.get((sold_to, brand), set()).copy()
             if not ship_set:
                 ship_set.add(sold_to)   # show zero row so sold_to is visible
 
             for sh in sorted(ship_set):
-                if territory == "TTL":
+                if brand == "TTL":
                     hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
                     lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
                     actual = (hk["qty"] + lf["qty"]) if unit == "Q" \
                              else (hk["amt"] + lf["amt"])
                 else:
-                    d = ship_sales.get((sold_to, sh, territory), {"qty": 0.0, "amt": 0.0})
+                    d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
                     actual = d["qty"] if unit == "Q" else d["amt"]
 
-                curr_tier, next_tier = _calc_tier(actual, tiers)
+                curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
                 needed     = round(next_tier["threshold"] - actual, 2) if next_tier else None
                 est_rebate = round(actual * curr_tier["rate"] / 100, 2)
 
@@ -3325,7 +3336,7 @@ def api_rebate_data():
                     "region":         c["region"] or "-",
                     "ship_to":        sh,
                     "ship_to_name":   name_map.get(sh, sh),
-                    "territory":      territory,
+                    "brand":          brand,
                     "structure_name": struct,
                     "unit":           unit,
                     "actual":         round(actual, 2),
@@ -3361,16 +3372,16 @@ def api_rebate_data():
             "est_total":  round(sum(r["est_rebate"] for r in rows), 2),
         }
 
-        # ── 8. Group by (sold_to, territory) ─────────────────────────────────
+        # ── 8. Group by (sold_to, brand) ──────────────────────────────────────
         grp_map = {}
         for r in rows:
-            key = r["sold_to"] + "|" + r["territory"]
+            key = r["sold_to"] + "|" + r["brand"]
             if key not in grp_map:
                 grp_map[key] = {
                     "key": key,
                     "sold_to": r["sold_to"], "sold_to_name": r["sold_to_name"],
                     "sold_to_group": r["sold_to_group"], "region": r["region"],
-                    "territory": r["territory"], "unit": r["unit"],
+                    "brand": r["brand"], "unit": r["unit"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_est": 0.0, "items": [],
                 }
@@ -3423,28 +3434,23 @@ def api_rebate_data():
 def api_rebate_export():
     """Stream a CSV of all rows matching current filters (no pagination)."""
     import csv, io
-    # reuse the same logic – just request page_size=99999
-    orig_page_size = request.args.get("page_size")
-    # We call the internal logic by delegating to the same function with a
-    # modified environ — simpler: just inline the flat-row fetch here.
-    terr_filter = request.args.get("territory",     "ALL").upper()
-    stg_filter  = request.args.get("sold_to_group", "ALL")
-    search      = request.args.get("search",  "").strip().lower()
-    show        = request.args.get("show",    "ALL").upper()
-    sort_col    = request.args.get("sort",    "actual")
-    sort_dir    = request.args.get("dir",     "desc")
+    brand_filter = request.args.get("territory",     "ALL").upper()
+    stg_filter   = request.args.get("sold_to_group", "ALL")
+    search       = request.args.get("search",  "").strip().lower()
+    show         = request.args.get("show",    "ALL").upper()
+    sort_dir     = request.args.get("dir",     "desc")
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
         cur.execute("""
-            SELECT m.sold_to, m.territory, m.structure_name,
+            SELECT m.sold_to, m.brand, m.structure_name,
                    c.sold_to_name, c.sold_to_group, c.bde_state AS region
             FROM rebate_customer_map m
             LEFT JOIN customer c ON c.sold_to = m.sold_to
-            WHERE (%s='ALL' OR m.territory=%s)
+            WHERE (%s='ALL' OR m.brand=%s)
               AND (%s='ALL' OR c.sold_to_group=%s)
-        """, (terr_filter, terr_filter, stg_filter, stg_filter))
+        """, (brand_filter, brand_filter, stg_filter, stg_filter))
         customers = cur.fetchall()
 
         cur.execute("""
@@ -3464,44 +3470,49 @@ def api_rebate_export():
         cur.execute("SELECT sold_to, sold_to_name FROM customer")
         name_map = {str(r["sold_to"]):(r["sold_to_name"] or str(r["sold_to"])) for r in cur.fetchall()}
 
-        cur.execute("SELECT structure_name,unit,tier_order,threshold,rate FROM rebate_structure ORDER BY structure_name,tier_order")
+        cur.execute("""
+            SELECT structure_name, unit, tier_order, top_order, threshold, rate
+            FROM rebate_structure ORDER BY structure_name, tier_order
+        """)
         tiers_map = {}
         for r in cur.fetchall():
-            sd = tiers_map.setdefault(r["structure_name"],{"unit":r["unit"],"tiers":[]})
-            sd["tiers"].append({"tier":r["tier_order"],"threshold":float(r["threshold"]),"rate":float(r["rate"])})
+            sd = tiers_map.setdefault(r["structure_name"],{"unit":r["unit"],"top_order":int(r["top_order"]),"tiers":[]})
+            if r["tier_order"] <= r["top_order"]:
+                sd["tiers"].append({"tier":r["tier_order"],"threshold":float(r["threshold"]),"rate":float(r["rate"])})
 
-        def _calc(actual, tiers):
+        def _calc(actual, tiers, top_order):
             curr={"tier":0,"threshold":0,"rate":0}; nxt=None
             for t in tiers:
                 if t["threshold"]<=actual and t["rate"]>0: curr=t
                 elif t["threshold"]>actual and t["rate"]>0 and nxt is None: nxt=t
+            if curr["tier"] >= top_order: nxt=None
             return curr, nxt
 
         rows=[]
         for c in customers:
-            struct=c["structure_name"]; territory=c["territory"]; sold_to=str(c["sold_to"])
+            struct=c["structure_name"]; brand=c["brand"]; sold_to=str(c["sold_to"])
             sd=tiers_map.get(struct)
             if not sd: continue
-            unit=sd["unit"]; tiers=sd["tiers"]
-            if territory=="TTL":
+            unit=sd["unit"]; tiers=sd["tiers"]; top_order=sd["top_order"]
+            if brand=="TTL":
                 ship_set=(ship_idx.get((sold_to,"HK"),set())|ship_idx.get((sold_to,"LF"),set()))
             else:
-                ship_set=ship_idx.get((sold_to,territory),set()).copy()
+                ship_set=ship_idx.get((sold_to,brand),set()).copy()
             if not ship_set: ship_set.add(sold_to)
             for sh in sorted(ship_set):
-                if territory=="TTL":
+                if brand=="TTL":
                     hk=ship_sales.get((sold_to,sh,"HK"),{"qty":0,"amt":0})
                     lf=ship_sales.get((sold_to,sh,"LF"),{"qty":0,"amt":0})
                     actual=(hk["qty"]+lf["qty"]) if unit=="Q" else (hk["amt"]+lf["amt"])
                 else:
-                    d=ship_sales.get((sold_to,sh,territory),{"qty":0,"amt":0})
+                    d=ship_sales.get((sold_to,sh,brand),{"qty":0,"amt":0})
                     actual=d["qty"] if unit=="Q" else d["amt"]
-                curr_tier,next_tier=_calc(actual,tiers)
+                curr_tier,next_tier=_calc(actual,tiers,top_order)
                 rows.append({
                     "sold_to":sold_to,"sold_to_name":c["sold_to_name"] or sold_to,
                     "sold_to_group":c["sold_to_group"] or "-","region":c["region"] or "-",
                     "ship_to":sh,"ship_to_name":name_map.get(sh,sh),
-                    "territory":territory,"structure_name":struct,"unit":unit,
+                    "brand":brand,"structure_name":struct,"unit":unit,
                     "actual":round(actual,2),"curr_rate":curr_tier["rate"],
                     "next_rate":next_tier["rate"] if next_tier else None,
                     "needed":round(next_tier["threshold"]-actual,2) if next_tier else None,
@@ -3515,15 +3526,14 @@ def api_rebate_export():
         elif show=="MAX": rows=[r for r in rows if r["next_rate"] is None and r["curr_rate"]>0]
         elif show=="ZERO": rows=[r for r in rows if r["actual"]==0]
 
-        rev=(sort_dir!="asc")
-        rows.sort(key=lambda r:(r["sold_to_group"],r["sold_to_name"],r["territory"],r["ship_to"]))
+        rows.sort(key=lambda r:(r["sold_to_group"],r["sold_to_name"],r["brand"],r["ship_to"]))
 
         # build CSV
         out=io.StringIO()
         w=csv.writer(out)
-        w.writerow(["Sold-To","Sold-To Name","Group","Region","Ship-To","Ship-To Name","Territory","Type","Actual","Curr Rate%","Next Rate%","Need to Reach","Est Rebate","Structure"])
+        w.writerow(["Sold-To","Sold-To Name","Group","Region","Ship-To","Ship-To Name","Brand","Type","Actual","Curr Rate%","Next Rate%","Need to Reach","Est Rebate","Structure"])
         for r in rows:
-            w.writerow([r["sold_to"],r["sold_to_name"],r["sold_to_group"],r["region"],r["ship_to"],r["ship_to_name"],r["territory"],"Annual $" if r["unit"]=="A" else "QTR Qty",r["actual"],r["curr_rate"],r["next_rate"] if r["next_rate"] is not None else "",r["needed"] if r["needed"] is not None else "",r["est_rebate"],r["structure_name"]])
+            w.writerow([r["sold_to"],r["sold_to_name"],r["sold_to_group"],r["region"],r["ship_to"],r["ship_to_name"],r["brand"],"Annual $" if r["unit"]=="A" else "QTR Qty",r["actual"],r["curr_rate"],r["next_rate"] if r["next_rate"] is not None else "",r["needed"] if r["needed"] is not None else "",r["est_rebate"],r["structure_name"]])
 
         from flask import Response
         from datetime import date

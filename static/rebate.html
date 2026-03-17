@@ -209,7 +209,7 @@ function renderPage(data){
   data.groups.forEach(g=>{
     const isOpen    = expanded.has(g.key);
     const itemCount = g.items.length;
-    const terrBadge = terrBadgeHtml(g.territory);
+    const terrBadge = terrBadgeHtml(g.brand);
     const typeBadge = g.unit==="A"
       ? `<span class="badge b-A">Annual $</span>`
       : `<span class="badge b-Q">Quarterly Qty</span>`;
@@ -253,7 +253,7 @@ function renderPage(data){
         bodyHtml += `<tr class="ship-row">
           <td style="font-family:monospace;font-size:11px;color:#374151">${r.ship_to}</td>
           <td>${esc(r.ship_to_name)}</td>
-          <td>${terrBadgeHtml(r.territory)}</td>
+          <td>${terrBadgeHtml(r.brand)}</td>
           <td>${r.unit==="A"?`<span class="badge b-A">Annual $</span>`:`<span class="badge b-Q">QTR Qty</span>`}</td>
           <td>
             <div class="prog-wrap"><div class="prog-bar" style="width:${pct.toFixed(1)}%;background:${barClr}"></div></div>
