@@ -26,8 +26,8 @@ DB = dict(
 
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 RAW_DIR      = os.path.join(BASE_DIR, "rawdata", "unlock")
-CUSTOMER_CSV = os.path.join(RAW_DIR, "rebate_structure.csv")
-CATEGORY_CSV = os.path.join(RAW_DIR, "rebate_category.csv")
+CUSTOMER_CSV = os.path.join(RAW_DIR, "rebate_category.csv")
+CATEGORY_CSV = os.path.join(RAW_DIR, "rebate_structure.csv")
 
 
 # ──────────────────────────────────────────────────────────────
