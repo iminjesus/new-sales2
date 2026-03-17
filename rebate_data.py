@@ -158,8 +158,10 @@ def main():
     sql_path = os.path.join(BASE_DIR, "rebate_setup.sql")
     with open(sql_path, encoding="utf-8") as f:
         for stmt in f.read().split(";"):
-            stmt = stmt.strip()
-            if stmt and not stmt.startswith("--"):
+            # 주석 줄 제거 후 실행 여부 판단
+            lines = [l for l in stmt.splitlines() if not l.strip().startswith("--")]
+            stmt = "\n".join(lines).strip()
+            if stmt:
                 cur.execute(stmt)
     conn.commit()
 
