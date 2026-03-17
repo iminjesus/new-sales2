@@ -24,9 +24,10 @@ DB = dict(
     port=int(os.getenv("DB_PORT", "3306")),
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CUSTOMER_CSV  = os.path.join(BASE_DIR, "rebate_customer.csv")
-CATEGORY_CSV  = os.path.join(BASE_DIR, "rebate_category.csv")
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+RAW_DIR      = os.path.join(BASE_DIR, "rawdata", "unlock")
+CUSTOMER_CSV = os.path.join(RAW_DIR, "rebate_structure.csv")
+CATEGORY_CSV = os.path.join(RAW_DIR, "rebate_category.csv")
 
 
 # ──────────────────────────────────────────────────────────────
