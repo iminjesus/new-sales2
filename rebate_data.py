@@ -100,18 +100,34 @@ def parse_category_csv(path: str) -> list[tuple[str, str, int, float, float]]:
       행 2: (빈칸),         r0, r1, ..., r14   (15개 비율%)
     """
     tiers = []
-    with open(path, newline="", encoding="utf-8-sig") as f:
+    # 인코딩 자동 감지: utf-8-sig → utf-8 → cp1252 순으로 시도
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "cp949"):
+        try:
+            with open(path, encoding=enc) as _f:
+                _f.read()
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        enc = "utf-8-sig"
+
+    with open(path, newline="", encoding=enc) as f:
         reader = csv.reader(f)
-        next(reader)  # skip header "Category,,,,..."
+        header = next(reader)  # skip header "Category,,,,..."
+        print(f"  [category CSV] encoding={enc}, header cols={len(header)}")
 
         pending_name = None
         pending_thresholds = []
+        row_count = 0
 
         for line in reader:
+            row_count += 1
             if not line:
                 continue
 
             first = line[0].strip()
+            if row_count <= 4:
+                print(f"  [row {row_count}] first={repr(first)}, cols={len(line)}")
 
             if first == "":
                 # 비율 행 – 직전 카테고리의 rate 행
