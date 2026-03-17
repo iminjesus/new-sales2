@@ -3233,10 +3233,13 @@ def api_rebate_data():
             GROUP BY s.sold_to, s.ship_to, mat.brand
         """)
         ship_sales = {}   # (sold_to, ship_to, brand) -> {qty, amt}
+        # Pre-build index: (sold_to, brand) -> set of ship_tos  ← O(1) lookup later
+        ship_idx   = {}   # (sold_to, brand) -> set{ship_to}
         for r in cur.fetchall():
-            k = (str(r["sold_to"]), str(r["ship_to"]), r["brand"])
-            ship_sales[k] = {"qty": float(r["qty"] or 0),
-                              "amt": float(r["amt"] or 0)}
+            st, sh, br = str(r["sold_to"]), str(r["ship_to"]), r["brand"]
+            ship_sales[(st, sh, br)] = {"qty": float(r["qty"] or 0),
+                                        "amt": float(r["amt"] or 0)}
+            ship_idx.setdefault((st, br), set()).add(sh)
 
         # ── 3. Customer name lookup ──────────────────────────────────────────
         cur.execute("SELECT sold_to, sold_to_name FROM customer")
@@ -3279,9 +3282,12 @@ def api_rebate_data():
             unit  = sd["unit"]   # A=Amount, Q=Qty
             tiers = sd["tiers"]
 
-            # Collect all ship_tos with sales for this sold_to / territory
-            ship_set = {sh for (st, sh, br) in ship_sales
-                        if st == sold_to and (territory == "TTL" or br == territory)}
+            # Collect ship_tos via pre-built index (O(1) per brand)
+            if territory == "TTL":
+                ship_set = (ship_idx.get((sold_to, "HK"), set()) |
+                            ship_idx.get((sold_to, "LF"), set()))
+            else:
+                ship_set = ship_idx.get((sold_to, territory), set()).copy()
             if not ship_set:
                 ship_set.add(sold_to)   # show zero row so sold_to is visible
 
