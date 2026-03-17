@@ -156,7 +156,7 @@ def main():
 
     # Create / update tables
     sql_path = os.path.join(BASE_DIR, "rebate_setup.sql")
-    with open(sql_path) as f:
+    with open(sql_path, encoding="utf-8") as f:
         for stmt in f.read().split(";"):
             stmt = stmt.strip()
             if stmt and not stmt.startswith("--"):
