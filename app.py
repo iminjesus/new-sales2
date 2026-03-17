@@ -3194,18 +3194,31 @@ def rebate_page():
 @app.get("/api/rebate_data")
 def api_rebate_data():
     """
-    Return rebate status per SHIP_TO × territory.
-    Each ship_to is calculated individually against its sold_to's rebate structure.
-    Data source: sales_thismonth only (current month running total).
+    Return rebate status per SHIP_TO × territory — server-side paginated.
     Query params:
       territory     (TTL | HK | LF | ALL, default ALL)
       sold_to_group (default ALL)
+      search        free-text filter on name / code
+      show          ALL | NEXT | MAX | ZERO
+      sort          actual | est_rebate | needed | ship_to_name (default: actual)
+      dir           desc | asc (default desc)
+      page          0-indexed page of sold_to groups (default 0)
+      page_size     groups per page (default 40)
     unit=A → measure in $ amount
     unit=Q → measure in qty
     territory=TTL → sum HK + LF sales
     """
     terr_filter = request.args.get("territory",     "ALL").upper()
     stg_filter  = request.args.get("sold_to_group", "ALL")
+    search      = request.args.get("search",  "").strip().lower()
+    show        = request.args.get("show",    "ALL").upper()
+    sort_col    = request.args.get("sort",    "actual")
+    sort_dir    = request.args.get("dir",     "desc")
+    try:
+        page      = int(request.args.get("page",      0))
+        page_size = int(request.args.get("page_size", 40))
+    except ValueError:
+        page, page_size = 0, 40
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -3325,9 +3338,79 @@ def api_rebate_data():
                     "tiers":          tiers,
                 })
 
-        rows.sort(key=lambda r: (r["sold_to_group"], r["sold_to_name"],
-                                  r["territory"], r["ship_to"]))
-        return jsonify(rows)
+        # ── 6. Client-side-style filters applied server-side ─────────────────
+        if search:
+            rows = [r for r in rows if
+                    search in r["sold_to_name"].lower() or
+                    search in str(r["sold_to"]) or
+                    search in r["ship_to_name"].lower() or
+                    search in str(r["ship_to"])]
+        if show == "NEXT":
+            rows = [r for r in rows if r["next_rate"] is not None and r["actual"] > 0]
+        elif show == "MAX":
+            rows = [r for r in rows if r["next_rate"] is None and r["curr_rate"] > 0]
+        elif show == "ZERO":
+            rows = [r for r in rows if r["actual"] == 0]
+
+        # ── 7. Summary stats (over all filtered rows) ─────────────────────────
+        summary = {
+            "total_ship_to": len(rows),
+            "has_next":  sum(1 for r in rows if r["next_rate"] is not None and r["actual"] > 0),
+            "max_tier":  sum(1 for r in rows if r["next_rate"] is None and r["curr_rate"] > 0),
+            "zero_sales": sum(1 for r in rows if r["actual"] == 0),
+            "est_total":  round(sum(r["est_rebate"] for r in rows), 2),
+        }
+
+        # ── 8. Group by (sold_to, territory) ─────────────────────────────────
+        grp_map = {}
+        for r in rows:
+            key = r["sold_to"] + "|" + r["territory"]
+            if key not in grp_map:
+                grp_map[key] = {
+                    "key": key,
+                    "sold_to": r["sold_to"], "sold_to_name": r["sold_to_name"],
+                    "sold_to_group": r["sold_to_group"], "region": r["region"],
+                    "territory": r["territory"], "unit": r["unit"],
+                    "structure_name": r["structure_name"],
+                    "grp_actual": 0.0, "grp_est": 0.0, "items": [],
+                }
+            g = grp_map[key]
+            g["grp_actual"] += r["actual"]
+            g["grp_est"]    += r["est_rebate"]
+            g["items"].append(r)
+
+        groups = list(grp_map.values())
+        summary["total_groups"] = len(groups)
+
+        # ── 9. Sort groups ────────────────────────────────────────────────────
+        rev = (sort_dir != "asc")
+        if sort_col == "est_rebate":
+            groups.sort(key=lambda g: g["grp_est"], reverse=rev)
+        elif sort_col == "actual":
+            groups.sort(key=lambda g: g["grp_actual"], reverse=rev)
+        elif sort_col == "sold_to_name":
+            groups.sort(key=lambda g: g["sold_to_name"].lower(), reverse=rev)
+        else:
+            groups.sort(key=lambda g: (g["sold_to_group"], g["sold_to_name"].lower()))
+
+        # ── 10. Sort items within each group by actual desc ───────────────────
+        for g in groups:
+            g["items"].sort(key=lambda r: r["actual"], reverse=True)
+
+        # ── 11. Paginate ──────────────────────────────────────────────────────
+        total_pages = max(1, -(-len(groups) // page_size))  # ceil div
+        page = max(0, min(page, total_pages - 1))
+        page_groups = groups[page * page_size : (page + 1) * page_size]
+
+        stg_list = sorted({r["sold_to_group"] for r in rows if r["sold_to_group"] != "-"})
+        return jsonify({
+            "summary":     summary,
+            "page":        page,
+            "page_size":   page_size,
+            "total_pages": total_pages,
+            "groups":      page_groups,
+            "stg_list":    stg_list,
+        })
 
     except Exception as e:
         traceback.print_exc()
@@ -3335,6 +3418,123 @@ def api_rebate_data():
     finally:
         cur.close()
         conn.close()
+
+@app.get("/api/rebate_export")
+def api_rebate_export():
+    """Stream a CSV of all rows matching current filters (no pagination)."""
+    import csv, io
+    # reuse the same logic – just request page_size=99999
+    orig_page_size = request.args.get("page_size")
+    # We call the internal logic by delegating to the same function with a
+    # modified environ — simpler: just inline the flat-row fetch here.
+    terr_filter = request.args.get("territory",     "ALL").upper()
+    stg_filter  = request.args.get("sold_to_group", "ALL")
+    search      = request.args.get("search",  "").strip().lower()
+    show        = request.args.get("show",    "ALL").upper()
+    sort_col    = request.args.get("sort",    "actual")
+    sort_dir    = request.args.get("dir",     "desc")
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute("""
+            SELECT m.sold_to, m.territory, m.structure_name,
+                   c.sold_to_name, c.sold_to_group, c.bde_state AS region
+            FROM rebate_customer_map m
+            LEFT JOIN customer c ON c.sold_to = m.sold_to
+            WHERE (%s='ALL' OR m.territory=%s)
+              AND (%s='ALL' OR c.sold_to_group=%s)
+        """, (terr_filter, terr_filter, stg_filter, stg_filter))
+        customers = cur.fetchall()
+
+        cur.execute("""
+            SELECT s.sold_to, s.ship_to, mat.brand,
+                   SUM(s.qty) AS qty, SUM(s.amt) AS amt
+            FROM sales_thismonth s
+            JOIN carrying_2602 mat ON mat.m_code = s.material
+            WHERE mat.brand IN ('HK','LF')
+            GROUP BY s.sold_to, s.ship_to, mat.brand
+        """)
+        ship_sales = {}; ship_idx = {}
+        for r in cur.fetchall():
+            st,sh,br = str(r["sold_to"]),str(r["ship_to"]),r["brand"]
+            ship_sales[(st,sh,br)] = {"qty":float(r["qty"] or 0),"amt":float(r["amt"] or 0)}
+            ship_idx.setdefault((st,br),set()).add(sh)
+
+        cur.execute("SELECT sold_to, sold_to_name FROM customer")
+        name_map = {str(r["sold_to"]):(r["sold_to_name"] or str(r["sold_to"])) for r in cur.fetchall()}
+
+        cur.execute("SELECT structure_name,unit,tier_order,threshold,rate FROM rebate_structure ORDER BY structure_name,tier_order")
+        tiers_map = {}
+        for r in cur.fetchall():
+            sd = tiers_map.setdefault(r["structure_name"],{"unit":r["unit"],"tiers":[]})
+            sd["tiers"].append({"tier":r["tier_order"],"threshold":float(r["threshold"]),"rate":float(r["rate"])})
+
+        def _calc(actual, tiers):
+            curr={"tier":0,"threshold":0,"rate":0}; nxt=None
+            for t in tiers:
+                if t["threshold"]<=actual and t["rate"]>0: curr=t
+                elif t["threshold"]>actual and t["rate"]>0 and nxt is None: nxt=t
+            return curr, nxt
+
+        rows=[]
+        for c in customers:
+            struct=c["structure_name"]; territory=c["territory"]; sold_to=str(c["sold_to"])
+            sd=tiers_map.get(struct)
+            if not sd: continue
+            unit=sd["unit"]; tiers=sd["tiers"]
+            if territory=="TTL":
+                ship_set=(ship_idx.get((sold_to,"HK"),set())|ship_idx.get((sold_to,"LF"),set()))
+            else:
+                ship_set=ship_idx.get((sold_to,territory),set()).copy()
+            if not ship_set: ship_set.add(sold_to)
+            for sh in sorted(ship_set):
+                if territory=="TTL":
+                    hk=ship_sales.get((sold_to,sh,"HK"),{"qty":0,"amt":0})
+                    lf=ship_sales.get((sold_to,sh,"LF"),{"qty":0,"amt":0})
+                    actual=(hk["qty"]+lf["qty"]) if unit=="Q" else (hk["amt"]+lf["amt"])
+                else:
+                    d=ship_sales.get((sold_to,sh,territory),{"qty":0,"amt":0})
+                    actual=d["qty"] if unit=="Q" else d["amt"]
+                curr_tier,next_tier=_calc(actual,tiers)
+                rows.append({
+                    "sold_to":sold_to,"sold_to_name":c["sold_to_name"] or sold_to,
+                    "sold_to_group":c["sold_to_group"] or "-","region":c["region"] or "-",
+                    "ship_to":sh,"ship_to_name":name_map.get(sh,sh),
+                    "territory":territory,"structure_name":struct,"unit":unit,
+                    "actual":round(actual,2),"curr_rate":curr_tier["rate"],
+                    "next_rate":next_tier["rate"] if next_tier else None,
+                    "needed":round(next_tier["threshold"]-actual,2) if next_tier else None,
+                    "est_rebate":round(actual*curr_tier["rate"]/100,2),
+                })
+
+        # filters
+        if search:
+            rows=[r for r in rows if search in r["sold_to_name"].lower() or search in str(r["sold_to"]) or search in r["ship_to_name"].lower() or search in str(r["ship_to"])]
+        if show=="NEXT": rows=[r for r in rows if r["next_rate"] is not None and r["actual"]>0]
+        elif show=="MAX": rows=[r for r in rows if r["next_rate"] is None and r["curr_rate"]>0]
+        elif show=="ZERO": rows=[r for r in rows if r["actual"]==0]
+
+        rev=(sort_dir!="asc")
+        rows.sort(key=lambda r:(r["sold_to_group"],r["sold_to_name"],r["territory"],r["ship_to"]))
+
+        # build CSV
+        out=io.StringIO()
+        w=csv.writer(out)
+        w.writerow(["Sold-To","Sold-To Name","Group","Region","Ship-To","Ship-To Name","Territory","Type","Actual","Curr Rate%","Next Rate%","Need to Reach","Est Rebate","Structure"])
+        for r in rows:
+            w.writerow([r["sold_to"],r["sold_to_name"],r["sold_to_group"],r["region"],r["ship_to"],r["ship_to_name"],r["territory"],"Annual $" if r["unit"]=="A" else "QTR Qty",r["actual"],r["curr_rate"],r["next_rate"] if r["next_rate"] is not None else "",r["needed"] if r["needed"] is not None else "",r["est_rebate"],r["structure_name"]])
+
+        from flask import Response
+        from datetime import date
+        fname=f"rebate_{date.today().isoformat()}.csv"
+        return Response(out.getvalue(), mimetype="text/csv",
+                        headers={"Content-Disposition":f"attachment;filename={fname}"})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error":str(e)}),500
+    finally:
+        cur.close(); conn.close()
 
 # ------------------------------------------------------------------------------
 # Build fixed Top 10/20/30 once at startup (after functions are defined)

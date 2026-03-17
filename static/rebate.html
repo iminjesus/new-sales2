@@ -111,45 +111,54 @@ tr.ship-row td:first-child{padding-left:28px}
 
 <script>
 // ─── state ──────────────────────────────────────────────────────────────────
-let ALL_DATA    = [];        // flat array of ship_to rows from API
 let sortCol     = "actual";
-let sortDir     = -1;        // descending by default
-let expanded    = new Set(); // sold_to keys that are OPEN (default: all collapsed)
+let sortDir     = "desc";
+let expanded    = new Set(); // sold_to keys that are open
 let currentPage = 0;
-const PAGE_SIZE = 40;        // groups per page
+let lastMeta    = {};        // last API response metadata
 
-// ─── load ────────────────────────────────────────────────────────────────────
-async function load(){
-  const terr = document.getElementById("f_terr").value;
-  const stg  = document.getElementById("f_stg").value;
+// ─── build query params from current UI state ─────────────────────────────
+function buildQS(page){
+  return new URLSearchParams({
+    territory:     document.getElementById("f_terr").value,
+    sold_to_group: document.getElementById("f_stg").value,
+    search:        document.getElementById("f_search").value.trim(),
+    show:          document.getElementById("f_show").value,
+    sort:          sortCol,
+    dir:           sortDir,
+    page:          page ?? currentPage,
+    page_size:     40,
+  });
+}
+
+// ─── fetch a page from the server ────────────────────────────────────────────
+async function fetchPage(page){
+  currentPage = page ?? 0;
   document.getElementById("loading").style.display = "block";
   document.getElementById("table-wrap").innerHTML  = "";
-  document.getElementById("summary").innerHTML     = "";
-  collapsed.clear();
   try{
-    const qs  = new URLSearchParams({territory: terr, sold_to_group: stg});
-    const res = await fetch(`/api/rebate_data?${qs}`);
+    const res  = await fetch(`/api/rebate_data?${buildQS(currentPage)}`);
     const json = await res.json();
     if(json.error){
       document.getElementById("table-wrap").innerHTML =
         `<div class="empty" style="color:#dc2626">Error: ${esc(json.error)}<br>
          <small>Run <code>python rebate_data.py</code> to populate rebate tables.</small></div>`;
+      document.getElementById("summary").innerHTML = "";
       return;
     }
-    ALL_DATA = json;
-    currentPage = 0;
-    expanded.clear();
-    // populate group dropdown
-    const stgs = [...new Set(json.map(r=>r.sold_to_group).filter(x=>x&&x!=="-"))].sort();
-    const sel  = document.getElementById("f_stg");
-    const cur  = sel.value;
-    sel.innerHTML = '<option value="ALL">All Groups</option>';
-    stgs.forEach(s=>{
-      const o = document.createElement("option");
-      o.value = s; o.textContent = s; if(s===cur) o.selected=true;
-      sel.appendChild(o);
-    });
-    renderTable();
+    lastMeta = json;
+    // populate group dropdown on first load
+    if(json.stg_list){
+      const sel = document.getElementById("f_stg");
+      const cur = sel.value;
+      sel.innerHTML = '<option value="ALL">All Groups</option>';
+      json.stg_list.forEach(s=>{
+        const o = document.createElement("option");
+        o.value = s; o.textContent = s; if(s===cur) o.selected=true;
+        sel.appendChild(o);
+      });
+    }
+    renderPage(json);
   }catch(e){
     document.getElementById("table-wrap").innerHTML =
       `<div class="empty">Failed to load: ${esc(String(e))}</div>`;
@@ -158,84 +167,24 @@ async function load(){
   }
 }
 
-// ─── filter ──────────────────────────────────────────────────────────────────
-function applyFilter(data){
-  const search = document.getElementById("f_search").value.toLowerCase().trim();
-  const show   = document.getElementById("f_show").value;
-  return data.filter(r=>{
-    if(search &&
-       !r.sold_to_name.toLowerCase().includes(search) &&
-       !String(r.sold_to).includes(search) &&
-       !r.ship_to_name.toLowerCase().includes(search) &&
-       !String(r.ship_to).includes(search)) return false;
-    if(show==="NEXT" && r.next_rate == null)           return false;
-    if(show==="MAX"  && (r.next_rate!=null||r.curr_rate===0)) return false;
-    if(show==="ZERO" && r.actual > 0)                  return false;
-    return true;
-  });
-}
+// alias used by Refresh button
+function load(){ fetchPage(0); }
 
-// ─── sort ────────────────────────────────────────────────────────────────────
-function applySort(data){
-  return [...data].sort((a,b)=>{
-    let av=a[sortCol], bv=b[sortCol];
-    if(av==null) av = sortDir>0 ? 1e18 : -1e18;
-    if(bv==null) bv = sortDir>0 ? 1e18 : -1e18;
-    if(typeof av==="string") return av.localeCompare(bv)*sortDir;
-    return (av-bv)*sortDir;
-  });
-}
-function setSort(col){
-  if(sortCol===col) sortDir*=-1; else{sortCol=col;sortDir=-1;}
-  currentPage = 0;
-  renderTable();
-}
-
-// ─── group by sold_to ────────────────────────────────────────────────────────
-function groupData(rows){
-  // returns [{key, sold_to, sold_to_name, sold_to_group, region, items:[]}]
-  const map = new Map();
-  rows.forEach(r=>{
-    const key = r.sold_to + "|" + r.territory;
-    if(!map.has(key)) map.set(key, {
-      key, sold_to: r.sold_to, sold_to_name: r.sold_to_name,
-      sold_to_group: r.sold_to_group, region: r.region,
-      territory: r.territory, unit: r.unit,
-      structure_name: r.structure_name, items: []
-    });
-    map.get(key).items.push(r);
-  });
-  return [...map.values()];
-}
-
-// ─── render ──────────────────────────────────────────────────────────────────
-function renderTable(){
-  const filtered = applyFilter(ALL_DATA);
-  const sorted   = applySort(filtered);
-  const allGroups = groupData(sorted);
-
-  // summary (over all filtered data, not just current page)
-  const withNext  = filtered.filter(r=>r.next_rate!=null && r.actual>0).length;
-  const maxTier   = filtered.filter(r=>r.next_rate==null && r.curr_rate>0).length;
-  const zeroSales = filtered.filter(r=>r.actual===0).length;
-  const estTotal  = filtered.reduce((s,r)=>s+(r.est_rebate||0),0);
+// ─── render API response ──────────────────────────────────────────────────────
+function renderPage(data){
+  const s = data.summary;
   document.getElementById("summary").innerHTML = `
-    <div class="stat-card"><div class="label">Sold-To (structures)</div><div class="value">${allGroups.length}</div></div>
-    <div class="stat-card"><div class="label">Ship-To locations</div><div class="value">${filtered.length}</div></div>
-    <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${withNext}</div></div>
-    <div class="stat-card"><div class="label">Max Tier ✓</div><div class="value" style="color:#16a34a">${maxTier}</div></div>
-    <div class="stat-card"><div class="label">No Sales</div><div class="value" style="color:#9ca3af">${zeroSales}</div></div>
-    <div class="stat-card"><div class="label">Est. Total Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(estTotal)}</div></div>`;
+    <div class="stat-card"><div class="label">Sold-To (structures)</div><div class="value">${s.total_groups}</div></div>
+    <div class="stat-card"><div class="label">Ship-To locations</div><div class="value">${s.total_ship_to}</div></div>
+    <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${s.has_next}</div></div>
+    <div class="stat-card"><div class="label">Max Tier ✓</div><div class="value" style="color:#16a34a">${s.max_tier}</div></div>
+    <div class="stat-card"><div class="label">No Sales</div><div class="value" style="color:#9ca3af">${s.zero_sales}</div></div>
+    <div class="stat-card"><div class="label">Est. Total Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(s.est_total)}</div></div>`;
 
-  if(!allGroups.length){
+  if(!data.groups.length){
     document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
     return;
   }
-
-  // paginate groups
-  const totalPages = Math.ceil(allGroups.length / PAGE_SIZE);
-  if(currentPage >= totalPages) currentPage = totalPages - 1;
-  const pageGroups = allGroups.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
 
   const cols = [
     {key:"ship_to",      label:"Ship-To"},
@@ -243,26 +192,23 @@ function renderTable(){
     {key:"territory",    label:"Territory", nosort:true},
     {key:"unit",         label:"Type",      nosort:true},
     {key:"actual",       label:"Actual Sales"},
-    {key:"curr_rate",    label:"Curr %"},
-    {key:"next_rate",    label:"Next %"},
-    {key:"needed",       label:"Need to Reach"},
+    {key:"curr_rate",    label:"Curr %",    nosort:true},
+    {key:"next_rate",    label:"Next %",    nosort:true},
+    {key:"needed",       label:"Need to Reach", nosort:true},
     {key:"est_rebate",   label:"Est. Rebate"},
     {key:"tiers",        label:"Tier Progress", nosort:true},
   ];
-
   const ths = cols.map(c=>{
     if(c.nosort) return `<th>${c.label}</th>`;
     const active = sortCol===c.key;
-    const arrow  = active ? (sortDir>0?'▲':'▼') : '▲';
+    const arrow  = active ? (sortDir==="asc"?'▲':'▼') : '▲';
     return `<th class="${active?'sorted':''}" onclick="setSort('${c.key}')">${c.label} <span class="sa">${arrow}</span></th>`;
   }).join("");
 
   let bodyHtml = "";
-  pageGroups.forEach(g=>{
+  data.groups.forEach(g=>{
     const isOpen    = expanded.has(g.key);
     const itemCount = g.items.length;
-    const grpEst    = g.items.reduce((s,r)=>s+(r.est_rebate||0),0);
-    const grpActual = g.items.reduce((s,r)=>s+(r.actual||0),0);
     const terrBadge = terrBadgeHtml(g.territory);
     const typeBadge = g.unit==="A"
       ? `<span class="badge b-A">Annual $</span>`
@@ -276,11 +222,11 @@ function renderTable(){
         <span style="margin-left:4px;font-weight:400;color:#6b7280">${esc(g.region)}</span>
       </td>
       <td>${terrBadge} ${typeBadge}</td>
-      <td>${g.unit==="Q" ? fmt(grpActual)+" units" : "$"+fmt(grpActual)}
+      <td>${g.unit==="Q" ? fmt(g.grp_actual)+" units" : "$"+fmt(g.grp_actual)}
         <span class="ul">(${itemCount} ship-to)</span>
       </td>
       <td colspan="4"></td>
-      <td><span class="est">$${fmt(grpEst)}</span> <span class="ul">est.</span></td>
+      <td><span class="est">$${fmt(g.grp_est)}</span> <span class="ul">est.</span></td>
     </tr>`;
 
     if(isOpen){
@@ -323,14 +269,13 @@ function renderTable(){
     }
   });
 
-  // pagination controls
-  const pgInfo = `Page ${currentPage+1} / ${totalPages} &nbsp;(${allGroups.length} sold-to)`;
-  const pgBar  = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border-top:1px solid #e5e7eb;font-size:12px">
-    <button class="btn btn-outline" onclick="goPage(0)"       ${currentPage===0?'disabled':''}>«</button>
-    <button class="btn btn-outline" onclick="goPage(${currentPage-1})" ${currentPage===0?'disabled':''}>‹ Prev</button>
-    <span style="color:#6b7280">${pgInfo}</span>
-    <button class="btn btn-outline" onclick="goPage(${currentPage+1})" ${currentPage>=totalPages-1?'disabled':''}>Next ›</button>
-    <button class="btn btn-outline" onclick="goPage(${totalPages-1})"  ${currentPage>=totalPages-1?'disabled':''}>»</button>
+  const p = data.page, tp = data.total_pages, tg = s.total_groups;
+  const pgBar = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border-top:1px solid #e5e7eb;font-size:12px">
+    <button class="btn btn-outline" onclick="goPage(0)"     ${p===0?'disabled':''}>«</button>
+    <button class="btn btn-outline" onclick="goPage(${p-1})" ${p===0?'disabled':''}>‹ Prev</button>
+    <span style="color:#6b7280">Page ${p+1} / ${tp} &nbsp;(${tg} sold-to)</span>
+    <button class="btn btn-outline" onclick="goPage(${p+1})" ${p>=tp-1?'disabled':''}>Next ›</button>
+    <button class="btn btn-outline" onclick="goPage(${tp-1})" ${p>=tp-1?'disabled':''}>»</button>
   </div>`;
 
   document.getElementById("table-wrap").innerHTML = `
@@ -341,16 +286,18 @@ function renderTable(){
     ${pgBar}`;
 }
 
-function goPage(p){
-  currentPage = p;
-  renderTable();
-  window.scrollTo(0,0);
+function goPage(p){ fetchPage(p); window.scrollTo(0,0); }
+
+function setSort(col){
+  if(sortCol===col) sortDir = sortDir==="desc"?"asc":"desc";
+  else{ sortCol=col; sortDir="desc"; }
+  fetchPage(0);
 }
 
 function toggleGroup(key){
-  if(expanded.has(key)) expanded.delete(key);
-  else expanded.add(key);
-  renderTable();
+  if(expanded.has(key)) expanded.delete(key); else expanded.add(key);
+  // re-render current data without API call
+  if(lastMeta.groups) renderPage(lastMeta);
 }
 
 function terrBadgeHtml(t){
@@ -359,27 +306,11 @@ function terrBadgeHtml(t){
   return `<span class="badge b-lf">LF</span>`;
 }
 
-// ─── export ──────────────────────────────────────────────────────────────────
+// ─── export – server generates CSV ───────────────────────────────────────────
 function exportCSV(){
-  const data = applySort(applyFilter(ALL_DATA));
-  const hdr  = ["Sold-To","Sold-To Name","Group","Region","Ship-To","Ship-To Name",
-                 "Territory","Type","Actual","Curr Rate%","Next Rate%",
-                 "Need to Reach","Est Rebate","Structure"];
-  const lines = [hdr.join(",")];
-  data.forEach(r=>{
-    lines.push([
-      r.sold_to, q(r.sold_to_name), q(r.sold_to_group), r.region,
-      r.ship_to, q(r.ship_to_name),
-      r.territory, r.unit==="A"?"Annual $":"QTR Qty",
-      r.actual, r.curr_rate, r.next_rate??"",
-      r.needed??"", r.est_rebate, q(r.structure_name)
-    ].join(","));
-  });
-  const blob = new Blob([lines.join("\n")], {type:"text/csv"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `rebate_${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
+  const qs = buildQS(0);
+  qs.set("page_size", 99999);
+  window.location = `/api/rebate_export?${qs}`;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -391,12 +322,12 @@ function esc(s){
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 function escAttr(s){return String(s||"").replace(/"/g,"&quot;");}
-function q(s){return `"${String(s||"").replace(/"/g,'""')}"`;} // CSV quote
 
-// live client-side filters – reset page on change
-function resetAndRender(){ currentPage = 0; renderTable(); }
-document.getElementById("f_search").addEventListener("input",  resetAndRender);
-document.getElementById("f_show").addEventListener("change",   resetAndRender);
+// live filters – debounced
+let _debounce;
+function debouncedFetch(){ clearTimeout(_debounce); _debounce=setTimeout(()=>fetchPage(0),350); }
+document.getElementById("f_search").addEventListener("input",  debouncedFetch);
+document.getElementById("f_show").addEventListener("change",   ()=>fetchPage(0));
 
 load();
 </script>
