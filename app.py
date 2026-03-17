@@ -3259,21 +3259,20 @@ def api_rebate_data():
         name_map = {str(r["sold_to"]): (r["sold_to_name"] or str(r["sold_to"]))
                     for r in cur.fetchall()}
 
-        # ── 4. Tier definitions (only up to top_order) ───────────────────────
+        # ── 4. Tier definitions (only meaningful tiers: tier_order <= top_order) ─
         cur.execute("""
             SELECT structure_name, unit, tier_order, top_order, threshold, rate
             FROM rebate_structure
+            WHERE tier_order <= top_order
             ORDER BY structure_name, tier_order
         """)
         tiers_map = {}
         for r in cur.fetchall():
             sd = tiers_map.setdefault(r["structure_name"],
                                       {"unit": r["unit"], "top_order": int(r["top_order"]), "tiers": []})
-            # Only keep tiers up to and including top_order
-            if r["tier_order"] <= r["top_order"]:
-                sd["tiers"].append({"tier":      r["tier_order"],
-                                     "threshold": float(r["threshold"]),
-                                     "rate":      float(r["rate"])})
+            sd["tiers"].append({"tier":      int(r["tier_order"]),
+                                 "threshold": float(r["threshold"]),
+                                 "rate":      float(r["rate"])})
 
         # ── 5. Build result – one row per SHIP_TO ────────────────────────────
         def _calc_tier(actual, tiers, top_order):
@@ -3472,13 +3471,14 @@ def api_rebate_export():
 
         cur.execute("""
             SELECT structure_name, unit, tier_order, top_order, threshold, rate
-            FROM rebate_structure ORDER BY structure_name, tier_order
+            FROM rebate_structure
+            WHERE tier_order <= top_order
+            ORDER BY structure_name, tier_order
         """)
         tiers_map = {}
         for r in cur.fetchall():
             sd = tiers_map.setdefault(r["structure_name"],{"unit":r["unit"],"top_order":int(r["top_order"]),"tiers":[]})
-            if r["tier_order"] <= r["top_order"]:
-                sd["tiers"].append({"tier":r["tier_order"],"threshold":float(r["threshold"]),"rate":float(r["rate"])})
+            sd["tiers"].append({"tier":int(r["tier_order"]),"threshold":float(r["threshold"]),"rate":float(r["rate"])})
 
         def _calc(actual, tiers, top_order):
             curr={"tier":0,"threshold":0,"rate":0}; nxt=None
