@@ -3194,25 +3194,23 @@ def rebate_page():
 @app.get("/api/rebate_data")
 def api_rebate_data():
     """
-    Return rebate status per sold_to × territory with ship_to breakdown.
+    Return rebate status per SHIP_TO × territory.
+    Each ship_to is calculated individually against its sold_to's rebate structure.
+    Data source: sales_thismonth only (current month running total).
     Query params:
-      year          (default 2026)
-      month         (default current month – YTD end)
       territory     (TTL | HK | LF | ALL, default ALL)
       sold_to_group (default ALL)
-    unit=A → Annual period, measure in $ amount
-    unit=Q → Quarterly period, measure in qty
-    territory=TTL → sum HK + LF sales combined
+    unit=A → measure in $ amount
+    unit=Q → measure in qty
+    territory=TTL → sum HK + LF sales
     """
-    year       = int(request.args.get("year",  2026))
-    month      = int(request.args.get("month", datetime.now().month))
     terr_filter = request.args.get("territory",     "ALL").upper()
     stg_filter  = request.args.get("sold_to_group", "ALL")
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        # ── 1. Rebate-mapped customers ───────────────────────────────────────
+        # ── 1. Rebate-mapped customers (sold_to level) ───────────────────────
         cur.execute("""
             SELECT m.sold_to, m.territory, m.structure_name,
                    c.sold_to_name, c.sold_to_group, c.bde_state AS region
@@ -3222,57 +3220,30 @@ def api_rebate_data():
               AND (%s = 'ALL' OR c.sold_to_group = %s)
         """, (terr_filter, terr_filter, stg_filter, stg_filter))
         customers = cur.fetchall()
-
         if not customers:
             return jsonify([])
 
-        # ── 2. Annual YTD sales (sold_to + ship_to + brand) ─────────────────
+        # ── 2. Sales from sales_thismonth by (sold_to, ship_to, brand) ───────
         cur.execute("""
             SELECT s.sold_to, s.ship_to, mat.brand,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
-            FROM sales_25_2602 s
+            FROM sales_thismonth s
             JOIN carrying_2602 mat ON mat.m_code = s.material
-            WHERE s.year = %s AND s.month <= %s
-              AND mat.brand IN ('HK','LF')
+            WHERE mat.brand IN ('HK','LF')
             GROUP BY s.sold_to, s.ship_to, mat.brand
-        """, (year, month))
-        ann_ship  = {}   # (sold_to, ship_to, brand) -> {qty, amt}
-        ann_total = {}   # (sold_to, brand)           -> {qty, amt}
+        """)
+        ship_sales = {}   # (sold_to, ship_to, brand) -> {qty, amt}
         for r in cur.fetchall():
-            q, a = float(r["qty"] or 0), float(r["amt"] or 0)
-            sk = (str(r["sold_to"]), str(r["ship_to"]), r["brand"])
-            tk = (str(r["sold_to"]), r["brand"])
-            ann_ship[sk] = {"qty": q, "amt": a}
-            d = ann_total.setdefault(tk, {"qty": 0.0, "amt": 0.0})
-            d["qty"] += q;  d["amt"] += a
+            k = (str(r["sold_to"]), str(r["ship_to"]), r["brand"])
+            ship_sales[k] = {"qty": float(r["qty"] or 0),
+                              "amt": float(r["amt"] or 0)}
 
-        # ── 3. Quarterly sales ───────────────────────────────────────────────
-        q_start = ((month - 1) // 3) * 3 + 1
-        cur.execute("""
-            SELECT s.sold_to, s.ship_to, mat.brand,
-                   SUM(s.qty) AS qty, SUM(s.amt) AS amt
-            FROM sales_25_2602 s
-            JOIN carrying_2602 mat ON mat.m_code = s.material
-            WHERE s.year = %s AND s.month >= %s AND s.month <= %s
-              AND mat.brand IN ('HK','LF')
-            GROUP BY s.sold_to, s.ship_to, mat.brand
-        """, (year, q_start, month))
-        qtr_ship  = {}
-        qtr_total = {}
-        for r in cur.fetchall():
-            q, a = float(r["qty"] or 0), float(r["amt"] or 0)
-            sk = (str(r["sold_to"]), str(r["ship_to"]), r["brand"])
-            tk = (str(r["sold_to"]), r["brand"])
-            qtr_ship[sk] = {"qty": q, "amt": a}
-            d = qtr_total.setdefault(tk, {"qty": 0.0, "amt": 0.0})
-            d["qty"] += q;  d["amt"] += a
-
-        # ── 4. Ship_to name lookup ───────────────────────────────────────────
+        # ── 3. Customer name lookup ──────────────────────────────────────────
         cur.execute("SELECT sold_to, sold_to_name FROM customer")
         name_map = {str(r["sold_to"]): (r["sold_to_name"] or str(r["sold_to"]))
                     for r in cur.fetchall()}
 
-        # ── 5. Tier definitions ──────────────────────────────────────────────
+        # ── 4. Tier definitions ──────────────────────────────────────────────
         cur.execute("""
             SELECT structure_name, unit, tier_order, threshold, rate
             FROM rebate_structure
@@ -3286,92 +3257,70 @@ def api_rebate_data():
                                  "threshold": float(r["threshold"]),
                                  "rate":      float(r["rate"])})
 
-        # ── 6. Build result ──────────────────────────────────────────────────
+        # ── 5. Build result – one row per SHIP_TO ────────────────────────────
+        def _calc_tier(actual, tiers):
+            curr = {"tier": 0, "threshold": 0, "rate": 0}
+            nxt  = None
+            for t in tiers:
+                if t["threshold"] <= actual and t["rate"] > 0:
+                    curr = t
+                elif t["threshold"] > actual and t["rate"] > 0 and nxt is None:
+                    nxt = t
+            return curr, nxt
+
         rows = []
         for c in customers:
             struct    = c["structure_name"]
-            territory = c["territory"]           # TTL / HK / LF
+            territory = c["territory"]
             sold_to   = str(c["sold_to"])
             sd        = tiers_map.get(struct)
             if not sd:
                 continue
-            unit  = sd["unit"]   # A = Annual/Amount, Q = Quarterly/Qty
+            unit  = sd["unit"]   # A=Amount, Q=Qty
             tiers = sd["tiers"]
 
-            by_ship = qtr_ship  if unit == "Q" else ann_ship
-            total   = qtr_total if unit == "Q" else ann_total
-
-            # Aggregate actual sales for this territory
-            if territory == "TTL":
-                hk = total.get((sold_to, "HK"), {"qty": 0.0, "amt": 0.0})
-                lf = total.get((sold_to, "LF"), {"qty": 0.0, "amt": 0.0})
-                actual_qty = hk["qty"] + lf["qty"]
-                actual_amt = hk["amt"] + lf["amt"]
-            else:
-                d = total.get((sold_to, territory), {"qty": 0.0, "amt": 0.0})
-                actual_qty = d["qty"]
-                actual_amt = d["amt"]
-
-            actual = actual_qty if unit == "Q" else actual_amt
-
-            # Find current / next tier
-            curr_tier = {"tier": 0, "threshold": 0, "rate": 0}
-            next_tier = None
-            for t in tiers:
-                if t["threshold"] <= actual and t["rate"] > 0:
-                    curr_tier = t
-                elif t["threshold"] > actual and t["rate"] > 0 and next_tier is None:
-                    next_tier = t
-
-            needed     = round(next_tier["threshold"] - actual, 2) if next_tier else None
-            est_rebate = round(actual * curr_tier["rate"] / 100, 2)
-
-            # Ship_to breakdown
-            ship_set = {sh for (st, sh, br) in by_ship
+            # Collect all ship_tos with sales for this sold_to / territory
+            ship_set = {sh for (st, sh, br) in ship_sales
                         if st == sold_to and (territory == "TTL" or br == territory)}
-            ship_rows = []
+            if not ship_set:
+                ship_set.add(sold_to)   # show zero row so sold_to is visible
+
             for sh in sorted(ship_set):
                 if territory == "TTL":
-                    hk_d = ann_ship.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
-                    lf_d = ann_ship.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                    ship_rows.append({
-                        "ship_to":   sh,
-                        "name":      name_map.get(sh, sh),
-                        "hk_qty":    hk_d["qty"],  "hk_amt":    hk_d["amt"],
-                        "lf_qty":    lf_d["qty"],  "lf_amt":    lf_d["amt"],
-                        "total_qty": hk_d["qty"] + lf_d["qty"],
-                        "total_amt": hk_d["amt"] + lf_d["amt"],
-                    })
+                    hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
+                    lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
+                    actual = (hk["qty"] + lf["qty"]) if unit == "Q" \
+                             else (hk["amt"] + lf["amt"])
                 else:
-                    d = by_ship.get((sold_to, sh, territory), {"qty": 0.0, "amt": 0.0})
-                    ship_rows.append({
-                        "ship_to": sh,
-                        "name":    name_map.get(sh, sh),
-                        "qty":     d["qty"],
-                        "amt":     d["amt"],
-                    })
-            ship_rows.sort(key=lambda x: -x.get("total_amt", x.get("amt", 0)))
+                    d = ship_sales.get((sold_to, sh, territory), {"qty": 0.0, "amt": 0.0})
+                    actual = d["qty"] if unit == "Q" else d["amt"]
 
-            rows.append({
-                "sold_to":           sold_to,
-                "sold_to_name":      c["sold_to_name"] or sold_to,
-                "sold_to_group":     c["sold_to_group"] or "-",
-                "region":            c["region"] or "-",
-                "territory":         territory,
-                "structure_name":    struct,
-                "unit":              unit,
-                "actual":            round(actual, 2),
-                "curr_rate":         curr_tier["rate"],
-                "curr_threshold":    curr_tier["threshold"],
-                "next_threshold":    next_tier["threshold"] if next_tier else None,
-                "next_rate":         next_tier["rate"]      if next_tier else None,
-                "needed":            needed,
-                "est_rebate":        est_rebate,
-                "tiers":             tiers,
-                "ship_to_breakdown": ship_rows,
-            })
+                curr_tier, next_tier = _calc_tier(actual, tiers)
+                needed     = round(next_tier["threshold"] - actual, 2) if next_tier else None
+                est_rebate = round(actual * curr_tier["rate"] / 100, 2)
 
-        rows.sort(key=lambda r: (r["sold_to_group"], r["sold_to_name"]))
+                rows.append({
+                    "sold_to":        sold_to,
+                    "sold_to_name":   c["sold_to_name"] or sold_to,
+                    "sold_to_group":  c["sold_to_group"] or "-",
+                    "region":         c["region"] or "-",
+                    "ship_to":        sh,
+                    "ship_to_name":   name_map.get(sh, sh),
+                    "territory":      territory,
+                    "structure_name": struct,
+                    "unit":           unit,
+                    "actual":         round(actual, 2),
+                    "curr_rate":      curr_tier["rate"],
+                    "curr_threshold": curr_tier["threshold"],
+                    "next_threshold": next_tier["threshold"] if next_tier else None,
+                    "next_rate":      next_tier["rate"]      if next_tier else None,
+                    "needed":         needed,
+                    "est_rebate":     est_rebate,
+                    "tiers":          tiers,
+                })
+
+        rows.sort(key=lambda r: (r["sold_to_group"], r["sold_to_name"],
+                                  r["territory"], r["ship_to"]))
         return jsonify(rows)
 
     except Exception as e:

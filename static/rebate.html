@@ -9,70 +9,67 @@
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111827;font-size:13px}
 header{background:#1e3a5f;color:#fff;padding:12px 20px;display:flex;align-items:center;gap:16px}
 header h1{font-size:16px;font-weight:700}
+header .sub{font-size:11px;opacity:.65}
 .filters{background:#fff;padding:10px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;border-bottom:1px solid #e5e7eb}
 .filters label{font-size:11px;color:#6b7280;margin-bottom:2px;display:block}
 .filters select,.filters input{border:1px solid #d1d5db;border-radius:6px;padding:5px 8px;font-size:12px;min-width:120px}
-.btn-primary{background:#2563eb;color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600}
-.btn-primary:hover{background:#1d4ed8}
-.btn-export{background:#fff;color:#374151;border:1px solid #d1d5db;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:12px}
-.btn-export:hover{background:#f9fafb}
-#loading{padding:20px;text-align:center;color:#6b7280}
+.btn{border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600;border:none}
+.btn-primary{background:#2563eb;color:#fff}.btn-primary:hover{background:#1d4ed8}
+.btn-outline{background:#fff;color:#374151;border:1px solid #d1d5db}.btn-outline:hover{background:#f9fafb}
 .container{padding:12px 16px}
-.summary-row{display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap}
-.stat-card{background:#fff;border-radius:8px;padding:10px 16px;border:1px solid #e5e7eb;min-width:150px}
+.summary-row{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.stat-card{background:#fff;border-radius:8px;padding:10px 16px;border:1px solid #e5e7eb;min-width:145px}
 .stat-card .label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px}
-.stat-card .value{font-size:20px;font-weight:700;color:#1e3a5f;margin-top:2px}
+.stat-card .value{font-size:19px;font-weight:700;color:#1e3a5f;margin-top:2px}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+/* Sold-to header rows */
+tr.grp-hdr td{background:#e8eef6;font-weight:700;color:#1e3a5f;font-size:12px;padding:6px 10px;border-bottom:1px solid #c7d2e3;cursor:pointer}
+tr.grp-hdr:hover td{background:#dce6f5}
+tr.grp-hdr td.caret{width:24px;text-align:center;font-size:12px}
+/* Column headers */
 th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:8px 10px;text-align:left;border-bottom:1px solid #e5e7eb;white-space:nowrap;cursor:pointer;user-select:none}
 th:hover{background:#f1f5f9}
-th .sort-arrow{margin-left:4px;opacity:.4}
-th.sorted .sort-arrow{opacity:1}
+th .sa{margin-left:3px;opacity:.35}
+th.sorted .sa{opacity:1}
+/* Ship_to data rows */
 td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle;white-space:nowrap}
-tr.main-row:hover td{background:#f8fafc}
-tr.ship-row td{background:#f8fafc;font-size:11px;color:#374151;border-bottom:1px solid #e5e7eb}
-tr.ship-row td:first-child{padding-left:36px}
-tr.ship-hdr td{background:#e0f2fe;font-size:10px;font-weight:700;color:#0369a1;padding:4px 10px;border-bottom:1px solid #bae6fd}
-tr.ship-hdr td:first-child{padding-left:36px}
-.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600;white-space:nowrap}
-.badge-hk{background:#dbeafe;color:#1d4ed8}
-.badge-lf{background:#dcfce7;color:#16a34a}
-.badge-ttl{background:#ede9fe;color:#6d28d9}
-.badge-A{background:#fef3c7;color:#92400e}
-.badge-Q{background:#ede9fe;color:#5b21b6}
-.progress-wrap{width:80px;background:#e5e7eb;border-radius:4px;height:6px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:4px}
-.progress-bar{height:6px;border-radius:4px}
-.tier-list{display:flex;gap:3px;flex-wrap:wrap}
-.tier-dot{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;border:2px solid transparent;cursor:default}
-.tier-dot.past{background:#d1fae5;color:#065f46;border-color:#6ee7b7}
-.tier-dot.current{background:#fef9c3;color:#713f12;border-color:#fbbf24}
-.tier-dot.future{background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb}
+tr.ship-row:hover td{background:#fafafa}
+tr.ship-row td:first-child{padding-left:28px}
+/* Badges */
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:600}
+.b-hk{background:#dbeafe;color:#1d4ed8}
+.b-lf{background:#dcfce7;color:#16a34a}
+.b-ttl{background:#ede9fe;color:#6d28d9}
+.b-A{background:#fef3c7;color:#92400e}
+.b-Q{background:#ede9fe;color:#5b21b6}
+/* Progress */
+.prog-wrap{width:72px;background:#e5e7eb;border-radius:4px;height:6px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:4px}
+.prog-bar{height:6px;border-radius:4px}
+/* Tier dots */
+.tier-list{display:flex;gap:2px;flex-wrap:wrap}
+.td{width:21px;height:21px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;border:2px solid transparent}
+.td.past{background:#d1fae5;color:#065f46;border-color:#6ee7b7}
+.td.curr{background:#fef9c3;color:#713f12;border-color:#fbbf24}
+.td.fut{background:#f3f4f6;color:#9ca3af;border-color:#e5e7eb}
+/* Misc */
 .needed{color:#dc2626;font-weight:600}
 .no-next{color:#16a34a;font-weight:600}
-.rate-current{color:#1d4ed8;font-weight:700}
-.rate-next{color:#dc2626;font-size:11px}
+.rc{color:#1d4ed8;font-weight:700}
+.rn{color:#dc2626;font-size:11px}
+.est{color:#7c3aed;font-weight:600}
+.ul{font-size:9px;color:#6b7280}
 .empty{text-align:center;padding:40px;color:#9ca3af}
-.unit-label{font-size:9px;color:#6b7280}
-.expand-btn{background:none;border:none;cursor:pointer;color:#6b7280;font-size:13px;padding:2px 5px;border-radius:4px;line-height:1}
-.expand-btn:hover{background:#e5e7eb;color:#111}
-.est-rebate{color:#7c3aed;font-weight:600}
+#loading{padding:20px;text-align:center;color:#6b7280;display:none}
 </style>
 </head>
 <body>
 <header>
   <h1>Rebate Calculator</h1>
-  <span style="font-size:11px;opacity:.7">YTD Sales vs. Rebate Tiers — Sold-To / Ship-To</span>
+  <span class="sub">Ship-To 기준 개별 Tier 계산 &nbsp;|&nbsp; sales_thismonth 현재 누적 데이터</span>
 </header>
 
 <div class="filters">
-  <div>
-    <label>Year</label>
-    <select id="f_year"><option value="2026">2026</option><option value="2025">2025</option></select>
-  </div>
-  <div>
-    <label>Up to Month</label>
-    <select id="f_month"></select>
-  </div>
   <div>
     <label>Territory</label>
     <select id="f_terr">
@@ -88,24 +85,24 @@ tr.ship-hdr td:first-child{padding-left:36px}
   </div>
   <div>
     <label>Search</label>
-    <input type="text" id="f_search" placeholder="Name or sold-to…" style="min-width:180px">
+    <input type="text" id="f_search" placeholder="Name / code…" style="min-width:180px">
   </div>
   <div>
     <label>Show</label>
     <select id="f_show">
       <option value="ALL">All</option>
       <option value="NEXT">Has next tier</option>
-      <option value="MAX">Already max tier</option>
-      <option value="ZERO">No sales yet</option>
+      <option value="MAX">Max tier reached</option>
+      <option value="ZERO">No sales</option>
     </select>
   </div>
   <div style="display:flex;gap:6px">
-    <button class="btn-primary" onclick="load()">Refresh</button>
-    <button class="btn-export" onclick="exportCSV()">Export CSV</button>
+    <button class="btn btn-primary" onclick="load()">Refresh</button>
+    <button class="btn btn-outline" onclick="exportCSV()">Export CSV</button>
   </div>
 </div>
 
-<div id="loading" style="display:none;padding:20px;text-align:center;color:#6b7280">Loading…</div>
+<div id="loading">Loading rebate data…</div>
 
 <div class="container">
   <div class="summary-row" id="summary"></div>
@@ -113,73 +110,69 @@ tr.ship-hdr td:first-child{padding-left:36px}
 </div>
 
 <script>
-const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const selMonth = document.getElementById("f_month");
-for(let i=1;i<=12;i++){
-  const o=document.createElement("option");
-  o.value=i; o.textContent=`${i} – ${MONTHS[i-1]}`;
-  if(i===new Date().getMonth()+1) o.selected=true;
-  selMonth.appendChild(o);
-}
+// ─── state ──────────────────────────────────────────────────────────────────
+let ALL_DATA = [];           // flat array of ship_to rows from API
+let sortCol  = "actual";
+let sortDir  = -1;           // descending by default
+const collapsed = new Set(); // sold_to keys that are collapsed
 
-let ALL_DATA = [];
-let sortCol = "sold_to_name", sortDir = 1;
-const expanded = new Set();  // tracks expanded sold_to+territory keys
-
-// ── Load ──────────────────────────────────────────────────────
+// ─── load ────────────────────────────────────────────────────────────────────
 async function load(){
-  const year  = document.getElementById("f_year").value;
-  const month = document.getElementById("f_month").value;
-  const terr  = document.getElementById("f_terr").value;
-  const stg   = document.getElementById("f_stg").value;
-  document.getElementById("loading").style.display="block";
-  document.getElementById("table-wrap").innerHTML="";
-  document.getElementById("summary").innerHTML="";
-  expanded.clear();
+  const terr = document.getElementById("f_terr").value;
+  const stg  = document.getElementById("f_stg").value;
+  document.getElementById("loading").style.display = "block";
+  document.getElementById("table-wrap").innerHTML  = "";
+  document.getElementById("summary").innerHTML     = "";
+  collapsed.clear();
   try{
-    const qs = new URLSearchParams({year, month, territory:terr, sold_to_group:stg});
+    const qs  = new URLSearchParams({territory: terr, sold_to_group: stg});
     const res = await fetch(`/api/rebate_data?${qs}`);
     const json = await res.json();
     if(json.error){
-      document.getElementById("table-wrap").innerHTML=
-        `<div class="empty" style="color:#dc2626">Error: ${json.error}<br>
+      document.getElementById("table-wrap").innerHTML =
+        `<div class="empty" style="color:#dc2626">Error: ${esc(json.error)}<br>
          <small>Run <code>python rebate_data.py</code> to populate rebate tables.</small></div>`;
       return;
     }
     ALL_DATA = json;
-    // populate group filter
+    // populate group dropdown
     const stgs = [...new Set(json.map(r=>r.sold_to_group).filter(x=>x&&x!=="-"))].sort();
-    const sel = document.getElementById("f_stg");
-    const cur = sel.value;
-    sel.innerHTML='<option value="ALL">All Groups</option>';
+    const sel  = document.getElementById("f_stg");
+    const cur  = sel.value;
+    sel.innerHTML = '<option value="ALL">All Groups</option>';
     stgs.forEach(s=>{
-      const o=document.createElement("option");
-      o.value=s; o.textContent=s; if(s===cur) o.selected=true;
+      const o = document.createElement("option");
+      o.value = s; o.textContent = s; if(s===cur) o.selected=true;
       sel.appendChild(o);
     });
     renderTable();
   }catch(e){
-    document.getElementById("table-wrap").innerHTML=`<div class="empty">Failed: ${e}</div>`;
+    document.getElementById("table-wrap").innerHTML =
+      `<div class="empty">Failed to load: ${esc(String(e))}</div>`;
   }finally{
-    document.getElementById("loading").style.display="none";
+    document.getElementById("loading").style.display = "none";
   }
 }
 
-// ── Filter + sort ─────────────────────────────────────────────
-function filtered(){
+// ─── filter ──────────────────────────────────────────────────────────────────
+function applyFilter(data){
   const search = document.getElementById("f_search").value.toLowerCase().trim();
   const show   = document.getElementById("f_show").value;
-  return ALL_DATA.filter(r=>{
-    if(search && !r.sold_to_name.toLowerCase().includes(search)
-               && !String(r.sold_to).toLowerCase().includes(search)) return false;
-    if(show==="NEXT" && r.next_rate==null) return false;
-    if(show==="MAX"  && (r.next_rate!=null || r.curr_rate===0)) return false;
-    if(show==="ZERO" && r.actual > 0) return false;
+  return data.filter(r=>{
+    if(search &&
+       !r.sold_to_name.toLowerCase().includes(search) &&
+       !String(r.sold_to).includes(search) &&
+       !r.ship_to_name.toLowerCase().includes(search) &&
+       !String(r.ship_to).includes(search)) return false;
+    if(show==="NEXT" && r.next_rate == null)           return false;
+    if(show==="MAX"  && (r.next_rate!=null||r.curr_rate===0)) return false;
+    if(show==="ZERO" && r.actual > 0)                  return false;
     return true;
   });
 }
 
-function sortedData(data){
+// ─── sort ────────────────────────────────────────────────────────────────────
+function applySort(data){
   return [...data].sort((a,b)=>{
     let av=a[sortCol], bv=b[sortCol];
     if(av==null) av = sortDir>0 ? 1e18 : -1e18;
@@ -188,39 +181,61 @@ function sortedData(data){
     return (av-bv)*sortDir;
   });
 }
+function setSort(col){
+  if(sortCol===col) sortDir*=-1; else{sortCol=col;sortDir=-1;}
+  renderTable();
+}
 
-// ── Render ────────────────────────────────────────────────────
+// ─── group by sold_to ────────────────────────────────────────────────────────
+function groupData(rows){
+  // returns [{key, sold_to, sold_to_name, sold_to_group, region, items:[]}]
+  const map = new Map();
+  rows.forEach(r=>{
+    const key = r.sold_to + "|" + r.territory;
+    if(!map.has(key)) map.set(key, {
+      key, sold_to: r.sold_to, sold_to_name: r.sold_to_name,
+      sold_to_group: r.sold_to_group, region: r.region,
+      territory: r.territory, unit: r.unit,
+      structure_name: r.structure_name, items: []
+    });
+    map.get(key).items.push(r);
+  });
+  return [...map.values()];
+}
+
+// ─── render ──────────────────────────────────────────────────────────────────
 function renderTable(){
-  const data = sortedData(filtered());
+  const filtered = applyFilter(ALL_DATA);
+  const sorted   = applySort(filtered);
+  const groups   = groupData(sorted);
 
   // summary
-  const withNext  = data.filter(r=>r.next_rate!=null && r.actual>0);
-  const maxTier   = data.filter(r=>r.next_rate==null && r.curr_rate>0);
-  const zeroSales = data.filter(r=>r.actual===0);
-  const estTotal  = data.reduce((s,r)=>s+(r.est_rebate||0),0);
-  document.getElementById("summary").innerHTML=`
-    <div class="stat-card"><div class="label">Customers</div><div class="value">${data.length}</div></div>
-    <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${withNext.length}</div></div>
-    <div class="stat-card"><div class="label">Max Tier ✓</div><div class="value" style="color:#16a34a">${maxTier.length}</div></div>
-    <div class="stat-card"><div class="label">No Sales</div><div class="value" style="color:#9ca3af">${zeroSales.length}</div></div>
-    <div class="stat-card"><div class="label">Est. Total Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmtN(estTotal)}</div></div>`;
+  const withNext  = filtered.filter(r=>r.next_rate!=null && r.actual>0).length;
+  const maxTier   = filtered.filter(r=>r.next_rate==null && r.curr_rate>0).length;
+  const zeroSales = filtered.filter(r=>r.actual===0).length;
+  const estTotal  = filtered.reduce((s,r)=>s+(r.est_rebate||0),0);
+  const soldToSet = new Set(filtered.map(r=>r.sold_to+"|"+r.territory));
+  document.getElementById("summary").innerHTML = `
+    <div class="stat-card"><div class="label">Sold-To (structures)</div><div class="value">${soldToSet.size}</div></div>
+    <div class="stat-card"><div class="label">Ship-To locations</div><div class="value">${filtered.length}</div></div>
+    <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${withNext}</div></div>
+    <div class="stat-card"><div class="label">Max Tier ✓</div><div class="value" style="color:#16a34a">${maxTier}</div></div>
+    <div class="stat-card"><div class="label">No Sales</div><div class="value" style="color:#9ca3af">${zeroSales}</div></div>
+    <div class="stat-card"><div class="label">Est. Total Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(estTotal)}</div></div>`;
 
-  if(!data.length){
-    document.getElementById("table-wrap").innerHTML='<div class="empty">No data found</div>';
+  if(!filtered.length){
+    document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
     return;
   }
 
   const cols = [
-    {key:"",             label:"",            nosort:true},
-    {key:"sold_to_name", label:"Customer"},
-    {key:"sold_to",      label:"Sold-To"},
-    {key:"sold_to_group",label:"Group"},
-    {key:"region",       label:"Region"},
-    {key:"territory",    label:"Territory"},
-    {key:"unit",         label:"Type"},
+    {key:"ship_to",      label:"Ship-To"},
+    {key:"ship_to_name", label:"Name"},
+    {key:"territory",    label:"Territory", nosort:true},
+    {key:"unit",         label:"Type",      nosort:true},
     {key:"actual",       label:"Actual Sales"},
-    {key:"curr_rate",    label:"Curr Rate"},
-    {key:"next_rate",    label:"Next Rate"},
+    {key:"curr_rate",    label:"Curr %"},
+    {key:"next_rate",    label:"Next %"},
     {key:"needed",       label:"Need to Reach"},
     {key:"est_rebate",   label:"Est. Rebate"},
     {key:"tiers",        label:"Tier Progress", nosort:true},
@@ -228,182 +243,136 @@ function renderTable(){
 
   const ths = cols.map(c=>{
     if(c.nosort) return `<th>${c.label}</th>`;
-    const isSorted = sortCol===c.key;
-    const arrow = isSorted ? (sortDir>0?'▲':'▼') : '▲';
-    return `<th class="${isSorted?'sorted':''}" onclick="setSort('${c.key}')">${c.label} <span class="sort-arrow">${arrow}</span></th>`;
+    const active = sortCol===c.key;
+    const arrow  = active ? (sortDir>0?'▲':'▼') : '▲';
+    return `<th class="${active?'sorted':''}" onclick="setSort('${c.key}')">${c.label} <span class="sa">${arrow}</span></th>`;
   }).join("");
 
-  const rowsHtml = data.map(r=>{
-    const rowKey  = r.sold_to + "|" + r.territory;
-    const isOpen  = expanded.has(rowKey);
-    const unitLbl = r.unit==="Q" ? "units" : "$";
-    const fmtAct  = r.unit==="Q" ? fmtN(r.actual) : "$"+fmtN(r.actual);
+  let bodyHtml = "";
+  groups.forEach(g=>{
+    const isOpen     = !collapsed.has(g.key);
+    const itemCount  = g.items.length;
+    const grpEst     = g.items.reduce((s,r)=>s+(r.est_rebate||0),0);
+    const grpActual  = g.items.reduce((s,r)=>s+(r.actual||0),0);
+    const unitLbl    = g.unit==="Q" ? "units" : "$";
+    const terrBadge  = terrBadgeHtml(g.territory);
+    const typeBadge  = g.unit==="A"
+      ? `<span class="badge b-A">Annual $</span>`
+      : `<span class="badge b-Q">Quarterly Qty</span>`;
 
-    // progress bar
-    const validTiers = r.tiers.filter(t=>t.rate>0);
-    const maxT = validTiers.length ? validTiers[validTiers.length-1].threshold : 1;
-    const pct  = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
-    const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a" : pct>=50 ? "#f59e0b" : "#3b82f6";
-
-    // tier dots
-    const tierDots = validTiers.map(t=>{
-      let cls = "future";
-      if(t.threshold <= r.actual && t.rate>0) cls="past";
-      else if(t === validTiers.find(x=>x.threshold>r.actual && x.rate>0)) cls="current";
-      return `<span class="tier-dot ${cls}" title="${unitLbl}${fmtN(t.threshold)} → ${t.rate}%">${t.rate}%</span>`;
-    }).join("");
-
-    const neededHtml = r.needed!=null
-      ? `<span class="needed">+${r.unit==="Q"?fmtN(r.needed):"$"+fmtN(r.needed)}</span>`
-      : (r.curr_rate>0 ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
-
-    const terrBadge = r.territory==="TTL"
-      ? `<span class="badge badge-ttl">TTL</span>`
-      : r.territory==="HK"
-        ? `<span class="badge badge-hk">HK</span>`
-        : `<span class="badge badge-lf">LF</span>`;
-
-    const typeLbl = r.unit==="A"
-      ? `<span class="badge badge-A">Annual $</span>`
-      : `<span class="badge badge-Q">Quarterly Qty</span>`;
-
-    const shipCnt = r.ship_to_breakdown ? r.ship_to_breakdown.length : 0;
-    const expandBtn = shipCnt > 0
-      ? `<button class="expand-btn" onclick="toggleShip('${rowKey}')">${isOpen?"▼":"▶"} ${shipCnt}</button>`
-      : `<span style="color:#d1d5db;font-size:11px">—</span>`;
-
-    let mainRow = `<tr class="main-row" data-key="${escAttr(rowKey)}">
-      <td>${expandBtn}</td>
-      <td><b>${escHtml(r.sold_to_name)}</b></td>
-      <td style="font-family:monospace;font-size:11px">${r.sold_to}</td>
-      <td>${escHtml(r.sold_to_group)}</td>
-      <td>${escHtml(r.region)}</td>
-      <td>${terrBadge}</td>
-      <td>${typeLbl}</td>
-      <td>
-        <div class="progress-wrap"><div class="progress-bar" style="width:${pct.toFixed(1)}%;background:${barClr}"></div></div>
-        ${fmtAct} <span class="unit-label">${unitLbl}</span>
+    // sold_to group header
+    bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
+      <td class="caret">${isOpen?"▼":"▶"}</td>
+      <td colspan="2"><b>${esc(g.sold_to_name)}</b>
+        <span style="font-family:monospace;font-size:10px;color:#6b7280;margin-left:6px">${g.sold_to}</span>
+        <span style="margin-left:6px;font-weight:400;color:#6b7280">${esc(g.sold_to_group)}</span>
+        <span style="margin-left:4px;font-weight:400;color:#6b7280">${esc(g.region)}</span>
       </td>
-      <td><span class="rate-current">${r.curr_rate>0 ? r.curr_rate+"%" : "—"}</span></td>
-      <td><span class="rate-next">${r.next_rate!=null ? r.next_rate+"%" : "—"}</span></td>
-      <td>${neededHtml}</td>
-      <td><span class="est-rebate">${r.est_rebate>0 ? "$"+fmtN(r.est_rebate) : "—"}</span></td>
-      <td><div class="tier-list">${tierDots}</div></td>
+      <td>${terrBadge} ${typeBadge}</td>
+      <td>${g.unit==="Q" ? fmt(grpActual)+" units" : "$"+fmt(grpActual)}
+        <span class="ul">(${itemCount} ship-to)</span>
+      </td>
+      <td colspan="4"></td>
+      <td><span class="est">$${fmt(grpEst)}</span> <span class="ul">est.</span></td>
     </tr>`;
 
-    // ship_to sub-rows (rendered if expanded)
-    let subRows = "";
-    if(isOpen && shipCnt > 0){
-      const isTTL = r.territory === "TTL";
-      const hdrCols = isTTL
-        ? `<td></td><td>Ship-To</td><td>Name</td><td>HK Qty</td><td>HK Amt</td><td>LF Qty</td><td>LF Amt</td><td colspan="6">Total Amt</td>`
-        : `<td></td><td>Ship-To</td><td>Name</td><td>Qty</td><td>Amt</td><td colspan="8"></td>`;
-      subRows += `<tr class="ship-hdr">${hdrCols}</tr>`;
-      r.ship_to_breakdown.forEach(sh=>{
-        if(isTTL){
-          subRows += `<tr class="ship-row">
-            <td></td>
-            <td style="font-family:monospace">${sh.ship_to}</td>
-            <td>${escHtml(sh.name)}</td>
-            <td>${fmtN(sh.hk_qty)}</td>
-            <td>$${fmtN(sh.hk_amt)}</td>
-            <td>${fmtN(sh.lf_qty)}</td>
-            <td>$${fmtN(sh.lf_amt)}</td>
-            <td colspan="6"><b>$${fmtN(sh.total_amt)}</b></td>
-          </tr>`;
-        } else {
-          subRows += `<tr class="ship-row">
-            <td></td>
-            <td style="font-family:monospace">${sh.ship_to}</td>
-            <td>${escHtml(sh.name)}</td>
-            <td>${fmtN(sh.qty)}</td>
-            <td>$${fmtN(sh.amt)}</td>
-            <td colspan="8"></td>
-          </tr>`;
-        }
+    if(isOpen){
+      g.items.forEach(r=>{
+        const unitL  = r.unit==="Q" ? "units" : "$";
+        const fmtAct = r.unit==="Q" ? fmt(r.actual) : "$"+fmt(r.actual);
+
+        const validT = r.tiers.filter(t=>t.rate>0);
+        const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
+        const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
+        const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a"
+                     : pct>=50 ? "#f59e0b" : "#3b82f6";
+
+        const dots = validT.map(t=>{
+          let cls = "fut";
+          if(t.threshold<=r.actual && t.rate>0) cls="past";
+          else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
+          return `<span class="td ${cls}" title="${unitL}${fmt(t.threshold)} → ${t.rate}%">${t.rate}%</span>`;
+        }).join("");
+
+        const neededHtml = r.needed!=null
+          ? `<span class="needed">+${r.unit==="Q"?fmt(r.needed):"$"+fmt(r.needed)}</span>`
+          : (r.curr_rate>0 ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
+
+        bodyHtml += `<tr class="ship-row">
+          <td style="font-family:monospace;font-size:11px;color:#374151">${r.ship_to}</td>
+          <td>${esc(r.ship_to_name)}</td>
+          <td>${terrBadgeHtml(r.territory)}</td>
+          <td>${r.unit==="A"?`<span class="badge b-A">Annual $</span>`:`<span class="badge b-Q">QTR Qty</span>`}</td>
+          <td>
+            <div class="prog-wrap"><div class="prog-bar" style="width:${pct.toFixed(1)}%;background:${barClr}"></div></div>
+            ${fmtAct} <span class="ul">${unitL}</span>
+          </td>
+          <td><span class="rc">${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
+          <td><span class="rn">${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
+          <td>${neededHtml}</td>
+          <td><span class="est">${r.est_rebate>0?"$"+fmt(r.est_rebate):"—"}</span></td>
+          <td><div class="tier-list">${dots}</div></td>
+        </tr>`;
       });
     }
-    return mainRow + subRows;
-  }).join("");
+  });
 
-  document.getElementById("table-wrap").innerHTML=`
+  document.getElementById("table-wrap").innerHTML = `
     <table>
-      <thead><tr>${ths}</tr></thead>
-      <tbody>${rowsHtml}</tbody>
+      <thead><tr><th></th>${ths}</tr></thead>
+      <tbody>${bodyHtml}</tbody>
     </table>`;
 }
 
-function toggleShip(rowKey){
-  if(expanded.has(rowKey)) expanded.delete(rowKey);
-  else expanded.add(rowKey);
+function toggleGroup(key){
+  if(collapsed.has(key)) collapsed.delete(key);
+  else collapsed.add(key);
   renderTable();
 }
 
-function setSort(col){
-  if(sortCol===col) sortDir*=-1;
-  else{sortCol=col; sortDir=1;}
-  renderTable();
+function terrBadgeHtml(t){
+  if(t==="TTL") return `<span class="badge b-ttl">TTL</span>`;
+  if(t==="HK")  return `<span class="badge b-hk">HK</span>`;
+  return `<span class="badge b-lf">LF</span>`;
 }
 
-// ── Export CSV ────────────────────────────────────────────────
+// ─── export ──────────────────────────────────────────────────────────────────
 function exportCSV(){
-  const data = sortedData(filtered());
-  const hdr = ["Sold-To","Name","Group","Region","Territory","Type","Actual","Curr Rate%","Next Rate%","Need to Reach","Est Rebate","Structure"];
+  const data = applySort(applyFilter(ALL_DATA));
+  const hdr  = ["Sold-To","Sold-To Name","Group","Region","Ship-To","Ship-To Name",
+                 "Territory","Type","Actual","Curr Rate%","Next Rate%",
+                 "Need to Reach","Est Rebate","Structure"];
   const lines = [hdr.join(",")];
   data.forEach(r=>{
     lines.push([
-      r.sold_to,
-      `"${(r.sold_to_name||"").replace(/"/g,'""')}"`,
-      `"${(r.sold_to_group||"").replace(/"/g,'""')}"`,
-      r.region,
-      r.territory,
-      r.unit==="A"?"Annual $":"Quarterly Qty",
-      r.actual,
-      r.curr_rate,
-      r.next_rate??'',
-      r.needed??'',
-      r.est_rebate,
-      r.structure_name
+      r.sold_to, q(r.sold_to_name), q(r.sold_to_group), r.region,
+      r.ship_to, q(r.ship_to_name),
+      r.territory, r.unit==="A"?"Annual $":"QTR Qty",
+      r.actual, r.curr_rate, r.next_rate??"",
+      r.needed??"", r.est_rebate, q(r.structure_name)
     ].join(","));
-    // ship_to rows
-    (r.ship_to_breakdown||[]).forEach(sh=>{
-      if(r.territory==="TTL"){
-        lines.push([
-          r.sold_to, `"${sh.ship_to} ${(sh.name||"").replace(/"/g,'""')}"`,
-          "","","","",
-          sh.total_amt, "","","","", ""
-        ].join(","));
-      } else {
-        lines.push([
-          r.sold_to, `"${sh.ship_to} ${(sh.name||"").replace(/"/g,'""')}"`,
-          "","","","",
-          sh.amt, "","","","", ""
-        ].join(","));
-      }
-    });
   });
   const blob = new Blob([lines.join("\n")], {type:"text/csv"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `rebate_${document.getElementById("f_year").value}_m${document.getElementById("f_month").value}.csv`;
+  a.download = `rebate_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
 }
 
-// ── Helpers ───────────────────────────────────────────────────
-function fmtN(n){
-  if(n==null||n==='') return "—";
+// ─── helpers ─────────────────────────────────────────────────────────────────
+function fmt(n){
+  if(n==null||n==="") return "—";
   return Number(n).toLocaleString(undefined,{maximumFractionDigits:1});
 }
-function escHtml(s){
+function esc(s){
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
-function escAttr(s){
-  return String(s||"").replace(/"/g,"&quot;");
-}
+function escAttr(s){return String(s||"").replace(/"/g,"&quot;");}
+function q(s){return `"${String(s||"").replace(/"/g,'""')}"`;} // CSV quote
 
-// live filters
+// live client-side filters
 document.getElementById("f_search").addEventListener("input", renderTable);
-document.getElementById("f_show").addEventListener("change", renderTable);
+document.getElementById("f_show").addEventListener("change",  renderTable);
 
 load();
 </script>
