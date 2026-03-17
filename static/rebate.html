@@ -111,10 +111,12 @@ tr.ship-row td:first-child{padding-left:28px}
 
 <script>
 // ─── state ──────────────────────────────────────────────────────────────────
-let ALL_DATA = [];           // flat array of ship_to rows from API
-let sortCol  = "actual";
-let sortDir  = -1;           // descending by default
-const collapsed = new Set(); // sold_to keys that are collapsed
+let ALL_DATA    = [];        // flat array of ship_to rows from API
+let sortCol     = "actual";
+let sortDir     = -1;        // descending by default
+let expanded    = new Set(); // sold_to keys that are OPEN (default: all collapsed)
+let currentPage = 0;
+const PAGE_SIZE = 40;        // groups per page
 
 // ─── load ────────────────────────────────────────────────────────────────────
 async function load(){
@@ -135,6 +137,8 @@ async function load(){
       return;
     }
     ALL_DATA = json;
+    currentPage = 0;
+    expanded.clear();
     // populate group dropdown
     const stgs = [...new Set(json.map(r=>r.sold_to_group).filter(x=>x&&x!=="-"))].sort();
     const sel  = document.getElementById("f_stg");
@@ -183,6 +187,7 @@ function applySort(data){
 }
 function setSort(col){
   if(sortCol===col) sortDir*=-1; else{sortCol=col;sortDir=-1;}
+  currentPage = 0;
   renderTable();
 }
 
@@ -207,26 +212,30 @@ function groupData(rows){
 function renderTable(){
   const filtered = applyFilter(ALL_DATA);
   const sorted   = applySort(filtered);
-  const groups   = groupData(sorted);
+  const allGroups = groupData(sorted);
 
-  // summary
+  // summary (over all filtered data, not just current page)
   const withNext  = filtered.filter(r=>r.next_rate!=null && r.actual>0).length;
   const maxTier   = filtered.filter(r=>r.next_rate==null && r.curr_rate>0).length;
   const zeroSales = filtered.filter(r=>r.actual===0).length;
   const estTotal  = filtered.reduce((s,r)=>s+(r.est_rebate||0),0);
-  const soldToSet = new Set(filtered.map(r=>r.sold_to+"|"+r.territory));
   document.getElementById("summary").innerHTML = `
-    <div class="stat-card"><div class="label">Sold-To (structures)</div><div class="value">${soldToSet.size}</div></div>
+    <div class="stat-card"><div class="label">Sold-To (structures)</div><div class="value">${allGroups.length}</div></div>
     <div class="stat-card"><div class="label">Ship-To locations</div><div class="value">${filtered.length}</div></div>
     <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${withNext}</div></div>
     <div class="stat-card"><div class="label">Max Tier ✓</div><div class="value" style="color:#16a34a">${maxTier}</div></div>
     <div class="stat-card"><div class="label">No Sales</div><div class="value" style="color:#9ca3af">${zeroSales}</div></div>
     <div class="stat-card"><div class="label">Est. Total Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(estTotal)}</div></div>`;
 
-  if(!filtered.length){
+  if(!allGroups.length){
     document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
     return;
   }
+
+  // paginate groups
+  const totalPages = Math.ceil(allGroups.length / PAGE_SIZE);
+  if(currentPage >= totalPages) currentPage = totalPages - 1;
+  const pageGroups = allGroups.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
 
   const cols = [
     {key:"ship_to",      label:"Ship-To"},
@@ -249,18 +258,16 @@ function renderTable(){
   }).join("");
 
   let bodyHtml = "";
-  groups.forEach(g=>{
-    const isOpen     = !collapsed.has(g.key);
-    const itemCount  = g.items.length;
-    const grpEst     = g.items.reduce((s,r)=>s+(r.est_rebate||0),0);
-    const grpActual  = g.items.reduce((s,r)=>s+(r.actual||0),0);
-    const unitLbl    = g.unit==="Q" ? "units" : "$";
-    const terrBadge  = terrBadgeHtml(g.territory);
-    const typeBadge  = g.unit==="A"
+  pageGroups.forEach(g=>{
+    const isOpen    = expanded.has(g.key);
+    const itemCount = g.items.length;
+    const grpEst    = g.items.reduce((s,r)=>s+(r.est_rebate||0),0);
+    const grpActual = g.items.reduce((s,r)=>s+(r.actual||0),0);
+    const terrBadge = terrBadgeHtml(g.territory);
+    const typeBadge = g.unit==="A"
       ? `<span class="badge b-A">Annual $</span>`
       : `<span class="badge b-Q">Quarterly Qty</span>`;
 
-    // sold_to group header
     bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
       <td class="caret">${isOpen?"▼":"▶"}</td>
       <td colspan="2"><b>${esc(g.sold_to_name)}</b>
@@ -280,7 +287,6 @@ function renderTable(){
       g.items.forEach(r=>{
         const unitL  = r.unit==="Q" ? "units" : "$";
         const fmtAct = r.unit==="Q" ? fmt(r.actual) : "$"+fmt(r.actual);
-
         const validT = r.tiers.filter(t=>t.rate>0);
         const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
         const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
@@ -317,16 +323,33 @@ function renderTable(){
     }
   });
 
+  // pagination controls
+  const pgInfo = `Page ${currentPage+1} / ${totalPages} &nbsp;(${allGroups.length} sold-to)`;
+  const pgBar  = `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:#fff;border-top:1px solid #e5e7eb;font-size:12px">
+    <button class="btn btn-outline" onclick="goPage(0)"       ${currentPage===0?'disabled':''}>«</button>
+    <button class="btn btn-outline" onclick="goPage(${currentPage-1})" ${currentPage===0?'disabled':''}>‹ Prev</button>
+    <span style="color:#6b7280">${pgInfo}</span>
+    <button class="btn btn-outline" onclick="goPage(${currentPage+1})" ${currentPage>=totalPages-1?'disabled':''}>Next ›</button>
+    <button class="btn btn-outline" onclick="goPage(${totalPages-1})"  ${currentPage>=totalPages-1?'disabled':''}>»</button>
+  </div>`;
+
   document.getElementById("table-wrap").innerHTML = `
     <table>
       <thead><tr><th></th>${ths}</tr></thead>
       <tbody>${bodyHtml}</tbody>
-    </table>`;
+    </table>
+    ${pgBar}`;
+}
+
+function goPage(p){
+  currentPage = p;
+  renderTable();
+  window.scrollTo(0,0);
 }
 
 function toggleGroup(key){
-  if(collapsed.has(key)) collapsed.delete(key);
-  else collapsed.add(key);
+  if(expanded.has(key)) expanded.delete(key);
+  else expanded.add(key);
   renderTable();
 }
 
@@ -370,9 +393,10 @@ function esc(s){
 function escAttr(s){return String(s||"").replace(/"/g,"&quot;");}
 function q(s){return `"${String(s||"").replace(/"/g,'""')}"`;} // CSV quote
 
-// live client-side filters
-document.getElementById("f_search").addEventListener("input", renderTable);
-document.getElementById("f_show").addEventListener("change",  renderTable);
+// live client-side filters – reset page on change
+function resetAndRender(){ currentPage = 0; renderTable(); }
+document.getElementById("f_search").addEventListener("input",  resetAndRender);
+document.getElementById("f_show").addEventListener("change",   resetAndRender);
 
 load();
 </script>
