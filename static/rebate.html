@@ -75,19 +75,6 @@ tr.ship-row td:first-child{padding-left:28px}
 
 <div class="filters">
   <div>
-    <label>Region</label>
-    <select id="f_terr" onchange="fetchPage(0)">
-      <option value="ALL">All</option>
-      <option value="TTL">TTL (HK+LF)</option>
-      <option value="HK">HK – Hankook</option>
-      <option value="LF">LF – Laufenn</option>
-    </select>
-  </div>
-  <div>
-    <label>Customer Group</label>
-    <select id="f_stg" onchange="fetchPage(0)"><option value="ALL">All Groups</option></select>
-  </div>
-  <div>
     <label>Search</label>
     <input type="text" id="f_search" placeholder="Name / code…" style="min-width:180px" oninput="debounceSearch()">
   </div>
@@ -111,8 +98,6 @@ let lastMeta    = {};        // last API response metadata
 // ─── build query params from current UI state ─────────────────────────────
 function buildQS(page){
   return new URLSearchParams({
-    territory:     document.getElementById("f_terr").value,
-    sold_to_group: document.getElementById("f_stg").value,
     search:        document.getElementById("f_search").value.trim(),
     show:          "ALL",
     sort:          sortCol,
@@ -141,17 +126,6 @@ async function fetchPage(page){
       return;
     }
     lastMeta = json;
-    // populate group dropdown on first load
-    if(json.stg_list){
-      const sel = document.getElementById("f_stg");
-      const cur = sel.value;
-      sel.innerHTML = '<option value="ALL">All Groups</option>';
-      json.stg_list.forEach(s=>{
-        const o = document.createElement("option");
-        o.value = s; o.textContent = s; if(s===cur) o.selected=true;
-        sel.appendChild(o);
-      });
-    }
     renderPage(json);
   }catch(e){
     document.getElementById("table-wrap").innerHTML =
