@@ -149,17 +149,17 @@ function renderPage(data){
     return;
   }
 
-  // [▼] | Ship-To | Name | Brand | Actual Q | Actual A | Curr% | Next% | Need Q | Need A | Curr.Rebate | Tier  (12 cols + caret)
+  // [▼] | Ship-To | Name | Brand | Qty (YTD) | Amount (YTD) | Rebate % | Next Tier % | Need Qty | Need Amount | Curr.Rebate | Tier  (12 cols + caret)
   const cols = [
     {key:"ship_to",      label:"Ship-To"},
     {key:"ship_to_name", label:"Name"},
     {key:"brand",        label:"Brand",        nosort:true},
-    {key:"actual_qty",   label:"Actual Q"},
-    {key:"actual_amt",   label:"Actual A"},
-    {key:"curr_rate",    label:"Curr %",        nosort:true},
-    {key:"next_rate",    label:"Next %",        nosort:true},
-    {key:"needed_qty",   label:"Need Q",        nosort:true},
-    {key:"needed_amt",   label:"Need A",        nosort:true},
+    {key:"actual_qty",   label:"Qty (YTD)"},
+    {key:"actual_amt",   label:"Amount (YTD)"},
+    {key:"curr_rate",    label:"Rebate %",      nosort:true},
+    {key:"next_rate",    label:"Next Tier %",   nosort:true},
+    {key:"needed_qty",   label:"Need Qty",      nosort:true},
+    {key:"needed_amt",   label:"Need Amount",   nosort:true},
     {key:"curr_rebate",  label:"Curr. Rebate"},
     {key:"tiers",        label:"Tier Progress", nosort:true},
   ];
