@@ -1,13 +1,19 @@
 """
 auto_populate_claim_form.py
 ============================
-Customer master 데이터를 읽어 Claim Report Form Excel 파일에
-Store Name, Sold-to, Ship-to 정보를 자동으로 입력하는 스크립트.
+customer_2603.csv (또는 customer.csv) 데이터를 읽어
+기존 Claim Report Form Excel 템플릿에 자동으로 데이터를 채웁니다.
+
+필드 매핑:
+  - Store Name  ← ship_to_name
+  - Sold-to     ← sold_to (코드) + sold_to_name
+  - Ship-to     ← ship_to (코드) + ship_to_name + address
 
 사용법:
-    python auto_populate_claim_form.py --sold_to 731942
-    python auto_populate_claim_form.py --sold_to 731942 100142 724363   (여러 고객)
-    python auto_populate_claim_form.py --all   (전체 고객 파일 생성)
+  python auto_populate_claim_form.py --ship_to 724363
+  python auto_populate_claim_form.py --ship_to 724363 731942 100142
+  python auto_populate_claim_form.py --sample 3
+  python auto_populate_claim_form.py --all
 """
 
 import os
@@ -18,48 +24,45 @@ import shutil
 from openpyxl import load_workbook
 
 # ─────────────────────────────────────────────
-# 경로 설정 (본인 환경에 맞게 수정하세요)
+# 경로 설정
 # ─────────────────────────────────────────────
 BASE_DIR = r"E:\01. work\2025\Data_Anal_Website"
 RAWDATA_DIR = os.path.join(BASE_DIR, "rawdata")
 TEMPLATE_PATH = os.path.join(RAWDATA_DIR, "Claim report form_v2(1).xlsx")
-CUSTOMER_CSV = os.path.join(RAWDATA_DIR, "unlock", "customer.csv")
+UNLOCK_DIR = os.path.join(RAWDATA_DIR, "unlock")
 OUTPUT_DIR = os.path.join(RAWDATA_DIR, "output")
 
-# 이 스크립트를 /home/user/new-sales2 에서 실행할 경우 경로 자동 전환
+# Linux / 다른 환경 자동 전환
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if not os.path.exists(BASE_DIR):
-    BASE_DIR   = _SCRIPT_DIR
+    BASE_DIR = _SCRIPT_DIR
     RAWDATA_DIR = os.path.join(BASE_DIR, "rawdata")
     TEMPLATE_PATH = os.path.join(RAWDATA_DIR, "Claim report form_v2(1).xlsx")
-    CUSTOMER_CSV  = os.path.join(RAWDATA_DIR, "unlock", "customer.csv")
-    OUTPUT_DIR    = os.path.join(RAWDATA_DIR, "output")
+    UNLOCK_DIR = os.path.join(RAWDATA_DIR, "unlock")
+    OUTPUT_DIR = os.path.join(RAWDATA_DIR, "output")
+
+# customer_2603.csv 우선, 없으면 customer.csv
+CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer_2603.csv")
+if not os.path.exists(CUSTOMER_CSV):
+    CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer.csv")
+
 
 # ─────────────────────────────────────────────
-# 셀 위치 설정 (템플릿의 실제 셀 주소로 맞추세요)
-# 스크린샷 기준: Store Name 행5, Sold-to 행8, Ship-to 행11
-# 값은 레이블 오른쪽/아래 셀에 기입됩니다.
+# 데이터 로드
 # ─────────────────────────────────────────────
-CELL_STORE_NAME = "D5"   # Store Name 값 입력 셀
-CELL_SOLD_TO_ID = "D6"   # Sold-to 코드
-CELL_SOLD_TO_NAME = "D8" # Sold-to 회사명
-CELL_SHIP_TO_ID  = "D11" # Ship-to 코드
-CELL_SHIP_TO_NAME = "D12"# Ship-to 회사명
-CELL_ADDRESS     = "D13" # 주소
-
-
-def load_customer_master(csv_path: str) -> pd.DataFrame:
-    """customer.csv 를 읽어 sold_to 기준으로 unique 하게 반환."""
-    df = pd.read_csv(csv_path, dtype={"sold_to": str, "ship_to": str}, encoding="latin1")
-    # 컬럼명 공백 제거
+def load_customer_master() -> pd.DataFrame:
+    print(f"데이터 파일: {CUSTOMER_CSV}")
+    df = pd.read_csv(CUSTOMER_CSV, dtype={"sold_to": str, "ship_to": str}, encoding="latin1")
     df.columns = df.columns.str.strip()
-    # sold_to 기준 중복 제거 (첫 번째 ship_to 사용)
-    df = df.drop_duplicates(subset=["sold_to"], keep="first")
-    return df
+    # ship_to 기준 unique (각 ship_to 별 1개 파일)
+    return df.drop_duplicates(subset=["ship_to"], keep="first")
 
 
-def find_label_cell(ws, label: str):
-    """워크시트에서 특정 텍스트가 포함된 셀 좌표를 반환."""
+# ─────────────────────────────────────────────
+# 템플릿 셀 자동 탐지
+# ─────────────────────────────────────────────
+def find_label_row(ws, label: str):
+    """레이블 텍스트가 있는 행/열 반환."""
     for row in ws.iter_rows():
         for cell in row:
             if cell.value and label.lower() in str(cell.value).lower():
@@ -67,146 +70,100 @@ def find_label_cell(ws, label: str):
     return None, None
 
 
-def detect_cells_from_template(ws):
+def detect_value_columns(ws):
     """
-    템플릿에서 레이블 셀을 자동 탐지해 값을 넣을 셀 딕셔너리를 반환.
-    탐지 실패 시 기본값(CELL_* 상수) 사용.
+    Store Name / Sold-to / Ship-to 레이블 셀을 찾아
+    값을 입력할 (행, 열) 딕셔너리 반환.
+    값 열은 레이블 열 + 3 (오른쪽으로 이동) 또는 탐지 실패 시 None.
     """
     mapping = {}
-
-    labels = {
-        "store_name":  ["store name"],
-        "sold_to":     ["sold-to", "sold to"],
-        "ship_to":     ["ship-to", "ship to"],
-    }
-
-    for key, keywords in labels.items():
+    for key, keywords in {
+        "store_name": ["store name"],
+        "sold_to":    ["sold-to", "sold to"],
+        "ship_to":    ["ship-to", "ship to"],
+    }.items():
         for kw in keywords:
-            r, c = find_label_cell(ws, kw)
+            r, c = find_label_row(ws, kw)
             if r:
-                # 값은 레이블 바로 오른쪽 열에 기입 (같은 행, +1 열)
-                mapping[key] = (r, c + 1)
+                mapping[key] = (r, c)
                 break
-
     return mapping
 
 
-def fill_form(template_path: str, customer_row: pd.Series, output_path: str):
-    """
-    템플릿을 복사 후 고객 정보를 채워 output_path 에 저장.
-    """
-    # 템플릿 복사
-    shutil.copy2(template_path, output_path)
-
+# ─────────────────────────────────────────────
+# 폼 채우기 (템플릿 기반)
+# ─────────────────────────────────────────────
+def fill_form(customer: dict, output_path: str):
+    shutil.copy2(TEMPLATE_PATH, output_path)
     wb = load_workbook(output_path)
-    ws = wb.active  # 첫 번째 시트 사용
+    ws = wb.active
 
-    # 레이블 자동 탐지
-    mapping = detect_cells_from_template(ws)
+    mapping = detect_value_columns(ws)
 
-    def write_cell(key, default_cell, value):
+    def write_right(key, fallback_row, fallback_col, value, row_offset=0):
+        """레이블 오른쪽에 값 기입. 탐지 실패 시 fallback 셀 사용."""
         if key in mapping:
             r, c = mapping[key]
-            ws.cell(row=r, column=c, value=value)
+            # 값은 레이블보다 오른쪽 열 (c+3 이상)에 이미 merge 된 경우가 많으므로
+            # 같은 행에서 비어있는 가장 가까운 오른쪽 셀 찾기
+            target_col = c + 1
+            ws.cell(row=r + row_offset, column=target_col, value=value)
         else:
-            ws[default_cell] = value
+            ws.cell(row=fallback_row + row_offset, column=fallback_col, value=value)
 
-    # ── 값 기입 ────────────────────────────────
-    store_name = str(customer_row.get("sold_to_name", "")).strip()
-    sold_to_id = str(customer_row.get("sold_to", "")).strip()
-    ship_to_id = str(customer_row.get("ship_to", "")).strip()
-    ship_to_name = str(customer_row.get("ship_to_name", "")).strip()
-    address = str(customer_row.get("address", "")).strip()
+    # ── Store Name ← ship_to_name ──────────────────
+    write_right("store_name", 5, 5, customer["ship_to_name"])
 
-    write_cell("store_name", CELL_STORE_NAME, store_name)
-    write_cell("sold_to",    CELL_SOLD_TO_ID, sold_to_id)
-    write_cell("ship_to",    CELL_SHIP_TO_ID, ship_to_id)
+    # ── Sold-to ← sold_to + sold_to_name ───────────
+    write_right("sold_to", 8, 5, f"{customer['sold_to']}  {customer['sold_to_name']}")
 
-    # 추가 정보 (탐지 실패 시 하드코딩 셀에 기입)
-    if "sold_to" in mapping:
-        r, c = mapping["sold_to"]
-        ws.cell(row=r + 1, column=c, value=store_name)  # sold_to 아래 줄에 회사명
-    else:
-        ws[CELL_SOLD_TO_NAME] = store_name
-
-    if "ship_to" in mapping:
-        r, c = mapping["ship_to"]
-        ws.cell(row=r + 1, column=c, value=ship_to_name)
-        ws.cell(row=r + 2, column=c, value=address)
-    else:
-        ws[CELL_SHIP_TO_NAME] = ship_to_name
-        ws[CELL_ADDRESS] = address
+    # ── Ship-to ← ship_to / ship_to_name / address ─
+    write_right("ship_to", 11, 5, customer["ship_to"],      row_offset=0)
+    write_right("ship_to", 12, 5, customer["ship_to_name"], row_offset=1)
+    write_right("ship_to", 13, 5, customer["address"],      row_offset=2)
 
     wb.save(output_path)
-    print(f"  ✔ 저장 완료: {output_path}")
+    print(f"  ✔ {os.path.basename(output_path)}")
 
 
-def create_sample_files(n: int = 3):
-    """
-    customer.csv 에서 n 개를 선택해 샘플 파일을 output 폴더에 생성.
-    """
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    df = load_customer_master(CUSTOMER_CSV)
-
-    if not os.path.exists(TEMPLATE_PATH):
-        print(f"[ERROR] 템플릿 파일이 없습니다: {TEMPLATE_PATH}")
-        sys.exit(1)
-
-    samples = df.head(n)
-    for _, row in samples.iterrows():
-        sold_to = row["sold_to"]
-        safe_name = str(row.get("sold_to_name", sold_to)).replace("/", "_").replace("\\", "_")[:40]
-        filename = f"Claim_Form_{sold_to}_{safe_name}.xlsx"
-        output_path = os.path.join(OUTPUT_DIR, filename)
-        print(f"처리중: {sold_to} - {row.get('sold_to_name')}")
-        fill_form(TEMPLATE_PATH, row, output_path)
-
-    print(f"\n총 {len(samples)}개 파일 생성 완료 → {OUTPUT_DIR}")
-
-
+# ─────────────────────────────────────────────
+# 메인
+# ─────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(
-        description="Customer Master → Claim Report Form 자동 입력"
-    )
-    parser.add_argument(
-        "--sold_to", nargs="+", metavar="SOLD_TO",
-        help="입력할 sold_to 코드 (예: 731942 100142)"
-    )
-    parser.add_argument(
-        "--all", action="store_true",
-        help="customer.csv 전체 고객 파일 생성"
-    )
-    parser.add_argument(
-        "--sample", type=int, default=3, metavar="N",
-        help="샘플 파일 생성 개수 (기본 3개)"
-    )
+    parser = argparse.ArgumentParser(description="Claim Report Form 자동 입력")
+    parser.add_argument("--ship_to", nargs="+", help="ship_to 코드 지정 (예: 724363 731942)")
+    parser.add_argument("--all", action="store_true", help="전체 고객 파일 생성")
+    parser.add_argument("--sample", type=int, default=3, help="샘플 N개 생성 (기본 3)")
     args = parser.parse_args()
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    df = load_customer_master(CUSTOMER_CSV)
-
     if not os.path.exists(TEMPLATE_PATH):
-        print(f"[ERROR] 템플릿 파일이 없습니다: {TEMPLATE_PATH}")
+        print(f"[ERROR] 템플릿 파일 없음: {TEMPLATE_PATH}")
         sys.exit(1)
+
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    df = load_customer_master()
 
     if args.all:
         targets = df
-    elif args.sold_to:
-        targets = df[df["sold_to"].isin([str(s) for s in args.sold_to])]
+    elif args.ship_to:
+        targets = df[df["ship_to"].isin([str(s) for s in args.ship_to])]
         if targets.empty:
-            print(f"[ERROR] 해당 sold_to 를 customer.csv 에서 찾을 수 없습니다: {args.sold_to}")
+            print(f"[ERROR] 해당 ship_to를 찾을 수 없습니다: {args.ship_to}")
             sys.exit(1)
     else:
-        # 기본: 샘플 N개
         targets = df.head(args.sample)
 
     for _, row in targets.iterrows():
-        sold_to = row["sold_to"]
-        safe_name = str(row.get("sold_to_name", sold_to)).replace("/", "_").replace("\\", "_")[:40]
-        filename = f"Claim_Form_{sold_to}_{safe_name}.xlsx"
-        output_path = os.path.join(OUTPUT_DIR, filename)
-        print(f"처리중: {sold_to} - {row.get('sold_to_name')}")
-        fill_form(TEMPLATE_PATH, row, output_path)
+        customer = {
+            "sold_to":      str(row.get("sold_to", "")).strip(),
+            "sold_to_name": str(row.get("sold_to_name", "")).strip(),
+            "ship_to":      str(row.get("ship_to", "")).strip(),
+            "ship_to_name": str(row.get("ship_to_name", "")).strip(),
+            "address":      str(row.get("address", "")).strip(),
+        }
+        safe = customer["ship_to_name"].replace("/", "_").replace("\\", "_")[:40]
+        out = os.path.join(OUTPUT_DIR, f"Claim_Form_{customer['ship_to']}_{safe}.xlsx")
+        fill_form(customer, out)
 
     print(f"\n총 {len(targets)}개 파일 생성 완료 → {OUTPUT_DIR}")
 

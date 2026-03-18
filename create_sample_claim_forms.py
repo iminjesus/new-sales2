@@ -1,235 +1,332 @@
 """
 create_sample_claim_forms.py
 ============================
-템플릿 파일 없이 Claim Report Form 양식을 openpyxl로 직접 생성합니다.
-customer.csv에서 2~3개 고객을 선택해 샘플 파일을 만듭니다.
+customer_2603.csv (또는 customer.csv) 데이터를 읽어
+Claim Report Form Excel 파일을 자동으로 생성합니다.
+
+필드 매핑:
+  - Store Name  ← ship_to_name
+  - Sold-to     ← sold_to (코드) + sold_to_name
+  - Ship-to     ← ship_to (코드) + ship_to_name + address
 
 실행: python create_sample_claim_forms.py
 """
 
 import os
+import sys
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import (
-    Font, Alignment, Border, Side, PatternFill, colors
-)
-from openpyxl.utils import get_column_letter
-from openpyxl.drawing.image import Image as XLImage
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
 # ─────────────────────────────────────────────
 # 경로 설정
 # ─────────────────────────────────────────────
-SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-CUSTOMER_CSV = os.path.join(SCRIPT_DIR, "rawdata", "unlock", "customer.csv")
-OUTPUT_DIR   = os.path.join(SCRIPT_DIR, "rawdata", "output")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+UNLOCK_DIR = os.path.join(SCRIPT_DIR, "rawdata", "unlock")
+
+# customer_2603.csv 우선 사용, 없으면 customer.csv 사용
+CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer_2603.csv")
+if not os.path.exists(CUSTOMER_CSV):
+    CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer.csv")
+
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "rawdata", "output")
+
 
 # ─────────────────────────────────────────────
 # 스타일 헬퍼
 # ─────────────────────────────────────────────
-def thin_border(top=False, bottom=False, left=False, right=False):
-    thin = Side(style="thin")
+def thin():
+    return Side(style="thin")
+
+def no_side():
+    return Side(style=None)
+
+def border(top=False, bottom=False, left=False, right=False, dashed_bottom=False):
+    b = Side(style="dashed") if dashed_bottom else (thin() if bottom else no_side())
     return Border(
-        top=thin    if top    else Side(style=None),
-        bottom=thin if bottom else Side(style=None),
-        left=thin   if left   else Side(style=None),
-        right=thin  if right  else Side(style=None),
+        top=thin() if top else no_side(),
+        bottom=b,
+        left=thin() if left else no_side(),
+        right=thin() if right else no_side(),
     )
 
-def box_border():
-    thin = Side(style="thin")
-    return Border(top=thin, bottom=thin, left=thin, right=thin)
+def box():
+    return Border(top=thin(), bottom=thin(), left=thin(), right=thin())
 
-def dashed_border():
-    dash = Side(style="dashed")
-    return Border(top=dash, bottom=dash, left=dash, right=dash)
+def font(size=9, bold=False, color="000000"):
+    return Font(name="Arial", size=size, bold=bold, color=color)
 
-def label_font(bold=False, size=9):
-    return Font(name="Arial", size=size, bold=bold)
-
-def title_font():
-    return Font(name="Arial", size=16, bold=True)
+def align(h="left", v="top", wrap=False):
+    return Alignment(horizontal=h, vertical=v, wrap_text=wrap)
 
 
-def set_col_widths(ws):
-    widths = {
-        "A": 4, "B": 2, "C": 12, "D": 2, "E": 14, "F": 2,
-        "G": 12, "H": 2, "I": 14, "J": 2, "K": 3,
-        "L": 12, "M": 2, "N": 14, "O": 2, "P": 3,
-    }
-    for col, w in widths.items():
-        ws.column_dimensions[col].width = w
-    for r in range(1, 40):
-        ws.row_dimensions[r].height = 15
+# ─────────────────────────────────────────────
+# 컬럼 너비 / 행 높이 설정
+# 스크린샷 기준: A~AP 정도까지 넓게 사용
+# ─────────────────────────────────────────────
+def setup_sheet(ws):
+    # A~D: 레이블 영역, E~Z: 값 영역 (넓게)
+    ws.column_dimensions["A"].width = 2
+    ws.column_dimensions["B"].width = 14   # 레이블 열
+    for col in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        ws.column_dimensions[col].width = 3
+    # 오른쪽 박스 (Manufacturer 영역)
+    import openpyxl.utils as utils
+    for i in range(27, 45):  # AA ~ AR
+        ws.column_dimensions[utils.get_column_letter(i)].width = 3
+
+    for r in range(1, 50):
+        ws.row_dimensions[r].height = 16
 
 
-def build_claim_form(wb: Workbook, customer: dict) -> None:
+# ─────────────────────────────────────────────
+# 왼쪽 정보 박스 테두리 그리기
+# cols: 2(B) ~ 28(AB) / rows: 3~16
+# ─────────────────────────────────────────────
+def draw_left_box(ws, r1=3, r2=16, c1=2, c2=28):
+    for r in range(r1, r2 + 1):
+        for c in range(c1, c2 + 1):
+            top    = (r == r1)
+            bottom = (r == r2)
+            left   = (c == c1)
+            right  = (c == c2)
+            if top or bottom or left or right:
+                ws.cell(row=r, column=c).border = border(
+                    top=top, bottom=bottom, left=left, right=right
+                )
+
+
+# ─────────────────────────────────────────────
+# 오른쪽 Manufacturer 박스
+# cols: 30(AD) ~ 44(AR)
+# ─────────────────────────────────────────────
+def draw_right_box(ws):
+    # 섹션별 행 범위
+    sections = [
+        (3, 6),   # Manufacturer / Logo
+        (7, 9),   # Manufacturer Handling / Claim no.
+        (10, 12), # Inspector Name / Mobile
+        (13, 16), # Tyre Owner / Mobile
+    ]
+    c1, c2 = 30, 44
+    for r1, r2 in sections:
+        for r in range(r1, r2 + 1):
+            for c in range(c1, c2 + 1):
+                top    = (r == r1)
+                bottom = (r == r2)
+                left   = (c == c1)
+                right  = (c == c2)
+                if top or bottom or left or right:
+                    ws.cell(row=r, column=c).border = border(
+                        top=top, bottom=bottom, left=left, right=right
+                    )
+
+
+# ─────────────────────────────────────────────
+# Claim Form 작성
+# ─────────────────────────────────────────────
+def build_claim_form(wb: Workbook, customer: dict):
     ws = wb.active
     ws.title = "Claim Report"
-    set_col_widths(ws)
+    setup_sheet(ws)
 
-    # ── 제목 ─────────────────────────────────
-    ws.merge_cells("A1:P1")
-    ws["A1"] = "Claim report form"
-    ws["A1"].font = title_font()
-    ws["A1"].alignment = Alignment(vertical="center")
+    # ── 제목 ─────────────────────────────────────────
+    ws.merge_cells("B1:AB1")
+    ws["B1"] = "Claim report form"
+    ws["B1"].font = Font(name="Arial", size=16, bold=True)
+    ws["B1"].alignment = align(h="left", v="center")
     ws.row_dimensions[1].height = 28
 
-    # ── 왼쪽 박스 (Store Name / Sold-to / Ship-to) ──
-    left_box_rows = list(range(3, 16))  # rows 3~15
-    # 테두리 그리기 (A3:J15)
-    for r in range(3, 16):
-        for c in range(1, 11):   # A~J
-            cell = ws.cell(row=r, column=c)
-            top    = (r == 3)
-            bottom = (r == 15)
-            left   = (c == 1)
-            right  = (c == 10)
-            cell.border = thin_border(top=top, bottom=bottom, left=left, right=right)
+    # ── 왼쪽 외곽선 박스 (B3:AB16) ────────────────────
+    draw_left_box(ws)
 
-    # Store Name 레이블 + 값
-    ws["A3"] = "Store Name :"
-    ws["A3"].font = label_font(bold=False, size=9)
-    ws["A3"].alignment = Alignment(vertical="top")
-    ws.merge_cells("A3:J4")
-    ws["A3"] = f"Store Name :   {customer['sold_to_name']}"
-    ws["A3"].font = label_font(size=9)
+    # ── Store Name (← ship_to_name) ───────────────────
+    ws.merge_cells("B4:D4")
+    ws["B4"] = "Store Name :"
+    ws["B4"].font = font(size=9)
+    ws["B4"].alignment = align(v="center")
 
-    # 구분선 (점선)
-    for c in range(1, 11):
-        ws.cell(row=5, column=c).border = thin_border(bottom=True)
+    ws.merge_cells("E4:AB4")
+    ws["E4"] = customer["ship_to_name"]
+    ws["E4"].font = font(size=9)
+    ws["E4"].alignment = align(v="center")
 
-    # Sold-to 레이블 + 값
-    ws.merge_cells("A6:J7")
-    ws["A6"] = f"Sold-to :   {customer['sold_to']}  {customer['sold_to_name']}"
-    ws["A6"].font = label_font(size=9)
+    # Store Name 아래 dashed 구분선
+    for c in range(2, 29):
+        cell = ws.cell(row=5, column=c)
+        cell.border = Border(bottom=Side(style="dashed"))
 
-    # 구분선
-    for c in range(1, 11):
-        ws.cell(row=8, column=c).border = thin_border(bottom=True)
+    # ── Sold-to (← sold_to 코드 + sold_to_name) ───────
+    ws.merge_cells("B7:D7")
+    ws["B7"] = "Sold-to :"
+    ws["B7"].font = font(size=9)
+    ws["B7"].alignment = align(v="center")
 
-    # Ship-to 레이블 + 값
-    ws.merge_cells("A9:J10")
-    ws["A9"] = (
-        f"Ship-to :   {customer['ship_to']}  {customer['ship_to_name']}\n"
-        f"            {customer['address']}"
-    )
-    ws["A9"].font = label_font(size=9)
-    ws["A9"].alignment = Alignment(wrap_text=True, vertical="top")
+    ws.merge_cells("E7:AB7")
+    ws["E7"] = f"{customer['sold_to']}  {customer['sold_to_name']}"
+    ws["E7"].font = font(size=9)
+    ws["E7"].alignment = align(v="center")
 
-    # ── 오른쪽 박스 (Manufacturer) ──────────
-    ws.merge_cells("K2:P2")
-    ws["K2"] = "Manufacturer"
-    ws["K2"].font = label_font(size=8)
+    # Sold-to 아래 구분선
+    for c in range(2, 29):
+        cell = ws.cell(row=8, column=c)
+        cell.border = Border(bottom=Side(style="dashed"))
 
-    # Hankook 로고 텍스트 (실제 로고 이미지 없을 경우)
-    ws.merge_cells("K3:P6")
-    ws["K3"] = "HANKOOK"
-    ws["K3"].font = Font(name="Arial", size=20, bold=True, color="E85D04")
-    ws["K3"].alignment = Alignment(horizontal="center", vertical="center")
+    # ── Ship-to (← ship_to 코드 / ship_to_name / address) ─
+    ws.merge_cells("B10:D10")
+    ws["B10"] = "Ship-to :"
+    ws["B10"].font = font(size=9)
+    ws["B10"].alignment = align(v="top")
 
-    for r in range(2, 16):
-        for c in range(11, 17):
-            cell = ws.cell(row=r, column=c)
-            top    = (r == 2)
-            bottom = (r == 15)
-            left   = (c == 11)
-            right  = (c == 16)
-            cell.border = thin_border(top=top, bottom=bottom, left=left, right=right)
+    # ship_to ID
+    ws.merge_cells("E10:AB10")
+    ws["E10"] = customer["ship_to"]
+    ws["E10"].font = font(size=9)
+    ws["E10"].alignment = align(v="center")
 
-    ws.merge_cells("K7:P8")
-    ws["K7"] = "Manufacturer Handling\nClaim no."
-    ws["K7"].font = label_font(size=8)
-    ws["K7"].alignment = Alignment(wrap_text=True, vertical="top")
+    # ship_to_name
+    ws.merge_cells("E11:AB11")
+    ws["E11"] = customer["ship_to_name"]
+    ws["E11"].font = font(size=9)
+    ws["E11"].alignment = align(v="center")
 
-    ws.merge_cells("K9:P10")
-    ws["K9"] = "Inspector Name :\nMobile Phone no. :"
-    ws["K9"].font = label_font(size=8)
-    ws["K9"].alignment = Alignment(wrap_text=True, vertical="top")
+    # address
+    ws.merge_cells("E12:AB12")
+    ws["E12"] = customer["address"]
+    ws["E12"].font = font(size=9)
+    ws["E12"].alignment = align(v="center")
 
-    ws.merge_cells("K11:P12")
-    ws["K11"] = "Tyre Owner Name :\nMobile Phone No."
-    ws["K11"].font = label_font(size=8)
-    ws["K11"].alignment = Alignment(wrap_text=True, vertical="top")
+    # Ship-to 아래 dashed 구분선
+    for c in range(2, 29):
+        cell = ws.cell(row=13, column=c)
+        cell.border = Border(bottom=Side(style="dashed"))
 
-    # ── Tyre Purchase Date ──────────────────
-    ws["A17"] = "Tyre Purchase Date:"
-    ws["A17"].font = label_font(bold=True, size=9)
-    ws.merge_cells("D17:J17")
-    ws["D17"].border = box_border()
+    # ── 오른쪽 Manufacturer 박스 ──────────────────────
+    draw_right_box(ws)
 
-    # ── Return Tires Information ────────────
-    ws["A19"] = "Return Tires Information"
-    ws["A19"].font = label_font(bold=True, size=9)
+    ws.merge_cells("AD3:AR3")
+    ws["AD3"] = "Manufacturer"
+    ws["AD3"].font = font(size=8)
+    ws["AD3"].alignment = align(v="top")
 
-    headers = [
-        ("Tire Size\nDescription", "A21:C22"),
-        ("Pattern Name\n(or Product Name)", "D21:F22"),
-        ("DOT Number", "G21:H22"),
-        ("Serial Number\n(Truck & BUS Only)", "I21:K22"),
-        ("Remain Skid\nDepth (mm)", "L21:M22"),
-    ]
+    ws.merge_cells("AD7:AR7")
+    ws["AD7"] = "Manufacturer Handling"
+    ws["AD7"].font = font(size=8)
+
+    ws.merge_cells("AD8:AR8")
+    ws["AD8"] = "Claim no."
+    ws["AD8"].font = font(size=8)
+
+    ws.merge_cells("AD10:AR10")
+    ws["AD10"] = "Inspector Name :"
+    ws["AD10"].font = font(size=8)
+
+    ws.merge_cells("AD11:AR11")
+    ws["AD11"] = "Mobile Phone no. :"
+    ws["AD11"].font = font(size=8)
+
+    ws.merge_cells("AD13:AR13")
+    ws["AD13"] = "Tyre Owner Name :"
+    ws["AD13"].font = font(size=8)
+
+    ws.merge_cells("AD14:AR14")
+    ws["AD14"] = "Mobile Phone No."
+    ws["AD14"].font = font(size=8)
+
+    # ── Tyre Purchase Date ────────────────────────────
+    ws.merge_cells("B18:D18")
+    ws["B18"] = "Tyre Purchase Date:"
+    ws["B18"].font = font(bold=True)
+
+    ws.merge_cells("F18:P18")
+    ws["F18"].border = box()
+
+    # ── Return Tires Information ──────────────────────
+    ws.merge_cells("B20:AB20")
+    ws["B20"] = "Return Tires Information"
+    ws["B20"].font = font(bold=True)
+
+    # 헤더 행
     header_fill = PatternFill("solid", fgColor="D9D9D9")
-    for text, merge_range in headers:
-        ws.merge_cells(merge_range)
-        start_cell = merge_range.split(":")[0]
-        cell = ws[start_cell]
+    headers = [
+        ("Tire Size\nDescription",      "B22", "F23"),
+        ("Pattern Name\n(or Product Name)", "G22", "K23"),
+        ("DOT Number",                  "L22", "P23"),
+        ("Serial Number\n(Truck & BUS Only)", "Q22", "U23"),
+        ("Remain Skid\nDepth (mm)",     "V22", "AB23"),
+    ]
+    for text, start, end in headers:
+        ws.merge_cells(f"{start}:{end}")
+        cell = ws[start]
         cell.value = text
-        cell.font = label_font(bold=False, size=8)
+        cell.font = font(size=8)
         cell.fill = header_fill
         cell.alignment = Alignment(wrap_text=True, horizontal="center", vertical="center")
-        cell.border = box_border()
+        cell.border = box()
 
+    # 데이터 행 (ex, 1, 2, 3)
     row_labels = ["ex", "1", "2", "3"]
+    col_ranges = [("B", "F"), ("G", "K"), ("L", "P"), ("Q", "U"), ("V", "AB")]
     for i, lbl in enumerate(row_labels):
-        base_row = 23 + i * 2
-        ws.cell(row=base_row, column=1).value = lbl
-        ws.cell(row=base_row, column=1).font = label_font(size=8)
-        for col_range in ["A:C", "D:F", "G:H", "I:K", "L:M"]:
-            s, e = col_range.split(":")
-            sc = ord(s) - 64
-            ec = ord(e) - 64
-            ws.merge_cells(
-                start_row=base_row, start_column=sc,
-                end_row=base_row+1,  end_column=ec
-            )
-            ws.cell(row=base_row, column=sc).border = box_border()
+        r = 24 + i * 2
+        ws.cell(row=r, column=2).value = lbl
+        ws.cell(row=r, column=2).font = font(size=8)
+        for sc, ec in col_ranges:
+            sc_n = _col_num(sc)
+            ec_n = _col_num(ec)
+            ws.merge_cells(start_row=r, start_column=sc_n, end_row=r+1, end_column=ec_n)
+            ws.cell(row=r, column=sc_n).border = box()
 
-    # ── Description ─────────────────────────
-    desc_row = 23 + len(row_labels) * 2 + 1
-    ws.cell(row=desc_row, column=1).value = "Description (Claim reason)"
-    ws.cell(row=desc_row, column=1).font = label_font(bold=False, size=8)
-    ws.merge_cells(
-        start_row=desc_row, start_column=1,
-        end_row=desc_row+3,  end_column=13
+    # Description 영역
+    desc_row = 24 + len(row_labels) * 2 + 1
+    ws.merge_cells(start_row=desc_row, start_column=2, end_row=desc_row+3, end_column=28)
+    ws.cell(row=desc_row, column=2).value = "Description (Claim reason)"
+    ws.cell(row=desc_row, column=2).font = font(size=8)
+    ws.cell(row=desc_row, column=2).border = box()
+    ws.cell(row=desc_row, column=2).alignment = align(v="top")
+
+
+def _col_num(col_letter: str) -> int:
+    """컬럼 문자 → 번호 (A=1, Z=26, AA=27 …)"""
+    from openpyxl.utils import column_index_from_string
+    return column_index_from_string(col_letter)
+
+
+# ─────────────────────────────────────────────
+# 메인 실행
+# ─────────────────────────────────────────────
+def load_customers(n: int = None) -> pd.DataFrame:
+    print(f"데이터 파일: {CUSTOMER_CSV}")
+    df = pd.read_csv(
+        CUSTOMER_CSV,
+        dtype={"sold_to": str, "ship_to": str},
+        encoding="latin1",
     )
-    ws.cell(row=desc_row, column=1).border = box_border()
-    ws.cell(row=desc_row, column=1).alignment = Alignment(vertical="top")
+    df.columns = df.columns.str.strip()
+    # ship_to 기준으로 파일 생성 (각 ship_to별 1개 파일)
+    df = df.drop_duplicates(subset=["ship_to"], keep="first")
+    return df.head(n) if n else df
 
 
 def create_sample_files(n: int = 3):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-    df = pd.read_csv(CUSTOMER_CSV, dtype={"sold_to": str, "ship_to": str}, encoding="latin1")
-    df.columns = df.columns.str.strip()
-    df = df.drop_duplicates(subset=["sold_to"], keep="first")
-
-    samples = df.head(n)
+    df = load_customers(n)
     created = []
 
-    for _, row in samples.iterrows():
+    for _, row in df.iterrows():
         customer = {
-            "sold_to":       str(row.get("sold_to", "")).strip(),
-            "sold_to_name":  str(row.get("sold_to_name", "")).strip(),
-            "ship_to":       str(row.get("ship_to", "")).strip(),
-            "ship_to_name":  str(row.get("ship_to_name", "")).strip(),
-            "address":       str(row.get("address", "")).strip(),
+            "sold_to":      str(row.get("sold_to", "")).strip(),
+            "sold_to_name": str(row.get("sold_to_name", "")).strip(),
+            "ship_to":      str(row.get("ship_to", "")).strip(),
+            "ship_to_name": str(row.get("ship_to_name", "")).strip(),
+            "address":      str(row.get("address", "")).strip(),
         }
 
         wb = Workbook()
         build_claim_form(wb, customer)
 
-        safe_name = customer["sold_to_name"].replace("/", "_").replace("\\", "_")[:40]
-        filename = f"Claim_Form_{customer['sold_to']}_{safe_name}.xlsx"
+        safe_name = customer["ship_to_name"].replace("/", "_").replace("\\", "_")[:40]
+        filename = f"Claim_Form_{customer['ship_to']}_{safe_name}.xlsx"
         output_path = os.path.join(OUTPUT_DIR, filename)
         wb.save(output_path)
         created.append(output_path)
@@ -240,5 +337,11 @@ def create_sample_files(n: int = 3):
 
 
 if __name__ == "__main__":
-    print("샘플 Claim Report Form 파일 생성 중...")
-    create_sample_files(n=3)
+    import argparse
+    parser = argparse.ArgumentParser(description="Claim Report Form 샘플 생성")
+    parser.add_argument("--n", type=int, default=3, help="생성할 파일 수 (기본 3)")
+    parser.add_argument("--all", action="store_true", help="전체 고객 파일 생성")
+    args = parser.parse_args()
+
+    print("Claim Report Form 생성 중...")
+    create_sample_files(n=None if args.all else args.n)
