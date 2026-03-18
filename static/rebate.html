@@ -70,13 +70,13 @@ tr.ship-row td:first-child{padding-left:28px}
 <body>
 <header>
   <h1>Rebate Calculator</h1>
-  <span class="sub">Ship-To 기준 개별 Tier 계산 &nbsp;|&nbsp; sales_thismonth 현재 누적 데이터</span>
+  <span class="sub">Calculated per Ship-To &nbsp;|&nbsp; sales_thismonth cumulative data</span>
 </header>
 
 <div class="filters">
   <div>
-    <label>Territory</label>
-    <select id="f_terr">
+    <label>Region</label>
+    <select id="f_terr" onchange="fetchPage(0)">
       <option value="ALL">All</option>
       <option value="TTL">TTL (HK+LF)</option>
       <option value="HK">HK – Hankook</option>
@@ -85,24 +85,11 @@ tr.ship-row td:first-child{padding-left:28px}
   </div>
   <div>
     <label>Customer Group</label>
-    <select id="f_stg"><option value="ALL">All Groups</option></select>
+    <select id="f_stg" onchange="fetchPage(0)"><option value="ALL">All Groups</option></select>
   </div>
   <div>
     <label>Search</label>
-    <input type="text" id="f_search" placeholder="Name / code…" style="min-width:180px">
-  </div>
-  <div>
-    <label>Show</label>
-    <select id="f_show">
-      <option value="ALL">All</option>
-      <option value="NEXT">Has next tier</option>
-      <option value="MAX">Max tier reached</option>
-      <option value="ZERO">No sales</option>
-    </select>
-  </div>
-  <div style="display:flex;gap:6px">
-    <button class="btn btn-primary" onclick="load()">Refresh</button>
-    <button class="btn btn-outline" onclick="exportCSV()">Export CSV</button>
+    <input type="text" id="f_search" placeholder="Name / code…" style="min-width:180px" oninput="debounceSearch()">
   </div>
 </div>
 
@@ -127,13 +114,16 @@ function buildQS(page){
     territory:     document.getElementById("f_terr").value,
     sold_to_group: document.getElementById("f_stg").value,
     search:        document.getElementById("f_search").value.trim(),
-    show:          document.getElementById("f_show").value,
+    show:          "ALL",
     sort:          sortCol,
     dir:           sortDir,
     page:          page ?? currentPage,
     page_size:     40,
   });
 }
+
+let _searchTimer = null;
+function debounceSearch(){ clearTimeout(_searchTimer); _searchTimer = setTimeout(()=>fetchPage(0), 350); }
 
 // ─── fetch a page from the server ────────────────────────────────────────────
 async function fetchPage(page){
@@ -178,12 +168,7 @@ function load(){ fetchPage(0); }
 function renderPage(data){
   const s = data.summary;
   document.getElementById("summary").innerHTML = `
-    <div class="stat-card"><div class="label">Sold-To (structures)</div><div class="value">${s.total_groups}</div></div>
-    <div class="stat-card"><div class="label">Ship-To locations</div><div class="value">${s.total_ship_to}</div></div>
-    <div class="stat-card"><div class="label">Has Next Tier</div><div class="value" style="color:#dc2626">${s.has_next}</div></div>
-    <div class="stat-card"><div class="label">Max Tier ✓</div><div class="value" style="color:#16a34a">${s.max_tier}</div></div>
-    <div class="stat-card"><div class="label">No Sales</div><div class="value" style="color:#9ca3af">${s.zero_sales}</div></div>
-    <div class="stat-card"><div class="label">Est. Total Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(s.est_total)}</div></div>`;
+    <div class="stat-card"><div class="label">Total Current Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(s.est_total)}</div></div>`;
 
   if(!data.groups.length){
     document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
@@ -265,9 +250,18 @@ function renderPage(data){
     return html;
   }
 
+  // ── Sort regions: NSW, QLD, VIC, WA first, then others alphabetically ───
+  const regionOrder = ["NSW","QLD","VIC","WA"];
+  const sortedRegions = [...regionMap.entries()].sort(([a],[b])=>{
+    const ai = regionOrder.indexOf(a), bi = regionOrder.indexOf(b);
+    if(ai>=0 && bi>=0) return ai-bi;
+    if(ai>=0) return -1; if(bi>=0) return 1;
+    return a.localeCompare(b);
+  });
+
   // ── Render 4-level hierarchy ─────────────────────────────────────────────
   let bodyHtml = "";
-  regionMap.forEach((rNode, rKey) => {
+  sortedRegions.forEach(([rKey, rNode]) => {
     bodyHtml += `<tr class="region-hdr">
       <td colspan="12"><b>${esc(rNode.region)}</b>
         <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(rNode.qty)} units &nbsp;·&nbsp; $${fmt(rNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(rNode.rebate)}</span>
