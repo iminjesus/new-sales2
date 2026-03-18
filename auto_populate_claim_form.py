@@ -129,6 +129,23 @@ def detect_value_columns(ws):
 # ─────────────────────────────────────────────
 # 폼 채우기 (템플릿 기반)
 # ─────────────────────────────────────────────
+def safe_write(ws, row: int, col: int, value):
+    """
+    병합 셀이라도 안전하게 값을 기입.
+    MergedCell인 경우 해당 병합 범위의 최상단 왼쪽(master) 셀에 씁니다.
+    """
+    from openpyxl.cell.cell import MergedCell
+    cell = ws.cell(row=row, column=col)
+    if isinstance(cell, MergedCell):
+        # 이 셀이 속한 병합 범위 찾기
+        for merged in ws.merged_cells.ranges:
+            if (merged.min_row <= row <= merged.max_row and
+                    merged.min_col <= col <= merged.max_col):
+                ws.cell(row=merged.min_row, column=merged.min_col, value=value)
+                return
+    cell.value = value
+
+
 def fill_form(customer: dict, output_path: str):
     shutil.copy2(TEMPLATE_PATH, output_path)
     wb = load_workbook(output_path)
@@ -140,12 +157,9 @@ def fill_form(customer: dict, output_path: str):
         """레이블 오른쪽에 값 기입. 탐지 실패 시 fallback 셀 사용."""
         if key in mapping:
             r, c = mapping[key]
-            # 값은 레이블보다 오른쪽 열 (c+3 이상)에 이미 merge 된 경우가 많으므로
-            # 같은 행에서 비어있는 가장 가까운 오른쪽 셀 찾기
-            target_col = c + 1
-            ws.cell(row=r + row_offset, column=target_col, value=value)
+            safe_write(ws, r + row_offset, c + 1, value)
         else:
-            ws.cell(row=fallback_row + row_offset, column=fallback_col, value=value)
+            safe_write(ws, fallback_row + row_offset, fallback_col, value)
 
     # ── Store Name ← ship_to_name ──────────────────
     write_right("store_name", 5, 5, customer["ship_to_name"])
