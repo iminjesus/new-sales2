@@ -151,7 +151,7 @@ def parse_category_csv(path: str) -> list[tuple[str, str, int, int, float, float
                             rates[i] > rates[i - 1]):
                         top_order = i
 
-                for i in range(n):
+                for i in range(top_order + 1):  # only insert tiers 0..top_order
                     tiers.append((pending_name, unit, i, top_order,
                                   pending_thresholds[i], rates[i]))
 
