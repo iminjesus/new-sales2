@@ -230,7 +230,14 @@ function renderPage(data){
     </tr>`;
 
     if(isOpen){
-      g.items.forEach(r=>{
+      /* Deduplicate by ship_to: one row per ship-to location */
+      const seenShips = new Set();
+      const dedupItems = g.items.filter(r=>{
+        const k = r.ship_to + "|" + r.brand;
+        if(seenShips.has(k)) return false;
+        seenShips.add(k); return true;
+      });
+      dedupItems.forEach(r=>{
         const validT = r.tiers.filter(t=>t.rate>0);
         const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
         const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
@@ -275,7 +282,7 @@ function renderPage(data){
           <td><span class="est">${r.est_rebate>0?"$"+fmt(r.est_rebate):"—"}</span></td>
           <td><div class="tier-list">${dots}</div></td>
         </tr>`;
-      });
+      }); // dedupItems.forEach
     }
   });
 
