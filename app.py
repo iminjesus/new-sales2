@@ -3328,7 +3328,9 @@ def api_rebate_data():
                 actual = actual_qty if unit == "Q" else actual_amt
 
                 curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
-                est_rebate = round(actual * curr_tier["rate"] / 100, 2)
+                curr_rebate = round(actual * curr_tier["rate"] / 100, 2)
+                # est_rebate: rebate value when reaching next tier (next_threshold × next_rate)
+                est_rebate  = round(next_tier["threshold"] * next_tier["rate"] / 100, 2) if next_tier else None
                 # needed_qty / needed_amt: only one can be calculated per structure type
                 needed_qty = round(next_tier["threshold"] - actual_qty, 2) if next_tier and unit == "Q" else None
                 needed_amt = round(next_tier["threshold"] - actual_amt, 2) if next_tier and unit == "A" else None
@@ -3352,6 +3354,7 @@ def api_rebate_data():
                     "next_rate":      next_tier["rate"]      if next_tier else None,
                     "needed_qty":     needed_qty,
                     "needed_amt":     needed_amt,
+                    "curr_rebate":    curr_rebate,
                     "est_rebate":     est_rebate,
                     "tiers":          tiers,
                 })
@@ -3376,7 +3379,7 @@ def api_rebate_data():
             "has_next":  sum(1 for r in rows if r["next_rate"] is not None and r["actual"] > 0),
             "max_tier":  sum(1 for r in rows if r["next_rate"] is None and r["curr_rate"] > 0),
             "zero_sales": sum(1 for r in rows if r["actual"] == 0),
-            "est_total":  round(sum(r["est_rebate"] for r in rows), 2),
+            "est_total":  round(sum(r["curr_rebate"] for r in rows), 2),
         }
 
         # ── 8. Group by (sold_to, brand) ──────────────────────────────────────
@@ -3391,13 +3394,14 @@ def api_rebate_data():
                     "brand": r["brand"], "unit": r["unit"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
-                    "grp_est": 0.0, "items": [],
+                    "grp_curr_rebate": 0.0, "grp_est": 0.0, "items": [],
                 }
             g = grp_map[key]
-            g["grp_actual"]     += r["actual"]
-            g["grp_actual_qty"] += r["actual_qty"]
-            g["grp_actual_amt"] += r["actual_amt"]
-            g["grp_est"]        += r["est_rebate"]
+            g["grp_actual"]       += r["actual"]
+            g["grp_actual_qty"]   += r["actual_qty"]
+            g["grp_actual_amt"]   += r["actual_amt"]
+            g["grp_curr_rebate"]  += r["curr_rebate"]
+            g["grp_est"]          += r["est_rebate"] if r["est_rebate"] else 0.0
             g["items"].append(r)
 
         groups = list(grp_map.values())
