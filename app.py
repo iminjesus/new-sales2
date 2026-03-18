@@ -3349,7 +3349,7 @@ def api_rebate_data():
                     "sold_to_name":   c["sold_to_name"] or sold_to,
                     "sold_to_group":  c["sold_to_group"] or "-",
                     "region":         sh_info.get("state") or c["region"] or "-",
-                    "bde":            c["bde"] or "-",
+                    "bde":            sh_info.get("bde") or c["bde"] or "-",
                     "ship_to":        sh,
                     "ship_to_name":   sh_info.get("name") or sh,
                     "brand":          brand,
