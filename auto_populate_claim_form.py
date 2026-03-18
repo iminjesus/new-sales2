@@ -165,24 +165,24 @@ def fill_form(customer: dict, output_path: str):
 
     mapping = detect_value_columns(ws)
 
-    def write_right(key, fallback_row, fallback_col, value, row_offset=0):
-        """레이블 오른쪽에 값 기입. 탐지 실패 시 fallback 셀 사용."""
+    VALUE_COL = 3  # 값은 항상 C 열에 기입
+
+    def write_col_c(key, fallback_row, value, row_offset=0):
+        """레이블 행의 C열(col=3)에 값 기입. 탐지 실패 시 fallback 행 사용."""
         if key in mapping:
-            r, c = mapping[key]
-            safe_write(ws, r + row_offset, c + 1, value)
+            r, _ = mapping[key]
+            safe_write(ws, r + row_offset, VALUE_COL, value)
         else:
-            safe_write(ws, fallback_row + row_offset, fallback_col, value)
+            safe_write(ws, fallback_row + row_offset, VALUE_COL, value)
 
     # ── Store Name ← ship_to_name ──────────────────
-    write_right("store_name", 5, 5, customer["ship_to_name"])
+    write_col_c("store_name", 5, customer["ship_to_name"])
 
-    # ── Sold-to ← sold_to + sold_to_name ───────────
-    write_right("sold_to", 8, 5, f"{customer['sold_to']}  {customer['sold_to_name']}")
+    # ── Sold-to ← 코드만 ────────────────────────────
+    write_col_c("sold_to", 8, customer["sold_to"])
 
-    # ── Ship-to ← ship_to / ship_to_name / address ─
-    write_right("ship_to", 11, 5, customer["ship_to"],      row_offset=0)
-    write_right("ship_to", 12, 5, customer["ship_to_name"], row_offset=1)
-    write_right("ship_to", 13, 5, customer["address"],      row_offset=2)
+    # ── Ship-to ← 코드만 ────────────────────────────
+    write_col_c("ship_to", 11, customer["ship_to"])
 
     wb.save(output_path)
     print(f"  ✔ {os.path.basename(output_path)}")
