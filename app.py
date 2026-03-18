@@ -3254,9 +3254,9 @@ def api_rebate_data():
                                         "amt": float(r["amt"] or 0)}
             ship_idx.setdefault((st, br), set()).add(sh)
 
-        # ── 3. Customer name lookup ──────────────────────────────────────────
-        cur.execute("SELECT sold_to, sold_to_name FROM customer")
-        name_map = {str(r["sold_to"]): (r["sold_to_name"] or str(r["sold_to"]))
+        # ── 3. Customer name lookup (ship_to → ship_to_name) ─────────────────
+        cur.execute("SELECT ship_to, ship_to_name FROM customer")
+        name_map = {str(r["ship_to"]): (r["ship_to_name"] or str(r["ship_to"]))
                     for r in cur.fetchall()}
 
         # ── 4. Tier definitions (only meaningful tiers: tier_order <= top_order) ─
@@ -3477,8 +3477,8 @@ def api_rebate_export():
             ship_sales[(st,sh,br)] = {"qty":float(r["qty"] or 0),"amt":float(r["amt"] or 0)}
             ship_idx.setdefault((st,br),set()).add(sh)
 
-        cur.execute("SELECT sold_to, sold_to_name FROM customer")
-        name_map = {str(r["sold_to"]):(r["sold_to_name"] or str(r["sold_to"])) for r in cur.fetchall()}
+        cur.execute("SELECT ship_to, ship_to_name FROM customer")
+        name_map = {str(r["ship_to"]):(r["ship_to_name"] or str(r["ship_to"])) for r in cur.fetchall()}
 
         cur.execute("""
             SELECT structure_name, unit, tier_order, top_order, threshold, rate
