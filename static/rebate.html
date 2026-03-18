@@ -348,12 +348,6 @@ function esc(s){
 }
 function escAttr(s){return String(s||"").replace(/"/g,"&quot;");}
 
-// live filters – debounced
-let _debounce;
-function debouncedFetch(){ clearTimeout(_debounce); _debounce=setTimeout(()=>fetchPage(0),350); }
-document.getElementById("f_search").addEventListener("input",  debouncedFetch);
-document.getElementById("f_show").addEventListener("change",   ()=>fetchPage(0));
-
 load();
 </script>
 </body>
