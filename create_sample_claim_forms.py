@@ -297,14 +297,38 @@ def _col_num(col_letter: str) -> int:
 # ─────────────────────────────────────────────
 def load_customers(n: int = None) -> pd.DataFrame:
     print(f"데이터 파일: {CUSTOMER_CSV}")
-    df = pd.read_csv(
-        CUSTOMER_CSV,
-        dtype={"sold_to": str, "ship_to": str},
-        encoding="latin1",
-    )
+    for enc in ["utf-8", "latin1", "cp1252", "utf-16"]:
+        try:
+            df = pd.read_csv(CUSTOMER_CSV, encoding=enc)
+            break
+        except (UnicodeDecodeError, Exception):
+            continue
+    else:
+        raise ValueError(f"파일을 읽을 수 없습니다: {CUSTOMER_CSV}")
+
     df.columns = df.columns.str.strip()
-    # ship_to 기준으로 파일 생성 (각 ship_to별 1개 파일)
-    df = df.drop_duplicates(subset=["ship_to"], keep="first")
+    print(f"컬럼 목록: {df.columns.tolist()}")
+
+    # 컬럼명 정규화 및 자동 매핑
+    col_map = {c.lower().replace(" ", "_").replace("-", "_"): c for c in df.columns}
+    rename = {}
+    for target in ["sold_to", "sold_to_name", "ship_to", "ship_to_name", "address"]:
+        if target in df.columns:
+            continue
+        for key, orig in col_map.items():
+            if target in key or key in target:
+                rename[orig] = target
+                break
+    if rename:
+        print(f"컬럼 이름 변환: {rename}")
+        df = df.rename(columns=rename)
+
+    for col in ["sold_to", "ship_to"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    dedup_col = "ship_to" if "ship_to" in df.columns else df.columns[0]
+    df = df.drop_duplicates(subset=[dedup_col], keep="first")
     return df.head(n) if n else df
 
 

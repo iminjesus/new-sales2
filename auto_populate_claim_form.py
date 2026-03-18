@@ -52,10 +52,46 @@ if not os.path.exists(CUSTOMER_CSV):
 # ─────────────────────────────────────────────
 def load_customer_master() -> pd.DataFrame:
     print(f"데이터 파일: {CUSTOMER_CSV}")
-    df = pd.read_csv(CUSTOMER_CSV, dtype={"sold_to": str, "ship_to": str}, encoding="latin1")
+    for enc in ["utf-8", "latin1", "cp1252", "utf-16"]:
+        try:
+            df = pd.read_csv(CUSTOMER_CSV, encoding=enc)
+            break
+        except (UnicodeDecodeError, Exception):
+            continue
+    else:
+        raise ValueError(f"파일을 읽을 수 없습니다: {CUSTOMER_CSV}")
+
     df.columns = df.columns.str.strip()
-    # ship_to 기준 unique (각 ship_to 별 1개 파일)
-    return df.drop_duplicates(subset=["ship_to"], keep="first")
+    print(f"컬럼 목록: {df.columns.tolist()}")
+
+    # 컬럼명 정규화: 대소문자/공백/특수문자 무관하게 매핑
+    col_map = {}
+    for col in df.columns:
+        key = col.lower().replace(" ", "_").replace("-", "_")
+        col_map[key] = col
+
+    # 필요한 컬럼 자동 탐지
+    rename = {}
+    for target in ["sold_to", "sold_to_name", "ship_to", "ship_to_name", "address"]:
+        if target in df.columns:
+            continue  # 이미 정확한 이름
+        # 유사 이름 탐지
+        for key, orig in col_map.items():
+            if target in key or key in target:
+                rename[orig] = target
+                break
+
+    if rename:
+        print(f"컬럼 이름 변환: {rename}")
+        df = df.rename(columns=rename)
+
+    # sold_to, ship_to를 문자열로 변환
+    for col in ["sold_to", "ship_to"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+
+    dedup_col = "ship_to" if "ship_to" in df.columns else df.columns[0]
+    return df.drop_duplicates(subset=[dedup_col], keep="first")
 
 
 # ─────────────────────────────────────────────
