@@ -23,10 +23,18 @@ header .sub{font-size:11px;opacity:.65}
 .stat-card .value{font-size:19px;font-weight:700;color:#1e3a5f;margin-top:2px}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}
-/* Sold-to header rows */
-tr.grp-hdr td{background:#e8eef6;font-weight:700;color:#1e3a5f;font-size:12px;padding:6px 10px;border-bottom:1px solid #c7d2e3;cursor:pointer}
+/* Region header rows (level 1) */
+tr.region-hdr td{background:#1e3a5f;font-weight:700;color:#fff;font-size:12px;padding:7px 10px;border-bottom:2px solid #16305a;cursor:pointer}
+tr.region-hdr:hover td{background:#16305a}
+tr.region-hdr td.caret{width:24px;text-align:center}
+/* BDE header rows (level 2) */
+tr.bde-hdr td{background:#3b5f8a;font-weight:600;color:#e8f0fb;font-size:12px;padding:6px 10px 6px 28px;border-bottom:1px solid #2d4f7a;cursor:pointer}
+tr.bde-hdr:hover td{background:#2d4f7a}
+tr.bde-hdr td.caret{width:24px;text-align:center;padding-left:28px}
+/* Sold-to header rows (level 3) */
+tr.grp-hdr td{background:#e8eef6;font-weight:700;color:#1e3a5f;font-size:12px;padding:6px 10px 6px 44px;border-bottom:1px solid #c7d2e3;cursor:pointer}
 tr.grp-hdr:hover td{background:#dce6f5}
-tr.grp-hdr td.caret{width:24px;text-align:center;font-size:12px}
+tr.grp-hdr td.caret{width:24px;text-align:center;padding-left:44px}
 /* Column headers */
 th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:8px 10px;text-align:left;border-bottom:1px solid #e5e7eb;white-space:nowrap;cursor:pointer;user-select:none}
 th:hover{background:#f1f5f9}
@@ -113,7 +121,9 @@ tr.ship-row td:first-child{padding-left:28px}
 // ─── state ──────────────────────────────────────────────────────────────────
 let sortCol     = "actual";
 let sortDir     = "desc";
-let expanded    = new Set(); // sold_to keys that are open
+let expandedRegions = new Set(); // region keys open
+let expandedBDEs    = new Set(); // region|bde keys open
+let expanded        = new Set(); // sold_to group keys open
 let currentPage = 0;
 let lastMeta    = {};        // last API response metadata
 
@@ -207,82 +217,100 @@ function renderPage(data){
     return `<th class="${active?'sorted':''}" onclick="setSort('${c.key}')">${c.label} <span class="sa">${arrow}</span></th>`;
   }).join("");
 
+  // ── Build nested Region → BDE → Sold-to structure ──────────────────────
+  const regionMap = new Map();
+  data.groups.forEach(g => {
+    const rKey = g.region || "-";
+    if (!regionMap.has(rKey)) regionMap.set(rKey, {region:rKey, bdes:new Map(), qty:0, amt:0, rebate:0});
+    const rNode = regionMap.get(rKey);
+    rNode.qty += g.grp_actual_qty; rNode.amt += g.grp_actual_amt; rNode.rebate += g.grp_curr_rebate;
+    const bKey = rKey + "|" + (g.bde || "-");
+    if (!rNode.bdes.has(bKey)) rNode.bdes.set(bKey, {bde:g.bde||"-", rKey, groups:[], qty:0, amt:0, rebate:0});
+    const bNode = rNode.bdes.get(bKey);
+    bNode.qty += g.grp_actual_qty; bNode.amt += g.grp_actual_amt; bNode.rebate += g.grp_curr_rebate;
+    bNode.groups.push(g);
+  });
+
+  // ── Helper: render ship-to rows ──────────────────────────────────────────
+  function renderShipRows(g){
+    let html = "";
+    const seenShips = new Set();
+    g.items.filter(r=>{ const k=r.ship_to+"|"+r.brand; if(seenShips.has(k)) return false; seenShips.add(k); return true; })
+    .forEach(r=>{
+      const validT = r.tiers.filter(t=>t.rate>0);
+      const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
+      const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
+      const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a" : pct>=50 ? "#f59e0b" : "#3b82f6";
+      const dots   = validT.map(t=>{
+        let cls="fut";
+        if(t.threshold<=r.actual && t.rate>0) cls="past";
+        else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
+        const lbl = r.unit==="Q" ? fmt(t.threshold)+" u" : "$"+fmt(t.threshold);
+        return `<span class="td ${cls}" title="${lbl} → ${t.rate}%">${t.rate}%</span>`;
+      }).join("");
+      const isMax    = r.next_rate==null && r.curr_rate>0;
+      const needQHtml = r.needed_qty!=null ? `<span class="needed">+${fmt(r.needed_qty)}</span>`
+                      : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
+      const needAHtml = r.needed_amt!=null ? `<span class="needed">+$${fmt(r.needed_amt)}</span>`
+                      : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
+      html += `<tr class="ship-row">
+        <td></td>
+        <td colspan="2" style="padding-left:60px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
+          <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
+        </td>
+        <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
+        <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>${fmt(r.actual_qty)} <span class="ul">u</span></td>
+        <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div>$${fmt(r.actual_amt)}</td>
+        <td><span class="rc">${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
+        <td><span class="rn">${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
+        <td>${needQHtml}</td><td>${needAHtml}</td>
+        <td><span class="est">${r.curr_rebate>0?"$"+fmt(r.curr_rebate):"—"}</span></td>
+        <td><div class="tier-list">${dots}</div></td>
+      </tr>`;
+    });
+    return html;
+  }
+
+  // ── Render 4-level hierarchy ─────────────────────────────────────────────
   let bodyHtml = "";
-  data.groups.forEach(g=>{
-    const isOpen    = expanded.has(g.key);
-    const itemCount = g.items.length;
-
-    // group header: caret(1) + name colspan=2 + brand(1) + actualQ(1) + actualA(1) + colspan=4 + est(1) + tier(1) = 12 ✓
-    bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
-      <td class="caret">${isOpen?"▼":"▶"}</td>
-      <td colspan="2"><b>${esc(g.sold_to_name)}</b>
-        <span style="font-family:monospace;font-size:10px;color:#6b7280;margin-left:6px">${g.sold_to}</span>
-        <span style="margin-left:6px;font-weight:400;color:#6b7280">${esc(g.sold_to_group)}</span>
-        <span style="margin-left:4px;font-weight:400;color:#6b7280">${esc(g.region)}</span>
+  regionMap.forEach((rNode, rKey) => {
+    const isOpenR = expandedRegions.has(rKey);
+    bodyHtml += `<tr class="region-hdr" onclick="toggleRegion('${escAttr(rKey)}')">
+      <td class="caret">${isOpenR?"▼":"▶"}</td>
+      <td colspan="11"><b>${esc(rNode.region)}</b>
+        <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(rNode.qty)} units &nbsp;·&nbsp; $${fmt(rNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(rNode.rebate)}</span>
       </td>
-      <td>${terrBadgeHtml(g.brand)} ${g.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
-      <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
-      <td>$${fmt(g.grp_actual_amt)}</td>
-      <td colspan="4"></td>
-      <td><span class="est">$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${itemCount} ship-to)</span></td>
-      <td></td>
     </tr>`;
+    if (!isOpenR) return;
 
-    if(isOpen){
-      /* Deduplicate by ship_to: one row per ship-to location */
-      const seenShips = new Set();
-      const dedupItems = g.items.filter(r=>{
-        const k = r.ship_to + "|" + r.brand;
-        if(seenShips.has(k)) return false;
-        seenShips.add(k); return true;
-      });
-      dedupItems.forEach(r=>{
-        const validT = r.tiers.filter(t=>t.rate>0);
-        const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
-        const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
-        const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a"
-                     : pct>=50 ? "#f59e0b" : "#3b82f6";
+    rNode.bdes.forEach((bNode, bKey) => {
+      const isOpenB = expandedBDEs.has(bKey);
+      bodyHtml += `<tr class="bde-hdr" onclick="toggleBDE('${escAttr(bKey)}')">
+        <td class="caret">${isOpenB?"▼":"▶"}</td>
+        <td colspan="11"><b>${esc(bNode.bde)}</b>
+          <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(bNode.qty)} units &nbsp;·&nbsp; $${fmt(bNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(bNode.rebate)}</span>
+        </td>
+      </tr>`;
+      if (!isOpenB) return;
 
-        const dots = validT.map(t=>{
-          let cls = "fut";
-          if(t.threshold<=r.actual && t.rate>0) cls="past";
-          else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
-          const lbl = r.unit==="Q" ? fmt(t.threshold)+" u" : "$"+fmt(t.threshold);
-          return `<span class="td ${cls}" title="${lbl} → ${t.rate}%">${t.rate}%</span>`;
-        }).join("");
-
-        const isMax = r.next_rate==null && r.curr_rate>0;
-        const noSale = r.curr_rate===0 && r.actual===0;
-        const needQHtml = r.needed_qty!=null
-          ? `<span class="needed">+${fmt(r.needed_qty)}</span>`
-          : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
-        const needAHtml = r.needed_amt!=null
-          ? `<span class="needed">+$${fmt(r.needed_amt)}</span>`
-          : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
-
-        bodyHtml += `<tr class="ship-row">
+      bNode.groups.forEach(g => {
+        const isOpen    = expanded.has(g.key);
+        const itemCount = g.items.length;
+        bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
+          <td class="caret">${isOpen?"▼":"▶"}</td>
+          <td colspan="2"><b>${esc(g.sold_to_name)}</b>
+            <span style="font-family:monospace;font-size:10px;color:#6b7280;margin-left:6px">${g.sold_to}</span>
+          </td>
+          <td>${terrBadgeHtml(g.brand)} ${g.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
+          <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
+          <td>$${fmt(g.grp_actual_amt)}</td>
+          <td colspan="4"></td>
+          <td><span class="est">$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${itemCount} ship-to)</span></td>
           <td></td>
-          <td colspan="2"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
-            <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
-          </td>
-          <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
-          <td>
-            <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
-            ${fmt(r.actual_qty)} <span class="ul">u</span>
-          </td>
-          <td>
-            <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
-            $${fmt(r.actual_amt)}
-          </td>
-          <td><span class="rc">${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
-          <td><span class="rn">${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
-          <td>${needQHtml}</td>
-          <td>${needAHtml}</td>
-          <td><span class="est">${r.curr_rebate>0?"$"+fmt(r.curr_rebate):"—"}</span></td>
-          <td><div class="tier-list">${dots}</div></td>
         </tr>`;
-      }); // dedupItems.forEach
-    }
+        if (isOpen) bodyHtml += renderShipRows(g);
+      });
+    });
   });
 
   const p = data.page, tp = data.total_pages, tg = s.total_groups;
@@ -310,9 +338,16 @@ function setSort(col){
   fetchPage(0);
 }
 
+function toggleRegion(key){
+  if(expandedRegions.has(key)) expandedRegions.delete(key); else expandedRegions.add(key);
+  if(lastMeta.groups) renderPage(lastMeta);
+}
+function toggleBDE(key){
+  if(expandedBDEs.has(key)) expandedBDEs.delete(key); else expandedBDEs.add(key);
+  if(lastMeta.groups) renderPage(lastMeta);
+}
 function toggleGroup(key){
   if(expanded.has(key)) expanded.delete(key); else expanded.add(key);
-  // re-render current data without API call
   if(lastMeta.groups) renderPage(lastMeta);
 }
 

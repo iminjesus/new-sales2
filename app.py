@@ -3226,7 +3226,8 @@ def api_rebate_data():
         # ── 1. Rebate-mapped customers (sold_to level) ───────────────────────
         cur.execute("""
             SELECT m.sold_to, m.brand, m.structure_name,
-                   c.sold_to_name, c.sold_to_group, c.bde_state AS region
+                   c.sold_to_name, c.sold_to_group, c.bde_state AS region,
+                   COALESCE(NULLIF(TRIM(c.salesman_name),''), '-') AS bde
             FROM rebate_customer_map m
             LEFT JOIN customer c ON c.sold_to = m.sold_to
             WHERE (%s = 'ALL' OR m.brand = %s)
@@ -3340,6 +3341,7 @@ def api_rebate_data():
                     "sold_to_name":   c["sold_to_name"] or sold_to,
                     "sold_to_group":  c["sold_to_group"] or "-",
                     "region":         c["region"] or "-",
+                    "bde":            c["bde"] or "-",
                     "ship_to":        sh,
                     "ship_to_name":   name_map.get(sh, sh),
                     "brand":          brand,
@@ -3391,6 +3393,7 @@ def api_rebate_data():
                     "key": key,
                     "sold_to": r["sold_to"], "sold_to_name": r["sold_to_name"],
                     "sold_to_group": r["sold_to_group"], "region": r["region"],
+                    "bde": r["bde"],
                     "brand": r["brand"], "unit": r["unit"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
@@ -3416,7 +3419,7 @@ def api_rebate_data():
         elif sort_col == "sold_to_name":
             groups.sort(key=lambda g: g["sold_to_name"].lower(), reverse=rev)
         else:
-            groups.sort(key=lambda g: (g["sold_to_group"], g["sold_to_name"].lower()))
+            groups.sort(key=lambda g: (g["region"].lower(), g["bde"].lower(), g["sold_to_name"].lower()))
 
         # ── 10. Sort items within each group by actual desc ───────────────────
         for g in groups:
