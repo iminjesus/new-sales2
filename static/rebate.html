@@ -186,12 +186,11 @@ function renderPage(data){
     return;
   }
 
-  // colspan reference: [▼] | Ship-To | Name | Brand | QA | Actual Q | Actual A | Curr% | Next% | Need Q | Need A | Est.Rebate | Tier
+  // [▼] | Ship-To | Name | Brand | Actual Q | Actual A | Curr% | Next% | Need Q | Need A | Est.Rebate | Tier  (12 cols + caret)
   const cols = [
     {key:"ship_to",      label:"Ship-To"},
     {key:"ship_to_name", label:"Name"},
     {key:"brand",        label:"Brand",      nosort:true},
-    {key:"unit",         label:"QA",         nosort:true},
     {key:"actual_qty",   label:"Actual Q"},
     {key:"actual_amt",   label:"Actual A"},
     {key:"curr_rate",    label:"Curr %",     nosort:true},
@@ -212,11 +211,8 @@ function renderPage(data){
   data.groups.forEach(g=>{
     const isOpen    = expanded.has(g.key);
     const itemCount = g.items.length;
-    const brandBadge = terrBadgeHtml(g.brand);
-    const qaBadge    = g.unit==="A"
-      ? `<span class="badge b-A">A</span>`
-      : `<span class="badge b-Q">Q</span>`;
 
+    // group header: caret(1) + name colspan=2 + brand(1) + actualQ(1) + actualA(1) + colspan=4 + est(1) + tier(1) = 12 ✓
     bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
       <td class="caret">${isOpen?"▼":"▶"}</td>
       <td colspan="2"><b>${esc(g.sold_to_name)}</b>
@@ -224,7 +220,7 @@ function renderPage(data){
         <span style="margin-left:6px;font-weight:400;color:#6b7280">${esc(g.sold_to_group)}</span>
         <span style="margin-left:4px;font-weight:400;color:#6b7280">${esc(g.region)}</span>
       </td>
-      <td>${brandBadge} ${qaBadge}</td>
+      <td>${terrBadgeHtml(g.brand)}</td>
       <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
       <td>$${fmt(g.grp_actual_amt)}</td>
       <td colspan="4"></td>
@@ -262,7 +258,6 @@ function renderPage(data){
           <td style="font-family:monospace;font-size:11px;color:#374151">${r.ship_to}</td>
           <td>${esc(r.ship_to_name)}</td>
           <td>${terrBadgeHtml(r.brand)}</td>
-          <td>${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
           <td>
             <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
             ${fmt(r.actual_qty)} <span class="ul">u</span>
