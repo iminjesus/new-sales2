@@ -41,8 +41,10 @@ if not os.path.exists(BASE_DIR):
     UNLOCK_DIR = os.path.join(RAWDATA_DIR, "unlock")
     OUTPUT_DIR = os.path.join(RAWDATA_DIR, "output")
 
-# customer_2603.csv 우선, 없으면 customer.csv
+# customer_2603.csv 우선 (unlock폴더 → 스크립트 루트 순), 없으면 customer.csv
 CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer_2603.csv")
+if not os.path.exists(CUSTOMER_CSV):
+    CUSTOMER_CSV = os.path.join(_SCRIPT_DIR, "customer_2603.csv")
 if not os.path.exists(CUSTOMER_CSV):
     CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer.csv")
 
@@ -70,15 +72,25 @@ def load_customer_master() -> pd.DataFrame:
         key = col.lower().replace(" ", "_").replace("-", "_")
         col_map[key] = col
 
-    # 필요한 컬럼 자동 탐지
+    # 필요한 컬럼 자동 탐지 (이미 사용한 컬럼 재사용 방지)
+    used_cols: set = set()
     rename = {}
     for target in ["sold_to", "sold_to_name", "ship_to", "ship_to_name", "address"]:
         if target in df.columns:
-            continue  # 이미 정확한 이름
-        # 유사 이름 탐지
+            used_cols.add(target)
+            continue
+        # 정확한 키 매칭 우선
+        if target in col_map and col_map[target] not in used_cols:
+            rename[col_map[target]] = target
+            used_cols.add(col_map[target])
+            continue
+        # 부분 매칭 (이미 사용한 컬럼 제외)
         for key, orig in col_map.items():
+            if orig in used_cols:
+                continue
             if target in key or key in target:
                 rename[orig] = target
+                used_cols.add(orig)
                 break
 
     if rename:
