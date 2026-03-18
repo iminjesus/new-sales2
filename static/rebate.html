@@ -186,15 +186,18 @@ function renderPage(data){
     return;
   }
 
+  // colspan reference: [▼] | Ship-To | Name | Brand | QA | Actual Q | Actual A | Curr% | Next% | Need Q | Need A | Est.Rebate | Tier
   const cols = [
     {key:"ship_to",      label:"Ship-To"},
     {key:"ship_to_name", label:"Name"},
-    {key:"territory",    label:"Territory", nosort:true},
-    {key:"unit",         label:"Type",      nosort:true},
-    {key:"actual",       label:"Actual Sales"},
-    {key:"curr_rate",    label:"Curr %",    nosort:true},
-    {key:"next_rate",    label:"Next %",    nosort:true},
-    {key:"needed",       label:"Need to Reach", nosort:true},
+    {key:"brand",        label:"Brand",      nosort:true},
+    {key:"unit",         label:"QA",         nosort:true},
+    {key:"actual_qty",   label:"Actual Q"},
+    {key:"actual_amt",   label:"Actual A"},
+    {key:"curr_rate",    label:"Curr %",     nosort:true},
+    {key:"next_rate",    label:"Next %",     nosort:true},
+    {key:"needed_qty",   label:"Need Q",     nosort:true},
+    {key:"needed_amt",   label:"Need A",     nosort:true},
     {key:"est_rebate",   label:"Est. Rebate"},
     {key:"tiers",        label:"Tier Progress", nosort:true},
   ];
@@ -209,10 +212,10 @@ function renderPage(data){
   data.groups.forEach(g=>{
     const isOpen    = expanded.has(g.key);
     const itemCount = g.items.length;
-    const terrBadge = terrBadgeHtml(g.brand);
-    const typeBadge = g.unit==="A"
-      ? `<span class="badge b-A">Annual $</span>`
-      : `<span class="badge b-Q">Quarterly Qty</span>`;
+    const brandBadge = terrBadgeHtml(g.brand);
+    const qaBadge    = g.unit==="A"
+      ? `<span class="badge b-A">A</span>`
+      : `<span class="badge b-Q">Q</span>`;
 
     bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
       <td class="caret">${isOpen?"▼":"▶"}</td>
@@ -221,18 +224,17 @@ function renderPage(data){
         <span style="margin-left:6px;font-weight:400;color:#6b7280">${esc(g.sold_to_group)}</span>
         <span style="margin-left:4px;font-weight:400;color:#6b7280">${esc(g.region)}</span>
       </td>
-      <td>${terrBadge} ${typeBadge}</td>
-      <td>${g.unit==="Q" ? fmt(g.grp_actual)+" units" : "$"+fmt(g.grp_actual)}
-        <span class="ul">(${itemCount} ship-to)</span>
-      </td>
+      <td>${brandBadge} ${qaBadge}</td>
+      <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
+      <td>$${fmt(g.grp_actual_amt)}</td>
       <td colspan="4"></td>
-      <td><span class="est">$${fmt(g.grp_est)}</span> <span class="ul">est.</span></td>
+      <td><span class="est">$${fmt(g.grp_est)}</span> <span class="ul">est.</span>
+          <span class="ul">(${itemCount} ship-to)</span></td>
+      <td></td>
     </tr>`;
 
     if(isOpen){
       g.items.forEach(r=>{
-        const unitL  = r.unit==="Q" ? "units" : "$";
-        const fmtAct = r.unit==="Q" ? fmt(r.actual) : "$"+fmt(r.actual);
         const validT = r.tiers.filter(t=>t.rate>0);
         const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
         const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
@@ -243,25 +245,36 @@ function renderPage(data){
           let cls = "fut";
           if(t.threshold<=r.actual && t.rate>0) cls="past";
           else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
-          return `<span class="td ${cls}" title="${unitL}${fmt(t.threshold)} → ${t.rate}%">${t.rate}%</span>`;
+          const lbl = r.unit==="Q" ? fmt(t.threshold)+" u" : "$"+fmt(t.threshold);
+          return `<span class="td ${cls}" title="${lbl} → ${t.rate}%">${t.rate}%</span>`;
         }).join("");
 
-        const neededHtml = r.needed!=null
-          ? `<span class="needed">+${r.unit==="Q"?fmt(r.needed):"$"+fmt(r.needed)}</span>`
-          : (r.curr_rate>0 ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
+        const isMax = r.next_rate==null && r.curr_rate>0;
+        const noSale = r.curr_rate===0 && r.actual===0;
+        const needQHtml = r.needed_qty!=null
+          ? `<span class="needed">+${fmt(r.needed_qty)}</span>`
+          : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
+        const needAHtml = r.needed_amt!=null
+          ? `<span class="needed">+$${fmt(r.needed_amt)}</span>`
+          : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
 
         bodyHtml += `<tr class="ship-row">
           <td style="font-family:monospace;font-size:11px;color:#374151">${r.ship_to}</td>
           <td>${esc(r.ship_to_name)}</td>
           <td>${terrBadgeHtml(r.brand)}</td>
-          <td>${r.unit==="A"?`<span class="badge b-A">Annual $</span>`:`<span class="badge b-Q">QTR Qty</span>`}</td>
+          <td>${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
           <td>
-            <div class="prog-wrap"><div class="prog-bar" style="width:${pct.toFixed(1)}%;background:${barClr}"></div></div>
-            ${fmtAct} <span class="ul">${unitL}</span>
+            <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
+            ${fmt(r.actual_qty)} <span class="ul">u</span>
+          </td>
+          <td>
+            <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
+            $${fmt(r.actual_amt)}
           </td>
           <td><span class="rc">${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
           <td><span class="rn">${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
-          <td>${neededHtml}</td>
+          <td>${needQHtml}</td>
+          <td>${needAHtml}</td>
           <td><span class="est">${r.est_rebate>0?"$"+fmt(r.est_rebate):"—"}</span></td>
           <td><div class="tier-list">${dots}</div></td>
         </tr>`;

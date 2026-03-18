@@ -3318,15 +3318,20 @@ def api_rebate_data():
                 if brand == "TTL":
                     hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
                     lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                    actual = (hk["qty"] + lf["qty"]) if unit == "Q" \
-                             else (hk["amt"] + lf["amt"])
+                    actual_qty = hk["qty"] + lf["qty"]
+                    actual_amt = hk["amt"] + lf["amt"]
                 else:
                     d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
-                    actual = d["qty"] if unit == "Q" else d["amt"]
+                    actual_qty = d["qty"]
+                    actual_amt = d["amt"]
+
+                actual = actual_qty if unit == "Q" else actual_amt
 
                 curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
-                needed     = round(next_tier["threshold"] - actual, 2) if next_tier else None
                 est_rebate = round(actual * curr_tier["rate"] / 100, 2)
+                # needed_qty / needed_amt: only one can be calculated per structure type
+                needed_qty = round(next_tier["threshold"] - actual_qty, 2) if next_tier and unit == "Q" else None
+                needed_amt = round(next_tier["threshold"] - actual_amt, 2) if next_tier and unit == "A" else None
 
                 rows.append({
                     "sold_to":        sold_to,
@@ -3338,12 +3343,15 @@ def api_rebate_data():
                     "brand":          brand,
                     "structure_name": struct,
                     "unit":           unit,
-                    "actual":         round(actual, 2),
+                    "actual_qty":     round(actual_qty, 2),
+                    "actual_amt":     round(actual_amt, 2),
+                    "actual":         round(actual, 2),   # kept for sorting
                     "curr_rate":      curr_tier["rate"],
                     "curr_threshold": curr_tier["threshold"],
                     "next_threshold": next_tier["threshold"] if next_tier else None,
                     "next_rate":      next_tier["rate"]      if next_tier else None,
-                    "needed":         needed,
+                    "needed_qty":     needed_qty,
+                    "needed_amt":     needed_amt,
                     "est_rebate":     est_rebate,
                     "tiers":          tiers,
                 })
@@ -3382,11 +3390,14 @@ def api_rebate_data():
                     "sold_to_group": r["sold_to_group"], "region": r["region"],
                     "brand": r["brand"], "unit": r["unit"],
                     "structure_name": r["structure_name"],
-                    "grp_actual": 0.0, "grp_est": 0.0, "items": [],
+                    "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
+                    "grp_est": 0.0, "items": [],
                 }
             g = grp_map[key]
-            g["grp_actual"] += r["actual"]
-            g["grp_est"]    += r["est_rebate"]
+            g["grp_actual"]     += r["actual"]
+            g["grp_actual_qty"] += r["actual_qty"]
+            g["grp_actual_amt"] += r["actual_amt"]
+            g["grp_est"]        += r["est_rebate"]
             g["items"].append(r)
 
         groups = list(grp_map.values())
