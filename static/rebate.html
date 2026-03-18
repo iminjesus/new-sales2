@@ -255,8 +255,10 @@ function renderPage(data){
           : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
 
         bodyHtml += `<tr class="ship-row">
-          <td style="font-family:monospace;font-size:11px;color:#374151">${r.ship_to}</td>
-          <td>${esc(r.ship_to_name)}</td>
+          <td></td>
+          <td colspan="2"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
+            <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
+          </td>
           <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
           <td>
             <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
