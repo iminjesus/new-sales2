@@ -165,10 +165,10 @@ def fill_form(customer: dict, output_path: str):
 
     mapping = detect_value_columns(ws)
 
-    VALUE_COL = 3  # 값은 항상 C 열에 기입
+    VALUE_COL = 6  # 값은 항상 F 열에 기입
 
     def write_col_c(key, fallback_row, value, row_offset=0):
-        """레이블 행의 C열(col=3)에 값 기입. 탐지 실패 시 fallback 행 사용."""
+        """레이블 행의 F열(col=6)에 값 기입. 탐지 실패 시 fallback 행 사용."""
         if key in mapping:
             r, _ = mapping[key]
             safe_write(ws, r + row_offset, VALUE_COL, value)
