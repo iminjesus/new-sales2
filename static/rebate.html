@@ -220,7 +220,7 @@ function renderPage(data){
         <span style="margin-left:6px;font-weight:400;color:#6b7280">${esc(g.sold_to_group)}</span>
         <span style="margin-left:4px;font-weight:400;color:#6b7280">${esc(g.region)}</span>
       </td>
-      <td>${terrBadgeHtml(g.brand)}</td>
+      <td>${terrBadgeHtml(g.brand)} ${g.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
       <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
       <td>$${fmt(g.grp_actual_amt)}</td>
       <td colspan="4"></td>
@@ -257,7 +257,7 @@ function renderPage(data){
         bodyHtml += `<tr class="ship-row">
           <td style="font-family:monospace;font-size:11px;color:#374151">${r.ship_to}</td>
           <td>${esc(r.ship_to_name)}</td>
-          <td>${terrBadgeHtml(r.brand)}</td>
+          <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
           <td>
             <div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>
             ${fmt(r.actual_qty)} <span class="ul">u</span>
