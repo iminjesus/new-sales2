@@ -186,7 +186,7 @@ function renderPage(data){
     return;
   }
 
-  // [▼] | Ship-To | Name | Brand | Actual Q | Actual A | Curr% | Next% | Need Q | Need A | Curr.Rebate | Est.Rebate | Tier  (13 cols + caret)
+  // [▼] | Ship-To | Name | Brand | Actual Q | Actual A | Curr% | Next% | Need Q | Need A | Curr.Rebate | Tier  (12 cols + caret)
   const cols = [
     {key:"ship_to",      label:"Ship-To"},
     {key:"ship_to_name", label:"Name"},
@@ -198,7 +198,6 @@ function renderPage(data){
     {key:"needed_qty",   label:"Need Q",        nosort:true},
     {key:"needed_amt",   label:"Need A",        nosort:true},
     {key:"curr_rebate",  label:"Curr. Rebate"},
-    {key:"est_rebate",   label:"Est. Rebate"},
     {key:"tiers",        label:"Tier Progress", nosort:true},
   ];
   const ths = cols.map(c=>{
@@ -225,9 +224,7 @@ function renderPage(data){
       <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
       <td>$${fmt(g.grp_actual_amt)}</td>
       <td colspan="4"></td>
-      <td><span class="est">$${fmt(g.grp_curr_rebate)}</span></td>
-      <td><span class="est">${g.grp_est>0?"$"+fmt(g.grp_est):"—"}</span> <span class="ul">est.</span>
-          <span class="ul">(${itemCount} ship-to)</span></td>
+      <td><span class="est">$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${itemCount} ship-to)</span></td>
       <td></td>
     </tr>`;
 
@@ -282,7 +279,6 @@ function renderPage(data){
           <td>${needQHtml}</td>
           <td>${needAHtml}</td>
           <td><span class="est">${r.curr_rebate>0?"$"+fmt(r.curr_rebate):"—"}</span></td>
-          <td><span class="est">${r.est_rebate!=null?"$"+fmt(r.est_rebate):(isMax?`<span class="no-next">MAX ✓</span>`:"—")}</span></td>
           <td><div class="tier-list">${dots}</div></td>
         </tr>`;
       }); // dedupItems.forEach
