@@ -24,13 +24,9 @@ header .sub{font-size:11px;opacity:.65}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}
 /* Region header rows (level 1) */
-tr.region-hdr td{background:#1e3a5f;font-weight:700;color:#fff;font-size:12px;padding:7px 10px;border-bottom:2px solid #16305a;cursor:pointer}
-tr.region-hdr:hover td{background:#16305a}
-tr.region-hdr td.caret{width:24px;text-align:center}
+tr.region-hdr td{background:#1e3a5f;font-weight:700;color:#fff;font-size:12px;padding:7px 10px;border-bottom:2px solid #16305a}
 /* BDE header rows (level 2) */
-tr.bde-hdr td{background:#3b5f8a;font-weight:600;color:#e8f0fb;font-size:12px;padding:6px 10px 6px 28px;border-bottom:1px solid #2d4f7a;cursor:pointer}
-tr.bde-hdr:hover td{background:#2d4f7a}
-tr.bde-hdr td.caret{width:24px;text-align:center;padding-left:28px}
+tr.bde-hdr td{background:#3b5f8a;font-weight:600;color:#e8f0fb;font-size:12px;padding:6px 10px 6px 28px;border-bottom:1px solid #2d4f7a}
 /* Sold-to header rows (level 3) */
 tr.grp-hdr td{background:#e8eef6;font-weight:700;color:#1e3a5f;font-size:12px;padding:6px 10px 6px 44px;border-bottom:1px solid #c7d2e3;cursor:pointer}
 tr.grp-hdr:hover td{background:#dce6f5}
@@ -121,9 +117,7 @@ tr.ship-row td:first-child{padding-left:28px}
 // ─── state ──────────────────────────────────────────────────────────────────
 let sortCol     = "actual";
 let sortDir     = "desc";
-let expandedRegions = new Set(); // region keys open
-let expandedBDEs    = new Set(); // region|bde keys open
-let expanded        = new Set(); // sold_to group keys open
+let expanded = new Set(); // sold_to group keys open (ship-to toggle)
 let currentPage = 0;
 let lastMeta    = {};        // last API response metadata
 
@@ -274,24 +268,18 @@ function renderPage(data){
   // ── Render 4-level hierarchy ─────────────────────────────────────────────
   let bodyHtml = "";
   regionMap.forEach((rNode, rKey) => {
-    const isOpenR = expandedRegions.has(rKey);
-    bodyHtml += `<tr class="region-hdr" onclick="toggleRegion('${escAttr(rKey)}')">
-      <td class="caret">${isOpenR?"▼":"▶"}</td>
-      <td colspan="11"><b>${esc(rNode.region)}</b>
+    bodyHtml += `<tr class="region-hdr">
+      <td colspan="12"><b>${esc(rNode.region)}</b>
         <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(rNode.qty)} units &nbsp;·&nbsp; $${fmt(rNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(rNode.rebate)}</span>
       </td>
     </tr>`;
-    if (!isOpenR) return;
 
     rNode.bdes.forEach((bNode, bKey) => {
-      const isOpenB = expandedBDEs.has(bKey);
-      bodyHtml += `<tr class="bde-hdr" onclick="toggleBDE('${escAttr(bKey)}')">
-        <td class="caret">${isOpenB?"▼":"▶"}</td>
-        <td colspan="11"><b>${esc(bNode.bde)}</b>
+      bodyHtml += `<tr class="bde-hdr">
+        <td colspan="12"><b>${esc(bNode.bde)}</b>
           <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(bNode.qty)} units &nbsp;·&nbsp; $${fmt(bNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(bNode.rebate)}</span>
         </td>
       </tr>`;
-      if (!isOpenB) return;
 
       bNode.groups.forEach(g => {
         const isOpen    = expanded.has(g.key);
@@ -338,14 +326,6 @@ function setSort(col){
   fetchPage(0);
 }
 
-function toggleRegion(key){
-  if(expandedRegions.has(key)) expandedRegions.delete(key); else expandedRegions.add(key);
-  if(lastMeta.groups) renderPage(lastMeta);
-}
-function toggleBDE(key){
-  if(expandedBDEs.has(key)) expandedBDEs.delete(key); else expandedBDEs.add(key);
-  if(lastMeta.groups) renderPage(lastMeta);
-}
 function toggleGroup(key){
   if(expanded.has(key)) expanded.delete(key); else expanded.add(key);
   if(lastMeta.groups) renderPage(lastMeta);
