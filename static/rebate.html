@@ -7,9 +7,10 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111827;font-size:13px}
-header{background:#1e3a5f;color:#fff;padding:12px 20px;display:flex;align-items:center;gap:16px}
-header h1{font-size:16px;font-weight:700}
-header .sub{font-size:11px;opacity:.65}
+header{background:#1e3a5f;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:12px}
+header h1{font-size:13px;font-weight:700}
+header .sub{font-size:10px;opacity:.55}
+.lbl{font-size:10px;color:#9ca3af;font-weight:400;margin-right:2px}
 .filters{background:#fff;padding:10px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;border-bottom:1px solid #e5e7eb}
 .filters label{font-size:11px;color:#6b7280;margin-bottom:2px;display:block}
 .filters select,.filters input{border:1px solid #d1d5db;border-radius:6px;padding:5px 8px;font-size:12px;min-width:120px}
@@ -149,19 +150,13 @@ function renderPage(data){
     return;
   }
 
-  // [▼] | Ship-To | Name | Brand | Qty (YTD) | Amount (YTD) | Rebate % | Next Tier % | Need Qty | Need Amount | Curr.Rebate | Tier  (12 cols + caret)
+  // [▼] | Name | Brand | Qty (YTD) | Amount (YTD) | Curr. Rebate  (6 cols total)
   const cols = [
-    {key:"ship_to",      label:"Ship-To"},
     {key:"ship_to_name", label:"Name"},
     {key:"brand",        label:"Brand",        nosort:true},
     {key:"actual_qty",   label:"Qty (YTD)"},
     {key:"actual_amt",   label:"Amount (YTD)"},
-    {key:"curr_rate",    label:"Rebate %",      nosort:true},
-    {key:"next_rate",    label:"Next Tier %",   nosort:true},
-    {key:"needed_qty",   label:"Need Qty",      nosort:true},
-    {key:"needed_amt",   label:"Need Amount",   nosort:true},
     {key:"curr_rebate",  label:"Curr. Rebate"},
-    {key:"tiers",        label:"Tier Progress", nosort:true},
   ];
   const ths = cols.map(c=>{
     if(c.nosort) return `<th>${c.label}</th>`;
@@ -208,17 +203,13 @@ function renderPage(data){
                       : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
       html += `<tr class="ship-row">
         <td></td>
-        <td colspan="2" style="padding-left:60px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
+        <td style="padding-left:60px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
           <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
         </td>
         <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
-        <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div>${fmt(r.actual_qty)} <span class="ul">u</span></td>
-        <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div>$${fmt(r.actual_amt)}</td>
-        <td><span class="rc">${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
-        <td><span class="rn">${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
-        <td>${needQHtml}</td><td>${needAHtml}</td>
-        <td><span class="est">${r.curr_rebate>0?"$"+fmt(r.curr_rebate):"—"}</span></td>
-        <td><div class="tier-list">${dots}</div></td>
+        <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div><span class="lbl">qty</span>${fmt(r.actual_qty)} <span class="ul">u</span></td>
+        <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div><span class="lbl">amt</span>$${fmt(r.actual_amt)}</td>
+        <td><span class="est"><span class="lbl">rebate</span>${r.curr_rebate>0?"$"+fmt(r.curr_rebate):"—"}</span></td>
       </tr>`;
     });
     return html;
@@ -237,15 +228,15 @@ function renderPage(data){
   let bodyHtml = "";
   sortedRegions.forEach(([rKey, rNode]) => {
     bodyHtml += `<tr class="region-hdr">
-      <td colspan="12"><b>${esc(rNode.region)}</b>
-        <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(rNode.qty)} units &nbsp;·&nbsp; $${fmt(rNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(rNode.rebate)}</span>
+      <td colspan="6"><b>${esc(rNode.region)}</b>
+        <span style="font-weight:400;margin-left:12px;opacity:.8"><span class="lbl">qty</span>${fmt(rNode.qty)} u &nbsp;·&nbsp; <span class="lbl" style="color:rgba(255,255,255,.5)">amt</span>$${fmt(rNode.amt)} &nbsp;·&nbsp; <span class="lbl" style="color:rgba(255,255,255,.5)">rebate</span>$${fmt(rNode.rebate)}</span>
       </td>
     </tr>`;
 
     rNode.bdes.forEach((bNode, bKey) => {
       bodyHtml += `<tr class="bde-hdr">
-        <td colspan="12"><b>${esc(bNode.bde)}</b>
-          <span style="font-weight:400;margin-left:12px;opacity:.8">${fmt(bNode.qty)} units &nbsp;·&nbsp; $${fmt(bNode.amt)} &nbsp;·&nbsp; Rebate $${fmt(bNode.rebate)}</span>
+        <td colspan="6"><b>${esc(bNode.bde)}</b>
+          <span style="font-weight:400;margin-left:12px;opacity:.8"><span class="lbl" style="color:rgba(255,255,255,.5)">qty</span>${fmt(bNode.qty)} u &nbsp;·&nbsp; <span class="lbl" style="color:rgba(255,255,255,.5)">amt</span>$${fmt(bNode.amt)} &nbsp;·&nbsp; <span class="lbl" style="color:rgba(255,255,255,.5)">rebate</span>$${fmt(bNode.rebate)}</span>
         </td>
       </tr>`;
 
@@ -254,15 +245,13 @@ function renderPage(data){
         const itemCount = g.items.length;
         bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
           <td class="caret">${isOpen?"▼":"▶"}</td>
-          <td colspan="2"><b>${esc(g.sold_to_name)}</b>
+          <td><b>${esc(g.sold_to_name)}</b>
             <span style="font-family:monospace;font-size:10px;color:#6b7280;margin-left:6px">${g.sold_to}</span>
           </td>
           <td>${terrBadgeHtml(g.brand)} ${g.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
-          <td>${fmt(g.grp_actual_qty)} <span class="ul">units</span></td>
-          <td>$${fmt(g.grp_actual_amt)}</td>
-          <td colspan="4"></td>
-          <td><span class="est">$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${itemCount} ship-to)</span></td>
-          <td></td>
+          <td><span class="lbl">qty</span>${fmt(g.grp_actual_qty)} <span class="ul">u</span></td>
+          <td><span class="lbl">amt</span>$${fmt(g.grp_actual_amt)}</td>
+          <td><span class="est"><span class="lbl">rebate</span>$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${itemCount} ship-to)</span></td>
         </tr>`;
         if (isOpen) bodyHtml += renderShipRows(g);
       });
@@ -280,7 +269,7 @@ function renderPage(data){
 
   document.getElementById("table-wrap").innerHTML = `
     <table>
-      <thead><tr><th></th>${ths}</tr></thead>
+      <thead><tr><th style="width:24px"></th>${ths}</tr></thead>
       <tbody>${bodyHtml}</tbody>
     </table>
     ${pgBar}`;
