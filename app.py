@@ -3237,23 +3237,29 @@ def api_rebate_data():
         if not customers:
             return jsonify([])
 
-        # ── 2. Sales from sales_thismonth by (sold_to, ship_to, brand) ───────
+        # ── 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ──
         cur.execute("""
-            SELECT s.sold_to, s.ship_to, mat.brand,
+            SELECT s.sold_to, s.ship_to, mat.brand, COALESCE(mat.line,'') AS line,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
             FROM sales_thismonth s
             JOIN carrying_2602 mat ON mat.m_code = s.material
             WHERE mat.brand IN ('HK','LF')
-            GROUP BY s.sold_to, s.ship_to, mat.brand
+            GROUP BY s.sold_to, s.ship_to, mat.brand, mat.line
         """)
-        ship_sales = {}   # (sold_to, ship_to, brand) -> {qty, amt}
-        # Pre-build index: (sold_to, brand) -> set of ship_tos  ← O(1) lookup later
-        ship_idx   = {}   # (sold_to, brand) -> set{ship_to}
+        ship_sales      = {}   # (sold_to, ship_to, brand) -> {qty, amt}  all lines
+        ship_sales_line = {}   # (sold_to, ship_to, brand, line) -> {qty, amt}
+        ship_idx        = {}   # (sold_to, brand) -> set{ship_to}
+        ship_idx_line   = {}   # (sold_to, brand, line) -> set{ship_to}
         for r in cur.fetchall():
-            st, sh, br = str(r["sold_to"]), str(r["ship_to"]), r["brand"]
-            ship_sales[(st, sh, br)] = {"qty": float(r["qty"] or 0),
-                                        "amt": float(r["amt"] or 0)}
+            st, sh, br, ln = str(r["sold_to"]), str(r["ship_to"]), r["brand"], r["line"]
+            qty, amt = float(r["qty"] or 0), float(r["amt"] or 0)
+            # aggregate all lines → brand-level totals
+            agg = ship_sales.setdefault((st, sh, br), {"qty": 0.0, "amt": 0.0})
+            agg["qty"] += qty; agg["amt"] += amt
+            # store by line
+            ship_sales_line[(st, sh, br, ln)] = {"qty": qty, "amt": amt}
             ship_idx.setdefault((st, br), set()).add(sh)
+            ship_idx_line.setdefault((st, br, ln), set()).add(sh)
 
         # ── 3. Customer lookup (ship_to → name, bde_state, salesman) ──────────
         cur.execute("SELECT ship_to, ship_to_name, bde_state, salesman_name FROM customer")
@@ -3304,6 +3310,16 @@ def api_rebate_data():
         # AJT/ABJ/ATP/APP/ACD: calculate per ship_to; others: aggregate to sold_to level
         SHIP_TO_GROUPS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
 
+        def _atp_info(struct_name):
+            """AL_ATP_* → (None, 'PCLT');  HK_ATP_* → ('HK', 'TBR');  else → (None, None)."""
+            if "ATP" not in struct_name:
+                return None, None
+            if struct_name.startswith("AL_ATP"):
+                return None, "PCLT"
+            if struct_name.startswith("HK_ATP"):
+                return "HK", "TBR"
+            return None, None
+
         rows = []
         for c in customers:
             struct        = c["structure_name"]
@@ -3317,8 +3333,16 @@ def api_rebate_data():
             tiers     = sd["tiers"]
             top_order = sd["top_order"]
 
-            # Collect ship_tos via pre-built index joined with carrying_2602.brand
-            if brand == "TTL":
+            atp_brand, atp_line = _atp_info(struct)
+
+            # Collect ship_tos
+            if atp_line:
+                if atp_brand:   # HK_ATP: HK brand, TBR line
+                    ship_set = ship_idx_line.get((sold_to, atp_brand, atp_line), set()).copy()
+                else:           # AL_ATP: all brands, PCLT line
+                    ship_set = (ship_idx_line.get((sold_to, "HK", atp_line), set()) |
+                                ship_idx_line.get((sold_to, "LF", atp_line), set()))
+            elif brand == "TTL":
                 ship_set = (ship_idx.get((sold_to, "HK"), set()) |
                             ship_idx.get((sold_to, "LF"), set()))
             else:
@@ -3326,30 +3350,44 @@ def api_rebate_data():
             if not ship_set:
                 ship_set.add(sold_to)   # show zero row so sold_to is visible
 
+            # Badge labels for UI
+            if atp_line and not atp_brand:
+                badge1, badge2 = "PCLT", "A"
+            elif atp_line and atp_brand:
+                badge1, badge2 = atp_brand, atp_line   # e.g. "HK", "TBR"
+            else:
+                badge1, badge2 = brand, unit
+
+            def _get_sales(sh):
+                """Return (qty, amt) for this ship_to according to ATP or normal filter."""
+                if atp_line:
+                    if atp_brand:
+                        d = ship_sales_line.get((sold_to, sh, atp_brand, atp_line), {"qty": 0.0, "amt": 0.0})
+                        return d["qty"], d["amt"]
+                    else:
+                        hk = ship_sales_line.get((sold_to, sh, "HK", atp_line), {"qty": 0.0, "amt": 0.0})
+                        lf = ship_sales_line.get((sold_to, sh, "LF", atp_line), {"qty": 0.0, "amt": 0.0})
+                        return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
+                elif brand == "TTL":
+                    hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
+                    lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
+                    return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
+                else:
+                    d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
+                    return d["qty"], d["amt"]
+
             if sold_to_group in SHIP_TO_GROUPS:
                 # One row per ship_to
                 calc_items = []
                 for sh in sorted(ship_set):
-                    if brand == "TTL":
-                        hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
-                        lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                        calc_items.append((sh, hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]))
-                    else:
-                        d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
-                        calc_items.append((sh, d["qty"], d["amt"]))
+                    q, a = _get_sales(sh)
+                    calc_items.append((sh, q, a))
             else:
                 # Aggregate all ship_tos → one row per sold_to
                 total_qty = total_amt = 0.0
                 for sh in ship_set:
-                    if brand == "TTL":
-                        hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
-                        lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                        total_qty += hk["qty"] + lf["qty"]
-                        total_amt += hk["amt"] + lf["amt"]
-                    else:
-                        d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
-                        total_qty += d["qty"]
-                        total_amt += d["amt"]
+                    q, a = _get_sales(sh)
+                    total_qty += q; total_amt += a
                 calc_items = [(sold_to, total_qty, total_amt)]
 
             for sh, actual_qty, actual_amt in calc_items:
@@ -3373,6 +3411,8 @@ def api_rebate_data():
                     "ship_to":        sh,
                     "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
                     "brand":          brand,
+                    "badge1":         badge1,
+                    "badge2":         badge2,
                     "structure_name": struct,
                     "unit":           unit,
                     "actual_qty":     round(actual_qty, 2),
@@ -3437,6 +3477,7 @@ def api_rebate_data():
             if bkey not in g["brands"]:
                 g["brands"][bkey] = {
                     "brand": r["brand"], "unit": r["unit"],
+                    "badge1": r["badge1"], "badge2": r["badge2"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
                     "grp_curr_rebate": 0.0, "grp_est": 0.0, "items": [],

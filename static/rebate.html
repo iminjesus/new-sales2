@@ -50,6 +50,8 @@ tr.ship-row td:first-child{padding-left:28px}
 .b-ttl{background:#ede9fe;color:#6d28d9}
 .b-A{background:#fef3c7;color:#92400e}
 .b-Q{background:#ede9fe;color:#5b21b6}
+.b-PCLT{background:#fce7f3;color:#9d174d}
+.b-TBR{background:#ffedd5;color:#9a3412}
 /* Progress */
 .prog-wrap{width:72px;background:#e5e7eb;border-radius:4px;height:6px;overflow:hidden;display:inline-block;vertical-align:middle;margin-right:4px}
 .prog-bar{height:6px;border-radius:4px}
@@ -220,7 +222,7 @@ function renderPage(data){
         <td colspan="2" style="padding-left:76px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
           <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
         </td>
-        <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
+        <td>${badgePairHtml(r.badge1, r.badge2)}</td>
         <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div><span class="lbl">qty</span>${fmt(r.actual_qty)} <span class="ul">u</span></td>
         <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div><span class="lbl">amt</span>$${fmt(r.actual_amt)}</td>
         <td><span class="rc"><span class="lbl">rate</span>${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
@@ -262,7 +264,7 @@ function renderPage(data){
       bNode.groups.forEach(g => {
         const isOpen     = expanded.has(g.key);
         const totalShips = g.brands.reduce((s,b)=>s+b.items.length, 0);
-        const brandBadges = g.brands.map(b=>terrBadgeHtml(b.brand)).join(" ");
+        const brandBadges = g.brands.map(b=>terrBadgeHtml(b.badge1)).join(" ");
         bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
           <td class="caret">${isOpen?"▼":"▶"}</td>
           <td colspan="2"><b>${esc(g.sold_to_name)}</b>
@@ -279,7 +281,7 @@ function renderPage(data){
           g.brands.forEach(b => {
             bodyHtml += `<tr class="brand-hdr">
               <td></td>
-              <td colspan="2" style="padding-left:56px">${terrBadgeHtml(b.brand)} ${b.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}
+              <td colspan="2" style="padding-left:56px">${badgePairHtml(b.badge1, b.badge2)}
                 <span style="font-size:11px;color:#6b7280;margin-left:6px">${esc(b.structure_name)}</span>
               </td>
               <td></td>
@@ -327,9 +329,18 @@ function toggleGroup(key){
 }
 
 function terrBadgeHtml(t){
-  if(t==="TTL") return `<span class="badge b-ttl">TTL</span>`;
-  if(t==="HK")  return `<span class="badge b-hk">HK</span>`;
-  return `<span class="badge b-lf">LF</span>`;
+  if(t==="TTL")  return `<span class="badge b-ttl">TTL</span>`;
+  if(t==="HK")   return `<span class="badge b-hk">HK</span>`;
+  if(t==="LF")   return `<span class="badge b-lf">LF</span>`;
+  if(t==="PCLT") return `<span class="badge b-PCLT">PCLT</span>`;
+  if(t==="TBR")  return `<span class="badge b-TBR">TBR</span>`;
+  return `<span class="badge b-lf">${t}</span>`;
+}
+function badgePairHtml(badge1, badge2){
+  const b1 = terrBadgeHtml(badge1);
+  if(badge2==="A") return `${b1} <span class="badge b-A">A</span>`;
+  if(badge2==="Q") return `${b1} <span class="badge b-Q">Q</span>`;
+  return `${b1} ${terrBadgeHtml(badge2)}`;
 }
 
 // ─── export – server generates CSV ───────────────────────────────────────────
