@@ -37,6 +37,8 @@ th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:8px 1
 th:hover{background:#f1f5f9}
 th .sa{margin-left:3px;opacity:.35}
 th.sorted .sa{opacity:1}
+/* Brand sub-header rows (level 4) */
+tr.brand-hdr td{background:#f0f4fa;font-weight:600;color:#374151;font-size:12px;padding:5px 10px 5px 56px;border-bottom:1px solid #dde5f0}
 /* Ship_to data rows */
 td{padding:7px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle;white-space:nowrap}
 tr.ship-row:hover td{background:#fafafa}
@@ -215,7 +217,7 @@ function renderPage(data){
                       : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
       html += `<tr class="ship-row">
         <td></td>
-        <td colspan="2" style="padding-left:60px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
+        <td colspan="2" style="padding-left:76px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
           <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
         </td>
         <td>${terrBadgeHtml(r.brand)} ${r.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
@@ -258,21 +260,38 @@ function renderPage(data){
       </tr>`;
 
       bNode.groups.forEach(g => {
-        const isOpen    = expanded.has(g.key);
-        const itemCount = g.items.length;
+        const isOpen     = expanded.has(g.key);
+        const totalShips = g.brands.reduce((s,b)=>s+b.items.length, 0);
+        const brandBadges = g.brands.map(b=>terrBadgeHtml(b.brand)).join(" ");
         bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
           <td class="caret">${isOpen?"▼":"▶"}</td>
           <td colspan="2"><b>${esc(g.sold_to_name)}</b>
             <span style="font-family:monospace;font-size:10px;color:#6b7280;margin-left:6px">${g.sold_to}</span>
           </td>
-          <td>${terrBadgeHtml(g.brand)} ${g.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}</td>
+          <td>${brandBadges}</td>
           <td><span class="lbl">qty</span>${fmt(g.grp_actual_qty)} <span class="ul">u</span></td>
           <td><span class="lbl">amt</span>$${fmt(g.grp_actual_amt)}</td>
           <td colspan="4"></td>
-          <td><span class="est"><span class="lbl">rebate</span>$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${itemCount} ship-to)</span></td>
+          <td><span class="est"><span class="lbl">rebate</span>$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${totalShips} ship-to)</span></td>
           <td></td>
         </tr>`;
-        if (isOpen) bodyHtml += renderShipRows(g);
+        if (isOpen) {
+          g.brands.forEach(b => {
+            bodyHtml += `<tr class="brand-hdr">
+              <td></td>
+              <td colspan="2" style="padding-left:56px">${terrBadgeHtml(b.brand)} ${b.unit==="A"?`<span class="badge b-A">A</span>`:`<span class="badge b-Q">Q</span>`}
+                <span style="font-size:11px;color:#6b7280;margin-left:6px">${esc(b.structure_name)}</span>
+              </td>
+              <td></td>
+              <td><span class="lbl">qty</span>${fmt(b.grp_actual_qty)} <span class="ul">u</span></td>
+              <td><span class="lbl">amt</span>$${fmt(b.grp_actual_amt)}</td>
+              <td colspan="4"></td>
+              <td><span class="est"><span class="lbl">rebate</span>${b.grp_curr_rebate>0?"$"+fmt(b.grp_curr_rebate):"—"}</span> <span class="ul">(${b.items.length} ship-to)</span></td>
+              <td></td>
+            </tr>`;
+            bodyHtml += renderShipRows(b);
+          });
+        }
       });
     });
   });

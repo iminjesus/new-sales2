@@ -3412,28 +3412,46 @@ def api_rebate_data():
             "est_total":  round(sum(r["curr_rebate"] for r in rows), 2),
         }
 
-        # ── 8. Group by (region, sold_to, brand) ──────────────────────────────
+        # ── 8. Group by (region, sold_to) with brand sub-groups ──────────────
         grp_map = {}
+        brand_order = {"HK": 0, "LF": 1, "TTL": 2}
         for r in rows:
-            key = r["region"] + "|" + r["sold_to"] + "|" + r["brand"]
+            key = r["region"] + "|" + r["sold_to"]
             if key not in grp_map:
                 grp_map[key] = {
                     "key": key,
                     "sold_to": r["sold_to"], "sold_to_name": r["sold_to_name"],
                     "sold_to_group": r["sold_to_group"], "region": r["region"],
                     "bde": r["bde"],
+                    "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
+                    "grp_curr_rebate": 0.0, "grp_est": 0.0,
+                    "brands": {},
+                }
+            g = grp_map[key]
+            g["grp_actual"]      += r["actual"]
+            g["grp_actual_qty"]  += r["actual_qty"]
+            g["grp_actual_amt"]  += r["actual_amt"]
+            g["grp_curr_rebate"] += r["curr_rebate"]
+            g["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
+            bkey = r["brand"]
+            if bkey not in g["brands"]:
+                g["brands"][bkey] = {
                     "brand": r["brand"], "unit": r["unit"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
                     "grp_curr_rebate": 0.0, "grp_est": 0.0, "items": [],
                 }
-            g = grp_map[key]
-            g["grp_actual"]       += r["actual"]
-            g["grp_actual_qty"]   += r["actual_qty"]
-            g["grp_actual_amt"]   += r["actual_amt"]
-            g["grp_curr_rebate"]  += r["curr_rebate"]
-            g["grp_est"]          += r["est_rebate"] if r["est_rebate"] else 0.0
-            g["items"].append(r)
+            b = g["brands"][bkey]
+            b["grp_actual"]      += r["actual"]
+            b["grp_actual_qty"]  += r["actual_qty"]
+            b["grp_actual_amt"]  += r["actual_amt"]
+            b["grp_curr_rebate"] += r["curr_rebate"]
+            b["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
+            b["items"].append(r)
+
+        # Convert brands dict to sorted list (HK → LF → TTL)
+        for g in grp_map.values():
+            g["brands"] = sorted(g["brands"].values(), key=lambda b: brand_order.get(b["brand"], 99))
 
         groups = list(grp_map.values())
         summary["total_groups"] = len(groups)
@@ -3449,9 +3467,10 @@ def api_rebate_data():
         else:
             groups.sort(key=lambda g: (g["region"].lower(), g["bde"].lower(), g["sold_to_name"].lower()))
 
-        # ── 10. Sort items within each group by actual desc ───────────────────
+        # ── 10. Sort items within each brand sub-group by actual desc ─────────
         for g in groups:
-            g["items"].sort(key=lambda r: r["actual"], reverse=True)
+            for b in g["brands"]:
+                b["items"].sort(key=lambda r: r["actual"], reverse=True)
 
         # ── 11. Paginate ──────────────────────────────────────────────────────
         total_pages = max(1, -(-len(groups) // page_size))  # ceil div
