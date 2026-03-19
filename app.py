@@ -3382,6 +3382,8 @@ def api_rebate_data():
                 for sh in sorted(ship_set):
                     q, a = _get_sales(sh)
                     calc_items.append((sh, q, a))
+                sold_to_basis = False
+                ship_details_list = []
             else:
                 # Aggregate all ship_tos → one row per sold_to
                 total_qty = total_amt = 0.0
@@ -3389,6 +3391,18 @@ def api_rebate_data():
                     q, a = _get_sales(sh)
                     total_qty += q; total_amt += a
                 calc_items = [(sold_to, total_qty, total_amt)]
+                sold_to_basis = True
+                # Individual ship-to breakdown for display (qty/amt only)
+                ship_details_list = []
+                for sh in sorted(ship_set):
+                    q, a = _get_sales(sh)
+                    sh_info = ship_cust_map.get(sh, {})
+                    ship_details_list.append({
+                        "ship_to":      sh,
+                        "ship_to_name": sh_info.get("name") or sh,
+                        "actual_qty":   round(q, 2),
+                        "actual_amt":   round(a, 2),
+                    })
 
             for sh, actual_qty, actual_amt in calc_items:
                 actual = actual_qty if unit == "Q" else actual_amt
@@ -3413,6 +3427,8 @@ def api_rebate_data():
                     "brand":          brand,
                     "badges":         badges,
                     "structure_name": struct,
+                    "sold_to_basis":  sold_to_basis,
+                    "ship_details":   ship_details_list if sold_to_basis else [],
                     "unit":           unit,
                     "actual_qty":     round(actual_qty, 2),
                     "actual_amt":     round(actual_amt, 2),
