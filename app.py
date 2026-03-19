@@ -3352,11 +3352,11 @@ def api_rebate_data():
 
             # Badge labels for UI
             if atp_line and not atp_brand:
-                badge1, badge2 = "PCLT", "A"
+                badges = ["PCLT", "Q"]            # AL_ATP: PCLT line, qty
             elif atp_line and atp_brand:
-                badge1, badge2 = atp_brand, atp_line   # e.g. "HK", "TBR"
+                badges = [atp_brand, atp_line, "Q"]  # HK_ATP: HK brand, TBR line, qty
             else:
-                badge1, badge2 = brand, unit
+                badges = [brand, unit]
 
             def _get_sales(sh):
                 """Return (qty, amt) for this ship_to according to ATP or normal filter."""
@@ -3411,8 +3411,7 @@ def api_rebate_data():
                     "ship_to":        sh,
                     "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
                     "brand":          brand,
-                    "badge1":         badge1,
-                    "badge2":         badge2,
+                    "badges":         badges,
                     "structure_name": struct,
                     "unit":           unit,
                     "actual_qty":     round(actual_qty, 2),
@@ -3477,7 +3476,7 @@ def api_rebate_data():
             if bkey not in g["brands"]:
                 g["brands"][bkey] = {
                     "brand": r["brand"], "unit": r["unit"],
-                    "badge1": r["badge1"], "badge2": r["badge2"],
+                    "badges": r["badges"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
                     "grp_curr_rebate": 0.0, "grp_est": 0.0, "items": [],

@@ -222,7 +222,7 @@ function renderPage(data){
         <td colspan="2" style="padding-left:76px"><span style="font-weight:500">${esc(r.ship_to_name)}</span>
           <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
         </td>
-        <td>${badgePairHtml(r.badge1, r.badge2)}</td>
+        <td>${badgesHtml(r.badges)}</td>
         <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="Q"?pct.toFixed(1):0}%;background:${barClr}"></div></div><span class="lbl">qty</span>${fmt(r.actual_qty)} <span class="ul">u</span></td>
         <td><div class="prog-wrap"><div class="prog-bar" style="width:${r.unit==="A"?pct.toFixed(1):0}%;background:${barClr}"></div></div><span class="lbl">amt</span>$${fmt(r.actual_amt)}</td>
         <td><span class="rc"><span class="lbl">rate</span>${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
@@ -264,7 +264,7 @@ function renderPage(data){
       bNode.groups.forEach(g => {
         const isOpen     = expanded.has(g.key);
         const totalShips = g.brands.reduce((s,b)=>s+b.items.length, 0);
-        const brandBadges = g.brands.map(b=>terrBadgeHtml(b.badge1)).join(" ");
+        const brandBadges = g.brands.map(b=>badgesHtml(b.badges)).join(" &nbsp; ");
         bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
           <td class="caret">${isOpen?"▼":"▶"}</td>
           <td colspan="2"><b>${esc(g.sold_to_name)}</b>
@@ -281,7 +281,7 @@ function renderPage(data){
           g.brands.forEach(b => {
             bodyHtml += `<tr class="brand-hdr">
               <td></td>
-              <td colspan="2" style="padding-left:56px">${badgePairHtml(b.badge1, b.badge2)}
+              <td colspan="2" style="padding-left:56px">${badgesHtml(b.badges)}
                 <span style="font-size:11px;color:#6b7280;margin-left:6px">${esc(b.structure_name)}</span>
               </td>
               <td></td>
@@ -335,6 +335,13 @@ function terrBadgeHtml(t){
   if(t==="PCLT") return `<span class="badge b-PCLT">PCLT</span>`;
   if(t==="TBR")  return `<span class="badge b-TBR">TBR</span>`;
   return `<span class="badge b-lf">${t}</span>`;
+}
+function badgesHtml(arr){
+  return arr.map(b => {
+    if(b==="A") return `<span class="badge b-A">A</span>`;
+    if(b==="Q") return `<span class="badge b-Q">Q</span>`;
+    return terrBadgeHtml(b);
+  }).join(" ");
 }
 function badgePairHtml(badge1, badge2){
   const b1 = terrBadgeHtml(badge1);
