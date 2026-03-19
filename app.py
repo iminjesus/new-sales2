@@ -3301,12 +3301,16 @@ def api_rebate_data():
                 nxt = None
             return curr, nxt
 
+        # AJT/ABJ/ATP/APP/ACD: calculate per ship_to; others: aggregate to sold_to level
+        SHIP_TO_GROUPS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
+
         rows = []
         for c in customers:
-            struct  = c["structure_name"]
-            brand   = c["brand"]
-            sold_to = str(c["sold_to"])
-            sd      = tiers_map.get(struct)
+            struct        = c["structure_name"]
+            brand         = c["brand"]
+            sold_to       = str(c["sold_to"])
+            sold_to_group = c["sold_to_group"] or "-"
+            sd            = tiers_map.get(struct)
             if not sd:
                 continue
             unit      = sd["unit"]       # A=Amount, Q=Qty
@@ -3322,17 +3326,33 @@ def api_rebate_data():
             if not ship_set:
                 ship_set.add(sold_to)   # show zero row so sold_to is visible
 
-            for sh in sorted(ship_set):
-                if brand == "TTL":
-                    hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
-                    lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                    actual_qty = hk["qty"] + lf["qty"]
-                    actual_amt = hk["amt"] + lf["amt"]
-                else:
-                    d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
-                    actual_qty = d["qty"]
-                    actual_amt = d["amt"]
+            if sold_to_group in SHIP_TO_GROUPS:
+                # One row per ship_to
+                calc_items = []
+                for sh in sorted(ship_set):
+                    if brand == "TTL":
+                        hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
+                        lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
+                        calc_items.append((sh, hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]))
+                    else:
+                        d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
+                        calc_items.append((sh, d["qty"], d["amt"]))
+            else:
+                # Aggregate all ship_tos → one row per sold_to
+                total_qty = total_amt = 0.0
+                for sh in ship_set:
+                    if brand == "TTL":
+                        hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
+                        lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
+                        total_qty += hk["qty"] + lf["qty"]
+                        total_amt += hk["amt"] + lf["amt"]
+                    else:
+                        d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
+                        total_qty += d["qty"]
+                        total_amt += d["amt"]
+                calc_items = [(sold_to, total_qty, total_amt)]
 
+            for sh, actual_qty, actual_amt in calc_items:
                 actual = actual_qty if unit == "Q" else actual_amt
 
                 curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
@@ -3347,11 +3367,11 @@ def api_rebate_data():
                 rows.append({
                     "sold_to":        sold_to,
                     "sold_to_name":   c["sold_to_name"] or sold_to,
-                    "sold_to_group":  c["sold_to_group"] or "-",
+                    "sold_to_group":  sold_to_group,
                     "region":         sh_info.get("state") or c["region"] or "-",
                     "bde":            sh_info.get("bde") or c["bde"] or "-",
                     "ship_to":        sh,
-                    "ship_to_name":   sh_info.get("name") or sh,
+                    "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
                     "brand":          brand,
                     "structure_name": struct,
                     "unit":           unit,
@@ -3521,9 +3541,11 @@ def api_rebate_export():
             if curr["tier"] >= top_order: nxt=None
             return curr, nxt
 
+        SHIP_TO_GROUPS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
         rows=[]
         for c in customers:
             struct=c["structure_name"]; brand=c["brand"]; sold_to=str(c["sold_to"])
+            sold_to_group=c["sold_to_group"] or "-"
             sd=tiers_map.get(struct)
             if not sd: continue
             unit=sd["unit"]; tiers=sd["tiers"]; top_order=sd["top_order"]
@@ -3532,21 +3554,39 @@ def api_rebate_export():
             else:
                 ship_set=ship_idx.get((sold_to,brand),set()).copy()
             if not ship_set: ship_set.add(sold_to)
-            for sh in sorted(ship_set):
+
+            if sold_to_group in SHIP_TO_GROUPS:
+                # One row per ship_to
+                calc_items=[]
+                for sh in sorted(ship_set):
+                    if brand=="TTL":
+                        hk=ship_sales.get((sold_to,sh,"HK"),{"qty":0,"amt":0})
+                        lf=ship_sales.get((sold_to,sh,"LF"),{"qty":0,"amt":0})
+                        calc_items.append((sh,(hk["qty"]+lf["qty"]) if unit=="Q" else (hk["amt"]+lf["amt"])))
+                    else:
+                        d=ship_sales.get((sold_to,sh,brand),{"qty":0,"amt":0})
+                        calc_items.append((sh,d["qty"] if unit=="Q" else d["amt"]))
+            else:
+                # Aggregate all ship_tos → one row per sold_to
+                total=0.0
+                for sh in ship_set:
+                    if brand=="TTL":
+                        hk=ship_sales.get((sold_to,sh,"HK"),{"qty":0,"amt":0})
+                        lf=ship_sales.get((sold_to,sh,"LF"),{"qty":0,"amt":0})
+                        total+=(hk["qty"]+lf["qty"]) if unit=="Q" else (hk["amt"]+lf["amt"])
+                    else:
+                        d=ship_sales.get((sold_to,sh,brand),{"qty":0,"amt":0})
+                        total+=d["qty"] if unit=="Q" else d["amt"]
+                calc_items=[(sold_to,total)]
+
+            for sh,actual in calc_items:
                 sh_info = ship_cust_map_ex.get(sh, {})
-                if brand=="TTL":
-                    hk=ship_sales.get((sold_to,sh,"HK"),{"qty":0,"amt":0})
-                    lf=ship_sales.get((sold_to,sh,"LF"),{"qty":0,"amt":0})
-                    actual=(hk["qty"]+lf["qty"]) if unit=="Q" else (hk["amt"]+lf["amt"])
-                else:
-                    d=ship_sales.get((sold_to,sh,brand),{"qty":0,"amt":0})
-                    actual=d["qty"] if unit=="Q" else d["amt"]
                 curr_tier,next_tier=_calc(actual,tiers,top_order)
                 rows.append({
                     "sold_to":sold_to,"sold_to_name":c["sold_to_name"] or sold_to,
-                    "sold_to_group":c["sold_to_group"] or "-",
+                    "sold_to_group":sold_to_group,
                     "region": sh_info.get("state") or c["region"] or "-",
-                    "ship_to":sh,"ship_to_name":sh_info.get("name") or sh,
+                    "ship_to":sh,"ship_to_name":sh_info.get("name") or (c["sold_to_name"] or sh),
                     "brand":brand,"structure_name":struct,"unit":unit,
                     "actual":round(actual,2),"curr_rate":curr_tier["rate"],
                     "next_rate":next_tier["rate"] if next_tier else None,
