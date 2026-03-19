@@ -3308,7 +3308,8 @@ def api_rebate_data():
             return curr, nxt
 
         # AJT/ABJ/ATP/APP/ACD: calculate per ship_to; others: aggregate to sold_to level
-        SHIP_TO_GROUPS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
+        # Determined by structure name (not sold_to_group DB field)
+        SHIP_TO_STRUCT_KEYS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
 
         def _atp_info(struct_name):
             """AL_ATP_* → (None, 'PCLT');  HK_ATP_* → ('HK', 'TBR');  else → (None, None)."""
@@ -3376,8 +3377,8 @@ def api_rebate_data():
                     d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
                     return d["qty"], d["amt"]
 
-            if sold_to_group in SHIP_TO_GROUPS:
-                # One row per ship_to
+            if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
+                # One row per ship_to (AJT/ABJ/ATP/APP/ACD structures)
                 calc_items = []
                 for sh in sorted(ship_set):
                     q, a = _get_sales(sh)
@@ -3616,11 +3617,10 @@ def api_rebate_export():
             if curr["tier"] >= top_order: nxt=None
             return curr, nxt
 
-        SHIP_TO_GROUPS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
+        SHIP_TO_STRUCT_KEYS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
         rows=[]
         for c in customers:
             struct=c["structure_name"]; brand=c["brand"]; sold_to=str(c["sold_to"])
-            sold_to_group=c["sold_to_group"] or "-"
             sd=tiers_map.get(struct)
             if not sd: continue
             unit=sd["unit"]; tiers=sd["tiers"]; top_order=sd["top_order"]
@@ -3630,7 +3630,7 @@ def api_rebate_export():
                 ship_set=ship_idx.get((sold_to,brand),set()).copy()
             if not ship_set: ship_set.add(sold_to)
 
-            if sold_to_group in SHIP_TO_GROUPS:
+            if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
                 # One row per ship_to
                 calc_items=[]
                 for sh in sorted(ship_set):
