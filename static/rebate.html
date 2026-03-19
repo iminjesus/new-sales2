@@ -210,16 +210,39 @@ function renderPage(data){
     .forEach(r=>{
       if(r.sold_to_basis && r.ship_details && r.ship_details.length>0){
         // Sold-to basis: show individual ship-to addresses (qty/amt only, rebate on brand row)
+        // Sold-to basis: compute tier info from aggregated sold-to values
+        const validT = r.tiers.filter(t=>t.rate>0);
+        const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
+        const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
+        const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a" : pct>=50 ? "#f59e0b" : "#3b82f6";
+        const dots   = validT.map(t=>{
+          let cls="fut";
+          if(t.threshold<=r.actual && t.rate>0) cls="past";
+          else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
+          const lbl = r.unit==="Q" ? fmt(t.threshold)+" u" : "$"+fmt(t.threshold);
+          return `<span class="td ${cls}" title="${lbl} → ${t.rate}%">${t.rate}%</span>`;
+        }).join("");
+        const isMax    = r.next_rate==null && r.curr_rate>0;
+        const needQHtml = r.needed_qty!=null ? `<span class="needed">+${fmt(r.needed_qty)}</span>`
+                        : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
+        const needAHtml = r.needed_amt!=null ? `<span class="needed">+$${fmt(r.needed_amt)}</span>`
+                        : (isMax ? `<span class="no-next">MAX ✓</span>` : `<span style="color:#9ca3af">—</span>`);
         r.ship_details.forEach(sd=>{
           html += `<tr class="ship-row">
             <td></td>
             <td colspan="2" style="padding-left:76px"><span style="font-weight:500">${esc(sd.ship_to_name)}</span>
               <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${sd.ship_to}</span>
+              <span style="font-size:9px;color:#c4b5fd;margin-left:5px;font-style:italic">per Sold-To</span>
             </td>
             <td></td>
             <td><span class="lbl">qty</span>${fmt(sd.actual_qty)} <span class="ul">u</span></td>
             <td><span class="lbl">amt</span>$${fmt(sd.actual_amt)}</td>
-            <td colspan="5" style="color:#9ca3af;font-size:11px;text-align:center">— calculated per Sold-To —</td>
+            <td><span class="rc"><span class="lbl">rate</span>${r.curr_rate>0?r.curr_rate+"%":"—"}</span></td>
+            <td><span class="rn"><span class="lbl">next</span>${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
+            <td>${needQHtml}</td>
+            <td>${needAHtml}</td>
+            <td><span style="color:#9ca3af">—</span></td>
+            <td><div class="tier-list">${dots}</div></td>
           </tr>`;
         });
       } else {
