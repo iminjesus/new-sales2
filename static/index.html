@@ -203,14 +203,28 @@
   </div>
   <!-- ROW 1: Daily -->
   <div class="chart-row" style="margin-top:4px;">
-    <div class="box"><h3 id="dailyTitle">Daily Sales</h3><canvas id="dailyChart"></canvas></div>
+    <div class="box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <h3 id="dailyTitle" style="margin:0">Daily Sales</h3>
+        <div id="dailyViewBtns" style="display:flex;gap:3px">
+          <button class="btn active" data-dview="abs" style="font-size:11px;padding:2px 8px">Abs</button>
+          <button class="btn" data-dview="pct" style="font-size:11px;padding:2px 8px">Ach%</button>
+        </div>
+      </div>
+      <canvas id="dailyChart"></canvas>
+    </div>
     <div class="box"><h3>Stacked Daily</h3><canvas id="stackedDailyChart"></canvas></div>
     <div class="box"><h3>Stacked Daily %</h3><canvas id="stackedDailyPercentChart"></canvas></div>
   </div>
 
   <!-- ROW 2: Daily cumulative -->
   <div class="chart-row" style="margin-top:4px;">
-    <div class="box"><h3 id="cumTitle">Cumulative Sales (Daily)</h3><canvas id="dailyCumChart"></canvas></div>
+    <div class="box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <h3 id="cumTitle" style="margin:0">Cumulative Sales (Daily)</h3>
+      </div>
+      <canvas id="dailyCumChart"></canvas>
+    </div>
     <div class="box"><h3>Stacked Cumulative</h3><canvas id="stackedDailyCumChart"></canvas></div>
     <div class="box"><h3>Stacked Cumulative %</h3><canvas id="stackedDailyCumPercentChart"></canvas></div>
   </div>

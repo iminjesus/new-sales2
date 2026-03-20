@@ -94,6 +94,7 @@ const mapFilters = {
   top_limit: 0   
 };
 
+let dailyViewMode = "abs";   // "abs" | "pct"
 let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetInst,
     stackedDailyInst,stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst, stackedYearlyInst, stackedYearlyPctInst,
     stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst,
@@ -353,6 +354,14 @@ document.getElementById('metricBtns').addEventListener("click",e=>{
   if (ct) ct.textContent = filters.metric==="amount"?"Cumulative Amount":"Cumulative Sales";
   refreshAllDebounced();
 });
+document.getElementById('dailyViewBtns').addEventListener("click", e => {
+  if (!e.target.classList.contains("btn")) return;
+  dailyViewMode = e.target.dataset.dview;
+  [...document.querySelectorAll("#dailyViewBtns .btn")].forEach(b =>
+    b.classList.toggle("active", b.dataset.dview === dailyViewMode)
+  );
+  drawDailyTotals();
+});
 document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
   refreshAllDebounced();
@@ -544,17 +553,13 @@ async function drawDailyTotals(){
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
     }).toString()}`),
-    // Use breakdown as the cutoff source (same reason stacked stops correctly)
     fetchDailyBreakdownWithGroup("region")
   ]);
 
   const labels = daysLabels();
   const N = labels.length;
 
-  // cutoffIdx from breakdown: max day present (1-based) -> 0-based index
   let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-  // If breakdown is empty for some reason, fallback to last non-zero in salesRows
-  // (still simple; avoids "31 rows with future zeros" problem)
   if (cutoffIdx < 0){
     const tmp = salesRows.map(r => (+r.value || 0));
     for (let i = 0; i < Math.min(tmp.length, N); i++){
@@ -563,95 +568,160 @@ async function drawDailyTotals(){
     if (cutoffIdx < 0) cutoffIdx = Math.min(salesRows.length, N) - 1;
   }
 
-  // Sales: fill up to cutoffIdx, then null
   const sales = new Array(N).fill(null);
-  for (let i = 0; i <= cutoffIdx; i++){
-    sales[i] = (+salesRows[i]?.value || 0);
-  }
+  for (let i = 0; i <= cutoffIdx; i++) sales[i] = (+salesRows[i]?.value || 0);
 
-  // Targets: if you want the chart to visually stop, also null after cutoff
   const targets = new Array(N).fill(null);
-  for (let i = 0; i <= cutoffIdx; i++){
-    targets[i] = (+targetRows[i]?.value || 0);
-  }
+  for (let i = 0; i <= cutoffIdx; i++) targets[i] = (+targetRows[i]?.value || 0);
 
-  // Cumulative: stop at cutoffIdx
-  const salesCum  = new Array(N).fill(null);
+  const salesCum = new Array(N).fill(null);
   const targetCum = new Array(N).fill(null);
-
   let sRun = 0, tRun = 0;
   for (let i = 0; i <= cutoffIdx; i++){
-    sRun += (+sales[i] || 0);
-    tRun += (+targets[i] || 0);
-    salesCum[i]  = sRun;
-    targetCum[i] = tRun;
+    sRun += (+sales[i] || 0); tRun += (+targets[i] || 0);
+    salesCum[i] = sRun; targetCum[i] = tRun;
   }
 
-  // Achievement: stop at cutoffIdx
   const achievement    = new Array(N).fill(null);
   const cumAchievement = new Array(N).fill(null);
-
   for (let i = 0; i <= cutoffIdx; i++){
-    const s  = (+sales[i] || 0);
-    const t  = (+targets[i] || 0);
-    const sc = (+salesCum[i] || 0);
-    const tc = (+targetCum[i] || 0);
-
-    if (t  > 0) achievement[i]    = +((s  / t ) * 100).toFixed(1);
-    if (tc > 0) cumAchievement[i] = +((sc / tc) * 100).toFixed(1);
+    const s = +sales[i]||0, t = +targets[i]||0;
+    const sc = +salesCum[i]||0, tc = +targetCum[i]||0;
+    if (t  > 0) achievement[i]    = +((s /t )*100).toFixed(1);
+    if (tc > 0) cumAchievement[i] = +((sc/tc)*100).toFixed(1);
   }
+
+  // ── Filter out empty days (weekends with no sales/target) ──────────────────
+  const activeIdx = [];
+  for (let i = 0; i < N; i++){
+    if ((sales[i] ?? 0) > 0 || (targets[i] ?? 0) > 0) activeIdx.push(i);
+  }
+  const fL  = activeIdx.map(i => labels[i]);
+  const fS  = activeIdx.map(i => sales[i]);
+  const fT  = activeIdx.map(i => targets[i]);
+  const fSC = activeIdx.map(i => salesCum[i]);
+  const fTC = activeIdx.map(i => targetCum[i]);
+  const fA  = activeIdx.map(i => achievement[i]);
+  const fCA = activeIdx.map(i => cumAchievement[i]);
 
   [dailyInst, dailyCumInst].forEach(c => c && c.destroy());
 
-  dailyInst = new Chart(document.getElementById("dailyChart"), {
-    type: "bar",
-    data: { labels, datasets: [
-      { label: "Ach(%)", type: "line", data: achievement, yAxisID: "y1",
-        borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
-        datalabels: {
-          display: (ctx) => {
-            const i = ctx.dataIndex;
-            return (i % 2 === 0) && (sales[i] !== null) && (sales[i] > 0);
-          },
-          align: "top", anchor: "end",
-          formatter: v => v == null ? "" : v.toFixed(1) + "%"
-        }
-      },
-      { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
-        type: "bar", data: sales, backgroundColor: "#ABDEE6",
-        categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
-      },
-      { label: "Target", type: "bar", data: targets,
-        borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
-      }
-    ]},
-    options: getCommonOptions(false)
-  });
+  if (dailyViewMode === "pct") {
+    // ── Ach% mode: bars = daily achievement%, line = cumulative ach% ──────────
+    const achClr = fA.map(v => v == null ? "rgba(0,0,0,0)" : (v >= 100 ? "#86efac" : "#fca5a5"));
+    const ref100 = fL.map(() => 100);
 
-  dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
-    type: "bar",
-    data: { labels, datasets: [
-      { label: "Ach(%)", type: "line", data: cumAchievement, yAxisID: "y1",
-        borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
-        datalabels: {
-          display: (ctx) => {
-            const i = ctx.dataIndex;
-            return (i % 2 === 0) && (sales[i] !== null) && (sales[i] > 0);
-          },
-          align: "top", anchor: "end",
-          formatter: v => v == null ? "" : v.toFixed(1) + "%"
+    dailyInst = new Chart(document.getElementById("dailyChart"), {
+      type: "bar",
+      data: { labels: fL, datasets: [
+        { label: "Daily Ach(%)", data: fA, backgroundColor: achClr,
+          categoryPercentage: 0.8, barPercentage: 0.9,
+          datalabels: {
+            display: ctx => fA[ctx.dataIndex] != null && (fS[ctx.dataIndex]||0) > 0,
+            formatter: v => v == null ? "" : v.toFixed(1)+"%",
+            align: "center", anchor: "center", font: { size: 9, weight: "bold" }, color: "#1f2937"
+          }
+        },
+        { label: "100%", type: "line", data: ref100,
+          borderColor: "#6b7280", borderWidth: 1.5, borderDash: [5,3],
+          pointRadius: 0, fill: false, datalabels: { display: false }
         }
-      },
-      { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
-        type: "bar", data: salesCum, backgroundColor: "#ABDEE6",
-        categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
-      },
-      { label: "Cumulative Target", type: "bar", data: targetCum,
-        borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+      ]},
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "right" },
+          tooltip: { callbacks: { label: c => (c.parsed.y?.toFixed(1) ?? "—") + "%" } }
+        },
+        scales: {
+          x: xAxisDdMm(false),
+          y: { beginAtZero: true,
+               title: { display: true, text: "Achievement %" },
+               ticks: { callback: v => v + "%" } }
+        }
       }
-    ]},
-    options: getCommonOptions(false)
-  });
+    });
+
+    dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
+      type: "line",
+      data: { labels: fL, datasets: [
+        { label: "Cum Ach(%)", data: fCA,
+          borderColor: "#3b82f6", borderWidth: 2.5,
+          backgroundColor: "rgba(59,130,246,0.08)", fill: true,
+          pointRadius: 3, pointBackgroundColor: fCA.map(v => v==null?"transparent":(v>=100?"#22c55e":"#ef4444")),
+          tension: 0.3,
+          datalabels: {
+            display: ctx => ctx.dataIndex % 2 === 0 && fCA[ctx.dataIndex] != null,
+            formatter: v => v?.toFixed(1)+"%",
+            align: "top", anchor: "end", font: { size: 9 }, color: "#1e40af"
+          }
+        },
+        { label: "100%", data: ref100,
+          borderColor: "#6b7280", borderWidth: 1.5, borderDash: [5,3],
+          pointRadius: 0, fill: false, datalabels: { display: false }
+        }
+      ]},
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "right" },
+          tooltip: { callbacks: { label: c => (c.parsed.y?.toFixed(1) ?? "—") + "%" } }
+        },
+        scales: {
+          x: xAxisDdMm(false),
+          y: { beginAtZero: true,
+               title: { display: true, text: "Cumulative Ach%" },
+               ticks: { callback: v => v + "%" } }
+        }
+      }
+    });
+
+  } else {
+    // ── Abs mode: bars = absolute sales/target, line = Ach% ───────────────────
+    dailyInst = new Chart(document.getElementById("dailyChart"), {
+      type: "bar",
+      data: { labels: fL, datasets: [
+        { label: "Ach(%)", type: "line", data: fA, yAxisID: "y1",
+          borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
+          datalabels: {
+            display: ctx => { const i=ctx.dataIndex; return (i%2===0) && (fS[i]??0)>0; },
+            align: "top", anchor: "end",
+            formatter: v => v == null ? "" : v.toFixed(1)+"%"
+          }
+        },
+        { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
+          type: "bar", data: fS, backgroundColor: "#ABDEE6",
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+        },
+        { label: "Target", type: "bar", data: fT,
+          borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+        }
+      ]},
+      options: getCommonOptions(false)
+    });
+
+    dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
+      type: "bar",
+      data: { labels: fL, datasets: [
+        { label: "Ach(%)", type: "line", data: fCA, yAxisID: "y1",
+          borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
+          datalabels: {
+            display: ctx => { const i=ctx.dataIndex; return (i%2===0) && (fSC[i]??0)>0; },
+            align: "top", anchor: "end",
+            formatter: v => v == null ? "" : v.toFixed(1)+"%"
+          }
+        },
+        { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
+          type: "bar", data: fSC, backgroundColor: "#ABDEE6",
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+        },
+        { label: "Cumulative Target", type: "bar", data: fTC,
+          borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+        }
+      ]},
+      options: getCommonOptions(false)
+    });
+  }
 }
 
 
