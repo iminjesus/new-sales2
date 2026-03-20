@@ -1988,20 +1988,25 @@ function renderProfitCombined(rows) {
           type: "line",
           label: "Profit %",
           data: profitPct,
-          yAxisID: "y1",   // right axis
+          yAxisID: "y1",
           tension: 0.25,
-          borderWidth: 2,
-          pointRadius: 2,
+          borderWidth: 2.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
           fill: false,
           borderColor: "#10b981",
-          pointBackgroundColor: "#10b981",
+          pointBackgroundColor: profitPct.map(v => v >= 0 ? "#10b981" : "#ef4444"),
           datalabels: {
+            display: ctx => gross[ctx.dataIndex] > 0,
             align: "top",
-            formatter: (v) => v == null ? "" : v.toFixed(2) + "%",
-            font: {
-            weight: "bold",
-            size : 20
-            }
+            anchor: "end",
+            offset: 4,
+            formatter: v => v == null ? "" : v.toFixed(1) + "%",
+            font: { weight: "bold", size: 10 },
+            color: ctx => profitPct[ctx.dataIndex] >= 0 ? "#065f46" : "#991b1b",
+            backgroundColor: "rgba(255,255,255,0.75)",
+            borderRadius: 3,
+            padding: { top: 1, bottom: 1, left: 3, right: 3 }
           }
         },
         // Bar group 1: Gross
@@ -2063,15 +2068,15 @@ function renderProfitCombined(rows) {
         },
         y1: {
           position: "right",
-          beginAtZero: true,
-          suggestedMax: 100,
+          min: -10,
+          max: 10,
           title: { display: true, text: "Profit %" },
           grid: { drawOnChartArea: false },
-          ticks: { callback: v => `${Math.round(v)}%` }
+          ticks: { callback: v => `${v}%` }
         }
       },
       plugins: {
-        datalabels: { display: false },
+        datalabels: { display: ctx => ctx.dataset.type === "line" },
         legend: { display: true },
         tooltip: {
           callbacks: {
