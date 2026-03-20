@@ -1156,32 +1156,32 @@ async function drawMonthlyKPI(){
   // font colour based on achievement %
   const cellHtml = (v) => {
     if (v == null) {
-      return `<td style="text-align:right;color:#9ca3af">-</td>`;
+      return `<td style="text-align:right;color:#9ca3af;padding:1px 2px;">-</td>`;
     }
     const val = Number(v);
     let color;
     if (val >= 100)      color = "#16a34a"; // green
     else if (val >= 90)  color = "#f97316"; // orange
     else                 color = "#dc2626"; // red
-    return `<td style="text-align:right;color:${color}">${fmt(val)}</td>`;
+    return `<td style="text-align:right;color:${color};padding:1px 2px;">${fmt(val)}</td>`;
   };
 
   el.innerHTML = `
   <thead>
-  <tr>
-    <th style="text-align:center; font-weight:bold;">Region</th>
-    <th style="text-align:center; font-weight:bold;">BDE</th>
-    <th style="text-align:right; font-weight:bold;">This Month</th>
-    <th style="text-align:right; font-weight:bold;">Q1</th>
-    <th style="text-align:right; font-weight:bold;">Q2</th>
-    <th style="text-align:right; font-weight:bold;">Q3</th>
-    <th style="text-align:right; font-weight:bold;">Q4</th>
+  <tr style="font-size:11px; line-height:1.2;">
+    <th style="text-align:center; font-weight:bold; padding:1px 2px;">Region</th>
+    <th style="text-align:center; font-weight:bold; padding:1px 2px;">BDE</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">This Month</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q1</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q2</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q3</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q4</th>
   </tr></thead>
   <tbody>
     ${rows.map(r => `
-      <tr style="background-color:${rowBg(r.region)}">
-        <td style="text-align:center">${r.region}</td>
-        <td style="text-align:center">${r.bde}</td>
+      <tr style="background-color:${rowBg(r.region)}; font-size:11px; line-height:1.2;">
+        <td style="text-align:center; padding:1px 2px;">${r.region}</td>
+        <td style="text-align:center; padding:1px 2px;">${r.bde}</td>
         ${cellHtml(r.dailyKPI)}
         ${cellHtml(r.Q1)}
         ${cellHtml(r.Q2)}
