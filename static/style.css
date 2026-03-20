@@ -166,12 +166,13 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   z-index: 1;
   background: #f7f7f9;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 11px;
   color: #333;
 }
 #kpiRegionGridWrap .kpi-table th,
 #kpiRegionGridWrap .kpi-table td {
   padding: 0px 2px;
+  font-size: 11px;
   line-height: 1.3;
   border-bottom: 1px solid #eee;
   white-space: nowrap;
