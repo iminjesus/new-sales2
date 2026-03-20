@@ -677,18 +677,11 @@ async function drawDailyTotals(){
     });
 
   } else {
-    // ── Abs mode: bars = absolute sales/target, line = Ach% ───────────────────
+    // ── Abs mode ──────────────────────────────────────────────────────────────
+    // Daily: bars only (no Ach% line)
     dailyInst = new Chart(document.getElementById("dailyChart"), {
       type: "bar",
       data: { labels: fL, datasets: [
-        { label: "Ach(%)", type: "line", data: fA, yAxisID: "y1",
-          borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
-          datalabels: {
-            display: ctx => { const i=ctx.dataIndex; return (i%2===0) && (fS[i]??0)>0; },
-            align: "top", anchor: "end",
-            formatter: v => v == null ? "" : v.toFixed(1)+"%"
-          }
-        },
         { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
           type: "bar", data: fS, backgroundColor: "#ABDEE6",
           categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
@@ -700,16 +693,22 @@ async function drawDailyTotals(){
       options: getCommonOptions(false)
     });
 
+    // Cumulative: bars on left (y), Ach% line on right (y1) with 60-130 range + 100% ref
+    const ref100 = fL.map(() => 100);
     dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
       type: "bar",
       data: { labels: fL, datasets: [
         { label: "Ach(%)", type: "line", data: fCA, yAxisID: "y1",
-          borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
+          borderWidth: 2.5, pointRadius: 0, borderColor: "#ef4444", tension: 0.3,
           datalabels: {
             display: ctx => { const i=ctx.dataIndex; return (i%2===0) && (fSC[i]??0)>0; },
             align: "top", anchor: "end",
             formatter: v => v == null ? "" : v.toFixed(1)+"%"
           }
+        },
+        { label: "100%", type: "line", data: ref100, yAxisID: "y1",
+          borderColor: "#9ca3af", borderWidth: 1.5, borderDash: [5,3],
+          pointRadius: 0, fill: false, datalabels: { display: false }
         },
         { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
           type: "bar", data: fSC, backgroundColor: "#ABDEE6",
@@ -719,7 +718,20 @@ async function drawDailyTotals(){
           borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
         }
       ]},
-      options: getCommonOptions(false)
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "right" },
+          tooltip: { callbacks: { title: items => items[0]?.label } }
+        },
+        scales: {
+          x: xAxisDdMm(false),
+          y:  { beginAtZero: true },
+          y1: { position: "right", min: 60, max: 130,
+                ticks: { callback: v => v + "%" },
+                grid: { drawOnChartArea: false } }
+        }
+      }
     });
   }
 }
