@@ -3313,11 +3313,13 @@ def api_rebate_data():
         SHIP_TO_STRUCT_KEYS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
 
         def _atp_info(struct_name):
-            """AL_ATP_* → (None, 'PCLT');  HK_ATP_* → ('HK', 'TBR');  else → (None, None)."""
+            """AL_ATP_* → (None, 'AL_ATP');  HK_ATP_* → ('HK', 'TBR');  else → (None, None).
+            AL_ATP: all brands (HK+LF), both PCLT+TBR lines combined.
+            """
             if "ATP" not in struct_name:
                 return None, None
             if struct_name.startswith("AL_ATP"):
-                return None, "PCLT"
+                return None, "AL_ATP"
             if struct_name.startswith("HK_ATP"):
                 return "HK", "TBR"
             return None, None
@@ -3341,9 +3343,11 @@ def api_rebate_data():
             if atp_line:
                 if atp_brand:   # HK_ATP: HK brand, TBR line
                     ship_set = ship_idx_line.get((sold_to, atp_brand, atp_line), set()).copy()
-                else:           # AL_ATP: all brands, PCLT line
-                    ship_set = (ship_idx_line.get((sold_to, "HK", atp_line), set()) |
-                                ship_idx_line.get((sold_to, "LF", atp_line), set()))
+                else:           # AL_ATP: all brands, PCLT + TBR lines combined
+                    ship_set = (ship_idx_line.get((sold_to, "HK", "PCLT"), set()) |
+                                ship_idx_line.get((sold_to, "LF", "PCLT"), set()) |
+                                ship_idx_line.get((sold_to, "HK", "TBR"),  set()) |
+                                ship_idx_line.get((sold_to, "LF", "TBR"),  set()))
             elif brand == "TTL":
                 ship_set = (ship_idx.get((sold_to, "HK"), set()) |
                             ship_idx.get((sold_to, "LF"), set()))
@@ -3354,7 +3358,7 @@ def api_rebate_data():
 
             # Badge labels for UI
             if atp_line and not atp_brand:
-                badges = ["PCLT", "Q"]            # AL_ATP: PCLT line, qty
+                badges = ["PCLT", "TBR", "Q"]     # AL_ATP: PCLT+TBR lines, all brands, qty
             elif atp_line and atp_brand:
                 badges = [atp_brand, atp_line, "Q"]  # HK_ATP: HK brand, TBR line, qty
             else:
@@ -3366,10 +3370,13 @@ def api_rebate_data():
                     if atp_brand:
                         d = ship_sales_line.get((sold_to, sh, atp_brand, atp_line), {"qty": 0.0, "amt": 0.0})
                         return d["qty"], d["amt"]
-                    else:
-                        hk = ship_sales_line.get((sold_to, sh, "HK", atp_line), {"qty": 0.0, "amt": 0.0})
-                        lf = ship_sales_line.get((sold_to, sh, "LF", atp_line), {"qty": 0.0, "amt": 0.0})
-                        return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
+                    else:   # AL_ATP: HK+LF brands, PCLT+TBR lines
+                        hk_p = ship_sales_line.get((sold_to, sh, "HK", "PCLT"), {"qty": 0.0, "amt": 0.0})
+                        lf_p = ship_sales_line.get((sold_to, sh, "LF", "PCLT"), {"qty": 0.0, "amt": 0.0})
+                        hk_t = ship_sales_line.get((sold_to, sh, "HK", "TBR"),  {"qty": 0.0, "amt": 0.0})
+                        lf_t = ship_sales_line.get((sold_to, sh, "LF", "TBR"),  {"qty": 0.0, "amt": 0.0})
+                        return (hk_p["qty"] + lf_p["qty"] + hk_t["qty"] + lf_t["qty"],
+                                hk_p["amt"] + lf_p["amt"] + hk_t["amt"] + lf_t["amt"])
                 elif brand == "TTL":
                     hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
                     lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
