@@ -1168,7 +1168,7 @@ async function drawMonthlyKPI(){
 
   el.innerHTML = `
   <thead>
-  <tr style="font-size:11px; line-height:1.2;">
+  <tr style="font-size:10px; line-height:1.2;">
     <th style="text-align:center; font-weight:bold; padding:1px 2px;">Region</th>
     <th style="text-align:center; font-weight:bold; padding:1px 2px;">BDE</th>
     <th style="text-align:right; font-weight:bold; padding:1px 2px;">This Month</th>
@@ -1179,7 +1179,7 @@ async function drawMonthlyKPI(){
   </tr></thead>
   <tbody>
     ${rows.map(r => `
-      <tr style="background-color:${rowBg(r.region)}; font-size:11px; line-height:1.2;">
+      <tr style="background-color:${rowBg(r.region)}; font-size:10px; line-height:1.2;">
         <td style="text-align:center; padding:1px 2px;">${r.region}</td>
         <td style="text-align:center; padding:1px 2px;">${r.bde}</td>
         ${cellHtml(r.dailyKPI)}
