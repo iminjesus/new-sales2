@@ -396,8 +396,9 @@ def add_cache_headers(response):
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
     else:
-        # Static assets: tell CDN/cloudflare to always revalidate
-        response.headers['Cache-Control'] = 'no-cache, must-revalidate'
+        # Static assets: prevent Cloudflare/CDN from caching
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
     return response
 
 def category_filters_stock(alias: str, category: str):
