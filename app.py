@@ -3312,17 +3312,22 @@ def api_rebate_data():
         # Determined by structure name (not sold_to_group DB field)
         SHIP_TO_STRUCT_KEYS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
 
-        def _atp_info(struct_name):
-            """AL_ATP_* → (None, 'AL_ATP');  HK_ATP_* → ('HK', 'TBR');  else → (None, None).
-            AL_ATP: all brands (HK+LF), both PCLT+TBR lines combined.
+        def _atp_variants(struct_name, brand):
+            """Return list of (atp_brand, atp_line, brand_key, badges) to process separately.
+            AL_ATP: two entries — PCLT and TBR (each HK+LF combined).
+            HK_ATP: one entry — HK brand, TBR line.
+            Others: one entry — normal brand/unit (resolved later).
             """
             if "ATP" not in struct_name:
-                return None, None
+                return [(None, None, brand, None)]   # badges resolved later
             if struct_name.startswith("AL_ATP"):
-                return None, "AL_ATP"
+                return [
+                    (None,  "PCLT", "PCLT", ["PCLT", "Q"]),   # HK+LF combined
+                    ("HK",  "TBR",  "TBR",  ["TBR",  "Q"]),   # HK only
+                ]
             if struct_name.startswith("HK_ATP"):
-                return "HK", "TBR"
-            return None, None
+                return [("HK", "TBR", "HK_TBR", ["HK", "TBR", "Q"])]
+            return [(None, None, brand, None)]
 
         rows = []
         for c in customers:
@@ -3337,121 +3342,111 @@ def api_rebate_data():
             tiers     = sd["tiers"]
             top_order = sd["top_order"]
 
-            atp_brand, atp_line = _atp_info(struct)
+            for atp_brand, atp_line, brand_key, badges_override in _atp_variants(struct, brand):
 
-            # Collect ship_tos
-            if atp_line:
-                if atp_brand:   # HK_ATP: HK brand, TBR line
-                    ship_set = ship_idx_line.get((sold_to, atp_brand, atp_line), set()).copy()
-                else:           # AL_ATP: all brands, PCLT + TBR lines combined
-                    ship_set = (ship_idx_line.get((sold_to, "HK", "PCLT"), set()) |
-                                ship_idx_line.get((sold_to, "LF", "PCLT"), set()) |
-                                ship_idx_line.get((sold_to, "HK", "TBR"),  set()) |
-                                ship_idx_line.get((sold_to, "LF", "TBR"),  set()))
-            elif brand == "TTL":
-                ship_set = (ship_idx.get((sold_to, "HK"), set()) |
-                            ship_idx.get((sold_to, "LF"), set()))
-            else:
-                ship_set = ship_idx.get((sold_to, brand), set()).copy()
-            if not ship_set:
-                ship_set.add(sold_to)   # show zero row so sold_to is visible
-
-            # Badge labels for UI
-            if atp_line and not atp_brand:
-                badges = ["PCLT", "TBR", "Q"]     # AL_ATP: PCLT+TBR lines, all brands, qty
-            elif atp_line and atp_brand:
-                badges = [atp_brand, atp_line, "Q"]  # HK_ATP: HK brand, TBR line, qty
-            else:
-                badges = [brand, unit]
-
-            def _get_sales(sh):
-                """Return (qty, amt) for this ship_to according to ATP or normal filter."""
+                # Collect ship_tos for this variant
                 if atp_line:
-                    if atp_brand:
-                        d = ship_sales_line.get((sold_to, sh, atp_brand, atp_line), {"qty": 0.0, "amt": 0.0})
-                        return d["qty"], d["amt"]
-                    else:   # AL_ATP: HK+LF brands, PCLT+TBR lines
-                        hk_p = ship_sales_line.get((sold_to, sh, "HK", "PCLT"), {"qty": 0.0, "amt": 0.0})
-                        lf_p = ship_sales_line.get((sold_to, sh, "LF", "PCLT"), {"qty": 0.0, "amt": 0.0})
-                        hk_t = ship_sales_line.get((sold_to, sh, "HK", "TBR"),  {"qty": 0.0, "amt": 0.0})
-                        lf_t = ship_sales_line.get((sold_to, sh, "LF", "TBR"),  {"qty": 0.0, "amt": 0.0})
-                        return (hk_p["qty"] + lf_p["qty"] + hk_t["qty"] + lf_t["qty"],
-                                hk_p["amt"] + lf_p["amt"] + hk_t["amt"] + lf_t["amt"])
-                elif brand == "TTL":
-                    hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
-                    lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                    return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
+                    if atp_brand:   # HK_ATP: HK brand, specific line
+                        ship_set = ship_idx_line.get((sold_to, atp_brand, atp_line), set()).copy()
+                    else:           # AL_ATP: HK+LF brands, specific line (PCLT or TBR)
+                        ship_set = (ship_idx_line.get((sold_to, "HK", atp_line), set()) |
+                                    ship_idx_line.get((sold_to, "LF", atp_line), set()))
+                elif brand_key == "TTL":
+                    ship_set = (ship_idx.get((sold_to, "HK"), set()) |
+                                ship_idx.get((sold_to, "LF"), set()))
                 else:
-                    d = ship_sales.get((sold_to, sh, brand), {"qty": 0.0, "amt": 0.0})
-                    return d["qty"], d["amt"]
+                    ship_set = ship_idx.get((sold_to, brand_key), set()).copy()
+                if not ship_set:
+                    ship_set.add(sold_to)   # show zero row so sold_to is visible
 
-            if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
-                # One row per ship_to (AJT/ABJ/ATP/APP/ACD structures)
-                calc_items = []
-                for sh in sorted(ship_set):
-                    q, a = _get_sales(sh)
-                    calc_items.append((sh, q, a))
-                sold_to_basis = False
-                ship_details_list = []
-            else:
-                # Aggregate all ship_tos → one row per sold_to
-                total_qty = total_amt = 0.0
-                for sh in ship_set:
-                    q, a = _get_sales(sh)
-                    total_qty += q; total_amt += a
-                calc_items = [(sold_to, total_qty, total_amt)]
-                sold_to_basis = True
-                # Individual ship-to breakdown for display (qty/amt only)
-                ship_details_list = []
-                for sh in sorted(ship_set):
-                    q, a = _get_sales(sh)
+                # Badge labels for UI
+                if badges_override is not None:
+                    badges = badges_override
+                else:
+                    badges = [brand_key, unit]
+
+                def _get_sales(sh, _atp_brand=atp_brand, _atp_line=atp_line, _brand_key=brand_key):
+                    """Return (qty, amt) for this ship_to for this variant."""
+                    if _atp_line:
+                        if _atp_brand:
+                            d = ship_sales_line.get((sold_to, sh, _atp_brand, _atp_line), {"qty": 0.0, "amt": 0.0})
+                            return d["qty"], d["amt"]
+                        else:   # AL_ATP: HK+LF brands, single line (PCLT or TBR)
+                            hk = ship_sales_line.get((sold_to, sh, "HK", _atp_line), {"qty": 0.0, "amt": 0.0})
+                            lf = ship_sales_line.get((sold_to, sh, "LF", _atp_line), {"qty": 0.0, "amt": 0.0})
+                            return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
+                    elif _brand_key == "TTL":
+                        hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
+                        lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
+                        return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
+                    else:
+                        d = ship_sales.get((sold_to, sh, _brand_key), {"qty": 0.0, "amt": 0.0})
+                        return d["qty"], d["amt"]
+
+                if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
+                    # One row per ship_to (AJT/ABJ/ATP/APP/ACD structures)
+                    calc_items = []
+                    for sh in sorted(ship_set):
+                        q, a = _get_sales(sh)
+                        calc_items.append((sh, q, a))
+                    sold_to_basis = False
+                    ship_details_list = []
+                else:
+                    # Aggregate all ship_tos → one row per sold_to
+                    total_qty = total_amt = 0.0
+                    for sh in ship_set:
+                        q, a = _get_sales(sh)
+                        total_qty += q; total_amt += a
+                    calc_items = [(sold_to, total_qty, total_amt)]
+                    sold_to_basis = True
+                    ship_details_list = []
+                    for sh in sorted(ship_set):
+                        q, a = _get_sales(sh)
+                        sh_info = ship_cust_map.get(sh, {})
+                        ship_details_list.append({
+                            "ship_to":      sh,
+                            "ship_to_name": sh_info.get("name") or sh,
+                            "actual_qty":   round(q, 2),
+                            "actual_amt":   round(a, 2),
+                        })
+
+                for sh, actual_qty, actual_amt in calc_items:
+                    actual = actual_qty if unit == "Q" else actual_amt
+
+                    curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
+                    curr_rebate = round(actual * curr_tier["rate"] / 100, 2)
+                    est_rebate  = round(next_tier["threshold"] * next_tier["rate"] / 100, 2) if next_tier else None
+                    needed_qty = round(next_tier["threshold"] - actual_qty, 2) if next_tier and unit == "Q" else None
+                    needed_amt = round(next_tier["threshold"] - actual_amt, 2) if next_tier and unit == "A" else None
+
                     sh_info = ship_cust_map.get(sh, {})
-                    ship_details_list.append({
-                        "ship_to":      sh,
-                        "ship_to_name": sh_info.get("name") or sh,
-                        "actual_qty":   round(q, 2),
-                        "actual_amt":   round(a, 2),
+                    rows.append({
+                        "sold_to":        sold_to,
+                        "sold_to_name":   c["sold_to_name"] or sold_to,
+                        "sold_to_group":  sold_to_group,
+                        "region":         sh_info.get("state") or c["region"] or "-",
+                        "bde":            sh_info.get("bde") or c["bde"] or "-",
+                        "ship_to":        sh,
+                        "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
+                        "brand":          brand_key,
+                        "badges":         badges,
+                        "structure_name": struct,
+                        "sold_to_basis":  sold_to_basis,
+                        "ship_details":   ship_details_list if sold_to_basis else [],
+                        "unit":           unit,
+                        "actual_qty":     round(actual_qty, 2),
+                        "actual_amt":     round(actual_amt, 2),
+                        "actual":         round(actual, 2),
+                        "curr_rate":      curr_tier["rate"],
+                        "curr_threshold": curr_tier["threshold"],
+                        "next_threshold": next_tier["threshold"] if next_tier else None,
+                        "next_rate":      next_tier["rate"]      if next_tier else None,
+                        "needed_qty":     needed_qty,
+                        "needed_amt":     needed_amt,
+                        "curr_rebate":    curr_rebate,
+                        "est_rebate":     est_rebate,
+                        "tiers":          tiers,
                     })
-
-            for sh, actual_qty, actual_amt in calc_items:
-                actual = actual_qty if unit == "Q" else actual_amt
-
-                curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
-                curr_rebate = round(actual * curr_tier["rate"] / 100, 2)
-                # est_rebate: rebate value when reaching next tier (next_threshold × next_rate)
-                est_rebate  = round(next_tier["threshold"] * next_tier["rate"] / 100, 2) if next_tier else None
-                # needed_qty / needed_amt: only one can be calculated per structure type
-                needed_qty = round(next_tier["threshold"] - actual_qty, 2) if next_tier and unit == "Q" else None
-                needed_amt = round(next_tier["threshold"] - actual_amt, 2) if next_tier and unit == "A" else None
-
-                sh_info = ship_cust_map.get(sh, {})
-                rows.append({
-                    "sold_to":        sold_to,
-                    "sold_to_name":   c["sold_to_name"] or sold_to,
-                    "sold_to_group":  sold_to_group,
-                    "region":         sh_info.get("state") or c["region"] or "-",
-                    "bde":            sh_info.get("bde") or c["bde"] or "-",
-                    "ship_to":        sh,
-                    "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
-                    "brand":          brand,
-                    "badges":         badges,
-                    "structure_name": struct,
-                    "sold_to_basis":  sold_to_basis,
-                    "ship_details":   ship_details_list if sold_to_basis else [],
-                    "unit":           unit,
-                    "actual_qty":     round(actual_qty, 2),
-                    "actual_amt":     round(actual_amt, 2),
-                    "actual":         round(actual, 2),   # kept for sorting
-                    "curr_rate":      curr_tier["rate"],
-                    "curr_threshold": curr_tier["threshold"],
-                    "next_threshold": next_tier["threshold"] if next_tier else None,
-                    "next_rate":      next_tier["rate"]      if next_tier else None,
-                    "needed_qty":     needed_qty,
-                    "needed_amt":     needed_amt,
-                    "curr_rebate":    curr_rebate,
-                    "est_rebate":     est_rebate,
-                    "tiers":          tiers,
-                })
 
         # ── 6. Client-side-style filters applied server-side ─────────────────
         if search:
