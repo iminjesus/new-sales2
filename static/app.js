@@ -823,38 +823,39 @@ async function drawDailyStacked(){
     if (!rows || !rows.length){
 
     const totals = await fetchDailySales();
-    const labels = daysLabels();
+    let allLabels = daysLabels();
 
     // Build sales aligned to labels; future days = null, 0 is valid
-    const data = new Array(labels.length).fill(null);
-    for (let i = 0; i < Math.min(totals.length, labels.length); i++){
-      data[i] = (+totals[i].value || 0);
+    const allData = new Array(allLabels.length).fill(null);
+    for (let i = 0; i < Math.min(totals.length, allLabels.length); i++){
+      allData[i] = (+totals[i].value || 0);
     }
 
     // Find last actual index (0 is valid; only null means future)
     let lastActualIdx = -1;
-    for (let i = 0; i < data.length; i++){
-      if (data[i] !== null) lastActualIdx = i;
+    for (let i = 0; i < allData.length; i++){
+      if (allData[i] !== null) lastActualIdx = i;
     }
 
-    // Cumulative data: stop drawing after lastActualIdx
-    const cum = new Array(labels.length).fill(null);
+    // Truncate to last actual day only
+    const cutLen = lastActualIdx + 1;
+    const labels = allLabels.slice(0, cutLen);
+    const data   = allData.slice(0, cutLen);
+
+    // Cumulative
+    const cum = [];
     let run = 0;
-    for (let i = 0; i < labels.length; i++){
-      if (i <= lastActualIdx){
-        run += (+data[i] || 0);
-        cum[i] = run;
-      } else {
-        cum[i] = null;
-      }
+    for (let i = 0; i < cutLen; i++){
+      run += (+data[i] || 0);
+      cum.push(run);
     }
+
+    const pct100 = labels.map(() => 100);
 
     stackedDailyInst = makeStacked("stackedDailyChart", labels, [
       { label:"Total", data, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Daily");
 
-    // Percent: only up to lastActualIdx, then null
-    const pct100 = labels.map((_,i)=> (i <= lastActualIdx ? 100 : null));
     stackedDailyPctInst = makeStacked("stackedDailyPercentChart", labels, [
       { label:"Total %", data: pct100, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Daily %", 100);
@@ -874,14 +875,13 @@ async function drawDailyStacked(){
   // Build stacks
    let { labels, groups, byGroup, datasets, lastActualIdx } = buildDailyStacks(rows);
 
-  const byGroupCum   = cumPerGroup(byGroup);
+  // Truncate to last actual day — don't show future empty bars on x-axis
+  const cutLen = lastActualIdx + 1;
+  labels   = labels.slice(0, cutLen);
+  datasets = datasets.map(ds => ({ ...ds, data: ds.data.slice(0, cutLen) }));
+  groups.forEach(g => { byGroup[g] = byGroup[g].slice(0, cutLen); });
 
-  // After lastActualIdx, force cumulative stacks to null so they don't draw
-  groups.forEach(g => {
-    for (let i = lastActualIdx + 1; i < labels.length; i++){
-      byGroupCum[g][i] = null;
-    }
-  });
+  const byGroupCum   = cumPerGroup(byGroup);
 
   const datasetsCum  = groups.map((g,i)=>({
     label:g, data:byGroupCum[g],
