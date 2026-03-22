@@ -378,10 +378,12 @@ def category_target_filters(alias: str, category: str):
         joins.append(f"JOIN hm hm ON hm.sold_to = {alias}.sold_to")
 
     elif cat == "443":
+        # product_group lives in carrying_2602 (alias: mat) for target_26
+        joins.append(f"LEFT JOIN carrying_2602 mat ON mat.m_code = {alias}.material")
         wh.append(f"""EXISTS (
             SELECT 1 FROM `443_25` p443
             WHERE p443.month = {alias}.month
-            AND p443.product_group = {alias}.product_group
+            AND p443.product_group = mat.product_group
         )""")
 
     return joins, wh
@@ -1325,11 +1327,11 @@ def v2_dashboard():
         "pattern":       "mat.pattern",
     }
     group_cols_target = {
-        "product_group": "t.product_group",
+        "product_group": "mat.product_group",   # lives in carrying_2602
         "region":        "t.state",
         "salesman":      "t.bde",
         "sold_to":       "t.sold_to",
-        "pattern":       "t.pattern",
+        "pattern":       "mat.pattern",          # lives in carrying_2602
     }
     if group_by not in group_cols_sales:
         return jsonify({"error": "invalid group_by"}), 400
@@ -1421,12 +1423,18 @@ def v2_dashboard():
         tj, tw = category_target_filters("t", f["category"])
         joins_t += tj; wh_t += tw
         wh_t.append("t.month = %s"); params_t.append(month)
+        carrying_join_t = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+        needs_carrying_t = False
         if f["product_group"] != "ALL":
-            wh_t.append("t.product_group = %s"); params_t.append(f["product_group"])
+            needs_carrying_t = True
+            wh_t.append("mat.product_group = %s"); params_t.append(f["product_group"])
         if f["pattern"] != "ALL":
-            wh_t.append("t.pattern = %s"); params_t.append(f["pattern"])
+            needs_carrying_t = True
+            wh_t.append("mat.pattern = %s"); params_t.append(f["pattern"])
         if f["material"] != "ALL":
             wh_t.append("t.material = %s"); params_t.append(f["material"])
+        if needs_carrying_t and carrying_join_t not in joins_t:
+            joins_t.append(carrying_join_t)
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_t.append(f"t.sold_to IN ({placeholders})")
@@ -1518,12 +1526,19 @@ def v2_dashboard():
         joins_mt, wh_mt, params_mt = build_target_filters("t", f)
         tj2, tw2 = category_target_filters("t", f["category"])
         joins_mt += tj2; wh_mt += tw2
+        # carrying_2602 needed for product_group/pattern (not stored in target_26 directly)
+        carrying_join_mt = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+        needs_carrying_mt = group_by in ("product_group", "pattern")
         if f["product_group"] != "ALL":
-            wh_mt.append("t.product_group = %s"); params_mt.append(f["product_group"])
+            needs_carrying_mt = True
+            wh_mt.append("mat.product_group = %s"); params_mt.append(f["product_group"])
         if f["pattern"] != "ALL":
-            wh_mt.append("t.pattern = %s"); params_mt.append(f["pattern"])
+            needs_carrying_mt = True
+            wh_mt.append("mat.pattern = %s"); params_mt.append(f["pattern"])
         if f["material"] != "ALL":
             wh_mt.append("t.material = %s"); params_mt.append(f["material"])
+        if needs_carrying_mt and carrying_join_mt not in joins_mt:
+            joins_mt.append(carrying_join_mt)
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_mt.append(f"t.sold_to IN ({placeholders})")
@@ -2533,12 +2548,13 @@ def monthly_target_breakdown():
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
     group_by = (request.args.get("group_by") or "region").strip()
+    # product_group / pattern live in carrying_2602 (alias: mat), not in target_26 directly
     group_cols = {
-        "product_group": "t.product_group",
+        "product_group": "mat.product_group",
         "region":        "t.state",
         "salesman":      "t.bde",
         "sold_to":       "t.sold_to",
-        "pattern":       "t.pattern",
+        "pattern":       "mat.pattern",
     }
     if group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
@@ -2549,12 +2565,21 @@ def monthly_target_breakdown():
     joins += cat_joins
     wh    += cat_where
 
+    # carrying_2602 join needed for group_by or filter on product_group/pattern
+    carrying_join = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+    needs_carrying = group_by in ("product_group", "pattern")
+
     if f["product_group"] != "ALL":
-        wh.append("t.product_group = %s"); params.append(f["product_group"])
+        needs_carrying = True
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
-        wh.append("t.pattern = %s");       params.append(f["pattern"])
+        needs_carrying = True
+        wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("t.material = %s");      params.append(f["material"])
+        wh.append("t.material = %s");        params.append(f["material"])
+
+    if needs_carrying and carrying_join not in joins:
+        joins.append(carrying_join)
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
