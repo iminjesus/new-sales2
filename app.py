@@ -3386,15 +3386,11 @@ def api_rebate_data():
                 # Only keep ship_tos that are known in the customer table
                 ship_set = {sh for sh in ship_set if sh in ship_cust_map}
 
-                # Filter by BDE; if BDE not set, fall back to region
-                c_bde    = (c["bde"]    or "").strip()
-                c_region = (c["region"] or "").strip()
+                # Filter by BDE only (ship_to region is irrelevant)
+                c_bde = (c["bde"] or "").strip()
                 if c_bde and c_bde != "-":
                     ship_set = {sh for sh in ship_set
                                 if ship_cust_map[sh].get("bde", "").strip() == c_bde}
-                elif c_region and c_region != "-":
-                    ship_set = {sh for sh in ship_set
-                                if ship_cust_map[sh].get("state", "").strip() == c_region}
 
                 if not ship_set:
                     ship_set.add(sold_to)   # show zero row so sold_to is visible
@@ -3464,8 +3460,8 @@ def api_rebate_data():
                         "sold_to":        sold_to,
                         "sold_to_name":   c["sold_to_name"] or sold_to,
                         "sold_to_group":  sold_to_group,
-                        "region":         sh_info.get("state") or c["region"] or "-",
-                        "bde":            sh_info.get("bde") or c["bde"] or "-",
+                        "region":         c["region"] or "-",   # always BDE's region
+                        "bde":            c["bde"]    or "-",   # always sold_to's BDE
                         "ship_to":        sh,
                         "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
                         "brand":          brand_key,
@@ -3719,7 +3715,7 @@ def api_rebate_export():
                 rows.append({
                     "sold_to":sold_to,"sold_to_name":c["sold_to_name"] or sold_to,
                     "sold_to_group":sold_to_group,
-                    "region": sh_info.get("state") or c["region"] or "-",
+                    "region": c["region"] or "-",   # always BDE's region
                     "ship_to":sh,"ship_to_name":sh_info.get("name") or (c["sold_to_name"] or sh),
                     "brand":brand,"structure_name":struct,"unit":unit,
                     "actual":round(actual,2),"curr_rate":curr_tier["rate"],
