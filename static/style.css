@@ -272,6 +272,9 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   line-height: 1.3;
 }
 .stat-cell.stat-base .stat-val { color: #15803d; }
+.stat-cell.stat-pipe { background: #eff6ff; min-width: 90px; }
+.stat-cell.stat-pipe .stat-lbl { color: #3b82f6; }
+.stat-cell.stat-pipe .stat-val { color: #1d4ed8; font-size: 12px; }
 
 /* Stock page layout */
 #stockLayout {
