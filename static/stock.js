@@ -342,6 +342,25 @@
     });
   }
 
+  function fmtQty(n){ return Number.isFinite(n) ? n.toLocaleString() : "—"; }
+
+  async function fetchAndRenderSalesStats(){
+    const qs = buildQueryParams({ metric: "qty" });
+    const d  = await fetchJSON(`/api/sales_stats?${qs}`);
+    if (!d) return;
+    document.getElementById("v3m").textContent   = fmtQty(d.qty_3m);
+    document.getElementById("v6m").textContent   = fmtQty(d.qty_6m);
+    document.getElementById("v12m").textContent  = fmtQty(d.qty_12m);
+    document.getElementById("vBase").textContent = fmtQty(d.base_sales);
+    const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const lbl = d.latest_year && d.latest_month
+      ? ` (to ${mo[d.latest_month-1]} ${d.latest_year})`  : "";
+    document.getElementById("stat3m").title  = `Last 3 months qty${lbl}`;
+    document.getElementById("stat6m").title  = `Last 6 months qty${lbl}`;
+    document.getElementById("stat12m").title = `Last 12 months qty${lbl}`;
+    document.getElementById("statBase").title= `Average of 3M / 6M / 12M${lbl}`;
+  }
+
   async function fetchAndRenderSales(){
     const qs = buildQueryParams({ metric: "qty" });
     const [rows25, rows26, yearRows] = await Promise.all([
@@ -384,7 +403,7 @@
       map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 8 });
     }
 
-    await fetchAndRenderSales();
+    await Promise.all([fetchAndRenderSales(), fetchAndRenderSalesStats()]);
 
     setStatus(
       `Done. Stock: ${(stockRes?.rows||[]).length}, ` +

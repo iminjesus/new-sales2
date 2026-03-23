@@ -91,6 +91,14 @@
       </div>
       <div class="dd-menu" id="materialMenu"></div>
     </div>
+
+    <!-- Sales Stats (3M / 6M / 12M / Base Sales) -->
+    <div id="salesStatsBar" style="margin-left:auto; display:flex; align-items:center; gap:0; border:1px solid #e5e7eb; border-radius:6px; overflow:hidden; background:#fff; height:36px; min-width:520px;">
+      <div class="stat-cell" id="stat3m"  title="Last 3 months sales (qty)"><span class="stat-lbl">3M</span><span class="stat-val" id="v3m">—</span></div>
+      <div class="stat-cell" id="stat6m"  title="Last 6 months sales (qty)"><span class="stat-lbl">6M</span><span class="stat-val" id="v6m">—</span></div>
+      <div class="stat-cell" id="stat12m" title="Last 12 months sales (qty)"><span class="stat-lbl">12M</span><span class="stat-val" id="v12m">—</span></div>
+      <div class="stat-cell stat-base" id="statBase" title="Average of 3M / 6M / 12M"><span class="stat-lbl">Base Sales</span><span class="stat-val" id="vBase">—</span></div>
+    </div>
   </div>
 
   </div><!-- end #filterPanel -->

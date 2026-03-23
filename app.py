@@ -768,6 +768,101 @@ def api_stock():
     finally:
         cur.close()
         conn.close()
+
+@app.route("/api/sales_stats")
+def api_sales_stats():
+    """Return 3M / 6M / 12M sales totals (qty) and their average (Base Sales)
+    from sales_25_2602, filtered by the same category/product_group/pattern/material
+    parameters used on the Stock page.
+    Period boundaries are derived from the latest month present in the table.
+    """
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        # Determine the latest (year, month) present in sales_25_2602
+        cur.execute("SELECT MAX(year*100 + month) AS ym FROM sales_25_2602")
+        r = cur.fetchone()
+        latest_ym = int((r or {}).get("ym") or 0)
+        if not latest_ym:
+            return jsonify({"qty_3m": 0, "qty_6m": 0, "qty_12m": 0, "base_sales": 0})
+
+        latest_y = latest_ym // 100
+        latest_m = latest_ym % 100
+
+        def _months_back(n):
+            """Return list of (year, month) tuples for the n months ending at latest."""
+            result = []
+            y, m = latest_y, latest_m
+            for _ in range(n):
+                result.append((y, m))
+                m -= 1
+                if m == 0:
+                    m = 12
+                    y -= 1
+            return result
+
+        periods_3  = _months_back(3)
+        periods_6  = _months_back(6)
+        periods_12 = _months_back(12)
+
+        def _make_period_condition(periods, alias="s"):
+            if not periods:
+                return "1=0", []
+            clauses = [f"({alias}.year=%s AND {alias}.month=%s)" for _ in periods]
+            params  = [v for p in periods for v in p]
+            return "(" + " OR ".join(clauses) + ")", params
+
+        # Base joins / wheres shared across all three windows
+        cat_joins, cat_wh = category_filters_sales("s", category)
+
+        base_joins = ["JOIN carrying_2602 mat ON mat.m_code = s.material"] + cat_joins
+        base_wh    = list(cat_wh)
+        base_params: list = []
+
+        if prod_group and prod_group != "ALL":
+            base_wh.append("mat.product_group = %s")
+            base_params.append(prod_group)
+        if pattern:
+            base_wh.append("mat.pattern LIKE %s")
+            base_params.append(f"%{pattern}%")
+        if material:
+            base_wh.append("mat.size LIKE %s")
+            base_params.append(f"%{material}%")
+
+        results = {}
+        for label, periods in (("3m", periods_3), ("6m", periods_6), ("12m", periods_12)):
+            period_cond, period_params = _make_period_condition(periods)
+            wh_all    = base_wh + [period_cond]
+            params_all = base_params + period_params
+            join_sql   = "\n".join(base_joins)
+            where_sql  = ("WHERE " + " AND ".join(wh_all)) if wh_all else ""
+            cur.execute(f"""
+                SELECT SUM(s.qty) AS qty
+                FROM sales_25_2602 s
+                {join_sql}
+                {where_sql}
+            """, params_all)
+            row = cur.fetchone()
+            results[label] = round(float((row or {}).get("qty") or 0))
+
+        base_sales = round((results["3m"] + results["6m"] + results["12m"]) / 3)
+        return jsonify({
+            "qty_3m":      results["3m"],
+            "qty_6m":      results["6m"],
+            "qty_12m":     results["12m"],
+            "base_sales":  base_sales,
+            "latest_year":  latest_y,
+            "latest_month": latest_m,
+        })
+    finally:
+        cur.close()
+        conn.close()
+
 ORIGIN_GEO = {
     "CHN": {"name": "China", "lat": 33.8617, "lon": 104.1954},
     "KOR": {"name": "Korea", "lat": 33.5, "lon": 127.8},
