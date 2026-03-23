@@ -3383,15 +3383,11 @@ def api_rebate_data():
                 else:
                     ship_set = ship_idx.get((sold_to, brand_key), set()).copy()
 
-                # Filter ship_tos to match sold_to's region AND BDE
-                # (prevents national master-accounts from pulling in all ship_tos)
-                c_region = (c["region"] or "").strip()
-                c_bde    = (c["bde"]    or "").strip()
-                if c_region and c_region != "-":
+                # Filter ship_tos by BDE only; region follows the ship_to's own state
+                c_bde = (c["bde"] or "").strip()
+                if c_bde and c_bde != "-":
                     ship_set = {sh for sh in ship_set
-                                if ship_cust_map.get(sh, {}).get("state", "").strip() == c_region
-                                and (not c_bde or c_bde == "-"
-                                     or ship_cust_map.get(sh, {}).get("bde", "").strip() == c_bde)}
+                                if ship_cust_map.get(sh, {}).get("bde", "").strip() == c_bde}
 
                 if not ship_set:
                     ship_set.add(sold_to)   # show zero row so sold_to is visible
