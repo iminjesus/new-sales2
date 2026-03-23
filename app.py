@@ -881,7 +881,7 @@ def api_sales_stats():
 
 
 @app.route("/api/sales_stats_by_state")
-def api_sales_stats_by_state():  # noqa: C901
+def api_sales_stats_by_state():
     """Return 3M / 6M / 12M / Base Sales + stock/water/factory qty per state."""
     # COMMON excluded intentionally
     STATE_ORDER = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT"]
@@ -979,7 +979,7 @@ def api_sales_stats_by_state():  # noqa: C901
 
         # ── stock / water (incoming) / factory (orders) per plant ───
         stock_by_plant   = _plant_totals("stock",    "unrestricted")
-        water_by_plant   = _plant_totals("incoming", "confirm_qty")
+        water_by_plant   = _plant_totals("incoming", "po_qty")
         factory_by_plant = _plant_totals("orders",   "po_qty")
 
         # aggregate plant totals to state
@@ -1056,9 +1056,6 @@ def api_sales_stats_by_state():  # noqa: C901
             })
 
         return jsonify({"rows": rows_out, "latest_year": latest_y, "latest_month": latest_m})
-    except Exception as _exc:
-        traceback.print_exc()
-        return jsonify({"error": str(_exc), "trace": traceback.format_exc()}), 500
     finally:
         cur.close()
         conn.close()
