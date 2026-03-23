@@ -3234,8 +3234,9 @@ def api_rebate_data():
     unit=Q → measure in qty
     brand=TTL → sum HK + LF sales
     """
-    brand_filter = request.args.get("territory",     "ALL").upper()  # UI still sends 'territory'
-    stg_filter   = request.args.get("sold_to_group", "ALL")
+    brand_filter  = request.args.get("territory",     "ALL").upper()  # UI still sends 'territory'
+    stg_filter    = request.args.get("sold_to_group", "ALL")
+    region_filter = request.args.get("region",        "ALL").upper()
     search      = request.args.get("search",  "").strip().lower()
     show        = request.args.get("show",    "ALL").upper()
     sort_col    = request.args.get("sort",    "actual")
@@ -3499,13 +3500,29 @@ def api_rebate_data():
             rows = [r for r in rows if r["actual"] == 0]
 
         # ── 7. Summary stats (over all filtered rows) ─────────────────────────
+        REGION_KEYS = ["NSW", "QLD", "VIC", "WA"]
+        region_totals = {rk: {"rebate": 0.0, "qty": 0.0, "amt": 0.0} for rk in REGION_KEYS}
+        for r in rows:
+            rk = (r["region"] or "").strip().upper()
+            if rk in region_totals:
+                region_totals[rk]["rebate"] += r["curr_rebate"]
+                region_totals[rk]["qty"]    += r["actual_qty"]
+                region_totals[rk]["amt"]    += r["actual_amt"]
+        for rk in region_totals:
+            region_totals[rk] = {k: round(v, 2) for k, v in region_totals[rk].items()}
+
         summary = {
             "total_ship_to": len(rows),
             "has_next":  sum(1 for r in rows if r["next_rate"] is not None and r["actual"] > 0),
             "max_tier":  sum(1 for r in rows if r["next_rate"] is None and r["curr_rate"] > 0),
             "zero_sales": sum(1 for r in rows if r["actual"] == 0),
             "est_total":  round(sum(r["curr_rebate"] for r in rows), 2),
+            "region_totals": region_totals,
         }
+
+        # Apply region filter to rows (after computing region_totals)
+        if region_filter != "ALL":
+            rows = [r for r in rows if (r["region"] or "").strip().upper() == region_filter]
 
         # ── 8. Group by (region, sold_to) with brand sub-groups ──────────────
         grp_map = {}

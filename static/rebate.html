@@ -22,6 +22,19 @@ header .sub{font-size:10px;opacity:.55}
 .stat-card{background:#fff;border-radius:8px;padding:10px 16px;border:1px solid #e5e7eb;min-width:145px}
 .stat-card .label{font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:.5px}
 .stat-card .value{font-size:19px;font-weight:700;color:#1e3a5f;margin-top:2px}
+.stat-card.total-card{background:#1e3a5f;border-color:#1e3a5f}
+.stat-card.total-card .label{color:rgba(255,255,255,.6)}
+.stat-card.total-card .value{color:#fff}
+/* Region filter buttons */
+.region-btns{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.rbtn{border-radius:6px;padding:5px 14px;cursor:pointer;font-size:12px;font-weight:600;border:1px solid #d1d5db;background:#fff;color:#374151;transition:all .15s}
+.rbtn:hover{background:#f0f4ff;border-color:#93c5fd}
+.rbtn.active{color:#fff;border-color:transparent}
+.rbtn.r-all.active{background:#374151}
+.rbtn.r-nsw.active{background:#1d4ed8}
+.rbtn.r-qld.active{background:#b45309}
+.rbtn.r-vic.active{background:#6d28d9}
+.rbtn.r-wa.active{background:#065f46}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}
 /* Region header rows (level 1) */
@@ -89,6 +102,16 @@ tr.ship-row td:first-child{padding-left:28px}
     <label>Search</label>
     <input type="text" id="f_search" placeholder="Name / code…" style="min-width:180px" oninput="debounceSearch()">
   </div>
+  <div>
+    <label>Region</label>
+    <div class="region-btns">
+      <button class="rbtn r-all active"  onclick="setRegion('ALL')">All</button>
+      <button class="rbtn r-nsw"         onclick="setRegion('NSW')">NSW</button>
+      <button class="rbtn r-qld"         onclick="setRegion('QLD')">QLD</button>
+      <button class="rbtn r-vic"         onclick="setRegion('VIC')">VIC</button>
+      <button class="rbtn r-wa"          onclick="setRegion('WA')">WA</button>
+    </div>
+  </div>
 </div>
 
 <div id="loading">Loading rebate data…</div>
@@ -100,11 +123,22 @@ tr.ship-row td:first-child{padding-left:28px}
 
 <script>
 // ─── state ──────────────────────────────────────────────────────────────────
-let sortCol     = "actual";
-let sortDir     = "desc";
-let expanded = new Set(); // sold_to group keys open (ship-to toggle)
-let currentPage = 0;
-let lastMeta    = {};        // last API response metadata
+let sortCol       = "actual";
+let sortDir       = "desc";
+let expanded      = new Set(); // sold_to group keys open (ship-to toggle)
+let currentPage   = 0;
+let lastMeta      = {};        // last API response metadata
+let activeRegion  = "ALL";     // region filter
+
+// ─── region button logic ──────────────────────────────────────────────────
+const REGION_CLASSES = {ALL:"r-all", NSW:"r-nsw", QLD:"r-qld", VIC:"r-vic", WA:"r-wa"};
+function setRegion(r){
+  activeRegion = r;
+  document.querySelectorAll(".rbtn").forEach(b => b.classList.remove("active"));
+  const cls = REGION_CLASSES[r] || "r-all";
+  document.querySelector(`.rbtn.${cls}`)?.classList.add("active");
+  fetchPage(0);
+}
 
 // ─── build query params from current UI state ─────────────────────────────
 function buildQS(page){
@@ -113,6 +147,7 @@ function buildQS(page){
     show:          "ALL",
     sort:          sortCol,
     dir:           sortDir,
+    region:        activeRegion,
     page:          page ?? currentPage,
     page_size:     40,
   });
@@ -151,9 +186,29 @@ function load(){ fetchPage(0); }
 
 // ─── render API response ──────────────────────────────────────────────────────
 function renderPage(data){
-  const s = data.summary;
+  const s  = data.summary;
+  const rt = s.region_totals || {};
+  const REGIONS = ["NSW","QLD","VIC","WA"];
+  const REGION_COLORS = {NSW:"#1d4ed8", QLD:"#b45309", VIC:"#6d28d9", WA:"#065f46"};
+  const grandTotal = REGIONS.reduce((acc, r) => acc + (rt[r]?.rebate || 0), 0);
+
+  const regionCards = REGIONS.map(r => {
+    const v = rt[r] || {};
+    const isActive = activeRegion === r;
+    const col = REGION_COLORS[r];
+    return `<div class="stat-card" style="cursor:pointer;border-color:${isActive?col:'#e5e7eb'};outline:${isActive?`2px solid ${col}`:'none'}"
+              onclick="setRegion(activeRegion==='${r}'?'ALL':'${r}')">
+      <div class="label" style="color:${col};font-weight:700">${r}</div>
+      <div class="value" style="color:${col};font-size:16px">$${fmt(v.rebate)}</div>
+    </div>`;
+  }).join("");
+
   document.getElementById("summary").innerHTML = `
-    <div class="stat-card"><div class="label">Total Current Rebate</div><div class="value" style="color:#7c3aed;font-size:15px">$${fmt(s.est_total)}</div></div>`;
+    ${regionCards}
+    <div class="stat-card total-card" style="cursor:pointer" onclick="setRegion('ALL')">
+      <div class="label">4-Region Total</div>
+      <div class="value" style="font-size:16px">$${fmt(grandTotal)}</div>
+    </div>`;
 
   if(!data.groups.length){
     document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
