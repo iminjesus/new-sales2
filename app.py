@@ -820,17 +820,20 @@ def api_sales_stats():
         # Base joins / wheres shared across all three windows
         cat_joins, cat_wh = category_filters_sales("s", category)
 
-        base_joins = ["JOIN carrying_2602 mat ON mat.m_code = s.material"] + cat_joins
+        base_joins = list(cat_joins)
         base_wh    = list(cat_wh)
         base_params: list = []
 
         if prod_group and prod_group != "ALL":
+            _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.product_group = %s")
             base_params.append(prod_group)
         if pattern:
+            _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.pattern LIKE %s")
             base_params.append(f"%{pattern}%")
         if material:
+            _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.size LIKE %s")
             base_params.append(f"%{material}%")
 
