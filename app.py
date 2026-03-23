@@ -3256,7 +3256,7 @@ def api_rebate_data():
                    c.sold_to_name, c.sold_to_group, c.bde_state AS region,
                    COALESCE(NULLIF(TRIM(c.salesman_name),''), '-') AS bde
             FROM rebate_customer_map m
-            LEFT JOIN customer c ON c.sold_to = m.sold_to
+            LEFT JOIN customer c ON c.ship_to = m.sold_to
             WHERE (%s = 'ALL' OR m.brand = %s)
               AND (%s = 'ALL' OR c.sold_to_group = %s)
         """, (brand_filter, brand_filter, stg_filter, stg_filter))
