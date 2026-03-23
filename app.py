@@ -881,7 +881,7 @@ def api_sales_stats():
 
 
 @app.route("/api/sales_stats_by_state")
-def api_sales_stats_by_state():
+def api_sales_stats_by_state():  # noqa: C901
     """Return 3M / 6M / 12M / Base Sales + stock/water/factory qty per state."""
     # COMMON excluded intentionally
     STATE_ORDER = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT"]
@@ -1056,6 +1056,9 @@ def api_sales_stats_by_state():
             })
 
         return jsonify({"rows": rows_out, "latest_year": latest_y, "latest_month": latest_m})
+    except Exception as _exc:
+        traceback.print_exc()
+        return jsonify({"error": str(_exc), "trace": traceback.format_exc()}), 500
     finally:
         cur.close()
         conn.close()
