@@ -36,18 +36,37 @@ h1, h2 { margin: 6px 0; color:#333; }
   font-weight: 500;
   color: #374151;
   line-height: 1.4;
-  transition: background 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s, transform 0.08s;
   white-space: nowrap;
+  user-select: none;
 }
-.btn:hover:not(.active) {
+.btn:hover:not(.active):not(:disabled) {
   background: #f3f4f6;
   border-color: #9ca3af;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.94);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
+}
+.btn.active:active:not(:disabled) {
+  transform: scale(0.94);
+  background: #1d4ed8;
 }
 .btn.active {
   background: #2563eb;
   color: #fff;
   border-color: #2563eb;
   box-shadow: 0 1px 4px rgba(37,99,235,.30);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+/* Loading shimmer on disabled active btn */
+.btn.active:disabled {
+  background: #93c5fd;
+  border-color: #93c5fd;
 }
 
 /* ─── Select ───────────────────────────────────────────────── */
@@ -375,10 +394,14 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   cursor: pointer;
   font-size: 10px;
   color: #6b7280;
-  transition: background 0.12s;
+  transition: background 0.12s, transform 0.08s;
   line-height: 1.4;
+  user-select: none;
 }
-.dd-btn:hover { background: #e5e7eb; }
+.dd-btn:hover:not(:disabled) { background: #e5e7eb; }
+.dd-btn:active:not(:disabled) { transform: scale(0.93); }
+.dd-btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+.dd-wrap input:disabled { opacity: 0.55; cursor: not-allowed; background: #f3f4f6; }
 /* last button in the wrap (no clear btn after it) */
 .dd-btn.dd-last {
   border-right: 1.5px solid #d1d5db;

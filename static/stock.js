@@ -181,6 +181,23 @@
     if (el) el.textContent = msg;
   }
 
+  function setFiltersDisabled(disabled){
+    // Disable/enable all filter buttons so rapid repeated clicks are prevented
+    document.querySelectorAll("#catBtns .btn, #ordersMetricBtns .btn").forEach(b => {
+      b.disabled = disabled;
+    });
+    // Dropdown inputs
+    ["product_group","pattern","material"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+    // Dropdown toggle/clear buttons
+    ["pgBtn","patternBtn","patternClear","materialBtn","materialClear"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = disabled;
+    });
+  }
+
   const ORIGIN_COLOR = {
     "CHN": "#e53935",
     "KOR": "#1e88e5",
@@ -396,49 +413,53 @@
   // ---------------------- main fetch ----------------------
   async function fetchAndRender(){
     setStatus("Loading…");
+    setFiltersDisabled(true);
+    try {
+      const qsStock  = buildQueryParams();
+      const qsOrders = buildQueryParams({ metric: state.orders_metric });
 
-    const qsStock  = buildQueryParams();
-    const qsOrders = buildQueryParams({ metric: state.orders_metric });
+      const [stockRes, ordersRes, incomingRes] = await Promise.all([
+        fetchJSON(`${API_STOCK}?${qsStock}`),
+        fetchJSON(`${API_ORDERS}?${qsOrders}`),
+        fetchJSON(`${API_INCOMING}?${qsStock}`),
+      ]);
 
-    const [stockRes, ordersRes, incomingRes] = await Promise.all([
-      fetchJSON(`${API_STOCK}?${qsStock}`),
-      fetchJSON(`${API_ORDERS}?${qsOrders}`),
-      fetchJSON(`${API_INCOMING}?${qsStock}`),
-    ]);
+      drawStock(stockRes?.rows || []);
+      drawOrders(ordersRes?.rows || []);
+      drawIncoming(incomingRes?.rows || []);
 
-    drawStock(stockRes?.rows || []);
-    drawOrders(ordersRes?.rows || []);
-    drawIncoming(incomingRes?.rows || []);
+      // Compute pipeline totals from map data
+      const stockTotal   = (stockRes?.rows    || []).reduce((s,r) => s + (r.stock_value    ?? 0), 0);
+      const waterTotal   = (incomingRes?.rows || []).reduce((s,r) => s + (r.incoming_value ?? 0), 0);
+      const factoryTotal = (ordersRes?.rows   || []).reduce((s,r) => s + (r.order_value    ?? 0), 0);
 
-    // Compute pipeline totals from map data
-    const stockTotal   = (stockRes?.rows    || []).reduce((s,r) => s + (r.stock_value    ?? 0), 0);
-    const waterTotal   = (incomingRes?.rows || []).reduce((s,r) => s + (r.incoming_value ?? 0), 0);
-    const factoryTotal = (ordersRes?.rows   || []).reduce((s,r) => s + (r.order_value    ?? 0), 0);
+      // Fit map to all visible data points
+      const allRows = [
+        ...(stockRes?.rows || []),
+        ...(ordersRes?.rows || []),
+        ...(incomingRes?.rows || [])
+      ];
+      const validPts = allRows
+        .map(r => [Number(r.lat), Number(r.lon)])
+        .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo));
+      if (validPts.length > 0) {
+        map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 8 });
+      }
 
-    // Fit map to all visible data points
-    const allRows = [
-      ...(stockRes?.rows || []),
-      ...(ordersRes?.rows || []),
-      ...(incomingRes?.rows || [])
-    ];
-    const validPts = allRows
-      .map(r => [Number(r.lat), Number(r.lon)])
-      .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo));
-    if (validPts.length > 0) {
-      map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 8 });
+      const [, baseSales] = await Promise.all([
+        fetchAndRenderSales(),
+        fetchAndRenderSalesStats(),
+      ]);
+      renderPipeline(stockTotal, waterTotal, factoryTotal, baseSales);
+
+      setStatus(
+        `Done. Stock: ${(stockRes?.rows||[]).length}, ` +
+        `Orders: ${(ordersRes?.rows||[]).length}, ` +
+        `Incoming: ${(incomingRes?.rows||[]).length}`
+      );
+    } finally {
+      setFiltersDisabled(false);
     }
-
-    const [, baseSales] = await Promise.all([
-      fetchAndRenderSales(),
-      fetchAndRenderSalesStats(),
-    ]);
-    renderPipeline(stockTotal, waterTotal, factoryTotal, baseSales);
-
-    setStatus(
-      `Done. Stock: ${(stockRes?.rows||[]).length}, ` +
-      `Orders: ${(ordersRes?.rows||[]).length}, ` +
-      `Incoming: ${(incomingRes?.rows||[]).length}`
-    );
   }
 
   // ---------------------- dropdown/datalist loaders ----------------------
