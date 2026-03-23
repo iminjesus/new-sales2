@@ -187,11 +187,14 @@ function renderPage(data){
     const rKey = g.region || "-";
     if (!regionMap.has(rKey)) regionMap.set(rKey, {region:rKey, bdes:new Map(), qty:0, amt:0, rebate:0});
     const rNode = regionMap.get(rKey);
-    rNode.qty += g.grp_actual_qty; rNode.amt += g.grp_actual_amt; rNode.rebate += g.grp_curr_rebate;
     const bKey = rKey + "|" + (g.bde || "-");
     if (!rNode.bdes.has(bKey)) rNode.bdes.set(bKey, {bde:g.bde||"-", rKey, groups:[], qty:0, amt:0, rebate:0});
     const bNode = rNode.bdes.get(bKey);
-    bNode.qty += g.grp_actual_qty; bNode.amt += g.grp_actual_amt; bNode.rebate += g.grp_curr_rebate;
+    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR
+    g.brands.forEach(b => {
+      rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt; rNode.rebate += b.grp_curr_rebate;
+      bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt; bNode.rebate += b.grp_curr_rebate;
+    });
     bNode.groups.push(g);
   });
 
@@ -312,14 +315,23 @@ function renderPage(data){
         const isOpen     = expanded.has(g.key);
         const totalShips = g.brands.reduce((s,b)=>s+shipCount(b), 0);
         const brandBadges = g.brands.map(b=>badgesHtml(b.badges)).join(" &nbsp; ");
+        // When a sold_to has both PCLT and TBR brands, summing qty/amt is misleading — show "—"
+        const hasMixedLines = g.brands.length > 1 &&
+          g.brands.some(b => b.brand === "PCLT" || b.brand === "TBR");
+        const grpQtyHtml = hasMixedLines
+          ? `<span style="color:#9ca3af">—</span>`
+          : `<span class="lbl">qty</span>${fmt(g.grp_actual_qty)} <span class="ul">u</span>`;
+        const grpAmtHtml = hasMixedLines
+          ? `<span style="color:#9ca3af">—</span>`
+          : `<span class="lbl">amt</span>$${fmt(g.grp_actual_amt)}`;
         bodyHtml += `<tr class="grp-hdr" onclick="toggleGroup('${escAttr(g.key)}')">
           <td class="caret">${isOpen?"▼":"▶"}</td>
           <td colspan="2"><b>${esc(g.sold_to_name)}</b>
             <span style="font-family:monospace;font-size:10px;color:#6b7280;margin-left:6px">${g.sold_to}</span>
           </td>
           <td>${brandBadges}</td>
-          <td><span class="lbl">qty</span>${fmt(g.grp_actual_qty)} <span class="ul">u</span></td>
-          <td><span class="lbl">amt</span>$${fmt(g.grp_actual_amt)}</td>
+          <td>${grpQtyHtml}</td>
+          <td>${grpAmtHtml}</td>
           <td colspan="4"></td>
           <td><span class="est"><span class="lbl">rebate</span>$${fmt(g.grp_curr_rebate)}</span> <span class="ul">(${totalShips} ship-to)</span></td>
           <td></td>
