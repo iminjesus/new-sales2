@@ -3300,6 +3300,18 @@ def api_rebate_data():
             }
         name_map = {sh: v["name"] for sh, v in ship_cust_map.items()}
 
+        # Build BDE → region mapping: for each BDE, use the most common state among
+        # their ship_tos in ship_cust_map (actual BDE region, not sold_to's bde_state)
+        from collections import Counter
+        _bde_state_counter = {}
+        for v in ship_cust_map.values():
+            bde = v.get("bde", "-")
+            st  = v.get("state", "-")
+            if bde and bde != "-" and st and st != "-":
+                _bde_state_counter.setdefault(bde, Counter())[st] += 1
+        bde_region_map = {bde: cnt.most_common(1)[0][0]
+                          for bde, cnt in _bde_state_counter.items()}
+
         # ── 4. Tier definitions (only meaningful tiers: tier_order <= top_order) ─
         cur.execute("""
             SELECT structure_name, unit, tier_order, top_order, threshold, rate
@@ -3460,7 +3472,7 @@ def api_rebate_data():
                         "sold_to":        sold_to,
                         "sold_to_name":   c["sold_to_name"] or sold_to,
                         "sold_to_group":  sold_to_group,
-                        "region":         c["region"] or "-",   # always BDE's region
+                        "region":         bde_region_map.get(c["bde"] or "") or c["region"] or "-",
                         "bde":            c["bde"]    or "-",   # always sold_to's BDE
                         "ship_to":        sh,
                         "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
