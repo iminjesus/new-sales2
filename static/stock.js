@@ -430,6 +430,9 @@
         <td>${fmtQty(r.qty_6m)}</td>
         <td>${fmtQty(r.qty_12m)}</td>
         <td class="st-base">${fmtQty(bs)}</td>
+        <td class="st-qty">${fmtQty(_stockTotal)}</td>
+        <td class="st-qty">${fmtQty(_waterTotal)}</td>
+        <td class="st-qty">${fmtQty(_factoryTotal)}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
@@ -447,6 +450,9 @@
       <td>${fmtQty(Math.round(totQ6/rows.length))}</td>
       <td>${fmtQty(Math.round(totQ12/rows.length))}</td>
       <td class="st-base">${fmtQty(totBase)}</td>
+      <td class="st-qty">${fmtQty(_stockTotal)}</td>
+      <td class="st-qty">${fmtQty(_waterTotal)}</td>
+      <td class="st-qty">${fmtQty(_factoryTotal)}</td>
       <td class="st-pipe">${tpipeS}</td>
       <td class="st-pipe">${tpipeSW}</td>
       <td class="st-pipe">${tpipeSWF}</td>

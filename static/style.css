@@ -721,3 +721,10 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   color: #9ca3af;
   padding: 12px !important;
 }
+.st-qty {
+  color: #374151 !important;
+  font-weight: 500;
+}
+.st-qty-hdr {
+  background: #f9fafb !important;
+}
