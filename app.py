@@ -848,7 +848,9 @@ def api_sales_stats():
                 {where_sql}
             """, params_all)
             row = cur.fetchone()
-            results[label] = round(float((row or {}).get("qty") or 0))
+            total = float((row or {}).get("qty") or 0)
+            n = {"3m": 3, "6m": 6, "12m": 12}[label]
+            results[label] = round(total / n)
 
         base_sales = round((results["3m"] + results["6m"] + results["12m"]) / 3)
         return jsonify({
