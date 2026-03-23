@@ -3253,7 +3253,7 @@ def api_rebate_data():
         # ── 1. Rebate-mapped customers (sold_to level) ───────────────────────
         cur.execute("""
             SELECT m.sold_to, m.brand, m.structure_name,
-                   c.sold_to_name, c.sold_to_group, c.bde_state AS region,
+                   c.ship_to_name AS sold_to_name, c.sold_to_group, c.bde_state AS region,
                    COALESCE(NULLIF(TRIM(c.salesman_name),''), '-') AS bde
             FROM rebate_customer_map m
             LEFT JOIN customer c ON c.ship_to = m.sold_to
@@ -3462,7 +3462,7 @@ def api_rebate_data():
                     actual = actual_qty if unit == "Q" else actual_amt
 
                     curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
-                    curr_rebate = round(actual * curr_tier["rate"] / 100, 2)
+                    curr_rebate = round(actual_amt * curr_tier["rate"] / 100, 2)
                     est_rebate  = round(next_tier["threshold"] * next_tier["rate"] / 100, 2) if next_tier else None
                     needed_qty = round(next_tier["threshold"] - actual_qty, 2) if next_tier and unit == "Q" else None
                     needed_amt = round(next_tier["threshold"] - actual_amt, 2) if next_tier and unit == "A" else None
