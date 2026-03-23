@@ -719,21 +719,32 @@ def api_stock():
             wh.append("c.size LIKE %s")
             params.append(f"%{material}%")
 
-        # category chip handling
-        if category in CATEGORY_TABLE:
-            t = CATEGORY_TABLE[category]
-            joins.append(f"JOIN {t} cat ON cat.Material = s.material")  # column name 맞춰서 Material/m_code로 변경
-        elif category == "PCLT":
-            # 예시: carrying_2602.product_group 기준 (너 데이터에 맞게 조정)
-            # wh.append("c.some_segment = 'PCLT'")
-            pass
+        # category chip handling — carrying_2602 c is already joined above
+        if category == "PCLT":
+            wh.append("c.line = 'PCLT'")
         elif category == "TBR":
-            # 예시: carrying_2602.product_group 기준 (너 데이터에 맞게 조정)
-            # wh.append("c.some_segment = 'TBR'")
-            pass
-        else:
-            # ALL: no extra filter
-            pass
+            wh.append("c.line = 'TBR'")
+        elif category == "18PLUS":
+            wh.append("c.line = 'PCLT'")
+            wh.append("CAST(SUBSTRING_INDEX(c.size, 'R', -1) AS DECIMAL(5,2)) >= 18.0")
+        elif category == "ISEG":
+            joins.append("JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) = s.material")
+        elif category == "SUV":
+            joins.append("JOIN suv suv ON suv.Pattern = c.pattern")
+        elif category == "LOWPROFILE":
+            joins.append("JOIN lowprofile lp ON CAST(TRIM(lp.Material) AS UNSIGNED) = s.material")
+        elif category == "HM":
+            wh.append("""EXISTS (
+                SELECT 1 FROM hm hm
+                JOIN sales_25_2602 ss ON ss.sold_to = hm.sold_to
+                WHERE ss.material = s.material
+            )""")
+        elif category == "443":
+            wh.append("""EXISTS (
+                SELECT 1 FROM `443_25` p443
+                WHERE p443.product_group = c.product_group
+            )""")
+        # ALL: no extra filter
 
         sql += "\n" + "\n".join(joins)
         if wh:
