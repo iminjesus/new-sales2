@@ -882,8 +882,12 @@ def api_sales_stats():
 
 @app.route("/api/sales_stats_by_state")
 def api_sales_stats_by_state():
-    """Return 3M / 6M / 12M / Base Sales per Australian state (bde_state)."""
-    STATE_ORDER = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT", "COMMON"]
+    """Return 3M / 6M / 12M / Base Sales + stock/water/factory qty per state."""
+    # COMMON excluded intentionally
+    STATE_ORDER = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT"]
+    # plant -> state mapping derived from plant geographic locations
+    PLANT_STATE = {"42R1": "NSW", "42R0": "QLD", "42R2": "VIC", "42R4": "WA"}
+    ALL_PLANTS  = list(PLANT_STATE.keys())
 
     category   = (request.args.get("category")      or "ALL").strip().upper()
     prod_group = (request.args.get("product_group") or "ALL").strip()
@@ -922,9 +926,79 @@ def api_sales_stats_by_state():
         periods_6  = _months_back(6)
         periods_12 = _months_back(12)
 
-        cat_joins, cat_wh = category_filters_sales("s", category)
-        base_joins = ["JOIN customer cus ON cus.ship_to = s.ship_to"] + list(cat_joins)
-        base_wh    = list(cat_wh)
+        # ── category filter helpers ──────────────────────────────────
+        def _cat_joins_wh_stock(tbl_alias):
+            """Return (joins_list, wh_list, params_list) for stock/incoming/orders."""
+            joins, wh, params = [], [], []
+            joins.append(f"JOIN carrying_2602 c ON c.m_code = {tbl_alias}.material")
+            if prod_group and prod_group != "ALL":
+                wh.append("c.product_group = %s"); params.append(prod_group)
+            if pattern:
+                wh.append("c.pattern LIKE %s"); params.append(f"%{pattern}%")
+            if material:
+                wh.append("c.size LIKE %s"); params.append(f"%{material}%")
+            if category == "PCLT":
+                wh.append("c.line = 'PCLT'")
+            elif category == "TBR":
+                wh.append("c.line = 'TBR'")
+            elif category == "18PLUS":
+                wh.append("c.line = 'PCLT'")
+                wh.append("CAST(SUBSTRING_INDEX(c.size,'R',-1) AS DECIMAL(5,2)) >= 18.0")
+            elif category == "ISEG":
+                joins.append(f"JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) = {tbl_alias}.material")
+            elif category == "SUV":
+                joins.append("JOIN suv suv ON suv.Pattern = c.pattern")
+            elif category == "LOWPROFILE":
+                joins.append(f"JOIN lowprofile lp ON CAST(TRIM(lp.Material) AS UNSIGNED) = {tbl_alias}.material")
+            elif category == "HM":
+                wh.append(f"""EXISTS (
+                    SELECT 1 FROM hm hm
+                    JOIN sales_25_2602 ss ON ss.sold_to = hm.sold_to
+                    WHERE ss.material = {tbl_alias}.material
+                )""")
+            elif category == "443":
+                wh.append("EXISTS (SELECT 1 FROM `443_25` p443 WHERE p443.product_group = c.product_group)")
+            return joins, wh, params
+
+        def _plant_totals(table, val_col):
+            """Return {plant: qty} for given table and value column, grouped by plant."""
+            j, wh, p = _cat_joins_wh_stock("t")
+            plant_ph = ",".join(["%s"] * len(ALL_PLANTS))
+            wh.append(f"t.plant IN ({plant_ph})")
+            p += ALL_PLANTS
+            join_sql  = "\n".join(j)
+            where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+            cur.execute(f"""
+                SELECT t.plant, SUM(t.{val_col}) AS val
+                FROM {table} t
+                {join_sql}
+                {where_sql}
+                GROUP BY t.plant
+            """, p)
+            return {row["plant"]: float(row["val"] or 0) for row in (cur.fetchall() or [])}
+
+        # ── stock / water (incoming) / factory (orders) per plant ───
+        stock_by_plant   = _plant_totals("stock",    "unrestricted")
+        water_by_plant   = _plant_totals("incoming", "confirm_qty")
+        factory_by_plant = _plant_totals("orders",   "po_qty")
+
+        # aggregate plant totals to state
+        def _to_state(by_plant):
+            d = {}
+            for plant, val in by_plant.items():
+                st = PLANT_STATE.get(plant)
+                if st:
+                    d[st] = d.get(st, 0) + val
+            return d
+
+        stock_by_state   = _to_state(stock_by_plant)
+        water_by_state   = _to_state(water_by_plant)
+        factory_by_state = _to_state(factory_by_plant)
+
+        # ── sales per state ─────────────────────────────────────────
+        cat_joins_s, cat_wh_s = category_filters_sales("s", category)
+        base_joins = ["JOIN customer cus ON cus.ship_to = s.ship_to"] + list(cat_joins_s)
+        base_wh    = list(cat_wh_s)
         base_params: list = []
 
         if prod_group and prod_group != "ALL":
@@ -936,9 +1010,10 @@ def api_sales_stats_by_state():
         if material:
             _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.size LIKE %s"); base_params.append(f"%{material}%")
+        # exclude COMMON / unmapped states
+        base_wh.append("cus.bde_state IS NOT NULL AND cus.bde_state != 'COMMON'")
 
-        # Fetch per-state sums for each window
-        state_data = {}  # state -> {3m, 6m, 12m}
+        state_data = {}
         for label, periods in (("3m", periods_3), ("6m", periods_6), ("12m", periods_12)):
             pcond, pparams = _period_cond(periods)
             wh_all     = base_wh + [pcond]
@@ -946,8 +1021,7 @@ def api_sales_stats_by_state():
             join_sql   = "\n".join(base_joins)
             where_sql  = ("WHERE " + " AND ".join(wh_all)) if wh_all else ""
             cur.execute(f"""
-                SELECT COALESCE(cus.bde_state, 'COMMON') AS state,
-                       SUM(s.qty) AS qty
+                SELECT cus.bde_state AS state, SUM(s.qty) AS qty
                 FROM sales_25_2602 s
                 {join_sql}
                 {where_sql}
@@ -955,26 +1029,31 @@ def api_sales_stats_by_state():
             """, params_all)
             n = {"3m": 3, "6m": 6, "12m": 12}[label]
             for row in (cur.fetchall() or []):
-                st  = row["state"] or "COMMON"
+                st  = row["state"]
+                if not st or st == "COMMON":
+                    continue
                 val = round(float(row["qty"] or 0) / n)
                 state_data.setdefault(st, {})[label] = val
 
         rows_out = []
-        seen = set()
         for st in STATE_ORDER:
             d = state_data.get(st, {})
             q3  = d.get("3m",  0)
             q6  = d.get("6m",  0)
             q12 = d.get("12m", 0)
+            if q3 == 0 and q6 == 0 and q12 == 0:
+                continue
             base = round((q3 + q6 + q12) / 3)
-            rows_out.append({"state": st, "qty_3m": q3, "qty_6m": q6, "qty_12m": q12, "base_sales": base})
-            seen.add(st)
-        # any unexpected states
-        for st, d in state_data.items():
-            if st not in seen:
-                q3 = d.get("3m", 0); q6 = d.get("6m", 0); q12 = d.get("12m", 0)
-                rows_out.append({"state": st, "qty_3m": q3, "qty_6m": q6, "qty_12m": q12,
-                                  "base_sales": round((q3+q6+q12)/3)})
+            rows_out.append({
+                "state":       st,
+                "qty_3m":      q3,
+                "qty_6m":      q6,
+                "qty_12m":     q12,
+                "base_sales":  base,
+                "stock_qty":   round(stock_by_state.get(st, 0)),
+                "water_qty":   round(water_by_state.get(st, 0)),
+                "factory_qty": round(factory_by_state.get(st, 0)),
+            })
 
         return jsonify({"rows": rows_out, "latest_year": latest_y, "latest_month": latest_m})
     finally:

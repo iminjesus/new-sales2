@@ -413,26 +413,32 @@
       return;
     }
 
-    let totQ3 = 0, totQ6 = 0, totQ12 = 0;
-    const rows = data.rows.filter(r => (r.qty_3m + r.qty_6m + r.qty_12m) > 0);
+    let totQ3 = 0, totQ6 = 0, totQ12 = 0, totStock = 0, totWater = 0, totFactory = 0;
+    const rows = data.rows;   // backend already excludes COMMON and zero rows
 
     tbody.innerHTML = rows.map(r => {
-      totQ3  += r.qty_3m;
-      totQ6  += r.qty_6m;
-      totQ12 += r.qty_12m;
-      const bs = r.base_sales;
-      const pipeS   = bs ? (_stockTotal              / bs) : 0;
-      const pipeSW  = bs ? ((_stockTotal+_waterTotal) / bs) : 0;
-      const pipeSWF = bs ? ((_stockTotal+_waterTotal+_factoryTotal) / bs) : 0;
+      totQ3      += r.qty_3m;
+      totQ6      += r.qty_6m;
+      totQ12     += r.qty_12m;
+      totStock   += r.stock_qty   || 0;
+      totWater   += r.water_qty   || 0;
+      totFactory += r.factory_qty || 0;
+      const bs  = r.base_sales;
+      const sq  = r.stock_qty   || 0;
+      const wq  = r.water_qty   || 0;
+      const fq  = r.factory_qty || 0;
+      const pipeS   = bs ? (sq          / bs) : 0;
+      const pipeSW  = bs ? ((sq+wq)     / bs) : 0;
+      const pipeSWF = bs ? ((sq+wq+fq)  / bs) : 0;
       return `<tr>
         <td class="st-state">${r.state}</td>
         <td>${fmtQty(r.qty_3m)}</td>
         <td>${fmtQty(r.qty_6m)}</td>
         <td>${fmtQty(r.qty_12m)}</td>
         <td class="st-base">${fmtQty(bs)}</td>
-        <td class="st-qty">${fmtQty(_stockTotal)}</td>
-        <td class="st-qty">${fmtQty(_waterTotal)}</td>
-        <td class="st-qty">${fmtQty(_factoryTotal)}</td>
+        <td class="st-qty">${fmtQty(sq)}</td>
+        <td class="st-qty">${fmtQty(wq)}</td>
+        <td class="st-qty">${fmtQty(fq)}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
@@ -441,18 +447,18 @@
 
     // Total footer row
     const totBase = Math.round((totQ3 + totQ6 + totQ12) / 3);
-    const tpipeS   = totBase ? fmtPipe(_stockTotal / totBase) : "—";
-    const tpipeSW  = totBase ? fmtPipe((_stockTotal+_waterTotal) / totBase) : "—";
-    const tpipeSWF = totBase ? fmtPipe((_stockTotal+_waterTotal+_factoryTotal) / totBase) : "—";
+    const tpipeS   = totBase ? fmtPipe(totStock / totBase) : "—";
+    const tpipeSW  = totBase ? fmtPipe((totStock+totWater) / totBase) : "—";
+    const tpipeSWF = totBase ? fmtPipe((totStock+totWater+totFactory) / totBase) : "—";
     tfoot.innerHTML = `<tr class="st-total">
       <td>TOTAL</td>
-      <td>${fmtQty(Math.round(totQ3/rows.length))}</td>
-      <td>${fmtQty(Math.round(totQ6/rows.length))}</td>
-      <td>${fmtQty(Math.round(totQ12/rows.length))}</td>
+      <td>${fmtQty(rows.length ? Math.round(totQ3/rows.length) : 0)}</td>
+      <td>${fmtQty(rows.length ? Math.round(totQ6/rows.length) : 0)}</td>
+      <td>${fmtQty(rows.length ? Math.round(totQ12/rows.length) : 0)}</td>
       <td class="st-base">${fmtQty(totBase)}</td>
-      <td class="st-qty">${fmtQty(_stockTotal)}</td>
-      <td class="st-qty">${fmtQty(_waterTotal)}</td>
-      <td class="st-qty">${fmtQty(_factoryTotal)}</td>
+      <td class="st-qty">${fmtQty(totStock)}</td>
+      <td class="st-qty">${fmtQty(totWater)}</td>
+      <td class="st-qty">${fmtQty(totFactory)}</td>
       <td class="st-pipe">${tpipeS}</td>
       <td class="st-pipe">${tpipeSW}</td>
       <td class="st-pipe">${tpipeSWF}</td>
