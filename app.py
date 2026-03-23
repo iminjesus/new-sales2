@@ -879,6 +879,108 @@ def api_sales_stats():
         cur.close()
         conn.close()
 
+
+@app.route("/api/sales_stats_by_state")
+def api_sales_stats_by_state():
+    """Return 3M / 6M / 12M / Base Sales per Australian state (bde_state)."""
+    STATE_ORDER = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT", "COMMON"]
+
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT MAX(year*100 + month) AS ym FROM sales_25_2602")
+        r = cur.fetchone()
+        latest_ym = int((r or {}).get("ym") or 0)
+        if not latest_ym:
+            return jsonify({"rows": [], "latest_year": None, "latest_month": None})
+
+        latest_y = latest_ym // 100
+        latest_m = latest_ym % 100
+
+        def _months_back(n):
+            result = []
+            y, m = latest_y, latest_m
+            for _ in range(n):
+                result.append((y, m))
+                m -= 1
+                if m == 0:
+                    m = 12; y -= 1
+            return result
+
+        def _period_cond(periods, alias="s"):
+            if not periods:
+                return "1=0", []
+            clauses = [f"({alias}.year=%s AND {alias}.month=%s)" for _ in periods]
+            return "(" + " OR ".join(clauses) + ")", [v for p in periods for v in p]
+
+        periods_3  = _months_back(3)
+        periods_6  = _months_back(6)
+        periods_12 = _months_back(12)
+
+        cat_joins, cat_wh = category_filters_sales("s", category)
+        base_joins = ["JOIN customer cus ON cus.ship_to = s.ship_to"] + list(cat_joins)
+        base_wh    = list(cat_wh)
+        base_params: list = []
+
+        if prod_group and prod_group != "ALL":
+            _ensure_carrying_join("s", base_joins)
+            base_wh.append("mat.product_group = %s"); base_params.append(prod_group)
+        if pattern:
+            _ensure_carrying_join("s", base_joins)
+            base_wh.append("mat.pattern LIKE %s"); base_params.append(f"%{pattern}%")
+        if material:
+            _ensure_carrying_join("s", base_joins)
+            base_wh.append("mat.size LIKE %s"); base_params.append(f"%{material}%")
+
+        # Fetch per-state sums for each window
+        state_data = {}  # state -> {3m, 6m, 12m}
+        for label, periods in (("3m", periods_3), ("6m", periods_6), ("12m", periods_12)):
+            pcond, pparams = _period_cond(periods)
+            wh_all     = base_wh + [pcond]
+            params_all = base_params + pparams
+            join_sql   = "\n".join(base_joins)
+            where_sql  = ("WHERE " + " AND ".join(wh_all)) if wh_all else ""
+            cur.execute(f"""
+                SELECT COALESCE(cus.bde_state, 'COMMON') AS state,
+                       SUM(s.qty) AS qty
+                FROM sales_25_2602 s
+                {join_sql}
+                {where_sql}
+                GROUP BY state
+            """, params_all)
+            n = {"3m": 3, "6m": 6, "12m": 12}[label]
+            for row in (cur.fetchall() or []):
+                st  = row["state"] or "COMMON"
+                val = round(float(row["qty"] or 0) / n)
+                state_data.setdefault(st, {})[label] = val
+
+        rows_out = []
+        seen = set()
+        for st in STATE_ORDER:
+            d = state_data.get(st, {})
+            q3  = d.get("3m",  0)
+            q6  = d.get("6m",  0)
+            q12 = d.get("12m", 0)
+            base = round((q3 + q6 + q12) / 3)
+            rows_out.append({"state": st, "qty_3m": q3, "qty_6m": q6, "qty_12m": q12, "base_sales": base})
+            seen.add(st)
+        # any unexpected states
+        for st, d in state_data.items():
+            if st not in seen:
+                q3 = d.get("3m", 0); q6 = d.get("6m", 0); q12 = d.get("12m", 0)
+                rows_out.append({"state": st, "qty_3m": q3, "qty_6m": q6, "qty_12m": q12,
+                                  "base_sales": round((q3+q6+q12)/3)})
+
+        return jsonify({"rows": rows_out, "latest_year": latest_y, "latest_month": latest_m})
+    finally:
+        cur.close()
+        conn.close()
+
 ORIGIN_GEO = {
     "CHN": {"name": "China", "lat": 33.8617, "lon": 104.1954},
     "KOR": {"name": "Korea", "lat": 33.5, "lon": 127.8},

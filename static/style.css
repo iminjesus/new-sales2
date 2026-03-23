@@ -657,3 +657,67 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
     min-height: 0 !important;
   }
 }
+/* ─── State breakdown table ────────────────────────────────── */
+#stateTableWrap {
+  margin: 6px 0 0;
+  overflow-x: auto;
+}
+#stateTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  overflow: hidden;
+}
+#stateTable thead th {
+  background: #f3f4f6;
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  padding: 6px 12px;
+  text-align: right;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+#stateTable thead th:first-child { text-align: left; }
+#stateTable tbody tr:hover { background: #f9fafb; }
+#stateTable tbody td {
+  padding: 5px 12px;
+  text-align: right;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+}
+#stateTable tbody td:first-child { text-align: left; }
+.st-state {
+  font-weight: 600;
+  color: #111827 !important;
+  min-width: 60px;
+}
+.st-base {
+  color: #15803d !important;
+  font-weight: 600;
+}
+.st-pipe {
+  color: #2563eb !important;
+  font-weight: 600;
+}
+#stateTable tfoot tr.st-total td {
+  background: #eff6ff;
+  font-weight: 700;
+  border-top: 2px solid #bfdbfe;
+  color: #1e40af;
+  padding: 6px 12px;
+  text-align: right;
+}
+#stateTable tfoot tr.st-total td:first-child {
+  text-align: left;
+  color: #1e3a8a;
+}
+.st-loading {
+  text-align: center !important;
+  color: #9ca3af;
+  padding: 12px !important;
+}

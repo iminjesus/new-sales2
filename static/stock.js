@@ -398,6 +398,61 @@
     document.getElementById("statPipeSWF").title = `(Stock + Water + Factory) ${fmtQty(swf)} ÷ Base Sales ${fmtQty(bs)}`;
   }
 
+  // ---------------------- state table ----------------------
+  // stockTotal / waterTotal / factoryTotal are the global totals (pipeline numerators)
+  let _stockTotal = 0, _waterTotal = 0, _factoryTotal = 0;
+
+  async function fetchAndRenderStateTable(){
+    const qs   = buildQueryParams({ metric: "qty" });
+    const data = await fetchJSON(`/api/sales_stats_by_state?${qs}`);
+    const tbody = document.getElementById("stateTableBody");
+    const tfoot = document.getElementById("stateTableFoot");
+    if (!tbody || !tfoot) return;
+    if (!data || !data.rows || data.rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="st-loading">No data</td></tr>`;
+      return;
+    }
+
+    let totQ3 = 0, totQ6 = 0, totQ12 = 0;
+    const rows = data.rows.filter(r => (r.qty_3m + r.qty_6m + r.qty_12m) > 0);
+
+    tbody.innerHTML = rows.map(r => {
+      totQ3  += r.qty_3m;
+      totQ6  += r.qty_6m;
+      totQ12 += r.qty_12m;
+      const bs = r.base_sales;
+      const pipeS   = bs ? (_stockTotal              / bs) : 0;
+      const pipeSW  = bs ? ((_stockTotal+_waterTotal) / bs) : 0;
+      const pipeSWF = bs ? ((_stockTotal+_waterTotal+_factoryTotal) / bs) : 0;
+      return `<tr>
+        <td class="st-state">${r.state}</td>
+        <td>${fmtQty(r.qty_3m)}</td>
+        <td>${fmtQty(r.qty_6m)}</td>
+        <td>${fmtQty(r.qty_12m)}</td>
+        <td class="st-base">${fmtQty(bs)}</td>
+        <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
+        <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
+        <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
+      </tr>`;
+    }).join("");
+
+    // Total footer row
+    const totBase = Math.round((totQ3 + totQ6 + totQ12) / 3);
+    const tpipeS   = totBase ? fmtPipe(_stockTotal / totBase) : "—";
+    const tpipeSW  = totBase ? fmtPipe((_stockTotal+_waterTotal) / totBase) : "—";
+    const tpipeSWF = totBase ? fmtPipe((_stockTotal+_waterTotal+_factoryTotal) / totBase) : "—";
+    tfoot.innerHTML = `<tr class="st-total">
+      <td>TOTAL</td>
+      <td>${fmtQty(Math.round(totQ3/rows.length))}</td>
+      <td>${fmtQty(Math.round(totQ6/rows.length))}</td>
+      <td>${fmtQty(Math.round(totQ12/rows.length))}</td>
+      <td class="st-base">${fmtQty(totBase)}</td>
+      <td class="st-pipe">${tpipeS}</td>
+      <td class="st-pipe">${tpipeSW}</td>
+      <td class="st-pipe">${tpipeSWF}</td>
+    </tr>`;
+  }
+
   async function fetchAndRenderSales(){
     const qs = buildQueryParams({ metric: "qty" });
     const [rows25, rows26, yearRows] = await Promise.all([
@@ -432,6 +487,7 @@
       const stockTotal   = (stockRes?.rows    || []).reduce((s,r) => s + (r.stock_value    ?? 0), 0);
       const waterTotal   = (incomingRes?.rows || []).reduce((s,r) => s + (r.incoming_value ?? 0), 0);
       const factoryTotal = (ordersRes?.rows   || []).reduce((s,r) => s + (r.order_value    ?? 0), 0);
+      _stockTotal = stockTotal; _waterTotal = waterTotal; _factoryTotal = factoryTotal;
 
       // Fit map to all visible data points
       const allRows = [
@@ -451,6 +507,7 @@
         fetchAndRenderSalesStats(),
       ]);
       renderPipeline(stockTotal, waterTotal, factoryTotal, baseSales);
+      await fetchAndRenderStateTable();
 
       setStatus(
         `Done. Stock: ${(stockRes?.rows||[]).length}, ` +
