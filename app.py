@@ -3253,12 +3253,13 @@ def api_rebate_data():
         # ── 1. Rebate-mapped customers (sold_to level) ───────────────────────
         cur.execute("""
             SELECT m.sold_to, m.brand, m.structure_name,
-                   c.ship_to_name AS sold_to_name, c.sold_to_group, c.bde_state AS region,
-                   COALESCE(NULLIF(TRIM(c.salesman_name),''), '-') AS bde
+                   MIN(c.sold_to_name)  AS sold_to_name,
+                   MIN(c.sold_to_group) AS sold_to_group
             FROM rebate_customer_map m
-            LEFT JOIN customer c ON c.ship_to = m.sold_to
+            LEFT JOIN customer c ON c.sold_to = m.sold_to
             WHERE (%s = 'ALL' OR m.brand = %s)
               AND (%s = 'ALL' OR c.sold_to_group = %s)
+            GROUP BY m.sold_to, m.brand, m.structure_name
         """, (brand_filter, brand_filter, stg_filter, stg_filter))
         customers = cur.fetchall()
         if not customers:
@@ -3398,14 +3399,30 @@ def api_rebate_data():
                 # Only keep ship_tos that are known in the customer table
                 ship_set = {sh for sh in ship_set if sh in ship_cust_map}
 
-                # Filter by BDE only (ship_to region is irrelevant)
-                c_bde = (c["bde"] or "").strip()
-                if c_bde and c_bde != "-":
-                    ship_set = {sh for sh in ship_set
-                                if ship_cust_map[sh].get("bde", "").strip() == c_bde}
-
                 if not ship_set:
                     ship_set.add(sold_to)   # show zero row so sold_to is visible
+
+                # Determine sold_to's canonical BDE and region.
+                # Prefer the self-referencing record (ship_to == sold_to code);
+                # if that does not exist, infer from the ship_tos in ship_set.
+                st_info = ship_cust_map.get(sold_to, {})
+                if st_info:
+                    sold_to_bde    = st_info.get("bde",   "-") or "-"
+                    sold_to_region = st_info.get("state", "-") or "-"
+                else:
+                    real_ships = [sh for sh in ship_set if sh != sold_to]
+                    state_cnt = Counter(
+                        ship_cust_map[sh].get("state", "") for sh in real_ships
+                        if ship_cust_map.get(sh, {}).get("state", "")
+                        and ship_cust_map[sh]["state"] != "-"
+                    )
+                    bde_cnt = Counter(
+                        ship_cust_map[sh].get("bde", "") for sh in real_ships
+                        if ship_cust_map.get(sh, {}).get("bde", "")
+                        and ship_cust_map[sh]["bde"] != "-"
+                    )
+                    sold_to_region = state_cnt.most_common(1)[0][0] if state_cnt else "-"
+                    sold_to_bde    = bde_cnt.most_common(1)[0][0]   if bde_cnt   else "-"
 
                 # Badge labels for UI
                 if badges_override is not None:
@@ -3470,10 +3487,10 @@ def api_rebate_data():
                     sh_info = ship_cust_map.get(sh, {})
                     rows.append({
                         "sold_to":        sold_to,
-                        "sold_to_name":   c["sold_to_name"] or sold_to,
+                        "sold_to_name":   c["sold_to_name"] or st_info.get("name") or sold_to,
                         "sold_to_group":  sold_to_group,
-                        "region":         bde_region_map.get(c["bde"] or "") or c["region"] or "-",
-                        "bde":            c["bde"]    or "-",   # always sold_to's BDE
+                        "region":         sold_to_region,
+                        "bde":            sold_to_bde,
                         "ship_to":        sh,
                         "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
                         "brand":          brand_key,
