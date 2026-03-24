@@ -489,17 +489,23 @@ function computeWorkingDaysInfo(cutRows) {
   const maxDay = Object.keys(totalPerDay).length > 0
     ? Math.max(...Object.keys(totalPerDay).map(Number)) : 0;
 
+  // Build per-day (0-based index) working day flag
+  const isWorkingDay = new Array(31).fill(false);
   let workingDaysElapsed = 0;
   let lastWorkingDay = 0; // 1-based
   for (let d = 1; d <= maxDay; d++) {
-    if ((totalPerDay[d] || 0) >= 10) { workingDaysElapsed++; lastWorkingDay = d; }
+    if ((totalPerDay[d] || 0) >= 10) {
+      isWorkingDay[d - 1] = true;
+      workingDaysElapsed++;
+      lastWorkingDay = d;
+    }
   }
 
   const lastWorkingDayIdx = lastWorkingDay > 0 ? lastWorkingDay - 1 : -1; // 0-based index
   const remainingDays = Math.max(0, calendarDays - maxDay);
   const totalWorkingDays = workingDaysElapsed + remainingDays * (5 / 7);
 
-  return { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays, calendarDays };
+  return { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays, calendarDays, isWorkingDay };
 }
 
 
@@ -546,14 +552,20 @@ async function fetchDailyBreakdownWithGroup(groupBy){
 
 // totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
-  const [salesRows, targetRows, cutRows] = await Promise.all([
+  const [salesRows, targetRows, cutRows, wdRows] = await Promise.all([
     fetchDailySales(),
     fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
     }).toString()}`),
-    fetchDailyBreakdownWithGroup("region")
+    fetchDailyBreakdownWithGroup("region"),
+    fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
+      metric:filters.metric, category:filters.category, region:"ALL", salesman:"ALL",
+      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      group_by:"region", top_limit:filters.top_limit||0
+    }).toString()}`)
   ]);
 
   const labels = daysLabels();
@@ -574,6 +586,10 @@ async function drawDailyTotals(){
   const targets = new Array(N).fill(null);
   for (let i = 0; i <= cutoffIdx; i++) targets[i] = (+targetRows[i]?.value || 0);
 
+  // Working day info from company-wide data (same basis as the table's "This Month")
+  const workingInfo = computeWorkingDaysInfo(wdRows);
+  const { isWorkingDay, totalWorkingDays } = workingInfo;
+
   const salesCum = new Array(N).fill(null);
   const targetCum = new Array(N).fill(null);
   let sRun = 0, tRun = 0;
@@ -582,27 +598,48 @@ async function drawDailyTotals(){
     salesCum[i] = sRun; targetCum[i] = tRun;
   }
 
+  // fullMonthTarget = sum of all daily targets for the month
+  const fullMonthTarget = targetRows.reduce((s, r) => s + (+r.value || 0), 0);
+
+  // Cumulative working days elapsed up to each day index (0-based)
+  const workingDaysCum = new Array(N).fill(0);
+  let wdCum = 0;
+  for (let i = 0; i < N; i++) {
+    if (isWorkingDay[i]) wdCum++;
+    workingDaysCum[i] = wdCum;
+  }
+
   const achievement    = new Array(N).fill(null);
   const cumAchievement = new Array(N).fill(null);
   for (let i = 0; i <= cutoffIdx; i++){
     const s = +sales[i]||0, t = +targets[i]||0;
-    const sc = +salesCum[i]||0, tc = +targetCum[i]||0;
-    if (t  > 0) achievement[i]    = +((s /t )*100).toFixed(1);
-    if (tc > 0) cumAchievement[i] = +((sc/tc)*100).toFixed(1);
+    const sc = +salesCum[i]||0;
+    if (t > 0) achievement[i] = +((s / t) * 100).toFixed(1);
+    // Prorated cumulative Ach% — same logic as table's "This Month"
+    const proratedTarget = totalWorkingDays > 0
+      ? fullMonthTarget * workingDaysCum[i] / totalWorkingDays
+      : (+targetCum[i] || 0);
+    if (proratedTarget > 0) cumAchievement[i] = +((sc / proratedTarget) * 100).toFixed(1);
   }
 
-  // ── Filter out empty days (weekends with no sales/target) ──────────────────
-  const activeIdx = [];
-  for (let i = 0; i < N; i++){
-    if ((sales[i] ?? 0) > 0 || (targets[i] ?? 0) > 0) activeIdx.push(i);
+  // Non-working days: keep date label but null out bars
+  for (let i = 0; i < N; i++) {
+    if (!isWorkingDay[i]) {
+      sales[i]    = null;
+      targets[i]  = null;
+      salesCum[i] = null;
+      targetCum[i]= null;
+    }
   }
-  const fL  = activeIdx.map(i => labels[i]);
-  const fS  = activeIdx.map(i => sales[i]);
-  const fT  = activeIdx.map(i => targets[i]);
-  const fSC = activeIdx.map(i => salesCum[i]);
-  const fTC = activeIdx.map(i => targetCum[i]);
-  const fA  = activeIdx.map(i => achievement[i]);
-  const fCA = activeIdx.map(i => cumAchievement[i]);
+
+  // Use all N day labels (non-working day dates remain on x-axis, bars are null)
+  const fL  = labels.slice(0, N);
+  const fS  = sales.slice(0, N);
+  const fT  = targets.slice(0, N);
+  const fSC = salesCum.slice(0, N);
+  const fTC = targetCum.slice(0, N);
+  const fA  = achievement.slice(0, N);
+  const fCA = cumAchievement.slice(0, N);
 
   [dailyInst, dailyCumInst].forEach(c => c && c.destroy());
 
@@ -701,7 +738,7 @@ async function drawDailyTotals(){
         { label: "Ach(%)", type: "line", data: fCA, yAxisID: "y1",
           borderWidth: 2.5, pointRadius: 0, borderColor: "#ef4444", tension: 0.3,
           datalabels: {
-            display: ctx => { const i=ctx.dataIndex; return (i%2===0) && (fSC[i]??0)>0; },
+            display: ctx => { const i=ctx.dataIndex; return (i%2===0) && fCA[i]!=null; },
             align: "top", anchor: "end",
             formatter: v => v == null ? "" : v.toFixed(1)+"%"
           }
