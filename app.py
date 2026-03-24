@@ -2249,12 +2249,45 @@ def daily_target():
     monthly_total = float(row["monthly_total"] or 0) if row else 0
 
     # how many days in that month? (target_26 is for 2026)
-    days_in_month = calendar.monthrange(2026, month)[1]     # CHANGED
-    daily_value   = monthly_total / days_in_month if days_in_month else 0
+    days_in_month = calendar.monthrange(2026, month)[1]
 
-    # return one entry per day: 1..N
+    # ── Determine working days ────────────────────────────────────────────────
+    # Past days: working if company-wide total sales >= 10 (same threshold as frontend)
+    # Future days: working if weekday (Mon–Fri)
+    conn2 = get_connection()
+    cur2  = conn2.cursor(dictionary=True)
+    try:
+        cur2.execute("""
+            SELECT day, SUM(qty) AS total_qty
+            FROM sales_thismonth
+            GROUP BY day
+            ORDER BY day
+        """)
+        sales_by_day = {int(r["day"]): float(r["total_qty"] or 0) for r in cur2.fetchall()}
+    finally:
+        cur2.close()
+        conn2.close()
+
+    max_known_day = max(sales_by_day.keys()) if sales_by_day else 0
+
+    from datetime import date as _date
+    working_days = set()
+    for d in range(1, days_in_month + 1):
+        if d <= max_known_day:
+            # past day: working if total company sales >= 10
+            if sales_by_day.get(d, 0) >= 10:
+                working_days.add(d)
+        else:
+            # future day: working if Mon–Fri
+            if _date(2026, month, d).weekday() < 5:
+                working_days.add(d)
+
+    total_working_days = len(working_days)
+    daily_value = monthly_total / total_working_days if total_working_days else 0
+
+    # return one entry per day: working days get daily_value, non-working days get 0
     return jsonify([
-        {"day": d, "value": daily_value}
+        {"day": d, "value": daily_value if d in working_days else 0}
         for d in range(1, days_in_month + 1)
     ])
 
