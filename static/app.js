@@ -552,7 +552,7 @@ async function fetchDailyBreakdownWithGroup(groupBy){
 
 // totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
-  const [salesRows, targetRows, cutRows, wdRows] = await Promise.all([
+  const [salesRows, targetRows, cutRows, wdRows, monthlyTargetRows] = await Promise.all([
     fetchDailySales(),
     fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
@@ -565,6 +565,12 @@ async function drawDailyTotals(){
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
       group_by:"region", top_limit:filters.top_limit||0
+    }).toString()}`),
+    fetchJSON_DIRECT(`/api/monthly_target?${new URLSearchParams({
+      metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      top_limit:filters.top_limit||0, year:2026
     }).toString()}`)
   ]);
 
@@ -598,8 +604,9 @@ async function drawDailyTotals(){
     salesCum[i] = sRun; targetCum[i] = tRun;
   }
 
-  // fullMonthTarget = sum of all daily targets for the month
-  const fullMonthTarget = targetRows.reduce((s, r) => s + (+r.value || 0), 0);
+  // fullMonthTarget = monthly target for current month (same source as table's "This Month")
+  const currentMonthIdx = new Date().getMonth();
+  const fullMonthTarget = +((monthlyTargetRows || [])[currentMonthIdx]?.value) || 0;
 
   // Cumulative working days elapsed up to each day index (0-based)
   const workingDaysCum = new Array(N).fill(0);
