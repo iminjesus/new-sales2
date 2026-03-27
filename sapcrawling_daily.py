@@ -87,19 +87,21 @@ def start_tcode(session, tcode):
 
 def set_billing_date(session, date_from: str, date_to: str):
     """
-    Billing date LOW/HIGH 필드 설정.
-    ZSDR24030 화면의 실제 ID에 맞게 fallback 순서로 시도.
+    Billing Date LOW/HIGH 설정.
+    Sales Organization 등 다른 필드는 건드리지 않음.
     """
-    # LOW (from)
+    # LOW (from) — 화면에서 확인된 Billing Date 첫 번째 필드
     for wid in (
         "wnd[0]/usr/ctxtS_FKDAT-LOW",
-        "wnd[0]/usr/ctxtFKDAT-LOW",
+        "wnd[0]/usr/ctxtP_FKDAT-LOW",
         "wnd[0]/usr/txtS_FKDAT-LOW",
-        "wnd[0]/usr/txtFKDAT-LOW",
+        "wnd[0]/usr/txtP_FKDAT-LOW",
+        "wnd[0]/usr/ctxtS_BUDAT-LOW",
     ):
         if exists(session, wid):
             try:
                 session.findById(wid).Text = date_from
+                print(f"  Billing Date FROM set via {wid}")
                 break
             except:
                 pass
@@ -107,19 +109,20 @@ def set_billing_date(session, date_from: str, date_to: str):
     # HIGH (to)
     for wid in (
         "wnd[0]/usr/ctxtS_FKDAT-HIGH",
-        "wnd[0]/usr/ctxtFKDAT-HIGH",
+        "wnd[0]/usr/ctxtP_FKDAT-HIGH",
         "wnd[0]/usr/txtS_FKDAT-HIGH",
-        "wnd[0]/usr/txtFKDAT-HIGH",
+        "wnd[0]/usr/txtP_FKDAT-HIGH",
+        "wnd[0]/usr/ctxtS_BUDAT-HIGH",
     ):
         if exists(session, wid):
             try:
                 session.findById(wid).Text = date_to
+                print(f"  Billing Date TO   set via {wid}")
                 break
             except:
                 pass
 
-    session.findById("wnd[0]").sendVKey(0)
-    wait(0.5)
+    wait(0.3)
 
 def newest_export_xlsx(after_ts: float) -> str:
     pattern = os.path.join(SAP_EXPORT_DIR, SAP_EXPORT_GLOB)
