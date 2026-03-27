@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()  # .env 파일에서 환경변수 읽기
 
 # ---------------- CONFIG ----------------
-CSV_PATH = r"C:\temp\mb52_42.csv"
+CSV_PATH = r"D:\Data-Anal website\rawdata\unlock\mb52_42.csv"
 
 DB_HOST     = os.getenv("DB_HOST", "localhost")
 DB_PORT     = int(os.getenv("DB_PORT", "3306"))

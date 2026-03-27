@@ -29,7 +29,7 @@ PLANT_HIGH = "42R4"
 SAP_EXPORT_DIR  = r"C:\temp"         # where EXPORT_*.xlsx appears
 SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 
-OUT_CSV = r"C:\temp\mb52_42.csv"   # set to your project raw data folder
+OUT_CSV = r"D:\Data-Anal website\rawdata\unlock\mb52_42.csv"
 
 DELETE_XLSX_AFTER_CONVERT = False
 MIN_CSV_SIZE = 200  # bytes
