@@ -159,7 +159,14 @@ def xlsx_to_csv(xlsx_path: str, csv_path: str):
     while rows and is_trailing_summary_row(rows[-1]):
         rows.pop()
 
-    # 4) CSV로 저장
+    # 4) 필요한 컬럼만 추출 (Plant, Material, Unrestricted)
+    KEEP_COLS = ["Plant", "Material", "Unrestricted"]
+    if rows:
+        header = rows[0]
+        keep_idx = [i for i, h in enumerate(header) if h.strip() in KEEP_COLS]
+        rows = [[r[i] for i in keep_idx] for r in rows]
+
+    # 5) CSV로 저장
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for r in rows:
