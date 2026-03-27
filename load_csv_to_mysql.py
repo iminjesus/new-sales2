@@ -1,14 +1,18 @@
 import os
 import re
 import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv()  # .env 파일에서 환경변수 읽기
 
 # ---------------- CONFIG ----------------
-CSV_PATH = r"E:\01. work\2025\Data_Anal_Website\rawdata\unlock\mb52_42.csv"
+CSV_PATH = r"C:\temp\mb52_42.csv"
 
-DB_HOST = "localhost"
-DB_USER = "root"
-DB_PASSWORD = ""          # 너 설정에 맞게
-DB_NAME = "my_new_database"     # 너 DB명에 맞게
+DB_HOST     = os.getenv("DB_HOST", "localhost")
+DB_PORT     = int(os.getenv("DB_PORT", "3306"))
+DB_USER     = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASS", "")
+DB_NAME     = os.getenv("DB_NAME", "my_new_database")
 
 TABLE_NAME = "stock"   # 원하면 바꿔도 됨
 TRUNCATE_BEFORE_LOAD = True
@@ -92,6 +96,7 @@ def main():
 
     conn = mysql.connector.connect(
         host=DB_HOST,
+        port=DB_PORT,
         user=DB_USER,
         password=DB_PASSWORD,
         database=DB_NAME,
