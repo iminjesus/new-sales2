@@ -511,7 +511,7 @@
         .map(r => [Number(r.lat), Number(r.lon)])
         .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo));
       if (validPts.length > 0) {
-        map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 8 });
+        map.fitBounds(L.latLngBounds(validPts), { padding: [60, 60], maxZoom: 3 });
       }
 
       const [, baseSales] = await Promise.all([
