@@ -93,43 +93,10 @@
     </div>
 
     <!-- Sales Stats (3M / 6M / 12M / Base Sales) + Pipeline -->
-    <div id="salesStatsBar" style="margin-left:auto; display:flex; align-items:center; gap:0; border:1px solid #e5e7eb; border-radius:6px; overflow:hidden; background:#fff; height:36px;">
-      <div class="stat-cell" id="stat3m"  title="Last 3 months avg qty"><span class="stat-lbl">3M</span><span class="stat-val" id="v3m">—</span></div>
-      <div class="stat-cell" id="stat6m"  title="Last 6 months avg qty"><span class="stat-lbl">6M</span><span class="stat-val" id="v6m">—</span></div>
-      <div class="stat-cell" id="stat12m" title="Last 12 months avg qty"><span class="stat-lbl">12M</span><span class="stat-val" id="v12m">—</span></div>
-      <div class="stat-cell stat-base" id="statBase" title="Average of 3M / 6M / 12M"><span class="stat-lbl">Base Sales</span><span class="stat-val" id="vBase">—</span></div>
-      <div class="stat-cell stat-pipe" id="statPipeS"   title="Stock ÷ Base Sales"><span class="stat-lbl">Stock</span><span class="stat-val" id="vPipeS">—</span></div>
-      <div class="stat-cell stat-pipe" id="statPipeSW"  title="(Stock + Water) ÷ Base Sales"><span class="stat-lbl">+ Water</span><span class="stat-val" id="vPipeSW">—</span></div>
-      <div class="stat-cell stat-pipe" id="statPipeSWF" title="(Stock + Water + Factory) ÷ Base Sales"><span class="stat-lbl">+ Factory</span><span class="stat-val" id="vPipeSWF">—</span></div>
-    </div>
+    <!-- removed: replaced by TOTAL row in stateTable -->
   </div>
 
   </div><!-- end #filterPanel -->
-
-  <!-- State breakdown table -->
-  <div id="stateTableWrap">
-    <table id="stateTable">
-      <thead>
-        <tr>
-          <th>State</th>
-          <th>3M</th>
-          <th>6M</th>
-          <th>12M</th>
-          <th>Base Sales</th>
-          <th class="st-qty-hdr">Stock Qty</th>
-          <th class="st-qty-hdr">+ Water Qty</th>
-          <th class="st-qty-hdr">+ Factory Qty</th>
-          <th>Stock</th>
-          <th>+ Water</th>
-          <th>+ Factory</th>
-        </tr>
-      </thead>
-      <tbody id="stateTableBody">
-        <tr><td colspan="11" class="st-loading">Loading…</td></tr>
-      </tbody>
-      <tfoot id="stateTableFoot"></tfoot>
-    </table>
-  </div>
 
   <div id="errbar" class="errbar" hidden></div>
 
@@ -139,8 +106,33 @@
       <div id="stockMap"></div>
     </div>
 
-    <!-- Right: sales charts -->
+    <!-- Right: state table + sales charts -->
     <div id="stockSidePanel">
+
+      <!-- State breakdown table (moved from top) -->
+      <div id="stateTableWrap">
+        <table id="stateTable">
+          <thead>
+            <tr>
+              <th>State</th>
+              <th>3M</th>
+              <th>6M</th>
+              <th>12M</th>
+              <th>Base Sales</th>
+              <th class="st-qty-hdr">Stock Qty</th>
+              <th class="st-qty-hdr">+ Water Qty</th>
+              <th class="st-qty-hdr">+ Factory Qty</th>
+              <th>Stock</th>
+              <th>+ Water</th>
+              <th>+ Factory</th>
+            </tr>
+          </thead>
+          <tbody id="stateTableBody">
+            <tr><td colspan="11" class="st-loading">Loading…</td></tr>
+          </tbody>
+          <tfoot id="stateTableFoot"></tfoot>
+        </table>
+      </div>
       <div class="stockChartPane">
         <h4>Monthly Sales</h4>
         <canvas id="salesMonthlyChart"></canvas>

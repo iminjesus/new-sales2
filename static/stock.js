@@ -370,32 +370,11 @@
     const d  = await fetchJSON(`/api/sales_stats?${qs}`);
     if (!d) return;
     _baseSales = d.base_sales || 0;
-    document.getElementById("v3m").textContent   = fmtQty(d.qty_3m);
-    document.getElementById("v6m").textContent   = fmtQty(d.qty_6m);
-    document.getElementById("v12m").textContent  = fmtQty(d.qty_12m);
-    document.getElementById("vBase").textContent = fmtQty(d.base_sales);
-    const mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const lbl = d.latest_year && d.latest_month
-      ? ` (to ${mo[d.latest_month-1]} ${d.latest_year})`  : "";
-    document.getElementById("stat3m").title   = `Last 3 months avg qty${lbl}`;
-    document.getElementById("stat6m").title   = `Last 6 months avg qty${lbl}`;
-    document.getElementById("stat12m").title  = `Last 12 months avg qty${lbl}`;
-    document.getElementById("statBase").title = `Average of 3M / 6M / 12M${lbl}`;
     return d.base_sales || 0;
   }
 
   function renderPipeline(stockTotal, waterTotal, factoryTotal, baseSales){
-    const bs = baseSales || _baseSales;
-    if (!bs) return;
-    const s   = stockTotal;
-    const sw  = stockTotal + waterTotal;
-    const swf = stockTotal + waterTotal + factoryTotal;
-    document.getElementById("vPipeS").textContent   = fmtPipe(s   / bs);
-    document.getElementById("vPipeSW").textContent  = fmtPipe(sw  / bs);
-    document.getElementById("vPipeSWF").textContent = fmtPipe(swf / bs);
-    document.getElementById("statPipeS").title   = `Stock ${fmtQty(s)} ÷ Base Sales ${fmtQty(bs)}`;
-    document.getElementById("statPipeSW").title  = `(Stock + Water) ${fmtQty(sw)} ÷ Base Sales ${fmtQty(bs)}`;
-    document.getElementById("statPipeSWF").title = `(Stock + Water + Factory) ${fmtQty(swf)} ÷ Base Sales ${fmtQty(bs)}`;
+    _baseSales = baseSales || _baseSales;
   }
 
   // ---------------------- state table ----------------------
