@@ -1201,10 +1201,12 @@ def parse_date_ymd(x):
     s = str(x).strip()
     if not s or s.startswith("0000-00-00"):
         return None
-    try:
-        return datetime.strptime(s[:10], "%Y-%m-%d").date()
-    except:
-        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%Y%m%d"):
+        try:
+            return datetime.strptime(s[:10], fmt).date()
+        except:
+            pass
+    return None
 
 def clamp01(v):
     return 0.0 if v < 0 else (1.0 if v > 1 else v)
