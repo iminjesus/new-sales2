@@ -477,7 +477,9 @@ function cutoffIdxFromBreakdown(rows, N){
 // Future days (beyond the last data day) are estimated at 5/7 ratio.
 function computeWorkingDaysInfo(cutRows) {
   const today = new Date();
-  const calendarDays = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const year  = today.getFullYear();
+  const month = today.getMonth(); // 0-based
+  const calendarDays = new Date(year, month + 1, 0).getDate();
 
   // Sum values per day across all group labels
   const totalPerDay = {};
@@ -493,6 +495,8 @@ function computeWorkingDaysInfo(cutRows) {
   const isWorkingDay = new Array(31).fill(false);
   let workingDaysElapsed = 0;
   let lastWorkingDay = 0; // 1-based
+
+  // Past days: working if total company sales >= 10
   for (let d = 1; d <= maxDay; d++) {
     if ((totalPerDay[d] || 0) >= 10) {
       isWorkingDay[d - 1] = true;
@@ -501,9 +505,19 @@ function computeWorkingDaysInfo(cutRows) {
     }
   }
 
+  // Future days (beyond last data day): working if Mon–Fri
+  // JS getDay(): 0=Sun, 1=Mon, …, 5=Fri, 6=Sat
+  let futureWorkingDays = 0;
+  for (let d = maxDay + 1; d <= calendarDays; d++) {
+    const dow = new Date(year, month, d).getDay();
+    if (dow >= 1 && dow <= 5) {
+      isWorkingDay[d - 1] = true;
+      futureWorkingDays++;
+    }
+  }
+
   const lastWorkingDayIdx = lastWorkingDay > 0 ? lastWorkingDay - 1 : -1; // 0-based index
-  const remainingDays = Math.max(0, calendarDays - maxDay);
-  const totalWorkingDays = workingDaysElapsed + remainingDays * (5 / 7);
+  const totalWorkingDays = workingDaysElapsed + futureWorkingDays;
 
   return { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays, calendarDays, isWorkingDay };
 }
