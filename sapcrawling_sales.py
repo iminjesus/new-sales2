@@ -10,7 +10,7 @@ from openpyxl import load_workbook
 ZSDR24030 Sales Export → Local CSV
 - Sales Organization: 4200
 - Billing date: 1st of current month ~ last working day
-- Output: D:\Data-Anal website\rawdata\unlock\sales_thismonth.csv
+- Output: D:/Data-Anal website/rawdata/unlock/sales_thismonth.csv
 
 Pre-req:
 - SAP GUI must be OPEN and LOGGED IN
