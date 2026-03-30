@@ -1,5 +1,7 @@
 import os
 import re
+import csv
+from datetime import datetime
 import mysql.connector
 from dotenv import load_dotenv
 
@@ -20,6 +22,68 @@ TRUNCATE_BEFORE_LOAD = True
 # Windows CSV 줄바꿈은 보통 \r\n
 LINES_TERMINATED_BY = r"\r\n"
 
+# ---- sales_thismonth CSV ----
+SALES_CSV_PATH = r"D:\Data-Anal website\rawdata\unlock\sales_thismonth.csv"
+SALES_TABLE    = "sales_thismonth"
+
+# ZSDR24030 CSV header (sanitized) → sales_thismonth DB column
+# SAP export headers vary; add alternative names if needed
+SALES_HEADER_MAP = {
+    # Billing Date → day number
+    "billing_date": "day",
+    "fkdat":        "day",
+    "billing_date_fkdat": "day",
+    # S/O Type
+    "s_o_type":     "so_type",
+    "so_type":      "so_type",
+    "auart":        "so_type",
+    "order_type":   "so_type",
+    # Sold-to
+    "sold_to":          "sold_to",
+    "sold_to_party":    "sold_to",
+    "kunag":            "sold_to",
+    # Ship-to
+    "ship_to":          "ship_to",
+    "ship_to_party":    "ship_to",
+    "kunwe":            "ship_to",
+    # Material
+    "material":         "material",
+    "matnr":            "material",
+    # Qty
+    "bill_qty_in_sku":  "qty",
+    "bill_qty":         "qty",
+    "fkimg":            "qty",
+    # Amount
+    "net_value":        "amt",
+    "netwr":            "amt",
+    # State / Region
+    "state":            "state",
+    "sales_district":   "state",
+    "bzirk":            "state",
+    # BDE / Salesman
+    "bde":              "bde",
+    "salesperson":      "bde",
+    "vkgrp":            "bde",
+    # New columns
+    "cogs":             "cogs",
+    "dc_rate":          "dc_rate",
+    "p_rate":           "p_rate",
+    "p_rate_p_rate":    "p_rate",
+}
+
+# All DB columns we expect to populate (order matters for INSERT)
+SALES_DB_COLS = ["day", "qty", "amt", "sold_to", "ship_to", "material", "state", "bde",
+                 "so_type", "cogs", "dc_rate", "p_rate"]
+
+# New columns to ADD to the table if missing
+SALES_NEW_COLS = {
+    "so_type":  "VARCHAR(10)",
+    "cogs":     "DECIMAL(18,4)",
+    "dc_rate":  "DECIMAL(10,4)",
+    "p_rate":   "DECIMAL(10,4)",
+}
+
+
 # ---------------- HELPERS ----------------
 def sanitize_col(name: str) -> str:
     s = (name or "").strip()
@@ -34,14 +98,11 @@ def sanitize_col(name: str) -> str:
     # column cannot start with digit
     if re.match(r"^\d", s):
         s = "c_" + s
-    # avoid reserved-ish generic names duplicates handled later
     return s
 
 def read_header(csv_path: str):
     with open(csv_path, "r", encoding="utf-8-sig", errors="replace") as f:
         line = f.readline()
-    # crude CSV split that works for most SAP exports
-    # if your header contains commas inside quotes, tell me and I'll swap to csv.reader
     parts = [p.strip().strip('"') for p in line.strip().split(",")]
     return parts
 
@@ -59,20 +120,38 @@ def ensure_unique(cols):
     return out
 
 def mysql_path(p: str) -> str:
-    # MySQL LOAD DATA likes forward slashes
     return p.replace("\\", "/")
 
-# ---------------- MAIN ----------------
-def main():
-    if not os.path.exists(CSV_PATH):
-        raise FileNotFoundError(CSV_PATH)
+def parse_billing_date_day(val: str) -> str:
+    """
+    SAP billing date format: DD.MM.YYYY
+    Extract day number as string.
+    """
+    val = val.strip()
+    if not val:
+        return ""
+    # DD.MM.YYYY
+    try:
+        d = datetime.strptime(val, "%d.%m.%Y")
+        return str(d.day)
+    except:
+        pass
+    # Try YYYY-MM-DD or YYYYMMDD
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            d = datetime.strptime(val, fmt)
+            return str(d.day)
+        except:
+            pass
+    return val  # fallback: return as-is
 
+
+# ---------------- STOCK LOAD ----------------
+def load_stock(conn):
     raw_cols = read_header(CSV_PATH)
     cols = [sanitize_col(c) for c in raw_cols]
     cols = ensure_unique(cols)
 
-    # Build CREATE TABLE with all TEXT (safe first step)
-    # Later we can cast selected columns into DECIMAL/INT in a typed table.
     col_defs = ",\n  ".join([f"`{c}` TEXT" for c in cols])
 
     create_sql = f"""
@@ -94,15 +173,6 @@ def main():
     ({", ".join([f"`{c}`" for c in cols])});
     """
 
-    conn = mysql.connector.connect(
-        host=DB_HOST,
-        port=DB_PORT,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
-        allow_local_infile=True,
-    )
-
     cur = conn.cursor()
     try:
         cur.execute(create_sql)
@@ -113,10 +183,112 @@ def main():
 
         cur.execute(f"SELECT COUNT(*) FROM `{TABLE_NAME}`;")
         cnt = cur.fetchone()[0]
-        print("Loaded rows:", cnt)
-        print("Table:", TABLE_NAME)
+        print(f"[stock] Loaded rows: {cnt}")
     finally:
         cur.close()
+
+
+# ---------------- SALES LOAD ----------------
+def load_sales(conn):
+    if not os.path.exists(SALES_CSV_PATH):
+        raise FileNotFoundError(SALES_CSV_PATH)
+
+    # 1. Ensure new columns exist in the table
+    cur = conn.cursor()
+    try:
+        for col_name, col_type in SALES_NEW_COLS.items():
+            try:
+                cur.execute(
+                    f"ALTER TABLE `{SALES_TABLE}` ADD COLUMN `{col_name}` {col_type};"
+                )
+                print(f"  Added column: {col_name}")
+            except mysql.connector.Error as e:
+                if e.errno == 1060:  # Duplicate column
+                    pass
+                else:
+                    raise
+        conn.commit()
+    finally:
+        cur.close()
+
+    # 2. Read CSV and map headers to DB columns
+    with open(SALES_CSV_PATH, "r", encoding="utf-8-sig", errors="replace") as f:
+        reader = csv.reader(f)
+        raw_headers = next(reader)
+        sanitized = [sanitize_col(h) for h in raw_headers]
+
+        # Build (csv_col_index → db_col_name) mapping
+        col_idx_map = {}  # db_col_name → csv index
+        for i, s in enumerate(sanitized):
+            db_col = SALES_HEADER_MAP.get(s)
+            if db_col and db_col not in col_idx_map:
+                col_idx_map[db_col] = i
+
+        if not col_idx_map:
+            print(f"  [WARN] No matching columns found in {SALES_CSV_PATH}")
+            print(f"  CSV headers: {sanitized}")
+            return
+
+        # Columns we'll actually insert (intersection of SALES_DB_COLS and what we found)
+        insert_cols = [c for c in SALES_DB_COLS if c in col_idx_map]
+        print(f"  Mapped columns: {insert_cols}")
+
+        placeholders = ", ".join(["%s"] * len(insert_cols))
+        col_names    = ", ".join([f"`{c}`" for c in insert_cols])
+        insert_sql   = f"INSERT INTO `{SALES_TABLE}` ({col_names}) VALUES ({placeholders})"
+
+        # 3. Truncate and insert
+        cur = conn.cursor()
+        try:
+            cur.execute(f"TRUNCATE TABLE `{SALES_TABLE}`;")
+
+            batch = []
+            for row in reader:
+                if not any(v.strip() for v in row):
+                    continue  # skip empty rows
+                values = []
+                for db_col in insert_cols:
+                    idx = col_idx_map[db_col]
+                    raw = row[idx].strip() if idx < len(row) else ""
+                    if db_col == "day":
+                        raw = parse_billing_date_day(raw)
+                    values.append(raw if raw != "" else None)
+                batch.append(tuple(values))
+
+                if len(batch) >= 500:
+                    cur.executemany(insert_sql, batch)
+                    batch = []
+
+            if batch:
+                cur.executemany(insert_sql, batch)
+
+            conn.commit()
+            cur.execute(f"SELECT COUNT(*) FROM `{SALES_TABLE}`;")
+            cnt = cur.fetchone()[0]
+            print(f"[sales] Loaded rows: {cnt}")
+        finally:
+            cur.close()
+
+
+# ---------------- MAIN ----------------
+def main():
+    conn = mysql.connector.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        allow_local_infile=True,
+    )
+
+    try:
+        if not os.path.exists(CSV_PATH):
+            raise FileNotFoundError(CSV_PATH)
+        load_stock(conn)
+        load_sales(conn)
+        print("Table:", TABLE_NAME)
+        print("Table:", SALES_TABLE)
+    finally:
         conn.close()
 
 if __name__ == "__main__":

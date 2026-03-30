@@ -7,15 +7,13 @@ from datetime import datetime, date, timedelta
 from openpyxl import load_workbook
 
 """
-ZSDR24030 Sales Export → NAS
+ZSDR24030 Sales Export → Local CSV
 - Sales Organization: 4200
 - Billing date: 1st of current month ~ last working day
-- Output: \\NAS\Marketing Operation\05. Sales Targets, Results & Analysis\
-          2-1 Daily Sales Report\Data\sales_YYYYMMDD.csv
+- Output: D:\Data-Anal website\rawdata\unlock\sales_thismonth.csv
 
 Pre-req:
 - SAP GUI must be OPEN and LOGGED IN
-- NAS must be accessible
 - Packages: pywin32, openpyxl
 """
 
@@ -26,7 +24,7 @@ SALES_ORG      = "4200"
 SAP_EXPORT_DIR  = r"C:\temp"
 SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 
-NAS_DIR = r"\\NAS\Marketing Operation\05. Sales Targets, Results & Analysis\2-1 Daily Sales Report\Data"
+OUT_CSV = r"D:\Data-Anal website\rawdata\unlock\sales_thismonth.csv"
 
 DELETE_XLSX_AFTER_CONVERT = False
 MIN_CSV_SIZE = 200  # bytes
@@ -314,20 +312,13 @@ def main():
     date_from = sap_date(d_from)
     date_to   = sap_date(d_to)
 
-    # Output filename: sales_YYYYMMDD.csv (based on last business day)
-    out_filename = f"sales_{d_to.strftime('%Y%m%d')}.csv"
-    out_csv = os.path.join(NAS_DIR, out_filename)
-
     print(f"Billing date : {date_from} ~ {date_to}")
-    print(f"Output file  : {out_csv}")
+    print(f"Output file  : {OUT_CSV}")
 
-    # Check NAS accessibility
-    if not os.path.isdir(NAS_DIR):
-        raise RuntimeError(f"NAS path not accessible: {NAS_DIR}")
-
-    if os.path.exists(out_csv):
+    ensure_out_dir(OUT_CSV)
+    if os.path.exists(OUT_CSV):
         try:
-            os.remove(out_csv)
+            os.remove(OUT_CSV)
         except:
             pass
 
@@ -375,12 +366,12 @@ def main():
         raise RuntimeError(f"Could not find SAP export XLSX in {SAP_EXPORT_DIR}")
 
     print("Detected XLSX:", xlsx_path)
-    xlsx_to_csv(xlsx_path, out_csv)
+    xlsx_to_csv(xlsx_path, OUT_CSV)
 
-    if not file_ok(out_csv, MIN_CSV_SIZE):
+    if not file_ok(OUT_CSV, MIN_CSV_SIZE):
         raise RuntimeError("CSV conversion failed or file too small.")
 
-    print("CSV saved:", out_csv)
+    print("CSV saved:", OUT_CSV)
 
     if DELETE_XLSX_AFTER_CONVERT:
         try:
