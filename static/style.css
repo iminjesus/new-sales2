@@ -312,7 +312,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 }
 #stockMap { width: 100%; height: 100% !important; }
 #stockSidePanel {
-  flex: 0 0 560px;
+  flex: 0 0 750px;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -678,7 +678,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   font-weight: 600;
   font-size: 11px;
   letter-spacing: 0.03em;
-  padding: 6px 12px;
+  padding: 5px 8px;
   text-align: right;
   border-bottom: 1px solid #e5e7eb;
   white-space: nowrap;
@@ -686,7 +686,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 #stateTable thead th:first-child { text-align: left; }
 #stateTable tbody tr:hover { background: #f9fafb; }
 #stateTable tbody td {
-  padding: 5px 12px;
+  padding: 4px 8px;
   text-align: right;
   border-bottom: 1px solid #f3f4f6;
   color: #374151;
@@ -710,7 +710,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   font-weight: 700;
   border-top: 2px solid #bfdbfe;
   color: #1e40af;
-  padding: 6px 12px;
+  padding: 4px 8px;
   text-align: right;
 }
 #stateTable tfoot tr.st-total td:first-child {
