@@ -227,6 +227,9 @@ def load_sales(conn):
         raw_headers = next(reader)
         sanitized = [sanitize_col(h) for h in raw_headers]
 
+        print(f"  [DEBUG] Raw headers   : {raw_headers}")
+        print(f"  [DEBUG] Sanitized     : {sanitized}")
+
         # Build (csv_col_index → db_col_name) mapping
         col_idx_map = {}  # db_col_name → csv index
         for i, s in enumerate(sanitized):
@@ -234,9 +237,10 @@ def load_sales(conn):
             if db_col and db_col not in col_idx_map:
                 col_idx_map[db_col] = i
 
+        print(f"  [DEBUG] col_idx_map   : {col_idx_map}")
+
         if not col_idx_map:
             print(f"  [WARN] No matching columns found in {SALES_CSV_PATH}")
-            print(f"  CSV headers: {sanitized}")
             return
 
         # Columns we'll actually insert (intersection of SALES_DB_COLS and what we found)
@@ -253,6 +257,7 @@ def load_sales(conn):
             cur.execute(f"TRUNCATE TABLE `{SALES_TABLE}`;")
 
             batch = []
+            debug_shown = False
             for row in reader:
                 if not any(v.strip() for v in row):
                     continue  # skip empty rows
@@ -261,6 +266,9 @@ def load_sales(conn):
                     idx = col_idx_map[db_col]
                     raw = row[idx].strip() if idx < len(row) else ""
                     if db_col == "day":
+                        if not debug_shown:
+                            print(f"  [DEBUG] First billing date raw value: {raw!r}")
+                            debug_shown = True
                         raw = parse_billing_date_day(raw)
                     values.append(raw if raw != "" else None)
                 batch.append(tuple(values))
