@@ -571,7 +571,8 @@ async function drawDailyTotals(){
     fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      top_limit:filters.top_limit||0, month: new Date().getMonth() + 1
     }).toString()}`),
     fetchDailyBreakdownWithGroup("region"),
     fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
