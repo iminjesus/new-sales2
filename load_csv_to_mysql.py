@@ -262,8 +262,11 @@ def load_sales(conn):
                     raw = row[idx].strip() if idx < len(row) else ""
                     if db_col == "day":
                         raw = parse_billing_date_day(raw)
+                        if not raw:
+                            break  # 합계/소계 행 → 건너뜀
                     values.append(raw if raw != "" else None)
-                batch.append(tuple(values))
+                else:
+                    batch.append(tuple(values))
 
                 if len(batch) >= 500:
                     cur.executemany(insert_sql, batch)
