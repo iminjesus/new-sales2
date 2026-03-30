@@ -124,26 +124,36 @@ def mysql_path(p: str) -> str:
 
 def parse_billing_date_day(val: str) -> str:
     """
-    SAP billing date format: DD.MM.YYYY
-    Extract day number as string.
+    Extract day number from various SAP/openpyxl date formats.
+    openpyxl datetime → str() gives "2026-03-01 00:00:00"
+    SAP screen input format: DD.MM.YYYY
+    Returns day as integer string, e.g. "1", "15"
     """
     val = val.strip()
     if not val:
         return ""
-    # DD.MM.YYYY
-    try:
-        d = datetime.strptime(val, "%d.%m.%Y")
-        return str(d.day)
-    except:
-        pass
-    # Try YYYY-MM-DD or YYYYMMDD
-    for fmt in ("%Y-%m-%d", "%Y%m%d", "%d/%m/%Y", "%m/%d/%Y"):
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",   # openpyxl datetime str
+        "%Y-%m-%d",            # ISO date
+        "%d.%m.%Y",            # SAP screen format
+        "%Y%m%d",              # compact
+        "%d/%m/%Y",
+        "%m/%d/%Y",
+    ):
         try:
             d = datetime.strptime(val, fmt)
             return str(d.day)
         except:
             pass
-    return val  # fallback: return as-is
+    # Last resort: if val looks like a plain integer already
+    try:
+        day = int(float(val))
+        if 1 <= day <= 31:
+            return str(day)
+    except:
+        pass
+    print(f"  [WARN] Could not parse billing date: {val!r}")
+    return ""
 
 
 # ---------------- STOCK LOAD ----------------
