@@ -124,48 +124,42 @@ def login(driver, wait):
 
 def search_tyres(driver, wait, query):
     driver.get(SEARCH_URL)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.select2-search__field, input[type='search']")))
 
-    # The search field uses Select2 — click the container first then type
+    # Wait for the Select2 container to be present on the page
+    search_container = wait.until(
+        EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-selection, .select2-container"))
+    )
+    search_container.click()
+    time.sleep(0.8)
+
+    # After clicking, the search input appears inside the dropdown
+    search_input = wait.until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, ".select2-search__field"))
+    )
+    search_input.send_keys(query)
+    time.sleep(1.5)  # wait for autocomplete options to appear
+
+    # Click the first matching result from the dropdown list
     try:
-        search_container = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-selection"))
+        first_option = wait.until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-results__option:not(.select2-results__option--group)"))
         )
-        search_container.click()
-        time.sleep(0.5)
-
-        search_input = wait.until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".select2-search__field"))
-        )
-        search_input.clear()
-        search_input.send_keys(query)
-        time.sleep(1.5)  # wait for autocomplete suggestions
-
-        # Pick the first suggestion or just press Enter
-        try:
-            first_option = wait.until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-results__option"))
-            )
-            first_option.click()
-        except Exception:
-            search_input.send_keys(Keys.RETURN)
-    except Exception as e:
-        print(f"[WARN] Select2 interaction failed: {e}. Trying plain input.")
-        plain_input = driver.find_element(By.CSS_SELECTOR, "input[name*='earch'], input[id*='earch']")
-        plain_input.clear()
-        plain_input.send_keys(query)
-        plain_input.send_keys(Keys.RETURN)
-
-    # Click the Search button
-    try:
-        search_btn = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, "input[value='Search'], button[type='submit']"))
-        )
-        search_btn.click()
+        first_option.click()
+        print(f"Selected option: {first_option.text}")
     except Exception:
-        pass
+        # No dropdown option — just close and proceed with Search button
+        search_input.send_keys(Keys.ESCAPE)
 
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr, .product-row, tr[data-sku]")))
+    time.sleep(0.5)
+
+    # Click the red Search button
+    search_btn = wait.until(
+        EC.element_to_be_clickable((By.XPATH, "//input[@value='Search'] | //button[normalize-space()='Search']"))
+    )
+    search_btn.click()
+
+    # Wait for results table to appear
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
     time.sleep(1)
     print(f"Search results loaded for: {query}")
 
