@@ -1,0 +1,262 @@
+import re
+import os
+import time
+from datetime import datetime
+from dotenv import load_dotenv
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+load_dotenv()
+
+TEMPE_USERNAME = os.getenv("TEMPE_USERNAME")
+TEMPE_PASSWORD = os.getenv("TEMPE_PASSWORD")
+
+LOGIN_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Account/Login"
+SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
+
+# Tyre size queries to search (format: WWWAALLRR -> e.g. 1756514 = 175/65R14)
+SEARCH_QUERIES = ["1756514"]
+
+current_month = datetime.now().strftime('%b')
+current_year = datetime.now().strftime('%Y')
+OUTPUT_FILE = f"Tempe_{current_month}_{current_year}.txt"
+
+
+def clean_text(text):
+    return text.strip() if text else ""
+
+
+def extract_brand(description):
+    """Extract the brand (first word) from the product description."""
+    parts = description.strip().split()
+    return parts[0] if parts else ""
+
+
+def init_driver():
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--window-size=1920,1080")
+    return webdriver.Chrome(options=options)
+
+
+def login(driver, wait):
+    driver.get(LOGIN_URL)
+    wait.until(EC.presence_of_element_located((By.ID, "UserName")))
+
+    driver.find_element(By.ID, "UserName").clear()
+    driver.find_element(By.ID, "UserName").send_keys(TEMPE_USERNAME)
+    driver.find_element(By.ID, "Password").clear()
+    driver.find_element(By.ID, "Password").send_keys(TEMPE_PASSWORD)
+    driver.find_element(By.ID, "Password").send_keys(Keys.RETURN)
+
+    wait.until(EC.url_contains("/WebOrder/Product"))
+    print("Login successful.")
+
+
+def search_tyres(driver, wait, query):
+    driver.get(SEARCH_URL)
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "input.select2-search__field, input[type='search']")))
+
+    # The search field uses Select2 — click the container first then type
+    try:
+        search_container = wait.until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-selection"))
+        )
+        search_container.click()
+        time.sleep(0.5)
+
+        search_input = wait.until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, ".select2-search__field"))
+        )
+        search_input.clear()
+        search_input.send_keys(query)
+        time.sleep(1.5)  # wait for autocomplete suggestions
+
+        # Pick the first suggestion or just press Enter
+        try:
+            first_option = wait.until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-results__option"))
+            )
+            first_option.click()
+        except Exception:
+            search_input.send_keys(Keys.RETURN)
+    except Exception as e:
+        print(f"[WARN] Select2 interaction failed: {e}. Trying plain input.")
+        plain_input = driver.find_element(By.CSS_SELECTOR, "input[name*='earch'], input[id*='earch']")
+        plain_input.clear()
+        plain_input.send_keys(query)
+        plain_input.send_keys(Keys.RETURN)
+
+    # Click the Search button
+    try:
+        search_btn = wait.until(
+            EC.element_to_be_clickable((By.CSS_SELECTOR, "input[value='Search'], button[type='submit']"))
+        )
+        search_btn.click()
+    except Exception:
+        pass
+
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr, .product-row, tr[data-sku]")))
+    time.sleep(1)
+    print(f"Search results loaded for: {query}")
+
+
+def get_cost_for_row(driver, wait, row):
+    """Click 'Get Cost' link in the row and return the revealed cost."""
+    try:
+        get_cost_link = row.find_element(By.XPATH, ".//a[contains(text(),'Get Cost')]")
+        driver.execute_script("arguments[0].scrollIntoView(true);", get_cost_link)
+        driver.execute_script("arguments[0].click();", get_cost_link)
+
+        # Wait for the cost value to replace the link in the same cell
+        cost_cell = get_cost_link.find_element(By.XPATH, "..")
+        wait.until(lambda d: "Get Cost" not in cost_cell.text)
+        cost_text = clean_text(cost_cell.text)
+        return re.sub(r"[^\d.]", "", cost_text)
+    except Exception:
+        return ""
+
+
+def scrape_rows(driver, wait):
+    """Scrape all rows on the current results page."""
+    rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
+    results = []
+
+    for row in rows:
+        cells = row.find_elements(By.TAG_NAME, "td")
+        if len(cells) < 4:
+            continue
+
+        try:
+            # SIZE cell — first column, may contain size + SKU
+            size_cell = clean_text(cells[0].text)
+            size_lines = size_cell.splitlines()
+            size = size_lines[0] if size_lines else ""
+            sku = ""
+            for line in size_lines[1:]:
+                if "SKU" in line.upper():
+                    sku = line.replace("SKU:", "").replace("SKU", "").strip()
+                    break
+
+            # DESCRIPTION cell
+            description = clean_text(cells[1].text) if len(cells) > 1 else ""
+            # Remove duplicate load/speed rating sub-line that sometimes appears
+            description_lines = description.splitlines()
+            description = description_lines[0] if description_lines else description
+
+            brand = extract_brand(description)
+
+            # COST cell — click "Get Cost"
+            cost = get_cost_for_row(driver, wait, row)
+
+            # PRICE cell
+            price_text = ""
+            for i in range(2, len(cells)):
+                txt = clean_text(cells[i].text)
+                if txt.startswith("$"):
+                    price_text = re.sub(r"[^\d.]", "", txt)
+                    break
+
+            # ON HAND cell (green badge)
+            on_hand = ""
+            try:
+                on_hand_elem = row.find_element(By.CSS_SELECTOR, ".btn-success, .badge-success, td.on-hand, .stock-qty")
+                on_hand = clean_text(on_hand_elem.text)
+            except Exception:
+                # Fallback: look for numeric-ish cell near the end
+                for i in range(len(cells) - 1, max(len(cells) - 4, 0), -1):
+                    txt = clean_text(cells[i].text)
+                    if re.match(r"^\d+\+?$", txt):
+                        on_hand = txt
+                        break
+
+            results.append({
+                "size": size,
+                "sku": sku,
+                "description": description,
+                "brand": brand,
+                "cost": cost,
+                "price": price_text,
+                "on_hand": on_hand,
+            })
+
+        except Exception as e:
+            print(f"[WARN] Failed to parse row: {e}")
+            continue
+
+    return results
+
+
+def has_next_page(driver):
+    """Return True if a 'next page' control exists and is enabled."""
+    try:
+        next_btn = driver.find_element(
+            By.CSS_SELECTOR,
+            "a[rel='next'], li.next:not(.disabled) a, .pagination .next:not(.disabled) a"
+        )
+        return next_btn.is_displayed()
+    except Exception:
+        return False
+
+
+def go_next_page(driver, wait):
+    next_btn = driver.find_element(
+        By.CSS_SELECTOR,
+        "a[rel='next'], li.next:not(.disabled) a, .pagination .next:not(.disabled) a"
+    )
+    driver.execute_script("arguments[0].click();", next_btn)
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
+    time.sleep(1)
+
+
+def main():
+    if not TEMPE_USERNAME or not TEMPE_PASSWORD:
+        raise RuntimeError(
+            "Missing credentials. Set TEMPE_USERNAME and TEMPE_PASSWORD in your .env file."
+        )
+
+    driver = init_driver()
+    wait = WebDriverWait(driver, 20)
+
+    try:
+        login(driver, wait)
+
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            for query in SEARCH_QUERIES:
+                print(f"\n=== Searching: {query} ===")
+                search_tyres(driver, wait, query)
+
+                page = 1
+                while True:
+                    print(f"  Scraping page {page}...")
+                    rows = scrape_rows(driver, wait)
+
+                    for r in rows:
+                        line = (
+                            f"{current_month}_{current_year}|TEMPE|{r['brand']}|"
+                            f"{r['description']}|{r['sku']}|{r['size']}|"
+                            f"{r['cost']}|{r['price']}|{r['on_hand']}\n"
+                        )
+                        f.write(line)
+
+                    print(f"  -> {len(rows)} products written from page {page}")
+
+                    if has_next_page(driver):
+                        go_next_page(driver, wait)
+                        page += 1
+                    else:
+                        break
+
+        print(f"\nDone. Output saved to: {OUTPUT_FILE}")
+
+    finally:
+        driver.quit()
+
+
+if __name__ == "__main__":
+    main()
