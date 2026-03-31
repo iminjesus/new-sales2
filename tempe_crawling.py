@@ -35,7 +35,7 @@ def init_driver():
 
 
 def wait_for_manual_login(driver):
-    driver.get(SEARCH_URL)
+    driver.get("https://orders.tempetyreswholesale.com.au/weborder")
     print("\n" + "="*60)
     print("Chrome 브라우저가 열렸습니다.")
     print("1. 로그인 하세요")
@@ -47,8 +47,15 @@ def wait_for_manual_login(driver):
 
 
 def search_tyres(driver, wait, query):
-    driver.get(SEARCH_URL)
-    time.sleep(2)
+    # If not already on the search page, click the nav tab
+    if "Product/Search" not in driver.current_url:
+        try:
+            tab = driver.find_element(By.XPATH, "//a[contains(@href,'Product/Search')]")
+            driver.execute_script("arguments[0].click();", tab)
+            time.sleep(2)
+        except Exception:
+            pass
+
     print(f"Search page: {driver.current_url}")
 
     search_container = wait.until(
