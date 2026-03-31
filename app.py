@@ -3653,6 +3653,7 @@ def api_rebate_data():
             FROM sales_thismonth s
             JOIN carrying_2602 mat ON mat.m_code = s.material
             WHERE mat.brand IN ('HK','LF')
+              AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
             GROUP BY s.sold_to, s.ship_to, mat.brand, mat.line
         """)
         ship_sales      = {}   # (sold_to, ship_to, brand) -> {qty, amt}  all lines
@@ -4045,6 +4046,7 @@ def api_rebate_export():
             FROM sales_thismonth s
             JOIN carrying_2602 mat ON mat.m_code = s.material
             WHERE mat.brand IN ('HK','LF')
+              AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
             GROUP BY s.sold_to, s.ship_to, mat.brand
         """)
         ship_sales = {}; ship_idx = {}
