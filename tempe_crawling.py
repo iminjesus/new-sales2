@@ -113,36 +113,20 @@ def scrape_rows(driver, wait):
     """Click all Get Cost links first, then collect all row data."""
     click_all_get_costs(driver, wait)
 
-    # Collect all product rows — rows that have a $ price cell
-    rows = driver.find_elements(By.XPATH,
-        "//tr[.//td[starts-with(normalize-space(.),'$')]]")
-    print(f"  Collecting {len(rows)} rows")
+    driver.save_screenshot("after_get_cost.png")
+    print("  Saved after_get_cost.png")
 
-    results = []
-    for row in rows:
-        try:
-            cells = row.find_elements(By.TAG_NAME, "td")
-            if len(cells) < 2:
-                continue
+    # Debug: find ALL elements containing "$" to understand page structure
+    dollar_els = driver.find_elements(By.XPATH, "//*[contains(text(),'$')]")
+    print(f"  Elements with '$': {len(dollar_els)}")
+    for el in dollar_els[:10]:
+        parent = el.find_element(By.XPATH, "..")
+        gp = parent.find_element(By.XPATH, "..")
+        print(f"    tag={el.tag_name} class={el.get_attribute('class')!r} text={el.text!r}")
+        print(f"      parent: tag={parent.tag_name} class={parent.get_attribute('class')!r}")
+        print(f"      grandparent: tag={gp.tag_name} class={gp.get_attribute('class')!r}")
 
-            size = clean(cells[0].text).splitlines()[0]
-            description = clean(cells[1].text).splitlines()[0] if len(cells) > 1 else ""
-
-            # Find $ cells: first = cost, second = price
-            dollar_cells = [c for c in cells if re.match(r'^\$\d', clean(c.text))]
-            cost  = re.sub(r"[^\d.]", "", clean(dollar_cells[0].text)) if len(dollar_cells) >= 1 else ""
-            price = re.sub(r"[^\d.]", "", clean(dollar_cells[1].text)) if len(dollar_cells) >= 2 else ""
-
-            if not size:
-                continue
-
-            results.append({"size": size, "description": description, "cost": cost, "price": price})
-            print(f"  {size} | {description[:45]} | cost={cost} | price={price}")
-
-        except Exception as e:
-            print(f"  [WARN] {e}")
-
-    return results
+    return []
 
 
 def has_next_page(driver):
