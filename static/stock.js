@@ -430,9 +430,9 @@
     const tpipeSWF = totBase ? fmtPipe((totStock+totWater+totFactory) / totBase) : "—";
     tfoot.innerHTML = `<tr class="st-total">
       <td>TOTAL</td>
-      <td>${fmtQty(rows.length ? Math.round(totQ3/rows.length) : 0)}</td>
-      <td>${fmtQty(rows.length ? Math.round(totQ6/rows.length) : 0)}</td>
-      <td>${fmtQty(rows.length ? Math.round(totQ12/rows.length) : 0)}</td>
+      <td>${fmtQty(totQ3)}</td>
+      <td>${fmtQty(totQ6)}</td>
+      <td>${fmtQty(totQ12)}</td>
       <td class="st-base">${fmtQty(totBase)}</td>
       <td class="st-qty">${fmtQty(totStock)}</td>
       <td class="st-qty">${fmtQty(totWater)}</td>
