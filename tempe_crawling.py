@@ -113,20 +113,57 @@ def scrape_rows(driver, wait):
     """Click all Get Cost links first, then collect all row data."""
     click_all_get_costs(driver, wait)
 
-    driver.save_screenshot("after_get_cost.png")
-    print("  Saved after_get_cost.png")
+    rows = driver.find_elements(By.CSS_SELECTOR, "div.product-data-list")
+    print(f"  Collecting {len(rows)} rows")
 
-    # Debug: find ALL elements containing "$" to understand page structure
-    dollar_els = driver.find_elements(By.XPATH, "//*[contains(text(),'$')]")
-    print(f"  Elements with '$': {len(dollar_els)}")
-    for el in dollar_els[:10]:
-        parent = el.find_element(By.XPATH, "..")
-        gp = parent.find_element(By.XPATH, "..")
-        print(f"    tag={el.tag_name} class={el.get_attribute('class')!r} text={el.text!r}")
-        print(f"      parent: tag={parent.tag_name} class={parent.get_attribute('class')!r}")
-        print(f"      grandparent: tag={gp.tag_name} class={gp.get_attribute('class')!r}")
+    results = []
+    for row in rows:
+        try:
+            # All ng-binding span texts in DOM order
+            all_spans = row.find_elements(By.CSS_SELECTOR, "span.ng-binding")
+            texts = [clean(el.text) for el in all_spans]
 
-    return []
+            # Separate $ values from text values
+            dollar_texts = [t for t in texts if re.match(r'^\$[\d.]', t)]
+            other_texts  = [t for t in texts if t and not re.match(r'^\$', t)]
+
+            # Cost: span.clickable inside col-xs-7
+            cost = ""
+            try:
+                cost_el = row.find_element(By.CSS_SELECTOR,
+                    "div[class*='col-xs-7'] span.clickable, div[class*='col-xs-7'] span.ng-binding")
+                val = clean(cost_el.text)
+                if re.match(r'^\$[\d.]', val):
+                    cost = re.sub(r"[^\d.]", "", val)
+            except Exception:
+                cost = re.sub(r"[^\d.]", "", dollar_texts[0]) if dollar_texts else ""
+
+            # Price: span inside col-xs-9
+            price = ""
+            try:
+                price_el = row.find_element(By.CSS_SELECTOR,
+                    "div[class*='col-xs-9'] span.ng-binding")
+                val = clean(price_el.text)
+                if re.match(r'^\$[\d.]', val):
+                    price = re.sub(r"[^\d.]", "", val)
+            except Exception:
+                price = re.sub(r"[^\d.]", "", dollar_texts[1]) if len(dollar_texts) >= 2 else ""
+
+            # SIZE and DESCRIPTION: first two non-$ ng-binding texts
+            size        = other_texts[0] if other_texts else ""
+            description = other_texts[1] if len(other_texts) > 1 else ""
+
+            if not size:
+                continue
+
+            results.append({"size": size, "description": description,
+                            "cost": cost, "price": price})
+            print(f"  {size} | {description[:45]} | cost={cost} | price={price}")
+
+        except Exception as e:
+            print(f"  [WARN] {e}")
+
+    return results
 
 
 def has_next_page(driver):
