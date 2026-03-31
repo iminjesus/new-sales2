@@ -69,9 +69,13 @@ def search_tyres(driver, wait, query):
 
     time.sleep(2)
 
-    # Wait for results — detect by "Get Cost" links appearing
+    # Close the dropdown by pressing Escape
+    driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+    time.sleep(1)
+
+    # Wait for results — detect by "Get Cost" text in any element
     wait.until(EC.presence_of_element_located(
-        (By.XPATH, "//*[contains(text(),'Get Cost') or contains(text(),'get-cost')]")
+        (By.XPATH, "//*[contains(text(),'Get Cost')]")
     ))
     time.sleep(1)
     print("Results loaded.")
@@ -89,21 +93,17 @@ def scrape_rows(driver, wait):
     iframes = driver.find_elements(By.TAG_NAME, "iframe")
     print(f"  iframes found: {len(iframes)}")
 
-    # Print ALL anchor tags on page
-    all_links = driver.find_elements(By.TAG_NAME, "a")
-    print(f"  Total <a> tags: {len(all_links)}")
-    for lnk in all_links[:30]:
-        print(f"    href={lnk.get_attribute('href')!r} text={lnk.text!r}")
-
-    # Find every "Get Cost" link on the page
+    # Find "Get Cost" in ANY element (not just <a>)
     get_cost_links = driver.find_elements(
-        By.XPATH, "//a[contains(text(),'Get Cost')]"
+        By.XPATH, "//*[contains(text(),'Get Cost')]"
     )
-    print(f"  Found {len(get_cost_links)} 'Get Cost' links")
+    print(f"  Found {len(get_cost_links)} 'Get Cost' elements")
+    for el in get_cost_links[:5]:
+        print(f"    tag={el.tag_name} class={el.get_attribute('class')!r} text={el.text!r}")
 
     for i, link in enumerate(get_cost_links):
         try:
-            # Scroll into view and click "Get Cost"
+            # Scroll into view and click "Get Cost" (any element type)
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
             time.sleep(0.3)
             driver.execute_script("arguments[0].click();", link)
