@@ -135,6 +135,16 @@ function makeStacked(id,labels,datasets,title,max){ return new Chart(document.ge
 const monthsLabels=()=>["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const daysLabels=()=>[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
 const yearsLabels=()=>[2021,2022,2023,2024,2025];
+// 이달 첫 번째 비즈니스 데이(월~금) 당일 또는 그 이전이면 전달을 반환 (1-based)
+function effectiveMonth(){
+  const today=new Date();
+  const yr=today.getFullYear(), mo=today.getMonth(); // mo: 0-based
+  let firstBD=new Date(yr,mo,1);
+  while(firstBD.getDay()===0||firstBD.getDay()===6) firstBD.setDate(firstBD.getDate()+1);
+  if(today<=firstBD) return mo===0?12:mo; // mo===0 → prev=December(12), else mo (0-based prev = 1-based current-1)
+  return mo+1; // current month 1-based
+}
+function effectiveMonthIdx(){ return effectiveMonth()-1; } // 0-based
 function toCumulative(arr){const out=[];let run=0;for(const v of arr){run+=(+v||0);out.push(run);}return out;}
 function cumPerGroup(map){ const out={}; for(const k in map){out[k]=toCumulative(map[k]);} return out;}
 
@@ -470,8 +480,8 @@ function cutoffIdxFromBreakdown(rows, N){
 function computeWorkingDaysInfo(cutRows) {
   const today = new Date();
   const year  = today.getFullYear();
-  const month = today.getMonth(); // 0-based
-  const calendarDays = new Date(year, month + 1, 0).getDate();
+  const effMo = effectiveMonthIdx(); // 0-based, 전달 보정 적용
+  const calendarDays = new Date(year, effMo + 1, 0).getDate();
 
   // Sum values per day across all group labels
   const totalPerDay = {};
@@ -564,7 +574,7 @@ async function drawDailyTotals(){
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
-      top_limit:filters.top_limit||0, month: new Date().getMonth() + 1
+      top_limit:filters.top_limit||0, month: effectiveMonth()
     }).toString()}`),
     fetchDailyBreakdownWithGroup("region"),
     fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
@@ -612,7 +622,7 @@ async function drawDailyTotals(){
   }
 
   // fullMonthTarget = monthly target for current month (same source as table's "This Month")
-  const currentMonthIdx = new Date().getMonth();
+  const currentMonthIdx = effectiveMonthIdx();
   const fullMonthTarget = +((monthlyTargetRows || [])[currentMonthIdx]?.value) || 0;
 
   // Cumulative working days elapsed up to each day index (0-based)
