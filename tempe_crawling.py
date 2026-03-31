@@ -81,66 +81,66 @@ def search_tyres(driver, wait, query):
     print("Results loaded.")
 
 
-def scrape_rows(driver, wait):
-    """Find all 'Get Cost' links, click each one, then extract row data."""
-    results = []
-
-    # Screenshot to see what's actually on screen
-    driver.save_screenshot("scrape_debug.png")
-    print("  Saved scrape_debug.png")
-
-    # Print all frames/iframes present
-    iframes = driver.find_elements(By.TAG_NAME, "iframe")
-    print(f"  iframes found: {len(iframes)}")
-
-    # Find "Get Cost" in ANY element (not just <a>)
-    get_cost_links = driver.find_elements(
-        By.XPATH, "//*[contains(text(),'Get Cost')]"
-    )
-    print(f"  Found {len(get_cost_links)} 'Get Cost' elements")
-    for el in get_cost_links[:5]:
-        print(f"    tag={el.tag_name} class={el.get_attribute('class')!r} text={el.text!r}")
-
-    for i, link in enumerate(get_cost_links):
+def click_all_get_costs(driver, wait):
+    """Click every 'Get Cost' element one by one, always re-finding fresh elements."""
+    clicked = 0
+    max_iter = 500
+    for _ in range(max_iter):
+        els = driver.find_elements(By.XPATH, "//*[contains(text(),'Get Cost')]")
+        if not els:
+            break
+        el = els[0]
+        prev_count = len(els)
         try:
-            # Scroll into view and click "Get Cost" (any element type)
-            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
-            time.sleep(0.3)
-            driver.execute_script("arguments[0].click();", link)
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
+            time.sleep(0.2)
+            driver.execute_script("arguments[0].click();", el)
+            # Wait until this element disappears (replaced by cost or "Call For Availability")
+            wait.until(lambda d: len(d.find_elements(
+                By.XPATH, "//*[contains(text(),'Get Cost')]")) < prev_count)
+        except Exception:
+            # If click failed or timed out, skip by scrolling past
+            try:
+                driver.execute_script("arguments[0].style.display='none';", el)
+            except Exception:
+                break
+        time.sleep(0.2)
+        clicked += 1
+    print(f"  Clicked {clicked} 'Get Cost' elements")
 
-            # Wait until the link's parent cell no longer says "Get Cost"
-            cost_cell = link.find_element(By.XPATH, "..")
-            wait.until(lambda d, c=cost_cell: "Get Cost" not in c.text)
-            cost = re.sub(r"[^\d.]", "", clean(cost_cell.text))
 
-            # Walk up to find the row (<tr>)
-            row = link.find_element(By.XPATH, "ancestor::tr[1]")
+def scrape_rows(driver, wait):
+    """Click all Get Cost links first, then collect all row data."""
+    click_all_get_costs(driver, wait)
+
+    # Collect all product rows — rows that have a $ price cell
+    rows = driver.find_elements(By.XPATH,
+        "//tr[.//td[starts-with(normalize-space(.),'$')]]")
+    print(f"  Collecting {len(rows)} rows")
+
+    results = []
+    for row in rows:
+        try:
             cells = row.find_elements(By.TAG_NAME, "td")
+            if len(cells) < 2:
+                continue
 
-            # SIZE — first td, first line
-            size = clean(cells[0].text).splitlines()[0] if cells else ""
-
-            # DESCRIPTION — second td, first line
+            size = clean(cells[0].text).splitlines()[0]
             description = clean(cells[1].text).splitlines()[0] if len(cells) > 1 else ""
 
-            # PRICE — first td whose text starts with "$" (excluding cost cell)
-            price = ""
-            for cell in cells:
-                txt = clean(cell.text)
-                if txt.startswith("$"):
-                    price = re.sub(r"[^\d.]", "", txt)
-                    break
+            # Find $ cells: first = cost, second = price
+            dollar_cells = [c for c in cells if re.match(r'^\$\d', clean(c.text))]
+            cost  = re.sub(r"[^\d.]", "", clean(dollar_cells[0].text)) if len(dollar_cells) >= 1 else ""
+            price = re.sub(r"[^\d.]", "", clean(dollar_cells[1].text)) if len(dollar_cells) >= 2 else ""
 
-            results.append({
-                "size": size,
-                "description": description,
-                "cost": cost,
-                "price": price,
-            })
-            print(f"  [{i+1}] {size} | {description} | cost={cost} | price={price}")
+            if not size:
+                continue
+
+            results.append({"size": size, "description": description, "cost": cost, "price": price})
+            print(f"  {size} | {description[:45]} | cost={cost} | price={price}")
 
         except Exception as e:
-            print(f"  [{i+1}] [WARN] {e}")
+            print(f"  [WARN] {e}")
 
     return results
 
