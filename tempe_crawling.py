@@ -102,27 +102,48 @@ def login(driver, wait):
     password_field.clear()
     password_field.send_keys(TEMPE_PASSWORD)
 
-    # Click the Login button
-    try:
-        login_btn = driver.find_element(By.CSS_SELECTOR, "input[value='Login'], button[type='submit'], input[type='submit']")
-        login_btn.click()
-    except Exception:
-        password_field.send_keys(Keys.RETURN)
+    # Screenshot before clicking login
+    driver.save_screenshot("before_login_click.png")
+    print("Saved before_login_click.png")
 
-    # Wait until URL changes away from the login page (/weborder)
+    # Try to find and click the Login button
+    login_btn = None
+    for selector in [
+        (By.CSS_SELECTOR, "input[value='Login']"),
+        (By.CSS_SELECTOR, "input[type='submit']"),
+        (By.CSS_SELECTOR, "button[type='submit']"),
+        (By.XPATH, "//input[@value='Login']"),
+        (By.XPATH, "//button[normalize-space()='Login']"),
+    ]:
+        try:
+            login_btn = driver.find_element(*selector)
+            print(f"Found login button: {selector[1]} tag={login_btn.tag_name} value={login_btn.get_attribute('value')}")
+            break
+        except Exception:
+            continue
+
+    if login_btn:
+        driver.execute_script("arguments[0].click();", login_btn)
+        print("Clicked login button via JS")
+    else:
+        password_field.send_keys(Keys.RETURN)
+        print("Submitted via Enter key")
+
+    time.sleep(3)
+    print(f"After login URL: {driver.current_url}")
+    driver.save_screenshot("after_login_click.png")
+    print("Saved after_login_click.png")
+
+    # Check for error messages on page
     try:
-        wait.until(EC.url_changes("https://orders.tempetyreswholesale.com.au/weborder"))
+        error_msg = driver.find_element(By.CSS_SELECTOR, ".validation-summary-errors, .alert-danger, .error")
+        print(f"Login error on page: {error_msg.text}")
     except Exception:
         pass
 
-    time.sleep(2)  # extra wait for session cookie to be set
-    print(f"After login URL: {driver.current_url}")
-
-    # If still on login/weborder root, login failed
     current = driver.current_url.lower()
     if current.endswith("/weborder") or current.endswith("/weborder/"):
-        driver.save_screenshot("login_failed.png")
-        raise RuntimeError("Login failed — URL did not change. Check login_failed.png.")
+        raise RuntimeError("Login failed — URL did not change. Check after_login_click.png.")
 
     print("Login successful.")
 
