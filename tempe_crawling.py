@@ -81,6 +81,20 @@ def scrape_rows(driver, wait):
     """Find all 'Get Cost' links, click each one, then extract row data."""
     results = []
 
+    # Screenshot to see what's actually on screen
+    driver.save_screenshot("scrape_debug.png")
+    print("  Saved scrape_debug.png")
+
+    # Print all frames/iframes present
+    iframes = driver.find_elements(By.TAG_NAME, "iframe")
+    print(f"  iframes found: {len(iframes)}")
+
+    # Print ALL anchor tags on page
+    all_links = driver.find_elements(By.TAG_NAME, "a")
+    print(f"  Total <a> tags: {len(all_links)}")
+    for lnk in all_links[:30]:
+        print(f"    href={lnk.get_attribute('href')!r} text={lnk.text!r}")
+
     # Find every "Get Cost" link on the page
     get_cost_links = driver.find_elements(
         By.XPATH, "//a[contains(text(),'Get Cost')]"
