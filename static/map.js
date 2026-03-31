@@ -33,8 +33,8 @@ function initSalesMap() {
   if (!el) return;  // not on the map page
 
   salesMap = L.map("salesMap", {
-    minZoom: 3
-  }).setView([-25.0, 128.0], 3);
+    minZoom: 4
+  }).fitBounds([[-39.5, 114.0], [-10.6, 153.6]], { padding: [20, 20] });
 
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
@@ -66,7 +66,7 @@ async function loadSalesMap() {
 
   const data = await fetchJSON(`/api/sales_map?${qs}`);
   if (!Array.isArray(data) || data.length === 0) {
-    salesMap.setView([-25.0, 133.0], 4);
+    salesMap.fitBounds([[-39.5, 114.0], [-10.6, 153.6]], { padding: [20, 20] });
     return;
   }
 
@@ -129,16 +129,24 @@ async function loadSalesMap() {
 });
 
 
+  const hasFilter = filters.region || filters.salesman || filters.sold_to ||
+                    filters.ship_to || filters.sold_to_group;
+
   if (points.length === 1) {
     salesMap.setView(points[0], 10);
   } else if (points.length > 1) {
     const bounds = L.latLngBounds(points);
-    // Always include full Australia (VIC at SW corner) in view
-    bounds.extend([-39.5, 114.0]);
-    bounds.extend([-10.6, 153.6]);
-    salesMap.fitBounds(bounds.pad(0.05), { maxZoom: 4 });
+    if (hasFilter) {
+      // Filtered view: zoom to just the matching markers
+      salesMap.fitBounds(bounds.pad(0.2), { maxZoom: 10 });
+    } else {
+      // No filter: show all Australia
+      bounds.extend([-39.5, 114.0]);
+      bounds.extend([-10.6, 153.6]);
+      salesMap.fitBounds(bounds.pad(0.05), { maxZoom: 6 });
+    }
   } else {
-    salesMap.setView([-25.0, 128.0], 3);
+    salesMap.fitBounds([[-39.5, 114.0], [-10.6, 153.6]], { padding: [20, 20] });
   }
 }
 
