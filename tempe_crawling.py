@@ -24,35 +24,45 @@ def extract_brand(description):
     return parts[0] if parts else ""
 
 
-def connect_to_existing_chrome():
-    """Connect to an already-open Chrome browser (started with --remote-debugging-port=9222)."""
+def init_driver():
     options = webdriver.ChromeOptions()
-    options.add_experimental_option("debuggerAddress", "127.0.0.1:9222")
+    options.add_argument("--window-size=1280,900")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
     driver = webdriver.Chrome(options=options)
-    print(f"Connected to Chrome. Current URL: {driver.current_url}")
     return driver
+
+
+def wait_for_manual_login(driver):
+    driver.get(SEARCH_URL)
+    print("\n" + "="*60)
+    print("Chrome 브라우저가 열렸습니다.")
+    print("1. 로그인 하세요")
+    print("2. Search Tyres 탭으로 이동하세요")
+    print("3. 준비되면 여기서 Enter를 누르세요")
+    print("="*60)
+    input(">>> Enter를 누르면 크롤링을 시작합니다: ")
+    print(f"현재 URL: {driver.current_url}")
 
 
 def search_tyres(driver, wait, query):
     driver.get(SEARCH_URL)
     time.sleep(2)
-    print(f"Search page loaded: {driver.current_url}")
+    print(f"Search page: {driver.current_url}")
 
-    # Click the Select2 container to open dropdown
     search_container = wait.until(
         EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-selection"))
     )
     search_container.click()
     time.sleep(0.8)
 
-    # Type query into search field
     search_input = wait.until(
         EC.presence_of_element_located((By.CSS_SELECTOR, ".select2-search__field"))
     )
     search_input.send_keys(query)
     time.sleep(1.5)
 
-    # Click first suggestion from dropdown if available
     try:
         first_option = wait.until(
             EC.element_to_be_clickable(
@@ -66,7 +76,6 @@ def search_tyres(driver, wait, query):
 
     time.sleep(0.5)
 
-    # Click the Search button
     search_btn = wait.until(
         EC.element_to_be_clickable(
             (By.XPATH, "//input[@value='Search'] | //button[normalize-space()='Search']")
@@ -164,36 +173,42 @@ def go_next_page(driver, wait):
 
 
 def main():
-    driver = connect_to_existing_chrome()
+    driver = init_driver()
     wait = WebDriverWait(driver, 20)
 
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        for query in SEARCH_QUERIES:
-            print(f"\n=== Searching: {query} ===")
-            search_tyres(driver, wait, query)
+    try:
+        wait_for_manual_login(driver)
 
-            page = 1
-            while True:
-                print(f"  Scraping page {page}...")
-                rows = scrape_rows(driver, wait)
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            for query in SEARCH_QUERIES:
+                print(f"\n=== Searching: {query} ===")
+                search_tyres(driver, wait, query)
 
-                for r in rows:
-                    line = (
-                        f"{current_month}_{current_year}|TEMPE|{r['brand']}|"
-                        f"{r['description']}|{r['sku']}|{r['size']}|"
-                        f"{r['cost']}|{r['price']}|{r['on_hand']}\n"
-                    )
-                    f.write(line)
+                page = 1
+                while True:
+                    print(f"  Scraping page {page}...")
+                    rows = scrape_rows(driver, wait)
 
-                print(f"  -> {len(rows)} rows written from page {page}")
+                    for r in rows:
+                        line = (
+                            f"{current_month}_{current_year}|TEMPE|{r['brand']}|"
+                            f"{r['description']}|{r['sku']}|{r['size']}|"
+                            f"{r['cost']}|{r['price']}|{r['on_hand']}\n"
+                        )
+                        f.write(line)
 
-                if has_next_page(driver):
-                    go_next_page(driver, wait)
-                    page += 1
-                else:
-                    break
+                    print(f"  -> {len(rows)} rows written from page {page}")
 
-    print(f"\nDone. Output saved to: {OUTPUT_FILE}")
+                    if has_next_page(driver):
+                        go_next_page(driver, wait)
+                        page += 1
+                    else:
+                        break
+
+        print(f"\nDone. Output saved to: {OUTPUT_FILE}")
+
+    finally:
+        driver.quit()
 
 
 if __name__ == "__main__":
