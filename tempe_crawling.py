@@ -77,68 +77,45 @@ def search_tyres(driver, wait, query):
     print("Results loaded.")
 
 
-def get_cost(driver, wait, row):
-    """Click 'Get Cost' if present, then return the cost value."""
-    try:
-        link = row.find_element(By.XPATH, ".//*[contains(text(),'Get Cost')]")
-        driver.execute_script("arguments[0].scrollIntoView(true);", link)
-        driver.execute_script("arguments[0].click();", link)
-        parent = link.find_element(By.XPATH, "..")
-        wait.until(lambda d: "Get Cost" not in parent.text)
-        return re.sub(r"[^\d.]", "", clean(parent.text))
-    except Exception:
-        pass
-
-    # Cost may already be visible (e.g. $33.00)
-    try:
-        cost_cell = row.find_element(By.XPATH,
-            ".//td[contains(@class,'cost')] | .//td[a[contains(@class,'cost')]] | .//a[contains(@href,'GetCost')]/..")
-        val = re.sub(r"[^\d.]", "", clean(cost_cell.text))
-        if val:
-            return val
-    except Exception:
-        pass
-
-    # Fallback: look for any cell that starts with $
-    cells = row.find_elements(By.TAG_NAME, "td")
-    dollar_cells = [c for c in cells if clean(c.text).startswith("$")]
-    if len(dollar_cells) >= 2:
-        return re.sub(r"[^\d.]", "", clean(dollar_cells[0].text))
-    return ""
-
-
 def scrape_rows(driver, wait):
-    # Try multiple row selectors for Angular/table structures
-    rows = driver.find_elements(By.CSS_SELECTOR,
-        "table tbody tr, tr[ng-repeat], tr[data-ng-repeat]")
-    if not rows:
-        rows = driver.find_elements(By.XPATH,
-            "//tr[.//a[contains(text(),'Get Cost')] or .//td[contains(text(),'Get Cost')]]"
-            " | //tr[.//td[contains(@class,'cost')]]")
-    print(f"  Found {len(rows)} rows")
+    """Find all 'Get Cost' links, click each one, then extract row data."""
     results = []
 
-    for row in rows:
-        cells = row.find_elements(By.TAG_NAME, "td")
-        if len(cells) < 3:
-            continue
-        try:
-            # SIZE — first cell (e.g. "175/65R14 82T\nSKU: 15740RSC")
-            size = clean(cells[0].text).splitlines()[0]
+    # Find every "Get Cost" link on the page
+    get_cost_links = driver.find_elements(
+        By.XPATH, "//a[contains(text(),'Get Cost')]"
+    )
+    print(f"  Found {len(get_cost_links)} 'Get Cost' links")
 
-            # DESCRIPTION — second cell (first line only)
+    for i, link in enumerate(get_cost_links):
+        try:
+            # Scroll into view and click "Get Cost"
+            driver.execute_script("arguments[0].scrollIntoView({block:'center'});", link)
+            time.sleep(0.3)
+            driver.execute_script("arguments[0].click();", link)
+
+            # Wait until the link's parent cell no longer says "Get Cost"
+            cost_cell = link.find_element(By.XPATH, "..")
+            wait.until(lambda d, c=cost_cell: "Get Cost" not in c.text)
+            cost = re.sub(r"[^\d.]", "", clean(cost_cell.text))
+
+            # Walk up to find the row (<tr>)
+            row = link.find_element(By.XPATH, "ancestor::tr[1]")
+            cells = row.find_elements(By.TAG_NAME, "td")
+
+            # SIZE — first td, first line
+            size = clean(cells[0].text).splitlines()[0] if cells else ""
+
+            # DESCRIPTION — second td, first line
             description = clean(cells[1].text).splitlines()[0] if len(cells) > 1 else ""
 
-            # COST — click "Get Cost" or read existing value
-            cost = get_cost(driver, wait, row)
-
-            # PRICE — find cell starting with $, skip COST cell
+            # PRICE — first td whose text starts with "$" (excluding cost cell)
             price = ""
-            dollar_cells = [c for c in cells if clean(c.text).startswith("$")]
-            if len(dollar_cells) >= 2:
-                price = re.sub(r"[^\d.]", "", clean(dollar_cells[1].text))
-            elif len(dollar_cells) == 1:
-                price = re.sub(r"[^\d.]", "", clean(dollar_cells[0].text))
+            for cell in cells:
+                txt = clean(cell.text)
+                if txt.startswith("$"):
+                    price = re.sub(r"[^\d.]", "", txt)
+                    break
 
             results.append({
                 "size": size,
@@ -146,10 +123,10 @@ def scrape_rows(driver, wait):
                 "cost": cost,
                 "price": price,
             })
-            print(f"  {size} | {description} | cost={cost} | price={price}")
+            print(f"  [{i+1}] {size} | {description} | cost={cost} | price={price}")
 
         except Exception as e:
-            print(f"  [WARN] {e}")
+            print(f"  [{i+1}] [WARN] {e}")
 
     return results
 
