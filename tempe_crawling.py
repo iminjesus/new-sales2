@@ -123,24 +123,21 @@ def login(driver, wait):
 
 
 def search_tyres(driver, wait, query):
-    # Click "SEARCH TYRES" tab instead of navigating directly
-    try:
-        search_tyres_tab = wait.until(
-            EC.element_to_be_clickable((By.XPATH, "//a[normalize-space()='SEARCH TYRES'] | //li[normalize-space()='SEARCH TYRES']"))
-        )
-        search_tyres_tab.click()
-        time.sleep(1.5)
-        print(f"Navigated via SEARCH TYRES tab: {driver.current_url}")
-    except Exception:
-        driver.get(SEARCH_URL)
-        time.sleep(2)
-        print(f"Navigated directly to: {driver.current_url}")
+    driver.get(SEARCH_URL)
+    time.sleep(2)
+    print(f"Navigated to: {driver.current_url}")
 
-    # Debug screenshot
+    # Debug screenshot — shows what the page actually looks like
     driver.save_screenshot("search_page_debug.png")
     print("Saved search_page_debug.png")
 
-    # Wait for the Select2 container to be present on the page
+    # Print all input/select elements found on page for diagnosis
+    inputs = driver.find_elements(By.CSS_SELECTOR, "input, select, .select2-container, .select2-selection")
+    print(f"Found {len(inputs)} input/select2 elements:")
+    for el in inputs[:10]:
+        print(f"  tag={el.tag_name} id={el.get_attribute('id')} class={el.get_attribute('class')} type={el.get_attribute('type')}")
+
+    # Wait for Select2 container
     search_container = wait.until(
         EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-selection, .select2-container"))
     )
