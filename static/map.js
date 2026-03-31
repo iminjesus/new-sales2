@@ -34,7 +34,7 @@ function initSalesMap() {
 
   salesMap = L.map("salesMap", {
     minZoom: 4
-  }).setView([-27.0, 134.0], 5);
+  }).setView([-27.0, 128.0], 4);
 
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
