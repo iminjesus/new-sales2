@@ -47,18 +47,33 @@ def search_tyres(driver, wait, query):
 
     print(f"Search page: {driver.current_url}")
 
-    # Type into the simple search input and press Enter
     search_input = wait.until(
         EC.presence_of_element_located((By.ID, "simpleSearchText"))
     )
     search_input.clear()
     search_input.send_keys(query)
-    search_input.send_keys(Keys.RETURN)
-    print(f"Searched: {query}")
+    time.sleep(1)
 
-    # Wait for results rows to appear
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr, .product-row")))
-    time.sleep(1.5)
+    # Click the red Search button inside the dropdown
+    try:
+        search_btn = wait.until(
+            EC.element_to_be_clickable((By.XPATH,
+                "//input[@value='Search'] | //button[normalize-space()='Search'] | //a[normalize-space()='Search']"
+            ))
+        )
+        driver.execute_script("arguments[0].click();", search_btn)
+        print("Clicked Search button")
+    except Exception:
+        search_input.send_keys(Keys.RETURN)
+        print("Pressed Enter")
+
+    time.sleep(2)
+
+    # Wait for results — detect by "Get Cost" links appearing
+    wait.until(EC.presence_of_element_located(
+        (By.XPATH, "//*[contains(text(),'Get Cost') or contains(text(),'get-cost')]")
+    ))
+    time.sleep(1)
     print("Results loaded.")
 
 
@@ -93,7 +108,14 @@ def get_cost(driver, wait, row):
 
 
 def scrape_rows(driver, wait):
-    rows = driver.find_elements(By.CSS_SELECTOR, "table tbody tr")
+    # Try multiple row selectors for Angular/table structures
+    rows = driver.find_elements(By.CSS_SELECTOR,
+        "table tbody tr, tr[ng-repeat], tr[data-ng-repeat]")
+    if not rows:
+        rows = driver.find_elements(By.XPATH,
+            "//tr[.//a[contains(text(),'Get Cost')] or .//td[contains(text(),'Get Cost')]]"
+            " | //tr[.//td[contains(@class,'cost')]]")
+    print(f"  Found {len(rows)} rows")
     results = []
 
     for row in rows:
