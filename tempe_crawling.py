@@ -109,15 +109,20 @@ def login(driver, wait):
     except Exception:
         password_field.send_keys(Keys.RETURN)
 
+    # Wait until URL changes away from the login page (/weborder)
     try:
-        wait.until(EC.url_contains("/WebOrder/Product"))
+        wait.until(EC.url_changes("https://orders.tempetyreswholesale.com.au/weborder"))
     except Exception:
         pass
 
+    time.sleep(2)  # extra wait for session cookie to be set
     print(f"After login URL: {driver.current_url}")
-    if "login" in driver.current_url.lower() or "account" in driver.current_url.lower():
+
+    # If still on login/weborder root, login failed
+    current = driver.current_url.lower()
+    if current.endswith("/weborder") or current.endswith("/weborder/"):
         driver.save_screenshot("login_failed.png")
-        raise RuntimeError("Login failed — still on login page. Check login_failed.png.")
+        raise RuntimeError("Login failed — URL did not change. Check login_failed.png.")
 
     print("Login successful.")
 
