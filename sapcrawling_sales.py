@@ -37,6 +37,12 @@ def last_business_day(ref: date) -> date:
         d -= timedelta(days=1)
     return d
 
+def first_business_day(ref: date) -> date:
+    d = ref.replace(day=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
 def month_start(ref: date) -> date:
     return ref.replace(day=1)
 
@@ -306,8 +312,16 @@ def trigger_export(session):
 # ================= MAIN =================
 def main():
     today   = date.today()
-    d_from  = month_start(today)
-    d_to    = last_business_day(today)
+
+    # 이달 첫 번째 비즈니스 데이 당일 또는 그 이전이면 전달 데이터로 다운로드
+    if today <= first_business_day(today):
+        last_day_prev = month_start(today) - timedelta(days=1)
+        d_from = month_start(last_day_prev)
+        d_to   = last_business_day(month_start(today))
+        print("[INFO] 이달 첫 번째 비즈니스 데이 이전 → 전달 데이터 범위로 다운로드")
+    else:
+        d_from = month_start(today)
+        d_to   = last_business_day(today)
 
     date_from = sap_date(d_from)
     date_to   = sap_date(d_to)
