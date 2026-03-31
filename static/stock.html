@@ -31,7 +31,7 @@
 
   <!-- ── Top filter bar (includes dropdowns) ── -->
   <div style="display:flex; gap:8px; align-items:stretch; margin-bottom:6px;">
-    <div id="topRow" class="filter-bar" style="flex:1; margin-bottom:0; flex-wrap:wrap;">
+    <div id="topRow" class="filter-bar" style="flex:1; margin-bottom:0; flex-wrap:wrap; width:100%;">
       <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
         <button class="btn active" data-val="ALL">All</button>
         <button class="btn" data-val="PCLT">PCLT</button>
@@ -92,19 +92,6 @@
         <button class="btn" onclick="window.location.href='/rebate'">Rebate</button>
       </div>
     </div>
-
-    <!-- Price box (top right) -->
-    <div id="priceBox" class="filter-bar" style="margin-bottom:0; flex-shrink:0; min-width:260px; display:flex; gap:16px; align-items:center; justify-content:center;">
-      <div class="price-cell">
-        <span class="price-lbl">List Price</span>
-        <span class="price-val" id="priceList">—</span>
-      </div>
-      <div class="price-sep"></div>
-      <div class="price-cell">
-        <span class="price-lbl">Purchase Price</span>
-        <span class="price-val" id="pricePurchase">—</span>
-      </div>
-    </div>
   </div>
 
   </div><!-- end #filterPanel -->
@@ -119,6 +106,19 @@
 
     <!-- Right: state table + sales charts -->
     <div id="stockSidePanel">
+
+      <!-- Price box -->
+      <div id="priceBox" style="display:flex; gap:16px; align-items:center; justify-content:center; background:#fff; border:1px solid #e5e7eb; border-radius:7px; padding:10px 20px; flex-shrink:0;">
+        <div class="price-cell">
+          <span class="price-lbl">List Price</span>
+          <span class="price-val" id="priceList">—</span>
+        </div>
+        <div class="price-sep"></div>
+        <div class="price-cell">
+          <span class="price-lbl">Purchase Price</span>
+          <span class="price-val" id="pricePurchase">—</span>
+        </div>
+      </div>
 
       <!-- State breakdown table (moved from top) -->
       <div id="stateTableWrap">

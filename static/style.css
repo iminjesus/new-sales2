@@ -303,7 +303,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   justify-content: center;
 }
 .price-lbl {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   color: #6b7280;
   text-transform: uppercase;
@@ -311,7 +311,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   line-height: 1;
 }
 .price-val {
-  font-size: 14px;
+  font-size: 22px;
   font-weight: 700;
   color: #111827;
   line-height: 1.3;
@@ -694,7 +694,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 #stateTable {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 14px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 7px;
@@ -704,9 +704,9 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   background: #f3f4f6;
   color: #6b7280;
   font-weight: 600;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.03em;
-  padding: 5px 8px;
+  padding: 7px 10px;
   text-align: right;
   border-bottom: 1px solid #e5e7eb;
   white-space: nowrap;
@@ -714,7 +714,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 #stateTable thead th:first-child { text-align: left; }
 #stateTable tbody tr:hover { background: #f9fafb; }
 #stateTable tbody td {
-  padding: 4px 8px;
+  padding: 6px 10px;
   text-align: right;
   border-bottom: 1px solid #f3f4f6;
   color: #374151;
@@ -738,7 +738,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   font-weight: 700;
   border-top: 2px solid #bfdbfe;
   color: #1e40af;
-  padding: 4px 8px;
+  padding: 6px 10px;
   text-align: right;
 }
 #stateTable tfoot tr.st-total td:first-child {
