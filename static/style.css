@@ -301,8 +301,8 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   gap: 8px;
   margin-top: 4px;
   align-items: flex-start;
-  height: calc(100vh - 115px);
-  min-height: 740px;
+  height: calc(100vh - 160px);
+  min-height: 600px;
 }
 #stockMapWrapper {
   flex: 2;

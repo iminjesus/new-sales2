@@ -489,7 +489,11 @@
         .map(r => [Number(r.lat), Number(r.lon)])
         .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo));
       if (validPts.length > 0) {
-        map.fitBounds(L.latLngBounds(validPts), { padding: [40, 40], maxZoom: 5 });
+        const bounds = L.latLngBounds(validPts);
+        // Always include full Australia (VIC at SW corner) in view
+        bounds.extend([-39.5, 114.0]);
+        bounds.extend([-10.6, 153.6]);
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 4 });
       }
 
       const [, baseSales] = await Promise.all([
