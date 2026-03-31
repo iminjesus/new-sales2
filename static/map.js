@@ -33,7 +33,7 @@ function initSalesMap() {
   if (!el) return;  // not on the map page
 
   salesMap = L.map("salesMap", {
-    minZoom: 4
+    minZoom: 3
   }).setView([-25.0, 128.0], 3);
 
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -133,9 +133,12 @@ async function loadSalesMap() {
     salesMap.setView(points[0], 10);
   } else if (points.length > 1) {
     const bounds = L.latLngBounds(points);
-    salesMap.fitBounds(bounds.pad(0.1));
+    // Always include full Australia (VIC at SW corner) in view
+    bounds.extend([-39.5, 114.0]);
+    bounds.extend([-10.6, 153.6]);
+    salesMap.fitBounds(bounds.pad(0.05), { maxZoom: 4 });
   } else {
-    salesMap.setView([-25.0, 133.0], 4);
+    salesMap.setView([-25.0, 128.0], 3);
   }
 }
 
