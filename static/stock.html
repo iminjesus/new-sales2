@@ -29,71 +29,82 @@
 
   <div id="filterPanel">
 
-  <!-- ── Top filter bar ── -->
-  <div id="topRow" class="filter-bar">
-    <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
-      <button class="btn active" data-val="ALL">All</button>
-      <button class="btn" data-val="PCLT">PCLT</button>
-      <button class="btn" data-val="TBR">TBR</button>
-      <button class="btn" data-val="18PLUS">18+ Inch</button>
-      <button class="btn" data-val="ISEG">EV/iSeg</button>
-      <button class="btn" data-val="SUV">SUV</button>
-      <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
-      <button class="btn" data-val="HM">HM</button>
-      <button class="btn" data-val="443">443</button>
-    </div>
-
-    <div class="filter-sep"></div>
-
-    <div id="ordersMetricBtns" style="display:flex; gap:5px;">
-      <button class="btn active" data-metric="po">Orders PO</button>
-      <button class="btn" data-metric="confirm">Orders Confirm</button>
-    </div>
-
-    <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
-      <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
-      <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>
-      <button class="btn active">Stock</button>
-      <button class="btn" onclick="window.location.href='/rebate'">Rebate</button>
-    </div>
-  </div>
-
-  <!-- ── Second filter bar ── -->
-  <div class="filter-bar">
-    <!-- Product Group (no clear) -->
-    <div class="dd" id="ddProductGroup">
-      <label for="product_group">Product Group</label>
-      <div class="dd-wrap">
-        <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
-        <button type="button" class="dd-btn dd-last" id="pgBtn">▼</button>
+  <!-- ── Top filter bar (includes dropdowns) ── -->
+  <div style="display:flex; gap:8px; align-items:stretch; margin-bottom:6px;">
+    <div id="topRow" class="filter-bar" style="flex:1; margin-bottom:0; flex-wrap:wrap;">
+      <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
+        <button class="btn active" data-val="ALL">All</button>
+        <button class="btn" data-val="PCLT">PCLT</button>
+        <button class="btn" data-val="TBR">TBR</button>
+        <button class="btn" data-val="18PLUS">18+ Inch</button>
+        <button class="btn" data-val="ISEG">EV/iSeg</button>
+        <button class="btn" data-val="SUV">SUV</button>
+        <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
+        <button class="btn" data-val="HM">HM</button>
+        <button class="btn" data-val="443">443</button>
       </div>
-      <div class="dd-menu" id="pgMenu"></div>
-    </div>
 
-    <!-- Pattern -->
-    <div class="dd" id="ddPattern">
-      <label for="pattern">Pattern</label>
-      <div class="dd-wrap">
-        <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
-        <button type="button" class="dd-btn" id="patternBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+      <div class="filter-sep"></div>
+
+      <div id="ordersMetricBtns" style="display:flex; gap:5px;">
+        <button class="btn active" data-metric="po">Orders PO</button>
+        <button class="btn" data-metric="confirm">Orders Confirm</button>
       </div>
-      <div class="dd-menu" id="patternMenu"></div>
-    </div>
 
-    <!-- Size -->
-    <div class="dd" id="ddMaterial">
-      <label for="material">Size</label>
-      <div class="dd-wrap">
-        <input id="material" type="text" placeholder="Search Size" autocomplete="off">
-        <button type="button" class="dd-btn" id="materialBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+      <div class="filter-sep"></div>
+
+      <!-- Product Group (moved from second bar) -->
+      <div class="dd" id="ddProductGroup">
+        <label for="product_group">Product Group</label>
+        <div class="dd-wrap">
+          <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
+          <button type="button" class="dd-btn dd-last" id="pgBtn">▼</button>
+        </div>
+        <div class="dd-menu" id="pgMenu"></div>
       </div>
-      <div class="dd-menu" id="materialMenu"></div>
+
+      <!-- Pattern -->
+      <div class="dd" id="ddPattern">
+        <label for="pattern">Pattern</label>
+        <div class="dd-wrap">
+          <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+          <button type="button" class="dd-btn" id="patternBtn">▼</button>
+          <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+        </div>
+        <div class="dd-menu" id="patternMenu"></div>
+      </div>
+
+      <!-- Size -->
+      <div class="dd" id="ddMaterial">
+        <label for="material">Size</label>
+        <div class="dd-wrap">
+          <input id="material" type="text" placeholder="Search Size" autocomplete="off">
+          <button type="button" class="dd-btn" id="materialBtn">▼</button>
+          <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+        </div>
+        <div class="dd-menu" id="materialMenu"></div>
+      </div>
+
+      <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
+        <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
+        <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>
+        <button class="btn active">Stock</button>
+        <button class="btn" onclick="window.location.href='/rebate'">Rebate</button>
+      </div>
     </div>
 
-    <!-- Sales Stats (3M / 6M / 12M / Base Sales) + Pipeline -->
-    <!-- removed: replaced by TOTAL row in stateTable -->
+    <!-- Price box (top right) -->
+    <div id="priceBox" class="filter-bar" style="margin-bottom:0; flex-shrink:0; min-width:260px; display:flex; gap:16px; align-items:center; justify-content:center;">
+      <div class="price-cell">
+        <span class="price-lbl">List Price</span>
+        <span class="price-val" id="priceList">—</span>
+      </div>
+      <div class="price-sep"></div>
+      <div class="price-cell">
+        <span class="price-lbl">Purchase Price</span>
+        <span class="price-val" id="pricePurchase">—</span>
+      </div>
+    </div>
   </div>
 
   </div><!-- end #filterPanel -->

@@ -3359,7 +3359,49 @@ def materials():
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-    
+
+@app.get("/api/carrying_price")
+def carrying_price():
+    """Return avg list_price and purchase_price from carrying_2602 for current filter."""
+    product_group = (request.args.get("product_group") or "ALL").strip()
+    pattern       = (request.args.get("pattern")       or "").strip()
+    material      = (request.args.get("material")      or "").strip()
+
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
+
+        where  = []
+        params = []
+
+        if product_group and product_group != "ALL":
+            where.append("product_group = %s")
+            params.append(product_group)
+        if pattern:
+            where.append("pattern LIKE %s")
+            params.append(f"%{pattern}%")
+        if material:
+            where.append("size LIKE %s")
+            params.append(f"%{material}%")
+
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+        cur.execute(f"""
+            SELECT AVG(list_price) AS list_price, AVG(purchase_price) AS purchase_price
+            FROM carrying_2602
+            {where_sql}
+        """, tuple(params))
+
+        row = cur.fetchone()
+        cur.close(); conn.close()
+
+        return jsonify({
+            "list_price":      float(row["list_price"])      if row and row["list_price"]      is not None else None,
+            "purchase_price":  float(row["purchase_price"])  if row and row["purchase_price"]  is not None else None,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.get("/api/profit_monthly")
 def profit_monthly():
     import traceback
