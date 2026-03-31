@@ -11,8 +11,8 @@ from selenium.webdriver.support import expected_conditions as EC
 
 load_dotenv(encoding="utf-8-sig")  # utf-8-sig handles both UTF-8 and UTF-16 BOM (Windows PowerShell)
 
-TEMPE_USERNAME = os.getenv("TEMPE_USERNAME")
-TEMPE_PASSWORD = os.getenv("TEMPE_PASSWORD")
+TEMPE_USERNAME = os.getenv("Tempe_username")
+TEMPE_PASSWORD = os.getenv("Tempe_password")
 
 LOGIN_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Account/Login"
 SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
