@@ -58,15 +58,41 @@ def search_tyres(driver, wait, query):
 
     print(f"Search page: {driver.current_url}")
 
-    search_container = wait.until(
-        EC.element_to_be_clickable((By.CSS_SELECTOR, ".select2-selection"))
-    )
-    search_container.click()
-    time.sleep(0.8)
+    # Print every element with 'select' or 'search' in class/id for diagnosis
+    all_els = driver.find_elements(By.CSS_SELECTOR, "[class*='select'], [class*='search'], input")
+    print(f"Found {len(all_els)} elements:")
+    for el in all_els[:20]:
+        print(f"  tag={el.tag_name} id={el.get_attribute('id')!r} class={el.get_attribute('class')!r} placeholder={el.get_attribute('placeholder')!r}")
 
-    search_input = wait.until(
-        EC.presence_of_element_located((By.CSS_SELECTOR, ".select2-search__field"))
-    )
+    # Try multiple selectors to open/find the search input
+    search_input = None
+
+    # Try 1: Select2 — click container first, then get input
+    for container_sel in [".select2-selection", ".select2-container", "span.select2", "[class*='select2']"]:
+        try:
+            container = driver.find_element(By.CSS_SELECTOR, container_sel)
+            driver.execute_script("arguments[0].click();", container)
+            time.sleep(0.8)
+            search_input = driver.find_element(By.CSS_SELECTOR, ".select2-search__field, input.select2-search__field")
+            print(f"Found via Select2 container: {container_sel}")
+            break
+        except Exception:
+            continue
+
+    # Try 2: Direct input with placeholder
+    if not search_input:
+        for sel in ["input[placeholder*='tyre']", "input[placeholder*='search']", "input[placeholder*='Search']", "input[placeholder*='Tyre']"]:
+            try:
+                search_input = driver.find_element(By.CSS_SELECTOR, sel)
+                print(f"Found via placeholder: {sel}")
+                break
+            except Exception:
+                continue
+
+    if not search_input:
+        raise RuntimeError("Cannot find search input. Check the element list printed above.")
+
+    search_input.clear()
     search_input.send_keys(query)
     time.sleep(1.5)
 
