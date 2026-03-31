@@ -102,34 +102,26 @@ let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetIn
     stackedMonthlyTargetInst, stackedMonthlyTargetCumInst, stackedMonthlyTargetPctInst, stackedMonthlyTargetCumPctInst;
 
 const $=s=>document.querySelector(s);
-function showError(msg){
-  const el = document.getElementById('errbar');
-  if (!el) return;
-  el.textContent = msg;
-  el.hidden = false;
+function showError(msg){ /* silenced — errors logged to console only */ }
+
+async function _doFetch(u) {
+  const r = await fetch(u, {credentials:'same-origin'});
+  if (r.ok) return r.json();
+  // Retry once on 5xx (transient server/proxy errors)
+  if (r.status >= 500) {
+    await new Promise(res => setTimeout(res, 800));
+    const r2 = await fetch(u, {credentials:'same-origin'});
+    if (r2.ok) return r2.json();
+  }
+  throw new Error(`${r.status} ${r.statusText}`);
 }
 const fetchJSON = async (u) => {
-  try {
-    const r = await fetch(u, {credentials:'same-origin'});
-    if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return await r.json();
-  } catch (e) {
-    console.error('Fetch fail:', u, e);
-    showError(`Failed: ${u} — ${e.message}`);
-    return [];
-  }
+  try { return await _doFetch(u); }
+  catch (e) { console.error('Fetch fail:', u, e.message); return []; }
 };
 const fetchJSON_DIRECT = async (u) => {
-  // Bypass any v2 shim/caching (used for KPI table accuracy)
-  try {
-    const r = await fetch(u, {credentials:'same-origin'});
-    if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return await r.json();
-  } catch (e) {
-    console.error('Fetch fail (DIRECT):', u, e);
-    showError(`Failed: ${u} — ${e.message}`);
-    return [];
-  }
+  try { return await _doFetch(u); }
+  catch (e) { console.error('Fetch fail (DIRECT):', u, e.message); return []; }
 };
 
 const setActive = (wrap, attr, val) => {

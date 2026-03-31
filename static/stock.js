@@ -131,21 +131,20 @@
     });
   }
 
-  function showError(msg){
-    const el = document.getElementById("errbar");
-    if (!el) return;
-    el.textContent = msg;
-    el.hidden = false;
-  }
+  function showError(msg){ /* silenced */ }
 
   async function fetchJSON(url){
     try{
       const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      return await r.json();
+      if (r.ok) return await r.json();
+      if (r.status >= 500) {
+        await new Promise(res => setTimeout(res, 800));
+        const r2 = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+        if (r2.ok) return await r2.json();
+      }
+      throw new Error(`${r.status} ${r.statusText}`);
     }catch(e){
-      console.error("fetch fail:", url, e);
-      showError(`Failed: ${url} — ${e.message}`);
+      console.error("fetch fail:", url, e.message);
       return null;
     }
   }

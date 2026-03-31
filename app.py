@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_file,send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
 import mysql.connector
 from mysql.connector import pooling
@@ -389,7 +390,18 @@ def category_target_filters(alias: str, category: str):
     return joins, wh
 
 app = Flask(__name__, static_folder="static")
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+@app.errorhandler(500)
+def handle_500(e):
+    return jsonify({"error": "internal_server_error", "detail": str(e)}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    import traceback as _tb
+    _tb.print_exc()
+    return jsonify({"error": type(e).__name__, "detail": str(e)}), 500
 
 @app.after_request
 def add_cache_headers(response):
