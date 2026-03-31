@@ -35,26 +35,82 @@ def extract_brand(description):
     return parts[0] if parts else ""
 
 
-def init_driver():
+def init_driver(headless=False):
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
+    if headless:
+        options.add_argument("--headless=new")
     options.add_argument("--disable-gpu")
     options.add_argument("--no-sandbox")
     options.add_argument("--window-size=1920,1080")
+    # Avoid bot detection
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
     return webdriver.Chrome(options=options)
 
 
 def login(driver, wait):
     driver.get(LOGIN_URL)
-    wait.until(EC.presence_of_element_located((By.ID, "UserName")))
+    print(f"Login page loaded: {driver.current_url}")
 
-    driver.find_element(By.ID, "UserName").clear()
-    driver.find_element(By.ID, "UserName").send_keys(TEMPE_USERNAME)
-    driver.find_element(By.ID, "Password").clear()
-    driver.find_element(By.ID, "Password").send_keys(TEMPE_PASSWORD)
-    driver.find_element(By.ID, "Password").send_keys(Keys.RETURN)
+    # Try multiple possible selectors for the username field
+    username_selectors = [
+        (By.ID, "UserName"),
+        (By.NAME, "UserName"),
+        (By.NAME, "username"),
+        (By.CSS_SELECTOR, "input[type='email']"),
+        (By.CSS_SELECTOR, "input[name*='ser']"),
+        (By.CSS_SELECTOR, "input[id*='ser']"),
+    ]
+    username_field = None
+    for by, selector in username_selectors:
+        try:
+            username_field = wait.until(EC.presence_of_element_located((by, selector)))
+            print(f"Found username field with: {by}={selector}")
+            break
+        except Exception:
+            continue
 
-    wait.until(EC.url_contains("/WebOrder/Product"))
+    if not username_field:
+        driver.save_screenshot("login_debug.png")
+        print("Saved login_debug.png — check the screenshot to see what the login page looks like.")
+        raise RuntimeError("Could not find username field. Check login_debug.png.")
+
+    password_selectors = [
+        (By.ID, "Password"),
+        (By.NAME, "Password"),
+        (By.NAME, "password"),
+        (By.CSS_SELECTOR, "input[type='password']"),
+    ]
+    password_field = None
+    for by, selector in password_selectors:
+        try:
+            password_field = driver.find_element(by, selector)
+            print(f"Found password field with: {by}={selector}")
+            break
+        except Exception:
+            continue
+
+    if not password_field:
+        driver.save_screenshot("login_debug.png")
+        raise RuntimeError("Could not find password field. Check login_debug.png.")
+
+    username_field.clear()
+    username_field.send_keys(TEMPE_USERNAME)
+    password_field.clear()
+    password_field.send_keys(TEMPE_PASSWORD)
+    password_field.send_keys(Keys.RETURN)
+
+    try:
+        wait.until(EC.url_changes(LOGIN_URL))
+    except Exception:
+        pass
+
+    print(f"After login URL: {driver.current_url}")
+    if "Login" in driver.current_url or "login" in driver.current_url:
+        driver.save_screenshot("login_failed.png")
+        raise RuntimeError("Login failed — still on login page. Check login_failed.png.")
+
     print("Login successful.")
 
 
@@ -220,7 +276,7 @@ def main():
             "Missing credentials. Set TEMPE_USERNAME and TEMPE_PASSWORD in your .env file."
         )
 
-    driver = init_driver()
+    driver = init_driver(headless=False)  # Set to True after confirming login works
     wait = WebDriverWait(driver, 20)
 
     try:
