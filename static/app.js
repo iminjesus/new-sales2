@@ -346,7 +346,7 @@ document.getElementById('metricBtns').addEventListener("click",e=>{
   if (ct) ct.textContent = filters.metric==="amount"?"Cumulative Amount":"Cumulative Sales";
   refreshAllDebounced();
 });
-document.getElementById('dailyViewBtns').addEventListener("click", e => {
+document.getElementById('dailyViewBtns')?.addEventListener("click", e => {
   if (!e.target.classList.contains("btn")) return;
   dailyViewMode = e.target.dataset.dview;
   [...document.querySelectorAll("#dailyViewBtns .btn")].forEach(b =>
