@@ -1,4 +1,5 @@
 import re
+import csv
 import time
 from datetime import datetime
 from selenium import webdriver
@@ -11,17 +12,12 @@ SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
 SEARCH_QUERIES = ["1756514"]
 
 current_month = datetime.now().strftime('%b')
-current_year = datetime.now().strftime('%Y')
-OUTPUT_FILE = f"Tempe_{current_month}_{current_year}.txt"
+current_year  = datetime.now().strftime('%Y')
+OUTPUT_FILE   = f"Tempe_{current_month}_{current_year}.csv"
 
 
-def clean_text(text):
+def clean(text):
     return text.strip() if text else ""
-
-
-def extract_brand(description):
-    parts = description.strip().split()
-    return parts[0] if parts else ""
 
 
 def init_driver():
@@ -30,8 +26,7 @@ def init_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-    driver = webdriver.Chrome(options=options)
-    return driver
+    return webdriver.Chrome(options=options)
 
 
 def wait_for_manual_login(driver):
@@ -43,94 +38,58 @@ def wait_for_manual_login(driver):
     print("3. 준비되면 여기서 Enter를 누르세요")
     print("="*60)
     input(">>> Enter를 누르면 크롤링을 시작합니다: ")
-    print(f"현재 URL: {driver.current_url}")
 
 
 def search_tyres(driver, wait, query):
-    # If not already on the search page, click the nav tab
     if "Product/Search" not in driver.current_url:
-        try:
-            tab = driver.find_element(By.XPATH, "//a[contains(@href,'Product/Search')]")
-            driver.execute_script("arguments[0].click();", tab)
-            time.sleep(2)
-        except Exception:
-            pass
+        driver.get(SEARCH_URL)
+        time.sleep(2)
 
     print(f"Search page: {driver.current_url}")
 
-    # Print every element with 'select' or 'search' in class/id for diagnosis
-    all_els = driver.find_elements(By.CSS_SELECTOR, "[class*='select'], [class*='search'], input")
-    print(f"Found {len(all_els)} elements:")
-    for el in all_els[:20]:
-        print(f"  tag={el.tag_name} id={el.get_attribute('id')!r} class={el.get_attribute('class')!r} placeholder={el.get_attribute('placeholder')!r}")
-
-    # Try multiple selectors to open/find the search input
-    search_input = None
-
-    # Try 1: Select2 — click container first, then get input
-    for container_sel in [".select2-selection", ".select2-container", "span.select2", "[class*='select2']"]:
-        try:
-            container = driver.find_element(By.CSS_SELECTOR, container_sel)
-            driver.execute_script("arguments[0].click();", container)
-            time.sleep(0.8)
-            search_input = driver.find_element(By.CSS_SELECTOR, ".select2-search__field, input.select2-search__field")
-            print(f"Found via Select2 container: {container_sel}")
-            break
-        except Exception:
-            continue
-
-    # Try 2: Direct input with placeholder
-    if not search_input:
-        for sel in ["input[placeholder*='tyre']", "input[placeholder*='search']", "input[placeholder*='Search']", "input[placeholder*='Tyre']"]:
-            try:
-                search_input = driver.find_element(By.CSS_SELECTOR, sel)
-                print(f"Found via placeholder: {sel}")
-                break
-            except Exception:
-                continue
-
-    if not search_input:
-        raise RuntimeError("Cannot find search input. Check the element list printed above.")
-
+    # Type into the simple search input and press Enter
+    search_input = wait.until(
+        EC.presence_of_element_located((By.ID, "simpleSearchText"))
+    )
     search_input.clear()
     search_input.send_keys(query)
+    search_input.send_keys(Keys.RETURN)
+    print(f"Searched: {query}")
+
+    # Wait for results rows to appear
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr, .product-row")))
     time.sleep(1.5)
+    print("Results loaded.")
 
+
+def get_cost(driver, wait, row):
+    """Click 'Get Cost' if present, then return the cost value."""
     try:
-        first_option = wait.until(
-            EC.element_to_be_clickable(
-                (By.CSS_SELECTOR, ".select2-results__option:not(.select2-results__option--group)")
-            )
-        )
-        print(f"Selecting: {first_option.text}")
-        first_option.click()
+        link = row.find_element(By.XPATH, ".//*[contains(text(),'Get Cost')]")
+        driver.execute_script("arguments[0].scrollIntoView(true);", link)
+        driver.execute_script("arguments[0].click();", link)
+        parent = link.find_element(By.XPATH, "..")
+        wait.until(lambda d: "Get Cost" not in parent.text)
+        return re.sub(r"[^\d.]", "", clean(parent.text))
     except Exception:
-        search_input.send_keys(Keys.ESCAPE)
+        pass
 
-    time.sleep(0.5)
-
-    search_btn = wait.until(
-        EC.element_to_be_clickable(
-            (By.XPATH, "//input[@value='Search'] | //button[normalize-space()='Search']")
-        )
-    )
-    search_btn.click()
-
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
-    time.sleep(1)
-    print(f"Results loaded for: {query}")
-
-
-def get_cost_for_row(driver, wait, row):
+    # Cost may already be visible (e.g. $33.00)
     try:
-        get_cost_link = row.find_element(By.XPATH, ".//a[contains(text(),'Get Cost')]")
-        driver.execute_script("arguments[0].scrollIntoView(true);", get_cost_link)
-        driver.execute_script("arguments[0].click();", get_cost_link)
-        cost_cell = get_cost_link.find_element(By.XPATH, "..")
-        wait.until(lambda d: "Get Cost" not in cost_cell.text)
-        return re.sub(r"[^\d.]", "", clean_text(cost_cell.text))
+        cost_cell = row.find_element(By.XPATH,
+            ".//td[contains(@class,'cost')] | .//td[a[contains(@class,'cost')]] | .//a[contains(@href,'GetCost')]/..")
+        val = re.sub(r"[^\d.]", "", clean(cost_cell.text))
+        if val:
+            return val
     except Exception:
-        return ""
+        pass
+
+    # Fallback: look for any cell that starts with $
+    cells = row.find_elements(By.TAG_NAME, "td")
+    dollar_cells = [c for c in cells if clean(c.text).startswith("$")]
+    if len(dollar_cells) >= 2:
+        return re.sub(r"[^\d.]", "", clean(dollar_cells[0].text))
+    return ""
 
 
 def scrape_rows(driver, wait):
@@ -139,47 +98,36 @@ def scrape_rows(driver, wait):
 
     for row in rows:
         cells = row.find_elements(By.TAG_NAME, "td")
-        if len(cells) < 4:
+        if len(cells) < 3:
             continue
         try:
-            size_lines = clean_text(cells[0].text).splitlines()
-            size = size_lines[0] if size_lines else ""
-            sku = ""
-            for line in size_lines[1:]:
-                if "SKU" in line.upper():
-                    sku = line.replace("SKU:", "").replace("SKU", "").strip()
-                    break
+            # SIZE — first cell (e.g. "175/65R14 82T\nSKU: 15740RSC")
+            size = clean(cells[0].text).splitlines()[0]
 
-            desc_lines = clean_text(cells[1].text).splitlines() if len(cells) > 1 else [""]
-            description = desc_lines[0]
-            brand = extract_brand(description)
+            # DESCRIPTION — second cell (first line only)
+            description = clean(cells[1].text).splitlines()[0] if len(cells) > 1 else ""
 
-            cost = get_cost_for_row(driver, wait, row)
+            # COST — click "Get Cost" or read existing value
+            cost = get_cost(driver, wait, row)
 
-            price_text = ""
-            for i in range(2, len(cells)):
-                txt = clean_text(cells[i].text)
-                if txt.startswith("$"):
-                    price_text = re.sub(r"[^\d.]", "", txt)
-                    break
-
-            on_hand = ""
-            try:
-                on_hand_elem = row.find_element(By.CSS_SELECTOR, ".btn-success, .badge-success")
-                on_hand = clean_text(on_hand_elem.text)
-            except Exception:
-                for i in range(len(cells) - 1, max(len(cells) - 4, 0), -1):
-                    txt = clean_text(cells[i].text)
-                    if re.match(r"^\d+\+?$", txt):
-                        on_hand = txt
-                        break
+            # PRICE — find cell starting with $, skip COST cell
+            price = ""
+            dollar_cells = [c for c in cells if clean(c.text).startswith("$")]
+            if len(dollar_cells) >= 2:
+                price = re.sub(r"[^\d.]", "", clean(dollar_cells[1].text))
+            elif len(dollar_cells) == 1:
+                price = re.sub(r"[^\d.]", "", clean(dollar_cells[0].text))
 
             results.append({
-                "size": size, "sku": sku, "description": description,
-                "brand": brand, "cost": cost, "price": price_text, "on_hand": on_hand,
+                "size": size,
+                "description": description,
+                "cost": cost,
+                "price": price,
             })
+            print(f"  {size} | {description} | cost={cost} | price={price}")
+
         except Exception as e:
-            print(f"[WARN] Row parse error: {e}")
+            print(f"  [WARN] {e}")
 
     return results
 
@@ -207,30 +155,26 @@ def go_next_page(driver, wait):
 
 def main():
     driver = init_driver()
-    wait = WebDriverWait(driver, 20)
+    wait   = WebDriverWait(driver, 20)
 
     try:
         wait_for_manual_login(driver)
 
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.writer(f)
+            writer.writerow(["SIZE", "DESCRIPTION", "COST", "PRICE"])
+
             for query in SEARCH_QUERIES:
                 print(f"\n=== Searching: {query} ===")
                 search_tyres(driver, wait, query)
 
                 page = 1
                 while True:
-                    print(f"  Scraping page {page}...")
+                    print(f"  -- Page {page} --")
                     rows = scrape_rows(driver, wait)
-
                     for r in rows:
-                        line = (
-                            f"{current_month}_{current_year}|TEMPE|{r['brand']}|"
-                            f"{r['description']}|{r['sku']}|{r['size']}|"
-                            f"{r['cost']}|{r['price']}|{r['on_hand']}\n"
-                        )
-                        f.write(line)
-
-                    print(f"  -> {len(rows)} rows written from page {page}")
+                        writer.writerow([r["size"], r["description"], r["cost"], r["price"]])
+                    print(f"  {len(rows)} rows written")
 
                     if has_next_page(driver):
                         go_next_page(driver, wait)
@@ -238,7 +182,7 @@ def main():
                     else:
                         break
 
-        print(f"\nDone. Output saved to: {OUTPUT_FILE}")
+        print(f"\nDone. Saved to: {OUTPUT_FILE}")
 
     finally:
         driver.quit()
