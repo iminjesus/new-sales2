@@ -14,7 +14,7 @@ load_dotenv(encoding="utf-8-sig")  # utf-8-sig handles both UTF-8 and UTF-16 BOM
 TEMPE_USERNAME = os.getenv("Tempe_username")
 TEMPE_PASSWORD = os.getenv("Tempe_password")
 
-LOGIN_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Account/Login"
+BASE_URL = "https://orders.tempetyreswholesale.com.au"
 SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
 
 # Tyre size queries to search (format: WWWAALLRR -> e.g. 1756514 = 175/65R14)
@@ -50,7 +50,9 @@ def init_driver(headless=False):
 
 
 def login(driver, wait):
-    driver.get(LOGIN_URL)
+    # Navigate to root — site will redirect to its own login page
+    driver.get(BASE_URL)
+    time.sleep(2)
     print(f"Login page loaded: {driver.current_url}")
 
     # Try multiple possible selectors for the username field
@@ -102,12 +104,12 @@ def login(driver, wait):
     password_field.send_keys(Keys.RETURN)
 
     try:
-        wait.until(EC.url_changes(LOGIN_URL))
+        wait.until(EC.url_contains("/WebOrder/Product"))
     except Exception:
         pass
 
     print(f"After login URL: {driver.current_url}")
-    if "Login" in driver.current_url or "login" in driver.current_url:
+    if "login" in driver.current_url.lower() or "account" in driver.current_url.lower():
         driver.save_screenshot("login_failed.png")
         raise RuntimeError("Login failed — still on login page. Check login_failed.png.")
 
