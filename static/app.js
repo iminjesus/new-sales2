@@ -512,7 +512,7 @@ function computeWorkingDaysInfo(cutRows) {
   // JS getDay(): 0=Sun, 1=Mon, …, 5=Fri, 6=Sat
   let futureWorkingDays = 0;
   for (let d = maxDay + 1; d <= calendarDays; d++) {
-    const dow = new Date(year, month, d).getDay();
+    const dow = new Date(year, effMo, d).getDay();
     if (dow >= 1 && dow <= 5) {
       isWorkingDay[d - 1] = true;
       futureWorkingDays++;
@@ -1117,7 +1117,7 @@ async function fetchMonthlyKPITarget(region,BDE, year=2026){
 
 // build & render table
 async function drawMonthlyKPI(){
-  const currentMonthIdx = new Date().getMonth(); // 0-based
+  const currentMonthIdx = effectiveMonthIdx(); // 0-based, 전달 보정 적용
   const REGIONS = ["NSW","QLD","VIC","WA"];
 
   // Fire ALL requests at once — no sequential awaits
