@@ -14,7 +14,7 @@ load_dotenv(encoding="utf-8-sig")  # utf-8-sig handles both UTF-8 and UTF-16 BOM
 TEMPE_USERNAME = os.getenv("Tempe_username")
 TEMPE_PASSWORD = os.getenv("Tempe_password")
 
-BASE_URL = "https://orders.tempetyreswholesale.com.au"
+BASE_URL = "https://orders.tempetyreswholesale.com.au/weborder"
 SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
 
 # Tyre size queries to search (format: WWWAALLRR -> e.g. 1756514 = 175/65R14)
@@ -101,7 +101,13 @@ def login(driver, wait):
     username_field.send_keys(TEMPE_USERNAME)
     password_field.clear()
     password_field.send_keys(TEMPE_PASSWORD)
-    password_field.send_keys(Keys.RETURN)
+
+    # Click the Login button
+    try:
+        login_btn = driver.find_element(By.CSS_SELECTOR, "input[value='Login'], button[type='submit'], input[type='submit']")
+        login_btn.click()
+    except Exception:
+        password_field.send_keys(Keys.RETURN)
 
     try:
         wait.until(EC.url_contains("/WebOrder/Product"))
