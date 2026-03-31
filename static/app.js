@@ -137,8 +137,9 @@ const daysLabels=()=>[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,2
 const yearsLabels=()=>[2021,2022,2023,2024,2025];
 // 이달 첫 번째 비즈니스 데이(월~금) 당일 또는 그 이전이면 전달을 반환 (1-based)
 function effectiveMonth(){
-  const today=new Date();
-  const yr=today.getFullYear(), mo=today.getMonth(); // mo: 0-based
+  const now=new Date();
+  const yr=now.getFullYear(), mo=now.getMonth(); // mo: 0-based
+  const today=new Date(yr,mo,now.getDate()); // 시간 제거, 날짜만
   let firstBD=new Date(yr,mo,1);
   while(firstBD.getDay()===0||firstBD.getDay()===6) firstBD.setDate(firstBD.getDate()+1);
   if(today<=firstBD) return mo===0?12:mo; // mo===0 → prev=December(12), else mo (0-based prev = 1-based current-1)
