@@ -41,7 +41,8 @@ SEARCH_QUERIES = [
 
 current_month = datetime.now().strftime('%b')
 current_year  = datetime.now().strftime('%Y')
-OUTPUT_FILE   = f"Tempe_{current_month}_{current_year}.csv"
+current_time  = datetime.now().strftime('%H%M')
+OUTPUT_FILE   = f"Tempe_{current_month}_{current_year}_{current_time}.csv"
 
 
 def clean(text):
