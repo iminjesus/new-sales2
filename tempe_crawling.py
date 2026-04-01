@@ -9,7 +9,35 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
-SEARCH_QUERIES = ["1756514"]
+
+# Format: width + aspect + rim (digits only), e.g. 175/65R14 → 1756514
+# For no-aspect tyres: 185R14 → 18514
+SEARCH_QUERIES = [
+    "1756514",  # 175/65R14
+    "1956515",  # 195/65R15
+    "2056516",  # 205/65R16
+    "2254517",  # 225/45R17
+    "2154517",  # 215/45R17 (wait, 215/45R17)
+    "2354517",  # 235/45R17
+    "2254018",  # 225/40R18
+    "2354519",  # 235/45R19
+    "2453520",  # 245/35R20
+    "2256517",  # 225/65R17
+    "2255518",  # 225/55R18
+    "2256018",  # 225/60R18
+    "2255519",  # 225/55R19
+    "2254519",  # 225/45R19
+    "2554520",  # 255/45R20
+    "2654021",  # 265/40R21
+    "2457016",  # 245/70R16
+    "2657016",  # 265/70R16
+    "2656018",  # 265/60R18
+    "2656517",  # 265/65R17
+    "2657516",  # 265/75R16
+    "18514",    # 185R14
+    "19515",    # 195R15
+    "2356516",  # 235/65R16
+]
 
 current_month = datetime.now().strftime('%b')
 current_year  = datetime.now().strftime('%Y')
@@ -45,7 +73,14 @@ def search_tyres(driver, wait, query):
         driver.get(SEARCH_URL)
         time.sleep(2)
 
-    print(f"Search page: {driver.current_url}")
+    # Click Clear to reset previous search results
+    try:
+        clear_btn = driver.find_element(By.XPATH,
+            "//input[@value='Clear'] | //button[normalize-space()='Clear']")
+        driver.execute_script("arguments[0].click();", clear_btn)
+        time.sleep(0.8)
+    except Exception:
+        pass
 
     search_input = wait.until(
         EC.presence_of_element_located((By.ID, "simpleSearchText"))
