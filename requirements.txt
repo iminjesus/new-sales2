@@ -6,3 +6,4 @@ gunicorn==23.0.0
 pandas
 selenium
 beautifulsoup4
+openpyxl
