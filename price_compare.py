@@ -538,7 +538,9 @@ def main():
     sheet_detail(wb, rows)
     sheet_competitor_match(wb, rows)
 
-    out = csv_path.replace(".csv", "_comparison.xlsx")
+    from datetime import datetime
+    ts  = datetime.now().strftime("%H%M%S")
+    out = csv_path.replace(".csv", f"_comparison_{ts}.xlsx")
     wb.save(out)
     print(f"Saved:  {out}")
     os.startfile(out)             # auto-open in Excel (Windows)
