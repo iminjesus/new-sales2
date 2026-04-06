@@ -247,85 +247,124 @@ def load_csv(path):
             rows.append(r)
     return rows
 
-# ── Sheet 1: Comparison summary (one column per brand) ───────────────────────
+# ── Sheet 1: Comparison summary (one row per size, brand columns) ────────────
 def sheet_summary(wb, all_rows):
     ws = wb.create_sheet("Summary")
-    ws.freeze_panes = "C3"
+    ws.freeze_panes = "C4"
 
     brand_abbrs = list(BRANDS.keys())
+    n_brands = len(brand_abbrs)
 
-    # Row 1: title
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2 + len(brand_abbrs) * 2)
+    # ── Build lookup: (size_norm, abbr) → best matched (desc, cost, price) ───
+    # Use COMPETITOR_PATTERNS keywords to find best match per brand per size
+    raw_lookup = {}   # (size_norm, abbr) → list of (desc, cost_f, price_f)
+    for r in all_rows:
+        brand = r.get("brand", "").strip()
+        desc  = r.get("DESCRIPTION", "").strip()
+        cost  = r.get("COST",  "").strip()
+        price = r.get("PRICE", "").strip()
+        abbr  = abbr_for(brand) or ("KH" if brand.lower() == "kumho" else None)
+        if not abbr or not desc:
+            continue
+        size_norm = normalise_size(desc)
+        cost_f  = float(cost)  if cost  else None
+        price_f = float(price) if price else None
+        raw_lookup.setdefault((size_norm, abbr), []).append((desc, cost_f, price_f))
+
+    def best_match(size, abbr):
+        candidates = raw_lookup.get((size, abbr), [])
+        cat_info = SIZE_CATEGORY.get(size)
+        if cat_info:
+            keywords = COMPETITOR_PATTERNS.get(cat_info, {}).get(abbr, [])
+            matched = [x for x in candidates if keywords and match_competitor(x[0], keywords)]
+            pool = matched if matched else candidates
+        else:
+            pool = candidates
+        if not pool:
+            return None, None, None
+        best = sorted(pool, key=lambda x: (x[2] is None, x[2] or 0))[0]
+        return best  # (desc, cost_f, price_f)
+
+    # ── Title row ─────────────────────────────────────────────────────────────
+    total_cols = 3 + n_brands * 2
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
     t = ws.cell(row=1, column=1, value="All Sizes — Brand Price Comparison  (COST / PRICE)")
     t.font      = Font(bold=True, size=13, color="FFFFFF")
     t.fill      = PatternFill("solid", fgColor="1F4E79")
     t.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    # Row 2: column headers
-    hdr_cell(ws, 2, 1, "Size",        bg="2E4057")
-    hdr_cell(ws, 2, 2, "Description", bg="2E4057")
-    col = 3
+    # ── Row 2: brand headers ──────────────────────────────────────────────────
+    hdr_cell(ws, 2, 1, "Size",    bg="2E4057")
+    hdr_cell(ws, 2, 2, "Pattern", bg="2E4057")
+    hdr_cell(ws, 2, 3, "Category", bg="2E4057")
+    col = 4
     for abbr in brand_abbrs:
         ws.merge_cells(start_row=2, start_column=col, end_row=2, end_column=col+1)
-        hdr_cell(ws, 2, col,   f"{abbr}\n{BRANDS[abbr]}",
+        hdr_cell(ws, 2, col, f"{abbr}  {BRANDS[abbr]}",
                  bg=BRAND_COLOURS.get(abbr, "555555"))
-        ws.cell(row=2, column=col+1).fill = PatternFill("solid",
-                 fgColor=BRAND_COLOURS.get(abbr, "555555"))
+        ws.cell(row=2, column=col+1).fill = PatternFill(
+            "solid", fgColor=BRAND_COLOURS.get(abbr, "555555"))
         col += 2
 
-    # Row 3: sub-headers
-    hdr_cell(ws, 3, 1, "Size",        bg="334155", fg="CCCCCC", bold=False)
-    hdr_cell(ws, 3, 2, "Description", bg="334155", fg="CCCCCC", bold=False)
-    col = 3
-    for abbr in brand_abbrs:
+    # ── Row 3: sub-headers ────────────────────────────────────────────────────
+    hdr_cell(ws, 3, 1, "Size",     bg="334155", fg="CCCCCC", bold=False)
+    hdr_cell(ws, 3, 2, "Pattern",  bg="334155", fg="CCCCCC", bold=False)
+    hdr_cell(ws, 3, 3, "Category", bg="334155", fg="CCCCCC", bold=False)
+    col = 4
+    for _ in brand_abbrs:
         hdr_cell(ws, 3, col,   "Cost",  bg="334155", fg="AAAAAA", bold=False)
         hdr_cell(ws, 3, col+1, "Price", bg="334155", fg="AAAAAA", bold=False)
         col += 2
     ws.row_dimensions[3].height = 18
 
-    # Group rows by (size, description) — keep unique descriptions
-    # For summary: one row per description, show cost/price in each brand column
-    # Build lookup: (brand_abbr, description) → (cost, price)
-    lookup = {}
-    sizes_seen = []
-    for r in all_rows:
-        brand  = r.get("brand", "").strip()
-        desc   = r.get("DESCRIPTION", "").strip()
-        cost   = r.get("COST",  "").strip()
-        price  = r.get("PRICE", "").strip()
-        abbr   = abbr_for(brand)
-        if not abbr:
-            continue
-        size_part = desc.split(" ")[0] if desc else ""
-        key = (size_part, desc)
-        if key not in lookup:
-            lookup[key] = {}
-            sizes_seen.append(key)
-        lookup[key][abbr] = (cost, price)
+    # ── Data rows: one row per size ───────────────────────────────────────────
+    sizes_ordered = list(SIZE_CATEGORY.keys())
+    csv_sizes = sorted({normalise_size(r.get("DESCRIPTION", "")) for r in all_rows})
+    for s in csv_sizes:
+        if s not in sizes_ordered:
+            sizes_ordered.append(s)
 
     row_num = 4
-    for (size_part, desc) in sizes_seen:
+    prev_line = None
+    for size in sizes_ordered:
+        cat_info = SIZE_CATEGORY.get(size)
+        if cat_info:
+            line, category, kumho_pat = cat_info
+        else:
+            line, category, kumho_pat = ("?", "?", "?")
+
+        # Light separator line between Line groups (Car / SUV / PUP / Van)
+        if prev_line and line != prev_line:
+            for ci in range(1, total_cols + 1):
+                ws.cell(row=row_num, column=ci).fill = PatternFill("solid", fgColor="D9D9D9")
+            row_num += 1
+        prev_line = line
+
         bg = "F7F9FC" if row_num % 2 == 0 else "FFFFFF"
-        data_cell(ws, row_num, 1, size_part, bg=bg, align="center")
-        data_cell(ws, row_num, 2, desc,      bg=bg)
-        col = 3
+
+        data_cell(ws, row_num, 1, size,       bg=bg, align="center")
+        data_cell(ws, row_num, 2, kumho_pat,  bg=bg, align="center")
+        data_cell(ws, row_num, 3, f"{line} / {category}", bg=bg, align="center")
+
+        col = 4
         for abbr in brand_abbrs:
             brand_bg = ROW_FILLS.get(abbr, "FFFFFF")
-            entry = lookup.get((size_part, desc), {}).get(abbr)
-            if entry:
-                cost_val  = float(entry[0]) if entry[0] else None
-                price_val = float(entry[1]) if entry[1] else None
+            desc, cost_val, price_val = best_match(size, abbr)
+            if desc:
                 data_cell(ws, row_num, col,   cost_val,  bg=brand_bg, align="right", num_fmt="$#,##0.00")
                 data_cell(ws, row_num, col+1, price_val, bg=brand_bg, align="right", num_fmt="$#,##0.00")
             else:
                 data_cell(ws, row_num, col,   "-", bg="F0F0F0", align="center")
                 data_cell(ws, row_num, col+1, "-", bg="F0F0F0", align="center")
             col += 2
+
         row_num += 1
 
     autofit(ws)
-    ws.column_dimensions["B"].width = 45
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 12
+    ws.column_dimensions["C"].width = 18
 
 
 # ── Sheet 2: Detail (all brands, sorted by price) ────────────────────────────
