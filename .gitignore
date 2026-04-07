@@ -17,6 +17,7 @@ env/
 node_modules/
 npm-debug.log*
 
+<<<<<<< HEAD
 # OS
 .DS_Store
 Thumbs.db
@@ -42,3 +43,15 @@ geocoded.log
 # SQLite snapshot
 *.db
 *.sqlite
+=======
+# Temp
+temp.py
+rawdata/
+
+# Environment variables
+.env
+
+# Crawl output files
+Tempe_*.txt
+JAX_*.txt
+>>>>>>> d0953bf2f59c4f42287673781837bb8e16884c4f
