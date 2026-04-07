@@ -286,26 +286,28 @@ def sheet_summary(wb, all_rows):
         return best  # (desc, cost_f, price_f)
 
     # ── Title row ─────────────────────────────────────────────────────────────
-    total_cols = 3 + n_brands * 2
+    total_cols = 3 + n_brands * 3
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
-    t = ws.cell(row=1, column=1, value="All Sizes — Brand Price Comparison  (COST / PRICE)")
+    t = ws.cell(row=1, column=1, value="All Sizes — Brand Price Comparison  (PRODUCT / COST / PRICE)")
     t.font      = Font(bold=True, size=13, color="FFFFFF")
     t.fill      = PatternFill("solid", fgColor="1F4E79")
     t.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    # ── Row 2: brand headers ──────────────────────────────────────────────────
-    hdr_cell(ws, 2, 1, "Size",    bg="2E4057")
-    hdr_cell(ws, 2, 2, "Pattern", bg="2E4057")
+    # ── Row 2: brand headers (3 cols each: Product | Cost | Price) ───────────
+    hdr_cell(ws, 2, 1, "Size",     bg="2E4057")
+    hdr_cell(ws, 2, 2, "Pattern",  bg="2E4057")
     hdr_cell(ws, 2, 3, "Category", bg="2E4057")
     col = 4
     for abbr in brand_abbrs:
-        ws.merge_cells(start_row=2, start_column=col, end_row=2, end_column=col+1)
+        ws.merge_cells(start_row=2, start_column=col, end_row=2, end_column=col+2)
         hdr_cell(ws, 2, col, f"{abbr}  {BRANDS[abbr]}",
                  bg=BRAND_COLOURS.get(abbr, "555555"))
         ws.cell(row=2, column=col+1).fill = PatternFill(
             "solid", fgColor=BRAND_COLOURS.get(abbr, "555555"))
-        col += 2
+        ws.cell(row=2, column=col+2).fill = PatternFill(
+            "solid", fgColor=BRAND_COLOURS.get(abbr, "555555"))
+        col += 3
 
     # ── Row 3: sub-headers ────────────────────────────────────────────────────
     hdr_cell(ws, 3, 1, "Size",     bg="334155", fg="CCCCCC", bold=False)
@@ -313,9 +315,10 @@ def sheet_summary(wb, all_rows):
     hdr_cell(ws, 3, 3, "Category", bg="334155", fg="CCCCCC", bold=False)
     col = 4
     for _ in brand_abbrs:
-        hdr_cell(ws, 3, col,   "Cost",  bg="334155", fg="AAAAAA", bold=False)
-        hdr_cell(ws, 3, col+1, "Price", bg="334155", fg="AAAAAA", bold=False)
-        col += 2
+        hdr_cell(ws, 3, col,   "Product", bg="334155", fg="AAAAAA", bold=False)
+        hdr_cell(ws, 3, col+1, "Cost",    bg="334155", fg="AAAAAA", bold=False)
+        hdr_cell(ws, 3, col+2, "Price",   bg="334155", fg="AAAAAA", bold=False)
+        col += 3
     ws.row_dimensions[3].height = 18
 
     # ── Data rows: one row per size ───────────────────────────────────────────
@@ -343,21 +346,25 @@ def sheet_summary(wb, all_rows):
 
         bg = "F7F9FC" if row_num % 2 == 0 else "FFFFFF"
 
-        data_cell(ws, row_num, 1, size,       bg=bg, align="center")
-        data_cell(ws, row_num, 2, kumho_pat,  bg=bg, align="center")
-        data_cell(ws, row_num, 3, f"{line} / {category}", bg=bg, align="center")
+        data_cell(ws, row_num, 1, size,                    bg=bg, align="center")
+        data_cell(ws, row_num, 2, kumho_pat,               bg=bg, align="center")
+        data_cell(ws, row_num, 3, f"{line} / {category}",  bg=bg, align="center")
 
         col = 4
         for abbr in brand_abbrs:
             brand_bg = ROW_FILLS.get(abbr, "FFFFFF")
             desc, cost_val, price_val = best_match(size, abbr)
             if desc:
-                data_cell(ws, row_num, col,   cost_val,  bg=brand_bg, align="right", num_fmt="$#,##0.00")
-                data_cell(ws, row_num, col+1, price_val, bg=brand_bg, align="right", num_fmt="$#,##0.00")
+                # Strip the leading size token from description for brevity
+                short_desc = " ".join(desc.split()[1:]) if desc.split() else desc
+                data_cell(ws, row_num, col,   short_desc, bg=brand_bg, align="left")
+                data_cell(ws, row_num, col+1, cost_val,   bg=brand_bg, align="right", num_fmt="$#,##0.00")
+                data_cell(ws, row_num, col+2, price_val,  bg=brand_bg, align="right", num_fmt="$#,##0.00")
             else:
                 data_cell(ws, row_num, col,   "-", bg="F0F0F0", align="center")
                 data_cell(ws, row_num, col+1, "-", bg="F0F0F0", align="center")
-            col += 2
+                data_cell(ws, row_num, col+2, "-", bg="F0F0F0", align="center")
+            col += 3
 
         row_num += 1
 
@@ -365,6 +372,10 @@ def sheet_summary(wb, all_rows):
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 12
     ws.column_dimensions["C"].width = 18
+    # Product name columns: every 3rd col starting from col 4
+    for i, _ in enumerate(brand_abbrs):
+        col_letter = get_column_letter(4 + i * 3)
+        ws.column_dimensions[col_letter].width = 32
 
 
 # ── Sheet 2: Detail (all brands, sorted by price) ────────────────────────────
