@@ -355,9 +355,7 @@ def sheet_summary(wb, all_rows):
             brand_bg = ROW_FILLS.get(abbr, "FFFFFF")
             desc, cost_val, price_val = best_match(size, abbr)
             if desc:
-                # Strip the leading size token from description for brevity
-                short_desc = " ".join(desc.split()[1:]) if desc.split() else desc
-                data_cell(ws, row_num, col,   short_desc, bg=brand_bg, align="left")
+                data_cell(ws, row_num, col,   desc, bg=brand_bg, align="left")
                 data_cell(ws, row_num, col+1, cost_val,   bg=brand_bg, align="right", num_fmt="$#,##0.00")
                 data_cell(ws, row_num, col+2, price_val,  bg=brand_bg, align="right", num_fmt="$#,##0.00")
             else:
@@ -378,33 +376,36 @@ def sheet_summary(wb, all_rows):
         ws.column_dimensions[col_letter].width = 32
 
 
-# ── Sheet 2: Detail (all brands, sorted by price) ────────────────────────────
+# ── Sheet 2: Detail (all brands, sorted by size then price) ──────────────────
 def sheet_detail(wb, all_rows):
     ws = wb.create_sheet("All Products")
     ws.freeze_panes = "A3"
 
-    hdr_cell(ws, 1, 1, "Brand Abbr", bg="2E4057")
-    hdr_cell(ws, 1, 2, "Brand",       bg="2E4057")
-    hdr_cell(ws, 1, 3, "Description", bg="2E4057")
-    hdr_cell(ws, 1, 4, "Cost ($)",    bg="2E4057")
-    hdr_cell(ws, 1, 5, "Price ($)",   bg="2E4057")
-    hdr_cell(ws, 1, 6, "Margin ($)",  bg="2E4057")
-    hdr_cell(ws, 1, 7, "Margin %",    bg="2E4057")
+    hdr_cell(ws, 1, 1, "Size",        bg="2E4057")
+    hdr_cell(ws, 1, 2, "Brand Abbr",  bg="2E4057")
+    hdr_cell(ws, 1, 3, "Brand",       bg="2E4057")
+    hdr_cell(ws, 1, 4, "Description", bg="2E4057")
+    hdr_cell(ws, 1, 5, "Cost ($)",    bg="2E4057")
+    hdr_cell(ws, 1, 6, "Price ($)",   bg="2E4057")
+    hdr_cell(ws, 1, 7, "Margin ($)",  bg="2E4057")
+    hdr_cell(ws, 1, 8, "Margin %",    bg="2E4057")
 
     known_rows = []
     other_rows = []
     for r in all_rows:
         brand = r.get("brand", "").strip()
         abbr  = abbr_for(brand)
+        size  = r.get("SIZE", "").strip() or normalise_size(r.get("DESCRIPTION", ""))
         if abbr:
-            known_rows.append((abbr, r))
+            known_rows.append((size, abbr, r))
         else:
-            other_rows.append(("--", r))
+            other_rows.append((size, "--", r))
 
-    known_rows.sort(key=lambda x: (x[0], float(x[1].get("PRICE","0") or 0)))
+    known_rows.sort(key=lambda x: (x[0], x[1], float(x[2].get("PRICE", "0") or 0)))
+    other_rows.sort(key=lambda x: (x[0], float(x[2].get("PRICE", "0") or 0)))
 
     all_out = known_rows + other_rows
-    for i, (abbr, r) in enumerate(all_out):
+    for i, (size, abbr, r) in enumerate(all_out):
         rn     = i + 2
         brand  = r.get("brand", "").strip()
         desc   = r.get("DESCRIPTION", "").strip()
@@ -414,27 +415,28 @@ def sheet_detail(wb, all_rows):
 
         cost_f  = float(cost)  if cost  else None
         price_f = float(price) if price else None
-        margin  = round(price_f - cost_f, 2)           if (cost_f and price_f) else None
-        margin_pct = round(margin / price_f * 100, 1)  if (margin and price_f) else None
+        margin      = round(price_f - cost_f, 2)          if (cost_f and price_f) else None
+        margin_pct  = round(margin / price_f * 100, 1)    if (margin and price_f) else None
 
-        data_cell(ws, rn, 1, abbr if abbr != "--" else "other", bg=bg, align="center")
-        data_cell(ws, rn, 2, brand, bg=bg)
-        data_cell(ws, rn, 3, desc,  bg=bg)
-        data_cell(ws, rn, 4, cost_f,      bg=bg, align="right", num_fmt="$#,##0.00")
-        data_cell(ws, rn, 5, price_f,     bg=bg, align="right", num_fmt="$#,##0.00")
-        data_cell(ws, rn, 6, margin,      bg=bg, align="right", num_fmt="$#,##0.00")
-        data_cell(ws, rn, 7, margin_pct,  bg=bg, align="right", num_fmt='0.0"%"')
+        data_cell(ws, rn, 1, size,  bg=bg, align="center")
+        data_cell(ws, rn, 2, abbr if abbr != "--" else "other", bg=bg, align="center")
+        data_cell(ws, rn, 3, brand, bg=bg)
+        data_cell(ws, rn, 4, desc,  bg=bg)
+        data_cell(ws, rn, 5, cost_f,     bg=bg, align="right", num_fmt="$#,##0.00")
+        data_cell(ws, rn, 6, price_f,    bg=bg, align="right", num_fmt="$#,##0.00")
+        data_cell(ws, rn, 7, margin,     bg=bg, align="right", num_fmt="$#,##0.00")
+        data_cell(ws, rn, 8, margin_pct, bg=bg, align="right", num_fmt='0.0"%"')
 
     # Conditional colour scale on Price column
     last = len(all_out) + 1
     ws.conditional_formatting.add(
-        f"E2:E{last}",
+        f"F2:F{last}",
         ColorScaleRule(start_type="min", start_color="63BE7B",
                        mid_type="percentile", mid_value=50, mid_color="FFEB84",
                        end_type="max", end_color="F8696B")
     )
     autofit(ws)
-    ws.column_dimensions["C"].width = 50
+    ws.column_dimensions["D"].width = 40
 
 
 # ── Sheet 3: Competitor Match ─────────────────────────────────────────────────
