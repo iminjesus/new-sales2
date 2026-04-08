@@ -33,7 +33,11 @@ function initSalesMap() {
   if (!el) return;  // not on the map page
 
   salesMap = L.map("salesMap", {
-    minZoom: 4
+    minZoom: 4,
+    tap: true,          // enable tap handler for mobile
+    tapTolerance: 15,   // pixels tolerance for tap
+    touchZoom: true,    // pinch-to-zoom on mobile
+    dragging: true
   }).fitBounds([[-39.5, 114.0], [-10.6, 153.6]], { padding: [20, 20] });
 
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -42,6 +46,20 @@ function initSalesMap() {
   }).addTo(salesMap);
 
   salesMapLayer = L.layerGroup().addTo(salesMap);
+
+  // Re-measure map when its container is resized (handles mobile layout shifts)
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        try { salesMap.invalidateSize(); } catch (_e) {}
+      });
+    }).observe(el);
+  }
+
+  // Re-measure when filter panel is toggled on mobile
+  window.addEventListener("filterpanelchanged", () => {
+    setTimeout(() => { try { salesMap.invalidateSize(); } catch (_e) {} }, 80);
+  });
 }
 
 // This is called from refreshAllWithKpi() when we are on the map page
@@ -315,6 +333,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Category, metric, region buttons will already have listeners from app.js.
   // Just trigger one initial refresh.
   await loadSalesMap();
-  if (salesMap) setTimeout(() => salesMap.invalidateSize(), 0);
+
+  // Let the browser settle the flex layout (especially on mobile) before
+  // telling Leaflet the correct container size.
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise(r => setTimeout(r, 150));
+  if (salesMap) salesMap.invalidateSize();
 });
 

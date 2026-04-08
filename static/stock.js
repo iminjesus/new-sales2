@@ -166,9 +166,29 @@
   function fmt(n){ return Math.round(Number(n)||0).toLocaleString(); }
 
   // ---------------- Leaflet ----------------
-  const map = L.map("stockMap", { zoomSnap: 0.1 });
+  const map = L.map("stockMap", {
+    zoomSnap: 0.1,
+    tap: true,          // enable tap handler for mobile
+    tapTolerance: 15,   // pixels tolerance for tap
+    touchZoom: true,    // pinch-to-zoom on mobile
+    dragging: true
+  });
   map.setView([5, 120], 4); // Asia default; fitBounds after data loads
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+
+  // Re-measure map when its container is resized (handles mobile layout shifts)
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        try { map.invalidateSize(); } catch (_e) {}
+      });
+    }).observe(document.getElementById("stockMap"));
+  }
+
+  // Re-measure when filter panel is toggled (changes page height on mobile)
+  window.addEventListener("filterpanelchanged", () => {
+    setTimeout(() => { try { map.invalidateSize(); } catch (_e) {} }, 80);
+  });
 
   const layerStock         = L.layerGroup().addTo(map);
   const layerOrders        = L.layerGroup().addTo(map);
@@ -656,7 +676,9 @@
     });
 
     // Let the browser paint the flex layout before Leaflet measures the map div
-    await new Promise(r => setTimeout(r, 100));
+    // Use two rAF passes to ensure layout has settled (especially on mobile)
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    await new Promise(r => setTimeout(r, 150));
     try { map.invalidateSize(); } catch(_e) {}
 
     await fetchAndRender();

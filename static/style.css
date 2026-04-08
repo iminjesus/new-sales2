@@ -530,7 +530,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 
 /* ─── Mobile responsive ─────────────────────────────────── */
 @media (max-width: 768px) {
-  body { margin: 8px; }
+  body { margin: 8px; overflow-x: hidden; }
 
   h2 { font-size: 15px !important; }
   h3 { font-size: 12px; margin: 0 0 6px; }
@@ -560,11 +560,22 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   /* Chart rows: stack vertically */
   .chart-row {
     flex-direction: column;
+    flex-wrap: wrap;
   }
   .chart-row > .box {
     flex: 1 1 100%;
     width: 100%;
+    min-height: 220px;
+    box-sizing: border-box;
   }
+  /* Graph view: give canvases inside chart boxes a visible height */
+  .chart-row > .box > canvas {
+    width: 100% !important;
+    height: 200px !important;
+    min-height: 0 !important;
+  }
+  /* Profit chart: shorter canvas */
+  .profit-chart-canvas { height: 220px !important; }
 
   /* KPI + Profit: single column */
   .kpi-profit-row {
@@ -573,6 +584,12 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   .kpi-profit-row > .kpi-box {
     width: 100%;
     min-width: 0;
+    box-sizing: border-box;
+  }
+  .kpi-profit-row > .profit-box {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
   }
 
   /* KPI table: smaller font and columns */
@@ -587,9 +604,6 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   #kpiByRegion th:nth-child(5), #kpiByRegion td:nth-child(5) { width: 44px !important; }
   #kpiByRegion th:nth-child(6), #kpiByRegion td:nth-child(6) { width: 44px !important; }
   #kpiByRegion th:nth-child(7), #kpiByRegion td:nth-child(7) { width: 44px !important; }
-
-  /* Profit chart: shorter canvas */
-  .profit-chart-canvas { height: 220px !important; }
 
   /* Custom dropdowns: narrower input */
   .dd-wrap input { width: 110px; }
@@ -606,6 +620,7 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   /* ── Map page ── */
   #mapLayout {
     flex-direction: column !important;
+    flex-wrap: wrap !important;
     height: auto !important;
     min-height: 0 !important;
     gap: 4px;
@@ -614,12 +629,13 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   #mapWrapper {
     flex: none !important;
     width: 100% !important;
-    height: 300px !important;
+    height: 350px !important;
     min-height: 0 !important;
+    box-sizing: border-box;
   }
   #salesMap {
     width: 100% !important;
-    height: 300px !important;
+    height: 350px !important;
     min-height: 0 !important;
   }
   /* side panel becomes a full-width block below the map */
@@ -633,21 +649,23 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
     flex-direction: column;
     gap: 8px;
     overflow-y: visible;
+    box-sizing: border-box;
   }
   /* chart panes: fixed px height so canvas 100% resolves correctly */
   .chartPane {
     flex: none !important;
-    height: 200px !important;
+    height: 220px !important;
     min-height: 0 !important;
   }
   .chartPane canvas {
     width: 100% !important;
-    height: 200px !important;
+    height: 220px !important;
   }
 
   /* ── Stock page ── */
   #stockLayout {
     flex-direction: column !important;
+    flex-wrap: wrap !important;
     height: auto !important;
     min-height: 0 !important;
     gap: 4px;
@@ -656,13 +674,14 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   #stockMapWrapper {
     flex: none !important;
     width: 100% !important;
-    height: 300px !important;
+    height: 350px !important;
     min-height: 0 !important;
     position: relative;
+    box-sizing: border-box;
   }
   #stockMap {
     width: 100% !important;
-    height: 300px !important;
+    height: 350px !important;
   }
   /* chart panel stacks below the map */
   #stockSidePanel {
@@ -671,18 +690,31 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
     height: auto !important;
     max-height: none !important;
     overflow-y: visible;
+    box-sizing: border-box;
   }
   /* fixed px height on each pane so canvas 100% resolves */
   .stockChartPane {
     flex: none !important;
-    height: 220px !important;
+    height: 240px !important;
     min-height: 0 !important;
     max-height: none !important;
   }
   .stockChartPane canvas {
-    height: 180px !important;
+    height: 200px !important;
     flex: none !important;
     min-height: 0 !important;
+  }
+
+  /* State table: smaller font on mobile */
+  #stateTable { font-size: 11px !important; }
+  #stateTable th, #stateTable td { padding: 4px 6px !important; }
+
+  /* Leaflet controls: larger touch targets */
+  .leaflet-control-zoom a {
+    width: 36px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+    font-size: 18px !important;
   }
 }
 /* ─── State breakdown table ────────────────────────────────── */

@@ -23,9 +23,6 @@
     Chart.register(ChartDataLabels);
   </script>
 
-  <style>
-    #salesMap{ height: 580px; min-height: 580px; }
-  </style>
 </head>
 <body>
   <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Map</h2>
@@ -201,6 +198,8 @@
       btn.addEventListener("click", function () {
         var open = panel.classList.toggle("open");
         btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+        // Notify Leaflet map that the layout has changed
+        window.dispatchEvent(new CustomEvent("filterpanelchanged"));
       });
     }
   })();
@@ -209,6 +208,6 @@
   <!-- shared dashboard logic -->
   <script src="/static/app.js?v=20260331" defer></script>
   <!-- small map-specific layer that reuses app.js -->
-  <script src="/static/map.js?v=20260331" defer></script>
+  <script src="/static/map.js?v=20260408" defer></script>
 </body>
 </html>

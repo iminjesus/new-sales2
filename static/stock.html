@@ -169,11 +169,13 @@
       btn.addEventListener("click", function () {
         var open = panel.classList.toggle("open");
         btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+        // Notify Leaflet map that the layout has changed
+        window.dispatchEvent(new CustomEvent("filterpanelchanged"));
       });
     }
   })();
   </script>
 
-  <script src="/static/stock.js?v=20260318" defer></script>
+  <script src="/static/stock.js?v=20260408" defer></script>
 </body>
 </html>
