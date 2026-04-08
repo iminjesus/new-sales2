@@ -117,37 +117,47 @@ def search_tyres(driver, wait, query):
     print("Results loaded.")
 
 
-def click_all_get_costs(driver, wait):
-    """Click every 'Get Cost' element one by one, always re-finding fresh elements."""
+def click_all_get_costs(driver):
+    """Click every 'Get Cost' element one by one. Never break early — skip stuck ones."""
+    short_wait = WebDriverWait(driver, 8)
     clicked = 0
-    max_iter = 500
-    for _ in range(max_iter):
+    skipped = 0
+
+    while True:
         els = driver.find_elements(By.XPATH, "//*[contains(text(),'Get Cost')]")
         if not els:
             break
+
         el = els[0]
         prev_count = len(els)
+
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-            time.sleep(0.2)
+            time.sleep(0.25)
             driver.execute_script("arguments[0].click();", el)
-            # Wait until this element disappears (replaced by cost or "Call For Availability")
-            wait.until(lambda d: len(d.find_elements(
+            # Wait up to 8s for this element to disappear
+            short_wait.until(lambda d: len(d.find_elements(
                 By.XPATH, "//*[contains(text(),'Get Cost')]")) < prev_count)
+            clicked += 1
         except Exception:
-            # If click failed or timed out, skip by scrolling past
+            # Click didn't register or timed out — hide and continue to next
+            skipped += 1
             try:
                 driver.execute_script("arguments[0].style.display='none';", el)
             except Exception:
-                break
-        time.sleep(0.2)
-        clicked += 1
-    print(f"  Clicked {clicked} 'Get Cost' elements")
+                pass
+        time.sleep(0.25)
+
+    print(f"  'Get Cost' clicked={clicked}, skipped={skipped}")
 
 
-def scrape_rows(driver, wait):
+def scrape_rows(driver):
     """Click all Get Cost links first, then collect all row data."""
-    click_all_get_costs(driver, wait)
+    click_all_get_costs(driver)
+
+    # Scroll back to top so all rows are accessible
+    driver.execute_script("window.scrollTo(0, 0);")
+    time.sleep(0.5)
 
     rows = driver.find_elements(By.CSS_SELECTOR, "div.product-data-list")
     print(f"  Collecting {len(rows)} rows")
@@ -155,11 +165,34 @@ def scrape_rows(driver, wait):
     results = []
     for row in rows:
         try:
+            # Brand name
+            brand = ""
+            for sel in [
+                "div[class*='brand'] span",
+                "span[class*='brand']",
+                "div.brand span",
+                "div[ng-bind*='brand']",
+                "span[ng-bind*='brand']",
+            ]:
+                try:
+                    brand = clean(row.find_element(By.CSS_SELECTOR, sel).text)
+                    if brand:
+                        break
+                except Exception:
+                    pass
+            # Fallback: first non-dollar non-size text that looks like a brand word
+            if not brand:
+                all_spans = row.find_elements(By.CSS_SELECTOR, "span.ng-binding")
+                texts = [clean(el.text) for el in all_spans]
+                for t in texts:
+                    if t and not re.match(r'^\$', t) and not re.match(r'^\d{3}', t):
+                        brand = t
+                        break
+
             # All ng-binding span texts in DOM order
             all_spans = row.find_elements(By.CSS_SELECTOR, "span.ng-binding")
             texts = [clean(el.text) for el in all_spans]
 
-            # Separate $ values from text values
             dollar_texts = [t for t in texts if re.match(r'^\$[\d.]', t)]
             other_texts  = [t for t in texts if t and not re.match(r'^\$', t)]
 
@@ -185,16 +218,15 @@ def scrape_rows(driver, wait):
             except Exception:
                 price = re.sub(r"[^\d.]", "", dollar_texts[1]) if len(dollar_texts) >= 2 else ""
 
-            # SIZE and DESCRIPTION: first two non-$ ng-binding texts
-            size        = other_texts[0] if other_texts else ""
-            description = other_texts[1] if len(other_texts) > 1 else ""
+            # DESCRIPTION: first non-$ ng-binding text (contains size + model)
+            description = other_texts[0] if other_texts else ""
 
-            if not size:
+            if not description:
                 continue
 
-            results.append({"size": size, "description": description,
+            results.append({"brand": brand, "description": description,
                             "cost": cost, "price": price})
-            print(f"  {size} | {description[:45]} | cost={cost} | price={price}")
+            print(f"  {brand:<15} | {description[:50]} | cost={cost} | price={price}")
 
         except Exception as e:
             print(f"  [WARN] {e}")
@@ -219,31 +251,39 @@ def go_next_page(driver, wait):
         "a[rel='next'], li.next:not(.disabled) a, .pagination .next:not(.disabled) a"
     )
     driver.execute_script("arguments[0].click();", btn)
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "table tbody tr")))
-    time.sleep(1)
+    # Wait for Angular product rows to load (not table — Angular uses divs)
+    wait.until(EC.presence_of_element_located(
+        (By.CSS_SELECTOR, "div.product-data-list")))
+    time.sleep(1.5)
 
 
 def main():
     driver = init_driver()
-    wait   = WebDriverWait(driver, 20)
+    wait   = WebDriverWait(driver, 25)
 
     try:
         wait_for_manual_login(driver)
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "DESCRIPTION", "COST", "PRICE"])
+            writer.writerow(["brand", "DESCRIPTION", "COST", "PRICE"])
 
             for query in SEARCH_QUERIES:
                 print(f"\n=== Searching: {query} ===")
-                search_tyres(driver, wait, query)
+                try:
+                    search_tyres(driver, wait, query)
+                except Exception as e:
+                    print(f"  [ERROR] search failed: {e} — skipping")
+                    continue
 
                 page = 1
                 while True:
                     print(f"  -- Page {page} --")
-                    rows = scrape_rows(driver, wait)
+                    rows = scrape_rows(driver)
                     for r in rows:
-                        writer.writerow([r["size"], r["description"], r["cost"], r["price"]])
+                        writer.writerow([r["brand"], r["description"],
+                                         r["cost"], r["price"]])
+                    f.flush()   # write to disk immediately (safe against crash)
                     print(f"  {len(rows)} rows written")
 
                     if has_next_page(driver):
