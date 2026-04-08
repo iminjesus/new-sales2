@@ -13,30 +13,30 @@ SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
 # Format: width + aspect + rim (digits only), e.g. 175/65R14 → 1756514
 # For no-aspect tyres: 185R14 → 18514
 SEARCH_QUERIES = [
-    "1756514",  # 175/65R14
-    "1956515",  # 195/65R15
-    "2056516",  # 205/65R16
-    "2254517",  # 225/45R17
-    "2154517",  # 215/45R17 (wait, 215/45R17)
-    "2354517",  # 235/45R17
-    "2254018",  # 225/40R18
-    "2354519",  # 235/45R19
-    "2453520",  # 245/35R20
-    "2256517",  # 225/65R17
-    "2255518",  # 225/55R18
-    "2256018",  # 225/60R18
-    "2255519",  # 225/55R19
-    "2254519",  # 225/45R19
-    "2554520",  # 255/45R20
-    "2654021",  # 265/40R21
-    "2457016",  # 245/70R16
-    "2657016",  # 265/70R16
-    "2656018",  # 265/60R18
-    "2656517",  # 265/65R17
-    "2657516",  # 265/75R16
-    "18514",    # 185R14
-    "19515",    # 195R15
-    "2356516",  # 235/65R16
+    ("1756514", "175/65R14"),
+    ("1956515", "195/65R15"),
+    ("2056516", "205/65R16"),
+    ("2254517", "225/45R17"),
+    ("2154517", "215/45R17"),
+    ("2354517", "235/45R17"),
+    ("2254018", "225/40R18"),
+    ("2354519", "235/45R19"),
+    ("2453520", "245/35R20"),
+    ("2256517", "225/65R17"),
+    ("2255518", "225/55R18"),
+    ("2256018", "225/60R18"),
+    ("2255519", "225/55R19"),
+    ("2254519", "225/45R19"),
+    ("2554520", "255/45R20"),
+    ("2654021", "265/40R21"),
+    ("2457016", "245/70R16"),
+    ("2657016", "265/70R16"),
+    ("2656018", "265/60R18"),
+    ("2656517", "265/65R17"),
+    ("2657516", "265/75R16"),
+    ("18514",   "185R14"),
+    ("19515",   "195R15"),
+    ("2356516", "235/65R16"),
 ]
 
 current_month = datetime.now().strftime('%b')
@@ -269,10 +269,10 @@ def main():
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["brand", "DESCRIPTION", "COST", "PRICE"])
+            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE"])
 
-            for query in SEARCH_QUERIES:
-                print(f"\n=== Searching: {query} ===")
+            for query, size in SEARCH_QUERIES:
+                print(f"\n=== Searching: {query}  ({size}) ===")
                 try:
                     search_tyres(driver, wait, query)
                 except Exception as e:
@@ -284,9 +284,9 @@ def main():
                     print(f"  -- Page {page} --")
                     rows = scrape_rows(driver)
                     for r in rows:
-                        writer.writerow([r["brand"], r["description"],
+                        writer.writerow([size, r["brand"], r["description"],
                                          r["cost"], r["price"]])
-                    f.flush()   # write to disk immediately (safe against crash)
+                    f.flush()
                     print(f"  {len(rows)} rows written")
 
                     if has_next_page(driver):

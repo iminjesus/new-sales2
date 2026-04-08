@@ -266,7 +266,7 @@ def sheet_summary(wb, all_rows):
         abbr  = abbr_for(brand) or ("KH" if brand.lower() == "kumho" else None)
         if not abbr or not desc:
             continue
-        size_norm = normalise_size(desc)
+        size_norm = r.get("SIZE", "").strip() or normalise_size(desc)
         cost_f  = float(cost)  if cost  else None
         price_f = float(price) if price else None
         raw_lookup.setdefault((size_norm, abbr), []).append((desc, cost_f, price_f))
@@ -323,7 +323,7 @@ def sheet_summary(wb, all_rows):
 
     # ── Data rows: one row per size ───────────────────────────────────────────
     sizes_ordered = list(SIZE_CATEGORY.keys())
-    csv_sizes = sorted({normalise_size(r.get("DESCRIPTION", "")) for r in all_rows})
+    csv_sizes = sorted({r.get("SIZE","").strip() or normalise_size(r.get("DESCRIPTION","")) for r in all_rows})
     for s in csv_sizes:
         if s not in sizes_ordered:
             sizes_ordered.append(s)
@@ -468,7 +468,7 @@ def sheet_competitor_match(wb, all_rows):
         abbr  = abbr_for(brand)
         if not abbr or not desc:
             continue
-        size_norm = normalise_size(desc)
+        size_norm = r.get("SIZE", "").strip() or normalise_size(desc)
         cost_f  = float(cost)  if cost  else None
         price_f = float(price) if price else None
         lookup.setdefault((size_norm, abbr), []).append((desc, cost_f, price_f))
@@ -481,7 +481,7 @@ def sheet_competitor_match(wb, all_rows):
         price = r.get("PRICE", "").strip()
         if brand.lower() != "kumho" or not desc:
             continue
-        size_norm = normalise_size(desc)
+        size_norm = r.get("SIZE", "").strip() or normalise_size(desc)
         cost_f  = float(cost)  if cost  else None
         price_f = float(price) if price else None
         lookup.setdefault((size_norm, "KH"), []).append((desc, cost_f, price_f))
@@ -490,7 +490,7 @@ def sheet_competitor_match(wb, all_rows):
     # Order: iterate sizes in SIZE_CATEGORY order, then each brand
     sizes_ordered = list(SIZE_CATEGORY.keys())
     # Also pick up sizes from CSV not in SIZE_CATEGORY
-    csv_sizes = sorted({normalise_size(r.get("DESCRIPTION","")) for r in all_rows})
+    csv_sizes = sorted({r.get("SIZE","").strip() or normalise_size(r.get("DESCRIPTION","")) for r in all_rows})
     for s in csv_sizes:
         if s not in sizes_ordered:
             sizes_ordered.append(s)
