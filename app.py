@@ -942,7 +942,13 @@ def api_sales_stats_by_state():
         def _cat_joins_wh_stock(tbl_alias):
             """Return (joins_list, wh_list, params_list) for stock/incoming/orders."""
             joins, wh, params = [], [], []
-            joins.append(f"JOIN carrying_2602 c ON c.m_code = {tbl_alias}.material")
+            needs_carrying = (
+                (prod_group and prod_group != "ALL")
+                or bool(pattern) or bool(material)
+                or category in ("PCLT", "TBR", "18PLUS", "SUV", "443")
+            )
+            if needs_carrying:
+                joins.append(f"JOIN carrying_2602 c ON c.m_code = {tbl_alias}.material")
             if prod_group and prod_group != "ALL":
                 wh.append("c.product_group = %s"); params.append(prod_group)
             if pattern:
@@ -975,9 +981,6 @@ def api_sales_stats_by_state():
         def _plant_totals(table, val_col):
             """Return {plant: qty} for given table and value column, grouped by plant."""
             j, wh, p = _cat_joins_wh_stock("t")
-            plant_ph = ",".join(["%s"] * len(ALL_PLANTS))
-            wh.append(f"t.plant IN ({plant_ph})")
-            p += ALL_PLANTS
             join_sql  = "\n".join(j)
             where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
             cur.execute(f"""

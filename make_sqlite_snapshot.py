@@ -47,7 +47,7 @@ TABLES = [
 
     # Sales fact tables (normalised)
     ("sales_21_25",        "sales_21_25",        None),
-    ("sales_25_2602",      "sales_25_2602",      None),
+    ("sales_2526",      "sales_2526",      None),
     ("sales_thismonth",    "sales_thismonth",    None),
 
     # Target
