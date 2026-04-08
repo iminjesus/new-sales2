@@ -118,35 +118,38 @@ def search_tyres(driver, wait, query):
 
 
 def click_all_get_costs(driver):
-    """Click every 'Get Cost' element one by one. Never break early — skip stuck ones."""
+    """Click every visible 'Get Cost' element. Filters out hidden elements to avoid infinite loop."""
     short_wait = WebDriverWait(driver, 8)
     clicked = 0
     skipped = 0
 
     while True:
-        els = driver.find_elements(By.XPATH, "//*[contains(text(),'Get Cost')]")
+        # Only process VISIBLE elements — hidden ones (display:none) are excluded
+        all_els = driver.find_elements(By.XPATH, "//*[contains(text(),'Get Cost')]")
+        els = [e for e in all_els if e.is_displayed()]
         if not els:
             break
 
         el = els[0]
-        prev_count = len(els)
+        prev_total = len(all_els)
 
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
             time.sleep(0.25)
             driver.execute_script("arguments[0].click();", el)
-            # Wait up to 8s for this element to disappear
+            # Wait for any "Get Cost" element to disappear (total count drops)
             short_wait.until(lambda d: len(d.find_elements(
-                By.XPATH, "//*[contains(text(),'Get Cost')]")) < prev_count)
+                By.XPATH, "//*[contains(text(),'Get Cost')]")) < prev_total)
             clicked += 1
         except Exception:
-            # Click didn't register or timed out — hide and continue to next
+            # Mark this element as processed so we don't retry it
             skipped += 1
             try:
-                driver.execute_script("arguments[0].style.display='none';", el)
+                driver.execute_script(
+                    "arguments[0].textContent = 'N/A';", el)
             except Exception:
                 pass
-        time.sleep(0.25)
+        time.sleep(0.2)
 
     print(f"  'Get Cost' clicked={clicked}, skipped={skipped}")
 
