@@ -3390,7 +3390,8 @@ def carrying_price():
         where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
         cur.execute(f"""
-            SELECT AVG(list_price) AS list_price, AVG(purchase_price) AS purchase_price
+            SELECT AVG(NULLIF(list_price, 0)) AS list_price,
+                   AVG(NULLIF(purchase_price, 0)) AS purchase_price
             FROM carrying_2602
             {where_sql}
         """, tuple(params))
