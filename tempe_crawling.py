@@ -221,15 +221,26 @@ def scrape_rows(driver):
             except Exception:
                 price = re.sub(r"[^\d.]", "", dollar_texts[1]) if len(dollar_texts) >= 2 else ""
 
-            # DESCRIPTION: first non-$ ng-binding text (contains size + model)
-            description = other_texts[0] if other_texts else ""
+            # Full description is other_texts[1] (other_texts[0] is the brand name)
+            # Strip leading brand and size to keep only load rating + model name
+            full_desc = other_texts[1] if len(other_texts) > 1 else other_texts[0] if other_texts else ""
+            desc = full_desc
+            # Remove brand prefix (case-insensitive)
+            if brand and desc.lower().startswith(brand.lower()):
+                desc = desc[len(brand):].strip()
+            # Remove size prefix e.g. "175/65R14" or "185R14"
+            desc = re.sub(r'^\d{3}/\d{2}[A-Za-z]\d{2}\s*', '', desc).strip()
+            desc = re.sub(r'^\d{3}[A-Za-z]\d{2}\s*', '', desc).strip()
 
-            if not description:
+            if not desc:
+                desc = full_desc  # fallback to full text if stripping removed everything
+
+            if not desc:
                 continue
 
-            results.append({"brand": brand, "description": description,
+            results.append({"brand": brand, "description": desc,
                             "cost": cost, "price": price})
-            print(f"  {brand:<15} | {description[:50]} | cost={cost} | price={price}")
+            print(f"  {brand:<15} | {desc[:50]} | cost={cost} | price={price}")
 
         except Exception as e:
             print(f"  [WARN] {e}")
