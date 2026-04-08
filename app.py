@@ -3789,13 +3789,15 @@ def api_rebate_data():
                     ship_set.add(sold_to)   # show zero row so sold_to is visible
 
                 # Determine sold_to's canonical BDE and region.
-                # Prefer the self-referencing record (ship_to == sold_to code);
-                # if that does not exist, infer from the ship_tos in ship_set.
+                # Start from the self-referencing record (ship_to == sold_to code),
+                # then fall back to individual ship_tos if BDE/region is still missing.
                 st_info = ship_cust_map.get(sold_to, {})
-                if st_info:
-                    sold_to_bde    = st_info.get("bde",   "-") or "-"
-                    sold_to_region = st_info.get("state", "-") or "-"
-                else:
+                sold_to_bde    = (st_info.get("bde",   "-") or "-") if st_info else "-"
+                sold_to_region = (st_info.get("state", "-") or "-") if st_info else "-"
+
+                # If sold_to's own record is missing BDE or region, infer from
+                # the actual ship_tos (customer table joined via ship_to).
+                if sold_to_bde == "-" or sold_to_region == "-":
                     real_ships = [sh for sh in ship_set if sh != sold_to]
                     state_cnt = Counter(
                         ship_cust_map[sh].get("state", "") for sh in real_ships
@@ -3807,8 +3809,10 @@ def api_rebate_data():
                         if ship_cust_map.get(sh, {}).get("bde", "")
                         and ship_cust_map[sh]["bde"] != "-"
                     )
-                    sold_to_region = state_cnt.most_common(1)[0][0] if state_cnt else "-"
-                    sold_to_bde    = bde_cnt.most_common(1)[0][0]   if bde_cnt   else "-"
+                    if sold_to_bde == "-":
+                        sold_to_bde    = bde_cnt.most_common(1)[0][0]   if bde_cnt   else "-"
+                    if sold_to_region == "-":
+                        sold_to_region = state_cnt.most_common(1)[0][0] if state_cnt else "-"
 
                 # Badge labels for UI
                 if badges_override is not None:
@@ -4059,13 +4063,14 @@ def api_rebate_export():
             ship_sales[(st,sh,br)] = {"qty":float(r["qty"] or 0),"amt":float(r["amt"] or 0)}
             ship_idx.setdefault((st,br),set()).add(sh)
 
-        cur.execute("SELECT ship_to, ship_to_name, bde_state FROM customer")
+        cur.execute("SELECT ship_to, ship_to_name, bde_state, salesman_name FROM customer")
         ship_cust_map_ex = {}
         for r in cur.fetchall():
             sh = str(r["ship_to"])
             ship_cust_map_ex[sh] = {
                 "name":  r["ship_to_name"] or sh,
-                "state": (r["bde_state"] or "").strip() or "-",
+                "state": (r["bde_state"]    or "").strip() or "-",
+                "bde":   (r["salesman_name"] or "").strip() or "-",
             }
         name_map = {sh: v["name"] for sh, v in ship_cust_map_ex.items()}
 
@@ -4092,6 +4097,7 @@ def api_rebate_export():
         rows=[]
         for c in customers:
             struct=c["structure_name"]; brand=c["brand"]; sold_to=str(c["sold_to"])
+            sold_to_group = c["sold_to_group"] or "-"
             sd=tiers_map.get(struct)
             if not sd: continue
             unit=sd["unit"]; tiers=sd["tiers"]; top_order=sd["top_order"]
@@ -4099,7 +4105,25 @@ def api_rebate_export():
                 ship_set=(ship_idx.get((sold_to,"HK"),set())|ship_idx.get((sold_to,"LF"),set()))
             else:
                 ship_set=ship_idx.get((sold_to,brand),set()).copy()
+            ship_set = {sh for sh in ship_set if sh in ship_cust_map_ex}
             if not ship_set: ship_set.add(sold_to)
+
+            # Resolve region and BDE from sold_to's own record, falling back to ship_tos
+            st_info_ex = ship_cust_map_ex.get(sold_to, {})
+            sold_to_bde_ex    = (st_info_ex.get("bde",   "-") or "-") if st_info_ex else "-"
+            sold_to_region_ex = (st_info_ex.get("state", "-") or "-") if st_info_ex else "-"
+            if sold_to_bde_ex == "-" or sold_to_region_ex == "-":
+                real_ships = [sh for sh in ship_set if sh != sold_to]
+                if real_ships:
+                    from collections import Counter as _Counter
+                    sc = _Counter(ship_cust_map_ex[sh].get("state","") for sh in real_ships
+                                  if ship_cust_map_ex.get(sh,{}).get("state","") and ship_cust_map_ex[sh]["state"]!="-")
+                    bc = _Counter(ship_cust_map_ex[sh].get("bde","") for sh in real_ships
+                                  if ship_cust_map_ex.get(sh,{}).get("bde","") and ship_cust_map_ex[sh]["bde"]!="-")
+                    if sold_to_bde_ex == "-":
+                        sold_to_bde_ex    = bc.most_common(1)[0][0] if bc else "-"
+                    if sold_to_region_ex == "-":
+                        sold_to_region_ex = sc.most_common(1)[0][0] if sc else "-"
 
             if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
                 # One row per ship_to
@@ -4131,7 +4155,8 @@ def api_rebate_export():
                 rows.append({
                     "sold_to":sold_to,"sold_to_name":c["sold_to_name"] or sold_to,
                     "sold_to_group":sold_to_group,
-                    "region": c["region"] or "-",   # always BDE's region
+                    "region": sold_to_region_ex,
+                    "bde":    sold_to_bde_ex,
                     "ship_to":sh,"ship_to_name":sh_info.get("name") or (c["sold_to_name"] or sh),
                     "brand":brand,"structure_name":struct,"unit":unit,
                     "actual":round(actual,2),"curr_rate":curr_tier["rate"],
@@ -4152,9 +4177,9 @@ def api_rebate_export():
         # build CSV
         out=io.StringIO()
         w=csv.writer(out)
-        w.writerow(["Sold-To","Sold-To Name","Group","Region","Ship-To","Ship-To Name","Brand","Type","Actual","Curr Rate%","Next Rate%","Need to Reach","Est Rebate","Structure"])
+        w.writerow(["Sold-To","Sold-To Name","Group","Region","BDE","Ship-To","Ship-To Name","Brand","Type","Actual","Curr Rate%","Next Rate%","Need to Reach","Est Rebate","Structure"])
         for r in rows:
-            w.writerow([r["sold_to"],r["sold_to_name"],r["sold_to_group"],r["region"],r["ship_to"],r["ship_to_name"],r["brand"],"Annual $" if r["unit"]=="A" else "QTR Qty",r["actual"],r["curr_rate"],r["next_rate"] if r["next_rate"] is not None else "",r["needed"] if r["needed"] is not None else "",r["est_rebate"],r["structure_name"]])
+            w.writerow([r["sold_to"],r["sold_to_name"],r["sold_to_group"],r["region"],r["bde"],r["ship_to"],r["ship_to_name"],r["brand"],"Annual $" if r["unit"]=="A" else "QTR Qty",r["actual"],r["curr_rate"],r["next_rate"] if r["next_rate"] is not None else "",r["needed"] if r["needed"] is not None else "",r["est_rebate"],r["structure_name"]])
 
         from flask import Response
         from datetime import date
