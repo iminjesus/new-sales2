@@ -574,12 +574,12 @@ def sheet_competitor_match(wb, all_rows):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    csv_files = sorted(glob.glob("Tempe_*.csv"), reverse=True)
+    csv_files = glob.glob("Tempe_*.csv")
     if not csv_files:
         print("ERROR: No Tempe_*.csv file found in current directory.")
         return
 
-    csv_path = csv_files[0]
+    csv_path = max(csv_files, key=os.path.getmtime)  # most recently modified
     print(f"Reading: {csv_path}")
     rows = load_csv(csv_path)
     print(f"  {len(rows)} rows loaded")
