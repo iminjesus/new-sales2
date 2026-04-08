@@ -9,6 +9,5 @@ services:
       env:
         - name: PORT
           value: "8080"
-      command: sh -c "uvicorn app:app --host 0.0.0.0 --port ${PORT}"
     ports:
       - 8080
