@@ -3839,33 +3839,78 @@ def api_rebate_data():
                         return d["qty"], d["amt"]
 
                 if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
-                    # One row per ship_to (AJT/ABJ/ATP/APP/ACD structures)
+                    # One row per ship_to — BDE comes from each ship_to's own customer record
                     calc_items = []
                     for sh in sorted(ship_set):
                         q, a = _get_sales(sh)
-                        calc_items.append((sh, q, a))
-                    sold_to_basis = False
-                    ship_details_list = []
+                        sh_info_local = ship_cust_map.get(sh, {})
+                        calc_items.append({
+                            "sh":           sh,
+                            "qty":          q,
+                            "amt":          a,
+                            "bde":          sh_info_local.get("bde",   "-") or sold_to_bde,
+                            "region":       sh_info_local.get("state", "-") or sold_to_region,
+                            "sold_to_basis": False,
+                            "ship_details": [],
+                        })
                 else:
-                    # Aggregate all ship_tos → one row per sold_to
-                    total_qty = total_amt = 0.0
-                    for sh in ship_set:
-                        q, a = _get_sales(sh)
-                        total_qty += q; total_amt += a
-                    calc_items = [(sold_to, total_qty, total_amt)]
-                    sold_to_basis = True
-                    ship_details_list = []
+                    # Group ship_tos by their BDE → one row per BDE per sold_to.
+                    # This ensures every salesman sees their own portion of shared accounts
+                    # like JAXQUICKFIT whose 94 ship_tos span multiple BDEs.
+                    bde_groups = {}  # bde_name -> {region, qty, amt, ship_details}
                     for sh in sorted(ship_set):
                         q, a = _get_sales(sh)
-                        sh_info = ship_cust_map.get(sh, {})
-                        ship_details_list.append({
+                        sh_info_local = ship_cust_map.get(sh, {})
+                        sh_bde   = sh_info_local.get("bde",   "-") or sold_to_bde
+                        sh_state = sh_info_local.get("state", "-") or sold_to_region
+                        grp = bde_groups.setdefault(sh_bde, {
+                            "bde":          sh_bde,
+                            "region":       sh_state,
+                            "qty":          0.0,
+                            "amt":          0.0,
+                            "ship_details": [],
+                        })
+                        grp["qty"] += q
+                        grp["amt"] += a
+                        grp["ship_details"].append({
                             "ship_to":      sh,
-                            "ship_to_name": sh_info.get("name") or sh,
+                            "ship_to_name": sh_info_local.get("name") or sh,
                             "actual_qty":   round(q, 2),
                             "actual_amt":   round(a, 2),
                         })
 
-                for sh, actual_qty, actual_amt in calc_items:
+                    calc_items = [
+                        {
+                            "sh":           sold_to,
+                            "qty":          grp["qty"],
+                            "amt":          grp["amt"],
+                            "bde":          grp["bde"],
+                            "region":       grp["region"],
+                            "sold_to_basis": True,
+                            "ship_details": grp["ship_details"],
+                        }
+                        for grp in sorted(bde_groups.values(), key=lambda x: x["bde"])
+                    ]
+                    if not calc_items:
+                        calc_items = [{
+                            "sh":           sold_to,
+                            "qty":          0.0,
+                            "amt":          0.0,
+                            "bde":          sold_to_bde,
+                            "region":       sold_to_region,
+                            "sold_to_basis": True,
+                            "ship_details": [],
+                        }]
+
+                for item in calc_items:
+                    sh          = item["sh"]
+                    actual_qty  = item["qty"]
+                    actual_amt  = item["amt"]
+                    row_bde     = item["bde"]
+                    row_region  = item["region"]
+                    row_stbasis = item["sold_to_basis"]
+                    row_details = item["ship_details"]
+
                     actual = actual_qty if unit == "Q" else actual_amt
 
                     curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
@@ -3879,15 +3924,15 @@ def api_rebate_data():
                         "sold_to":        sold_to,
                         "sold_to_name":   c["sold_to_name"] or st_info.get("name") or sold_to,
                         "sold_to_group":  sold_to_group,
-                        "region":         sold_to_region,
-                        "bde":            sold_to_bde,
+                        "region":         row_region,
+                        "bde":            row_bde,
                         "ship_to":        sh,
                         "ship_to_name":   sh_info.get("name") or (c["sold_to_name"] or sh),
                         "brand":          brand_key,
                         "badges":         badges,
                         "structure_name": struct,
-                        "sold_to_basis":  sold_to_basis,
-                        "ship_details":   ship_details_list if sold_to_basis else [],
+                        "sold_to_basis":  row_stbasis,
+                        "ship_details":   row_details,
                         "unit":           unit,
                         "actual_qty":     round(actual_qty, 2),
                         "actual_amt":     round(actual_amt, 2),
