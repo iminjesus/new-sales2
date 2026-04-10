@@ -896,7 +896,9 @@ def api_sales_stats():
 def api_sales_stats_by_state():
     """Return 3M / 6M / 12M / Base Sales + stock/water/factory qty per state."""
     # COMMON excluded intentionally
-    STATE_ORDER = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT"]
+    STATE_ORDER = ["NSW", "QLD", "VIC", "WA"]
+    # SA is part of VIC territory — merge into VIC
+    STATE_REMAP = {"SA": "VIC", "NT": "WA", "TAS": "VIC", "ACT": "NSW"}
     # plant -> state mapping derived from plant geographic locations
     PLANT_STATE = {"42R1": "NSW", "42R0": "QLD", "42R2": "VIC", "42R4": "WA"}
     ALL_PLANTS  = list(PLANT_STATE.keys())
@@ -1047,8 +1049,10 @@ def api_sales_stats_by_state():
                 st  = row["state"]
                 if not st or st == "COMMON":
                     continue
+                st = STATE_REMAP.get(st, st)  # SA→VIC, NT→WA, etc.
                 val = round(float(row["qty"] or 0) / n)
-                state_data.setdefault(st, {})[label] = val
+                sd = state_data.setdefault(st, {})
+                sd[label] = sd.get(label, 0) + val
 
         rows_out = []
         for st in STATE_ORDER:
