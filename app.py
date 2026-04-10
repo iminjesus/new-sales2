@@ -3394,15 +3394,15 @@ def ship_to_names():
         where_sql = "WHERE " + " AND ".join(where)
 
         cur.execute(f"""
-            SELECT DISTINCT TRIM(ship_to_name)
+            SELECT DISTINCT ship_to, TRIM(ship_to_name) AS ship_to_name
             FROM customer
             {where_sql}
             ORDER BY TRIM(ship_to_name)
         """, tuple(params))
 
-        names = [r[0] for r in cur.fetchall()]
+        rows_out = [{"code": str(r[0]), "name": r[1]} for r in cur.fetchall()]
         cur.close(); conn.close()
-        return jsonify(names)
+        return jsonify(rows_out)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
