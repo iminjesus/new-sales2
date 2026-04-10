@@ -50,7 +50,7 @@ const REGION_SALESMEN={
   NSW:["LUTTRELL STEVE","Borghese Alessio","NSW SM"],
   QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
   VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-  WA:["DAIS Jim","WA SM"]
+  WA:["DAIS Jim","ASIM Qureshi"]
 };
 const fmt = (n) => (+n || 0).toLocaleString();
 
