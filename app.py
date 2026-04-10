@@ -2461,34 +2461,54 @@ def export_excel():
         for r in rows:
             r["Total"] = sum(float(r.get(c) or 0) for c in day_labels)
 
-        # ── Fetch monthly target per ship_to from target_26 ──────────────
+        # ── Fetch monthly target — same method as KPI table ─────────────
+        # KPI table uses target_26 grouped by state/bde (region level).
+        # Here we group by sold_to so each row gets its sold_to's target.
         conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
         try:
             cur2.execute("SELECT MAX(year*100+month) AS ym FROM sales_thismonth")
             ym = int((cur2.fetchone() or {}).get("ym") or 0)
             cur_month = ym % 100 if ym else datetime.now().month
+            # target_26 has state, bde, sold_to, month — same table KPI uses
             cur2.execute(
-                f"SELECT ship_to, SUM({value_col}) AS tgt FROM target_26 WHERE month=%s GROUP BY ship_to",
+                f"SELECT sold_to, SUM({value_col}) AS tgt "
+                f"FROM target_26 WHERE month=%s GROUP BY sold_to",
                 (cur_month,)
             )
-            target_by_ship = {str(r2["ship_to"]): float(r2["tgt"] or 0) for r2 in cur2.fetchall()}
+            target_by_sold_to = {str(r2["sold_to"]): float(r2["tgt"] or 0)
+                                  for r2 in cur2.fetchall()}
         except Exception:
-            target_by_ship = {}
+            target_by_sold_to = {}
         finally:
             cur2.close(); conn2.close()
 
+        # Compute sold_to totals (sum of all ship_tos) so achievement
+        # = sold_to_total / sold_to_target (same denominator for every
+        # ship_to row of the same sold_to, matching KPI logic).
+        sold_to_total = {}
         for r in rows:
-            tgt = target_by_ship.get(str(r.get("ship_to_code") or ""), 0)
-            r["Target"] = round(tgt, 1)
-            r["Ach%"]   = round(r["Total"] / tgt * 100, 1) if tgt > 0 else None
+            sc = str(r.get("sold_to_code") or "")
+            sold_to_total[sc] = sold_to_total.get(sc, 0.0) + r["Total"]
 
-        # ── Pre-calculate state totals ───────────────────────────────────
+        for r in rows:
+            sc  = str(r.get("sold_to_code") or "")
+            tgt = target_by_sold_to.get(sc, 0)
+            st_total = sold_to_total.get(sc, 0)
+            r["Target"] = round(tgt, 1)
+            r["Ach%"]   = round(st_total / tgt * 100, 1) if tgt > 0 else None
+
+        # ── Pre-calculate state totals (sum sold_to targets once per sold_to) ──
+        counted_sold_tos = set()
         state_totals = {}
         for r in rows:
             st = (r.get("region") or "").upper()
+            sc = str(r.get("sold_to_code") or "")
             g  = state_totals.setdefault(st, {"Total": 0.0, "Target": 0.0})
-            g["Total"]  += r["Total"]
-            g["Target"] += r["Target"]
+            g["Total"] += r["Total"]
+            # Add sold_to target only once per sold_to to avoid double-counting
+            if sc not in counted_sold_tos:
+                g["Target"] += r["Target"]
+                counted_sold_tos.add(sc)
 
         # ── Achievement color (matches KPI table) ────────────────────────
         def _ach_color(val):
