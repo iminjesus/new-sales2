@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple, Any
 from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Font, Alignment
+from openpyxl.styles import Font, Alignment, PatternFill
 from datetime import datetime
 import traceback
 USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
@@ -2445,10 +2445,11 @@ def export_excel():
         top_limit = int(request.args.get("top_limit", "0") or "0")
         f = parse_filters(request)
         metric = (request.args.get("metric") or f.get("metric") or "qty").lower()
+        value_col = "qty" if metric == "qty" else "amt"
 
         rows = fetch_table_rows(top_limit=top_limit)
 
-        # Sort by region order NSW→QLD→VIC→WA, then BDE, then sold_to_name
+        # Sort: NSW→QLD→VIC→WA, then BDE, then sold_to_name
         _REGION_ORDER = {"NSW": 0, "QLD": 1, "VIC": 2, "WA": 3}
         rows.sort(key=lambda r: (
             _REGION_ORDER.get((r.get("region") or "").upper(), 99),
@@ -2460,40 +2461,124 @@ def export_excel():
         for r in rows:
             r["Total"] = sum(float(r.get(c) or 0) for c in day_labels)
 
-        header_order = (
-            ["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name", "sold_to_code", "ship_to_code"]
-            + day_labels + ["Total"]
-        )
+        # ── Fetch monthly target per ship_to from target_26 ──────────────
+        conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
+        try:
+            cur2.execute("SELECT MAX(year*100+month) AS ym FROM sales_thismonth")
+            ym = int((cur2.fetchone() or {}).get("ym") or 0)
+            cur_month = ym % 100 if ym else datetime.now().month
+            cur2.execute(
+                f"SELECT ship_to, SUM({value_col}) AS tgt FROM target_26 WHERE month=%s GROUP BY ship_to",
+                (cur_month,)
+            )
+            target_by_ship = {str(r2["ship_to"]): float(r2["tgt"] or 0) for r2 in cur2.fetchall()}
+        except Exception:
+            target_by_ship = {}
+        finally:
+            cur2.close(); conn2.close()
 
-        # 맨 위에 어떤 선택으로 이 데이터가 나왔는지 표시
-        meta_lines = [
+        for r in rows:
+            tgt = target_by_ship.get(str(r.get("ship_to_code") or ""), 0)
+            r["Target"] = round(tgt, 1)
+            r["Ach%"]   = round(r["Total"] / tgt * 100, 1) if tgt > 0 else None
+
+        # ── Pre-calculate state totals ───────────────────────────────────
+        state_totals = {}
+        for r in rows:
+            st = (r.get("region") or "").upper()
+            g  = state_totals.setdefault(st, {"Total": 0.0, "Target": 0.0})
+            g["Total"]  += r["Total"]
+            g["Target"] += r["Target"]
+
+        # ── Achievement color (matches KPI table) ────────────────────────
+        def _ach_color(val):
+            if val is None: return None
+            if val >= 100:  return "16a34a"   # green
+            if val >= 90:   return "f97316"   # orange
+            return "dc2626"                    # red
+
+        # ── Build workbook ───────────────────────────────────────────────
+        wb  = Workbook()
+        ws  = wb.active
+        ws.title = "sales_thismonth_by_day"
+
+        # Meta info
+        for line in [
             f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"metric={metric}, top_limit={top_limit if top_limit else 'ALL'}",
             f"category={f.get('category','ALL')}, region={f.get('region','ALL')}, salesman={f.get('salesman','ALL')}, sold_to_group={f.get('sold_to_group','ALL')}",
             f"product_group={f.get('product_group','ALL')}, pattern={f.get('pattern','ALL')}, material={f.get('material','ALL')}",
             f"sold_to={f.get('sold_to','ALL')}, ship_to={f.get('ship_to','ALL')}",
-        ]
+        ]:
+            ws.append([line])
+        ws.append([])
 
-        wb = build_excel(
-            rows,
-            sheet_name="sales_thismonth_by_day",
-            header_order=header_order,
-            meta_lines=meta_lines
-        )
+        # Header row: Total/Target/Ach% sit between ship_to_code and day columns
+        HDR = (["region","bde","sold_to_group","sold_to_name","ship_to_name",
+                "sold_to_code","ship_to_code","Total","Target","Ach%"]
+               + day_labels)
+        ws.append(HDR)
+        hdr_row = ws.max_row
+        for c, h in enumerate(HDR, 1):
+            cell = ws.cell(row=hdr_row, column=c)
+            cell.font      = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.freeze_panes = f"A{hdr_row+1}"
+
+        ACH_COL = HDR.index("Ach%") + 1   # 1-based column index
+
+        GREY_FILL = PatternFill("solid", fgColor="D9D9D9")
+
+        def _append_state_summary(region):
+            g    = state_totals.get(region, {})
+            tot  = g.get("Total",  0.0)
+            tgt  = g.get("Target", 0.0)
+            ach  = round(tot / tgt * 100, 1) if tgt > 0 else None
+            vals = ([region, "", "", f"── {region} TOTAL ──", "", "",
+                     "", round(tot,1), round(tgt,1),
+                     (f"{ach:.1f}%" if ach is not None else "-")]
+                    + [""] * 31)
+            ws.append(vals)
+            sr = ws.max_row
+            for c in range(1, len(HDR)+1):
+                ws.cell(row=sr, column=c).font = Font(bold=True)
+                ws.cell(row=sr, column=c).fill = GREY_FILL
+            if ach is not None:
+                ws.cell(row=sr, column=ACH_COL).font = Font(bold=True, color=_ach_color(ach))
+
+        current_region = None
+        for r in rows:
+            region = (r.get("region") or "").upper()
+            if region != current_region:
+                current_region = region
+                _append_state_summary(region)
+
+            # Build row values
+            vals = []
+            for h in HDR:
+                if h == "Ach%":
+                    v = r.get("Ach%")
+                    vals.append(f"{v:.1f}%" if v is not None else "-")
+                else:
+                    vals.append(r.get(h))
+            ws.append(vals)
+
+            # Colour the Ach% cell
+            ach_val = r.get("Ach%")
+            if ach_val is not None:
+                ws.cell(row=ws.max_row, column=ACH_COL).font = Font(color=_ach_color(ach_val))
+
+        # Column widths
+        autosize_columns(ws)
+        ws.column_dimensions["A"].width = min(ws.column_dimensions["A"].width, 10)
+        ws.column_dimensions["B"].width = min(ws.column_dimensions["B"].width, 18)
 
         bio = BytesIO()
-        wb.save(bio)
-        bio.seek(0)
-
-        stamp = datetime.now().strftime("%Y%m%d_%H%M")
+        wb.save(bio); bio.seek(0)
+        stamp    = datetime.now().strftime("%Y%m%d_%H%M")
         filename = f"sales_thismonth_top{top_limit if top_limit else 'ALL'}_{metric}_{stamp}.xlsx"
-
-        return send_file(
-            bio,
-            as_attachment=True,
-            download_name=filename,
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        return send_file(bio, as_attachment=True, download_name=filename,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     except Exception as e:
         print("export_excel error:", repr(e))
