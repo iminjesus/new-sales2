@@ -2361,6 +2361,9 @@ def build_excel(rows, sheet_name="Data", header_order=None, meta_lines=None):
     ws.freeze_panes = f"A{header_row+1}"
 
     autosize_columns(ws)
+    # meta_lines in col A can be very long → cap col A to data width only
+    if meta_lines:
+        ws.column_dimensions['A'].width = min(ws.column_dimensions['A'].width, 20)
     return wb
 def fetch_table_rows(top_limit: int):
     f = parse_filters(request)
