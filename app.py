@@ -2361,9 +2361,10 @@ def build_excel(rows, sheet_name="Data", header_order=None, meta_lines=None):
     ws.freeze_panes = f"A{header_row+1}"
 
     autosize_columns(ws)
-    # meta_lines in col A can be very long → cap col A to data width only
+    # meta_lines in col A/B can be very long → cap to keep sheet tidy
     if meta_lines:
-        ws.column_dimensions['A'].width = min(ws.column_dimensions['A'].width, 20)
+        ws.column_dimensions['A'].width = min(ws.column_dimensions['A'].width, 10)
+        ws.column_dimensions['B'].width = min(ws.column_dimensions['B'].width, 18)
     return wb
 def fetch_table_rows(top_limit: int):
     f = parse_filters(request)
@@ -2446,6 +2447,14 @@ def export_excel():
         metric = (request.args.get("metric") or f.get("metric") or "qty").lower()
 
         rows = fetch_table_rows(top_limit=top_limit)
+
+        # Sort by region order NSW→QLD→VIC→WA, then BDE, then sold_to_name
+        _REGION_ORDER = {"NSW": 0, "QLD": 1, "VIC": 2, "WA": 3}
+        rows.sort(key=lambda r: (
+            _REGION_ORDER.get((r.get("region") or "").upper(), 99),
+            (r.get("bde") or "").lower(),
+            (r.get("sold_to_name") or "").lower(),
+        ))
 
         day_labels = [str(d) for d in range(1, 32)]
         for r in rows:
