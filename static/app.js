@@ -2285,6 +2285,7 @@ let __MATERIAL_OPTIONS = [];
 
 let __SOLD_TO_OPTIONS = [];
 let __SHIP_TO_OPTIONS = [];
+let __SHIP_TO_CODE_MAP = {};   // name -> code (for fast backend filtering)
 
 async function refreshSoldToCustom(){
   const stg = document.getElementById("sold_to_group")?.value || "ALL";
@@ -2303,7 +2304,15 @@ async function refreshShipToCustom(){
 
   const res = await fetchJSON(`/api/ship_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
-  __SHIP_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+  // Build name->code map for fast filtering; dropdown shows names
+  __SHIP_TO_CODE_MAP = {};
+  __SHIP_TO_OPTIONS = rows.map(x => {
+    if (x && typeof x === "object" && x.name) {
+      __SHIP_TO_CODE_MAP[x.name] = x.code;
+      return x.name;
+    }
+    return String(x);  // legacy fallback
+  }).filter(Boolean);
 }
 
 function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
@@ -2472,7 +2481,9 @@ window.addEventListener("load", async () => {
       const v = (val === "ALL") ? "" : val;
       const shipEl = document.getElementById("ship_to");
       if (shipEl) { shipEl.value = v; ddUpdateActive(shipEl); }
-      filters.ship_to = v || "ALL";
+      // Use ship_to code for filtering (faster, indexed query) if available
+      const code = v ? (__SHIP_TO_CODE_MAP[v] || v) : "ALL";
+      filters.ship_to = code;
       refreshAllDebounced();
     }
   });

@@ -2461,34 +2461,62 @@ def export_excel():
         for r in rows:
             r["Total"] = sum(float(r.get(c) or 0) for c in day_labels)
 
-        # ── Fetch monthly target per ship_to from target_26 ──────────────
+        # ── Fetch monthly target — ship_to level, fall back to sold_to ──
         conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
         try:
             cur2.execute("SELECT MAX(year*100+month) AS ym FROM sales_thismonth")
             ym = int((cur2.fetchone() or {}).get("ym") or 0)
             cur_month = ym % 100 if ym else datetime.now().month
+            # Fetch both ship_to and sold_to targets in one query
             cur2.execute(
-                f"SELECT ship_to, SUM({value_col}) AS tgt FROM target_26 WHERE month=%s GROUP BY ship_to",
+                f"SELECT sold_to, ship_to, SUM({value_col}) AS tgt "
+                f"FROM target_26 WHERE month=%s GROUP BY sold_to, ship_to",
                 (cur_month,)
             )
-            target_by_ship = {str(r2["ship_to"]): float(r2["tgt"] or 0) for r2 in cur2.fetchall()}
+            target_by_ship   = {}   # ship_to  -> target
+            target_by_sold_to = {}  # sold_to  -> target
+            for r2 in cur2.fetchall():
+                st  = str(r2["ship_to"]  or "")
+                so  = str(r2["sold_to"]  or "")
+                tgt = float(r2["tgt"] or 0)
+                if st:
+                    target_by_ship[st]    = target_by_ship.get(st, 0) + tgt
+                if so:
+                    target_by_sold_to[so] = target_by_sold_to.get(so, 0) + tgt
         except Exception:
-            target_by_ship = {}
+            target_by_ship = {}; target_by_sold_to = {}
         finally:
             cur2.close(); conn2.close()
 
+        # Count ship_tos per sold_to (for proportional fallback)
+        ship_count = {}
         for r in rows:
-            tgt = target_by_ship.get(str(r.get("ship_to_code") or ""), 0)
+            sc = str(r.get("sold_to_code") or "")
+            ship_count[sc] = ship_count.get(sc, 0) + 1
+
+        for r in rows:
+            ship = str(r.get("ship_to_code")  or "")
+            sold = str(r.get("sold_to_code")  or "")
+            # Use ship_to target if available; otherwise split sold_to target evenly
+            tgt = target_by_ship.get(ship, 0)
+            if tgt == 0 and sold in target_by_sold_to:
+                cnt = ship_count.get(sold, 1)
+                tgt = target_by_sold_to[sold] / cnt if cnt else 0
             r["Target"] = round(tgt, 1)
             r["Ach%"]   = round(r["Total"] / tgt * 100, 1) if tgt > 0 else None
 
-        # ── Pre-calculate state totals ───────────────────────────────────
+        # ── Pre-calculate state totals (sum sold_to targets once per sold_to) ──
+        counted_sold_tos = set()
         state_totals = {}
         for r in rows:
             st = (r.get("region") or "").upper()
+            sc = str(r.get("sold_to_code") or "")
             g  = state_totals.setdefault(st, {"Total": 0.0, "Target": 0.0})
-            g["Total"]  += r["Total"]
-            g["Target"] += r["Target"]
+            g["Total"] += r["Total"]
+            # Add sold_to target only once per sold_to to avoid double-counting
+            if sc not in counted_sold_tos:
+                g["Target"] += r["Target"]
+                counted_sold_tos.add(sc)
 
         # ── Achievement color (matches KPI table) ────────────────────────
         def _ach_color(val):
@@ -3366,15 +3394,15 @@ def ship_to_names():
         where_sql = "WHERE " + " AND ".join(where)
 
         cur.execute(f"""
-            SELECT DISTINCT TRIM(ship_to_name)
+            SELECT DISTINCT ship_to, TRIM(ship_to_name) AS ship_to_name
             FROM customer
             {where_sql}
             ORDER BY TRIM(ship_to_name)
         """, tuple(params))
 
-        names = [r[0] for r in cur.fetchall()]
+        rows_out = [{"code": str(r[0]), "name": r[1]} for r in cur.fetchall()]
         cur.close(); conn.close()
-        return jsonify(names)
+        return jsonify(rows_out)
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
