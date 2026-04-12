@@ -1013,8 +1013,17 @@ def api_sales_stats_by_state():
         factory_by_state = _to_state(factory_by_plant)
 
         # ── sales per state ─────────────────────────────────────────
+        # Use a deduplicated subquery for the customer join so that ship_tos
+        # with multiple rows in customer (different sold_tos) don't inflate sums.
         cat_joins_s, cat_wh_s = category_filters_sales("s", category)
-        base_joins = ["JOIN customer cus ON cus.ship_to = s.ship_to"] + list(cat_joins_s)
+        base_joins = [
+            "JOIN ("
+            "  SELECT ship_to, MIN(bde_state) AS bde_state"
+            "  FROM customer"
+            "  WHERE bde_state IS NOT NULL AND bde_state != 'COMMON'"
+            "  GROUP BY ship_to"
+            ") cus ON cus.ship_to = s.ship_to"
+        ] + list(cat_joins_s)
         base_wh    = list(cat_wh_s)
         base_params: list = []
 
@@ -1027,8 +1036,6 @@ def api_sales_stats_by_state():
         if material:
             _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.size LIKE %s"); base_params.append(f"%{material}%")
-        # exclude COMMON / unmapped states
-        base_wh.append("cus.bde_state IS NOT NULL AND cus.bde_state != 'COMMON'")
 
         state_data = {}
         for label, periods in (("3m", periods_3), ("6m", periods_6), ("12m", periods_12)):
