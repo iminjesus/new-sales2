@@ -115,6 +115,16 @@ def parse_filters(req):
         "pattern":       (req.args.get("pattern") or "ALL").strip(),
         "material":       (req.args.get("material") or "ALL").strip(),
     }
+
+# States that belong to each sales region.
+# SA/TAS are part of VIC territory; NT is part of WA; ACT is part of NSW.
+REGION_STATES = {
+    "NSW": ["NSW", "ACT"],
+    "QLD": ["QLD"],
+    "VIC": ["VIC", "SA", "TAS"],
+    "WA":  ["WA",  "NT"],
+}
+
 def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     """
     Returns (joins, wheres, params) to apply Region/Salesman/Group/Sold_to on a fact table.
@@ -127,7 +137,11 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
 
     if f["region"] != "ALL":
         needs_cus = True
-        wh.append("cus.bde_state = %s"); p.append(f["region"])
+        states = REGION_STATES.get(f["region"].upper(), [f["region"]])
+        if len(states) == 1:
+            wh.append("cus.bde_state = %s"); p.append(states[0])
+        else:
+            wh.append(f"cus.bde_state IN ({','.join(['%s']*len(states))})"); p.extend(states)
     if f["salesman"] != "ALL":
         needs_cus = True
         wh.append("UPPER(TRIM(cus.salesman_name)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
@@ -169,7 +183,11 @@ def build_target_filters(alias: str, f):
     needs_cus = False
 
     if f["region"] != "ALL":
-        wh.append(f"{alias}.state = %s"); p.append(f["region"])
+        states = REGION_STATES.get(f["region"].upper(), [f["region"]])
+        if len(states) == 1:
+            wh.append(f"{alias}.state = %s"); p.append(states[0])
+        else:
+            wh.append(f"{alias}.state IN ({','.join(['%s']*len(states))})"); p.extend(states)
     if f["salesman"] != "ALL":
         wh.append(f"UPPER(TRIM({alias}.bde)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
     if f["sold_to_group"] != "ALL":
