@@ -3448,25 +3448,28 @@ def sold_to_names():
     conn = get_connection()
     cur = conn.cursor(dictionary=True)
     try:
-        # ----------------- 1) No top_limit -> old behavior -----------------
+        # ----------------- 1) No top_limit -----------------
+        # Only show sold_tos that have actual sales (avoids showing every
+        # inactive account in the customer master — far too many entries).
         if top_limit <= 0:
+            params_s: list = []
+            extra_wh = (
+                "AND c.sold_to_group = %s" if parent != "ALL" else ""
+            )
             if parent != "ALL":
-                cur.execute("""
-                    SELECT DISTINCT TRIM(sold_to_name) AS name
-                      FROM customer
-                     WHERE sold_to_group = %s
-                       AND sold_to_name IS NOT NULL
-                       AND TRIM(sold_to_name) <> ''
-                     ORDER BY TRIM(sold_to_name)
-                """, (parent,))
-            else:
-                cur.execute("""
-                    SELECT DISTINCT TRIM(sold_to_name) AS name
-                      FROM customer
-                     WHERE sold_to_name IS NOT NULL
-                       AND TRIM(sold_to_name) <> ''
-                     ORDER BY TRIM(sold_to_name)
-                """)
+                params_s.append(parent)
+            cur.execute(f"""
+                SELECT DISTINCT TRIM(c.sold_to_name) AS name
+                  FROM customer c
+                 WHERE c.sold_to IN (
+                       SELECT DISTINCT sold_to FROM sales_2526
+                        WHERE sold_to IS NOT NULL
+                 )
+                   {extra_wh}
+                   AND c.sold_to_name IS NOT NULL
+                   AND TRIM(c.sold_to_name) <> ''
+                 ORDER BY TRIM(c.sold_to_name)
+            """, params_s)
             rows = cur.fetchall()
             return jsonify([r["name"] for r in rows])
 
