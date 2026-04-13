@@ -129,42 +129,41 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     """
     Returns (joins, wheres, params) to apply Region/Salesman/Group/Sold_to on a fact table.
     Customer JOIN is added only when needed (name-based filters or customer-dimension filters).
-    Region/Salesman/Group filters use EXISTS subqueries to avoid JOIN inflation
-    (customer has multiple rows per ship_to → plain JOIN multiplies sales rows).
+    Region/Group filters use EXISTS on customer (ship_to only) to avoid JOIN inflation.
+    Salesman filter uses EXISTS on target_26 (authoritative bde→ship_to mapping),
+    because customer.salesman_name is often incomplete for WA/NT accounts.
     If use_sold_to_name=True, 'sold_to' will match customer.Sold_to_Name instead of id.
     """
     joins = []
     wh, p = [], []
     needs_cus = False   # only for name-based sold_to/ship_to lookups
 
-    # ── region: EXISTS subquery → no JOIN inflation ──
+    # ── region: EXISTS on customer (ship_to only) → no JOIN inflation ──
     if f["region"] != "ALL":
         states = REGION_STATES.get(f["region"].upper(), [f["region"]])
         ph = ",".join(["%s"] * len(states))
         wh.append(
             f"EXISTS (SELECT 1 FROM customer _cr"
             f" WHERE _cr.ship_to = {alias_fact}.ship_to"
-            f" AND _cr.sold_to = {alias_fact}.sold_to"
             f" AND _cr.bde_state IN ({ph}))"
         )
         p.extend(states)
 
-    # ── salesman: EXISTS subquery ──
+    # ── salesman: EXISTS on target_26 (bde is authoritative; customer.salesman_name
+    #    may be missing or inconsistent for some regions like WA) ──
     if f["salesman"] != "ALL":
         wh.append(
-            f"EXISTS (SELECT 1 FROM customer _cr"
-            f" WHERE _cr.ship_to = {alias_fact}.ship_to"
-            f" AND _cr.sold_to = {alias_fact}.sold_to"
-            f" AND UPPER(TRIM(_cr.salesman_name)) = UPPER(TRIM(%s)))"
+            f"EXISTS (SELECT 1 FROM target_26 _t"
+            f" WHERE _t.ship_to = {alias_fact}.ship_to"
+            f" AND UPPER(TRIM(_t.bde)) = UPPER(TRIM(%s)))"
         )
         p.append(f["salesman"])
 
-    # ── sold_to_group: EXISTS subquery ──
+    # ── sold_to_group: EXISTS on customer (ship_to only) ──
     if f["sold_to_group"] != "ALL":
         wh.append(
             f"EXISTS (SELECT 1 FROM customer _cr"
             f" WHERE _cr.ship_to = {alias_fact}.ship_to"
-            f" AND _cr.sold_to = {alias_fact}.sold_to"
             f" AND _cr.sold_to_group = %s)"
         )
         p.append(f["sold_to_group"])
