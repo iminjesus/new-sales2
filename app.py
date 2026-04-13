@@ -142,7 +142,9 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
         states = REGION_STATES.get(f["region"].upper(), [f["region"]])
         ph = ",".join(["%s"] * len(states))
         wh.append(
-            f"EXISTS (SELECT 1 FROM customer _cr WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f"EXISTS (SELECT 1 FROM customer _cr"
+            f" WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f" AND _cr.sold_to = {alias_fact}.sold_to"
             f" AND _cr.bde_state IN ({ph}))"
         )
         p.extend(states)
@@ -150,7 +152,9 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     # ── salesman: EXISTS subquery ──
     if f["salesman"] != "ALL":
         wh.append(
-            f"EXISTS (SELECT 1 FROM customer _cr WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f"EXISTS (SELECT 1 FROM customer _cr"
+            f" WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f" AND _cr.sold_to = {alias_fact}.sold_to"
             f" AND UPPER(TRIM(_cr.salesman_name)) = UPPER(TRIM(%s)))"
         )
         p.append(f["salesman"])
@@ -158,7 +162,9 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     # ── sold_to_group: EXISTS subquery ──
     if f["sold_to_group"] != "ALL":
         wh.append(
-            f"EXISTS (SELECT 1 FROM customer _cr WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f"EXISTS (SELECT 1 FROM customer _cr"
+            f" WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f" AND _cr.sold_to = {alias_fact}.sold_to"
             f" AND _cr.sold_to_group = %s)"
         )
         p.append(f["sold_to_group"])
