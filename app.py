@@ -1098,9 +1098,11 @@ def api_sales_stats_by_state():
                 wh.append("EXISTS (SELECT 1 FROM `443_25` p443 WHERE p443.product_group = c.product_group)")
             return joins, wh, params
 
-        def _plant_totals(table, val_col):
+        def _plant_totals(table, val_col, extra_wh=None):
             """Return {plant: qty} for given table and value column, grouped by plant."""
             j, wh, p = _cat_joins_wh_stock("t")
+            if extra_wh:
+                wh = wh + list(extra_wh)
             join_sql  = "\n".join(j)
             where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
             cur.execute(f"""
@@ -1112,10 +1114,17 @@ def api_sales_stats_by_state():
             """, p)
             return {row["plant"]: float(row["val"] or 0) for row in (cur.fetchall() or [])}
 
+        # Exclude orders whose po_no already appears in the incoming table
+        # (those shipments are already counted as incoming, not open orders)
+        _orders_extra = [
+            "t.po_no NOT IN (SELECT DISTINCT po_no FROM incoming"
+            " WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')"
+        ]
+
         # ── stock / water (incoming) / factory (orders) per plant ───
         stock_by_plant   = _plant_totals("stock",    "unrestricted")
         water_by_plant   = _plant_totals("incoming", "po_qty")
-        factory_by_plant = _plant_totals("orders",   "po_qty")
+        factory_by_plant = _plant_totals("orders",   "po_qty", extra_wh=_orders_extra)
 
         # aggregate plant totals to state
         def _to_state(by_plant):
@@ -1280,6 +1289,13 @@ def api_orders():
                 params.append(f"%{pattern}%")
 
         wh += cat_wh
+
+        # Exclude orders whose po_no is already in the incoming table
+        # (applies to both po_qty and confirmed_qty — the row is already received)
+        wh.append(
+            "o.po_no NOT IN (SELECT DISTINCT po_no FROM incoming"
+            " WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')"
+        )
 
         sql += "\n" + "\n".join(joins)
         if wh:
