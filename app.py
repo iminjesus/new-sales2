@@ -3566,11 +3566,7 @@ def profit_monthly():
 
     try:
         f = parse_filters(request)
-
-        # same metric logic as daily_sales
         value = "qty" if f.get("metric") == "qty" else "amt"
-
-        # optional: ?top_limit=10 -> top 10 sold_to by sales (from sales_2025)
         top_limit = int(request.args.get("top_limit", 0) or 0)
 
         conn = get_connection()
@@ -3578,39 +3574,90 @@ def profit_monthly():
         try:
             top_sold_to = None
 
-            # 1) Top-N sold_to should ALWAYS come from baseline sales table: sales_2526
+            # 1) Top-N sold_to from baseline sales table
             if top_limit > 0:
-                # NOTE: assumes you already created this helper elsewhere:
-                # def get_top_sold_to_from_baseline(cur, f, top_limit, value): ...
                 top_sold_to = get_top_sold_to_from_baseline(cur, f, top_limit, value)
-
                 if not top_sold_to:
                     return jsonify([
                         dict(month=m, gross=0, sd=0, cogs=0, op_cost=0)
                         for m in range(1, 13)
                     ])
 
-            # 2) Monthly profit totals from profit_2501_10,
-            #    restricted to those top sold_to (if any)
+            # 2) Build filters for the new `profit` table.
+            #    profit has: month, sold_to, material, gross, sales_deduction, cogs, operating_cost, profit
+            #    NO ship_to column — ship_to filter resolves to sold_to via customer subquery.
             joins_p  = []
             wh_p     = []
             params_p = []
 
-            # category filters on profit table
-            cat_joins_p, cat_where_p = category_filters("p", f.get("category", "ALL"))
+            # ── region filter (using EXISTS to avoid JOIN inflation) ──
+            if f["region"] != "ALL":
+                states = REGION_STATES.get(f["region"].upper(), [f["region"]])
+                ph = ",".join(["%s"] * len(states))
+                wh_p.append(
+                    f"EXISTS (SELECT 1 FROM customer c2 WHERE c2.sold_to = p.sold_to"
+                    f" AND c2.bde_state IN ({ph}))"
+                )
+                params_p.extend(states)
+
+            # ── salesman filter ──
+            if f["salesman"] != "ALL":
+                wh_p.append(
+                    "EXISTS (SELECT 1 FROM customer c2 WHERE c2.sold_to = p.sold_to"
+                    " AND UPPER(TRIM(c2.salesman_name)) = UPPER(TRIM(%s)))"
+                )
+                params_p.append(f["salesman"])
+
+            # ── sold_to_group filter ──
+            if f["sold_to_group"] != "ALL":
+                wh_p.append(
+                    "EXISTS (SELECT 1 FROM customer c2 WHERE c2.sold_to = p.sold_to"
+                    " AND c2.sold_to_group = %s)"
+                )
+                params_p.append(f["sold_to_group"])
+
+            # ── sold_to filter (directly on p.sold_to) ──
+            if f["sold_to"] != "ALL":
+                sv = f["sold_to"]
+                if sv.isdigit() or sv.upper().startswith("A"):
+                    wh_p.append("p.sold_to = %s"); params_p.append(sv)
+                else:
+                    wh_p.append(
+                        "p.sold_to IN (SELECT DISTINCT sold_to FROM customer WHERE sold_to_name = %s)"
+                    )
+                    params_p.append(sv)
+
+            # ── ship_to filter: no ship_to in profit → resolve to its sold_to ──
+            if f["ship_to"] != "ALL":
+                st = f["ship_to"].strip()
+                if st.isdigit() or st.upper().startswith("A"):
+                    wh_p.append(
+                        "p.sold_to IN (SELECT DISTINCT sold_to FROM customer WHERE ship_to = %s)"
+                    )
+                    params_p.append(st)
+                else:
+                    wh_p.append(
+                        "p.sold_to IN (SELECT DISTINCT sold_to FROM customer"
+                        " WHERE UPPER(TRIM(ship_to_name)) = UPPER(TRIM(%s)))"
+                    )
+                    params_p.append(st)
+
+            # ── category filter (via carrying_2602, same as sales tables) ──
+            cat_joins_p, cat_where_p = category_filters_sales("p", f.get("category", "ALL"))
             joins_p += cat_joins_p
             wh_p    += cat_where_p
 
+            # ── product_group / pattern filter (via carrying_2602) ──
+            if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL":
+                _ensure_carrying_join("p", joins_p)
             if f.get("product_group", "ALL") != "ALL":
-                wh_p.append("p.product_group = %s")
-                params_p.append(f["product_group"])
-
+                wh_p.append("mat.product_group = %s"); params_p.append(f["product_group"])
             if f.get("pattern", "ALL") != "ALL":
-                wh_p.append("p.pattern = %s")
-                params_p.append(f["pattern"])
+                wh_p.append("mat.pattern = %s"); params_p.append(f["pattern"])
             if f["material"] != "ALL":
-                wh_p.append("p.material = %s")
-                params_p.append(f["material"])
+                wh_p.append("p.material = %s"); params_p.append(f["material"])
+
+            # ── top sold_to restriction ──
             if top_sold_to:
                 placeholders = ",".join(["%s"] * len(top_sold_to))
                 wh_p.append(f"p.sold_to IN ({placeholders})")
@@ -3623,7 +3670,7 @@ def profit_monthly():
                        SUM(p.sales_deduction) AS sd,
                        SUM(p.cogs)            AS cogs,
                        SUM(p.operating_cost)  AS op_cost
-                  FROM profit_2501_10 p
+                  FROM profit p
                   {' '.join(joins_p)}
                   {where_sql2}
                  GROUP BY CAST(p.month AS UNSIGNED)
@@ -3636,7 +3683,6 @@ def profit_monthly():
             cur.close()
             conn.close()
 
-        # Build output for months 1..12
         out = [dict(month=m, gross=0, sd=0, cogs=0, op_cost=0) for m in range(1, 13)]
         for r in rows:
             m = int(r["month"] or 0)
