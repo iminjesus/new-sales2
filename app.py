@@ -698,7 +698,72 @@ def ping():
     except Exception:
         return {"ok": False}, 503
 
-# ------------------------------------------------------------------------------
+@app.get("/api/debug_salesman")
+def debug_salesman():
+    """Temporary: diagnose salesman/ship_to data for a given bde_state."""
+    state = request.args.get("state", "WA")
+    states = REGION_STATES.get(state.upper(), [state])
+    ph = ",".join(["%s"] * len(states))
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        # 1. Distinct salesman names in customer for this state
+        cur.execute(
+            f"SELECT salesman_name, COUNT(*) AS cnt FROM customer"
+            f" WHERE bde_state IN ({ph}) GROUP BY salesman_name ORDER BY cnt DESC",
+            tuple(states))
+        cus_salesmen = cur.fetchall()
+
+        # 2. Distinct bde names in target_26 for this state
+        cur.execute(
+            f"SELECT bde, COUNT(DISTINCT ship_to) AS ships, COUNT(DISTINCT sold_to) AS soltos"
+            f" FROM target_26 WHERE state IN ({ph})"
+            f" GROUP BY bde ORDER BY ships DESC",
+            tuple(states))
+        tgt_bdes = cur.fetchall()
+
+        # 3. Sample customer rows for state (shows ship_to, sold_to, salesman)
+        cur.execute(
+            f"SELECT ship_to, sold_to, salesman_name, bde_state FROM customer"
+            f" WHERE bde_state IN ({ph}) LIMIT 20",
+            tuple(states))
+        cus_sample = cur.fetchall()
+
+        # 4. Sample sales_2526 rows for a WA ship_to (check sold_to presence)
+        cur.execute(
+            f"SELECT s.ship_to, s.sold_to, s.year, SUM(s.amt) AS amt"
+            f" FROM sales_2526 s"
+            f" WHERE s.ship_to IN (SELECT DISTINCT ship_to FROM customer WHERE bde_state IN ({ph}))"
+            f" AND s.year = 2025"
+            f" GROUP BY s.ship_to, s.sold_to, s.year"
+            f" LIMIT 20",
+            tuple(states))
+        sales_sample = cur.fetchall()
+
+        # 5. Ship_to counts per salesman in target_26 for this state (shows split)
+        cur.execute(
+            f"SELECT t.bde, t.ship_to, t.sold_to, SUM(t.amt) AS tgt_amt"
+            f" FROM target_26 t"
+            f" WHERE t.state IN ({ph})"
+            f" GROUP BY t.bde, t.ship_to, t.sold_to"
+            f" LIMIT 30",
+            tuple(states))
+        tgt_sample = cur.fetchall()
+
+        cur.close(); conn.close()
+        return jsonify({
+            "state_filter": states,
+            "customer_salesmen": cus_salesmen,
+            "target26_bdes": tgt_bdes,
+            "customer_sample": cus_sample,
+            "sales_sample": sales_sample,
+            "target26_sample": tgt_sample,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 
 @app.route("/")
 def index():
