@@ -168,7 +168,7 @@ async function refreshSoldToList() {
   // We intentionally DO NOT send current sold_to/ship_to/pattern/material as filters here.
   // If we do, the list can "lock" to the current value and you can't re-open other options.
   await refreshSoldToCustom();
-  await refreshShipToCustom();
+  // Ship-to list is independent; do NOT auto-fetch ship_tos here.
 }
 async function ensureTopSet(){
   const k = keyForTopSet();
@@ -2455,18 +2455,12 @@ window.addEventListener("load", async () => {
     clearId: "soldToClear",
     menuId: "soldToMenu",
     getOptions: () => __SOLD_TO_OPTIONS,
-    onPick: async (val) => {
+    onPick: (val) => {
       const v = (val === "ALL") ? "" : val;
       const soldEl = document.getElementById("sold_to");
-      const shipEl = document.getElementById("ship_to");
       if (soldEl) { soldEl.value = v; ddUpdateActive(soldEl); }
       filters.sold_to = v || "ALL";
-
-      // sold-to changes -> reset ship-to + reload ship-to list
-      if (shipEl) { shipEl.value = ""; ddUpdateActive(shipEl); }
-      filters.ship_to = "ALL";
-      await refreshShipToCustom();
-
+      // Do NOT auto-refresh ship_to when sold_to changes — ship_to is independent.
       refreshAllDebounced();
     }
   });
