@@ -129,42 +129,64 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     """
     Returns (joins, wheres, params) to apply Region/Salesman/Group/Sold_to on a fact table.
     Customer JOIN is added only when needed (name-based filters or customer-dimension filters).
+    Region/Salesman/Group filters use EXISTS subqueries to avoid JOIN inflation
+    (customer has multiple rows per ship_to → plain JOIN multiplies sales rows).
     If use_sold_to_name=True, 'sold_to' will match customer.Sold_to_Name instead of id.
     """
     joins = []
     wh, p = [], []
-    needs_cus = False
+    needs_cus = False   # only for name-based sold_to/ship_to lookups
 
+    # ── region: EXISTS subquery → no JOIN inflation ──
     if f["region"] != "ALL":
-        needs_cus = True
         states = REGION_STATES.get(f["region"].upper(), [f["region"]])
-        if len(states) == 1:
-            wh.append("cus.bde_state = %s"); p.append(states[0])
-        else:
-            wh.append(f"cus.bde_state IN ({','.join(['%s']*len(states))})"); p.extend(states)
-    if f["salesman"] != "ALL":
-        needs_cus = True
-        wh.append("UPPER(TRIM(cus.salesman_name)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
-    if f["sold_to_group"] != "ALL":
-        needs_cus = True
-        wh.append("cus.sold_to_group = %s"); p.append(f["sold_to_group"])
+        ph = ",".join(["%s"] * len(states))
+        wh.append(
+            f"EXISTS (SELECT 1 FROM customer _cr WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f" AND _cr.bde_state IN ({ph}))"
+        )
+        p.extend(states)
 
-    # sold_to: id (A.. / digits) → filter directly on fact table; name → customer JOIN
+    # ── salesman: EXISTS subquery ──
+    if f["salesman"] != "ALL":
+        wh.append(
+            f"EXISTS (SELECT 1 FROM customer _cr WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f" AND UPPER(TRIM(_cr.salesman_name)) = UPPER(TRIM(%s)))"
+        )
+        p.append(f["salesman"])
+
+    # ── sold_to_group: EXISTS subquery ──
+    if f["sold_to_group"] != "ALL":
+        wh.append(
+            f"EXISTS (SELECT 1 FROM customer _cr WHERE _cr.ship_to = {alias_fact}.ship_to"
+            f" AND _cr.sold_to_group = %s)"
+        )
+        p.append(f["sold_to_group"])
+
+    # ── sold_to: id → direct filter on fact table; name → subquery ──
     if f["sold_to"] != "ALL":
         sv = f["sold_to"]
         if not use_sold_to_name and (sv.isdigit() or sv.upper().startswith("A")):
             wh.append(f"{alias_fact}.sold_to = %s"); p.append(sv)
         else:
-            needs_cus = True
-            wh.append("cus.sold_to_name = %s"); p.append(sv)
+            wh.append(
+                f"{alias_fact}.sold_to IN ("
+                f"SELECT DISTINCT sold_to FROM customer WHERE sold_to_name = %s)"
+            )
+            p.append(sv)
 
+    # ── ship_to: code → direct; name → subquery (names now come as codes from frontend) ──
     if f["ship_to"] != "ALL":
         st = f["ship_to"].strip()
         if st.isdigit() or st.upper().startswith("A"):
             wh.append(f"{alias_fact}.ship_to = %s"); p.append(st)
         else:
-            needs_cus = True
-            wh.append("UPPER(TRIM(cus.ship_to_name)) = UPPER(TRIM(%s))"); p.append(st)
+            wh.append(
+                f"{alias_fact}.ship_to IN ("
+                f"SELECT DISTINCT ship_to FROM customer"
+                f" WHERE UPPER(TRIM(ship_to_name)) = UPPER(TRIM(%s)))"
+            )
+            p.append(st)
 
     if needs_cus:
         joins.append(_customer_join(alias_fact))
@@ -289,8 +311,16 @@ def _ensure_carrying_join(alias: str, joins: list) -> None:
 
 
 def _customer_join(alias: str) -> str:
-    """Returns the LEFT JOIN clause for customer table using alias 'cus'."""
-    return f"LEFT JOIN customer cus ON cus.ship_to = {alias}.ship_to"
+    """Returns a deduplicated LEFT JOIN for customer (one row per ship_to) to avoid
+    inflating aggregates when a ship_to appears in multiple customer rows."""
+    return (
+        f"LEFT JOIN ("
+        f"SELECT ship_to, MIN(bde_state) AS bde_state, MIN(salesman_name) AS salesman_name,"
+        f" MIN(sold_to_group) AS sold_to_group, MIN(sold_to_name) AS sold_to_name,"
+        f" MIN(ship_to_name) AS ship_to_name, MIN(sold_to) AS sold_to"
+        f" FROM customer GROUP BY ship_to"
+        f") cus ON cus.ship_to = {alias}.ship_to"
+    )
 
 
 def _ensure_customer_join(alias: str, joins: list) -> None:
