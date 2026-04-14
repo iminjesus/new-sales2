@@ -5,7 +5,7 @@ import mysql.connector
 # ---------------- CONFIG ----------------
 CSV_PATH = r"E:\01. work\2025\Data_Anal_Website\rawdata\unlock\mb52_42.csv"
 
-DB_HOST = "localhost"
+DB_HOST = "100.127.139.79"   # 집 PC Tailscale IP
 DB_USER = "root"
 DB_PASSWORD = ""          # 너 설정에 맞게
 DB_NAME = "my_new_database"     # 너 DB명에 맞게
