@@ -10,7 +10,7 @@ load_dotenv()  # .env 파일에서 환경변수 읽기
 # ---------------- CONFIG ----------------
 CSV_PATH = r"D:\Data-Anal website\rawdata\unlock\mb52_42.csv"
 
-DB_HOST     = os.getenv("DB_HOST", "localhost")
+DB_HOST     = os.getenv("DB_HOST", "100.127.139.79")  # 집 PC Tailscale IP
 DB_PORT     = int(os.getenv("DB_PORT", "3306"))
 DB_USER     = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASS", "")
