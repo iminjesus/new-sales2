@@ -2,8 +2,8 @@
 bobjane_crawling.py
 -------------------
 Scrapes ALL tyre prices from https://www.bobjane.com.au/collections/tyres
-Uses URL pagination (?page=N) instead of Load More — keeps each page small
-so the browser stays fast throughout. Saves to CSV after every page.
+Uses Load More (AJAX) but extracts only NEW cards after each click and
+saves to CSV immediately — keeps JS work tiny, survives browser crashes.
 
 Usage:
     python bobjane_crawling.py
@@ -13,12 +13,10 @@ import csv
 import time
 from datetime import datetime
 from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 BASE_URL    = "https://www.bobjane.com.au/collections/tyres"
 OUTPUT_FILE = datetime.now().strftime("BobJane_%Y%m%d_%H%M.csv")
+MAX_CLICKS  = 300
 
 
 def init_driver():
@@ -32,28 +30,31 @@ def init_driver():
     return driver
 
 
-# ── JS: extract all product data from current page in ONE call ────────────────
-# Bob Jane DOM: div.productCard > div.productCardInner > div.productInfo
-_JS_EXTRACT = r"""
-return (function() {
-    var cards = Array.from(document.querySelectorAll('div.productCard'));
+# ── JS snippets ───────────────────────────────────────────────────────────────
 
-    /* Fallback: walk up from product links to price container */
-    if (cards.length === 0) {
-        var seen = new Set();
-        var links = document.querySelectorAll('a[href*="/products/"]');
-        for (var li = 0; li < links.length; li++) {
-            var el = links[li].parentElement;
-            for (var up = 0; up < 8; up++) {
-                if (!el) break;
-                var tc = el.textContent || '';
-                if (/\$\d/.test(tc) && tc.length < 2000 && !seen.has(el)) {
-                    seen.add(el); cards.push(el); break;
-                }
-                el = el.parentElement;
-            }
-        }
+_JS_COUNT = r"""
+return document.querySelectorAll('div.productCard').length;
+"""
+
+_JS_CLICK = r"""
+var btn = document.querySelector('button.load-more-btn');
+if (!btn) btn = document.querySelector('[class*="load-more"],[class*="LoadMore"],[data-load-more]');
+if (!btn) {
+    var btns = document.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+        if (/load\s*more/i.test(btns[i].textContent)) { btn = btns[i]; break; }
     }
+}
+if (!btn) return false;
+btn.click();
+return true;
+"""
+
+# Pass startIdx as arguments[0] — only processes cards from that index onward
+_JS_EXTRACT = r"""
+return (function(startIdx) {
+    var allCards = document.querySelectorAll('div.productCard');
+    var cards = Array.from(allCards).slice(startIdx || 0);
 
     var results = [];
     var dedupKeys = new Set();
@@ -63,7 +64,7 @@ return (function() {
         var text = (card.textContent || '').replace(/\s+/g, ' ').trim();
         if (!text) continue;
 
-        /* Title: product info link (not image link) */
+        /* Title: product info link (not the image link) */
         var title = '';
         var infoEl = card.querySelector('div.productInfo, .productInfo');
         if (infoEl) {
@@ -90,7 +91,7 @@ return (function() {
             if (sm) price = sm[1].replace(/,/g, '');
         }
 
-        /* Save text */
+        /* Save text: "SAVE $N ON A SET OF N" */
         var saveText = '';
         var stm = text.match(/(SAVE \$[\d,]+ ON A SET OF \d+)/i);
         if (stm) saveText = stm[1];
@@ -119,8 +120,49 @@ return (function() {
         results.push({ title: title, price: price, saveText: saveText, promo: promo });
     }
     return results;
-})();
+})(arguments[0]);
 """
+
+
+# ── Python helpers ────────────────────────────────────────────────────────────
+
+def count_cards(driver):
+    try:
+        return driver.execute_script(_JS_COUNT) or 0
+    except Exception:
+        return 0
+
+
+def click_load_more(driver):
+    try:
+        return driver.execute_script(_JS_CLICK)
+    except Exception:
+        return False
+
+
+def extract_from(driver, start_idx):
+    """Extract only cards from start_idx onward. Returns list of row dicts."""
+    try:
+        raw = driver.execute_script(_JS_EXTRACT, start_idx)
+    except Exception as e:
+        print(f"  [JS error] {e}")
+        return []
+    if not raw:
+        return []
+    return raw
+
+
+KNOWN_BRANDS = [
+    "Michelin", "Bridgestone", "Continental", "Goodyear", "Kumho",
+    "Falken", "Hankook", "Laufenn", "Dunlop", "Yokohama", "Pirelli",
+    "Toyo", "Nexen", "Nitto", "Cooper", "BFGoodrich", "General",
+    "Maxxis", "Sailun", "Accelera", "Achilles", "Landsail", "Winrun",
+    "Roadstone", "Haida", "Minerva", "Centara", "Hifly", "Triangle",
+    "Davanti", "Firemax", "Boto", "Comforser", "Radar", "Arivo",
+    "Westlake", "Linglong", "GT Radial", "Goodride", "Ironman",
+    "Federal", "Thunderer", "Grenlander", "Trazano", "Tracmax",
+    "Bob Jane", "RoadX", "Mazzini", "Aplus", "Vitour", "Wanli",
+]
 
 
 def extract_size_from_title(title):
@@ -133,53 +175,27 @@ def extract_size_from_title(title):
     return ""
 
 
-KNOWN_BRANDS = [
-    "Michelin", "Bridgestone", "Continental", "Goodyear", "Kumho",
-    "Falken", "Hankook", "Laufenn", "Dunlop", "Yokohama", "Pirelli",
-    "Toyo", "Nexen", "Nitto", "Cooper", "BFGoodrich", "General",
-    "Maxxis", "Sailun", "Accelera", "Achilles", "Landsail", "Winrun",
-    "Roadstone", "Haida", "Minerva", "Centara", "Hifly", "Triangle",
-    "Davanti", "Firemax", "Boto", "Comforser", "Radar", "Arivo",
-    "Westlake", "Linglong", "GT Radial", "Goodride", "Ironman",
-    "Federal", "Thunderer", "Grenlander", "Trazano", "Tracmax",
-]
-
-
 def parse_title(title):
     size  = extract_size_from_title(title)
     brand = ""
     rest  = title.strip()
-
     for b in KNOWN_BRANDS:
         if rest.lower().startswith(b.lower()):
             brand = b
             rest  = rest[len(b):].strip()
             break
-
     if size:
         rest = re.sub(re.escape(size), "", rest, flags=re.IGNORECASE).strip()
     rest = re.sub(r'\d{3}/\d{2}[A-Za-z]\d{2}[A-Za-z\d]*', "", rest).strip()
     rest = re.sub(r'\d{3}[A-Za-z]\d{2}[A-Za-z\d]*',       "", rest).strip()
     rest = re.sub(r'^[\s\-–/]+', '', rest).strip()
-
     return size, brand or title.split()[0], rest or title
 
 
-def scrape_page(driver):
-    """Extract products from current page via single JS call."""
-    try:
-        raw = driver.execute_script(_JS_EXTRACT)
-    except Exception as e:
-        print(f"  [JS error] {e}")
-        return []
-
-    if not raw:
-        return []
-
+def process_raw(raw_items):
+    """Convert raw JS items to final row dicts with parsed title."""
     results = []
-    seen = set()
-
-    for item in raw:
+    for item in raw_items:
         title     = (item.get("title")    or "").strip()
         price_s   = (item.get("price")    or "").strip()
         save_text = (item.get("saveText") or "").strip()
@@ -196,7 +212,6 @@ def scrape_page(driver):
                 save_amount = float(m.group(1).replace(',', '')) / int(m.group(2))
             except Exception:
                 pass
-
         if price:
             if save_amount is not None:
                 disc_price = f"{round(float(price) - save_amount, 2):.2f}"
@@ -204,85 +219,92 @@ def scrape_page(driver):
                 disc_price = f"{round(float(price) * 3 / 4, 2):.2f}"
 
         size, brand, desc = parse_title(title)
-
-        key = (size, brand, desc)
-        if key in seen:
-            continue
-        seen.add(key)
-
         results.append({
-            "size":        size,
-            "brand":       brand,
-            "description": desc,
-            "price":       price,
-            "disc_price":  disc_price,
-            "promo":       promo,
-            "save_text":   save_text,
+            "size": size, "brand": brand, "description": desc,
+            "price": price, "disc_price": disc_price,
+            "promo": promo, "save_text": save_text,
         })
-
     return results
+
+
+def write_rows(writer, rows):
+    for r in rows:
+        writer.writerow([r["size"], r["brand"], r["description"],
+                         r["price"], r["disc_price"], r["promo"], r["save_text"]])
+        line = f"  {r['brand']:<15} | {r['size']:<12} | {r['description'][:30]:<30} | ${r['price']}"
+        if r["disc_price"]:
+            line += f" → ${r['disc_price']}"
+        print(line)
 
 
 def main():
     driver = init_driver()
 
     print(f"\nOutput: {OUTPUT_FILE}")
-    print("Crawling page by page — saves after every page, browser stays fast.\n")
+    print("Loading Bob Jane catalogue — extracts + saves after every Load More click.\n")
 
     try:
-        all_seen  = set()   # global dedup across all pages
-        page_num  = 1
-        total     = 0
+        driver.get(BASE_URL)
+        time.sleep(5)   # wait for AJAX initial load
+
+        total         = 0
+        extracted_idx = 0   # how many cards already extracted
+        stale         = 0
+        click_num     = 0
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(["SIZE", "brand", "DESCRIPTION",
                              "PRICE", "DISC_PRICE", "PROMO", "SAVE_TEXT"])
 
-            while True:
-                # Page 1: use bare URL (site JS ignores ?page=1)
-                # Page 2+: use ?page=N for Shopify pagination
-                url = BASE_URL if page_num == 1 else f"{BASE_URL}?page={page_num}"
-                driver.get(url)
-                time.sleep(5)   # wait for AJAX product loading (plain sleep — reliable)
+            # ── Extract initial page ──────────────────────────────────────────
+            initial_count = count_cards(driver)
+            print(f"Initial load: {initial_count} cards")
+            raw  = extract_from(driver, 0)
+            rows = process_raw(raw)
+            write_rows(writer, rows)
+            f.flush()
+            total         += len(rows)
+            extracted_idx  = initial_count
+            print(f"  ── saved {len(rows)}  (total: {total})\n")
 
-                # Debug: show card count and page title if empty
-                try:
-                    card_count = driver.execute_script(
-                        "return document.querySelectorAll('div.productCard').length;")
-                    page_title = driver.title
-                    print(f"  [debug] title='{page_title[:60]}' cards={card_count}")
-                except Exception:
-                    pass
-
-                rows = scrape_page(driver)
-
-                if not rows:
-                    print(f"Page {page_num:>3}: no products — finished")
+            # ── Load More loop ────────────────────────────────────────────────
+            while click_num < MAX_CLICKS:
+                found = click_load_more(driver)
+                if not found:
+                    print(f"Load More button gone — finished")
                     break
 
-                # Shopify returns page 1 when page number exceeds catalogue
-                new_rows = [r for r in rows
-                            if (r['size'], r['brand'], r['description']) not in all_seen]
+                click_num += 1
 
-                if not new_rows:
-                    print(f"Page {page_num:>3}: all duplicates — finished")
-                    break
+                # Adaptive wait: poll until count rises (max 6s)
+                deadline = time.time() + 6.0
+                after = extracted_idx
+                while time.time() < deadline:
+                    time.sleep(0.3)
+                    after = count_cards(driver)
+                    if after > extracted_idx:
+                        break
 
-                for r in new_rows:
-                    all_seen.add((r['size'], r['brand'], r['description']))
-                    writer.writerow([r["size"],  r["brand"],  r["description"],
-                                     r["price"], r["disc_price"],
-                                     r["promo"], r["save_text"]])
-                    line = f"  {r['brand']:<15} | {r['size']:<12} | {r['description'][:30]:<30} | ${r['price']}"
-                    if r['disc_price']:
-                        line += f" → ${r['disc_price']}"
-                    print(line)
+                added = after - extracted_idx
+                if added == 0:
+                    stale += 1
+                    print(f"  Click {click_num:>3}: +0  [stale {stale}/5]")
+                    if stale >= 5:
+                        print("  No new products — finished")
+                        break
+                    continue
 
+                stale = 0
+
+                # Extract ONLY the new cards
+                raw  = extract_from(driver, extracted_idx)
+                rows = process_raw(raw)
+                write_rows(writer, rows)
                 f.flush()
-                total    += len(new_rows)
-                page_num += 1
-                print(f"  ── page {page_num-1} done: {len(new_rows)} products  (running total: {total})")
+                total         += len(rows)
+                extracted_idx  = after
+                print(f"  Click {click_num:>3}: +{added:>3} cards → {len(rows):>3} products  (total: {total})")
 
         print(f"\nFinished. {total} products saved → {OUTPUT_FILE}")
 
