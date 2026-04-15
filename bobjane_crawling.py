@@ -33,33 +33,40 @@ def init_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
-    return webdriver.Chrome(options=options)
+    driver = webdriver.Chrome(options=options)
+    driver.set_script_timeout(60)   # allow longer JS execution on big pages
+    return driver
+
+
+def find_load_more_btn(driver):
+    """Find the Load More button using fast, simple selectors only."""
+    # Fast: button/a containing 'load' (case-insensitive via lower-case XPath)
+    for xpath in [
+        "//button[contains(translate(text(),'LOADMRE ','loadmre '),'load more')]",
+        "//a[contains(translate(text(),'LOADMRE ','loadmre '),'load more')]",
+        "//button[contains(@class,'load')]",
+        "//button[contains(@class,'Load')]",
+        "//*[@data-load-more]",
+        "//*[contains(@class,'load-more')]",
+    ]:
+        try:
+            els = driver.find_elements(By.XPATH, xpath)
+            visible = [e for e in els if e.is_displayed()]
+            if visible:
+                return visible[0]
+        except Exception:
+            pass
+    return None
 
 
 def load_all_results(driver):
     """Click Load More until the button disappears or the cap is hit."""
     clicked = 0
     while clicked < MAX_LOAD_MORE:
-        # Find visible Load More button (any element containing that text)
-        btn = None
-        els = driver.find_elements(
-            By.XPATH,
-            "//*[contains(translate(normalize-space(text()),"
-            "'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),"
-            "'LOAD MORE')]"
-        )
-        for el in els:
-            try:
-                if el.is_displayed():
-                    btn = el
-                    break
-            except Exception:
-                pass
-
+        btn = find_load_more_btn(driver)
         if not btn:
-            print(f"  No more Load More button — done after {clicked} clicks")
+            print(f"  No more Load More — done after {clicked} clicks")
             break
-
         try:
             driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
             time.sleep(0.6)
