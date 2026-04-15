@@ -65,15 +65,76 @@ def init_driver():
     return webdriver.Chrome(options=options)
 
 
-def build_url(width, profile, rim):
-    """Try common Shopify filter URL patterns."""
-    if profile:
-        return (
-            f"{BASE_URL}?width={width}&profile={profile}&rim={rim}"
-        )
-    else:
-        # Run-flat / no-profile tyres (185R14 etc.)
-        return f"{BASE_URL}?width={width}&rim={rim}"
+def select_option(driver, select_el, value):
+    """Select an option from a <select> element by value or visible text."""
+    from selenium.webdriver.support.ui import Select
+    sel = Select(select_el)
+    try:
+        sel.select_by_value(str(value))
+        return True
+    except Exception:
+        pass
+    # Try partial text match
+    for option in sel.options:
+        if str(value) in option.text:
+            sel.select_by_visible_text(option.text)
+            return True
+    return False
+
+
+def apply_size_filter(driver, wait, width, profile, rim, size):
+    """
+    Use the Bob Jane on-page size filter dropdowns:
+      Width → Profile/Aspect Ratio → Rim/Diameter → click Filter By Size
+    Returns True if filter was successfully applied.
+    """
+    try:
+        # Wait for filter section to be present
+        wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//*[contains(text(),'Filter By Size') or "
+                       "contains(text(),'By Size') or "
+                       "contains(text(),'By Width')]")))
+        time.sleep(1)
+    except TimeoutException:
+        return False
+
+    selects = driver.find_elements(By.CSS_SELECTOR, "select")
+    if len(selects) < 2:
+        return False
+
+    # Bob Jane filter has 3 selects: Width, Profile, Rim
+    try:
+        select_option(driver, selects[0], width)
+        time.sleep(0.8)
+        # Refresh selects as DOM may update after width selection
+        selects = driver.find_elements(By.CSS_SELECTOR, "select")
+        if profile and len(selects) > 1:
+            select_option(driver, selects[1], profile)
+            time.sleep(0.8)
+        selects = driver.find_elements(By.CSS_SELECTOR, "select")
+        if len(selects) > 2:
+            select_option(driver, selects[2], rim)
+            time.sleep(0.8)
+    except Exception as e:
+        print(f"  [WARN] dropdown select failed: {e}")
+        return False
+
+    # Click Filter By Size button
+    for xpath in [
+        "//button[contains(text(),'Filter By Size')]",
+        "//button[contains(text(),'Filter')]",
+        "//input[@value='Filter By Size']",
+        "//a[contains(text(),'Filter By Size')]",
+    ]:
+        btns = driver.find_elements(By.XPATH, xpath)
+        visible = [b for b in btns if b.is_displayed()]
+        if visible:
+            driver.execute_script("arguments[0].click();", visible[0])
+            print(f"  Filter applied: {size}")
+            time.sleep(3)
+            return True
+
+    return False
 
 
 MAX_LOAD_MORE = 15  # safety cap — if filter works, 1 size should need far fewer
@@ -285,39 +346,23 @@ def scrape_products(driver, size):
 
 
 def scrape_size(driver, wait, width, profile, rim, size):
-    """Navigate to the size-filtered page and scrape all products."""
-    url = build_url(width, profile, rim)
-    print(f"  Navigating: {url}")
-    driver.get(url)
-    time.sleep(3)
+    """Navigate to the base page, apply the size filter UI, then scrape."""
+    # Always start from the base collections page (filter UI lives there)
+    if BASE_URL not in driver.current_url:
+        driver.get(BASE_URL)
+        time.sleep(3)
 
-    # Check if any products loaded; if 0, try alternate URL patterns
-    alt_urls = [
-        f"{BASE_URL}?q={size.replace('/', '%2F')}",
-        f"{BASE_URL}?filter.p.m.custom.width={width}&filter.p.m.custom.profile={profile}&filter.p.m.custom.rim={rim}",
-        f"https://www.bobjane.com.au/search?type=product&q={width}+{profile}+{rim}",
-    ]
+    # Try the on-page filter dropdowns first (most reliable)
+    filter_ok = apply_size_filter(driver, wait, width, profile, rim, size)
 
-    # Quick check for product cards
-    found = any(
-        driver.find_elements(By.CSS_SELECTOR, sel)
-        for sel in ["div.product-card", "div.product-item", "div.grid__item",
-                    "li.product-card", "article.product-card", "div.card-wrapper"]
-    )
-
-    if not found:
-        for alt in alt_urls:
-            print(f"  Trying alternate: {alt}")
-            driver.get(alt)
-            time.sleep(3)
-            found = any(
-                driver.find_elements(By.CSS_SELECTOR, sel)
-                for sel in ["div.product-card", "div.product-item",
-                            "div.grid__item", "li.product-card",
-                            "article.product-card", "div.card-wrapper"]
-            )
-            if found:
-                break
+    if not filter_ok:
+        # Fallback: try URL-based filter parameters
+        print(f"  Filter UI failed, trying URL params...")
+        driver.get(BASE_URL)
+        time.sleep(2)
+        driver.get(f"{BASE_URL}?width={width}&profile={profile}&rim={rim}")
+        time.sleep(3)
+        filter_ok = apply_size_filter(driver, wait, width, profile, rim, size)
 
     # Click Load More until all products are visible
     load_all_results(driver, wait, size)
