@@ -76,11 +76,13 @@ def build_url(width, profile, rim):
         return f"{BASE_URL}?width={width}&rim={rim}"
 
 
-def load_all_results(driver, wait):
-    """Keep clicking 'Load More' until the button disappears."""
+MAX_LOAD_MORE = 15  # safety cap — if filter works, 1 size should need far fewer
+
+
+def load_all_results(driver, wait, size=""):
+    """Keep clicking 'Load More' until button disappears or cap is reached."""
     loaded = 0
-    while True:
-        # Common selectors for Load More button
+    while loaded < MAX_LOAD_MORE:
         btn = None
         for sel in [
             "//button[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'LOAD MORE')]",
@@ -102,11 +104,14 @@ def load_all_results(driver, wait):
             driver.execute_script("arguments[0].click();", btn)
             loaded += 1
             print(f"    Load More clicked ({loaded})")
-            time.sleep(2.5)   # wait for AJAX to append products
+            time.sleep(2.5)
         except Exception as e:
             print(f"    Load More error: {e}")
             break
 
+    if loaded >= MAX_LOAD_MORE:
+        print(f"    [WARN] Hit Load More cap ({MAX_LOAD_MORE}) — "
+              f"URL filter may not be working for {size}")
     print(f"    Total Load More clicks: {loaded}")
 
 
@@ -315,10 +320,20 @@ def scrape_size(driver, wait, width, profile, rim, size):
                 break
 
     # Click Load More until all products are visible
-    load_all_results(driver, wait)
+    load_all_results(driver, wait, size)
 
-    # Scrape all visible product cards
-    return scrape_products(driver, size)
+    # Scrape all visible product cards, filtering to matching size only
+    all_products = scrape_products(driver, size)
+
+    # If URL filter didn't work, the page may have returned all sizes —
+    # keep only rows whose title or description contains the target size
+    size_pattern = re.sub(r'[/R]', r'.?', size)   # "175/65R14" → "175.?65.?14"
+    matched = [r for r in all_products
+               if re.search(size_pattern, r["description"] + r["brand"], re.IGNORECASE)
+               or re.search(size_pattern, r["size"], re.IGNORECASE)]
+    if len(matched) < len(all_products):
+        print(f"  Filtered {len(all_products)} → {len(matched)} products matching {size}")
+    return matched if matched else all_products
 
 
 def main():
