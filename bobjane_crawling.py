@@ -211,7 +211,83 @@ def parse_title(title):
 
 
 _JS_COUNT_PRODUCTS = r"""
-return document.querySelectorAll('a[href*="/products/"]').length;
+/* Count only product links that are inside a main/section (excludes nav) */
+var main = document.querySelector('main, #main, .main-content, section.collection') || document.body;
+return main.querySelectorAll('a[href*="/products/"]').length;
+"""
+
+_JS_DIAGNOSE = r"""
+(function() {
+    var d = {};
+
+    /* 1. Card selector hit counts */
+    var SELECTORS = [
+        'div.product-card','li.product-card','article.product-card',
+        'div.product-item','div.grid-product','div.card-wrapper',
+        'li.grid__item','.grid__item','.product-item','li[class*="grid"]',
+        'div[class*="ProductCard"]','div[class*="product-block"]',
+        '[data-product-id]','[data-product]','div[class*="item"]'
+    ];
+    d.selectorHits = {};
+    for (var s of SELECTORS) {
+        var n = document.querySelectorAll(s).length;
+        if (n > 0) d.selectorHits[s] = n;
+    }
+
+    /* 2. First product link parent chain (tag + classes) */
+    var link = document.querySelector('a[href*="/products/"]');
+    d.firstProductLinkHref = link ? link.href.substring(0, 80) : 'none';
+    d.parentChain = [];
+    if (link) {
+        var el = link;
+        for (var i = 0; i < 8; i++) {
+            el = el.parentElement;
+            if (!el || el === document.body) break;
+            d.parentChain.push(el.tagName + (el.className ? '.' + el.className.trim().split(/\s+/).join('.') : ''));
+        }
+    }
+
+    /* 3. Load More button candidates */
+    d.loadMoreCandidates = [];
+    var all = document.querySelectorAll('button, a, [role="button"]');
+    for (var j = 0; j < all.length; j++) {
+        var txt = (all[j].textContent || '').trim();
+        if (txt.length < 40 && /load.?more/i.test(txt)) {
+            var r = all[j].getBoundingClientRect();
+            d.loadMoreCandidates.push({
+                tag: all[j].tagName,
+                cls: all[j].className,
+                txt: txt,
+                href: all[j].href || '',
+                visible: r.width > 0 && r.height > 0,
+                offsetParentNull: all[j].offsetParent === null
+            });
+        }
+    }
+
+    /* 4. Price text sample — first 3 elements containing "$" near a product link */
+    d.priceSamples = [];
+    var priceEls = document.querySelectorAll('a[href*="/products/"]');
+    for (var k = 0; k < Math.min(priceEls.length, 5); k++) {
+        var par = priceEls[k];
+        for (var up = 0; up < 8; up++) {
+            par = par.parentElement;
+            if (!par) break;
+            var tc = par.textContent || '';
+            if (/\$\d/.test(tc)) {
+                d.priceSamples.push({
+                    tag: par.tagName,
+                    cls: par.className.trim().split(/\s+/).slice(0,3).join(' '),
+                    textLen: tc.length,
+                    textSnippet: tc.trim().substring(0, 120).replace(/\s+/g,' ')
+                });
+                break;
+            }
+        }
+    }
+
+    return d;
+})();
 """
 
 def load_all_results(driver):
@@ -258,6 +334,42 @@ def load_all_results(driver):
 
     if clicked >= MAX_LOAD_MORE:
         print(f"  [WARN] Hit cap ({MAX_LOAD_MORE} clicks)")
+
+
+def diagnose_page(driver):
+    """Print DOM structure so we can tune selectors without guessing."""
+    print("\n=== PAGE DIAGNOSIS ===")
+    try:
+        d = driver.execute_script(_JS_DIAGNOSE)
+    except Exception as e:
+        print(f"  Diagnose error: {e}")
+        return
+
+    print(f"First product link: {d.get('firstProductLinkHref','none')}")
+
+    hits = d.get("selectorHits", {})
+    if hits:
+        print("Card selectors with matches:")
+        for sel, n in hits.items():
+            print(f"  {n:>4}  {sel}")
+    else:
+        print("  No card selectors matched!")
+
+    print("Parent chain from first product link:")
+    for p in (d.get("parentChain") or []):
+        print(f"  {p}")
+
+    lm = d.get("loadMoreCandidates") or []
+    print(f"Load More candidates ({len(lm)}):")
+    for c in lm:
+        vis = "VISIBLE" if c.get("visible") else "hidden"
+        print(f"  [{vis}] <{c['tag']}> cls='{c['cls']}' txt='{c['txt']}' href='{c['href'][:60]}'")
+
+    print("Price-containing parent samples:")
+    for s in (d.get("priceSamples") or []):
+        print(f"  <{s['tag']}> cls='{s['cls']}' len={s['textLen']}  → {s['textSnippet']!r}")
+
+    print("=== END DIAGNOSIS ===\n")
 
 
 def scrape_all_products(driver):
@@ -334,6 +446,8 @@ def main():
     try:
         driver.get(BASE_URL)
         time.sleep(3)
+
+        diagnose_page(driver)   # shows DOM structure so selectors can be tuned
 
         print("Clicking Load More to load all products...")
         load_all_results(driver)
