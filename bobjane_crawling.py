@@ -245,15 +245,15 @@ def main():
                 url = BASE_URL if page_num == 1 else f"{BASE_URL}?page={page_num}"
                 driver.get(url)
 
-                # Wait for product cards to render (JS-loaded)
+                # Wait for actual price text to appear — cards exist as empty
+                # shells before AJAX fills them, so we must wait for content
                 try:
-                    WebDriverWait(driver, 10).until(
+                    WebDriverWait(driver, 15).until(
                         EC.presence_of_element_located(
-                            (By.CSS_SELECTOR, "div.productCard"))
+                            (By.XPATH, "//*[contains(text(),'per tyre')]"))
                     )
                 except Exception:
-                    pass   # fall through to scrape (may return empty → stop)
-                time.sleep(1)   # let any late-rendering elements settle
+                    pass   # timed out — scrape anyway (returns empty → stops loop)
 
                 rows = scrape_page(driver)
 
