@@ -33,70 +33,54 @@ def init_driver():
 # ── JS: find and click Load More (specific selectors only — no mass scan) ─────
 # Use raw string to avoid Python escape warnings for \s etc.
 _JS_CLICK_LOAD_MORE = r"""
-/* 1. Try class/attribute selectors first — O(1) lookup */
-var btn = document.querySelector(
-    '[data-load-more], [class*="load-more"], [class*="LoadMore"]'
-);
-/* 2. Fallback: scan only <button> elements (far fewer than all <a> tags) */
+/* 1. Bob Jane uses <button class="load-more-btn"> — direct class match */
+var btn = document.querySelector('button.load-more-btn');
+/* 2. Generic class-based fallback */
+if (!btn) btn = document.querySelector('[class*="load-more"], [class*="LoadMore"], [data-load-more]');
+/* 3. Scan all <button> elements for Load More text */
 if (!btn) {
     var buttons = document.querySelectorAll('button');
     for (var i = 0; i < buttons.length; i++) {
-        if (/load\s*more/i.test(buttons[i].textContent)) {
-            btn = buttons[i];
-            break;
-        }
+        if (/load\s*more/i.test(buttons[i].textContent)) { btn = buttons[i]; break; }
     }
 }
-/* 3. Last resort: scan <a> elements with href="#" or no href (pagination links) */
-if (!btn) {
-    var anchors = document.querySelectorAll('a[href="#"], a[href="javascript:;"], a[href=""]');
-    for (var j = 0; j < anchors.length; j++) {
-        if (/load\s*more/i.test(anchors[j].textContent)) {
-            btn = anchors[j];
-            break;
-        }
-    }
-}
-if (btn && btn.offsetParent !== null) {
-    btn.scrollIntoView({block: 'center'});
-    btn.click();
-    return true;
-}
-return false;
+if (!btn) return false;
+/* Scroll to bottom first, then to button — some sites gate button on scroll */
+window.scrollTo(0, document.body.scrollHeight);
+btn.scrollIntoView({block: 'center'});
+btn.click();
+return true;
 """
 
 # ── JS: extract all product data in ONE call ──────────────────────────────────
-# Use textContent (no layout reflow) for bulk text; innerText only where needed.
+# Bob Jane DOM: div.productCard > div.productCardInner > div.productInfo
 _JS_EXTRACT = r"""
 (function() {
-    var CARD_SELECTORS = [
-        'div.product-card', 'li.product-card', 'article.product-card',
-        'div.product-item', 'div.grid-product', 'div.card-wrapper',
-        'div[class*="ProductCard"]', 'div[class*="product-block"]',
-        'li[class*="grid__item"]'
-    ];
+    /* Primary: Bob Jane-specific selector */
+    var cards = Array.from(document.querySelectorAll('div.productCard'));
 
-    var cards = [];
-    for (var si = 0; si < CARD_SELECTORS.length; si++) {
-        var els = document.querySelectorAll(CARD_SELECTORS[si]);
-        if (els.length > 2) { cards = Array.from(els); break; }
+    /* Fallback: use data-product-id containers if productCard not found */
+    if (cards.length === 0) {
+        var byAttr = document.querySelectorAll('[data-product-id]');
+        for (var ai = 0; ai < byAttr.length; ai++) {
+            var pc = byAttr[ai].closest('div') || byAttr[ai];
+            if (cards.indexOf(pc) === -1) cards.push(pc);
+        }
     }
 
+    /* Generic fallback: walk up from product links to price container */
     if (cards.length === 0) {
-        /* Fallback: unique parent containers of /products/ links that have a price */
         var seen = new Set();
         var links = document.querySelectorAll('a[href*="/products/"]');
         for (var li = 0; li < links.length; li++) {
-            var el = links[li];
-            for (var up = 0; up < 6; up++) {
-                el = el.parentElement;
+            var el = links[li].parentElement;
+            for (var up = 0; up < 8; up++) {
                 if (!el) break;
                 var tc = el.textContent || '';
-                if (/\$\d/.test(tc) && tc.length < 1000 && !seen.has(el)) {
-                    seen.add(el);
-                    cards.push(el);
-                    break;
+                if (/\$\d/.test(tc) && tc.length < 2000 && !seen.has(el)) {
+                    seen.add(el); cards.push(el); break;
                 }
+                el = el.parentElement;
             }
         }
     }
@@ -106,24 +90,22 @@ _JS_EXTRACT = r"""
 
     for (var ci = 0; ci < cards.length; ci++) {
         var card = cards[ci];
-        /* textContent is fast (no layout reflow); use for regex matching */
-        var text = (card.textContent || '').trim();
+        var text = (card.textContent || '').replace(/\s+/g, ' ').trim();
         if (!text) continue;
 
-        /* Title: prefer heading/link elements */
-        var titleEl = card.querySelector(
-            'h2, h3, h4, [class*="title"] a, a[href*="/products/"]'
-        );
+        /* Title: product info link (not image link — image link has no text) */
         var title = '';
-        if (titleEl) {
-            title = (titleEl.textContent || '').trim();
+        var infoEl = card.querySelector('div.productInfo, .productInfo');
+        if (infoEl) {
+            var infoLink = infoEl.querySelector('a[href*="/products/"]');
+            if (infoLink) title = (infoLink.textContent || '').trim();
         }
+        /* Fallback: any product link with meaningful text */
         if (!title) {
-            /* Fall back to first non-price line in card text */
-            var lines = text.split('\n');
-            for (var ln = 0; ln < lines.length; ln++) {
-                var line = lines[ln].trim();
-                if (line.length > 8 && line[0] !== '$') { title = line; break; }
+            var allLinks = card.querySelectorAll('a[href*="/products/"]');
+            for (var tl = 0; tl < allLinks.length; tl++) {
+                var lt = (allLinks[tl].textContent || '').trim();
+                if (lt.length > 6) { title = lt; break; }
             }
         }
 
@@ -141,18 +123,23 @@ _JS_EXTRACT = r"""
 
         /* Save text: "SAVE $N ON A SET OF N" */
         var saveText = '';
-        var stm = text.match(/(SAVE\s+\$[\d,]+\s+ON\s+A\s+SET\s+OF\s+\d+)/i);
-        if (stm) saveText = stm[1].trim();
+        var stm = text.match(/(SAVE \$[\d,]+ ON A SET OF \d+)/i);
+        if (stm) saveText = stm[1];
 
-        /* Promo badge — use innerText on just this one small element */
+        /* Promo badge */
         var promo = '';
         var promoEl = card.querySelector(
-            '[class*="badge"], [class*="banner"], [class*="promo"],' +
-            ' [class*="ribbon"], [class*="label"], [class*="tag"]'
+            '[class*="badge"],[class*="promo"],[class*="ribbon"],' +
+            '[class*="label"],[class*="tag"],[class*="banner"]'
         );
         if (promoEl) {
-            var pt = (promoEl.innerText || promoEl.textContent || '').trim();
+            var pt = (promoEl.textContent || '').trim();
             if (pt && pt.length < 60 && pt[0] !== '$') promo = pt;
+        }
+        /* Also catch "Buy 3 Get 1 Free" style text at start of card */
+        if (!promo) {
+            var buyM = text.match(/^((?:buy|get)\s+\d+\s+\w+\s+\d+\s+\w+)/i);
+            if (buyM) promo = buyM[1];
         }
 
         if (!title && !price) continue;
@@ -211,9 +198,8 @@ def parse_title(title):
 
 
 _JS_COUNT_PRODUCTS = r"""
-/* Count only product links that are inside a main/section (excludes nav) */
-var main = document.querySelector('main, #main, .main-content, section.collection') || document.body;
-return main.querySelectorAll('a[href*="/products/"]').length;
+/* One element per product card — accurate count regardless of how many links each card has */
+return document.querySelectorAll('div.productCard, [data-product-id]').length;
 """
 
 _JS_DIAGNOSE = r"""
@@ -321,7 +307,7 @@ def load_all_results(driver):
 
         if added == 0:
             stale += 1
-            if stale >= 3:
+            if stale >= 5:
                 print(f"  No new products for {stale} clicks in a row — stopping")
                 break
         else:
