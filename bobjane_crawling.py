@@ -184,6 +184,21 @@ def scrape_products(driver, size):
 
     for card in cards:
         try:
+            # ── Promo banner (e.g. "Buy 3 Get 1 Free") ───────────────────────
+            promo = ""
+            for sel in [
+                "[class*='badge']", "[class*='Banner']", "[class*='banner']",
+                "[class*='promo']", "[class*='tag']", "[class*='label']",
+                "[class*='ribbon']", "[class*='sticker']",
+            ]:
+                try:
+                    raw = clean(card.find_element(By.CSS_SELECTOR, sel).text)
+                    if raw and len(raw) < 60:
+                        promo = raw
+                        break
+                except Exception:
+                    pass
+
             # ── Title ────────────────────────────────────────────────────────
             title = ""
             for sel in ["h2", "h3", ".product-card__title", ".product-title",
@@ -195,19 +210,52 @@ def scrape_products(driver, size):
                 except Exception:
                     pass
 
-            # ── Price ─────────────────────────────────────────────────────────
+            # ── Price (normal per tyre) ───────────────────────────────────────
             price = ""
             for sel in [".price", ".product-price", "[class*='price']",
                         "span.money", ".price__regular", ".price-item"]:
                 try:
-                    raw = clean(card.find_element(By.CSS_SELECTOR, sel).text)
-                    # Skip "SAVE $..." lines
-                    if raw and not raw.upper().startswith("SAVE"):
-                        price = extract_price(raw)
-                        if price:
-                            break
+                    els = card.find_elements(By.CSS_SELECTOR, sel)
+                    for el in els:
+                        raw = clean(el.text)
+                        if raw and not raw.upper().startswith("SAVE"):
+                            p = extract_price(raw)
+                            if p:
+                                price = p
+                                break
+                    if price:
+                        break
                 except Exception:
                     pass
+
+            # ── Save text (e.g. "SAVE $134 ON A SET OF 4") ───────────────────
+            save_text = ""
+            full_text = clean(card.text)
+            m = re.search(r'(SAVE\s+\$[\d,]+[^\n]*)', full_text, re.IGNORECASE)
+            if m:
+                save_text = m.group(1).strip()
+
+            # ── Calculate discounted per-tyre price ───────────────────────────
+            disc_price = ""
+            if save_text and price:
+                # "SAVE $134 ON A SET OF 4" → save 134/4 = 33.50 per tyre
+                m_save = re.search(r'SAVE\s+\$([\d,]+)\s+ON\s+A\s+SET\s+OF\s+(\d+)',
+                                   save_text, re.IGNORECASE)
+                if m_save:
+                    save_total = float(m_save.group(1).replace(',', ''))
+                    set_of     = int(m_save.group(2))
+                    try:
+                        disc = round(float(price) - save_total / set_of, 2)
+                        disc_price = f"{disc:.2f}"
+                    except Exception:
+                        pass
+                # "Buy 3 Get 1 Free" → effective price = 3/4 of normal
+                elif promo and re.search(r'buy\s*3\s*get\s*1\s*free', promo, re.IGNORECASE):
+                    try:
+                        disc = round(float(price) * 3 / 4, 2)
+                        disc_price = f"{disc:.2f}"
+                    except Exception:
+                        pass
 
             if not title and not price:
                 continue
@@ -218,8 +266,12 @@ def scrape_products(driver, size):
                 "brand":       brand,
                 "description": desc,
                 "price":       price,
+                "disc_price":  disc_price,
+                "promo":       promo,
+                "save_text":   save_text,
             })
-            print(f"    {brand:<15} | {desc[:45]} | price={price}")
+            print(f"    {brand:<15} | {desc[:40]} | ${price}"
+                  + (f" → ${disc_price} ({save_text})" if disc_price else ""))
 
         except Exception as e:
             print(f"    [WARN] card parse error: {e}")
@@ -279,15 +331,17 @@ def main():
     try:
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "PRICE"])
+            writer.writerow(["SIZE", "brand", "DESCRIPTION",
+                             "PRICE", "DISC_PRICE", "PROMO", "SAVE_TEXT"])
 
             for width, profile, rim, size in SEARCH_SIZES:
                 print(f"\n=== {size} ===")
                 try:
                     rows = scrape_size(driver, wait, width, profile, rim, size)
                     for r in rows:
-                        writer.writerow([r["size"], r["brand"],
-                                         r["description"], r["price"]])
+                        writer.writerow([r["size"], r["brand"], r["description"],
+                                         r["price"], r["disc_price"],
+                                         r["promo"], r["save_text"]])
                     f.flush()
                     print(f"  {len(rows)} rows written")
                 except Exception as e:
