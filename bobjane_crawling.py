@@ -223,10 +223,17 @@ def scrape_all_products(driver):
         return []
 
     results = []
+    seen = set()   # deduplicate by (size, brand, description)
+
     for card in cards:
         try:
-            card_text = clean(card.text if hasattr(card, 'text') else
-                              driver.execute_script("return arguments[0].innerText;", card))
+            # Preserve newlines — do NOT use clean() here
+            try:
+                card_text = card.text
+            except Exception:
+                card_text = driver.execute_script(
+                    "return arguments[0].innerText;", card) or ""
+            card_text = card_text.strip()
             if not card_text:
                 continue
 
@@ -237,16 +244,14 @@ def scrape_all_products(driver):
                         "[class*='title']", "a[href*='/products/']"]:
                 try:
                     el = card.find_element(By.CSS_SELECTOR, sel)
-                    t  = clean(el.text or
-                               driver.execute_script("return arguments[0].innerText;", el))
+                    t  = (el.text or "").strip()
                     if t and len(t) > 5:
                         title = t
                         break
                 except Exception:
                     pass
             if not title:
-                # Grab first non-empty line from card text
-                for line in card_text.split("\n"):
+                for line in card_text.splitlines():
                     line = line.strip()
                     if len(line) > 8 and not line.startswith("$"):
                         title = line
@@ -258,60 +263,73 @@ def scrape_all_products(driver):
                         "[class*='promo']", "[class*='label']",
                         "[class*='tag']", "[class*='ribbon']"]:
                 try:
-                    raw = clean(card.find_element(By.CSS_SELECTOR, sel).text)
+                    raw = (card.find_element(By.CSS_SELECTOR, sel).text or "").strip()
                     if raw and len(raw) < 60 and not raw.startswith("$"):
                         promo = raw
                         break
                 except Exception:
                     pass
 
-            # ── Price ("$159 per tyre") ────────────────────────────────────────
+            # ── Price: find "$XXX" before SAVE line ───────────────────────────
             price = ""
-            for line in card_text.split("\n"):
-                line = line.strip()
-                if re.match(r'^\$\d', line) and "SAVE" not in line.upper():
-                    price = extract_price_number(line)
-                    if price:
-                        break
+            # Strategy A: look for "$N per tyre" pattern in full text
+            m = re.search(r'\$([\d,]+(?:\.\d+)?)\s*per\s+tyre', card_text, re.IGNORECASE)
+            if m:
+                price = f"{float(m.group(1).replace(',','')):.2f}"
+            else:
+                # Strategy B: find first "$N" that appears before "SAVE"
+                save_pos = card_text.upper().find("SAVE")
+                search_in = card_text[:save_pos] if save_pos > 0 else card_text
+                m = re.search(r'\$([\d,]+(?:\.\d+)?)', search_in)
+                if m:
+                    price = f"{float(m.group(1).replace(',','')):.2f}"
 
-            # ── Save text ("SAVE $134 ON A SET OF 4") ─────────────────────────
+            # ── Save text: stop before "Add to Cart" ──────────────────────────
             save_text = ""
-            m = re.search(r'(SAVE\s+\$[\d,]+[^\n]*)', card_text, re.IGNORECASE)
+            m = re.search(
+                r'(SAVE\s+\$[\d,]+\s+ON\s+A\s+SET\s+OF\s+\d+)',
+                card_text, re.IGNORECASE)
             if m:
                 save_text = m.group(1).strip()
 
             # ── Calculated discount per-tyre price ────────────────────────────
             disc_price = ""
-            if save_text and price:
-                m2 = re.search(r'SAVE\s+\$([\d,]+)\s+ON\s+A\s+SET\s+OF\s+(\d+)',
-                               save_text, re.IGNORECASE)
-                if m2:
-                    try:
-                        save_total = float(m2.group(1).replace(',', ''))
-                        set_of     = int(m2.group(2))
-                        disc = round(float(price) - save_total / set_of, 2)
-                        disc_price = f"{disc:.2f}"
-                    except Exception:
-                        pass
-            if not disc_price and promo and re.search(
-                    r'buy\s*3\s*get\s*1\s*free', promo, re.IGNORECASE):
+            save_amount = None
+            m2 = re.search(r'SAVE\s+\$([\d,]+)\s+ON\s+A\s+SET\s+OF\s+(\d+)',
+                           save_text, re.IGNORECASE)
+            if m2:
                 try:
-                    disc_price = f"{round(float(price) * 3 / 4, 2):.2f}"
+                    save_total  = float(m2.group(1).replace(',', ''))
+                    set_of      = int(m2.group(2))
+                    save_amount = save_total / set_of
                 except Exception:
                     pass
+
+            if price:
+                if save_amount is not None:
+                    disc_price = f"{round(float(price) - save_amount, 2):.2f}"
+                elif promo and re.search(r'buy\s*3\s*get\s*1\s*free', promo, re.IGNORECASE):
+                    disc_price = f"{round(float(price) * 3 / 4, 2):.2f}"
 
             if not title and not price:
                 continue
 
             size, brand, desc = parse_title(title)
+
+            # Deduplicate
+            key = (size, brand, desc)
+            if key in seen:
+                continue
+            seen.add(key)
+
             results.append({
-                "size":       size,
-                "brand":      brand,
+                "size":        size,
+                "brand":       brand,
                 "description": desc,
-                "price":      price,
-                "disc_price": disc_price,
-                "promo":      promo,
-                "save_text":  save_text,
+                "price":       price,
+                "disc_price":  disc_price,
+                "promo":       promo,
+                "save_text":   save_text,
             })
             line_out = f"  {brand:<15} | {size:<12} | {desc[:35]:<35} | ${price}"
             if disc_price:
