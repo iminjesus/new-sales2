@@ -13,6 +13,9 @@ import csv
 import time
 from datetime import datetime
 from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 BASE_URL    = "https://www.bobjane.com.au/collections/tyres"
 OUTPUT_FILE = datetime.now().strftime("BobJane_%Y%m%d_%H%M.csv")
@@ -237,9 +240,20 @@ def main():
                              "PRICE", "DISC_PRICE", "PROMO", "SAVE_TEXT"])
 
             while True:
-                url = f"{BASE_URL}?page={page_num}"
+                # Page 1: use bare URL (site JS ignores ?page=1)
+                # Page 2+: use ?page=N for Shopify pagination
+                url = BASE_URL if page_num == 1 else f"{BASE_URL}?page={page_num}"
                 driver.get(url)
-                time.sleep(2)
+
+                # Wait for product cards to render (JS-loaded)
+                try:
+                    WebDriverWait(driver, 10).until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, "div.productCard"))
+                    )
+                except Exception:
+                    pass   # fall through to scrape (may return empty → stop)
+                time.sleep(1)   # let any late-rendering elements settle
 
                 rows = scrape_page(driver)
 
