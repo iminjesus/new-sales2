@@ -244,16 +244,16 @@ def main():
                 # Page 2+: use ?page=N for Shopify pagination
                 url = BASE_URL if page_num == 1 else f"{BASE_URL}?page={page_num}"
                 driver.get(url)
+                time.sleep(5)   # wait for AJAX product loading (plain sleep — reliable)
 
-                # Wait for actual price text to appear — cards exist as empty
-                # shells before AJAX fills them, so we must wait for content
+                # Debug: show card count and page title if empty
                 try:
-                    WebDriverWait(driver, 15).until(
-                        EC.presence_of_element_located(
-                            (By.XPATH, "//*[contains(text(),'per tyre')]"))
-                    )
+                    card_count = driver.execute_script(
+                        "return document.querySelectorAll('div.productCard').length;")
+                    page_title = driver.title
+                    print(f"  [debug] title='{page_title[:60]}' cards={card_count}")
                 except Exception:
-                    pass   # timed out — scrape anyway (returns empty → stops loop)
+                    pass
 
                 rows = scrape_page(driver)
 
