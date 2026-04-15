@@ -2,8 +2,8 @@
 bobjane_crawling.py
 -------------------
 Scrapes ALL tyre prices from https://www.bobjane.com.au/collections/tyres
-No login, no size filter — just clicks Load More until all products are loaded,
-then saves SIZE (from title), brand, DESCRIPTION, PRICE, DISC_PRICE, PROMO, SAVE_TEXT.
+Uses URL pagination (?page=N) instead of Load More — keeps each page small
+so the browser stays fast throughout. Saves to CSV after every page.
 
 Usage:
     python bobjane_crawling.py
@@ -16,7 +16,6 @@ from selenium import webdriver
 
 BASE_URL    = "https://www.bobjane.com.au/collections/tyres"
 OUTPUT_FILE = datetime.now().strftime("BobJane_%Y%m%d_%H%M.csv")
-MAX_LOAD_MORE = 300   # safety cap for the full catalogue
 
 
 def init_driver():
@@ -26,47 +25,17 @@ def init_driver():
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     driver = webdriver.Chrome(options=options)
-    driver.set_script_timeout(120)   # large page needs time
+    driver.set_script_timeout(60)
     return driver
 
 
-# ── JS: find and click Load More (specific selectors only — no mass scan) ─────
-# Use raw string to avoid Python escape warnings for \s etc.
-_JS_CLICK_LOAD_MORE = r"""
-/* 1. Bob Jane uses <button class="load-more-btn"> — direct class match */
-var btn = document.querySelector('button.load-more-btn');
-/* 2. Generic class-based fallback */
-if (!btn) btn = document.querySelector('[class*="load-more"], [class*="LoadMore"], [data-load-more]');
-/* 3. Scan all <button> elements for Load More text */
-if (!btn) {
-    var buttons = document.querySelectorAll('button');
-    for (var i = 0; i < buttons.length; i++) {
-        if (/load\s*more/i.test(buttons[i].textContent)) { btn = buttons[i]; break; }
-    }
-}
-if (!btn) return false;
-/* Direct click — no scrollTo/scrollIntoView which forces layout reflow on large DOM */
-btn.click();
-return true;
-"""
-
-# ── JS: extract all product data in ONE call ──────────────────────────────────
+# ── JS: extract all product data from current page in ONE call ────────────────
 # Bob Jane DOM: div.productCard > div.productCardInner > div.productInfo
 _JS_EXTRACT = r"""
 (function() {
-    /* Primary: Bob Jane-specific selector */
     var cards = Array.from(document.querySelectorAll('div.productCard'));
 
-    /* Fallback: use data-product-id containers if productCard not found */
-    if (cards.length === 0) {
-        var byAttr = document.querySelectorAll('[data-product-id]');
-        for (var ai = 0; ai < byAttr.length; ai++) {
-            var pc = byAttr[ai].closest('div') || byAttr[ai];
-            if (cards.indexOf(pc) === -1) cards.push(pc);
-        }
-    }
-
-    /* Generic fallback: walk up from product links to price container */
+    /* Fallback: walk up from product links to price container */
     if (cards.length === 0) {
         var seen = new Set();
         var links = document.querySelectorAll('a[href*="/products/"]');
@@ -91,14 +60,13 @@ _JS_EXTRACT = r"""
         var text = (card.textContent || '').replace(/\s+/g, ' ').trim();
         if (!text) continue;
 
-        /* Title: product info link (not image link — image link has no text) */
+        /* Title: product info link (not image link) */
         var title = '';
         var infoEl = card.querySelector('div.productInfo, .productInfo');
         if (infoEl) {
             var infoLink = infoEl.querySelector('a[href*="/products/"]');
             if (infoLink) title = (infoLink.textContent || '').trim();
         }
-        /* Fallback: any product link with meaningful text */
         if (!title) {
             var allLinks = card.querySelectorAll('a[href*="/products/"]');
             for (var tl = 0; tl < allLinks.length; tl++) {
@@ -119,7 +87,7 @@ _JS_EXTRACT = r"""
             if (sm) price = sm[1].replace(/,/g, '');
         }
 
-        /* Save text: "SAVE $N ON A SET OF N" */
+        /* Save text */
         var saveText = '';
         var stm = text.match(/(SAVE \$[\d,]+ ON A SET OF \d+)/i);
         if (stm) saveText = stm[1];
@@ -134,7 +102,6 @@ _JS_EXTRACT = r"""
             var pt = (promoEl.textContent || '').trim();
             if (pt && pt.length < 60 && pt[0] !== '$') promo = pt;
         }
-        /* Also catch "Buy 3 Get 1 Free" style text at start of card */
         if (!promo) {
             var buyM = text.match(/^((?:buy|get)\s+\d+\s+\w+\s+\d+\s+\w+)/i);
             if (buyM) promo = buyM[1];
@@ -195,189 +162,17 @@ def parse_title(title):
     return size, brand or title.split()[0], rest or title
 
 
-_JS_COUNT_PRODUCTS = r"""
-return document.querySelectorAll('div.productCard').length;
-"""
-
-_JS_DIAGNOSE = r"""
-try {
-    var d = { selectorHits:{}, parentChain:[], loadMoreCandidates:[], priceSamples:[] };
-
-    var SELECTORS = [
-        'div.product-card','li.product-card','article.product-card',
-        'div.product-item','div.grid-product','div.card-wrapper',
-        'li.grid__item','.grid__item','li[class*="grid"]',
-        'div[class*="ProductCard"]','div[class*="product-block"]',
-        '[data-product-id]','[data-product]'
-    ];
-    for (var si = 0; si < SELECTORS.length; si++) {
-        var n = document.querySelectorAll(SELECTORS[si]).length;
-        if (n > 0) d.selectorHits[SELECTORS[si]] = n;
-    }
-
-    var link = document.querySelector('a[href*="/products/"]');
-    d.firstProductLinkHref = link ? link.href.substring(0, 80) : 'none';
-    if (link) {
-        var el = link;
-        for (var i = 0; i < 8; i++) {
-            el = el.parentElement;
-            if (!el || el === document.body) break;
-            var cls = typeof el.className === 'string' ? el.className.trim().split(/\s+/).join('.') : '';
-            d.parentChain.push(el.tagName + (cls ? '.' + cls : ''));
-        }
-    }
-
-    var all = document.querySelectorAll('button, a');
-    for (var j = 0; j < all.length; j++) {
-        var txt = (all[j].textContent || '').trim();
-        if (txt.length > 0 && txt.length < 40 && /load.?more/i.test(txt)) {
-            d.loadMoreCandidates.push({
-                tag: all[j].tagName,
-                cls: typeof all[j].className === 'string' ? all[j].className : '',
-                txt: txt,
-                href: all[j].getAttribute('href') || '',
-                offNull: all[j].offsetParent === null
-            });
-        }
-    }
-
-    var links = document.querySelectorAll('a[href*="/products/"]');
-    var limit = Math.min(links.length, 5);
-    for (var k = 0; k < limit; k++) {
-        var par = links[k].parentElement;
-        for (var up = 0; up < 8; up++) {
-            if (!par) break;
-            var tc = par.textContent || '';
-            if (/\$\d/.test(tc)) {
-                var cls2 = typeof par.className === 'string' ? par.className.trim().split(/\s+/).slice(0,3).join(' ') : '';
-                d.priceSamples.push({
-                    tag: par.tagName,
-                    cls: cls2,
-                    len: tc.length,
-                    snip: tc.replace(/\s+/g,' ').trim().substring(0, 120)
-                });
-                break;
-            }
-            par = par.parentElement;
-        }
-    }
-
-    return d;
-} catch(e) {
-    return { error: e.toString() };
-}
-"""
-
-def load_all_results(driver):
-    """Click Load More until button gone, product count stops growing, or cap hit."""
-    clicked   = 0
-    prev_count = 0
-    stale      = 0          # how many consecutive clicks added 0 new products
-
-    while clicked < MAX_LOAD_MORE:
-        # Count before click
-        try:
-            before = driver.execute_script(_JS_COUNT_PRODUCTS) or 0
-        except Exception:
-            before = 0
-
-        try:
-            found = driver.execute_script(_JS_CLICK_LOAD_MORE)
-        except Exception as e:
-            print(f"  [Load More error] {e}")
-            break
-
-        if not found:
-            print(f"  Load More button gone — finished after {clicked} clicks  ({before} product links)")
-            break
-
-        clicked += 1
-
-        # Adaptive wait: poll every 0.3s until product count rises (max 6s)
-        deadline = time.time() + 6.0
-        after = before
-        while time.time() < deadline:
-            time.sleep(0.3)
-            try:
-                after = driver.execute_script(_JS_COUNT_PRODUCTS) or 0
-            except Exception:
-                after = before
-            if after > before:
-                break
-
-        added = after - before
-        print(f"  Click {clicked:>3}: +{added:>3} products  (total {after})")
-
-        if added == 0:
-            stale += 1
-            if stale >= 5:
-                print(f"  No new products for {stale} clicks in a row — stopping")
-                break
-        else:
-            stale = 0
-
-    if clicked >= MAX_LOAD_MORE:
-        print(f"  [WARN] Hit cap ({MAX_LOAD_MORE} clicks)")
-
-
-def diagnose_page(driver):
-    """Print DOM structure so we can tune selectors without guessing."""
-    print("\n=== PAGE DIAGNOSIS ===")
-    try:
-        d = driver.execute_script(_JS_DIAGNOSE)
-    except Exception as e:
-        print(f"  Diagnose JS error: {e}")
-        return
-
-    if not d:
-        print("  JS returned None — page may not have loaded yet")
-        return
-
-    if d.get("error"):
-        print(f"  JS exception: {d['error']}")
-        return
-
-    print(f"First product link: {d.get('firstProductLinkHref', 'none')}")
-
-    hits = d.get("selectorHits") or {}
-    if hits:
-        print("Card selectors with matches:")
-        for sel, n in hits.items():
-            print(f"  {n:>4}  {sel}")
-    else:
-        print("  No card selectors matched!")
-
-    print("Parent chain from first product link:")
-    for p in (d.get("parentChain") or []):
-        print(f"  {p}")
-
-    lm = d.get("loadMoreCandidates") or []
-    print(f"Load More candidates ({len(lm)}):")
-    for c in lm:
-        vis = "hidden" if c.get("offNull") else "VISIBLE"
-        print(f"  [{vis}] <{c['tag']}> cls='{c['cls']}' txt='{c['txt']}' href='{c['href'][:60]}'")
-
-    print("Price-containing parent samples:")
-    for s in (d.get("priceSamples") or []):
-        print(f"  <{s['tag']}> cls='{s['cls']}' len={s['len']}  → {s['snip']!r}")
-
-    print("=== END DIAGNOSIS ===\n")
-
-
-def scrape_all_products(driver):
-    """Single JS call extracts all product data; Python only does title parsing."""
-    print("  Running JS extraction...")
+def scrape_page(driver):
+    """Extract products from current page via single JS call."""
     try:
         raw = driver.execute_script(_JS_EXTRACT)
     except Exception as e:
-        print(f"  [ERROR] JS extraction failed: {e}")
+        print(f"  [JS error] {e}")
         return []
 
     if not raw:
-        print("  [WARN] No products found by JS extractor")
         return []
 
-    print(f"  JS returned {len(raw)} raw items — parsing titles...")
     results = []
     seen = set()
 
@@ -421,10 +216,6 @@ def scrape_all_products(driver):
             "promo":       promo,
             "save_text":   save_text,
         })
-        line_out = f"  {brand:<15} | {size:<12} | {desc[:35]:<35} | ${price}"
-        if disc_price:
-            line_out += f" → ${disc_price}"
-        print(line_out)
 
     return results
 
@@ -433,39 +224,53 @@ def main():
     driver = init_driver()
 
     print(f"\nOutput: {OUTPUT_FILE}")
-    print("Navigating to Bob Jane catalogue — do NOT close the browser.\n")
+    print("Crawling page by page — saves after every page, browser stays fast.\n")
 
     try:
-        driver.get(BASE_URL)
-        time.sleep(3)
-
-        diagnose_page(driver)   # shows DOM structure so selectors can be tuned
-
-        print("Clicking Load More to load all products...")
-        try:
-            load_all_results(driver)
-        except Exception as e:
-            print(f"  [Load More stopped] {e}")
-
-        # Let browser settle before extracting large DOM
-        print("\nWaiting for browser to settle...")
-        time.sleep(3)
-        driver.set_script_timeout(300)   # 5 min for large-page extraction
-
-        print("Scraping product cards...")
-        rows = scrape_all_products(driver)
-        print(f"\nTotal products found: {len(rows)}")
+        all_seen  = set()   # global dedup across all pages
+        page_num  = 1
+        total     = 0
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(["SIZE", "brand", "DESCRIPTION",
                              "PRICE", "DISC_PRICE", "PROMO", "SAVE_TEXT"])
-            for r in rows:
-                writer.writerow([r["size"],  r["brand"],  r["description"],
-                                 r["price"], r["disc_price"],
-                                 r["promo"], r["save_text"]])
 
-        print(f"Saved: {OUTPUT_FILE}")
+            while True:
+                url = f"{BASE_URL}?page={page_num}"
+                driver.get(url)
+                time.sleep(2)
+
+                rows = scrape_page(driver)
+
+                if not rows:
+                    print(f"Page {page_num:>3}: no products — finished")
+                    break
+
+                # Shopify returns page 1 when page number exceeds catalogue
+                new_rows = [r for r in rows
+                            if (r['size'], r['brand'], r['description']) not in all_seen]
+
+                if not new_rows:
+                    print(f"Page {page_num:>3}: all duplicates — finished")
+                    break
+
+                for r in new_rows:
+                    all_seen.add((r['size'], r['brand'], r['description']))
+                    writer.writerow([r["size"],  r["brand"],  r["description"],
+                                     r["price"], r["disc_price"],
+                                     r["promo"], r["save_text"]])
+                    line = f"  {r['brand']:<15} | {r['size']:<12} | {r['description'][:30]:<30} | ${r['price']}"
+                    if r['disc_price']:
+                        line += f" → ${r['disc_price']}"
+                    print(line)
+
+                f.flush()
+                total    += len(new_rows)
+                page_num += 1
+                print(f"  ── page {page_num-1} done: {len(new_rows)} products  (running total: {total})")
+
+        print(f"\nFinished. {total} products saved → {OUTPUT_FILE}")
 
     finally:
         driver.quit()
