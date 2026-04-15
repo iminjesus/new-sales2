@@ -45,9 +45,7 @@ if (!btn) {
     }
 }
 if (!btn) return false;
-/* Scroll to bottom first, then to button — some sites gate button on scroll */
-window.scrollTo(0, document.body.scrollHeight);
-btn.scrollIntoView({block: 'center'});
+/* Direct click — no scrollTo/scrollIntoView which forces layout reflow on large DOM */
 btn.click();
 return true;
 """
@@ -444,9 +442,17 @@ def main():
         diagnose_page(driver)   # shows DOM structure so selectors can be tuned
 
         print("Clicking Load More to load all products...")
-        load_all_results(driver)
+        try:
+            load_all_results(driver)
+        except Exception as e:
+            print(f"  [Load More stopped] {e}")
 
-        print("\nScraping product cards...")
+        # Let browser settle before extracting large DOM
+        print("\nWaiting for browser to settle...")
+        time.sleep(3)
+        driver.set_script_timeout(300)   # 5 min for large-page extraction
+
+        print("Scraping product cards...")
         rows = scrape_all_products(driver)
         print(f"\nTotal products found: {len(rows)}")
 
