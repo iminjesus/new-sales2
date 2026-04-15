@@ -210,26 +210,54 @@ def parse_title(title):
     return size, brand or title.split()[0], rest or title
 
 
+_JS_COUNT_PRODUCTS = r"""
+return document.querySelectorAll('a[href*="/products/"]').length;
+"""
+
 def load_all_results(driver):
-    """Click Load More via JS until gone or cap hit."""
-    clicked = 0
+    """Click Load More until button gone, product count stops growing, or cap hit."""
+    clicked   = 0
+    prev_count = 0
+    stale      = 0          # how many consecutive clicks added 0 new products
+
     while clicked < MAX_LOAD_MORE:
+        # Count before click
+        try:
+            before = driver.execute_script(_JS_COUNT_PRODUCTS) or 0
+        except Exception:
+            before = 0
+
         try:
             found = driver.execute_script(_JS_CLICK_LOAD_MORE)
         except Exception as e:
-            print(f"\n  Load More JS error: {e}")
+            print(f"  [Load More error] {e}")
             break
+
         if not found:
-            print(f"  No more Load More — done after {clicked} clicks")
+            print(f"  Load More button gone — finished after {clicked} clicks  ({before} product links)")
             break
+
         clicked += 1
-        print(f"  Load More clicked ({clicked})", end="\r")
         time.sleep(1.5)   # wait for AJAX batch to render
 
+        try:
+            after = driver.execute_script(_JS_COUNT_PRODUCTS) or 0
+        except Exception:
+            after = before
+
+        added = after - before
+        print(f"  Click {clicked:>3}: +{added:>3} products  (total {after})")
+
+        if added == 0:
+            stale += 1
+            if stale >= 3:
+                print(f"  No new products for {stale} clicks in a row — stopping")
+                break
+        else:
+            stale = 0
+
     if clicked >= MAX_LOAD_MORE:
-        print(f"\n  [WARN] Hit cap ({MAX_LOAD_MORE} clicks)")
-    else:
-        print()
+        print(f"  [WARN] Hit cap ({MAX_LOAD_MORE} clicks)")
 
 
 def scrape_all_products(driver):
