@@ -35,7 +35,7 @@ def init_driver():
 # ── JS: extract all product data from current page in ONE call ────────────────
 # Bob Jane DOM: div.productCard > div.productCardInner > div.productInfo
 _JS_EXTRACT = r"""
-(function() {
+return (function() {
     var cards = Array.from(document.querySelectorAll('div.productCard'));
 
     /* Fallback: walk up from product links to price container */
