@@ -198,8 +198,7 @@ def parse_title(title):
 
 
 _JS_COUNT_PRODUCTS = r"""
-/* One element per product card — accurate count regardless of how many links each card has */
-return document.querySelectorAll('div.productCard, [data-product-id]').length;
+return document.querySelectorAll('div.productCard').length;
 """
 
 _JS_DIAGNOSE = r"""
@@ -295,12 +294,18 @@ def load_all_results(driver):
             break
 
         clicked += 1
-        time.sleep(1.5)   # wait for AJAX batch to render
 
-        try:
-            after = driver.execute_script(_JS_COUNT_PRODUCTS) or 0
-        except Exception:
-            after = before
+        # Adaptive wait: poll every 0.3s until product count rises (max 6s)
+        deadline = time.time() + 6.0
+        after = before
+        while time.time() < deadline:
+            time.sleep(0.3)
+            try:
+                after = driver.execute_script(_JS_COUNT_PRODUCTS) or 0
+            except Exception:
+                after = before
+            if after > before:
+                break
 
         added = after - before
         print(f"  Click {clicked:>3}: +{added:>3} products  (total {after})")
