@@ -195,9 +195,17 @@ def kw_match(desc, keywords):
     d = desc.lower()
     return any(k.lower() in d for k in keywords)
 
-# Leading load-index + speed-rating patterns: "98H ", "102/100R ", "C 106/104R "
+# Leading patterns to strip before extracting series name.
+# Handles both Tempe formats:
+#   "265/70R16 112T AT52 ROAD VENTURE"  (description contains full size + load index)
+#   "98H TURANZA 6"                      (description starts with load index only)
+#   "C 106/104R AGILIS 3"                (commercial van prefix)
 _LEAD_RE = re.compile(
-    r'^(C\s+)?(\d{2,3}(/\d{2,3})?[A-Za-z]{1,2}\s+)?(XL\s+)?',
+    r'^(C\s+)?'                                   # optional "C " for commercial
+    r'(\d{3}/\d{2}R\d{2,3}C?\s+)?'               # optional "265/70R16 " or "185/65R15C " size
+    r'(\d{3}R\d{2,3}\s+)?'                        # optional "185R14 " old-format size
+    r'(\d{2,3}(/\d{2,3})?[A-Za-z]{1,2}\s+)?'     # optional "112T " or "102/100R " load+rating
+    r'(XL\s+)?',                                   # optional "XL " suffix
     re.IGNORECASE,
 )
 
