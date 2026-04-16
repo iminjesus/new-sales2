@@ -195,6 +195,32 @@ def kw_match(desc, keywords):
     d = desc.lower()
     return any(k.lower() in d for k in keywords)
 
+# Leading load-index + speed-rating patterns: "98H ", "102/100R ", "C 106/104R "
+_LEAD_RE = re.compile(
+    r'^(C\s+)?(\d{2,3}(/\d{2,3})?[A-Za-z]{1,2}\s+)?(XL\s+)?',
+    re.IGNORECASE,
+)
+
+def extract_series(desc):
+    """Return the main product series word from a tyre description.
+
+    Works for both formats:
+      Tempe  "98H TURANZA 6"          → "TURANZA"
+      BJ     "Turanza 6 102V"         → "TURANZA"
+      Tempe  "98H E PRIMACY"          → "PRIMACY"   (skips single-char "E")
+      Tempe  "C 106/104R AGILIS 3"    → "AGILIS"
+    """
+    if not desc:
+        return ""
+    s = _LEAD_RE.sub("", desc.strip())
+    for w in s.split():
+        if len(w) <= 1:          # skip "E", "C", "R"
+            continue
+        if re.match(r'^[\d/]+[A-Za-z]{0,2}$', w):   # skip "106/104R", "82T"
+            continue
+        return w.upper()
+    return ""
+
 def load_csv(path):
     with open(path, encoding="utf-8-sig") as f:
         return list(csv.DictReader(f))
@@ -241,9 +267,9 @@ def build_bj_lookup(rows):
     return lk
 
 def best_tempe(size, abbr, t_lk):
-    """Returns (desc, cost, price, matched_kw).
-    matched_kw is the COMPETITOR_PATTERNS keyword that matched the best product,
-    used to find the same-series product in BJ."""
+    """Returns (desc, cost, price).
+    Uses COMPETITOR_PATTERNS to prefer the 'standard' competitor product;
+    falls back to cheapest available if no keyword match."""
     cands = t_lk.get((size, abbr), [])
     cat   = SIZE_CATEGORY.get(size)
     if cat:
@@ -256,32 +282,25 @@ def best_tempe(size, abbr, t_lk):
     else:
         pool = cands
     if not pool:
-        return None, None, None, None
+        return None, None, None
     best = sorted(pool, key=lambda x: (x[2] is None, x[2] or 0))[0]
-    # Identify which keyword matched the best product
-    matched_kw = None
-    if cat:
-        kws = COMPETITOR_PATTERNS.get(cat, {}).get(abbr, [])
-        for kw in (kws or []):
-            if kw.lower() in best[0].lower():
-                matched_kw = kw
-                break
-    return best[0], best[1], best[2], matched_kw
+    return best[0], best[1], best[2]
 
 
-def best_bj(size, abbr, bj_lk, matched_kw=None):
-    """Find BJ product in the same product series as matched_kw.
-    No fallback — if series doesn't match, returns None (no comparison)."""
+def best_bj(size, abbr, bj_lk, t_desc=None):
+    """Find BJ product in the same product series as t_desc.
+
+    Extracts the series name from the Tempe description (e.g. "98H TURANZA 6"
+    → "TURANZA") and looks for a BJ product containing that word.
+    No fallback to unrelated products — returns None if no series match.
+    """
     cands = bj_lk.get((size, abbr), [])
-    if not cands or not matched_kw:
+    if not cands or not t_desc:
         return None, None, None, "", ""
-    # 1) Try full keyword match  (e.g. "EP150" in "Ecopia EP150 82H ECO")
-    matched = [x for x in cands if matched_kw.lower() in x[0].lower()]
-    if not matched:
-        # 2) Try series name only — first word of keyword
-        #    "Turanza T005" → "Turanza",  "Energy XM2" → "Energy"
-        series = matched_kw.split()[0]
-        matched = [x for x in cands if series.lower() in x[0].lower()]
+    series = extract_series(t_desc)
+    if not series:
+        return None, None, None, "", ""
+    matched = [x for x in cands if series.lower() in x[0].lower()]
     if not matched:
         return None, None, None, "", ""
     best = sorted(matched, key=lambda x: (x[1] is None, x[1] or 0))[0]
@@ -366,8 +385,8 @@ def sheet_summary(wb, t_rows, bj_rows):
         for abbr in brand_abbrs:
             bbg = ROW_FILLS.get(abbr, "FFFFFF")
 
-            t_desc, t_cost, t_price, matched_kw = best_tempe(size, abbr, t_lk)
-            bj_desc, bj_price, bj_disc, _, _ = best_bj(size, abbr, bj_lk, matched_kw)
+            t_desc, t_cost, t_price = best_tempe(size, abbr, t_lk)
+            bj_desc, bj_price, bj_disc, _, _ = best_bj(size, abbr, bj_lk, t_desc)
 
             if t_desc or bj_desc:
                 dc(ws, row_num, col,   t_desc or "—",  bg=bbg)
@@ -471,8 +490,8 @@ def sheet_match(wb, t_rows, bj_rows):
         for abbr in BRANDS:
             bg = ROW_FILLS.get(abbr, "F9F9F9")
 
-            t_desc, t_cost, t_price, matched_kw = best_tempe(size, abbr, t_lk)
-            bj_desc, bj_price, bj_disc, bj_promo, _ = best_bj(size, abbr, bj_lk, matched_kw)
+            t_desc, t_cost, t_price = best_tempe(size, abbr, t_lk)
+            bj_desc, bj_price, bj_disc, bj_promo, _ = best_bj(size, abbr, bj_lk, t_desc)
 
             if not t_desc and not bj_desc:
                 continue
