@@ -70,115 +70,153 @@ if (m2) return parseInt(m2[1].replace(/,/g,''));
 return -1;
 """
 
-# Extracts all product cards from the current page.
-# Returns array of {name, spec, size, price, disc_price, promo}.
+# Diagnostic: run when 0 products found to identify correct selectors.
+_JS_DIAGNOSE = r"""
+return (function() {
+    var info = { url: location.href, title: document.title };
+
+    /* Count "View Product Details" links (reliable card marker) */
+    var detail_count = 0;
+    var links = document.querySelectorAll('a');
+    for (var i = 0; i < links.length; i++) {
+        if (/view\s+product\s+details/i.test(links[i].textContent || '')) detail_count++;
+    }
+    info.detail_links = detail_count;
+
+    /* Count price / size patterns in body text */
+    var body = document.body.textContent || '';
+    var pm = body.match(/\$\d{2,4}/g);
+    info.price_count = pm ? pm.length : 0;
+    var sm = body.match(/\d{3}\/\d{2}[A-Za-z]\d{2}/g);
+    info.size_count  = sm ? sm.length : 0;
+
+    /* Collect unique div class names (first 300 divs) */
+    var divs = document.querySelectorAll('div');
+    var seenCls = {};
+    info.div_classes = [];
+    for (var i = 0; i < Math.min(divs.length, 300); i++) {
+        var cls = divs[i].className;
+        if (cls && typeof cls === 'string' && !seenCls[cls] &&
+                cls.length > 3 && cls.length < 120) {
+            seenCls[cls] = 1;
+            info.div_classes.push(cls);
+            if (info.div_classes.length >= 30) break;
+        }
+    }
+    return info;
+}());
+"""
+
+# Extracts all product cards.  Strategy:
+#   1. Walk up from each "View Product Details" link until we find an ancestor
+#      containing both a tyre-size pattern and a price → that's the card.
+#   2. Fallback to common CSS class selectors if strategy 1 yields < 3 results.
 _JS_EXTRACT = r"""
 return (function() {
     var results = [];
     var seen = {};
 
-    /* ── Find product cards ────────────────────────────────────────────────
-       Try selectors from most specific to least; stop on first hit with ≥3. */
-    var SELECTORS = [
-        'div.product-listing-item',
-        'div[class*="ProductItem"]',
-        'div[class*="product-item"]',
-        'li[class*="product"]',
-        'article[class*="product"]',
-        'div[class*="tyre-card"]',
-        'div[class*="TyreCard"]',
-    ];
-    var cards = null;
-    for (var si = 0; si < SELECTORS.length; si++) {
-        var found = document.querySelectorAll(SELECTORS[si]);
-        if (found && found.length >= 3) { cards = found; break; }
-    }
-    if (!cards || !cards.length) return results;
-
-    for (var ci = 0; ci < cards.length; ci++) {
-        var card = cards[ci];
+    /* ── Shared card-extraction helper ─────────────────────────────────── */
+    function extractCard(card) {
         var text = (card.textContent || '').replace(/\s+/g, ' ').trim();
-        if (!text) continue;
 
-        /* ── Product name ────────────────────────────────────────────────── */
+        /* Name: prefer h2/h3/h4, then first meaningful link */
         var name = '';
         var hEl = card.querySelector('h2,h3,h4');
-        if (hEl) {
-            name = (hEl.textContent || '').trim();
-        }
+        if (hEl) name = (hEl.textContent || '').trim();
         if (!name) {
-            var links = card.querySelectorAll('a');
-            for (var li = 0; li < links.length; li++) {
-                var lt = (links[li].textContent || '').trim();
-                if (lt.length > 5 && !/add|booking|detail|view/i.test(lt)) {
+            var ls = card.querySelectorAll('a');
+            for (var li = 0; li < ls.length; li++) {
+                var lt = (ls[li].textContent || '').trim();
+                if (lt.length > 5 && !/add|booking|detail|view|cart/i.test(lt)) {
                     name = lt; break;
                 }
             }
         }
 
-        /* ── Tyre spec: "175/65R14 82H XL" ─────────────────────────────── */
-        var spec = '';
-        var size = '';
-
-        /* Try to find spec in a child <p> or <span> near the size pattern  */
-        var specEl = card.querySelector('p,span');
-        if (specEl) {
-            var st = (specEl.textContent || '').trim();
-            if (/\d{3}\/\d{2}[A-Za-z]\d{2}/.test(st)) spec = st;
-        }
-        /* Fallback: extract from full card text */
-        if (!spec) {
-            var sm = text.match(/(\d{3}\/\d{2}[A-Za-z]\d{2}[A-Za-z0-9 ]*?)(?=\s*\$|\s+[Aa]dd|\s+[Vv]iew|\s+[Qq]ty|$)/);
-            if (sm) spec = sm[1].trim();
-        }
-        /* Old-format size: "185R14" */
+        /* Spec + size */
+        var spec = '', size = '';
+        var sm = text.match(/(\d{3}\/\d{2}[A-Za-z]\d{2}[A-Za-z0-9 ]*?)(?=\s*\$|\s+[Aa]dd|\s+[Vv]iew|\s+[Qq]ty|$)/);
+        if (sm) spec = sm[1].trim();
         if (!spec) {
             var om = text.match(/(\d{3}R\d{2}[A-Za-z0-9 ]*?)(?=\s*\$|\s+[Aa]dd|\s+[Vv]iew|$)/);
             if (om) spec = om[1].trim();
         }
-        /* Extract clean size from spec */
         var szm = spec.match(/(\d{3}\/\d{2}[A-Za-z]\d{2})/);
-        if (szm) {
-            size = szm[1].toUpperCase();
-        } else {
+        if (szm) size = szm[1].toUpperCase();
+        if (!size) {
             var szm2 = spec.match(/(\d{3}R\d{2})/i);
             if (szm2) size = szm2[1].toUpperCase();
         }
 
-        /* ── Regular price: first $ amount before any "OR BUY" ──────────── */
+        /* Regular price (before "OR BUY") */
         var price = '';
         var buyPos = text.toUpperCase().indexOf('OR BUY');
-        var priceSearchIn = buyPos > 0 ? text.substring(0, buyPos) : text;
-        var pm = priceSearchIn.match(/\$([\d,]+(?:\.\d+)?)/);
+        var priceIn = buyPos > 0 ? text.substring(0, buyPos) : text;
+        var pm = priceIn.match(/\$([\d,]+(?:\.\d+)?)/);
         if (pm) price = pm[1].replace(/,/g, '');
 
-        /* ── Bulk / promo price ──────────────────────────────────────────── */
-        var disc_price = '';
-        var promo = '';
-
-        /* "OR BUY 4 FOR $122.50ea" */
+        /* Bulk / promo */
+        var disc = '', promo = '';
         var b4m = text.match(/OR\s+BUY\s+4\s+FOR\s+\$([\d,]+(?:\.\d+)?)/i);
         if (b4m) {
-            disc_price = b4m[1].replace(/,/g, '');
+            disc  = b4m[1].replace(/,/g, '');
             promo = 'OR BUY 4 FOR $' + b4m[1];
         }
-        /* "BUY 4 & GET 4TH TYRE FREE" */
         if (!promo && /BUY\s+4\s*[&+]\s*GET\s+4TH\s+TYRE\s+FREE/i.test(text)) {
             promo = 'Buy 4 Get 4th Free';
-            /* effective per-tyre = price × 3/4 */
-            if (price) disc_price = (Math.round(parseFloat(price) * 0.75 * 100) / 100).toFixed(2);
+            if (price) disc = (Math.round(parseFloat(price) * 0.75 * 100) / 100).toFixed(2);
         }
 
-        if (!name && !price) continue;
+        return { name: name, spec: spec, size: size,
+                 price: price, disc_price: disc, promo: promo };
+    }
 
-        var key = (name + '|' + spec).toLowerCase();
-        if (seen[key]) continue;
+    function addCard(card) {
+        var key = (card.textContent || '').replace(/\s+/g,' ').substring(0, 100);
+        if (seen[key]) return;
         seen[key] = 1;
+        var item = extractCard(card);
+        if (item.name || item.price) results.push(item);
+    }
 
-        results.push({
-            name: name, spec: spec, size: size,
-            price: price, disc_price: disc_price, promo: promo
-        });
+    /* ── Strategy 1: anchor on "View Product Details" links ─────────────
+       Walk up from each link until we hit an element containing both a
+       tyre-size pattern AND a price — that ancestor is the product card. */
+    var allLinks = document.querySelectorAll('a');
+    var anchorLinks = [];
+    for (var li = 0; li < allLinks.length; li++) {
+        if (/view\s+product\s+details/i.test(allLinks[li].textContent || ''))
+            anchorLinks.push(allLinks[li]);
+    }
+
+    for (var ai = 0; ai < anchorLinks.length; ai++) {
+        var el = anchorLinks[ai];
+        for (var level = 0; level < 10; level++) {
+            el = el.parentElement;
+            if (!el || el === document.body) break;
+            var t = (el.textContent || '');
+            if (/\d{3}\/\d{2}[A-Za-z]\d{2}/.test(t) && /\$\d{2,4}/.test(t)) {
+                addCard(el);
+                break;
+            }
+        }
+    }
+    if (results.length >= 3) return results;
+
+    /* ── Strategy 2: CSS class selectors (fallback) ─────────────────── */
+    var SELS = [
+        'div.product-listing-item', 'div[class*="ProductItem"]',
+        'div[class*="product-item"]', 'li[class*="product"]',
+        'article[class*="product"]', 'div[class*="tyre-card"]',
+        'div[class*="TyreCard"]',    'div[class*="listing-item"]',
+    ];
+    for (var si = 0; si < SELS.length; si++) {
+        var cards = document.querySelectorAll(SELS[si]);
+        if (cards && cards.length >= 3) {
+            for (var ci = 0; ci < cards.length; ci++) addCard(cards[ci]);
+            if (results.length >= 3) break;
+        }
     }
     return results;
 }());
@@ -195,9 +233,31 @@ def get_total(driver):
         return -1
 
 
-def extract_page(driver):
+def diagnose(driver):
+    """Print DOM debug info to help identify the correct card selector."""
+    try:
+        info = driver.execute_script(_JS_DIAGNOSE)
+        if not info:
+            print("  [DIAG] No info returned")
+            return
+        print(f"  [DIAG] URL:          {info.get('url','')}")
+        print(f"  [DIAG] Title:        {info.get('title','')}")
+        print(f"  [DIAG] detail_links: {info.get('detail_links',0)}")
+        print(f"  [DIAG] price_count:  {info.get('price_count',0)}")
+        print(f"  [DIAG] size_count:   {info.get('size_count',0)}")
+        print(f"  [DIAG] div classes (first 30):")
+        for cls in (info.get('div_classes') or []):
+            print(f"           {cls}")
+    except Exception as e:
+        print(f"  [DIAG error] {e}")
+
+
+def extract_page(driver, run_diag=False):
     try:
         raw = driver.execute_script(_JS_EXTRACT)
+        if not raw and run_diag:
+            print("  [0 products — running DOM diagnostic]")
+            diagnose(driver)
         return raw or []
     except Exception as e:
         print(f"  [JS error] {e}")
@@ -263,7 +323,8 @@ def scrape_brand(driver, abbr, brand_name, slug, writer, f_out):
             driver.get(PAGE_URL.format(brand=slug, page=page))
             time.sleep(3)
 
-        raw  = extract_page(driver)
+        # Run diagnostic only on page 1 of the first brand (page=1, brand_total=0)
+        raw  = extract_page(driver, run_diag=(page == 1 and brand_total == 0))
         rows = process_raw(raw, brand_name)
         write_rows(writer, rows)
         f_out.flush()
