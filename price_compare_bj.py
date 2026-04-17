@@ -296,23 +296,35 @@ def best_tempe(size, abbr, t_lk):
 
 
 def best_bj(size, abbr, bj_lk, t_desc=None):
-    """Find BJ product in the same product series as t_desc.
+    """Find BJ product matching any series word from t_desc.
 
-    Extracts the series name from the Tempe description (e.g. "98H TURANZA 6"
-    → "TURANZA") and looks for a BJ product containing that word.
-    No fallback to unrelated products — returns None if no series match.
+    Iterates left-to-right through meaningful words after stripping the leading
+    size + load-index prefix.  Returns the cheapest BJ product containing the
+    first word that produces a match, so e.g.:
+      "104H HP91 CRUGEN"  → tries "HP91" (no match) then "CRUGEN" → match ✓
+      "265/70R16 112T AT52 ROAD VENTURE" → tries "AT52" → match ✓
     """
     cands = bj_lk.get((size, abbr), [])
     if not cands or not t_desc:
         return None, None, None, "", ""
-    series = extract_series(t_desc)
-    if not series:
-        return None, None, None, "", ""
-    matched = [x for x in cands if series.lower() in x[0].lower()]
-    if not matched:
-        return None, None, None, "", ""
-    best = sorted(matched, key=lambda x: (x[1] is None, x[1] or 0))[0]
-    return best  # (desc, price, disc, promo, save_text)
+
+    s = _LEAD_RE.sub("", t_desc.strip())
+    for raw_w in s.split():
+        w = re.sub(r'[().,+]', '', raw_w)   # strip punctuation wrappers
+        if len(w) <= 1:
+            continue
+        if re.match(r'^[\d/]+[A-Za-z]{0,2}$', w):   # "82T", "106/104R" — load index
+            continue
+        if re.match(r'^\d+[A-Za-z]{1,2}$', w):       # "104V", "112T" — trailing rating
+            continue
+        if w.upper() in ('XL','OWT','RWL','OBL','TL','TT','FR','MFS',
+                         'DOT','BMW','AUDI','BENZ','DEMO','EV','RC'):
+            continue
+        matched = [x for x in cands if w.lower() in x[0].lower()]
+        if matched:
+            return sorted(matched, key=lambda x: (x[1] is None, x[1] or 0))[0]
+
+    return None, None, None, "", ""
 
 # ── Sheet 1: Summary ──────────────────────────────────────────────────────────
 def sheet_summary(wb, t_rows, bj_rows):
