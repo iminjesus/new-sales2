@@ -41,12 +41,10 @@ BRANDS = {
     "BS":  ("Bridgestone",  "bridgestone"),
     "CT":  ("Continental",  "continental"),
     "GY":  ("Goodyear",     "goodyear"),
-    "KH":  ("Kumho",        "kumho"),
     "FK":  ("Falken",       "falken"),
     "HK":  ("Hankook",      "hankook"),
     "LF":  ("Laufenn",      "laufenn"),
     "DL":  ("Dunlop",       "dunlop"),
-    "YO":  ("Yokohama",     "yokohama"),
 }
 
 
