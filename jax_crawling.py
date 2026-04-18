@@ -111,19 +111,51 @@ return (function() {
 #   1. Walk up from each "View Product Details" link until we find an ancestor
 #      containing both a tyre-size pattern and a price → that's the card.
 #   2. Fallback to common CSS class selectors if strategy 1 yields < 3 results.
+#
+# Name extraction: the card text is structured as:
+#   "MICHELIN Energy XM2+ 175/50R15 79H XL $145 ..."
+#   → regex captures the text between brand name and size pattern.
 _JS_EXTRACT = r"""
 return (function() {
     var results = [];
     var seen = {};
 
+    var BRAND_PAT = /(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama)\s+(.+?)\s+(\d{3}[\/R])/i;
+
     /* ── Shared card-extraction helper ─────────────────────────────────── */
     function extractCard(card) {
         var text = (card.textContent || '').replace(/\s+/g, ' ').trim();
 
-        /* Name: prefer h2/h3/h4, then first meaningful link */
+        /* Size: extract from text */
+        var size = '';
+        var szm = text.match(/(\d{3}\/\d{2}[A-Za-z]\d{2})/);
+        if (szm) {
+            size = szm[1].toUpperCase();
+        } else {
+            var szm2 = text.match(/(\d{3}R\d{2})/i);
+            if (szm2) size = szm2[1].toUpperCase();
+        }
+
+        /* Spec: size + load/speed rating + optional XL only — stop before words */
+        var spec = size;
+        if (size) {
+            var escaped = size.replace('/', '\\/');
+            var loadM = text.match(new RegExp(escaped + '\\s+(\\d{2,3}(?:\\/\\d{2,3})?[A-Za-z]{1,2}(?:\\s+XL)?)', 'i'));
+            if (loadM) spec = size + ' ' + loadM[1].trim();
+        }
+
+        /* Name: text between brand name and size pattern */
         var name = '';
-        var hEl = card.querySelector('h2,h3,h4');
-        if (hEl) name = (hEl.textContent || '').trim();
+        var nm = text.match(BRAND_PAT);
+        if (nm) {
+            name = nm[1].trim();
+        }
+        /* Fallback 1: h2/h3/h4 */
+        if (!name) {
+            var hEl = card.querySelector('h2,h3,h4');
+            if (hEl) name = (hEl.textContent || '').trim();
+        }
+        /* Fallback 2: first meaningful link */
         if (!name) {
             var ls = card.querySelectorAll('a');
             for (var li = 0; li < ls.length; li++) {
@@ -132,21 +164,6 @@ return (function() {
                     name = lt; break;
                 }
             }
-        }
-
-        /* Spec + size */
-        var spec = '', size = '';
-        var sm = text.match(/(\d{3}\/\d{2}[A-Za-z]\d{2}[A-Za-z0-9 ]*?)(?=\s*\$|\s+[Aa]dd|\s+[Vv]iew|\s+[Qq]ty|$)/);
-        if (sm) spec = sm[1].trim();
-        if (!spec) {
-            var om = text.match(/(\d{3}R\d{2}[A-Za-z0-9 ]*?)(?=\s*\$|\s+[Aa]dd|\s+[Vv]iew|$)/);
-            if (om) spec = om[1].trim();
-        }
-        var szm = spec.match(/(\d{3}\/\d{2}[A-Za-z]\d{2})/);
-        if (szm) size = szm[1].toUpperCase();
-        if (!size) {
-            var szm2 = spec.match(/(\d{3}R\d{2})/i);
-            if (szm2) size = szm2[1].toUpperCase();
         }
 
         /* Regular price (before "OR BUY") */
