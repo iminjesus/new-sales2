@@ -3,11 +3,11 @@ price_compare.py — Tyre Price Comparison Dashboard
 http://127.0.0.1:5000/price
 
 Left  : summary table (latest month)
-Right : button panel (top) + single chart area (bottom)
-  Buttons:
-    [Store Overview]
-    By Size    : one button per size  → chart shows brand lines (Tempe price)
-    By Brand   : brand button → size sub-buttons → chart shows store lines
+Right :
+  [Size buttons]   ← global filter, applies to both views
+  [By Store]  → brand sub-buttons → 3 store lines (Tempe/BJ/JAX) for selected brand + size
+  [By Brand]  → store sub-buttons → multiple brand lines for selected store + size
+  [chart area]
 """
 import glob, json, os, re, sys
 from datetime import datetime
@@ -69,6 +69,7 @@ def build_data(monthly):
     abbrs        = list(BRANDS.keys())
 
     store_avg = {"tempe": [], "bj": [], "jax": []}
+    # size_data[size][abbr][store] = [price_per_month, ...]
     size_data = {s: {a: {"tempe": [], "bj": [], "jax": []} for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
@@ -111,6 +112,7 @@ def build_data(monthly):
         store_avg["bj"].append(round(sum(bp)/len(bp), 2)   if bp else None)
         store_avg["jax"].append(round(sum(jp)/len(jp), 2)  if jp else None)
 
+    # brand_size_data: only combos that have at least one real price
     brand_size_data = {}
     for abbr in abbrs:
         for size in sizes:
@@ -124,6 +126,14 @@ def build_data(monthly):
         "size_data":       size_data,
         "brand_size_data": brand_size_data,
         "summary_rows":    summary_rows,
+        "sizes_with_data": sorted({
+            size for size in sizes
+            for abbr in abbrs
+            if any(p is not None for p in
+                   size_data[size][abbr]["tempe"] +
+                   size_data[size][abbr]["bj"] +
+                   size_data[size][abbr]["jax"])
+        }, key=lambda s: sizes.index(s)),
     }
 
 
@@ -148,7 +158,7 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 .body { display: flex; flex: 1; overflow: hidden; }
 
 /* ── LEFT table ── */
-.left { width: 40%; border-right: 1px solid #d0d5dd;
+.left { width: 38%; border-right: 1px solid #d0d5dd;
         overflow-y: auto; background: #fff; }
 table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 thead th { background: #1F4E79; color: #fff; padding: 7px 5px;
@@ -157,38 +167,51 @@ tbody td { padding: 4px 5px; border-bottom: 1px solid #eee; white-space: nowrap;
 tbody tr:hover td { filter: brightness(.94); }
 .r { text-align: right; font-family: monospace; }
 .dim { color: #888; font-size: 10.5px; }
-.sep td { background: #e8edf2 !important; height: 5px; }
+.sep td { background: #e4e8ef !important; height: 4px; }
 
 /* ── RIGHT panel ── */
-.right { width: 60%; display: flex; flex-direction: column; overflow: hidden; }
+.right { width: 62%; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Button panel */
-.btn-panel { flex-shrink: 0; padding: 10px 14px; background: #f8fafc;
-             border-bottom: 1px solid #dde1e7; overflow-y: auto; max-height: 46%; }
+.btn-panel { flex-shrink: 0; padding: 10px 14px 8px; background: #f5f7fa;
+             border-bottom: 1px solid #dde1e7; }
 
-.btn-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+.btn-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 7px; }
 .btn-row:last-child { margin-bottom: 0; }
 
-.row-label { font-size: 10.5px; font-weight: 700; color: #1F4E79;
-             min-width: 82px; padding-top: 5px; flex-shrink: 0; }
+.row-label { font-size: 10px; font-weight: 700; color: #1F4E79; letter-spacing: .03em;
+             min-width: 70px; padding-top: 5px; flex-shrink: 0; text-transform: uppercase; }
 
-.btns { display: flex; flex-wrap: wrap; gap: 5px; }
+.btns { display: flex; flex-wrap: wrap; gap: 4px; }
 
+/* buttons */
 .btn {
     font-size: 11px; padding: 4px 9px; border-radius: 4px; cursor: pointer;
-    border: 1px solid #c8d0db; background: #fff; color: #333;
-    transition: all .15s; white-space: nowrap;
+    border: 1.5px solid #c5ccd8; background: #fff; color: #444;
+    transition: background .12s, color .12s, border-color .12s;
+    white-space: nowrap; line-height: 1.4;
 }
-.btn:hover { background: #e8edf5; border-color: #1F4E79; color: #1F4E79; }
-.btn.active { background: #1F4E79; color: #fff; border-color: #1F4E79; }
-.btn.brand { font-weight: 600; }
+.btn:hover  { background: #eef1f8; border-color: #1F4E79; color: #1F4E79; }
+.btn.active { background: #1F4E79 !important; color: #fff !important;
+              border-color: #1F4E79 !important; }
 
-/* Chart panel */
+/* mode buttons are slightly bigger */
+.btn.mode { font-size: 12px; padding: 5px 14px; font-weight: 600; }
+
+/* divider between size row and mode rows */
+.divider { border: none; border-top: 1px solid #dde1e7; margin: 6px 0; }
+
+/* sub-buttons row animation */
+#sub-row { display: none; }
+
+/* ── Chart area ── */
 .chart-panel { flex: 1; padding: 12px 14px; display: flex;
                flex-direction: column; min-height: 0; overflow: hidden; }
-.chart-title { font-size: 12px; font-weight: 600; color: #334; margin-bottom: 8px; }
-.chart-wrap  { flex: 1; position: relative; min-height: 0; }
-.chart-wrap canvas { position: absolute; inset: 0; }
+.chart-title { font-size: 12.5px; font-weight: 600; color: #223;
+               margin-bottom: 8px; }
+.no-data { color: #e53; font-size: 13px; padding-top: 20px; text-align: center; }
+.chart-wrap { flex: 1; position: relative; min-height: 0; }
+.chart-wrap canvas { position: absolute; inset: 0; width:100%!important; height:100%!important; }
 </style>
 </head>
 <body>
@@ -201,7 +224,7 @@ tbody tr:hover td { filter: brightness(.94); }
 
 <div class="body">
 
-  <!-- ── LEFT: table ── -->
+  <!-- ── LEFT: summary table ── -->
   <div class="left">
     <table>
       <thead>
@@ -230,46 +253,40 @@ tbody tr:hover td { filter: brightness(.94); }
     </table>
   </div>
 
-  <!-- ── RIGHT: buttons + chart ── -->
+  <!-- ── RIGHT: controls + chart ── -->
   <div class="right">
 
-    <!-- Button panel -->
     <div class="btn-panel">
 
-      <!-- Row A: Store Overview -->
+      <!-- Row 1: Size filter (global) -->
       <div class="btn-row">
-        <span class="row-label">Overview</span>
-        <div class="btns">
-          <button class="btn active" id="btn-overview" onclick="showOverview(this)">
-            Tempe vs Bob Jane vs JAX
-          </button>
-        </div>
-      </div>
-
-      <!-- Row B: By Size -->
-      <div class="btn-row">
-        <span class="row-label">By Size</span>
+        <span class="row-label">Size</span>
         <div class="btns" id="size-btns"></div>
       </div>
 
-      <!-- Row C: By Brand -->
+      <hr class="divider">
+
+      <!-- Row 2: View mode -->
       <div class="btn-row">
-        <span class="row-label">By Brand</span>
-        <div class="btns" id="brand-btns"></div>
+        <span class="row-label">View</span>
+        <div class="btns">
+          <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Store</button>
+          <button class="btn mode" id="btn-brand" onclick="onModeBrand(this)">By Brand</button>
+        </div>
       </div>
 
-      <!-- Row C-sub: Size sub-buttons (shown after brand click) -->
-      <div class="btn-row" id="brand-size-row" style="display:none">
-        <span class="row-label" id="brand-size-label">— Sizes</span>
-        <div class="btns" id="brand-size-btns"></div>
+      <!-- Row 3: Sub-buttons (brand list or store list) -->
+      <div class="btn-row" id="sub-row">
+        <span class="row-label" id="sub-label"></span>
+        <div class="btns" id="sub-btns"></div>
       </div>
 
     </div>
 
-    <!-- Chart panel -->
+    <!-- Chart -->
     <div class="chart-panel">
-      <div class="chart-title" id="chart-title">Tempe vs Bob Jane vs JAX — Average Price</div>
-      <div class="chart-wrap">
+      <div class="chart-title" id="chart-title">Select a size and view mode above</div>
+      <div class="chart-wrap" id="chart-wrap">
         <canvas id="main-chart"></canvas>
       </div>
     </div>
@@ -278,163 +295,179 @@ tbody tr:hover td { filter: brightness(.94); }
 </div>
 
 <script>
-const D       = {{ chart_json | safe }};
-const BRANDS  = {{ brands_json | safe }};
-const BCOLORS = {{ bcolors_json | safe }};
-const months  = D.months;
+const D      = {{ chart_json | safe }};
+const BRANDS = {{ brands_json | safe }};
+const BCOLORS= {{ bcolors_json | safe }};
+const SIZES  = {{ sizes_json | safe }};
+const months = D.months;
 
 const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800' };
-const SL = { tempe:'Tempe', bj:'Bob Jane', jax:'JAX' };
+const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX' };
 const SD = { tempe:[], bj:[5,5], jax:[2,3] };
-const PALETTE = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6',
-                 '#1abc9c','#e67e22','#34495e','#e91e63','#607d8b'];
+const PALETTE = ['#C8102E','#E31837','#FFA500','#003087','#00539B',
+                 '#E8001A','#FF6600','#E4002B','#003DA5','#555555'];
 
 const baseOpts = {
-    responsive: true, maintainAspectRatio: false,
-    plugins: {
-        legend: { position:'bottom', labels:{ boxWidth:10, font:{size:10}, padding:8 } },
-        tooltip: { callbacks:{ label: ctx => ' $' + ctx.raw } }
+    responsive:true, maintainAspectRatio:false,
+    plugins:{
+        legend:{ position:'bottom', labels:{ boxWidth:11, font:{size:10}, padding:8 } },
+        tooltip:{ callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
     },
-    scales: {
-        x: { ticks:{ font:{size:10} } },
-        y: { ticks:{ font:{size:10}, callback: v => '$'+v }, grid:{ color:'#f0f0f0' } }
+    scales:{
+        x:{ ticks:{ font:{size:10} } },
+        y:{ ticks:{ font:{size:10}, callback: v => '$'+v }, grid:{ color:'#f0f0f0' } }
     }
 };
 
-/* ── chart management ─────────────────────────────── */
-let _chart = null;
-let _activeBtn = document.getElementById('btn-overview');
-let _activeBrandBtn = null;
-let _activeSizeSubBtn = null;
+/* ── state ────────────────────────────────────────────── */
+let selectedSize    = null;
+let selectedMode    = null;   // 'store' | 'brand'
+let selectedSubKey  = null;   // abbr (store mode) | 'tempe'/'bj'/'jax' (brand mode)
+let _chart          = null;
+let _activeSizeBtn  = null;
+let _activeModeBtn  = null;
+let _activeSubBtn   = null;
 
-function _setActive(btn) {
-    if (_activeBtn) _activeBtn.classList.remove('active');
-    _activeBtn = btn;
-    if (btn) btn.classList.add('active');
-}
-
+/* ── chart helpers ────────────────────────────────────── */
 function _render(title, datasets) {
     document.getElementById('chart-title').textContent = title;
     if (_chart) { _chart.destroy(); _chart = null; }
     _chart = new Chart(document.getElementById('main-chart'), {
-        type: 'line',
-        data: { labels: months, datasets: datasets },
-        options: baseOpts
+        type:'line', data:{ labels:months, datasets }, options:baseOpts
     });
 }
 
-/* ── A: Store Overview ─────────────────────────────── */
-function showOverview(btn) {
-    _setActive(btn);
-    _hideSizeSubRow();
-    _render('Tempe vs Bob Jane vs JAX — Average Price (all sizes & brands)', [
-        { label:'Tempe',    data:D.store_avg.tempe, borderColor:SC.tempe, backgroundColor:SC.tempe+'33', tension:.35, pointRadius:5 },
-        { label:'Bob Jane', data:D.store_avg.bj,    borderColor:SC.bj,    backgroundColor:SC.bj+'33',    tension:.35, pointRadius:5 },
-        { label:'JAX',      data:D.store_avg.jax,   borderColor:SC.jax,   backgroundColor:SC.jax+'33',   tension:.35, pointRadius:5 },
-    ]);
+function _noData(msg) {
+    document.getElementById('chart-title').textContent = msg;
+    if (_chart) { _chart.destroy(); _chart = null; }
 }
 
-/* ── B: By Size ─────────────────────────────────────── */
-function showSize(size, btn) {
-    _setActive(btn);
-    _hideSizeSubRow();
-    const brandMap = D.size_data[size];
+function _tryRender() {
+    if (!selectedSize || !selectedMode || !selectedSubKey) return;
+    if (selectedMode === 'store') _renderStore();
+    else                          _renderBrand();
+}
+
+/* ── By Store: selected brand → 3 store lines ───────── */
+function _renderStore() {
+    const abbr = selectedSubKey;
+    const bsd  = (D.brand_size_data[abbr] || {})[selectedSize];
+    if (!bsd) {
+        _noData((BRANDS[abbr]||abbr) + ' — ' + selectedSize + ': no data');
+        return;
+    }
+    const ds = ['tempe','bj','jax'].reduce((arr, s) => {
+        const prices = bsd[s];
+        if (prices && !prices.every(p => p === null))
+            arr.push({ label:SL[s], data:prices, borderColor:SC[s],
+                       backgroundColor:SC[s]+'33', borderDash:SD[s],
+                       tension:.3, pointRadius:5, fill:false });
+        return arr;
+    }, []);
+    _render((BRANDS[abbr]||abbr) + ' \u2014 ' + selectedSize
+            + ' \u2014 Tempe vs Bob Jane vs JAX', ds);
+}
+
+/* ── By Brand: selected store → brand lines ─────────── */
+function _renderBrand() {
+    const store = selectedSubKey;
+    const sizeMap = D.size_data[selectedSize];
+    if (!sizeMap) { _noData('No data for ' + selectedSize); return; }
     const ds = [];
     let ci = 0;
-    Object.keys(brandMap).forEach(function(abbr) {
-        const prices = brandMap[abbr].tempe;
-        if (prices.every(p => p === null)) return;
-        const c = '#' + (BCOLORS[abbr] || PALETTE[ci % PALETTE.length].slice(1));
+    Object.keys(sizeMap).forEach(function(abbr) {
+        const prices = sizeMap[abbr][store];
+        if (!prices || prices.every(p => p === null)) return;
+        const c = '#' + (BCOLORS[abbr] || PALETTE[ci%PALETTE.length].slice(1));
         ci++;
-        ds.push({ label:abbr, data:prices, borderColor:c, backgroundColor:c+'33', tension:.3, pointRadius:4 });
+        ds.push({ label:abbr + ' ' + (BRANDS[abbr]||''), data:prices,
+                  borderColor:c, backgroundColor:c+'33',
+                  tension:.3, pointRadius:5, fill:false });
     });
-    _render(size + ' — Brand Price Comparison (Tempe)', ds);
+    if (!ds.length) { _noData(SL[store] + ' — ' + selectedSize + ': no data'); return; }
+    _render(SL[store] + ' \u2014 ' + selectedSize + ' \u2014 Brand Comparison', ds);
 }
 
-/* ── C: By Brand × Size ─────────────────────────────── */
-function _hideSizeSubRow() {
-    document.getElementById('brand-size-row').style.display = 'none';
-    if (_activeBrandBtn) { _activeBrandBtn.classList.remove('active'); _activeBrandBtn = null; }
-    if (_activeSizeSubBtn) { _activeSizeSubBtn.classList.remove('active'); _activeSizeSubBtn = null; }
+/* ── Size buttons ─────────────────────────────────────── */
+function _setSize(size, btn) {
+    if (_activeSizeBtn) _activeSizeBtn.classList.remove('active');
+    _activeSizeBtn = btn; btn.classList.add('active');
+    selectedSize = size;
+    _tryRender();
 }
 
-function selectBrand(abbr, btn) {
-    // highlight brand button
-    if (_activeBrandBtn) _activeBrandBtn.classList.remove('active');
-    _activeBrandBtn = btn;
-    btn.classList.add('active');
-    if (_activeBtn && _activeBtn !== btn) { _activeBtn.classList.remove('active'); _activeBtn = null; }
+/* ── Mode: By Store ───────────────────────────────────── */
+function onModeStore(btn) {
+    if (_activeModeBtn) _activeModeBtn.classList.remove('active');
+    _activeModeBtn = btn; btn.classList.add('active');
+    selectedMode = 'store'; selectedSubKey = null;
+    if (_activeSubBtn) { _activeSubBtn.classList.remove('active'); _activeSubBtn = null; }
 
-    // build size sub-buttons
-    const subRow  = document.getElementById('brand-size-row');
-    const subBtns = document.getElementById('brand-size-btns');
-    document.getElementById('brand-size-label').textContent = (BRANDS[abbr]||abbr) + ' sizes';
+    document.getElementById('sub-label').textContent = 'Brand';
+    const subBtns = document.getElementById('sub-btns');
     subBtns.innerHTML = '';
-    if (_activeSizeSubBtn) { _activeSizeSubBtn = null; }
 
-    const sizes = Object.keys(D.brand_size_data[abbr] || {});
-    sizes.forEach(function(size) {
-        const b = document.createElement('button');
-        b.className = 'btn';
-        b.textContent = size;
-        b.onclick = function() { showBrandSize(abbr, size, b); };
-        subBtns.appendChild(b);
-    });
-    subRow.style.display = 'flex';
-
-    // auto-select first size
-    if (subBtns.firstChild) subBtns.firstChild.click();
-}
-
-function showBrandSize(abbr, size, btn) {
-    if (_activeSizeSubBtn) _activeSizeSubBtn.classList.remove('active');
-    _activeSizeSubBtn = btn;
-    btn.classList.add('active');
-
-    const sd = D.brand_size_data[abbr][size];
-    const ds = [];
-    ['tempe','bj','jax'].forEach(function(store) {
-        const prices = sd[store];
-        if (prices.every(p => p === null)) return;
-        ds.push({
-            label: SL[store], data: prices,
-            borderColor: SC[store], backgroundColor: SC[store]+'33',
-            borderDash: SD[store], tension:.3, pointRadius:4,
-        });
-    });
-    _render((BRANDS[abbr]||abbr) + ' \u2014 ' + size + ' \u2014 Store Comparison', ds);
-}
-
-/* ── populate buttons on load ─────────────────────── */
-(function init() {
-    // Size buttons
-    const szContainer = document.getElementById('size-btns');
-    Object.keys(D.size_data).forEach(function(size) {
-        const bm = D.size_data[size];
-        const hasData = Object.keys(bm).some(a => bm[a].tempe.some(p => p !== null));
-        if (!hasData) return;
-        const b = document.createElement('button');
-        b.className = 'btn';
-        b.textContent = size;
-        b.onclick = function() { showSize(size, b); };
-        szContainer.appendChild(b);
-    });
-
-    // Brand buttons
-    const brContainer = document.getElementById('brand-btns');
+    // one button per brand that has data in any size
     Object.keys(D.brand_size_data).forEach(function(abbr) {
         const c = '#' + (BCOLORS[abbr] || '555555');
         const b = document.createElement('button');
-        b.className = 'btn brand';
-        b.textContent = (BRANDS[abbr] || abbr);
-        b.style.borderColor = c;
-        b.style.color = c;
-        b.onclick = function() { selectBrand(abbr, b); };
-        brContainer.appendChild(b);
+        b.className = 'btn';
+        b.textContent = BRANDS[abbr] || abbr;
+        b.style.borderColor = c; b.style.color = c;
+        b.onclick = function() {
+            if (_activeSubBtn) _activeSubBtn.classList.remove('active');
+            _activeSubBtn = b; b.classList.add('active');
+            selectedSubKey = abbr; _tryRender();
+        };
+        subBtns.appendChild(b);
     });
+    document.getElementById('sub-row').style.display = 'flex';
+    if (subBtns.firstChild) subBtns.firstChild.click();
+}
 
-    // Show overview on load
-    showOverview(document.getElementById('btn-overview'));
+/* ── Mode: By Brand ───────────────────────────────────── */
+function onModeBrand(btn) {
+    if (_activeModeBtn) _activeModeBtn.classList.remove('active');
+    _activeModeBtn = btn; btn.classList.add('active');
+    selectedMode = 'brand'; selectedSubKey = null;
+    if (_activeSubBtn) { _activeSubBtn.classList.remove('active'); _activeSubBtn = null; }
+
+    document.getElementById('sub-label').textContent = 'Store';
+    const subBtns = document.getElementById('sub-btns');
+    subBtns.innerHTML = '';
+
+    [{key:'tempe', label:'Tempe',    c:'#2196F3'},
+     {key:'bj',    label:'Bob Jane', c:'#4CAF50'},
+     {key:'jax',   label:'JAX',      c:'#FF9800'}].forEach(function(s) {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = s.label;
+        b.style.borderColor = s.c; b.style.color = s.c;
+        b.onclick = function() {
+            if (_activeSubBtn) _activeSubBtn.classList.remove('active');
+            _activeSubBtn = b; b.classList.add('active');
+            selectedSubKey = s.key; _tryRender();
+        };
+        subBtns.appendChild(b);
+    });
+    document.getElementById('sub-row').style.display = 'flex';
+    if (subBtns.firstChild) subBtns.firstChild.click();
+}
+
+/* ── init ─────────────────────────────────────────────── */
+(function init() {
+    const szContainer = document.getElementById('size-btns');
+    SIZES.forEach(function(size) {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = size;
+        b.onclick = function() { _setSize(size, b); };
+        szContainer.appendChild(b);
+    });
+    // auto-select first size
+    if (szContainer.firstChild) szContainer.firstChild.click();
+    // auto-select By Store mode
+    document.getElementById('btn-store').click();
 }());
 </script>
 </body>
@@ -467,6 +500,7 @@ def price_dashboard():
         chart_json   = chart_json,
         brands_json  = json.dumps(BRANDS),
         bcolors_json = json.dumps(BRAND_COLOURS),
+        sizes_json   = json.dumps(data["sizes_with_data"]),
     )
 
 
