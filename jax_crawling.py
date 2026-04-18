@@ -103,6 +103,24 @@ return (function() {
             if (info.div_classes.length >= 30) break;
         }
     }
+
+    /* Dump first card's raw textContent so we can see structure */
+    info.first_card_text = '';
+    for (var li = 0; li < links.length; li++) {
+        if (/view\s+product\s+details/i.test(links[li].textContent || '')) {
+            var el = links[li];
+            for (var lvl = 0; lvl < 10; lvl++) {
+                el = el.parentElement;
+                if (!el || el === document.body) break;
+                var t = el.textContent || '';
+                if (/\d{3}\/\d{2}[A-Za-z]\d{2}/.test(t) && /\$\d{2,4}/.test(t)) {
+                    info.first_card_text = t.replace(/\s+/g,' ').substring(0, 300);
+                    break;
+                }
+            }
+            if (info.first_card_text) break;
+        }
+    }
     return info;
 }());
 """
@@ -120,7 +138,8 @@ return (function() {
     var results = [];
     var seen = {};
 
-    var BRAND_PAT = /(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama)\s+(.+?)\s+(\d{3}[\/R])/i;
+    var JUNK_RE = /\d+\s*day\s+satisfaction\s+guarantee|run\s*flat|EV\s+tyre|select\s+a\s+store|add\s+to\s+booking|view\s+product|qty/gi;
+    var BRAND_NAMES_RE = /^(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama)\s*/i;
 
     /* ── Shared card-extraction helper ─────────────────────────────────── */
     function extractCard(card) {
@@ -144,18 +163,35 @@ return (function() {
             if (loadM) spec = size + ' ' + loadM[1].trim();
         }
 
-        /* Name: text between brand name and size pattern */
+        /* Name: text before the tyre-size pattern, after stripping noise */
         var name = '';
-        var nm = text.match(BRAND_PAT);
-        if (nm) {
-            name = nm[1].trim();
+        var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}/i));
+        if (sizePos > 0) {
+            var pre = text.substring(0, sizePos)
+                         .replace(JUNK_RE, ' ')
+                         .replace(BRAND_NAMES_RE, '')
+                         .replace(/\s+/g, ' ').trim();
+            /* pre is now something like "Energy XM2+" or "" */
+            if (pre.length > 2 && pre.length < 80) name = pre;
         }
         /* Fallback 1: h2/h3/h4 */
         if (!name) {
             var hEl = card.querySelector('h2,h3,h4');
             if (hEl) name = (hEl.textContent || '').trim();
         }
-        /* Fallback 2: first meaningful link */
+        /* Fallback 2: first p/span that looks like a product name */
+        if (!name) {
+            var elems = card.querySelectorAll('p,span');
+            for (var ei = 0; ei < elems.length; ei++) {
+                var et = (elems[ei].textContent || '').trim();
+                if (et.length > 3 && et.length < 60 &&
+                        !/\$|\d{3}\/|\bqty\b|booking|detail|view|store/i.test(et) &&
+                        !/^\d+/.test(et)) {
+                    name = et; break;
+                }
+            }
+        }
+        /* Fallback 3: first meaningful link */
         if (!name) {
             var ls = card.querySelectorAll('a');
             for (var li = 0; li < ls.length; li++) {
@@ -265,6 +301,8 @@ def diagnose(driver):
         print(f"  [DIAG] div classes (first 30):")
         for cls in (info.get('div_classes') or []):
             print(f"           {cls}")
+        if info.get('first_card_text'):
+            print(f"  [DIAG] first card text: {info['first_card_text']}")
     except Exception as e:
         print(f"  [DIAG error] {e}")
 
