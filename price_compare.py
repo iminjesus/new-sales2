@@ -3,10 +3,11 @@ price_compare.py — Tyre Price Comparison Dashboard
 http://127.0.0.1:5000/price
 
 Left  : summary table (latest month)
-Right : line charts (X = month, Y = price)
-  Section A — Store Overview  : Tempe / BJ / JAX average price trend
-  Section B — By Size         : one card per size, lines = brands (Tempe price)
-  Section C — By Brand × Size : one card per (brand, size), lines = stores
+Right : button panel (top) + single chart area (bottom)
+  Buttons:
+    [Store Overview]
+    By Size    : one button per size  → chart shows brand lines (Tempe price)
+    By Brand   : brand button → size sub-buttons → chart shows store lines
 """
 import glob, json, os, re, sys
 from datetime import datetime
@@ -139,41 +140,55 @@ _HTML = r"""<!DOCTYPE html>
 body { font-family: system-ui, sans-serif; background: #f0f2f5;
        height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
-.hdr { background: #1F4E79; color: #fff; padding: 12px 20px; flex-shrink: 0;
-       display: flex; align-items: baseline; gap: 16px; }
-.hdr h1 { font-size: 17px; }
-.hdr span { font-size: 12px; opacity: .65; }
+.hdr { background: #1F4E79; color: #fff; padding: 11px 18px; flex-shrink: 0;
+       display: flex; align-items: baseline; gap: 14px; }
+.hdr h1 { font-size: 16px; }
+.hdr span { font-size: 11px; opacity: .65; }
 
 .body { display: flex; flex: 1; overflow: hidden; }
 
-.left { width: 41%; border-right: 1px solid #d0d5dd;
+/* ── LEFT table ── */
+.left { width: 40%; border-right: 1px solid #d0d5dd;
         overflow-y: auto; background: #fff; }
 table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 thead th { background: #1F4E79; color: #fff; padding: 7px 5px;
-           position: sticky; top: 0; z-index: 5; text-align: center;
-           white-space: nowrap; }
+           position: sticky; top: 0; z-index: 5; text-align: center; }
 tbody td { padding: 4px 5px; border-bottom: 1px solid #eee; white-space: nowrap; }
 tbody tr:hover td { filter: brightness(.94); }
 .r { text-align: right; font-family: monospace; }
 .dim { color: #888; font-size: 10.5px; }
 .sep td { background: #e8edf2 !important; height: 5px; }
 
-.right { width: 59%; overflow-y: auto; padding: 14px 16px; }
+/* ── RIGHT panel ── */
+.right { width: 60%; display: flex; flex-direction: column; overflow: hidden; }
 
-.sec { font-size: 13px; font-weight: 700; color: #1F4E79;
-       border-bottom: 2px solid #1F4E79; padding-bottom: 4px;
-       margin: 22px 0 10px; }
-.sec:first-of-type { margin-top: 0; }
+/* Button panel */
+.btn-panel { flex-shrink: 0; padding: 10px 14px; background: #f8fafc;
+             border-bottom: 1px solid #dde1e7; overflow-y: auto; max-height: 46%; }
 
-.grid { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+.btn-row:last-child { margin-bottom: 0; }
 
-.card { background: #fff; border-radius: 7px;
-        box-shadow: 0 1px 3px rgba(0,0,0,.13); padding: 10px; }
-.card.w100 { width: 100%; }
-.card.w50  { width: calc(50% - 5px); }
-.card.w33  { width: calc(33.33% - 7px); }
-.ct { font-size: 11px; font-weight: 600; text-align: center;
-      color: #444; margin-bottom: 6px; }
+.row-label { font-size: 10.5px; font-weight: 700; color: #1F4E79;
+             min-width: 82px; padding-top: 5px; flex-shrink: 0; }
+
+.btns { display: flex; flex-wrap: wrap; gap: 5px; }
+
+.btn {
+    font-size: 11px; padding: 4px 9px; border-radius: 4px; cursor: pointer;
+    border: 1px solid #c8d0db; background: #fff; color: #333;
+    transition: all .15s; white-space: nowrap;
+}
+.btn:hover { background: #e8edf5; border-color: #1F4E79; color: #1F4E79; }
+.btn.active { background: #1F4E79; color: #fff; border-color: #1F4E79; }
+.btn.brand { font-weight: 600; }
+
+/* Chart panel */
+.chart-panel { flex: 1; padding: 12px 14px; display: flex;
+               flex-direction: column; min-height: 0; overflow: hidden; }
+.chart-title { font-size: 12px; font-weight: 600; color: #334; margin-bottom: 8px; }
+.chart-wrap  { flex: 1; position: relative; min-height: 0; }
+.chart-wrap canvas { position: absolute; inset: 0; }
 </style>
 </head>
 <body>
@@ -186,6 +201,7 @@ tbody tr:hover td { filter: brightness(.94); }
 
 <div class="body">
 
+  <!-- ── LEFT: table ── -->
   <div class="left">
     <table>
       <thead>
@@ -214,21 +230,49 @@ tbody tr:hover td { filter: brightness(.94); }
     </table>
   </div>
 
+  <!-- ── RIGHT: buttons + chart ── -->
   <div class="right">
 
-    <div class="sec">Store Overview &mdash; Average Price Trend</div>
-    <div class="grid">
-      <div class="card w100">
-        <div class="ct">Tempe vs Bob Jane vs JAX &mdash; Average Tyre Price (all sizes &amp; brands)</div>
-        <canvas id="c_overview" height="85"></canvas>
+    <!-- Button panel -->
+    <div class="btn-panel">
+
+      <!-- Row A: Store Overview -->
+      <div class="btn-row">
+        <span class="row-label">Overview</span>
+        <div class="btns">
+          <button class="btn active" id="btn-overview" onclick="showOverview(this)">
+            Tempe vs Bob Jane vs JAX
+          </button>
+        </div>
       </div>
+
+      <!-- Row B: By Size -->
+      <div class="btn-row">
+        <span class="row-label">By Size</span>
+        <div class="btns" id="size-btns"></div>
+      </div>
+
+      <!-- Row C: By Brand -->
+      <div class="btn-row">
+        <span class="row-label">By Brand</span>
+        <div class="btns" id="brand-btns"></div>
+      </div>
+
+      <!-- Row C-sub: Size sub-buttons (shown after brand click) -->
+      <div class="btn-row" id="brand-size-row" style="display:none">
+        <span class="row-label" id="brand-size-label">— Sizes</span>
+        <div class="btns" id="brand-size-btns"></div>
+      </div>
+
     </div>
 
-    <div class="sec">By Size &mdash; Brand Price Comparison (Tempe Price)</div>
-    <div class="grid" id="grid_size"></div>
-
-    <div class="sec">By Brand &amp; Size &mdash; Store Comparison (Tempe / BJ / JAX)</div>
-    <div class="grid" id="grid_brand"></div>
+    <!-- Chart panel -->
+    <div class="chart-panel">
+      <div class="chart-title" id="chart-title">Tempe vs Bob Jane vs JAX — Average Price</div>
+      <div class="chart-wrap">
+        <canvas id="main-chart"></canvas>
+      </div>
+    </div>
 
   </div>
 </div>
@@ -246,48 +290,54 @@ const PALETTE = ['#e74c3c','#3498db','#2ecc71','#f39c12','#9b59b6',
                  '#1abc9c','#e67e22','#34495e','#e91e63','#607d8b'];
 
 const baseOpts = {
-    responsive: true,
+    responsive: true, maintainAspectRatio: false,
     plugins: {
-        legend: { position:'bottom', labels:{ boxWidth:10, font:{size:9}, padding:5 } },
-        tooltip: { callbacks:{ label: ctx => '$' + ctx.raw } }
+        legend: { position:'bottom', labels:{ boxWidth:10, font:{size:10}, padding:8 } },
+        tooltip: { callbacks:{ label: ctx => ' $' + ctx.raw } }
     },
     scales: {
-        x: { ticks:{ font:{size:9} } },
-        y: { ticks:{ font:{size:9}, callback: v => '$'+v }, grid:{ color:'#f0f0f0' } }
+        x: { ticks:{ font:{size:10} } },
+        y: { ticks:{ font:{size:10}, callback: v => '$'+v }, grid:{ color:'#f0f0f0' } }
     }
 };
 
-function mkCard(gridId, title, cid, w) {
-    const g = document.getElementById(gridId);
-    const d = document.createElement('div');
-    d.className = 'card ' + (w || 'w33');
-    d.innerHTML = '<div class="ct">' + title + '</div>'
-                + '<canvas id="' + cid + '" height="160"></canvas>';
-    g.appendChild(d);
+/* ── chart management ─────────────────────────────── */
+let _chart = null;
+let _activeBtn = document.getElementById('btn-overview');
+let _activeBrandBtn = null;
+let _activeSizeSubBtn = null;
+
+function _setActive(btn) {
+    if (_activeBtn) _activeBtn.classList.remove('active');
+    _activeBtn = btn;
+    if (btn) btn.classList.add('active');
 }
 
-function mkChart(id, datasets) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    new Chart(el, { type:'line', data:{ labels:months, datasets }, options:baseOpts });
+function _render(title, datasets) {
+    document.getElementById('chart-title').textContent = title;
+    if (_chart) { _chart.destroy(); _chart = null; }
+    _chart = new Chart(document.getElementById('main-chart'), {
+        type: 'line',
+        data: { labels: months, datasets: datasets },
+        options: baseOpts
+    });
 }
 
-/* A: Store Overview */
-new Chart(document.getElementById('c_overview'), {
-    type:'line',
-    data:{
-        labels: months,
-        datasets: ['tempe','bj','jax'].map(s => ({
-            label: SL[s], data: D.store_avg[s],
-            borderColor: SC[s], backgroundColor: SC[s]+'33',
-            tension:.35, pointRadius:5, fill:false,
-        }))
-    },
-    options: baseOpts
-});
+/* ── A: Store Overview ─────────────────────────────── */
+function showOverview(btn) {
+    _setActive(btn);
+    _hideSizeSubRow();
+    _render('Tempe vs Bob Jane vs JAX — Average Price (all sizes & brands)', [
+        { label:'Tempe',    data:D.store_avg.tempe, borderColor:SC.tempe, backgroundColor:SC.tempe+'33', tension:.35, pointRadius:5 },
+        { label:'Bob Jane', data:D.store_avg.bj,    borderColor:SC.bj,    backgroundColor:SC.bj+'33',    tension:.35, pointRadius:5 },
+        { label:'JAX',      data:D.store_avg.jax,   borderColor:SC.jax,   backgroundColor:SC.jax+'33',   tension:.35, pointRadius:5 },
+    ]);
+}
 
-/* B: By Size — brand lines (Tempe price) */
-Object.keys(D.size_data).forEach(function(size) {
+/* ── B: By Size ─────────────────────────────────────── */
+function showSize(size, btn) {
+    _setActive(btn);
+    _hideSizeSubRow();
     const brandMap = D.size_data[size];
     const ds = [];
     let ci = 0;
@@ -296,35 +346,96 @@ Object.keys(D.size_data).forEach(function(size) {
         if (prices.every(p => p === null)) return;
         const c = '#' + (BCOLORS[abbr] || PALETTE[ci % PALETTE.length].slice(1));
         ci++;
-        ds.push({ label:abbr, data:prices, borderColor:c,
-                  backgroundColor:c+'33', tension:.3, pointRadius:3 });
+        ds.push({ label:abbr, data:prices, borderColor:c, backgroundColor:c+'33', tension:.3, pointRadius:4 });
     });
-    if (!ds.length) return;
-    const cid = 'c_sz_' + size.replace(/[\/\s]/g,'_');
-    mkCard('grid_size', size, cid, 'w33');
-    mkChart(cid, ds);
-});
+    _render(size + ' — Brand Price Comparison (Tempe)', ds);
+}
 
-/* C: By Brand x Size — store comparison */
-Object.keys(D.brand_size_data).forEach(function(abbr) {
-    Object.keys(D.brand_size_data[abbr]).forEach(function(size) {
-        const sd = D.brand_size_data[abbr][size];
-        const ds = [];
-        ['tempe','bj','jax'].forEach(function(store) {
-            const prices = sd[store];
-            if (prices.every(p => p === null)) return;
-            ds.push({
-                label: SL[store], data: prices,
-                borderColor: SC[store], backgroundColor: SC[store]+'33',
-                borderDash: SD[store], tension:.3, pointRadius:3,
-            });
-        });
-        if (!ds.length) return;
-        const cid = 'c_bs_' + abbr + '_' + size.replace(/[\/\s]/g,'_');
-        mkCard('grid_brand', (BRANDS[abbr]||abbr) + ' &mdash; ' + size, cid, 'w33');
-        mkChart(cid, ds);
+/* ── C: By Brand × Size ─────────────────────────────── */
+function _hideSizeSubRow() {
+    document.getElementById('brand-size-row').style.display = 'none';
+    if (_activeBrandBtn) { _activeBrandBtn.classList.remove('active'); _activeBrandBtn = null; }
+    if (_activeSizeSubBtn) { _activeSizeSubBtn.classList.remove('active'); _activeSizeSubBtn = null; }
+}
+
+function selectBrand(abbr, btn) {
+    // highlight brand button
+    if (_activeBrandBtn) _activeBrandBtn.classList.remove('active');
+    _activeBrandBtn = btn;
+    btn.classList.add('active');
+    if (_activeBtn && _activeBtn !== btn) { _activeBtn.classList.remove('active'); _activeBtn = null; }
+
+    // build size sub-buttons
+    const subRow  = document.getElementById('brand-size-row');
+    const subBtns = document.getElementById('brand-size-btns');
+    document.getElementById('brand-size-label').textContent = (BRANDS[abbr]||abbr) + ' sizes';
+    subBtns.innerHTML = '';
+    if (_activeSizeSubBtn) { _activeSizeSubBtn = null; }
+
+    const sizes = Object.keys(D.brand_size_data[abbr] || {});
+    sizes.forEach(function(size) {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = size;
+        b.onclick = function() { showBrandSize(abbr, size, b); };
+        subBtns.appendChild(b);
     });
-});
+    subRow.style.display = 'flex';
+
+    // auto-select first size
+    if (subBtns.firstChild) subBtns.firstChild.click();
+}
+
+function showBrandSize(abbr, size, btn) {
+    if (_activeSizeSubBtn) _activeSizeSubBtn.classList.remove('active');
+    _activeSizeSubBtn = btn;
+    btn.classList.add('active');
+
+    const sd = D.brand_size_data[abbr][size];
+    const ds = [];
+    ['tempe','bj','jax'].forEach(function(store) {
+        const prices = sd[store];
+        if (prices.every(p => p === null)) return;
+        ds.push({
+            label: SL[store], data: prices,
+            borderColor: SC[store], backgroundColor: SC[store]+'33',
+            borderDash: SD[store], tension:.3, pointRadius:4,
+        });
+    });
+    _render((BRANDS[abbr]||abbr) + ' \u2014 ' + size + ' \u2014 Store Comparison', ds);
+}
+
+/* ── populate buttons on load ─────────────────────── */
+(function init() {
+    // Size buttons
+    const szContainer = document.getElementById('size-btns');
+    Object.keys(D.size_data).forEach(function(size) {
+        const bm = D.size_data[size];
+        const hasData = Object.keys(bm).some(a => bm[a].tempe.some(p => p !== null));
+        if (!hasData) return;
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = size;
+        b.onclick = function() { showSize(size, b); };
+        szContainer.appendChild(b);
+    });
+
+    // Brand buttons
+    const brContainer = document.getElementById('brand-btns');
+    Object.keys(D.brand_size_data).forEach(function(abbr) {
+        const c = '#' + (BCOLORS[abbr] || '555555');
+        const b = document.createElement('button');
+        b.className = 'btn brand';
+        b.textContent = (BRANDS[abbr] || abbr);
+        b.style.borderColor = c;
+        b.style.color = c;
+        b.onclick = function() { selectBrand(abbr, b); };
+        brContainer.appendChild(b);
+    });
+
+    // Show overview on load
+    showOverview(document.getElementById('btn-overview'));
+}());
 </script>
 </body>
 </html>
