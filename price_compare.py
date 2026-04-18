@@ -309,6 +309,7 @@ const PALETTE = ['#C8102E','#E31837','#FFA500','#003087','#00539B',
 
 const baseOpts = {
     responsive:true, maintainAspectRatio:false,
+    clip: false,
     plugins:{
         legend:{ position:'bottom', labels:{ boxWidth:11, font:{size:10}, padding:8 } },
         tooltip:{ callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
@@ -320,6 +321,15 @@ const baseOpts = {
             ticks:{ font:{size:10}, callback: v => '$'+v },
             grid:{ color:'#f0f0f0' },
         }
+    },
+    elements:{
+        point:{
+            radius: 7,
+            hoverRadius: 9,
+            borderWidth: 2,
+            borderColor: '#fff',
+            hitRadius: 12,
+        }
     }
 };
 
@@ -330,11 +340,34 @@ function _tightenY(chart) {
         .filter(v => v !== null && v !== undefined);
     if (!allVals.length) return;
     const lo = Math.min(...allVals), hi = Math.max(...allVals);
-    const pad = Math.max((hi - lo) * 0.4, 25);   // 40% of range, min $25
+    const pad = Math.max((hi - lo) * 0.4, 25);
     chart.options.scales.y.min = Math.floor(lo - pad);
     chart.options.scales.y.max = Math.ceil(hi + pad);
     chart.update('none');
 }
+
+/* Draw price labels above each point after chart renders */
+const _labelPlugin = {
+    id: 'pointLabels',
+    afterDatasetsDraw(chart) {
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.font = 'bold 10px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        chart.data.datasets.forEach((ds, di) => {
+            const meta = chart.getDatasetMeta(di);
+            meta.data.forEach((pt, i) => {
+                const val = ds.data[i];
+                if (val === null || val === undefined) return;
+                const color = Array.isArray(ds.borderColor) ? ds.borderColor[i] : ds.borderColor;
+                ctx.fillStyle = color || '#333';
+                ctx.fillText('$' + val, pt.x, pt.y - 12);
+            });
+        });
+        ctx.restore();
+    }
+};
+Chart.register(_labelPlugin);
 
 /* ── state ────────────────────────────────────────────── */
 let selectedSize    = null;
@@ -349,40 +382,9 @@ let _activeSubBtn   = null;
 function _render(title, datasets) {
     document.getElementById('chart-title').textContent = title;
     if (_chart) { _chart.destroy(); _chart = null; }
-
-    if (months.length <= 1) {
-        /* Single month → bar chart: each dataset = one bar */
-        _chart = new Chart(document.getElementById('main-chart'), {
-            type: 'bar',
-            data: {
-                labels: datasets.map(ds => ds.label),
-                datasets: [{
-                    data:            datasets.map(ds => ds.data[0] ?? null),
-                    backgroundColor: datasets.map(ds => ds.borderColor + 'BB'),
-                    borderColor:     datasets.map(ds => ds.borderColor),
-                    borderWidth: 2, borderRadius: 4,
-                }]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: {
-                    legend: { display: false },
-                    tooltip: { callbacks: { label: ctx => ' $' + ctx.raw } }
-                },
-                scales: {
-                    x: { ticks: { font: { size: 11 } } },
-                    y: { beginAtZero: false,
-                         ticks: { font: { size: 10 }, callback: v => '$' + v },
-                         grid: { color: '#f0f0f0' } }
-                }
-            }
-        });
-    } else {
-        /* Multiple months → line chart */
-        _chart = new Chart(document.getElementById('main-chart'), {
-            type: 'line', data: { labels: months, datasets }, options: baseOpts
-        });
-    }
+    _chart = new Chart(document.getElementById('main-chart'), {
+        type: 'line', data: { labels: months, datasets }, options: baseOpts
+    });
     _tightenY(_chart);
 }
 
