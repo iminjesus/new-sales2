@@ -333,17 +333,13 @@ const baseOpts = {
     }
 };
 
-/* Recalculate Y-axis min/max with comfortable breathing room */
-function _tightenY(chart) {
-    const allVals = chart.data.datasets
-        .flatMap(ds => ds.data)
-        .filter(v => v !== null && v !== undefined);
-    if (!allVals.length) return;
-    const lo = Math.min(...allVals), hi = Math.max(...allVals);
-    const pad = Math.max((hi - lo) * 0.4, 25);
-    chart.options.scales.y.min = Math.floor(lo - pad);
-    chart.options.scales.y.max = Math.ceil(hi + pad);
-    chart.update('none');
+/* Compute Y min/max from datasets before chart creation */
+function _yRange(datasets) {
+    const vals = datasets.flatMap(ds => ds.data).filter(v => v !== null && v !== undefined);
+    if (!vals.length) return {};
+    const lo = Math.min(...vals), hi = Math.max(...vals);
+    const pad = Math.max((hi - lo) * 0.5, 30);   // 50% padding, min $30
+    return { min: Math.floor(lo - pad), max: Math.ceil(hi + pad) };
 }
 
 /* Draw price labels above each point after chart renders */
@@ -382,10 +378,17 @@ let _activeSubBtn   = null;
 function _render(title, datasets) {
     document.getElementById('chart-title').textContent = title;
     if (_chart) { _chart.destroy(); _chart = null; }
+
+    const yr   = _yRange(datasets);
+    const opts = JSON.parse(JSON.stringify(baseOpts));  // deep-clone so baseOpts is not mutated
+    if (yr.min !== undefined) {
+        opts.scales.y.min = yr.min;
+        opts.scales.y.max = yr.max;
+    }
+
     _chart = new Chart(document.getElementById('main-chart'), {
-        type: 'line', data: { labels: months, datasets }, options: baseOpts
+        type: 'line', data: { labels: months, datasets }, options: opts
     });
-    _tightenY(_chart);
 }
 
 function _noData(msg) {
