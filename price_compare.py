@@ -210,7 +210,7 @@ tbody tr:hover td { filter: brightness(.94); }
 .chart-title { font-size: 12.5px; font-weight: 600; color: #223;
                margin-bottom: 8px; }
 .no-data { color: #e53; font-size: 13px; padding-top: 20px; text-align: center; }
-.chart-wrap { flex: 1; position: relative; min-height: 0; }
+.chart-wrap { height: 360px; max-height: 100%; position: relative; }
 .chart-wrap canvas { position: absolute; inset: 0; width:100%!important; height:100%!important; }
 </style>
 </head>
@@ -244,9 +244,9 @@ tbody tr:hover td { filter: brightness(.94); }
             <td>{{ r.size }}</td>
             <td>{{ r.brand }}</td>
             <td class="dim">{{ r.category }}</td>
-            <td class="r">{{ '$%d'|format(r.t_price|int)   if r.t_price   else '&mdash;' }}</td>
-            <td class="r">{{ '$%d'|format(r.bj_price|int)  if r.bj_price  else '&mdash;' }}</td>
-            <td class="r">{{ '$%d'|format(r.jax_price|int) if r.jax_price else '&mdash;' }}</td>
+            <td class="r">{{ '$%d'|format(r.t_price|int)   if r.t_price   else '—' }}</td>
+            <td class="r">{{ '$%d'|format(r.bj_price|int)  if r.bj_price  else '—' }}</td>
+            <td class="r">{{ '$%d'|format(r.jax_price|int) if r.jax_price else '—' }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -323,14 +323,14 @@ const baseOpts = {
     }
 };
 
-/* Recalculate Y-axis min/max tight around actual data after render */
+/* Recalculate Y-axis min/max with comfortable breathing room */
 function _tightenY(chart) {
     const allVals = chart.data.datasets
         .flatMap(ds => ds.data)
         .filter(v => v !== null && v !== undefined);
     if (!allVals.length) return;
     const lo = Math.min(...allVals), hi = Math.max(...allVals);
-    const pad = Math.max((hi - lo) * 0.15, 10);
+    const pad = Math.max((hi - lo) * 0.4, 25);   // 40% of range, min $25
     chart.options.scales.y.min = Math.floor(lo - pad);
     chart.options.scales.y.max = Math.ceil(hi + pad);
     chart.update('none');
