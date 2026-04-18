@@ -138,7 +138,7 @@ return (function() {
     var results = [];
     var seen = {};
 
-    var JUNK_RE = /\d+\s*day\s+satisfaction\s+guarantee|run\s*flat|EV\s+tyre|select\s+a\s+store|add\s+to\s+booking|view\s+product|qty/gi;
+    var JUNK_RE = /\d+\s*day\s+satisfaction\s+guarantee|compare\s+fuel\s+saving|\bfuel\s+saving\b|\bcompare\b|run\s*flat|EV\s+tyre|select\s+a\s+store|add\s+to\s+booking|view\s+product|qty/gi;
     var BRAND_NAMES_RE = /^(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama)\s*/i;
 
     /* ── Shared card-extraction helper ─────────────────────────────────── */
