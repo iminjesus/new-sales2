@@ -315,9 +315,26 @@ const baseOpts = {
     },
     scales:{
         x:{ ticks:{ font:{size:10} } },
-        y:{ ticks:{ font:{size:10}, callback: v => '$'+v }, grid:{ color:'#f0f0f0' } }
+        y:{
+            beginAtZero: false,
+            ticks:{ font:{size:10}, callback: v => '$'+v },
+            grid:{ color:'#f0f0f0' },
+        }
     }
 };
+
+/* Recalculate Y-axis min/max tight around actual data after render */
+function _tightenY(chart) {
+    const allVals = chart.data.datasets
+        .flatMap(ds => ds.data)
+        .filter(v => v !== null && v !== undefined);
+    if (!allVals.length) return;
+    const lo = Math.min(...allVals), hi = Math.max(...allVals);
+    const pad = Math.max((hi - lo) * 0.15, 10);
+    chart.options.scales.y.min = Math.floor(lo - pad);
+    chart.options.scales.y.max = Math.ceil(hi + pad);
+    chart.update('none');
+}
 
 /* ── state ────────────────────────────────────────────── */
 let selectedSize    = null;
@@ -335,6 +352,7 @@ function _render(title, datasets) {
     _chart = new Chart(document.getElementById('main-chart'), {
         type:'line', data:{ labels:months, datasets }, options:baseOpts
     });
+    _tightenY(_chart);
 }
 
 function _noData(msg) {
