@@ -349,9 +349,40 @@ let _activeSubBtn   = null;
 function _render(title, datasets) {
     document.getElementById('chart-title').textContent = title;
     if (_chart) { _chart.destroy(); _chart = null; }
-    _chart = new Chart(document.getElementById('main-chart'), {
-        type:'line', data:{ labels:months, datasets }, options:baseOpts
-    });
+
+    if (months.length <= 1) {
+        /* Single month → bar chart: each dataset = one bar */
+        _chart = new Chart(document.getElementById('main-chart'), {
+            type: 'bar',
+            data: {
+                labels: datasets.map(ds => ds.label),
+                datasets: [{
+                    data:            datasets.map(ds => ds.data[0] ?? null),
+                    backgroundColor: datasets.map(ds => ds.borderColor + 'BB'),
+                    borderColor:     datasets.map(ds => ds.borderColor),
+                    borderWidth: 2, borderRadius: 4,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: ctx => ' $' + ctx.raw } }
+                },
+                scales: {
+                    x: { ticks: { font: { size: 11 } } },
+                    y: { beginAtZero: false,
+                         ticks: { font: { size: 10 }, callback: v => '$' + v },
+                         grid: { color: '#f0f0f0' } }
+                }
+            }
+        });
+    } else {
+        /* Multiple months → line chart */
+        _chart = new Chart(document.getElementById('main-chart'), {
+            type: 'line', data: { labels: months, datasets }, options: baseOpts
+        });
+    }
     _tightenY(_chart);
 }
 
