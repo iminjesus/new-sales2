@@ -278,8 +278,12 @@ def best_tempe(size, abbr, t_lk):
 
 def _best_competitor(size, abbr, lk, t_desc):
     cands = lk.get((size, abbr), [])
-    if not cands or not t_desc:
+    if not cands:
         return None, None, None, "", ""
+    if not t_desc:
+        # No Tempe reference — return cheapest available product
+        best = sorted(cands, key=lambda x: (x[1] is None, x[1] or 0))[0]
+        return best
     s = _LEAD_RE.sub("", t_desc.strip())
     for raw_w in s.split():
         w = re.sub(r'[().,+]', '', raw_w)
