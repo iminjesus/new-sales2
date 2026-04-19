@@ -28,9 +28,31 @@ app = Flask(__name__)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+_MONTH_ABBR = {
+    'JAN':'01','JANUARY':'01','FEB':'02','FEBRUARY':'02','MAR':'03','MARCH':'03',
+    'APR':'04','APRIL':'04','MAY':'05','JUN':'06','JUNE':'06',
+    'JUL':'07','JULY':'07','AUG':'08','AUGUST':'08','SEP':'09','SEPTEMBER':'09',
+    'OCT':'10','OCTOBER':'10','NOV':'11','NOVEMBER':'11','DEC':'12','DECEMBER':'12',
+}
+
 def _month_key(fp):
-    m = re.search(r'(\d{4})(\d{2})\d{2}', os.path.basename(fp))
-    return f"{m.group(1)}{m.group(2)}" if m else "000000"
+    name = os.path.basename(fp).upper()
+    # Format 1: YYYYMMDD anywhere in name  (e.g. Tempe_20260401_1439.csv)
+    m = re.search(r'(\d{4})(\d{2})\d{2}', name)
+    if m:
+        return f"{m.group(1)}{m.group(2)}"
+    # Format 2: MonthName_YYYY  (e.g. Tempe_Apr_2026.csv, BobJane_March_2026.csv)
+    yr = re.search(r'(\d{4})', name)
+    if yr:
+        year = yr.group(1)
+        # find longest matching month name
+        best_len, best_num = 0, None
+        for key, num in _MONTH_ABBR.items():
+            if key in name and len(key) > best_len:
+                best_len, best_num = len(key), num
+        if best_num:
+            return f"{year}{best_num}"
+    return "000000"
 
 def _month_label(yyyymm):
     try:
