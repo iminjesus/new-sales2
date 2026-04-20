@@ -485,6 +485,10 @@ def map_page():
 def stock_page():
     return app.send_static_file("stock.html")
 
+# ── Price comparison dashboard ─────────────────────────────────────────────────
+from price_compare import price_dashboard
+app.add_url_rule('/price', 'price_dashboard', price_dashboard)
+
 # plant 좌표 매핑 (너가 줄 값으로 업데이트)
 PLANT_GEO = {
     "42R0": {"lat": -27.8688, "lon": 153.2093},
