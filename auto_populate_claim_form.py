@@ -142,20 +142,19 @@ def detect_value_columns(ws):
 # 폼 채우기 (템플릿 기반)
 # ─────────────────────────────────────────────
 def safe_write(ws, row: int, col: int, value):
-    """
-    병합 셀이라도 안전하게 값을 기입.
-    MergedCell인 경우 해당 병합 범위의 최상단 왼쪽(master) 셀에 씁니다.
-    """
+    """병합 셀을 포함해 안전하게 값 기입. 숫자형 코드는 텍스트로 저장."""
     from openpyxl.cell.cell import MergedCell
     cell = ws.cell(row=row, column=col)
     if isinstance(cell, MergedCell):
-        # 이 셀이 속한 병합 범위 찾기
         for merged in ws.merged_cells.ranges:
             if (merged.min_row <= row <= merged.max_row and
                     merged.min_col <= col <= merged.max_col):
-                ws.cell(row=merged.min_row, column=merged.min_col, value=value)
+                master = ws.cell(row=merged.min_row, column=merged.min_col)
+                master.value = str(value)
+                master.number_format = "@"   # 숫자 → 텍스트 경고 제거
                 return
-    cell.value = value
+    cell.value = str(value)
+    cell.number_format = "@"
 
 
 def fill_form(customer: dict, output_path: str):
@@ -165,10 +164,10 @@ def fill_form(customer: dict, output_path: str):
 
     mapping = detect_value_columns(ws)
 
-    VALUE_COL = 6  # 값은 항상 F 열에 기입
+    VALUE_COL = 5  # 값은 E 열에 기입
 
-    def write_col_c(key, fallback_row, value, row_offset=0):
-        """레이블 행의 F열(col=6)에 값 기입. 탐지 실패 시 fallback 행 사용."""
+    def write_e(key, fallback_row, value, row_offset=0):
+        """레이블 행의 E열(col=5)에 값 기입. 탐지 실패 시 fallback 행 사용."""
         if key in mapping:
             r, _ = mapping[key]
             safe_write(ws, r + row_offset, VALUE_COL, value)
@@ -176,13 +175,13 @@ def fill_form(customer: dict, output_path: str):
             safe_write(ws, fallback_row + row_offset, VALUE_COL, value)
 
     # ── Store Name ← ship_to_name ──────────────────
-    write_col_c("store_name", 5, customer["ship_to_name"])
+    write_e("store_name", 5, customer["ship_to_name"])
 
     # ── Sold-to ← 코드만 ────────────────────────────
-    write_col_c("sold_to", 8, customer["sold_to"])
+    write_e("sold_to", 8, customer["sold_to"])
 
     # ── Ship-to ← 코드만 ────────────────────────────
-    write_col_c("ship_to", 11, customer["ship_to"])
+    write_e("ship_to", 11, customer["ship_to"])
 
     wb.save(output_path)
     print(f"  ✔ {os.path.basename(output_path)}")
