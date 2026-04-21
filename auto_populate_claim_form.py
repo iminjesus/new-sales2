@@ -143,20 +143,26 @@ def detect_value_columns(ws):
 # ─────────────────────────────────────────────
 # 폼 채우기 (템플릿 기반)
 # ─────────────────────────────────────────────
+def _coerce(value):
+    """숫자처럼 생긴 값은 int로 변환 (오류 삼각형 방지). 텍스트는 그대로."""
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return str(value)
+
+
 def safe_write(ws, row: int, col: int, value):
-    """병합 셀을 포함해 안전하게 값 기입. 오류 표시 없이 텍스트로 저장."""
+    """병합 셀을 포함해 안전하게 값 기입."""
     from openpyxl.cell.cell import MergedCell
+    v = _coerce(value)
     cell = ws.cell(row=row, column=col)
     if isinstance(cell, MergedCell):
         for merged in ws.merged_cells.ranges:
             if (merged.min_row <= row <= merged.max_row and
                     merged.min_col <= col <= merged.max_col):
-                master = ws.cell(row=merged.min_row, column=merged.min_col)
-                master.value = str(value)
-                master.quotePrefix = True   # 오류 삼각형 완전 제거
+                ws.cell(row=merged.min_row, column=merged.min_col).value = v
                 return
-    cell.value = str(value)
-    cell.quotePrefix = True
+    cell.value = v
 
 
 def fill_form(customer: dict, output_path: str):
