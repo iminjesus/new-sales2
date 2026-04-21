@@ -53,6 +53,12 @@ Please find attached the Claim Report Form for your review.
 Best regards,
 """
 
+# 보내는 사람 설정
+# - 빈 문자열("")이면 Outlook 기본 계정으로 발송
+# - 특정 계정으로 보내려면 이메일 주소 입력 (Outlook에 등록된 계정이어야 함)
+#   예) SENDER_EMAIL = "claims@hankook.com"
+SENDER_EMAIL = ""
+
 # ─────────────────────────────────────────────
 # CSV 로드
 # ─────────────────────────────────────────────
@@ -125,6 +131,18 @@ def send_via_outlook(to_email: str, store_name: str, attachment_path: str, do_se
 
     outlook = win32com.client.Dispatch("Outlook.Application")
     mail = outlook.CreateItem(0)  # 0 = olMailItem
+
+    # 보내는 계정 설정
+    if SENDER_EMAIL:
+        accounts = outlook.Session.Accounts
+        for account in accounts:
+            if account.SmtpAddress.lower() == SENDER_EMAIL.lower():
+                mail._oleobj_.Invoke(
+                    *(64209, 0, 8, 0, account)  # SendUsingAccount
+                )
+                break
+        else:
+            print(f"[경고] '{SENDER_EMAIL}' 계정을 Outlook에서 찾을 수 없어 기본 계정으로 발송합니다.")
 
     mail.To      = to_email
     mail.Subject = EMAIL_SUBJECT
