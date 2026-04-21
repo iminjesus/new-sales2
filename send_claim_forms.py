@@ -68,12 +68,31 @@ def load_customers() -> pd.DataFrame:
 
     df.columns = df.columns.str.strip()
 
-    # 컬럼 정규화
-    col_map = {col.lower().replace(" ", "_").replace("-", "_"): col for col in df.columns}
+    # 명시적 별칭으로 컬럼 정규화 ('name' → ship_to_name 포함)
+    ALIASES = {
+        "sold_to":      ["sold-to", "sold_to"],
+        "ship_to":      ["ship-to", "ship_to"],
+        "ship_to_name": ["ship-to name", "ship_to_name", "name"],
+        "email":        ["email"],
+    }
+    used_cols: set = set()
     rename = {}
-    for target in ["sold_to", "ship_to", "ship_to_name", "email"]:
-        if target not in df.columns and target in col_map:
-            rename[col_map[target]] = target
+    for target, aliases in ALIASES.items():
+        if target in df.columns:
+            used_cols.add(target)
+            continue
+        for alias in aliases:
+            for orig in df.columns:
+                if orig in used_cols:
+                    continue
+                if orig.strip().lower() == alias.lower():
+                    if orig != target:
+                        rename[orig] = target
+                    used_cols.add(orig)
+                    break
+            else:
+                continue
+            break
     if rename:
         df = df.rename(columns=rename)
 

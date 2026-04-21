@@ -75,25 +75,35 @@ def load_customer_master() -> pd.DataFrame:
         col_map[key] = col
 
     # 필요한 컬럼 자동 탐지 (이미 사용한 컬럼 재사용 방지)
+    # 명시적 별칭: CSV 컬럼명 → 표준 컬럼명
+    ALIASES = {
+        "sold_to":      ["sold-to", "sold_to"],
+        "sold_to_name": ["sold-to name", "sold_to_name", "sold to name"],
+        "ship_to":      ["ship-to", "ship_to"],
+        "ship_to_name": ["ship-to name", "ship_to_name", "name"],  # 'name' 명시
+        "address":      ["address"],
+        "email":        ["email"],
+    }
+
     used_cols: set = set()
     rename = {}
-    for target in ["sold_to", "sold_to_name", "ship_to", "ship_to_name", "address"]:
+    for target, aliases in ALIASES.items():
         if target in df.columns:
             used_cols.add(target)
             continue
-        # 정확한 키 매칭 우선
-        if target in col_map and col_map[target] not in used_cols:
-            rename[col_map[target]] = target
-            used_cols.add(col_map[target])
-            continue
-        # 부분 매칭 (이미 사용한 컬럼 제외)
-        for key, orig in col_map.items():
-            if orig in used_cols:
+        for alias in aliases:
+            # df 컬럼 중 대소문자 무관하게 일치하는 것 찾기
+            for orig in df.columns:
+                if orig in used_cols:
+                    continue
+                if orig.strip().lower() == alias.lower():
+                    if orig != target:
+                        rename[orig] = target
+                    used_cols.add(orig)
+                    break
+            else:
                 continue
-            if target in key or key in target:
-                rename[orig] = target
-                used_cols.add(orig)
-                break
+            break
 
     if rename:
         print(f"컬럼 이름 변환: {rename}")
