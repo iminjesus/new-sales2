@@ -39,7 +39,9 @@ if not os.path.exists(BASE_DIR):
     RAWDATA_DIR = os.path.join(BASE_DIR, "rawdata")
     TEMPLATE_PATH = os.path.join(RAWDATA_DIR, "Claim report form_v2(1).xlsx")
     UNLOCK_DIR = os.path.join(RAWDATA_DIR, "unlock")
-    OUTPUT_DIR = os.path.join(RAWDATA_DIR, "output")
+
+# output 폴더는 항상 스크립트 위치 기준
+OUTPUT_DIR = os.path.join(_SCRIPT_DIR, "output")
 
 # customer_2603.csv 우선 (unlock폴더 → 스크립트 루트 순), 없으면 customer.csv
 CUSTOMER_CSV = os.path.join(UNLOCK_DIR, "customer_2603.csv")
@@ -142,7 +144,7 @@ def detect_value_columns(ws):
 # 폼 채우기 (템플릿 기반)
 # ─────────────────────────────────────────────
 def safe_write(ws, row: int, col: int, value):
-    """병합 셀을 포함해 안전하게 값 기입. 숫자형 코드는 텍스트로 저장."""
+    """병합 셀을 포함해 안전하게 값 기입. 오류 표시 없이 텍스트로 저장."""
     from openpyxl.cell.cell import MergedCell
     cell = ws.cell(row=row, column=col)
     if isinstance(cell, MergedCell):
@@ -151,10 +153,10 @@ def safe_write(ws, row: int, col: int, value):
                     merged.min_col <= col <= merged.max_col):
                 master = ws.cell(row=merged.min_row, column=merged.min_col)
                 master.value = str(value)
-                master.number_format = "@"   # 숫자 → 텍스트 경고 제거
+                master.quotePrefix = True   # 오류 삼각형 완전 제거
                 return
     cell.value = str(value)
-    cell.number_format = "@"
+    cell.quotePrefix = True
 
 
 def fill_form(customer: dict, output_path: str):
@@ -164,10 +166,10 @@ def fill_form(customer: dict, output_path: str):
 
     mapping = detect_value_columns(ws)
 
-    VALUE_COL = 5  # 값은 E 열에 기입
+    VALUE_COL = 6  # 값은 F 열에 기입
 
-    def write_e(key, fallback_row, value, row_offset=0):
-        """레이블 행의 E열(col=5)에 값 기입. 탐지 실패 시 fallback 행 사용."""
+    def write_f(key, fallback_row, value, row_offset=0):
+        """레이블 행의 F열(col=6)에 값 기입. 탐지 실패 시 fallback 행 사용."""
         if key in mapping:
             r, _ = mapping[key]
             safe_write(ws, r + row_offset, VALUE_COL, value)
@@ -175,13 +177,13 @@ def fill_form(customer: dict, output_path: str):
             safe_write(ws, fallback_row + row_offset, VALUE_COL, value)
 
     # ── Store Name ← ship_to_name ──────────────────
-    write_e("store_name", 5, customer["ship_to_name"])
+    write_f("store_name", 5, customer["ship_to_name"])
 
     # ── Sold-to ← 코드만 ────────────────────────────
-    write_e("sold_to", 8, customer["sold_to"])
+    write_f("sold_to", 8, customer["sold_to"])
 
     # ── Ship-to ← 코드만 ────────────────────────────
-    write_e("ship_to", 11, customer["ship_to"])
+    write_f("ship_to", 11, customer["ship_to"])
 
     wb.save(output_path)
     print(f"  ✔ {os.path.basename(output_path)}")
