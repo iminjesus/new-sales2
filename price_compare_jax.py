@@ -144,9 +144,16 @@ SIZE_CATEGORY = {
 }
 
 BRAND_COLOURS = {
-    "MC":"C8102E","BS":"E31837","CT":"FFA500","GY":"003087",
-    "KH":"00539B","FK":"E8001A","HK":"FF6600","LF":"FF6600",
-    "DL":"E4002B","YO":"003DA5",
+    "MC":"E53935",   # vivid red
+    "BS":"1976D2",   # strong blue
+    "CT":"F57C00",   # orange
+    "GY":"303F9F",   # indigo
+    "KH":"00897B",   # teal
+    "FK":"C2185B",   # deep pink
+    "HK":"FF6600",   # bright orange  (solid line)
+    "LF":"2E7D32",   # forest green   (solid line)
+    "DL":"6D4C41",   # brown
+    "YO":"7B1FA2",   # purple
 }
 ROW_FILLS = {
     "MC":"FADADD","BS":"FFE0E0","CT":"FFF3CD","GY":"D6EAF8",
