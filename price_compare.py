@@ -173,9 +173,15 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
        height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
 .hdr { background: #1F4E79; color: #fff; padding: 11px 18px; flex-shrink: 0;
-       display: flex; align-items: baseline; gap: 14px; }
+       display: flex; align-items: center; gap: 14px; }
 .hdr h1 { font-size: 16px; }
 .hdr span { font-size: 11px; opacity: .65; }
+.hdr .nav { margin-left: auto; display: flex; gap: 6px; }
+.hdr .nav a { font-size: 12px; padding: 4px 11px; border-radius: 4px; cursor: pointer;
+              border: 1px solid rgba(255,255,255,0.5); color: #fff; text-decoration: none;
+              background: transparent; }
+.hdr .nav a:hover { background: rgba(255,255,255,0.15); }
+.hdr .nav a.active { background: #fff; color: #1F4E79; font-weight: 600; }
 
 .body { display: flex; flex: 1; overflow: hidden; }
 
@@ -242,6 +248,13 @@ tbody tr:hover td { filter: brightness(.94); }
   <h1>Tyre Price Comparison Dashboard</h1>
   <span>Tempe &nbsp;|&nbsp; Bob Jane &nbsp;|&nbsp; JAX &nbsp;&middot;&nbsp;
         {{ month_count }} month{{ 's' if month_count != 1 else '' }} of data</span>
+  <nav class="nav">
+    <a href="/">Graph View</a>
+    <a href="/map">Map View</a>
+    <a href="/stock">Stock</a>
+    <a href="/rebate">Rebate</a>
+    <a href="/price" class="active">Price</a>
+  </nav>
 </div>
 
 <div class="body">
