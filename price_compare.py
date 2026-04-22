@@ -465,7 +465,7 @@ function _renderStore() {
         if (prices && !prices.every(p => p === null))
             arr.push({ label:SL[s], data:prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
-                       tension:.3, pointRadius:5, fill:false });
+                       spanGaps:true, tension:.3, pointRadius:5, fill:false });
         return arr;
     }, []);
     if (!ds.length) { _noData((BRANDS[abbr]||abbr) + ' — ' + sizeLabel + ': no data'); return; }
@@ -492,7 +492,7 @@ function _renderBrand() {
                   borderDash: solid ? [] : [6,4],
                   borderWidth: solid ? 3 : 1.5,
                   pointRadius: solid ? 7 : 5,
-                  tension:.3, fill:false });
+                  spanGaps:true, tension:.3, fill:false });
     });
     if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
     _render(SL[store] + ' \u2014 ' + sizeLabel + ' \u2014 Brand Comparison', ds);
