@@ -198,13 +198,18 @@ return (function() {
             candidates.push(all[i]);
         }
     }
-    // Keep only elements whose parent is NOT also a candidate (i.e. leaf cards)
-    var candSet = new Set(candidates);
+    // Keep only the smallest elements containing both size+price (true leaf cards):
+    // an element is a leaf if it doesn't contain any other candidate.
     for (var ci = 0; ci < candidates.length; ci++) {
         var el = candidates[ci];
-        if (!candSet.has(el.parentElement)) {
-            addCard(el);
+        var isLeaf = true;
+        for (var cj = 0; cj < candidates.length; cj++) {
+            if (cj !== ci && el.contains(candidates[cj])) {
+                isLeaf = false;
+                break;
+            }
         }
+        if (isLeaf) addCard(el);
     }
     if (results.length >= 3) return results;
 
