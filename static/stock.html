@@ -13,8 +13,11 @@
     crossorigin=""
   />
 
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+
   <style>
-    #stockMap{ height: 1200px; min-height: 760px; }
+    #stockMap{ height: 760px; min-height: 500px; }
 
     .status{
       position:absolute;left:12px;bottom:12px;z-index:800;
@@ -81,16 +84,27 @@
 
   <div id="errbar" class="errbar" hidden></div>
 
-  <div style="position:relative; margin-top:4px;">
-    <div id="stockMap"></div>
+  <div class="chart-row" style="margin-top:4px;">
+    <div class="box" style="flex:2; position:relative;">
+      <div id="stockMap"></div>
+      <div class="status">
+        <div id="statusLine">Ready.</div>
+        <div class="legend">
+          <div>Same filters applied to all layers.</div>
+          <div class="row"><span class="swatch stock"></span><span>Stock (Plant)</span></div>
+          <div class="row"><span class="swatch orders"></span><span>Orders (Origin)</span></div>
+          <div class="row"><span class="swatch incoming"></span><span>Incoming (in transit)</span></div>
+        </div>
+      </div>
+    </div>
 
-    <div class="status">
-      <div id="statusLine">Ready.</div>
-      <div class="legend">
-        <div>Same filters applied to all layers.</div>
-        <div class="row"><span class="swatch stock"></span><span>Stock (Plant)</span></div>
-        <div class="row"><span class="swatch orders"></span><span>Orders (Origin)</span></div>
-        <div class="row"><span class="swatch incoming"></span><span>Incoming (in transit)</span></div>
+    <div id="stockSidePanel" class="box" style="flex:1;">
+      <h3 id="salesTitle">Sales Summary</h3>
+      <div class="chartPane">
+        <canvas id="salesMonthlyChart"></canvas>
+      </div>
+      <div class="chartPane">
+        <canvas id="salesYearlyChart"></canvas>
       </div>
     </div>
   </div>
