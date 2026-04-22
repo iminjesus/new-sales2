@@ -150,25 +150,41 @@ return (function() {
             if (pm2) name = pm2[1].trim();
         }
 
-        // Price
-        var price = '';
-        var wasPosM = text.match(/was\s+\$[\d,.]+/i);
-        var searchIn = wasPosM ? text.substring(wasPosM.index + wasPosM[0].length) : text;
-        var buyPos = searchIn.toUpperCase().indexOf('OR BUY');
-        if (buyPos > 0) searchIn = searchIn.substring(0, buyPos);
-        var pm = searchIn.match(/\$([\d,]+(?:\.\d+)?)/);
-        if (pm) price = pm[1].replace(/,/g,'');
+        // disc_price: "$X EA, WHEN YOU BUY 4" banner at the top of some cards
+        var discPrice = '';
+        var b4m = text.match(/\$([\d,]+(?:\.\d+)?)\s*EA[,.]?\s*WHEN\s+YOU\s+BUY\s+4/i);
+        if (b4m) discPrice = b4m[1].replace(/,/g,'');
 
-        // SAVE_TEXT: detect SALE badge on the card
+        // Price: regular single-tyre price — appears right after "IN STOCK" text
+        var price = '';
+        var stockIdx = text.search(/\d+\+?\s*in\s*stock/i);
+        if (stockIdx >= 0) {
+            var pm = text.substring(stockIdx).match(/\$([\d,]+(?:\.\d+)?)/);
+            if (pm) price = pm[1].replace(/,/g,'');
+        }
+        // Fallback: first $ that is not the buy-4 disc price
+        if (!price) {
+            var allPm = text.match(/\$([\d,]+(?:\.\d+)?)/g) || [];
+            for (var ai = 0; ai < allPm.length; ai++) {
+                var v = allPm[ai].replace('$','').replace(/,/g,'');
+                if (!discPrice || v !== discPrice) { price = v; break; }
+            }
+        }
+
+        // SAVE_TEXT: "SALE" badge overlaid on the card image
         var saveText = '';
-        var saleBadge = card.querySelector('[class*="sale"],[class*="Sale"],[class*="badge"],[class*="tag"]');
+        var saleBadge = card.querySelector('[class*="sale"],[class*="Sale"]');
         if (saleBadge) {
             var bt = (saleBadge.textContent || '').trim();
-            if (bt.length > 0 && bt.length < 30 && /sale|save|\d+%/i.test(bt)) saveText = bt;
+            if (/^sale$/i.test(bt)) saveText = bt.toUpperCase();
         }
-        if (!saveText && /^\s*SALE\b/i.test(text)) saveText = 'SALE';
+        // Text fallback: card starts with "SALE" before the brand name
+        if (!saveText) {
+            var saleM = text.match(/^(SALE)\s+[A-Z]/i);
+            if (saleM) saveText = 'SALE';
+        }
 
-        return { name: name, size: size, price: price, saveText: saveText };
+        return { name: name, size: size, price: price, discPrice: discPrice, saveText: saveText };
     }
 
     function addCard(card) {
@@ -270,22 +286,25 @@ def extract_page(driver, run_diag=False):
 def process_raw(raw_items, brand_name):
     rows = []
     for item in raw_items:
-        size      = (item.get("size")     or "").strip().upper()
-        name      = (item.get("name")     or "").strip()
-        price     = (item.get("price")    or "").strip()
-        save_text = (item.get("saveText") or "").strip()
+        size       = (item.get("size")      or "").strip().upper()
+        name       = (item.get("name")      or "").strip()
+        price      = (item.get("price")     or "").strip()
+        disc_price = (item.get("discPrice") or "").strip()
+        save_text  = (item.get("saveText")  or "").strip()
 
         if not size or not price:
             continue
 
         price_fmt = f"{float(price):.2f}" if price else ""
+        disc_fmt  = f"{float(disc_price):.2f}" if disc_price else ""
 
         rows.append({
-            "size":      size,
-            "brand":     brand_name,
-            "desc":      name,
-            "price":     price_fmt,
-            "save_text": save_text,
+            "size":       size,
+            "brand":      brand_name,
+            "desc":       name,
+            "price":      price_fmt,
+            "disc_price": disc_fmt,
+            "save_text":  save_text,
         })
     return rows
 
@@ -294,8 +313,10 @@ def write_rows(writer, rows):
     for r in rows:
         # SIZE | brand | DESCRIPTION | price | disc_price | PROMO | SAVE_TEXT
         writer.writerow([r["size"], r["brand"], r["desc"],
-                         r["price"], "", "", r["save_text"]])
+                         r["price"], r["disc_price"], "", r["save_text"]])
         line = f"  {r['brand']:<14} | {r['size']:<13} | {r['desc'][:40]:<40} | ${r['price']}"
+        if r["disc_price"]:
+            line += f"  (buy4: ${r['disc_price']})"
         if r["save_text"]:
             line += f"  [{r['save_text']}]"
         print(line)
