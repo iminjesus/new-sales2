@@ -150,19 +150,31 @@ return (function() {
             if (pm2) name = pm2[1].trim();
         }
 
-        // disc_price: "$X EA, WHEN YOU BUY 4" banner at the top of some cards
+        // Banner elements (SALE badge, buy-4 price) may be siblings of the leaf card
+        // inside a card wrapper — check the parent if it looks like a single-card wrapper.
+        var b4Pattern = /\$([\d,]+(?:\.\d+)?)\s*EA[,.]?\s*WHEN\s+YOU\s+BUY\s+(?:4|FOUR)/i;
+        var wrapEl = card;
+        if (card.parentElement) {
+            var pt = (card.parentElement.textContent || '').replace(/\s+/g,' ');
+            // Only go up if parent contains at most ~3 size strings (= single-card wrapper)
+            if ((pt.match(/\d{3}\/\d{2}[A-Za-z]\d{2}/g) || []).length <= 3) {
+                wrapEl = card.parentElement;
+            }
+        }
+        var wrapText = (wrapEl.textContent || '').replace(/\s+/g,' ').trim();
+
+        // disc_price: "$X EA, WHEN YOU BUY 4"
         var discPrice = '';
-        var b4m = text.match(/\$([\d,]+(?:\.\d+)?)\s*EA[,.]?\s*WHEN\s+YOU\s+BUY\s+4/i);
+        var b4m = wrapText.match(b4Pattern);
         if (b4m) discPrice = b4m[1].replace(/,/g,'');
 
-        // Price: regular single-tyre price — appears right after "IN STOCK" text
+        // Price: regular single-tyre price — after "IN STOCK" in the card text
         var price = '';
         var stockIdx = text.search(/\d+\+?\s*in\s*stock/i);
         if (stockIdx >= 0) {
             var pm = text.substring(stockIdx).match(/\$([\d,]+(?:\.\d+)?)/);
             if (pm) price = pm[1].replace(/,/g,'');
         }
-        // Fallback: first $ that is not the buy-4 disc price
         if (!price) {
             var allPm = text.match(/\$([\d,]+(?:\.\d+)?)/g) || [];
             for (var ai = 0; ai < allPm.length; ai++) {
@@ -171,18 +183,18 @@ return (function() {
             }
         }
 
-        // SAVE_TEXT: "SALE" badge overlaid on the card image
+        // SAVE_TEXT: "SALE" badge — check card wrapper and card itself
         var saveText = '';
-        var saleBadge = card.querySelector('[class*="sale"],[class*="Sale"]');
+        var saleBadge = wrapEl.querySelector('[class*="sale"],[class*="Sale"],[class*="ribbon"]');
         if (saleBadge) {
             var bt = (saleBadge.textContent || '').trim();
-            if (/^sale$/i.test(bt)) saveText = bt.toUpperCase();
+            if (bt.length < 25 && /sale/i.test(bt)) {
+                saveText = bt.toUpperCase();
+            } else if (!bt && /sale/i.test(saleBadge.className || '')) {
+                saveText = 'SALE';
+            }
         }
-        // Text fallback: card starts with "SALE" before the brand name
-        if (!saveText) {
-            var saleM = text.match(/^(SALE)\s+[A-Z]/i);
-            if (saleM) saveText = 'SALE';
-        }
+        if (!saveText && /\bSALE\b/i.test(wrapText.substring(0, 50))) saveText = 'SALE';
 
         return { name: name, size: size, price: price, discPrice: discPrice, saveText: saveText };
     }
