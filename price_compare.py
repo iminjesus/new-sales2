@@ -455,10 +455,14 @@ function _renderBrand() {
         const prices = sizeMap[abbr][store];
         if (!prices || prices.every(p => p === null)) return;
         const c = '#' + (BCOLORS[abbr] || PALETTE[ci%PALETTE.length].slice(1));
+        const solid = (abbr === 'HK' || abbr === 'LF');
         ci++;
         ds.push({ label:abbr + ' ' + (BRANDS[abbr]||''), data:prices,
                   borderColor:c, backgroundColor:c+'33',
-                  tension:.3, pointRadius:5, fill:false });
+                  borderDash: solid ? [] : [6,4],
+                  borderWidth: solid ? 3 : 1.5,
+                  pointRadius: solid ? 7 : 5,
+                  tension:.3, fill:false });
     });
     if (!ds.length) { _noData(SL[store] + ' — ' + selectedSize + ': no data'); return; }
     _render(SL[store] + ' \u2014 ' + selectedSize + ' \u2014 Brand Comparison', ds);
