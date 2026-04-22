@@ -418,6 +418,19 @@ function _noData(msg) {
     if (_chart) { _chart.destroy(); _chart = null; }
 }
 
+/* ── ALL sizes: average across every size ──────────────── */
+function _avgAllSizes(abbr, store) {
+    const nM = months.length;
+    const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
+    Object.values(D.size_data).forEach(function(sizeAbbrs) {
+        const prices = ((sizeAbbrs[abbr] || {})[store]) || [];
+        prices.forEach(function(p, i) {
+            if (p !== null && p !== undefined) { sums[i] += p; counts[i]++; }
+        });
+    });
+    return sums.map(function(s, i) { return counts[i] > 0 ? Math.round(s / counts[i]) : null; });
+}
+
 function _tryRender() {
     if (!selectedSize || !selectedMode || !selectedSubKey) return;
     if (selectedMode === 'store') _renderStore();
@@ -427,32 +440,36 @@ function _tryRender() {
 /* ── By Store: selected brand → 3 store lines ───────── */
 function _renderStore() {
     const abbr = selectedSubKey;
-    const bsd  = (D.brand_size_data[abbr] || {})[selectedSize];
-    if (!bsd) {
-        _noData((BRANDS[abbr]||abbr) + ' — ' + selectedSize + ': no data');
-        return;
-    }
+    const sizeLabel = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
     const ds = ['tempe','bj','jax'].reduce((arr, s) => {
-        const prices = bsd[s];
+        let prices;
+        if (selectedSize === 'ALL') {
+            prices = _avgAllSizes(abbr, s);
+        } else {
+            const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
+            prices = bsd ? bsd[s] : null;
+        }
         if (prices && !prices.every(p => p === null))
             arr.push({ label:SL[s], data:prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
                        tension:.3, pointRadius:5, fill:false });
         return arr;
     }, []);
-    _render((BRANDS[abbr]||abbr) + ' \u2014 ' + selectedSize
+    if (!ds.length) { _noData((BRANDS[abbr]||abbr) + ' — ' + sizeLabel + ': no data'); return; }
+    _render((BRANDS[abbr]||abbr) + ' \u2014 ' + sizeLabel
             + ' \u2014 Tempe vs Bob Jane vs JAX', ds);
 }
 
 /* ── By Brand: selected store → brand lines ─────────── */
 function _renderBrand() {
     const store = selectedSubKey;
-    const sizeMap = D.size_data[selectedSize];
-    if (!sizeMap) { _noData('No data for ' + selectedSize); return; }
+    const sizeLabel = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
     const ds = [];
     let ci = 0;
-    Object.keys(sizeMap).forEach(function(abbr) {
-        const prices = sizeMap[abbr][store];
+    Object.keys(BRANDS).forEach(function(abbr) {
+        const prices = selectedSize === 'ALL'
+            ? _avgAllSizes(abbr, store)
+            : ((D.size_data[selectedSize] || {})[abbr] || {})[store];
         if (!prices || prices.every(p => p === null)) return;
         const c = '#' + (BCOLORS[abbr] || PALETTE[ci%PALETTE.length].slice(1));
         const solid = (abbr === 'HK' || abbr === 'LF');
@@ -464,8 +481,8 @@ function _renderBrand() {
                   pointRadius: solid ? 7 : 5,
                   tension:.3, fill:false });
     });
-    if (!ds.length) { _noData(SL[store] + ' — ' + selectedSize + ': no data'); return; }
-    _render(SL[store] + ' \u2014 ' + selectedSize + ' \u2014 Brand Comparison', ds);
+    if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
+    _render(SL[store] + ' \u2014 ' + sizeLabel + ' \u2014 Brand Comparison', ds);
 }
 
 /* ── Size buttons ─────────────────────────────────────── */
@@ -537,6 +554,13 @@ function onModeBrand(btn) {
 /* ── init ─────────────────────────────────────────────── */
 (function init() {
     const szContainer = document.getElementById('size-btns');
+    // ALL button first
+    const allBtn = document.createElement('button');
+    allBtn.className = 'btn';
+    allBtn.textContent = 'ALL';
+    allBtn.style.fontWeight = '700';
+    allBtn.onclick = function() { _setSize('ALL', allBtn); };
+    szContainer.appendChild(allBtn);
     SIZES.forEach(function(size) {
         const b = document.createElement('button');
         b.className = 'btn';
@@ -544,8 +568,8 @@ function onModeBrand(btn) {
         b.onclick = function() { _setSize(size, b); };
         szContainer.appendChild(b);
     });
-    // auto-select first size
-    if (szContainer.firstChild) szContainer.firstChild.click();
+    // default: ALL
+    allBtn.click();
     // auto-select By Store mode
     document.getElementById('btn-store').click();
 }());
