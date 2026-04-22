@@ -2293,3 +2293,23 @@ window.addEventListener("load", async () => {
   });
 });
 
+
+/* ── Price nav button injection ── */
+(function() {
+    function injectPriceBtn() {
+        const nav = document.getElementById('viewSwitch');
+        if (!nav) return;
+        if (nav.querySelector('[data-price-nav]')) return; // already added
+        const btn = document.createElement('button');
+        btn.className = 'btn' + (window.location.pathname === '/price' ? ' active' : '');
+        btn.setAttribute('data-price-nav', '1');
+        btn.textContent = 'Price';
+        btn.onclick = function() { window.location.href = '/price'; };
+        nav.appendChild(btn);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', injectPriceBtn);
+    } else {
+        injectPriceBtn();
+    }
+})();
