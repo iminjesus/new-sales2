@@ -337,7 +337,7 @@ const baseOpts = {
         tooltip:{ callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
     },
     scales:{
-        x:{ ticks:{ font:{size:10} } },
+        x:{ offset:true, ticks:{ font:{size:10}, padding:8 } },
         y:{
             beginAtZero: false,
             ticks:{ font:{size:10}, callback: v => '$'+v },
