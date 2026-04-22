@@ -232,7 +232,7 @@ tbody tr:hover td { filter: brightness(.94); }
 .chart-title { font-size: 12.5px; font-weight: 600; color: #223;
                margin-bottom: 8px; }
 .no-data { color: #e53; font-size: 13px; padding-top: 20px; text-align: center; }
-.chart-wrap { height: 360px; max-height: 100%; position: relative; }
+.chart-wrap { height: 520px; max-height: 100%; position: relative; }
 .chart-wrap canvas { position: absolute; inset: 0; width:100%!important; height:100%!important; }
 </style>
 </head>
@@ -360,7 +360,7 @@ function _yRange(datasets) {
     const vals = datasets.flatMap(ds => ds.data).filter(v => v !== null && v !== undefined);
     if (!vals.length) return {};
     const lo = Math.min(...vals), hi = Math.max(...vals);
-    const pad = Math.max((hi - lo) * 0.5, 30);   // 50% padding, min $30
+    const pad = Math.max((hi - lo) * 0.2, 20);   // 20% padding, min $20
     return { min: Math.floor(lo - pad), max: Math.ceil(hi + pad) };
 }
 
