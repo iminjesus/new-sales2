@@ -1,11 +1,102 @@
 body { font-family: Arial, sans-serif; margin:16px; background:#f4f4f4; }
 h1, h2 { margin: 6px 0; color:#333; }
 
-.controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:10px 0 14px; }
-.btn { padding:2px 4px; border:1px solid #ccc; background:#fafafa; border-radius:6px; cursor:pointer; }
-.btn.active { background:#0a66ff; color:#fff; border-color:#0a66ff; }
-select { padding:6px 10px; }
-label { font-size:12px; color:#666; margin-right:4px;}
+/* ─── Filter bar cards ─────────────────────────────────────── */
+.filter-bar {
+  background: #fff;
+  border-radius: 10px;
+  padding: 8px 14px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+/* vertical divider between filter groups inside the bar */
+.filter-sep {
+  width: 1px;
+  height: 22px;
+  background: #e5e7eb;
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+.controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:10px 0 6px; }
+
+/* ─── Buttons ──────────────────────────────────────────────── */
+.btn {
+  padding: 5px 11px;
+  border: 1.5px solid #d1d5db;
+  background: #f9fafb;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  line-height: 1.4;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s, transform 0.08s;
+  white-space: nowrap;
+  user-select: none;
+}
+.btn:hover:not(.active):not(:disabled) {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.94);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.12);
+}
+.btn.active:active:not(:disabled) {
+  transform: scale(0.94);
+  background: #1d4ed8;
+}
+.btn.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+  box-shadow: 0 1px 4px rgba(37,99,235,.30);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+/* Loading shimmer on disabled active btn */
+.btn.active:disabled {
+  background: #93c5fd;
+  border-color: #93c5fd;
+}
+
+/* ─── Select ───────────────────────────────────────────────── */
+select {
+  padding: 5px 8px;
+  border: 1.5px solid #d1d5db;
+  border-radius: 7px;
+  background: #f9fafb;
+  font-size: 12px;
+  color: #374151;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s;
+  outline: none;
+}
+select:focus { border-color: #2563eb; }
+select.sel-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+/* ─── Labels ───────────────────────────────────────────────── */
+label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  letter-spacing: 0.02em;
+  margin-right: 3px;
+}
 .chart-row { display:flex; gap:4px; flex-wrap:nowrap; }
 .box { background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.06); padding:12px; flex:1 1 calc(25% - 12px); min-width:0; }
 
@@ -94,12 +185,14 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   z-index: 1;
   background: #f7f7f9;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 11px;
   color: #333;
 }
 #kpiRegionGridWrap .kpi-table th,
 #kpiRegionGridWrap .kpi-table td {
-  padding: 1px 2px;
+  padding: 0px 2px;
+  font-size: 11px;
+  line-height: 1.3;
   border-bottom: 1px solid #eee;
   white-space: nowrap;
   overflow: hidden;
@@ -126,9 +219,9 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 /* Fix the chart height */
 .chart-fixed {
   position: relative;
-  height: 320px;      /* tweak this value to change chart height */
-  max-height: 320px;
-  width: 100%;
+  height: 200px;      /* tweak this value to change chart height */
+  max-height: 200px;
+  
 }
 
 /* Optional label above each region mini-table */
@@ -165,6 +258,110 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 #mapWrapper, #mapSidePanel { height: 100%; }
 #salesMap { height: 100% !important; }
 
+/* ─── Sales stats bar (3M / 6M / 12M / Base Sales) ────────── */
+#salesStatsBar { flex-shrink: 0; }
+.stat-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border-right: 1px solid #e5e7eb;
+  height: 36px;
+  min-width: 110px;
+  cursor: default;
+}
+.stat-cell:last-child { border-right: none; }
+.stat-cell.stat-base {
+  background: #f0fdf4;
+  min-width: 130px;
+}
+.stat-lbl {
+  font-size: 9px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+.stat-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.3;
+}
+.stat-cell.stat-base .stat-val { color: #15803d; }
+.stat-cell.stat-pipe { background: #eff6ff; min-width: 90px; }
+.stat-cell.stat-pipe .stat-lbl { color: #3b82f6; }
+.stat-cell.stat-pipe .stat-val { color: #1d4ed8; font-size: 12px; }
+
+/* Price box in stock top bar */
+.price-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.price-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+.price-val {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.3;
+}
+.price-sep {
+  width: 1px;
+  height: 28px;
+  background: #e5e7eb;
+  flex-shrink: 0;
+}
+
+/* Stock page layout */
+#stockLayout {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+  align-items: flex-start;
+  height: calc(100vh - 110px);
+  min-height: 600px;
+}
+#stockMapWrapper {
+  flex: 2;
+  min-width: 0;
+  position: relative;
+  height: 100%;
+}
+#stockMap { width: 100%; height: 100% !important; }
+#stockSidePanel {
+  flex: 0 0 920px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+.stockChartPane {
+  flex: 1 1 0;
+  min-height: 350px;
+  max-height: 400px;  
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+.stockChartPane h4 { margin: 0 0 6px; font-size: 13px; color: #444; flex-shrink: 0; }
+.stockChartPane canvas { flex: 1; min-height: 0; }
+
 #mapWrapper {
   flex: 1;                 /* map takes remaining space */
 }
@@ -200,27 +397,365 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   height: 1200px;
 }
 
-.dd { position: relative; display: inline-block; margin-left: 8px; }
-.dd-wrap { display:flex; align-items:center; gap:4px; }
-.dd-wrap input { width: 140px; }
-.dd-btn { padding: 2px 6px; cursor: pointer; }
+/* ─── Custom dropdown (dd) ─────────────────────────────────── */
+.dd { position: relative; display: inline-flex; flex-direction: column; gap: 2px; }
+.dd > label { margin-bottom: 1px; }
+.dd-wrap { display: flex; align-items: center; gap: 0; }
+.dd-wrap input {
+  width: 150px;
+  padding: 5px 8px;
+  border: 1.5px solid #d1d5db;
+  border-right: none;
+  border-radius: 7px 0 0 7px;
+  font-size: 12px;
+  color: #374151;
+  background: #f9fafb;
+  outline: none;
+  transition: border-color 0.12s, background 0.12s;
+}
+.dd-wrap input:focus { border-color: #2563eb; background: #fff; }
+.dd-btn {
+  padding: 5px 7px;
+  border: 1.5px solid #d1d5db;
+  border-right: none;
+  background: #f3f4f6;
+  cursor: pointer;
+  font-size: 10px;
+  color: #6b7280;
+  transition: background 0.12s, transform 0.08s;
+  line-height: 1.4;
+  user-select: none;
+}
+.dd-btn:hover:not(:disabled) { background: #e5e7eb; }
+.dd-btn:active:not(:disabled) { transform: scale(0.93); }
+.dd-btn:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+.dd-wrap input:disabled { opacity: 0.55; cursor: not-allowed; background: #f3f4f6; }
+/* last button in the wrap (no clear btn after it) */
+.dd-btn.dd-last {
+  border-right: 1.5px solid #d1d5db;
+  border-radius: 0 7px 7px 0;
+}
+.dd.dd-active .dd-btn.dd-last {
+  border-right-color: #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+.dd.dd-active .dd-btn.dd-last:hover { background: #1d4ed8; }
+.dd-btn.dd-clear-btn {
+  border-right: 1.5px solid #d1d5db;
+  border-radius: 0 7px 7px 0;
+  color: #9ca3af;
+}
+.dd-btn.dd-clear-btn:hover { background: #fee2e2; color: #ef4444; border-color: #fca5a5; }
+
+/* ── Active (value selected) state ── */
+.dd.dd-active > label { color: #2563eb; }
+.dd.dd-active .dd-wrap input {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.dd.dd-active .dd-btn {
+  border-color: #2563eb;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.dd.dd-active .dd-btn.dd-clear-btn {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+.dd.dd-active .dd-btn.dd-clear-btn:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+}
+
 .dd-menu {
   position: absolute;
-  top: calc(100% + 2px);
+  top: calc(100% + 4px);
   left: 0;
-  width: 240px;
-  max-height: 260px;
+  width: 260px;
+  max-height: 280px;
   overflow: auto;
   background: #fff;
-  border: 1px solid #bbb;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.12);
+  border: 1.5px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
   z-index: 9999;
   display: none;
 }
 .dd-item {
-  padding: 6px 8px;
+  padding: 7px 10px;
   cursor: pointer;
   white-space: nowrap;
+  font-size: 12px;
+  color: #374151;
+  transition: background 0.08s;
 }
-.dd-item:hover { background: #f0f0f0; }
-.dd-empty { padding: 8px; color: #777; }
+.dd-item:hover { background: #eff6ff; color: #2563eb; }
+.dd-empty { padding: 10px; color: #9ca3af; font-size: 12px; }
+
+/* ─── KPI + Profit row desktop layout ───────────────────── */
+.kpi-profit-row {
+  margin-top: 4px;
+  display: grid;
+  grid-template-columns: 640px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+  box-sizing: border-box;
+}
+.kpi-profit-row > .kpi-box {
+  width: 640px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.kpi-profit-row > .profit-box {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.profit-chart-canvas {
+  display: block;
+  width: 100% !important;
+  height: 320px !important;
+}
+
+/* ─── Mobile filter toggle (hidden on desktop) ──────────── */
+.filter-toggle-btn {
+  display: none;
+}
+
+/* ─── Mobile responsive ─────────────────────────────────── */
+@media (max-width: 768px) {
+  body { margin: 8px; }
+
+  h2 { font-size: 15px !important; }
+  h3 { font-size: 12px; margin: 0 0 6px; }
+
+  /* Filter panel: collapsed by default on mobile */
+  #filterPanel { display: none; }
+  #filterPanel.open { display: block; }
+
+  /* Toggle button: visible on mobile */
+  .filter-toggle-btn {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 14px;
+    background: #fff;
+    border: 1.5px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+    cursor: pointer;
+    margin-bottom: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+
+  /* Chart rows: stack vertically */
+  .chart-row {
+    flex-direction: column;
+  }
+  .chart-row > .box {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  /* KPI + Profit: single column */
+  .kpi-profit-row {
+    grid-template-columns: 1fr;
+  }
+  .kpi-profit-row > .kpi-box {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* KPI table: smaller font and columns */
+  #kpiByRegion th, #kpiByRegion td {
+    font-size: 12px !important;
+    padding: 2px 3px !important;
+  }
+  #kpiByRegion th:nth-child(1), #kpiByRegion td:nth-child(1) { width: 44px !important; }
+  #kpiByRegion th:nth-child(2), #kpiByRegion td:nth-child(2) { width: 130px !important; }
+  #kpiByRegion th:nth-child(3), #kpiByRegion td:nth-child(3) { width: 60px !important; }
+  #kpiByRegion th:nth-child(4), #kpiByRegion td:nth-child(4) { width: 44px !important; }
+  #kpiByRegion th:nth-child(5), #kpiByRegion td:nth-child(5) { width: 44px !important; }
+  #kpiByRegion th:nth-child(6), #kpiByRegion td:nth-child(6) { width: 44px !important; }
+  #kpiByRegion th:nth-child(7), #kpiByRegion td:nth-child(7) { width: 44px !important; }
+
+  /* Profit chart: shorter canvas */
+  .profit-chart-canvas { height: 220px !important; }
+
+  /* Custom dropdowns: narrower input */
+  .dd-wrap input { width: 110px; }
+
+  /* Chart fixed height */
+  .chart-fixed { height: 160px; max-height: 160px; }
+
+  /* View switch: push to next line */
+  #viewSwitch { margin-left: 0; }
+
+  /* Filter bar: tighter padding */
+  .filter-bar { padding: 6px 10px; gap: 6px; }
+
+  /* ── Map page ── */
+  #mapLayout {
+    flex-direction: column !important;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 4px;
+  }
+  /* map takes full width, fixed pixel height so Leaflet renders */
+  #mapWrapper {
+    flex: none !important;
+    width: 100% !important;
+    height: 300px !important;
+    min-height: 0 !important;
+  }
+  #salesMap {
+    width: 100% !important;
+    height: 300px !important;
+    min-height: 0 !important;
+  }
+  /* side panel becomes a full-width block below the map */
+  #mapSidePanel {
+    flex: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    padding: 8px 4px !important;
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: visible;
+  }
+  /* chart panes: fixed px height so canvas 100% resolves correctly */
+  .chartPane {
+    flex: none !important;
+    height: 200px !important;
+    min-height: 0 !important;
+  }
+  .chartPane canvas {
+    width: 100% !important;
+    height: 200px !important;
+  }
+
+  /* ── Stock page ── */
+  #stockLayout {
+    flex-direction: column !important;
+    height: auto !important;
+    min-height: 0 !important;
+    gap: 4px;
+  }
+  /* stock map: fixed pixel height so Leaflet renders */
+  #stockMapWrapper {
+    flex: none !important;
+    width: 100% !important;
+    height: 300px !important;
+    min-height: 0 !important;
+    position: relative;
+  }
+  #stockMap {
+    width: 100% !important;
+    height: 300px !important;
+  }
+  /* chart panel stacks below the map */
+  #stockSidePanel {
+    flex: none !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow-y: visible;
+  }
+  /* fixed px height on each pane so canvas 100% resolves */
+  .stockChartPane {
+    flex: none !important;
+    height: 220px !important;
+    min-height: 0 !important;
+    max-height: none !important;
+  }
+  .stockChartPane canvas {
+    height: 180px !important;
+    flex: none !important;
+    min-height: 0 !important;
+  }
+}
+/* ─── State breakdown table ────────────────────────────────── */
+#stateTableWrap {
+  margin: 0;
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+#stateTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  overflow: hidden;
+}
+#stateTable thead th {
+  background: #f3f4f6;
+  color: #6b7280;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  padding: 7px 10px;
+  text-align: right;
+  border-bottom: 1px solid #e5e7eb;
+  white-space: nowrap;
+}
+#stateTable thead th:first-child { text-align: left; }
+#stateTable tbody tr:hover { background: #f9fafb; }
+#stateTable tbody td {
+  padding: 6px 10px;
+  text-align: right;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+  white-space: nowrap;
+}
+#stateTable tbody td:first-child { text-align: left; }
+.st-state {
+  font-weight: 600;
+  color: #111827 !important;
+  min-width: 60px;
+}
+.st-base {
+  color: #15803d !important;
+  font-weight: 600;
+}
+.st-pipe {
+  color: #2563eb !important;
+  font-weight: 600;
+}
+#stateTable tfoot tr.st-total td {
+  background: #eff6ff;
+  font-weight: 700;
+  border-top: 2px solid #bfdbfe;
+  color: #1e40af;
+  padding: 6px 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+#stateTable tfoot tr.st-total td:first-child {
+  text-align: left;
+  color: #1e3a8a;
+}
+.st-loading {
+  text-align: center !important;
+  color: #9ca3af;
+  padding: 12px !important;
+}
+.st-qty {
+  color: #374151 !important;
+  font-weight: 500;
+}
+.st-qty-hdr {
+  background: #f9fafb !important;
+}

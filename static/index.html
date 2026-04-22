@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sales Dashboard</title>
 
   <!-- CDN for Chart.js -->
@@ -12,18 +13,17 @@
   </script>
 
   <!-- Served from Flask: /static -->
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260320g">
 
   <style>
     /* KPI table column widths + prevent squishing */
-    .kpi-profit-row{ width:100%; }
     #kpiByRegion{ width:100%; border-collapse:collapse; table-layout:fixed; }
     #kpiByRegion th, #kpiByRegion td{
-      padding:3px 4px;
+      padding:1px 2px;
       white-space:nowrap;
       overflow:hidden;
       text-overflow:ellipsis;
-      font-size:20px;
+      font-size:13px;
     }
     #kpiByRegion th:nth-child(1), #kpiByRegion td:nth-child(1){ width:70px; text-align:center; }
     #kpiByRegion th:nth-child(2), #kpiByRegion td:nth-child(2){ width:200px; text-align:center; }
@@ -32,44 +32,25 @@
     #kpiByRegion th:nth-child(5), #kpiByRegion td:nth-child(5){ width:70px; }
     #kpiByRegion th:nth-child(6), #kpiByRegion td:nth-child(6){ width:70px; }
     #kpiByRegion th:nth-child(7), #kpiByRegion td:nth-child(7){ width:70px; }
-
-    /* Make KPI box truly wide */
-    .kpi-profit-row > .box:first-child{ width:640px; min-width:640px; }
-  
-    /* custom dropdown (searchable) */
-    .dd { position: relative; display: inline-block; margin-left: 8px; }
-    .dd-wrap { display:flex; align-items:center; gap:4px; }
-    .dd-wrap input { width: 140px; }
-    .dd-btn { padding: 2px 6px; cursor: pointer; }
-    .dd-menu {
-      position: absolute;
-      top: calc(100% + 2px);
-      left: 0;
-      width: 240px;
-      max-height: 260px;
-      overflow: auto;
-      background: #fff;
-      border: 1px solid #bbb;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
-      z-index: 9999;
-      display: none;
-    }
-    .dd-item { padding: 6px 8px; cursor: pointer; white-space: nowrap; }
-    .dd-item:hover { background: #f0f0f0; }
-    .dd-empty { padding: 8px; color: #777; }
-
   </style>
 
 </head>
 
 <body>
-  <h2>Sales Dashboard</h2>
+  <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Dashboard</h2>
 
-  <div id="topRow" class="controls"
-       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+  <!-- Mobile: toggle button for filter panel -->
+  <button id="filterToggleBtn" class="filter-toggle-btn">
+    <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
+  </button>
+
+  <div id="filterPanel">
+
+  <!-- ── Top filter bar ── -->
+  <div id="topRow" class="filter-bar">
 
     <!-- Category buttons -->
-    <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
+    <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
       <button class="btn active" data-val="ALL">All</button>
       <button class="btn" data-val="PCLT">PCLT</button>
       <button class="btn" data-val="TBR">TBR</button>
@@ -81,153 +62,169 @@
       <button class="btn" data-val="443">443</button>
     </div>
 
-    <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
+    <div class="filter-sep"></div>
+
+    <div id="metricBtns" style="display:flex; gap:5px;">
       <button class="btn" data-metric="qty">Qty</button>
       <button class="btn" data-metric="amount">Amount</button>
     </div>
 
-    <label style="gap:6px; margin-left:50px;">Group By:</label>
-    <select id="group_by">
-      <option value="region" selected>Region</option>
-      <option value="salesman">Salesman</option>
-      <option value="sold_to_group">Sold-to Group</option>
-      <option value="sold_to">Sold-to</option>
-      <option value="product_group">Product Group</option>
-    </select>
+    <div class="filter-sep"></div>
+
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Group By:</label>
+      <select id="group_by">
+        <option value="region" selected>Region</option>
+        <option value="salesman">Salesman</option>
+        <option value="sold_to_group">Sold-to Group</option>
+        <option value="sold_to">Sold-to</option>
+        <option value="product_group">Product Group</option>
+      </select>
+    </div>
 
     <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
       <button class="btn active">Graph View</button>
       <button class="btn" onclick="window.location.href='/map'+ window.location.search">Map View</button>
       <button class="btn" onclick="window.location.href='/stock'+ window.location.search">Stock</button>
-      <button class="btn" onclick="window.location.href='/rebate'+ window.location.search">Rebate</button>
-      <button class="btn" onclick="window.location.href='/price'">Price</button>
+      <button class="btn" onclick="window.location.href='/rebate'">Rebate</button>
     </div>
   </div>
 
-  <div class="controls">
-    <div id="regionBtns" class="controls" style="gap:6px;">
-      <button class="btn" data-val="ALL">ALL</button>
+  <!-- ── Second filter bar ── -->
+  <div class="filter-bar">
+
+    <!-- Region buttons -->
+    <div id="regionBtns" style="display:flex; gap:5px;">
+      <button class="btn active" data-val="ALL">ALL</button>
       <button class="btn" data-val="NSW">NSW</button>
       <button class="btn" data-val="QLD">QLD</button>
       <button class="btn" data-val="VIC">VIC</button>
       <button class="btn" data-val="WA">WA</button>
     </div>
 
-    <label>Salesman:</label>
-    <select id="salesman_name"><option value="ALL">ALL</option></select>
+    <div class="filter-sep"></div>
 
-    <label>Sold-to Group:</label>
-    <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Salesman:</label>
+      <select id="salesman_name"><option value="ALL">ALL</option></select>
+    </div>
 
-    <div id="topCustomerControls" class="controls">
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Sold-to Group:</label>
+      <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    </div>
+
+    <div class="filter-sep"></div>
+
+    <div id="topCustomerControls" style="display:flex; gap:5px;">
       <button class="btn active" data-limit="0">All</button>
       <button class="btn" data-limit="10">Top 10</button>
       <button class="btn" data-limit="20">Top 20</button>
       <button class="btn" data-limit="30">Top 30</button>
     </div>
-    <button id="btnDownloadExcel" class="btn" style="margin-left:12px;">Excel Download</button>
+
+    <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
+    <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
+    <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
+
+    <div class="filter-sep"></div>
+
     <!-- Sold-to (custom dropdown) -->
-    <div class="dd">
-      <label for="sold_to">Sold-to:</label>
+    <div class="dd" id="ddSoldTo">
+      <label for="sold_to">Sold-to</label>
       <div class="dd-wrap">
         <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
         <button type="button" class="dd-btn" id="soldToBtn">▼</button>
-        <button type="button" class="dd-btn" id="soldToClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="soldToClear">✕</button>
       </div>
       <div class="dd-menu" id="soldToMenu"></div>
     </div>
 
     <!-- Ship-to (custom dropdown) -->
-    <div class="dd">
-      <label for="ship_to">Ship-to:</label>
+    <div class="dd" id="ddShipTo">
+      <label for="ship_to">Ship-to</label>
       <div class="dd-wrap">
         <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
         <button type="button" class="dd-btn" id="shipToBtn">▼</button>
-        <button type="button" class="dd-btn" id="shipToClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="shipToClear">✕</button>
       </div>
       <div class="dd-menu" id="shipToMenu"></div>
     </div>
 
-    <label>Product Group:</label>
-    <select id="product_group"><option value="ALL">ALL</option></select>
+    <!-- Product Group (custom dropdown, no clear) -->
+    <div class="dd" id="ddProductGroup">
+      <label for="product_group">Product Group</label>
+      <div class="dd-wrap">
+        <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
+        <button type="button" class="dd-btn dd-last" id="pgBtn">▼</button>
+      </div>
+      <div class="dd-menu" id="pgMenu"></div>
+    </div>
 
     <!-- Pattern (custom dropdown) -->
-  <div class="dd">
-    <label for="pattern">Pattern:</label>
-    <div class="dd-wrap">
-      <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
-      <button type="button" class="dd-btn" id="patternBtn">▼</button>
-      <button type="button" class="dd-btn" id="patternClear">✕</button>
+    <div class="dd" id="ddPattern">
+      <label for="pattern">Pattern</label>
+      <div class="dd-wrap">
+        <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+        <button type="button" class="dd-btn" id="patternBtn">▼</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+      </div>
+      <div class="dd-menu" id="patternMenu"></div>
     </div>
-    <div class="dd-menu" id="patternMenu"></div>
+
+    <!-- Size (custom dropdown) -->
+    <div class="dd" id="ddMaterial">
+      <label for="material">Size</label>
+      <div class="dd-wrap">
+        <input id="material" type="text" placeholder="Search Size" autocomplete="off">
+        <button type="button" class="dd-btn" id="materialBtn">▼</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+      </div>
+      <div class="dd-menu" id="materialMenu"></div>
+    </div>
   </div>
 
-  <!-- Material (custom dropdown) -->
-  <div class="dd">
-    <label for="material">Material:</label>
-    <div class="dd-wrap">
-      <input id="material" type="text" placeholder="Search Material" autocomplete="off">
-      <button type="button" class="dd-btn" id="materialBtn">▼</button>
-      <button type="button" class="dd-btn" id="materialClear">✕</button>
-    </div>
-    <div class="dd-menu" id="materialMenu"></div>
-  </div>
-  </div>
+  </div><!-- end #filterPanel -->
 
   <!-- KPI + Profit row (same row, no overlap) -->
-  <div class="kpi-profit-row" style="
-    margin-top:4px;
-    display:grid;
-    grid-template-columns: 640px minmax(0, 1fr);
-    gap:12px;
-    align-items:start;
-    width:100%;
-    box-sizing:border-box;
-  ">
+  <div class="kpi-profit-row">
     <!-- KPI -->
-    <div class="box" style="
-      width:640px;
-      box-sizing:border-box;
-      overflow:hidden;
-    ">
-      <table id="kpiByRegion" class="kpi-table" style="
-        width:100%;
-        table-layout:fixed;
-        border-collapse:collapse;
-      "></table>
+    <div class="box kpi-box">
+      <table id="kpiByRegion" class="kpi-table" style="width:100%; table-layout:fixed; border-collapse:collapse;"></table>
     </div>
 
     <!-- Profit -->
-    <div class="box" style="
-      width:100%;
-      min-width:0;              /* 중요: 이거 없으면 차트가 튀면서 겹칠 수 있음 */
-      box-sizing:border-box;
-      overflow:hidden;          /* 중요: 캔버스가 밖으로 나가는걸 막음 */
-    ">
+    <div class="box profit-box">
       <h3>Profit (Monthly)</h3>
-      <div class="chart-fixed" style="
-        position:relative;
-        width:100%;
-        overflow:hidden;
-      ">
-        <canvas id="profitComboChart" style="
-          display:block;
-          width:100% !important;
-          height:320px !important;
-        "></canvas>
+      <div style="position:relative; width:100%; overflow:hidden;">
+        <canvas id="profitComboChart" class="profit-chart-canvas"></canvas>
       </div>
     </div>
   </div>
   <!-- ROW 1: Daily -->
   <div class="chart-row" style="margin-top:4px;">
-    <div class="box"><h3 id="dailyTitle">Daily Sales</h3><canvas id="dailyChart"></canvas></div>
+    <div class="box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <h3 id="dailyTitle" style="margin:0">Daily Sales</h3>
+        <div id="dailyViewBtns" style="display:flex;gap:3px">
+          <button class="btn active" data-dview="abs" style="font-size:11px;padding:2px 8px">Abs</button>
+          <button class="btn" data-dview="pct" style="font-size:11px;padding:2px 8px">Ach%</button>
+        </div>
+      </div>
+      <canvas id="dailyChart"></canvas>
+    </div>
     <div class="box"><h3>Stacked Daily</h3><canvas id="stackedDailyChart"></canvas></div>
     <div class="box"><h3>Stacked Daily %</h3><canvas id="stackedDailyPercentChart"></canvas></div>
   </div>
 
   <!-- ROW 2: Daily cumulative -->
   <div class="chart-row" style="margin-top:4px;">
-    <div class="box"><h3 id="cumTitle">Cumulative Sales (Daily)</h3><canvas id="dailyCumChart"></canvas></div>
+    <div class="box">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <h3 id="cumTitle" style="margin:0">Cumulative Sales (Daily)</h3>
+      </div>
+      <canvas id="dailyCumChart"></canvas>
+    </div>
     <div class="box"><h3>Stacked Cumulative</h3><canvas id="stackedDailyCumChart"></canvas></div>
     <div class="box"><h3>Stacked Cumulative %</h3><canvas id="stackedDailyCumPercentChart"></canvas></div>
   </div>
@@ -262,43 +259,80 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20260320f" defer></script>
+<script>
+// Mobile filter panel toggle
+(function () {
+  var btn = document.getElementById("filterToggleBtn");
+  var panel = document.getElementById("filterPanel");
+  if (btn && panel) {
+    btn.addEventListener("click", function () {
+      var open = panel.classList.toggle("open");
+      btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+    });
+  }
+})();
+</script>
+
 <script>
 (function () {
 
-  function downloadExcel() {
+  function collectFilters() {
+    // metric
+    const metricBtn = document.querySelector("#metricBtns .btn.active");
+    const metric = metricBtn ? metricBtn.dataset.metric : "qty";
 
-    const activeBtn = document.querySelector("#topCustomerControls .btn.active");
-    const top_limit = activeBtn ? activeBtn.dataset.limit : "0";
+    // category
+    const catBtn = document.querySelector("#catBtns .btn.active");
+    const category = catBtn ? (catBtn.dataset.val || catBtn.dataset.cat || "ALL") : "ALL";
 
-    const salesman = document.getElementById("salesman_name")?.value || "ALL";
-    const group = document.getElementById("sold_to_group")?.value || "ALL";
-    const soldto = document.getElementById("sold_to")?.value || "";
+    // region
+    const regionBtn = document.querySelector("#regionBtns .btn.active");
+    const region = regionBtn ? (regionBtn.dataset.val || "ALL") : "ALL";
 
-    const params = new URLSearchParams();
-    params.set("top_limit", top_limit);
+    // top_limit
+    const topBtn = document.querySelector("#topCustomerControls .btn.active");
+    const top_limit = topBtn ? (topBtn.dataset.limit || "0") : "0";
 
-    if (salesman !== "ALL") params.set("salesman_name", salesman);
-    if (group !== "ALL") params.set("sold_to_group", group);
-    if (soldto) params.set("sold_to", soldto);
+    const salesman    = document.getElementById("salesman_name")?.value || "ALL";
+    const sold_to_grp = document.getElementById("sold_to_group")?.value || "ALL";
+    const sold_to     = document.getElementById("sold_to")?.value || "";
+    const ship_to     = document.getElementById("ship_to")?.value || "";
+    const prod_group  = document.getElementById("product_group")?.value || "";
+    const pattern     = document.getElementById("pattern")?.value || "";
+    const material    = document.getElementById("material")?.value || "";
 
-    const url = "/api/export_excel?" + params.toString();
+    const p = new URLSearchParams();
+    p.set("metric", metric);
+    if (category !== "ALL") p.set("category", category);
+    if (region !== "ALL")   p.set("region", region);
+    if (salesman !== "ALL") p.set("salesman", salesman);
+    if (sold_to_grp !== "ALL") p.set("sold_to_group", sold_to_grp);
+    if (sold_to)    p.set("sold_to", sold_to);
+    if (ship_to)    p.set("ship_to", ship_to);
+    if (prod_group) p.set("product_group", prod_group);
+    if (pattern)    p.set("pattern", pattern);
+    if (material)   p.set("material", material);
+    p.set("top_limit", top_limit);
+    return p;
+  }
 
-    console.log("Download:", url);
-
-    // ⭐ Direct download (no fetch)
+  function triggerDownload(url) {
     const a = document.createElement("a");
     a.href = url;
-    a.download = "export.xlsx";
     document.body.appendChild(a);
     a.click();
     a.remove();
   }
 
   window.addEventListener("load", () => {
-    const btn = document.getElementById("btnDownloadExcel");
-    if (!btn) return;
-    btn.onclick = downloadExcel;
+    const btnThisMonth = document.getElementById("btnExcelThisMonth");
+    const btn2526      = document.getElementById("btnExcel2526");
+    const btnYearly    = document.getElementById("btnExcelYearly");
+
+    if (btnThisMonth) btnThisMonth.onclick = () => triggerDownload("/api/export_excel?" + collectFilters().toString());
+    if (btn2526)      btn2526.onclick      = () => triggerDownload("/api/export_excel/sales2526?" + collectFilters().toString());
+    if (btnYearly)    btnYearly.onclick    = () => triggerDownload("/api/export_excel/yearly?" + collectFilters().toString());
   });
 
 })();
