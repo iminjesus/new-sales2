@@ -2299,7 +2299,9 @@ window.addEventListener("load", async () => {
     function injectPriceBtn() {
         const nav = document.getElementById('viewSwitch');
         if (!nav) return;
-        if (nav.querySelector('[data-price-nav]')) return; // already added
+        // skip if already present (hardcoded or previously injected)
+        const btns = nav.querySelectorAll('.btn');
+        for (const b of btns) { if (b.textContent.trim() === 'Price') return; }
         const btn = document.createElement('button');
         btn.className = 'btn' + (window.location.pathname === '/price' ? ' active' : '');
         btn.setAttribute('data-price-nav', '1');
