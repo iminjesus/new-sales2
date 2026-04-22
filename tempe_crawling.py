@@ -132,53 +132,43 @@ return (function() {
             if (lm) spec = size + ' ' + lm[1].trim();
         }
 
-        // Description (text before the size, strip brand prefix and noise)
+        // Description: product model name — text AFTER size+spec, before "IN STOCK" / price
         var name = '';
-        var sizePos = szm ? szm.index : -1;
-        if (sizePos > 0) {
-            var pre = text.substring(0, sizePos)
-                .replace(/\d+\s*day\s+satisfaction|qty|add\s+to\s+cart|more\s+info|view\s+details/gi, ' ')
-                .replace(BRAND_RE, '')
-                .replace(/\s+/g, ' ').trim()
-                .replace(/\s*[-–|]\s*$/, '').trim();
-            if (pre.length > 1 && pre.length < 80) name = pre;
+        if (spec) {
+            var specIdx = text.indexOf(spec);
+            if (specIdx >= 0) {
+                var afterSpec = text.substring(specIdx + spec.length).trim();
+                var stopM = afterSpec.match(/\d+\+?\s*in\s*stock|\bIN\s*STOCK\b|\$\d{2,4}|price\s+includes/i);
+                if (stopM && stopM.index > 0) {
+                    name = afterSpec.substring(0, stopM.index).replace(BRAND_RE, '').trim();
+                }
+            }
         }
+        // Fallback: PATTERN row from the detail table
         if (!name) {
-            var h = card.querySelector('h1,h2,h3,h4,.product-title,.product-name,[class*="title"],[class*="name"]');
-            if (h) name = (h.textContent || '').replace(BRAND_RE,'').trim();
+            var pm2 = text.match(/\bPATTERN\s+([A-Z0-9][^\n$]{2,60}?)(?=\s+(?:Price|SIZE|LOAD|SPEED|\$|$))/i);
+            if (pm2) name = pm2[1].trim();
         }
 
-        // Regular price (first $ before any promo text)
+        // Price
         var price = '';
-        var buyPos = text.toUpperCase().indexOf('OR BUY');
-        var searchIn = buyPos > 0 ? text.substring(0, buyPos) : text;
-        // Skip "was $X" struck-out prices if possible
-        var wasPosM = searchIn.match(/was\s+\$[\d,.]+/i);
-        if (wasPosM) searchIn = searchIn.substring(wasPosM.index + wasPosM[0].length);
+        var wasPosM = text.match(/was\s+\$[\d,.]+/i);
+        var searchIn = wasPosM ? text.substring(wasPosM.index + wasPosM[0].length) : text;
+        var buyPos = searchIn.toUpperCase().indexOf('OR BUY');
+        if (buyPos > 0) searchIn = searchIn.substring(0, buyPos);
         var pm = searchIn.match(/\$([\d,]+(?:\.\d+)?)/);
         if (pm) price = pm[1].replace(/,/g,'');
 
-        // Promo / bulk discount
-        var disc = '', promo = '';
-        var b4m = text.match(/OR\s+BUY\s+4\s+FOR\s+\$([\d,]+(?:\.\d+)?)/i);
-        if (b4m) {
-            disc  = b4m[1].replace(/,/g,'');
-            promo = 'OR BUY 4 FOR $' + b4m[1];
+        // SAVE_TEXT: detect SALE badge on the card
+        var saveText = '';
+        var saleBadge = card.querySelector('[class*="sale"],[class*="Sale"],[class*="badge"],[class*="tag"]');
+        if (saleBadge) {
+            var bt = (saleBadge.textContent || '').trim();
+            if (bt.length > 0 && bt.length < 30 && /sale|save|\d+%/i.test(bt)) saveText = bt;
         }
-        if (!promo && /BUY\s+[34]\s*[&+,]\s*GET\s+\d\s*(FREE|TYRE)/i.test(text)) {
-            promo = text.match(/BUY\s+[34]\s*[&+,]\s*GET[^|$\n]{0,40}/i)?.[0]?.trim() || 'Bundle offer';
-        }
+        if (!saveText && /^\s*SALE\b/i.test(text)) saveText = 'SALE';
 
-        // Was / save
-        var wasM = text.match(/was\s+\$([\d,]+(?:\.\d+)?)/i);
-        if (wasM && price) {
-            var wasVal = parseFloat(wasM[1].replace(/,/g,''));
-            var curVal = parseFloat(price);
-            if (wasVal > curVal) promo = promo || ('Was $' + wasVal.toFixed(2));
-        }
-
-        return { name: name, size: size, spec: spec,
-                 price: price, disc: disc, promo: promo };
+        return { name: name, size: size, price: price, saveText: saveText };
     }
 
     function addCard(card) {
@@ -280,43 +270,34 @@ def extract_page(driver, run_diag=False):
 def process_raw(raw_items, brand_name):
     rows = []
     for item in raw_items:
-        size  = (item.get("size")  or "").strip().upper()
-        name  = (item.get("name")  or "").strip()
-        spec  = (item.get("spec")  or "").strip()
-        price = (item.get("price") or "").strip()
-        disc  = (item.get("disc")  or "").strip()
-        promo = (item.get("promo") or "").strip()
+        size      = (item.get("size")     or "").strip().upper()
+        name      = (item.get("name")     or "").strip()
+        price     = (item.get("price")    or "").strip()
+        save_text = (item.get("saveText") or "").strip()
 
         if not size or not price:
             continue
 
-        # Build description: product name + load/speed spec (without repeating size)
-        extra = re.sub(re.escape(size), "", spec, flags=re.IGNORECASE).strip(" -–")
-        desc = f"{name} {extra}".strip() if extra else name
-
         price_fmt = f"{float(price):.2f}" if price else ""
-        disc_fmt  = f"{float(disc):.2f}"  if disc  else ""
 
         rows.append({
-            "size":  size,
-            "brand": brand_name,
-            "desc":  desc,
-            "price": price_fmt,
-            "disc":  disc_fmt,
-            "promo": promo,
+            "size":      size,
+            "brand":     brand_name,
+            "desc":      name,
+            "price":     price_fmt,
+            "save_text": save_text,
         })
     return rows
 
 
 def write_rows(writer, rows):
     for r in rows:
+        # SIZE | brand | DESCRIPTION | price | disc_price | PROMO | SAVE_TEXT
         writer.writerow([r["size"], r["brand"], r["desc"],
-                         "", r["price"]])   # COST blank, PRICE = retail price
+                         r["price"], "", "", r["save_text"]])
         line = f"  {r['brand']:<14} | {r['size']:<13} | {r['desc'][:40]:<40} | ${r['price']}"
-        if r["disc"]:
-            line += f"  (4-pack: ${r['disc']})"
-        if r["promo"]:
-            line += f"  [{r['promo'][:30]}]"
+        if r["save_text"]:
+            line += f"  [{r['save_text']}]"
         print(line)
 
 
@@ -387,7 +368,7 @@ def main():
     try:
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE"])
+            writer.writerow(["SIZE", "brand", "DESCRIPTION", "price", "disc_price", "PROMO", "SAVE_TEXT"])
 
             for abbr, (brand_name, url_slug) in BRANDS.items():
                 try:
