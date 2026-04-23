@@ -442,6 +442,7 @@ function _renderStoreTable(wrap) {
         { key:'twi',   label:'TempeWOS Sell In',   c: SC.twi  },
     ];
     const storePrices = stores.map(function(s) {
+        if (abbr === 'ALL') return _avgAllBrands(selectedSize, s.key);
         if (selectedSize === 'ALL') return _avgAllSizes(abbr, s.key);
         const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
         return bsd ? (bsd[s.key] || []) : [];
@@ -536,6 +537,20 @@ function _avgAllSizes(abbr, store) {
     return sums.map(function(s, i) { return counts[i] > 0 ? Math.round(s / counts[i]) : null; });
 }
 
+/* average across every brand for a store */
+function _avgAllBrands(size, store) {
+    if (size === 'ALL') return D.store_avg[store] || [];
+    const nM = months.length;
+    const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
+    Object.keys(BRANDS).forEach(function(abbr) {
+        const prices = ((D.size_data[size] || {})[abbr] || {})[store] || [];
+        prices.forEach(function(p, i) {
+            if (p !== null && p !== undefined) { sums[i] += p; counts[i]++; }
+        });
+    });
+    return sums.map(function(s, i) { return counts[i] > 0 ? Math.round(s / counts[i]) : null; });
+}
+
 function _tryRender() {
     if (!selectedSize || !selectedMode || !selectedSubKey) return;
     if (selectedMode === 'store') _renderStore();
@@ -545,10 +560,13 @@ function _tryRender() {
 /* ── By Store: selected brand → 3 store lines ───────── */
 function _renderStore() {
     const abbr = selectedSubKey;
-    const sizeLabel = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
+    const sizeLabel  = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
+    const brandLabel = abbr === 'ALL' ? 'All Brands (avg)' : (BRANDS[abbr] || abbr);
     const ds = ['tempe','bj','jax','tw','twi'].reduce((arr, s) => {
         let prices;
-        if (selectedSize === 'ALL') {
+        if (abbr === 'ALL') {
+            prices = _avgAllBrands(selectedSize, s);
+        } else if (selectedSize === 'ALL') {
             prices = _avgAllSizes(abbr, s);
         } else {
             const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
@@ -560,7 +578,7 @@ function _renderStore() {
                        spanGaps:true, tension:.3, pointRadius:5, fill:false });
         return arr;
     }, []);
-    if (!ds.length) { _noData((BRANDS[abbr]||abbr) + ' — ' + sizeLabel + ': no data'); return; }
+    if (!ds.length) { _noData(brandLabel + ' — ' + sizeLabel + ': no data'); return; }
     _render((BRANDS[abbr]||abbr) + ' \u2014 ' + sizeLabel
             + ' \u2014 Tempe vs Bob Jane vs JAX', ds);
     _renderTable();
@@ -610,6 +628,20 @@ function onModeStore(btn) {
     document.getElementById('sub-label').textContent = 'Brand';
     const subBtns = document.getElementById('sub-btns');
     subBtns.innerHTML = '';
+
+    // ALL button first
+    (function() {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = 'ALL';
+        b.style.fontWeight = '700';
+        b.onclick = function() {
+            if (_activeSubBtn) _activeSubBtn.classList.remove('active');
+            _activeSubBtn = b; b.classList.add('active');
+            selectedSubKey = 'ALL'; _tryRender();
+        };
+        subBtns.appendChild(b);
+    }());
 
     // one button per brand that has data in any size
     Object.keys(D.brand_size_data).forEach(function(abbr) {
