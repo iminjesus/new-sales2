@@ -440,18 +440,15 @@ function _renderStoreTable(wrap) {
         const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
         return bsd ? (bsd[s.key] || []) : [];
     });
-    let html = '<table class="ctable"><thead><tr><th class="th-month">Month</th>';
+    // rows = stores, cols = months
+    let html = '<table class="ctable"><thead><tr><th class="th-month">Store</th>';
+    months.forEach(function(m) { html += '<th class="th-month">' + m + '</th>'; });
+    html += '</tr></thead><tbody>';
     stores.forEach(function(s, si) {
         const hasData = storePrices[si].some(function(p){ return p !== null && p !== undefined; });
-        if (hasData) html += '<th style="color:' + s.c + '">' + s.label + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    months.forEach(function(m, i) {
-        html += '<tr><td>' + m + '</td>';
-        stores.forEach(function(s, si) {
-            const hasData = storePrices[si].some(function(p){ return p !== null && p !== undefined; });
-            if (!hasData) return;
-            const p = storePrices[si][i];
+        if (!hasData) return;
+        html += '<tr><td style="color:' + s.c + ';font-weight:700">' + s.label + '</td>';
+        storePrices[si].forEach(function(p) {
             html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
         });
         html += '</tr>';
@@ -470,16 +467,14 @@ function _renderBrandTable(wrap) {
     }).filter(function(e) {
         return e.prices.some(function(p){ return p !== null && p !== undefined; });
     });
-    let html = '<table class="ctable"><thead><tr><th class="th-month">Month</th>';
+    // rows = brands, cols = months
+    let html = '<table class="ctable"><thead><tr><th class="th-month">Brand</th>';
+    months.forEach(function(m) { html += '<th class="th-month">' + m + '</th>'; });
+    html += '</tr></thead><tbody>';
     entries.forEach(function(e) {
         const c = '#' + (BCOLORS[e.abbr] || '555555');
-        html += '<th style="color:' + c + '">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</th>';
-    });
-    html += '</tr></thead><tbody>';
-    months.forEach(function(m, i) {
-        html += '<tr><td>' + m + '</td>';
-        entries.forEach(function(e) {
-            const p = e.prices[i];
+        html += '<tr><td style="color:' + c + ';font-weight:700">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</td>';
+        e.prices.forEach(function(p) {
             html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
         });
         html += '</tr>';
