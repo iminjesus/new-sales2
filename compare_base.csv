@@ -1,0 +1,28 @@
+line,pattern,subcat,inch,size,mc,bs,ct,gy,kh,fk,hk,lf
+Car,K435,Car_Touring,14,175/65R14,Energy XM2+,EP150/EP300,TC6/UC7,Assurance TripleEdge,ES31,,Kinergy Eco 2,G Fit AS
+Car,K435,Car_Touring,15,195/65R15,Energy XM2+,EP150/EP300,TC6/UC7,Assurance TripleEdge,ES31,,Kinergy Eco 2,G Fit AS
+Car,K435,Car_Touring,16,205/65R16,Energy XM2+,EP150/EP300,TC6/UC7,Assurance TripleEdge,ES31,,Kinergy Eco 2,G Fit AS
+Car,K135,Car_GT,17,225/45R17,Primacy 5,Turanza 6,UC7,Assurance ComfortTred,PA51,Z310R Eco run,Prime 4,S Fit AS
+Car,K135,Car_GT,17,215/55R17,Primacy 5,Turanza 6,UC7,Assurance ComfortTred,PA51,Z310R Eco run,Prime 4,S Fit AS
+Car,K135,Car_GT,18,235/45R18,Primacy 5,Turanza 6,UC7,Assurance ComfortTred,PA51,Z310R Eco run,Prime 4,S Fit AS
+Car,K127/K137,Car_Perf,18,225/40R18,Pilot Sport 5,RE003,SC7,F1 Asym 5/6,PS71/PS72,Azenis FK520,Ventus evo,Z EQ
+Car,K127/K137,Car_Perf,19,235/35R19,Pilot Sport 5,RE003,SC7,F1 Asym 5/6,PS71/PS72,Azenis FK520,Ventus evo,Z EQ
+Car,K127/K137,Car_Perf,20,245/35R20,Pilot Sport 5,RE003,SC7,F1 Asym 5/6,PS71/PS72,Azenis FK520,Ventus evo,Z EQ
+SUV,RA33/RA55,SUV_On-road,17,225/65R17,Latitude Tour,H/L001,UC7 SUV,Assurance MaxGuard,HT51,Ziex CT60,HP2/3,X Fit HP
+SUV,RA33/RA55,SUV_On-road,18,225/55R18,Latitude Tour,H/L001,UC7 SUV,Assurance MaxGuard,HT51,Ziex CT60,HP2/3,X Fit HP
+SUV,RA43,SUV_Premium,18,265/60R18,Primacy SUV+,H/L001,CrossContact H,Assurance MaxGuard,HP71,,HPX,
+SUV,RA43,SUV_Premium,19,225/55R19,Primacy SUV+,H/L001,CrossContact H,Assurance MaxGuard,HP71,,HPX,
+SUV,K127A/K137A,SUV_Sports,19,225/55R19,PS4 SUV,A001,SC6 SUV/MC7 SUV,F1 Asym 6 SUV,PS71 SUV,,S1 evo 3 SUV,
+SUV,K127A/K137A,SUV_Sports,20,255/45R20,PS4 SUV,A001,SC6 SUV/MC7 SUV,F1 Asym 6 SUV,PS71 SUV,,S1 evo 3 SUV,
+SUV,K127A/K137A,SUV_Sports,21,265/40R21,PS4 SUV,A001,SC6 SUV/MC7 SUV,F1 Asym 6 SUV,PS71 SUV,,S1 evo 3 SUV,
+PUP,RF12(P),PUP_AT,16,245/70R16,LTX Trail,Dueler A/T 693,Cross Contact AT,Silent Trac,AT51/AT52,Wildpeak AT3W,AT2 XTR,X Fit AT
+PUP,RF12(P),PUP_AT,17,265/70R16,LTX Trail,Dueler A/T 693,Cross Contact AT,Silent Trac,AT51/AT52,Wildpeak AT3W,AT2 XTR,X Fit AT
+PUP,RF12(P),PUP_AT,18,265/60R18,LTX Trail,Dueler A/T 693,Cross Contact AT,Silent Trac,AT51/AT52,Wildpeak AT3W,AT2 XTR,X Fit AT
+PUP,RF12(LT),PUP_AT,16,245/70R16,LTX Force,Dueler A/T D69,Cross Contact AT,Silent Trac,AT51/AT52,Wildpeak AT3W,AT2 XTR,X Fit AT
+PUP,RF12(LT),PUP_AT,17,265/65R17,LTX Force,Dueler A/T D69,Cross Contact AT,Silent Trac,AT51/AT52,Wildpeak AT3W,AT2 XTR,X Fit AT
+PUP,RF12(LT),PUP_AT,18,265/60R18,LTX Force,Dueler A/T D69,Cross Contact AT,Silent Trac,AT51/AT52,Wildpeak AT3W,AT2 XTR,X Fit AT
+PUP,RT05,PUP_MT,16,265/75R16,BFG T/A KM3,M/T673/674,,Boulder MT,MT51/MT71,Wildpeak MT,MT2,
+PUP,RT05,PUP_MT,17,265/65R17,BFG T/A KM3,M/T673/674,,Boulder MT,MT51/MT71,Wildpeak MT,MT2,
+Van,RA18,Van,14,185R14,Agilis 3,R710/Duravis,Van contact U,Cargo Marathon,KC53/KC55,,Linam Van 01,Vantra LT
+Van,RA18,Van,15,195R15,Agilis 3,R710/Duravis,Van contact U,Cargo Marathon,KC53/KC55,,Linam Van 01,Vantra LT
+Van,RA18,Van,16,235/65R16,Agilis 3,R710/Duravis,Van contact U,Cargo Marathon,KC53/KC55,,Linam Van 01,Vantra LT
