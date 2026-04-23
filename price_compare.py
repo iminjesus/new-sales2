@@ -73,7 +73,7 @@ def load_all_months():
     t_f  = _latest_per_month("Tempe_*.csv")
     bj_f = _latest_per_month("BobJane_*.csv")
     jx_f = _latest_per_month("JAX_*.csv")
-    tw_f = _latest_per_month("tempeweborder_*.csv")
+    tw_f = _latest_per_month("[Tt]empeweborder_*.csv")
     all_months = sorted(set(list(t_f) + list(bj_f) + list(jx_f) + list(tw_f)))
     return {
         mk: {

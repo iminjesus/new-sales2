@@ -314,8 +314,28 @@ def best_bj(size, abbr, bj_lk, t_desc=None):
 def best_jax(size, abbr, jax_lk, t_desc=None):
     return _best_competitor(size, abbr, jax_lk, t_desc)
 
-# Tempe WebOrder uses same CSV format as Tempe retail (SIZE,brand,DESCRIPTION,COST,PRICE)
-build_tw_lookup = build_tempe_lookup
+# Tempe WebOrder CSV columns: SIZE, brand, DESCRIPTION, "Sell in Price", "Sell out Price"
+def build_tw_lookup(rows):
+    lk = {}
+    for r in rows:
+        brand = r.get("brand","").strip()
+        abbr  = abbr_for(brand)
+        if not abbr:
+            continue
+        size  = r.get("SIZE","").strip() or normalise_size(r.get("DESCRIPTION",""))
+        desc  = r.get("DESCRIPTION","").strip()
+        # Support both old column names (COST/PRICE) and new (Sell in Price / Sell out Price)
+        cost_raw  = (r.get("Sell in Price","")  or r.get("COST","")).strip()
+        price_raw = (r.get("Sell out Price","") or r.get("PRICE","")).strip()
+        try:
+            cost_val  = float(cost_raw)  if cost_raw  else None
+            price_val = float(price_raw) if price_raw else None
+        except ValueError:
+            continue
+        if not price_val or price_val <= 0:
+            continue
+        lk.setdefault((size, abbr), []).append((desc, cost_val, price_val))
+    return lk
 
 def best_tw(size, abbr, tw_lk):
     return best_tempe(size, abbr, tw_lk)
