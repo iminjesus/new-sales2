@@ -2830,6 +2830,10 @@ def sales_map():
     wh.append("c.latitude IS NOT NULL")
     wh.append("c.longitude IS NOT NULL")
 
+    # 2026 cumulative only
+    wh.append("s.year = %s")
+    params.append(2026)
+
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
     conn = get_connection()
