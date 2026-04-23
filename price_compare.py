@@ -246,8 +246,17 @@ tbody tr:hover td { filter: brightness(.94); }
 .chart-title { font-size: 12.5px; font-weight: 600; color: #223;
                margin-bottom: 8px; }
 .no-data { color: #e53; font-size: 13px; padding-top: 20px; text-align: center; }
-.chart-wrap { height: 520px; max-height: 100%; position: relative; }
+.chart-wrap { flex-shrink: 0; height: 300px; position: relative; }
 .chart-wrap canvas { position: absolute; inset: 0; width:100%!important; height:100%!important; }
+.chart-table-wrap { flex: 1; overflow-y: auto; margin-top: 10px; min-height: 0; }
+.ctable { width: 100%; border-collapse: collapse; font-size: 11px; }
+.ctable thead th { padding: 5px 8px; position: sticky; top: 0;
+                   z-index: 3; text-align: center; white-space: nowrap; font-weight: 700; }
+.ctable thead th.th-month { background: #1F4E79; color: #fff; }
+.ctable thead th:not(.th-month) { background: #f0f4f9; border-bottom: 2px solid #c5ccd8; }
+.ctable tbody td { padding: 4px 8px; border-bottom: 1px solid #eee; white-space: nowrap; }
+.ctable tbody tr:hover td { background: #f0f4fa; }
+.ctable .r { text-align: right; font-family: monospace; }
 </style>
 </head>
 <body>
@@ -326,12 +335,13 @@ tbody tr:hover td { filter: brightness(.94); }
 
     </div>
 
-    <!-- Chart -->
+    <!-- Chart + Table -->
     <div class="chart-panel">
       <div class="chart-title" id="chart-title">Select a size and view mode above</div>
       <div class="chart-wrap" id="chart-wrap">
         <canvas id="main-chart"></canvas>
       </div>
+      <div class="chart-table-wrap" id="chart-table-wrap"></div>
     </div>
 
   </div>
@@ -408,6 +418,76 @@ const _labelPlugin = {
 };
 Chart.register(_labelPlugin);
 
+
+/* ── Table below chart ───────────────────────────────── */
+function _renderTable() {
+    const wrap = document.getElementById('chart-table-wrap');
+    if (!wrap || !selectedMode || !selectedSubKey) return;
+    if (selectedMode === 'store') _renderStoreTable(wrap);
+    else                          _renderBrandTable(wrap);
+}
+
+function _renderStoreTable(wrap) {
+    const abbr = selectedSubKey;
+    const stores = [
+        { key:'tempe', label:'Tempe',         c: SC.tempe },
+        { key:'bj',    label:'Bob Jane',       c: SC.bj   },
+        { key:'jax',   label:'JAX',            c: SC.jax  },
+        { key:'tw',    label:'Tempe WebOrder', c: SC.tw   },
+    ];
+    const storePrices = stores.map(function(s) {
+        if (selectedSize === 'ALL') return _avgAllSizes(abbr, s.key);
+        const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
+        return bsd ? (bsd[s.key] || []) : [];
+    });
+    let html = '<table class="ctable"><thead><tr><th class="th-month">Month</th>';
+    stores.forEach(function(s, si) {
+        const hasData = storePrices[si].some(function(p){ return p !== null && p !== undefined; });
+        if (hasData) html += '<th style="color:' + s.c + '">' + s.label + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    months.forEach(function(m, i) {
+        html += '<tr><td>' + m + '</td>';
+        stores.forEach(function(s, si) {
+            const hasData = storePrices[si].some(function(p){ return p !== null && p !== undefined; });
+            if (!hasData) return;
+            const p = storePrices[si][i];
+            html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+}
+
+function _renderBrandTable(wrap) {
+    const store = selectedSubKey;
+    const entries = Object.keys(BRANDS).map(function(abbr) {
+        const prices = selectedSize === 'ALL'
+            ? _avgAllSizes(abbr, store)
+            : ((D.size_data[selectedSize] || {})[abbr] || {})[store];
+        return { abbr: abbr, prices: prices || [] };
+    }).filter(function(e) {
+        return e.prices.some(function(p){ return p !== null && p !== undefined; });
+    });
+    let html = '<table class="ctable"><thead><tr><th class="th-month">Month</th>';
+    entries.forEach(function(e) {
+        const c = '#' + (BCOLORS[e.abbr] || '555555');
+        html += '<th style="color:' + c + '">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+    months.forEach(function(m, i) {
+        html += '<tr><td>' + m + '</td>';
+        entries.forEach(function(e) {
+            const p = e.prices[i];
+            html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    wrap.innerHTML = html;
+}
+
 /* ── state ────────────────────────────────────────────── */
 let selectedSize    = null;
 let selectedMode    = null;   // 'store' | 'brand'
@@ -437,6 +517,8 @@ function _render(title, datasets) {
 function _noData(msg) {
     document.getElementById('chart-title').textContent = msg;
     if (_chart) { _chart.destroy(); _chart = null; }
+    const wrap = document.getElementById('chart-table-wrap');
+    if (wrap) wrap.innerHTML = '';
 }
 
 /* ── ALL sizes: average across every size ──────────────── */
@@ -480,6 +562,7 @@ function _renderStore() {
     if (!ds.length) { _noData((BRANDS[abbr]||abbr) + ' — ' + sizeLabel + ': no data'); return; }
     _render((BRANDS[abbr]||abbr) + ' \u2014 ' + sizeLabel
             + ' \u2014 Tempe vs Bob Jane vs JAX', ds);
+    _renderTable();
 }
 
 /* ── By Brand: selected store → brand lines ─────────── */
@@ -505,6 +588,7 @@ function _renderBrand() {
     });
     if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
     _render(SL[store] + ' \u2014 ' + sizeLabel + ' \u2014 Brand Comparison', ds);
+    _renderTable();
 }
 
 /* ── Size buttons ─────────────────────────────────────── */
