@@ -113,7 +113,7 @@ async function loadSalesMap() {
   `${shipTo} - ${shipNm}<br>` +
   `Region: ${regionVal || "-"}<br>` +
   `BDE: ${bde || "-"}<br>` +
-  `Total (2026): ${(total ?? 0).toLocaleString()}`
+  `<span id="popup-total">Total (2026): …</span>`
   );
 
   marker.on("click", () => {
@@ -206,6 +206,11 @@ async function drawShopCharts(shipToCode) {
   const sales25 = monthLabels.map((_, i) => Number((sales25Rows[i]?.value) || 0));
   const sales26 = monthLabels.map((_, i) => Number((sales26Rows[i]?.value) || 0));
   const targets26 = monthLabels.map((_, i) => Number((target26Rows[i]?.value) || 0));
+
+  // Update popup total with the same data source as the chart
+  const total26 = sales26.reduce((a, b) => a + b, 0);
+  const popupTotalEl = document.getElementById("popup-total");
+  if (popupTotalEl) popupTotalEl.textContent = `Total (2026): ${total26.toLocaleString()}`;
 
   const achieve26 = monthLabels.map((_, i) =>
   targets26[i] > 0 ? (sales26[i] / targets26[i]) * 100 : 0
