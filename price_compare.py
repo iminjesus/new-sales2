@@ -262,6 +262,9 @@ tbody tr:hover td { filter: brightness(.94); }
 .ctable tbody td { padding: 4px 8px; border-bottom: 1px solid #eee; white-space: nowrap; }
 .ctable tbody tr:hover td { background: #f0f4fa; }
 .ctable .r { text-align: right; font-family: monospace; }
+.ctable.idxtbl thead th.th-month { background: #37474F; }
+.idx-title { font-size: 10.5px; font-weight: 700; color: #37474F;
+             padding: 10px 0 3px 2px; letter-spacing: .03em; text-transform: uppercase; }
 </style>
 </head>
 <body>
@@ -436,10 +439,10 @@ function _renderStoreTable(wrap) {
     const abbr = selectedSubKey;
     const stores = [
         { key:'tempe', label:'Tempe',              c: SC.tempe },
-        { key:'bj',    label:'Bob Jane',          c: SC.bj   },
-        { key:'jax',   label:'JAX',               c: SC.jax  },
-        { key:'tw',    label:'TempeWOS Sell Out',  c: SC.tw   },
-        { key:'twi',   label:'TempeWOS Sell In',   c: SC.twi  },
+        { key:'bj',    label:'Bob Jane',           c: SC.bj   },
+        { key:'jax',   label:'JAX',                c: SC.jax  },
+        { key:'tw',    label:'TempeWOS Sell Out',   c: SC.tw   },
+        { key:'twi',   label:'TempeWOS Sell In',    c: SC.twi  },
     ];
     const storePrices = stores.map(function(s) {
         if (abbr === 'ALL') return _avgAllBrands(selectedSize, s.key);
@@ -447,7 +450,8 @@ function _renderStoreTable(wrap) {
         const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
         return bsd ? (bsd[s.key] || []) : [];
     });
-    // rows = stores, cols = months
+
+    // ── Price table ──
     let html = '<table class="ctable"><thead><tr><th class="th-month">Store</th>';
     months.forEach(function(m) { html += '<th class="th-month">' + m + '</th>'; });
     html += '</tr></thead><tbody>';
@@ -457,6 +461,35 @@ function _renderStoreTable(wrap) {
         html += '<tr><td style="color:' + s.c + ';font-weight:700">' + s.label + '</td>';
         storePrices[si].forEach(function(p) {
             html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    // ── JAX Index table (JAX = 100) ──
+    const jaxIdx = stores.findIndex(function(s) { return s.key === 'jax'; });
+    const jaxPrices = jaxIdx >= 0 ? storePrices[jaxIdx] : [];
+    html += '<div class="idx-title">JAX Index &nbsp;(JAX = 100)</div>';
+    html += '<table class="ctable idxtbl"><thead><tr><th class="th-month">Store</th>';
+    months.forEach(function(m) { html += '<th class="th-month">' + m + '</th>'; });
+    html += '</tr></thead><tbody>';
+    stores.forEach(function(s, si) {
+        const hasData = storePrices[si].some(function(p){ return p !== null && p !== undefined; });
+        if (!hasData) return;
+        html += '<tr><td style="color:' + s.c + ';font-weight:700">' + s.label + '</td>';
+        storePrices[si].forEach(function(p, i) {
+            const base = jaxPrices[i];
+            let cell;
+            if (base == null) {
+                cell = '—';                          // JAX blank → all blank
+            } else if (p == null) {
+                cell = '—';                          // store blank → blank
+            } else {
+                const idx = Math.round(p / base * 100);
+                const clr = idx < 98 ? '#388E3C' : (idx > 102 ? '#C62828' : '#37474F');
+                cell = '<b style="color:' + clr + '">' + idx + '</b>';
+            }
+            html += '<td class="r">' + cell + '</td>';
         });
         html += '</tr>';
     });
@@ -474,7 +507,8 @@ function _renderBrandTable(wrap) {
     }).filter(function(e) {
         return e.prices.some(function(p){ return p !== null && p !== undefined; });
     });
-    // rows = brands, cols = months
+
+    // ── Price table ──
     let html = '<table class="ctable"><thead><tr><th class="th-month">Brand</th>';
     months.forEach(function(m) { html += '<th class="th-month">' + m + '</th>'; });
     html += '</tr></thead><tbody>';
@@ -483,6 +517,34 @@ function _renderBrandTable(wrap) {
         html += '<tr><td style="color:' + c + ';font-weight:700">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</td>';
         e.prices.forEach(function(p) {
             html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
+        });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    // ── HK Index table (HK = 100) ──
+    const hkEntry = entries.find(function(e) { return e.abbr === 'HK'; });
+    const hkPrices = hkEntry ? hkEntry.prices : [];
+    html += '<div class="idx-title">HK Index &nbsp;(Hankook = 100)</div>';
+    html += '<table class="ctable idxtbl"><thead><tr><th class="th-month">Brand</th>';
+    months.forEach(function(m) { html += '<th class="th-month">' + m + '</th>'; });
+    html += '</tr></thead><tbody>';
+    entries.forEach(function(e) {
+        const c = '#' + (BCOLORS[e.abbr] || '555555');
+        html += '<tr><td style="color:' + c + ';font-weight:700">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</td>';
+        e.prices.forEach(function(p, i) {
+            const base = hkPrices[i];
+            let cell;
+            if (base == null) {
+                cell = '—';                          // HK blank → all blank
+            } else if (p == null) {
+                cell = '—';                          // brand blank → blank
+            } else {
+                const idx = Math.round(p / base * 100);
+                const clr = idx < 98 ? '#388E3C' : (idx > 102 ? '#C62828' : '#37474F');
+                cell = '<b style="color:' + clr + '">' + idx + '</b>';
+            }
+            html += '<td class="r">' + cell + '</td>';
         });
         html += '</tr>';
     });
