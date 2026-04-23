@@ -113,7 +113,7 @@ async function loadSalesMap() {
   `${shipTo} - ${shipNm}<br>` +
   `Region: ${regionVal || "-"}<br>` +
   `BDE: ${bde || "-"}<br>` +
-  `Total (2025): ${(total ?? 0).toLocaleString()}`
+  `Total (2026): ${(total ?? 0).toLocaleString()}`
   );
 
   marker.on("click", () => {
