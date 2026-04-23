@@ -19,7 +19,7 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 from price_compare_jax import (
     load_csv,
     build_tempe_lookup, build_bj_lookup, build_jax_lookup, build_tw_lookup,
-    best_tempe, best_bj, best_jax, best_tw,
+    best_tempe, best_bj, best_jax, best_tw, best_twi,
     BRANDS, SIZE_CATEGORY, BRAND_COLOURS, ROW_FILLS,
 )
 
@@ -92,9 +92,9 @@ def build_data(monthly):
     sizes        = list(SIZE_CATEGORY.keys())
     abbrs        = list(BRANDS.keys())
 
-    store_avg = {"tempe": [], "bj": [], "jax": [], "tw": []}
+    store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": []}
     # size_data[size][abbr][store] = [price_per_month, ...]
-    size_data = {s: {a: {"tempe": [], "bj": [], "jax": [], "tw": []} for a in abbrs} for s in sizes}
+    size_data = {s: {a: {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": []} for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
     summary_rows = []
@@ -105,24 +105,27 @@ def build_data(monthly):
         bj_lk  = build_bj_lookup(md["bj_rows"])
         jx_lk  = build_jax_lookup(md["jx_rows"])
         tw_lk  = build_tw_lookup(md["tw_rows"])
-        tp, bp, jp, twp = [], [], [], []
+        tp, bp, jp, twp, twip2 = [], [], [], [], []
 
         for size in sizes:
             for abbr in abbrs:
                 t_desc, t_cost, t_price      = best_tempe(size, abbr, t_lk)
                 bj_desc, bj_price, *_        = best_bj(size, abbr, bj_lk, t_desc)
                 jx_desc, jx_price, *_        = best_jax(size, abbr, jx_lk, t_desc)
-                _tw_desc, _tw_cost, tw_price = best_tw(size, abbr, tw_lk)
+                _tw_desc, _tw_cost, tw_price  = best_tw(size, abbr, tw_lk)
+                _twi_desc, _, twi_price          = best_twi(size, abbr, tw_lk)
 
                 size_data[size][abbr]["tempe"].append(t_price)
                 size_data[size][abbr]["bj"].append(bj_price)
                 size_data[size][abbr]["jax"].append(jx_price)
                 size_data[size][abbr]["tw"].append(tw_price)
+                size_data[size][abbr]["twi"].append(twi_price)
 
                 if t_price:   tp.append(t_price)
                 if bj_price:  bp.append(bj_price)
                 if jx_price:  jp.append(jx_price)
                 if tw_price:  twp.append(tw_price)
+                if twi_price: twip2.append(twi_price)
 
                 if mk == latest and (t_price or bj_price or jx_price):
                     cat = SIZE_CATEGORY.get(size, ("?", "?", "?"))
@@ -139,14 +142,15 @@ def build_data(monthly):
         store_avg["tempe"].append(round(sum(tp)/len(tp),   2) if tp  else None)
         store_avg["bj"].append(round(sum(bp)/len(bp),     2) if bp  else None)
         store_avg["jax"].append(round(sum(jp)/len(jp),    2) if jp  else None)
-        store_avg["tw"].append(round(sum(twp)/len(twp),   2) if twp else None)
+        store_avg["tw"].append(round(sum(twp)/len(twp),   2) if twp   else None)
+        store_avg["twi"].append(round(sum(twip2)/len(twip2), 2) if twip2 else None)
 
     # brand_size_data: only combos that have at least one real price
     brand_size_data = {}
     for abbr in abbrs:
         for size in sizes:
             d = size_data[size][abbr]
-            if any(p is not None for p in d["tempe"] + d["bj"] + d["jax"] + d["tw"]):
+            if any(p is not None for p in d["tempe"] + d["bj"] + d["jax"] + d["tw"] + d["twi"]):
                 brand_size_data.setdefault(abbr, {})[size] = d
 
     return {
@@ -162,7 +166,8 @@ def build_data(monthly):
                    size_data[size][abbr]["tempe"] +
                    size_data[size][abbr]["bj"] +
                    size_data[size][abbr]["jax"] +
-                   size_data[size][abbr]["tw"])
+                   size_data[size][abbr]["tw"] +
+                   size_data[size][abbr]["twi"])
         }, key=lambda s: sizes.index(s)),
     }
 
@@ -354,9 +359,9 @@ const BCOLORS= {{ bcolors_json | safe }};
 const SIZES  = {{ sizes_json | safe }};
 const months = D.months;
 
-const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800', tw:'#9C27B0' };
-const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX',   tw:'Tempe WebOrder' };
-const SD = { tempe:[], bj:[5,5], jax:[2,3], tw:[8,3] };
+const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800', tw:'#9C27B0', twi:'#E040FB' };
+const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX',   tw:'TempeWOS Sell Out', twi:'TempeWOS Sell In' };
+const SD = { tempe:[], bj:[5,5], jax:[2,3], tw:[8,3], twi:[3,3] };
 const PALETTE = ['#C8102E','#E31837','#FFA500','#003087','#00539B',
                  '#E8001A','#FF6600','#E4002B','#003DA5','#555555'];
 
@@ -430,10 +435,11 @@ function _renderTable() {
 function _renderStoreTable(wrap) {
     const abbr = selectedSubKey;
     const stores = [
-        { key:'tempe', label:'Tempe',         c: SC.tempe },
-        { key:'bj',    label:'Bob Jane',       c: SC.bj   },
-        { key:'jax',   label:'JAX',            c: SC.jax  },
-        { key:'tw',    label:'Tempe WebOrder', c: SC.tw   },
+        { key:'tempe', label:'Tempe',              c: SC.tempe },
+        { key:'bj',    label:'Bob Jane',          c: SC.bj   },
+        { key:'jax',   label:'JAX',               c: SC.jax  },
+        { key:'tw',    label:'TempeWOS Sell Out',  c: SC.tw   },
+        { key:'twi',   label:'TempeWOS Sell In',   c: SC.twi  },
     ];
     const storePrices = stores.map(function(s) {
         if (selectedSize === 'ALL') return _avgAllSizes(abbr, s.key);
@@ -540,7 +546,7 @@ function _tryRender() {
 function _renderStore() {
     const abbr = selectedSubKey;
     const sizeLabel = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
-    const ds = ['tempe','bj','jax','tw'].reduce((arr, s) => {
+    const ds = ['tempe','bj','jax','tw','twi'].reduce((arr, s) => {
         let prices;
         if (selectedSize === 'ALL') {
             prices = _avgAllSizes(abbr, s);
@@ -634,10 +640,11 @@ function onModeBrand(btn) {
     const subBtns = document.getElementById('sub-btns');
     subBtns.innerHTML = '';
 
-    [{key:'tempe', label:'Tempe',          c:'#2196F3'},
-     {key:'bj',    label:'Bob Jane',      c:'#4CAF50'},
-     {key:'jax',   label:'JAX',           c:'#FF9800'},
-     {key:'tw',    label:'Tempe WebOrder',c:'#9C27B0'}].forEach(function(s) {
+    [{key:'tempe', label:'Tempe',              c:'#2196F3'},
+     {key:'bj',    label:'Bob Jane',          c:'#4CAF50'},
+     {key:'jax',   label:'JAX',               c:'#FF9800'},
+     {key:'tw',    label:'TempeWOS Sell Out',  c:'#9C27B0'},
+     {key:'twi',   label:'TempeWOS Sell In',   c:'#E040FB'}].forEach(function(s) {
         const b = document.createElement('button');
         b.className = 'btn';
         b.textContent = s.label;

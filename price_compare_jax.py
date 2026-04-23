@@ -332,13 +332,23 @@ def build_tw_lookup(rows):
             price_val = float(price_raw) if price_raw else None
         except ValueError:
             continue
-        if not price_val or price_val <= 0:
+        # Keep row if either sell-in or sell-out is positive
+        if (not cost_val or cost_val <= 0) and (not price_val or price_val <= 0):
             continue
         lk.setdefault((size, abbr), []).append((desc, cost_val, price_val))
     return lk
 
 def best_tw(size, abbr, tw_lk):
+    """Returns (desc, sell_in_price, sell_out_price)."""
     return best_tempe(size, abbr, tw_lk)
+
+def best_twi(size, abbr, tw_lk):
+    """Returns (desc, None, sell_in_price) — for the Sell In line."""
+    items = tw_lk.get((size, abbr))
+    if not items:
+        return "", None, None
+    desc, cost_val, _price_val = items[0]
+    return desc, None, cost_val
 
 # ── Chunk 3: Sheet 1 — Summary (9 cols/brand) ─────────────────────────────────
 
