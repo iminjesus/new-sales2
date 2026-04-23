@@ -744,8 +744,8 @@ function onModeBrand(btn) {
     });
     // default: ALL
     allBtn.click();
-    // auto-select By Store mode
-    document.getElementById('btn-store').click();
+    // auto-select By Brand mode
+    document.getElementById('btn-brand').click();
 }());
 </script>
 </body>
