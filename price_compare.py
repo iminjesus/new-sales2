@@ -18,8 +18,8 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 
 from price_compare_jax import (
     load_csv,
-    build_tempe_lookup, build_bj_lookup, build_jax_lookup,
-    best_tempe, best_bj, best_jax,
+    build_tempe_lookup, build_bj_lookup, build_jax_lookup, build_tw_lookup,
+    best_tempe, best_bj, best_jax, best_tw,
     BRANDS, SIZE_CATEGORY, BRAND_COLOURS, ROW_FILLS,
 )
 
@@ -73,12 +73,14 @@ def load_all_months():
     t_f  = _latest_per_month("Tempe_*.csv")
     bj_f = _latest_per_month("BobJane_*.csv")
     jx_f = _latest_per_month("JAX_*.csv")
-    all_months = sorted(set(list(t_f) + list(bj_f) + list(jx_f)))
+    tw_f = _latest_per_month("tempeweborder_*.csv")
+    all_months = sorted(set(list(t_f) + list(bj_f) + list(jx_f) + list(tw_f)))
     return {
         mk: {
             "t_rows":  load_csv(t_f[mk])  if mk in t_f  else [],
             "bj_rows": load_csv(bj_f[mk]) if mk in bj_f else [],
             "jx_rows": load_csv(jx_f[mk]) if mk in jx_f else [],
+            "tw_rows": load_csv(tw_f[mk]) if mk in tw_f else [],
         }
         for mk in all_months
     }
@@ -90,9 +92,9 @@ def build_data(monthly):
     sizes        = list(SIZE_CATEGORY.keys())
     abbrs        = list(BRANDS.keys())
 
-    store_avg = {"tempe": [], "bj": [], "jax": []}
+    store_avg = {"tempe": [], "bj": [], "jax": [], "tw": []}
     # size_data[size][abbr][store] = [price_per_month, ...]
-    size_data = {s: {a: {"tempe": [], "bj": [], "jax": []} for a in abbrs} for s in sizes}
+    size_data = {s: {a: {"tempe": [], "bj": [], "jax": [], "tw": []} for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
     summary_rows = []
@@ -102,21 +104,25 @@ def build_data(monthly):
         t_lk   = build_tempe_lookup(md["t_rows"])
         bj_lk  = build_bj_lookup(md["bj_rows"])
         jx_lk  = build_jax_lookup(md["jx_rows"])
-        tp, bp, jp = [], [], []
+        tw_lk  = build_tw_lookup(md["tw_rows"])
+        tp, bp, jp, twp = [], [], [], []
 
         for size in sizes:
             for abbr in abbrs:
-                t_desc, t_cost, t_price  = best_tempe(size, abbr, t_lk)
-                bj_desc, bj_price, *_    = best_bj(size, abbr, bj_lk, t_desc)
-                jx_desc, jx_price, *_    = best_jax(size, abbr, jx_lk, t_desc)
+                t_desc, t_cost, t_price      = best_tempe(size, abbr, t_lk)
+                bj_desc, bj_price, *_        = best_bj(size, abbr, bj_lk, t_desc)
+                jx_desc, jx_price, *_        = best_jax(size, abbr, jx_lk, t_desc)
+                _tw_desc, _tw_cost, tw_price = best_tw(size, abbr, tw_lk)
 
                 size_data[size][abbr]["tempe"].append(t_price)
                 size_data[size][abbr]["bj"].append(bj_price)
                 size_data[size][abbr]["jax"].append(jx_price)
+                size_data[size][abbr]["tw"].append(tw_price)
 
-                if t_price:  tp.append(t_price)
-                if bj_price: bp.append(bj_price)
-                if jx_price: jp.append(jx_price)
+                if t_price:   tp.append(t_price)
+                if bj_price:  bp.append(bj_price)
+                if jx_price:  jp.append(jx_price)
+                if tw_price:  twp.append(tw_price)
 
                 if mk == latest and (t_price or bj_price or jx_price):
                     cat = SIZE_CATEGORY.get(size, ("?", "?", "?"))
@@ -130,16 +136,17 @@ def build_data(monthly):
                         "category":  f"{cat[0]}/{cat[1]}",
                     })
 
-        store_avg["tempe"].append(round(sum(tp)/len(tp), 2) if tp else None)
-        store_avg["bj"].append(round(sum(bp)/len(bp), 2)   if bp else None)
-        store_avg["jax"].append(round(sum(jp)/len(jp), 2)  if jp else None)
+        store_avg["tempe"].append(round(sum(tp)/len(tp),   2) if tp  else None)
+        store_avg["bj"].append(round(sum(bp)/len(bp),     2) if bp  else None)
+        store_avg["jax"].append(round(sum(jp)/len(jp),    2) if jp  else None)
+        store_avg["tw"].append(round(sum(twp)/len(twp),   2) if twp else None)
 
     # brand_size_data: only combos that have at least one real price
     brand_size_data = {}
     for abbr in abbrs:
         for size in sizes:
             d = size_data[size][abbr]
-            if any(p is not None for p in d["tempe"] + d["bj"] + d["jax"]):
+            if any(p is not None for p in d["tempe"] + d["bj"] + d["jax"] + d["tw"]):
                 brand_size_data.setdefault(abbr, {})[size] = d
 
     return {
@@ -154,7 +161,8 @@ def build_data(monthly):
             if any(p is not None for p in
                    size_data[size][abbr]["tempe"] +
                    size_data[size][abbr]["bj"] +
-                   size_data[size][abbr]["jax"])
+                   size_data[size][abbr]["jax"] +
+                   size_data[size][abbr]["tw"])
         }, key=lambda s: sizes.index(s)),
     }
 
@@ -336,9 +344,9 @@ const BCOLORS= {{ bcolors_json | safe }};
 const SIZES  = {{ sizes_json | safe }};
 const months = D.months;
 
-const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800' };
-const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX' };
-const SD = { tempe:[], bj:[5,5], jax:[2,3] };
+const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800', tw:'#9C27B0' };
+const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX',   tw:'Tempe WebOrder' };
+const SD = { tempe:[], bj:[5,5], jax:[2,3], tw:[8,3] };
 const PALETTE = ['#C8102E','#E31837','#FFA500','#003087','#00539B',
                  '#E8001A','#FF6600','#E4002B','#003DA5','#555555'];
 
@@ -435,8 +443,9 @@ function _noData(msg) {
 function _avgAllSizes(abbr, store) {
     const nM = months.length;
     const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
+    const storeKey = store;  // 'tempe','bj','jax','tw'
     Object.values(D.size_data).forEach(function(sizeAbbrs) {
-        const prices = ((sizeAbbrs[abbr] || {})[store]) || [];
+        const prices = ((sizeAbbrs[abbr] || {})[storeKey]) || [];
         prices.forEach(function(p, i) {
             if (p !== null && p !== undefined) { sums[i] += p; counts[i]++; }
         });
@@ -454,7 +463,7 @@ function _tryRender() {
 function _renderStore() {
     const abbr = selectedSubKey;
     const sizeLabel = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
-    const ds = ['tempe','bj','jax'].reduce((arr, s) => {
+    const ds = ['tempe','bj','jax','tw'].reduce((arr, s) => {
         let prices;
         if (selectedSize === 'ALL') {
             prices = _avgAllSizes(abbr, s);
@@ -546,9 +555,10 @@ function onModeBrand(btn) {
     const subBtns = document.getElementById('sub-btns');
     subBtns.innerHTML = '';
 
-    [{key:'tempe', label:'Tempe',    c:'#2196F3'},
-     {key:'bj',    label:'Bob Jane', c:'#4CAF50'},
-     {key:'jax',   label:'JAX',      c:'#FF9800'}].forEach(function(s) {
+    [{key:'tempe', label:'Tempe',          c:'#2196F3'},
+     {key:'bj',    label:'Bob Jane',      c:'#4CAF50'},
+     {key:'jax',   label:'JAX',           c:'#FF9800'},
+     {key:'tw',    label:'Tempe WebOrder',c:'#9C27B0'}].forEach(function(s) {
         const b = document.createElement('button');
         b.className = 'btn';
         b.textContent = s.label;

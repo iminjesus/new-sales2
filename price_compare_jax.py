@@ -314,6 +314,12 @@ def best_bj(size, abbr, bj_lk, t_desc=None):
 def best_jax(size, abbr, jax_lk, t_desc=None):
     return _best_competitor(size, abbr, jax_lk, t_desc)
 
+# Tempe WebOrder uses same CSV format as Tempe retail (SIZE,brand,DESCRIPTION,COST,PRICE)
+build_tw_lookup = build_tempe_lookup
+
+def best_tw(size, abbr, tw_lk):
+    return best_tempe(size, abbr, tw_lk)
+
 # ── Chunk 3: Sheet 1 — Summary (9 cols/brand) ─────────────────────────────────
 
 def sheet_summary(wb, t_rows, bj_rows, jax_rows):
