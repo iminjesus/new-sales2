@@ -198,20 +198,15 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 
 .body { display: flex; flex: 1; overflow: hidden; }
 
-/* ── LEFT table ── */
-.left { width: 38%; border-right: 1px solid #d0d5dd;
-        overflow-y: auto; background: #fff; }
-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-thead th { background: #1F4E79; color: #fff; padding: 7px 5px;
-           position: sticky; top: 0; z-index: 5; text-align: center; }
-tbody td { padding: 4px 5px; border-bottom: 1px solid #eee; white-space: nowrap; }
-tbody tr:hover td { filter: brightness(.94); }
-.r { text-align: right; font-family: monospace; }
-.dim { color: #888; font-size: 10.5px; }
-.sep td { background: #e4e8ef !important; height: 4px; }
+/* ── LEFT panel — comparison tables ── */
+.left { width: 40%; border-right: 1px solid #d0d5dd;
+        display: flex; flex-direction: column; overflow: hidden; background: #fff; }
+.left-title { background: #1F4E79; color: #fff; padding: 7px 14px;
+              font-size: 11.5px; font-weight: 700; flex-shrink: 0; letter-spacing: .02em; }
+#chart-table-wrap { flex: 1; overflow-y: auto; padding: 6px 0; }
 
 /* ── RIGHT panel ── */
-.right { width: 62%; display: flex; flex-direction: column; overflow: hidden; }
+.right { width: 60%; display: flex; flex-direction: column; overflow: hidden; }
 
 /* Button panel */
 .btn-panel { flex-shrink: 0; padding: 10px 14px 8px; background: #f5f7fa;
@@ -251,9 +246,9 @@ tbody tr:hover td { filter: brightness(.94); }
 .chart-title { font-size: 12.5px; font-weight: 600; color: #223;
                margin-bottom: 8px; }
 .no-data { color: #e53; font-size: 13px; padding-top: 20px; text-align: center; }
-.chart-wrap { flex-shrink: 0; height: 300px; position: relative; }
+.chart-wrap { flex: 1; min-height: 220px; position: relative; }
 .chart-wrap canvas { position: absolute; inset: 0; width:100%!important; height:100%!important; }
-.chart-table-wrap { flex: 1; overflow-y: auto; margin-top: 10px; min-height: 0; }
+
 .ctable { width: 100%; border-collapse: collapse; font-size: 11px; }
 .ctable thead th { padding: 5px 8px; position: sticky; top: 0;
                    z-index: 3; text-align: center; white-space: nowrap; font-weight: 700; }
@@ -264,7 +259,7 @@ tbody tr:hover td { filter: brightness(.94); }
 .ctable .r { text-align: right; font-family: monospace; }
 .ctable.idxtbl thead th.th-month { background: #37474F; }
 .idx-title { font-size: 10.5px; font-weight: 700; color: #37474F;
-             padding: 10px 0 3px 2px; letter-spacing: .03em; text-transform: uppercase; }
+             padding: 10px 8px 3px 8px; letter-spacing: .03em; text-transform: uppercase; }
 </style>
 </head>
 <body>
@@ -284,33 +279,10 @@ tbody tr:hover td { filter: brightness(.94); }
 
 <div class="body">
 
-  <!-- ── LEFT: summary table ── -->
+  <!-- ── LEFT: comparison tables ── -->
   <div class="left">
-    <table>
-      <thead>
-        <tr>
-          <th>Size</th><th>Brand</th><th>Cat.</th>
-          <th>Tempe</th><th>BJ</th><th>JAX</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% set prev = namespace(size='') %}
-        {% for r in summary_rows %}
-          {% if r.size != prev.size and not loop.first %}
-            <tr class="sep"><td colspan="6"></td></tr>
-          {% endif %}
-          {% set prev.size = r.size %}
-          <tr style="background:#{{ fills.get(r.abbr,'ffffff') }}">
-            <td>{{ r.size }}</td>
-            <td>{{ r.brand }}</td>
-            <td class="dim">{{ r.category }}</td>
-            <td class="r">{{ '$%d'|format(r.t_price|int)   if r.t_price   else '—' }}</td>
-            <td class="r">{{ '$%d'|format(r.bj_price|int)  if r.bj_price  else '—' }}</td>
-            <td class="r">{{ '$%d'|format(r.jax_price|int) if r.jax_price else '—' }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="left-title">Comparison Base table for popular size</div>
+    <div id="chart-table-wrap"></div>
   </div>
 
   <!-- ── RIGHT: controls + chart ── -->
@@ -343,13 +315,12 @@ tbody tr:hover td { filter: brightness(.94); }
 
     </div>
 
-    <!-- Chart + Table -->
+    <!-- Chart -->
     <div class="chart-panel">
       <div class="chart-title" id="chart-title">Select a size and view mode above</div>
       <div class="chart-wrap" id="chart-wrap">
         <canvas id="main-chart"></canvas>
       </div>
-      <div class="chart-table-wrap" id="chart-table-wrap"></div>
     </div>
 
   </div>
@@ -801,8 +772,6 @@ def price_dashboard():
 
     return render_template_string(
         _HTML,
-        summary_rows = data["summary_rows"],
-        fills        = ROW_FILLS,
         month_count  = len(data["months"]),
         chart_json   = chart_json,
         brands_json  = json.dumps(BRANDS),
