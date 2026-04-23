@@ -249,17 +249,17 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 .chart-wrap { flex: 1; min-height: 220px; position: relative; }
 .chart-wrap canvas { position: absolute; inset: 0; width:100%!important; height:100%!important; }
 
-.ctable { width: 100%; border-collapse: collapse; font-size: 11px; }
-.ctable thead th { padding: 5px 8px; position: sticky; top: 0;
+.ctable { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.ctable thead th { padding: 7px 12px; position: sticky; top: 0;
                    z-index: 3; text-align: center; white-space: nowrap; font-weight: 700; }
 .ctable thead th.th-month { background: #1F4E79; color: #fff; }
 .ctable thead th:not(.th-month) { background: #f0f4f9; border-bottom: 2px solid #c5ccd8; }
-.ctable tbody td { padding: 4px 8px; border-bottom: 1px solid #eee; white-space: nowrap; }
+.ctable tbody td { padding: 7px 12px; border-bottom: 1px solid #eee; white-space: nowrap; font-size: 13.5px; }
 .ctable tbody tr:hover td { background: #f0f4fa; }
 .ctable .r { text-align: right; font-family: monospace; }
 .ctable.idxtbl thead th.th-month { background: #37474F; }
-.idx-title { font-size: 10.5px; font-weight: 700; color: #37474F;
-             padding: 10px 8px 3px 8px; letter-spacing: .03em; text-transform: uppercase; }
+.idx-title { font-size: 12px; font-weight: 700; color: #37474F;
+             padding: 12px 12px 4px 12px; letter-spacing: .03em; text-transform: uppercase; }
 </style>
 </head>
 <body>
