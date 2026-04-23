@@ -2303,7 +2303,11 @@ async function refreshShipToCustom(){
 
   const res = await fetchJSON(`/api/ship_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
-  __SHIP_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+  __SHIP_TO_OPTIONS = rows.map(x => {
+    if (x === null || x === undefined) return '';
+    if (typeof x === 'object') return x.ship_to_name || x.v || x.name || x.label || '';
+    return String(x);
+  }).filter(Boolean);
 }
 
 function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
