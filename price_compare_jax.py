@@ -205,7 +205,9 @@ def kw_match(desc, keywords):
 
 def load_csv(path):
     with open(path, encoding="latin-1") as f:
-        return list(csv.DictReader(f))
+        rows = list(csv.DictReader(f))
+    # normalise header keys to uppercase so lookups work regardless of case
+    return [{k.upper(): v for k, v in r.items()} for r in rows]
 
 # ── Chunk 2: Series extraction + lookup builders + matchers ───────────────────
 
