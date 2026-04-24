@@ -200,18 +200,14 @@ async function drawShopCharts(shipToCode, shopLat, shopLng) {
   const visitParams26 = hasLoc
     ? new URLSearchParams({ lat: shopLat, lng: shopLng, year: "2026" })
     : null;
-  const visitParams25 = hasLoc
-    ? new URLSearchParams({ lat: shopLat, lng: shopLng, year: "2025" })
-    : null;
 
   const [sales25Rows, sales26Rows, target26Rows, yearlyRows,
-         visit26Rows, visit25Rows] = await Promise.all([
+         visit26Rows] = await Promise.all([
     fetchJSON("/api/monthly_sales?" + params25.toString()),
     fetchJSON("/api/monthly_sales?" + params26.toString()),
     fetchJSON("/api/monthly_target?" + params26.toString()),
     fetchJSON("/api/yearly_sales?" + params.toString()),
     visitParams26 ? fetchJSON("/api/monthly_visits?" + visitParams26.toString()) : Promise.resolve([]),
-    visitParams25 ? fetchJSON("/api/monthly_visits?" + visitParams25.toString()) : Promise.resolve([]),
   ]);
 
   const monthLabels = ["Ja","Fe","Ma","Ap","Ma","Ju","Ju","Au","Se","Oc","No","De"];
@@ -226,8 +222,7 @@ async function drawShopCharts(shipToCode, shopLat, shopLng) {
     return arr;
   };
   const visits26 = toVisitArr(visit26Rows);
-  const visits25 = toVisitArr(visit25Rows);
-  const hasVisits = visits26.some(v => v !== null) || visits25.some(v => v !== null);
+  const hasVisits = visits26.some(v => v !== null);
 
   // Update popup total
   const total26 = sales26.reduce((a, b) => a + b, 0);
@@ -263,19 +258,6 @@ async function drawShopCharts(shipToCode, shopLat, shopLng) {
     ];
 
     if (hasVisits) {
-      datasets.push({
-        label: "Visit (2025)",
-        type: "line",
-        data: visits25,
-        borderColor: "#FF9800",
-        backgroundColor: "transparent",
-        borderWidth: 1.5,
-        borderDash: [4, 3],
-        pointRadius: 3,
-        spanGaps: true,
-        yAxisID: "y1",
-        datalabels: { display: false }
-      });
       datasets.push({
         label: "Visit (2026)",
         type: "line",
