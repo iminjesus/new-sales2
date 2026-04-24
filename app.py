@@ -4565,6 +4565,21 @@ build_global_top_once()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
-    from price_compare import price_dashboard
+    from price_compare import price_dashboard, load_all_months, build_data
     app.add_url_rule('/price', 'price_dashboard', price_dashboard)
+
+    @app.get("/api/price_debug")
+    def price_debug():
+        from flask import jsonify
+        monthly = load_all_months()
+        if not monthly:
+            return jsonify({"error": "no monthly data"})
+        data = build_data(monthly)
+        return jsonify({
+            "months": data["months"],
+            "store_avg_tempe": data["store_avg"]["tempe"],
+            "brand_size_data_keys": list(data["brand_size_data"].keys()),
+            "sample": {abbr: list(sizes.keys())[:3] for abbr, sizes in list(data["brand_size_data"].items())[:3]},
+        })
+
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
