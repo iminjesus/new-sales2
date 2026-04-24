@@ -278,8 +278,8 @@ def category_filters_stock(alias: str, category: str):
         joins.append("JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) = s.material")
 
     elif cat == "SUV":
-        # stock에는 pattern이 없을 수 있으니 carrying_2601로부터 pattern 가져와야 함
-        joins.append("JOIN carrying_2601 c ON c.m_code = s.material")
+        # stock에는 pattern이 없을 수 있으니 carrying_2602로부터 pattern 가져와야 함
+        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
         joins.append("JOIN suv suv ON suv.Pattern = c.pattern")
 
     elif cat == "LOWPROFILE":
@@ -540,7 +540,7 @@ def api_stock():
         """
 
         # carrying join (for prod_group/pattern filters, and for PCLT/TBR if you implement via product_group)
-        joins.append("JOIN carrying_2601 c ON c.m_code = s.material")
+        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
 
         # plant filter
         wh.append(f"s.plant IN ({','.join(['%s']*len(plants))})")
@@ -567,11 +567,11 @@ def api_stock():
             t = CATEGORY_TABLE[category]
             joins.append(f"JOIN {t} cat ON cat.Material = s.material")  # column name 맞춰서 Material/m_code로 변경
         elif category == "PCLT":
-            # 예시: carrying_2601.product_group 기준 (너 데이터에 맞게 조정)
+            # 예시: carrying_2602.product_group 기준 (너 데이터에 맞게 조정)
             # wh.append("c.some_segment = 'PCLT'")
             pass
         elif category == "TBR":
-            # 예시: carrying_2601.product_group 기준 (너 데이터에 맞게 조정)
+            # 예시: carrying_2602.product_group 기준 (너 데이터에 맞게 조정)
             # wh.append("c.some_segment = 'TBR'")
             pass
         else:
@@ -660,7 +660,7 @@ def api_orders():
         """
 
         if needs_carrying:
-            joins.append("JOIN carrying_2601 c ON c.m_code = o.material")
+            joins.append("JOIN carrying_2602 c ON c.m_code = o.material")
 
         joins += cat_joins
 
@@ -791,7 +791,7 @@ def api_incoming():
         """
 
         if needs_carrying:
-            joins.append("JOIN carrying_2601 c ON c.m_code = o.material")
+            joins.append("JOIN carrying_2602 c ON c.m_code = o.material")
 
         joins += cat_joins
 
@@ -1087,7 +1087,7 @@ def v2_dimensions():
         w2_sql = ("WHERE " + " AND ".join(w2)) if w2 else ""
         cur.execute(f"""
             SELECT DISTINCT m_desc AS v
-            FROM carrying_2601
+            FROM carrying_2602
             {w2_sql}
             ORDER BY m_desc
         """, tuple(p2))
@@ -2685,7 +2685,7 @@ def materials():
 
         cur.execute(f"""
             SELECT DISTINCT m_desc
-            FROM carrying_2601
+            FROM carrying_2602
             {where_sql}
             ORDER BY m_desc
         """, tuple(params))
@@ -2728,7 +2728,7 @@ def profit_monthly():
                         for m in range(1, 13)
                     ])
 
-            # 2) Monthly profit totals from profit_2501_10,
+            # 2) Monthly profit totals from profit,
             #    restricted to those top sold_to (if any)
             joins_p  = []
             wh_p     = []
@@ -2761,7 +2761,7 @@ def profit_monthly():
                        SUM(p.sales_deduction) AS sd,
                        SUM(p.cogs)            AS cogs,
                        SUM(p.operating_cost)  AS op_cost
-                  FROM profit_2501_10 p
+                  FROM profit p
                   {' '.join(joins_p)}
                   {where_sql2}
                  GROUP BY CAST(p.month AS UNSIGNED)
