@@ -121,7 +121,7 @@ async function loadSalesMap() {
     if (titleEl) {
       titleEl.textContent = (shipNm || shipTo) + " – Monthly / Yearly";
     }
-    drawShopCharts(shipTo);
+    drawShopCharts(shipTo, latNum, lngNum);
   });
 
   marker.addTo(salesMapLayer);
@@ -158,7 +158,7 @@ function monthlyMapOptions() {
         position: "right",
         beginAtZero: true,
         grid: { drawOnChartArea: false },
-        ticks: { callback: v => v + "%" }
+        ticks: { color: "#E91E63", callback: v => v + "회" }
       }
     }
   };
@@ -179,7 +179,7 @@ function yearlyMapOptions() {
   };
 }
 
-async function drawShopCharts(shipToCode) {
+async function drawShopCharts(shipToCode, shopLat, shopLng) {
   const params = new URLSearchParams({
     metric:        filters.metric,
     category:      filters.category,
@@ -195,60 +195,104 @@ async function drawShopCharts(shipToCode) {
   const params25 = new URLSearchParams(params); params25.set("year", "2025");
   const params26 = new URLSearchParams(params); params26.set("year", "2026");
 
-  const [sales25Rows, sales26Rows, target26Rows, yearlyRows] = await Promise.all([
-  fetchJSON("/api/monthly_sales?" + params25.toString()),
-  fetchJSON("/api/monthly_sales?" + params26.toString()),
-  fetchJSON("/api/monthly_target?" + params26.toString()),
-  fetchJSON("/api/yearly_sales?" + params.toString())
+  // visit params — only if we have a valid location
+  const hasLoc = shopLat != null && shopLng != null;
+  const visitParams26 = hasLoc
+    ? new URLSearchParams({ lat: shopLat, lng: shopLng, year: "2026" })
+    : null;
+  const visitParams25 = hasLoc
+    ? new URLSearchParams({ lat: shopLat, lng: shopLng, year: "2025" })
+    : null;
+
+  const [sales25Rows, sales26Rows, target26Rows, yearlyRows,
+         visit26Rows, visit25Rows] = await Promise.all([
+    fetchJSON("/api/monthly_sales?" + params25.toString()),
+    fetchJSON("/api/monthly_sales?" + params26.toString()),
+    fetchJSON("/api/monthly_target?" + params26.toString()),
+    fetchJSON("/api/yearly_sales?" + params.toString()),
+    visitParams26 ? fetchJSON("/api/monthly_visits?" + visitParams26.toString()) : Promise.resolve([]),
+    visitParams25 ? fetchJSON("/api/monthly_visits?" + visitParams25.toString()) : Promise.resolve([]),
   ]);
 
-  const monthLabels  = ["Ja","Fe","Ma","Ap","Ma","Ju","Ju","Au","Se","Oc","No","De"];
-  const sales25 = monthLabels.map((_, i) => Number((sales25Rows[i]?.value) || 0));
-  const sales26 = monthLabels.map((_, i) => Number((sales26Rows[i]?.value) || 0));
+  const monthLabels = ["Ja","Fe","Ma","Ap","Ma","Ju","Ju","Au","Se","Oc","No","De"];
+  const sales25   = monthLabels.map((_, i) => Number((sales25Rows[i]?.value) || 0));
+  const sales26   = monthLabels.map((_, i) => Number((sales26Rows[i]?.value) || 0));
   const targets26 = monthLabels.map((_, i) => Number((target26Rows[i]?.value) || 0));
 
-  // Update popup total with the same data source as the chart
+  // Build visit arrays indexed by month (1-12 → index 0-11)
+  const toVisitArr = rows => {
+    const arr = new Array(12).fill(null);
+    (rows || []).forEach(r => { if (r.m >= 1 && r.m <= 12) arr[r.m - 1] = r.visits; });
+    return arr;
+  };
+  const visits26 = toVisitArr(visit26Rows);
+  const visits25 = toVisitArr(visit25Rows);
+  const hasVisits = visits26.some(v => v !== null) || visits25.some(v => v !== null);
+
+  // Update popup total
   const total26 = sales26.reduce((a, b) => a + b, 0);
   const popupTotalEl = document.getElementById("popup-total");
   if (popupTotalEl) popupTotalEl.textContent = `Total (2026): ${total26.toLocaleString()}`;
-
-  const achieve26 = monthLabels.map((_, i) =>
-  targets26[i] > 0 ? (sales26[i] / targets26[i]) * 100 : 0
-  );
 
   // monthly side chart
   if (shopMonthlyInst) shopMonthlyInst.destroy();
   const mCtx = document.getElementById("monthlyChart");
   if (mCtx) {
+    const datasets = [
+      {
+        label: filters.metric === "amount" ? "Sales Amount (2025)" : "SalesQty (2025)",
+        type: "bar",
+        data: sales25,
+        backgroundColor: "#7dc4a3",
+        datalabels: { display: false }
+      },
+      {
+        label: filters.metric === "amount" ? "Sales Amount (2026)" : "SalesQty (2026)",
+        type: "bar",
+        data: sales26,
+        backgroundColor: "#5fbcd3",
+        datalabels: { display: false }
+      },
+      {
+        label: "Target (2026)",
+        type: "bar",
+        data: targets26,
+        backgroundColor: "#4d8897",
+        datalabels: { display: false }
+      }
+    ];
+
+    if (hasVisits) {
+      datasets.push({
+        label: "Visit (2025)",
+        type: "line",
+        data: visits25,
+        borderColor: "#FF9800",
+        backgroundColor: "transparent",
+        borderWidth: 1.5,
+        borderDash: [4, 3],
+        pointRadius: 3,
+        spanGaps: true,
+        yAxisID: "y1",
+        datalabels: { display: false }
+      });
+      datasets.push({
+        label: "Visit (2026)",
+        type: "line",
+        data: visits26,
+        borderColor: "#E91E63",
+        backgroundColor: "transparent",
+        borderWidth: 2,
+        pointRadius: 4,
+        spanGaps: true,
+        yAxisID: "y1",
+        datalabels: { display: false }
+      });
+    }
+
     shopMonthlyInst = new Chart(mCtx, {
       type: "bar",
-      data: {
-        labels: monthLabels,
-        datasets: [
-          
-          {
-          label: filters.metric === "amount" ? "Sales Amount (2025)" : "SalesQty (2025)",
-          type: "bar",
-          data: sales25,
-          backgroundColor: "#7dc4a3",
-          datalabels: { display: false }
-          },
-          {
-          label: filters.metric === "amount" ? "Sales Amount (2026)" : "SalesQty (2026)",
-          type: "bar",
-          data: sales26,
-          backgroundColor: "#5fbcd3",
-          datalabels: { display: false }
-          },
-          {
-          label: "Target (2026)",
-          type: "bar",
-          data: targets26,
-          backgroundColor: "#4d8897",
-          datalabels: { display: false }
-          }
-          ]
-      },
+      data: { labels: monthLabels, datasets },
       options: monthlyMapOptions()
     });
   }
