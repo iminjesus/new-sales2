@@ -204,7 +204,7 @@ def kw_match(desc, keywords):
     return any(k.lower() in d for k in keywords)
 
 def load_csv(path):
-    with open(path, encoding="utf-8-sig") as f:
+    with open(path, encoding="cp949") as f:
         return list(csv.DictReader(f))
 
 # ── Chunk 2: Series extraction + lookup builders + matchers ───────────────────
