@@ -9,7 +9,7 @@ Right :
   [By Brand]  → store sub-buttons → multiple brand lines for selected store + size
   [chart area]
 """
-import glob, json, os, re, sys
+import csv, glob, json, os, re, sys
 from datetime import datetime
 from flask import Flask, render_template_string
 
@@ -84,6 +84,31 @@ def load_all_months():
         }
         for mk in all_months
     }
+
+
+def load_compare_base():
+    fp = os.path.join(_BASE, 'compare_base.csv')
+    if not os.path.exists(fp):
+        return []
+    rows = []
+    with open(fp, newline='', encoding='utf-8') as f:
+        for r in csv.DictReader(f):
+            rows.append(dict(r))
+    n = len(rows)
+    for i, row in enumerate(rows):
+        row['line_span'] = 0
+        row['pat_span']  = 0
+        if i == 0 or rows[i-1]['line'] != row['line']:
+            span = 1
+            while i + span < n and rows[i+span]['line'] == row['line']:
+                span += 1
+            row['line_span'] = span
+        if i == 0 or rows[i-1]['pattern'] != row['pattern']:
+            span = 1
+            while i + span < n and rows[i+span]['pattern'] == row['pattern']:
+                span += 1
+            row['pat_span'] = span
+    return rows
 
 
 def build_data(monthly):
@@ -203,7 +228,28 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
         display: flex; flex-direction: column; overflow: hidden; background: #fff; }
 .left-title { background: #1F4E79; color: #fff; padding: 7px 14px;
               font-size: 11.5px; font-weight: 700; flex-shrink: 0; letter-spacing: .02em; }
-#chart-table-wrap { flex: 1; overflow-y: auto; padding: 6px 0; }
+.left-scroll { flex: 1; overflow-y: auto; }
+#chart-table-wrap { padding: 4px 0 0; }
+/* ── Base pattern table ── */
+.base-section { border-top: 3px solid #1F4E79; margin-top: 14px; }
+.base-title { background: #37474F; color: #fff; padding: 5px 10px;
+              font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.btable { width: 100%; border-collapse: collapse; font-size: 9.5px; }
+.btable thead th { padding: 4px 5px; background: #1F4E79; color: #fff;
+                   position: sticky; top: 0; z-index: 4; text-align: center;
+                   white-space: nowrap; font-weight: 700; border: 1px solid #2a5f94; }
+.btable thead th.bh-brand { background: #263238; }
+.btable tbody td { padding: 3px 5px; border: 1px solid #e8e8e8;
+                   white-space: nowrap; vertical-align: middle; }
+.btable tbody td.td-line { background: #1F4E79; color: #fff; font-weight: 700;
+                            text-align: center; font-size: 9px; }
+.btable tbody td.td-pat  { background: #EEF2F7; font-weight: 700; font-size: 9px;
+                            text-align: center; }
+.btable tbody td.td-sub  { background: #F7F9FC; color: #555; font-size: 8.5px; }
+.btable tbody td.td-inch { text-align: center; color: #555; }
+.btable tbody td.td-size { font-family: monospace; color: #1F4E79; font-weight: 700; }
+.btable tbody tr.new-line > td:not(.td-line) { border-top: 2px solid #1F4E79; }
+.btable tbody tr.new-pat  > td:not(.td-line) { border-top: 1px dashed #aab; }
 
 /* ── RIGHT panel ── */
 .right { width: 60%; display: flex; flex-direction: column; overflow: hidden; }
@@ -282,7 +328,46 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
   <!-- ── LEFT: comparison tables ── -->
   <div class="left">
     <div class="left-title">Comparison Base table for popular size</div>
-    <div id="chart-table-wrap"></div>
+    <div class="left-scroll">
+      <div id="chart-table-wrap"></div>
+      {% if base_rows %}
+      <div class="base-section">
+        <div class="base-title">Pattern Reference</div>
+        <table class="btable">
+          <thead>
+            <tr>
+              <th>Line</th><th>Pattern</th><th>Sub</th><th>In</th><th>Size</th>
+              <th class="bh-brand" style="color:#FFB3B3">MC</th>
+              <th class="bh-brand" style="color:#90CAF9">BS</th>
+              <th class="bh-brand" style="color:#FFCC80">CT</th>
+              <th class="bh-brand" style="color:#9FA8DA">GY</th>
+              <th class="bh-brand" style="color:#80CBC4">KH</th>
+              <th class="bh-brand" style="color:#F48FB1">FK</th>
+              <th class="bh-brand" style="color:#FFCC80">HK</th>
+              <th class="bh-brand" style="color:#A5D6A7">LF</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for r in base_rows %}
+            <tr class="{{ 'new-line' if r.line_span > 0 else ('new-pat' if r.pat_span > 0 else '') }}">
+              {% if r.line_span > 0 %}
+                <td class="td-line" rowspan="{{ r.line_span }}">{{ r.line }}</td>
+              {% endif %}
+              {% if r.pat_span > 0 %}
+                <td class="td-pat" rowspan="{{ r.pat_span }}">{{ r.pattern }}</td>
+              {% endif %}
+              <td class="td-sub">{{ r.subcat }}</td>
+              <td class="td-inch">{{ r.inch }}</td>
+              <td class="td-size">{{ r.size }}</td>
+              <td>{{ r.mc }}</td><td>{{ r.bs }}</td><td>{{ r.ct }}</td><td>{{ r.gy }}</td>
+              <td>{{ r.kh }}</td><td>{{ r.fk }}</td><td>{{ r.hk }}</td><td>{{ r.lf }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
   </div>
 
   <!-- ── RIGHT: controls + chart ── -->
@@ -770,6 +855,7 @@ def price_dashboard():
         "brand_size_data": data["brand_size_data"],
     }, default=str)
 
+    base_rows = load_compare_base()
     return render_template_string(
         _HTML,
         month_count  = len(data["months"]),
@@ -777,6 +863,7 @@ def price_dashboard():
         brands_json  = json.dumps(BRANDS),
         bcolors_json = json.dumps(BRAND_COLOURS),
         sizes_json   = json.dumps(data["sizes_with_data"]),
+        base_rows    = base_rows,
     )
 
 
