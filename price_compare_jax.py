@@ -235,7 +235,7 @@ def extract_series(desc):
 def build_tempe_lookup(rows):
     lk = {}
     for r in rows:
-        brand = r.get("brand","").strip()
+        brand = (r.get("BRAND") or r.get("brand","")).strip()
         abbr  = abbr_for(brand)
         if not abbr:
             continue
@@ -253,7 +253,7 @@ def build_tempe_lookup(rows):
 def build_bj_lookup(rows):
     lk = {}
     for r in rows:
-        brand = r.get("brand","").strip()
+        brand = (r.get("BRAND") or r.get("brand","")).strip()
         abbr  = abbr_for(brand)
         if not abbr:
             continue
