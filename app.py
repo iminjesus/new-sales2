@@ -4119,6 +4119,30 @@ def visit_debug():
                 )
             match_counts[f"{r_m}m"] = cur.fetchone()["n"]
         out["match_counts_by_radius"] = match_counts
+
+        # Geographic spread of the gps table — answers "does the data even
+        # cover this region of Australia?"
+        if not USE_SQLITE:
+            cur.execute(
+                f"SELECT MIN({lat_col}) AS lat_min, MAX({lat_col}) AS lat_max, "
+                f"MIN({lng_col}) AS lng_min, MAX({lng_col}) AS lng_max FROM gps"
+            )
+            out["bbox_in_table"] = cur.fetchone()
+
+            # Nearest 5 GPS points to the requested location, any year
+            cur.execute(
+                f"SELECT {date_col} AS d, {lat_col} AS lat, {lng_col} AS lng, "
+                f"  registration, "
+                f"  ROUND(6371000 * ACOS(LEAST(1.0, "
+                f"    COS(RADIANS(%s))*COS(RADIANS({lat_col}))"
+                f"    *COS(RADIANS({lng_col}) - RADIANS(%s)) "
+                f"    + SIN(RADIANS(%s))*SIN(RADIANS({lat_col})) "
+                f"  )), 0) AS dist_m "
+                f"FROM gps "
+                f"ORDER BY dist_m ASC LIMIT 5",
+                [lat, lng, lat],
+            )
+            out["nearest_points_any_year"] = cur.fetchall()
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
@@ -4127,6 +4151,74 @@ def visit_debug():
         try: conn.close()
         except Exception: pass
 
+    return jsonify(out)
+
+
+@app.get("/api/visit_debug_topshops")
+def visit_debug_topshops():
+    """List the top customer ship-tos by GPS visit count for a year, so we can
+    confirm the Visit line renders for at least one shop and identify which
+    territories actually have GPS coverage.
+    Params: year=2026, radius=500, limit=20
+    """
+    try:
+        year = int(request.args.get("year", 2026) or 2026)
+    except (TypeError, ValueError):
+        year = 2026
+    try:
+        radius_m = float(request.args.get("radius", 500) or 500)
+    except (TypeError, ValueError):
+        radius_m = 500.0
+    try:
+        limit = int(request.args.get("limit", 20) or 20)
+    except (TypeError, ValueError):
+        limit = 20
+
+    if USE_SQLITE:
+        # Skip — need trig, only Haversine works on MySQL here
+        return jsonify({"note": "available only on MySQL"})
+
+    out = {"params": {"year": year, "radius_m": radius_m, "limit": limit}}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        date_col, lat_col, lng_col = _resolve_gps_columns(cur)
+
+        # For each customer, count distinct visit-days where any GPS sample
+        # lies within radius_m of the ship-to location.  Bbox prefilter on
+        # both customer and gps cuts the join down dramatically.
+        LAT_D = (radius_m / 111000.0) * 1.2
+        LNG_D = (radius_m / 96000.0)  * 1.2
+        sql = f"""
+            SELECT c.ship_to,
+                   c.ship_to_name,
+                   c.latitude  AS shop_lat,
+                   c.longitude AS shop_lng,
+                   COUNT(DISTINCT DATE(g.{date_col})) AS visits
+            FROM   customer c
+            JOIN   gps g
+              ON   g.{lat_col} BETWEEN c.latitude  - %s AND c.latitude  + %s
+              AND  g.{lng_col} BETWEEN c.longitude - %s AND c.longitude + %s
+              AND  YEAR(g.{date_col}) = %s
+              AND  (6371000 * ACOS(LEAST(1.0,
+                       COS(RADIANS(c.latitude))*COS(RADIANS(g.{lat_col}))
+                       *COS(RADIANS(g.{lng_col}) - RADIANS(c.longitude))
+                       + SIN(RADIANS(c.latitude))*SIN(RADIANS(g.{lat_col}))
+                   ))) <= %s
+            WHERE  c.latitude IS NOT NULL AND c.longitude IS NOT NULL
+            GROUP  BY c.ship_to, c.ship_to_name, c.latitude, c.longitude
+            ORDER  BY visits DESC
+            LIMIT  %s
+        """
+        cur.execute(sql, [LAT_D, LAT_D, LNG_D, LNG_D, year, radius_m, limit])
+        out["top_shops"] = cur.fetchall()
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
     return jsonify(out)
 
 # ==============================================================================
