@@ -4221,6 +4221,95 @@ def visit_debug_topshops():
         except Exception: pass
     return jsonify(out)
 
+
+@app.get("/api/visit_debug_closest")
+def visit_debug_closest():
+    """Find the absolute closest customer-to-GPS distance — answers
+    'is there a single customer that any salesperson got near at all?'.
+    Also returns row counts per year so we can rule out the year filter,
+    and the gps lat/lng range to spot coordinate-system issues.
+    Params: [bbox_km=50] cap on bbox prefilter, [limit=20]
+    """
+    if USE_SQLITE:
+        return jsonify({"note": "available only on MySQL"})
+    try:
+        bbox_km = float(request.args.get("bbox_km", 50) or 50)
+    except (TypeError, ValueError):
+        bbox_km = 50.0
+    try:
+        limit = int(request.args.get("limit", 20) or 20)
+    except (TypeError, ValueError):
+        limit = 20
+
+    out = {"params": {"bbox_km": bbox_km, "limit": limit}}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        date_col, lat_col, lng_col = _resolve_gps_columns(cur)
+
+        # gps row count per year — concentrates of how the 30k rows are
+        # distributed (years_in_table only listed distinct years).
+        cur.execute(
+            f"SELECT YEAR({date_col}) AS y, COUNT(*) AS n "
+            f"FROM gps GROUP BY YEAR({date_col}) ORDER BY n DESC LIMIT 20"
+        )
+        out["rows_per_year_top20"] = cur.fetchall()
+
+        # GPS bbox + customer bbox side by side — quickly spots coord swaps,
+        # sign flips, or scale issues.
+        cur.execute(
+            f"SELECT MIN({lat_col}) AS lat_min, MAX({lat_col}) AS lat_max, "
+            f"MIN({lng_col}) AS lng_min, MAX({lng_col}) AS lng_max FROM gps"
+        )
+        out["gps_bbox"] = cur.fetchone()
+        cur.execute(
+            "SELECT MIN(latitude) AS lat_min, MAX(latitude) AS lat_max, "
+            "MIN(longitude) AS lng_min, MAX(longitude) AS lng_max "
+            "FROM customer WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        )
+        out["customer_bbox"] = cur.fetchone()
+
+        # For each customer, find the single closest GPS point (any year),
+        # restricted to a generous bbox so the join stays cheap.  If the top
+        # rows here all have huge min_dist_m, the two coordinate sets just
+        # don't align spatially — separate from any year/visit-count concern.
+        LAT_D = (bbox_km * 1000 / 111000.0)
+        LNG_D = (bbox_km * 1000 / 96000.0)
+        sql = f"""
+            SELECT c.ship_to,
+                   c.ship_to_name,
+                   c.ship_to_state,
+                   c.latitude  AS shop_lat,
+                   c.longitude AS shop_lng,
+                   ROUND(MIN(6371000 * ACOS(LEAST(1.0,
+                       COS(RADIANS(c.latitude))*COS(RADIANS(g.{lat_col}))
+                       *COS(RADIANS(g.{lng_col}) - RADIANS(c.longitude))
+                       + SIN(RADIANS(c.latitude))*SIN(RADIANS(g.{lat_col}))
+                   ))), 0) AS min_dist_m,
+                   COUNT(*)              AS gps_in_bbox,
+                   MIN(YEAR(g.{date_col})) AS first_year,
+                   MAX(YEAR(g.{date_col})) AS last_year
+            FROM   customer c
+            JOIN   gps g
+              ON   g.{lat_col} BETWEEN c.latitude  - %s AND c.latitude  + %s
+              AND  g.{lng_col} BETWEEN c.longitude - %s AND c.longitude + %s
+            WHERE  c.latitude IS NOT NULL AND c.longitude IS NOT NULL
+            GROUP  BY c.ship_to, c.ship_to_name, c.ship_to_state,
+                     c.latitude, c.longitude
+            ORDER  BY min_dist_m ASC
+            LIMIT  %s
+        """
+        cur.execute(sql, [LAT_D, LAT_D, LNG_D, LNG_D, limit])
+        out["closest_customer_to_any_gps"] = cur.fetchall()
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    return jsonify(out)
+
 # ==============================================================================
 # REBATE CALCULATOR
 # ==============================================================================
