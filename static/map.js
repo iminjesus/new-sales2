@@ -158,7 +158,8 @@ function monthlyMapOptions() {
         position: "right",
         beginAtZero: true,
         grid: { drawOnChartArea: false },
-        ticks: { color: "#E91E63", callback: v => v + "회" }
+        title: { display: true, text: "Visits", color: "#E91E63" },
+        ticks: { color: "#E91E63", precision: 0 }
       }
     }
   };

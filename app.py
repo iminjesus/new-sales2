@@ -3916,6 +3916,91 @@ def sales_map():
         conn.close()
 
     return jsonify(rows)
+
+# ── GPS Visit count API ────────────────────────────────────────────────────────
+@app.get("/api/monthly_visits")
+def monthly_visits():
+    """
+    Count GPS visits within 500m of a given lat/lng per month.
+    A 'visit' = at least one GPS record on a calendar day within the radius.
+    Params: lat, lng, year
+    Returns: [{"m": 1, "visits": 3}, ...]   (m = month number 1-12)
+    """
+    try:
+        lat = float(request.args.get("lat", ""))
+        lng = float(request.args.get("lng", ""))
+    except (TypeError, ValueError):
+        return jsonify([])
+
+    try:
+        year = int(request.args.get("year", 2026) or 2026)
+    except (TypeError, ValueError):
+        year = 2026
+
+    # bbox pre-filter (~500 m at ~30°S latitude)
+    LAT_D = 0.0045
+    LNG_D = 0.0054
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+    except Exception as e:
+        print("monthly_visits: DB connect failed:", e)
+        return jsonify([])
+
+    try:
+        if USE_SQLITE:
+            sql = """
+                SELECT CAST(strftime('%m', local_date) AS INTEGER) AS m,
+                       COUNT(DISTINCT local_date)              AS visits
+                FROM   gps
+                WHERE  strftime('%Y', local_date) = ?
+                  AND  latitude  BETWEEN ? AND ?
+                  AND  longitude BETWEEN ? AND ?
+                GROUP  BY m
+                ORDER  BY m
+            """
+            cur.execute(sql, [str(year),
+                              lat - LAT_D, lat + LAT_D,
+                              lng - LNG_D, lng + LNG_D])
+        else:
+            sql = """
+                SELECT MONTH(local_date)            AS m,
+                       COUNT(DISTINCT local_date)   AS visits
+                FROM   gps
+                WHERE  YEAR(local_date) = %s
+                  AND  latitude  BETWEEN %s AND %s
+                  AND  longitude BETWEEN %s AND %s
+                  AND  (6371000 * ACOS(LEAST(1.0,
+                           COS(RADIANS(%s)) * COS(RADIANS(latitude))
+                           * COS(RADIANS(longitude) - RADIANS(%s))
+                           + SIN(RADIANS(%s)) * SIN(RADIANS(latitude))
+                       ))) <= 500
+                GROUP  BY MONTH(local_date)
+                ORDER  BY m
+            """
+            cur.execute(sql, [year,
+                              lat - LAT_D, lat + LAT_D,
+                              lng - LNG_D, lng + LNG_D,
+                              lat, lng, lat])
+        rows = cur.fetchall() or []
+    except Exception as e:
+        # gps table missing or query failure — degrade quietly so the chart
+        # simply omits the visit line instead of crashing the page.
+        print("monthly_visits: query failed:", e)
+        rows = []
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return jsonify([{"m": r["m"], "visits": r["visits"]} for r in rows])
+
 # ==============================================================================
 # REBATE CALCULATOR
 # ==============================================================================
