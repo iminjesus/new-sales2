@@ -3918,12 +3918,42 @@ def sales_map():
     return jsonify(rows)
 
 # ── GPS Visit count API ────────────────────────────────────────────────────────
+
+# Candidate column names — the real schema is whatever the gps table actually
+# uses; we pick the first one that exists so the endpoint isn't brittle.
+_GPS_DATE_CANDIDATES = (
+    "local_date", "date", "visit_date", "gps_date",
+    "recorded_at", "created_at", "timestamp", "ts", "datetime",
+)
+_GPS_LAT_CANDIDATES = ("latitude", "lat", "y")
+_GPS_LNG_CANDIDATES = ("longitude", "lng", "lon", "long", "x")
+
+def _resolve_gps_columns(cur):
+    """Return (date_col, lat_col, lng_col) by inspecting the gps table.
+    Raises RuntimeError if the table or required columns are missing."""
+    if USE_SQLITE:
+        cur.execute("PRAGMA table_info(gps)")
+        cols = [r["name"] if isinstance(r, dict) else r[1] for r in cur.fetchall()]
+    else:
+        cur.execute("SHOW COLUMNS FROM gps")
+        cols = [r["Field"] for r in cur.fetchall()]
+    if not cols:
+        raise RuntimeError("gps table has no columns or does not exist")
+    cols_lc = {c.lower(): c for c in cols}
+    def pick(cands, label):
+        for c in cands:
+            if c in cols_lc:
+                return cols_lc[c]
+        raise RuntimeError(f"no {label} column found in gps; tried {cands}; have {cols}")
+    return pick(_GPS_DATE_CANDIDATES, "date"), pick(_GPS_LAT_CANDIDATES, "lat"), pick(_GPS_LNG_CANDIDATES, "lng")
+
+
 @app.get("/api/monthly_visits")
 def monthly_visits():
     """
     Count GPS visits within 500m of a given lat/lng per month.
     A 'visit' = at least one GPS record on a calendar day within the radius.
-    Params: lat, lng, year
+    Params: lat, lng, year, [radius=500]
     Returns: [{"m": 1, "visits": 3}, ...]   (m = month number 1-12)
     """
     try:
@@ -3937,9 +3967,15 @@ def monthly_visits():
     except (TypeError, ValueError):
         year = 2026
 
-    # bbox pre-filter (~500 m at ~30°S latitude)
-    LAT_D = 0.0045
-    LNG_D = 0.0054
+    try:
+        radius_m = float(request.args.get("radius", 500) or 500)
+    except (TypeError, ValueError):
+        radius_m = 500.0
+
+    # bbox pre-filter sized from the radius (~111 km per degree lat,
+    # ~96 km per degree lng at 30°S)
+    LAT_D = (radius_m / 111000.0) * 1.2
+    LNG_D = (radius_m / 96000.0)  * 1.2
 
     try:
         conn = get_connection()
@@ -3949,14 +3985,15 @@ def monthly_visits():
         return jsonify([])
 
     try:
+        date_col, lat_col, lng_col = _resolve_gps_columns(cur)
         if USE_SQLITE:
-            sql = """
-                SELECT CAST(strftime('%m', local_date) AS INTEGER) AS m,
-                       COUNT(DISTINCT local_date)              AS visits
+            sql = f"""
+                SELECT CAST(strftime('%m', {date_col}) AS INTEGER) AS m,
+                       COUNT(DISTINCT date({date_col}))            AS visits
                 FROM   gps
-                WHERE  strftime('%Y', local_date) = ?
-                  AND  latitude  BETWEEN ? AND ?
-                  AND  longitude BETWEEN ? AND ?
+                WHERE  strftime('%Y', {date_col}) = ?
+                  AND  {lat_col} BETWEEN ? AND ?
+                  AND  {lng_col} BETWEEN ? AND ?
                 GROUP  BY m
                 ORDER  BY m
             """
@@ -3964,42 +4001,133 @@ def monthly_visits():
                               lat - LAT_D, lat + LAT_D,
                               lng - LNG_D, lng + LNG_D])
         else:
-            sql = """
-                SELECT MONTH(local_date)            AS m,
-                       COUNT(DISTINCT local_date)   AS visits
+            sql = f"""
+                SELECT MONTH({date_col})                  AS m,
+                       COUNT(DISTINCT DATE({date_col}))   AS visits
                 FROM   gps
-                WHERE  YEAR(local_date) = %s
-                  AND  latitude  BETWEEN %s AND %s
-                  AND  longitude BETWEEN %s AND %s
+                WHERE  YEAR({date_col}) = %s
+                  AND  {lat_col} BETWEEN %s AND %s
+                  AND  {lng_col} BETWEEN %s AND %s
                   AND  (6371000 * ACOS(LEAST(1.0,
-                           COS(RADIANS(%s)) * COS(RADIANS(latitude))
-                           * COS(RADIANS(longitude) - RADIANS(%s))
-                           + SIN(RADIANS(%s)) * SIN(RADIANS(latitude))
-                       ))) <= 500
-                GROUP  BY MONTH(local_date)
+                           COS(RADIANS(%s)) * COS(RADIANS({lat_col}))
+                           * COS(RADIANS({lng_col}) - RADIANS(%s))
+                           + SIN(RADIANS(%s)) * SIN(RADIANS({lat_col}))
+                       ))) <= %s
+                GROUP  BY MONTH({date_col})
                 ORDER  BY m
             """
             cur.execute(sql, [year,
                               lat - LAT_D, lat + LAT_D,
                               lng - LNG_D, lng + LNG_D,
-                              lat, lng, lat])
+                              lat, lng, lat, radius_m])
         rows = cur.fetchall() or []
     except Exception as e:
-        # gps table missing or query failure — degrade quietly so the chart
-        # simply omits the visit line instead of crashing the page.
         print("monthly_visits: query failed:", e)
         rows = []
     finally:
-        try:
-            cur.close()
-        except Exception:
-            pass
-        try:
-            conn.close()
-        except Exception:
-            pass
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
 
     return jsonify([{"m": r["m"], "visits": r["visits"]} for r in rows])
+
+
+@app.get("/api/visit_debug")
+def visit_debug():
+    """Diagnose why /api/monthly_visits returns nothing for a shop.
+    Params: lat, lng, [year=2026]
+    Returns table existence, resolved column names, sample rows, bbox/radius
+    match counts at several radii, and per-month visit counts.
+    """
+    out = {"params": dict(request.args)}
+    try:
+        lat = float(request.args.get("lat", ""))
+        lng = float(request.args.get("lng", ""))
+    except (TypeError, ValueError):
+        out["error"] = "lat/lng required as floats"
+        return jsonify(out)
+    try:
+        year = int(request.args.get("year", 2026) or 2026)
+    except (TypeError, ValueError):
+        year = 2026
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+    except Exception as e:
+        return jsonify({**out, "error": f"db connect: {e}"})
+
+    try:
+        # Table existence + column list
+        if USE_SQLITE:
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND lower(name)='gps'")
+        else:
+            cur.execute("SHOW TABLES LIKE 'gps'")
+        out["gps_table_exists"] = bool(cur.fetchall())
+        if not out["gps_table_exists"]:
+            return jsonify(out)
+
+        if USE_SQLITE:
+            cur.execute("PRAGMA table_info(gps)")
+            out["columns"] = [r["name"] if isinstance(r, dict) else r[1] for r in cur.fetchall()]
+        else:
+            cur.execute("SHOW COLUMNS FROM gps")
+            out["columns"] = [{"name": r["Field"], "type": r["Type"]} for r in cur.fetchall()]
+
+        try:
+            date_col, lat_col, lng_col = _resolve_gps_columns(cur)
+            out["resolved"] = {"date": date_col, "lat": lat_col, "lng": lng_col}
+        except Exception as e:
+            out["error"] = str(e)
+            return jsonify(out)
+
+        cur.execute(f"SELECT COUNT(*) AS n FROM gps")
+        out["total_rows"] = cur.fetchone()["n"]
+
+        cur.execute(f"SELECT * FROM gps LIMIT 3")
+        out["sample"] = cur.fetchall()
+
+        if USE_SQLITE:
+            cur.execute(f"SELECT DISTINCT strftime('%Y', {date_col}) AS y FROM gps ORDER BY y")
+        else:
+            cur.execute(f"SELECT DISTINCT YEAR({date_col}) AS y FROM gps ORDER BY y")
+        out["years_in_table"] = [r["y"] for r in cur.fetchall()]
+
+        # Match counts at increasing radii
+        match_counts = {}
+        for r_m in (100, 250, 500, 1000, 2500, 5000):
+            LAT_D = (r_m / 111000.0) * 1.2
+            LNG_D = (r_m / 96000.0)  * 1.2
+            if USE_SQLITE:
+                cur.execute(
+                    f"SELECT COUNT(*) AS n FROM gps "
+                    f"WHERE strftime('%Y', {date_col}) = ? "
+                    f"AND {lat_col} BETWEEN ? AND ? AND {lng_col} BETWEEN ? AND ?",
+                    [str(year), lat-LAT_D, lat+LAT_D, lng-LNG_D, lng+LNG_D],
+                )
+            else:
+                cur.execute(
+                    f"SELECT COUNT(*) AS n FROM gps "
+                    f"WHERE YEAR({date_col}) = %s "
+                    f"AND {lat_col} BETWEEN %s AND %s AND {lng_col} BETWEEN %s AND %s "
+                    f"AND (6371000 * ACOS(LEAST(1.0, "
+                    f"COS(RADIANS(%s))*COS(RADIANS({lat_col}))"
+                    f"*COS(RADIANS({lng_col}) - RADIANS(%s)) "
+                    f"+ SIN(RADIANS(%s))*SIN(RADIANS({lat_col}))))) <= %s",
+                    [year, lat-LAT_D, lat+LAT_D, lng-LNG_D, lng+LNG_D, lat, lng, lat, r_m],
+                )
+            match_counts[f"{r_m}m"] = cur.fetchone()["n"]
+        out["match_counts_by_radius"] = match_counts
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+
+    return jsonify(out)
 
 # ==============================================================================
 # REBATE CALCULATOR
