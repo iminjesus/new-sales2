@@ -4228,35 +4228,38 @@ def visit_debug_closest():
     'is there a single customer that any salesperson got near at all?'.
     Also returns row counts per year so we can rule out the year filter,
     and the gps lat/lng range to spot coordinate-system issues.
-    Params: [bbox_km=50] cap on bbox prefilter, [limit=20]
+
+    Strategy: load 30k gps points + a sample of customers into Python and
+    do the nearest-neighbour scan in-memory.  A single SQL JOIN over
+    customer × gps with bbox prefilter would time out without indexes
+    on gps.latitude/longitude.
+    Params: [sample=300] customers to scan, [limit=20]
     """
     if USE_SQLITE:
         return jsonify({"note": "available only on MySQL"})
     try:
-        bbox_km = float(request.args.get("bbox_km", 50) or 50)
+        sample_n = int(request.args.get("sample", 300) or 300)
     except (TypeError, ValueError):
-        bbox_km = 50.0
+        sample_n = 300
     try:
         limit = int(request.args.get("limit", 20) or 20)
     except (TypeError, ValueError):
         limit = 20
 
-    out = {"params": {"bbox_km": bbox_km, "limit": limit}}
+    out = {"params": {"sample": sample_n, "limit": limit}}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
         date_col, lat_col, lng_col = _resolve_gps_columns(cur)
 
-        # gps row count per year — concentrates of how the 30k rows are
-        # distributed (years_in_table only listed distinct years).
+        # Year distribution
         cur.execute(
             f"SELECT YEAR({date_col}) AS y, COUNT(*) AS n "
             f"FROM gps GROUP BY YEAR({date_col}) ORDER BY n DESC LIMIT 20"
         )
         out["rows_per_year_top20"] = cur.fetchall()
 
-        # GPS bbox + customer bbox side by side — quickly spots coord swaps,
-        # sign flips, or scale issues.
+        # Bounding boxes side by side
         cur.execute(
             f"SELECT MIN({lat_col}) AS lat_min, MAX({lat_col}) AS lat_max, "
             f"MIN({lng_col}) AS lng_min, MAX({lng_col}) AS lng_max FROM gps"
@@ -4269,38 +4272,59 @@ def visit_debug_closest():
         )
         out["customer_bbox"] = cur.fetchone()
 
-        # For each customer, find the single closest GPS point (any year),
-        # restricted to a generous bbox so the join stays cheap.  If the top
-        # rows here all have huge min_dist_m, the two coordinate sets just
-        # don't align spatially — separate from any year/visit-count concern.
-        LAT_D = (bbox_km * 1000 / 111000.0)
-        LNG_D = (bbox_km * 1000 / 96000.0)
-        sql = f"""
-            SELECT c.ship_to,
-                   c.ship_to_name,
-                   c.ship_to_state,
-                   c.latitude  AS shop_lat,
-                   c.longitude AS shop_lng,
-                   ROUND(MIN(6371000 * ACOS(LEAST(1.0,
-                       COS(RADIANS(c.latitude))*COS(RADIANS(g.{lat_col}))
-                       *COS(RADIANS(g.{lng_col}) - RADIANS(c.longitude))
-                       + SIN(RADIANS(c.latitude))*SIN(RADIANS(g.{lat_col}))
-                   ))), 0) AS min_dist_m,
-                   COUNT(*)              AS gps_in_bbox,
-                   MIN(YEAR(g.{date_col})) AS first_year,
-                   MAX(YEAR(g.{date_col})) AS last_year
-            FROM   customer c
-            JOIN   gps g
-              ON   g.{lat_col} BETWEEN c.latitude  - %s AND c.latitude  + %s
-              AND  g.{lng_col} BETWEEN c.longitude - %s AND c.longitude + %s
-            WHERE  c.latitude IS NOT NULL AND c.longitude IS NOT NULL
-            GROUP  BY c.ship_to, c.ship_to_name, c.ship_to_state,
-                     c.latitude, c.longitude
-            ORDER  BY min_dist_m ASC
-            LIMIT  %s
-        """
-        cur.execute(sql, [LAT_D, LAT_D, LNG_D, LNG_D, limit])
-        out["closest_customer_to_any_gps"] = cur.fetchall()
+        # Pull all gps points (~30k floats) into Python — small enough.
+        cur.execute(
+            f"SELECT {lat_col} AS la, {lng_col} AS lo FROM gps "
+            f"WHERE {lat_col} IS NOT NULL AND {lng_col} IS NOT NULL"
+        )
+        gps_pts = [(float(r["la"]), float(r["lo"])) for r in cur.fetchall()]
+        out["gps_points_loaded"] = len(gps_pts)
+
+        # Sample customers with coords
+        cur.execute(
+            "SELECT ship_to, ship_to_name, ship_to_state, latitude, longitude "
+            "FROM customer "
+            "WHERE latitude IS NOT NULL AND longitude IS NOT NULL "
+            "ORDER BY RAND() LIMIT %s",
+            [sample_n],
+        )
+        sample = cur.fetchall()
+        out["customers_scanned"] = len(sample)
+
+        # In-memory Haversine: O(sample × 30k) ≈ 9M ops, well under a second
+        from math import radians, sin, cos, asin, sqrt
+        R = 6371000.0
+        results = []
+        for c in sample:
+            cla = radians(float(c["latitude"]))
+            clo = radians(float(c["longitude"]))
+            best = None
+            for la, lo in gps_pts:
+                dla = radians(la) - cla
+                dlo = radians(lo) - clo
+                a = sin(dla / 2) ** 2 + cos(cla) * cos(radians(la)) * sin(dlo / 2) ** 2
+                d = 2 * R * asin(min(1.0, sqrt(a)))
+                if best is None or d < best:
+                    best = d
+            results.append({
+                "ship_to":       c["ship_to"],
+                "ship_to_name":  c["ship_to_name"],
+                "ship_to_state": c["ship_to_state"],
+                "shop_lat":      float(c["latitude"]),
+                "shop_lng":      float(c["longitude"]),
+                "min_dist_m":    round(best, 0) if best is not None else None,
+            })
+        results.sort(key=lambda r: (r["min_dist_m"] is None, r["min_dist_m"] or 0))
+
+        out["closest_customer_to_any_gps"] = results[:limit]
+        # Distribution: how many customers are within X metres
+        out["distance_buckets"] = {
+            "<=500m":   sum(1 for r in results if r["min_dist_m"] is not None and r["min_dist_m"] <=    500),
+            "<=1000m":  sum(1 for r in results if r["min_dist_m"] is not None and r["min_dist_m"] <=  1000),
+            "<=2500m":  sum(1 for r in results if r["min_dist_m"] is not None and r["min_dist_m"] <=  2500),
+            "<=5000m":  sum(1 for r in results if r["min_dist_m"] is not None and r["min_dist_m"] <=  5000),
+            "<=20000m": sum(1 for r in results if r["min_dist_m"] is not None and r["min_dist_m"] <= 20000),
+        }
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
