@@ -204,8 +204,15 @@ def kw_match(desc, keywords):
     return any(k.lower() in d for k in keywords)
 
 def load_csv(path):
-    with open(path, encoding="latin-1") as f:
-        rows = list(csv.DictReader(f))
+    # utf-8-sig strips the UTF-8 BOM (Excel exports add it); cp949 covers
+    # Korean Windows exports; latin-1 is the last-resort byte-safe fallback.
+    for enc in ("utf-8-sig", "cp949", "latin-1"):
+        try:
+            with open(path, encoding=enc) as f:
+                rows = list(csv.DictReader(f))
+            break
+        except UnicodeDecodeError:
+            continue
     # normalise header keys to uppercase so lookups work regardless of case
     return [{k.upper(): v for k, v in r.items()} for r in rows]
 
@@ -320,15 +327,15 @@ def best_jax(size, abbr, jax_lk, t_desc=None):
 def build_tw_lookup(rows):
     lk = {}
     for r in rows:
-        brand = r.get("brand","").strip()
+        brand = (r.get("BRAND") or r.get("brand","")).strip()
         abbr  = abbr_for(brand)
         if not abbr:
             continue
         size  = r.get("SIZE","").strip() or normalise_size(r.get("DESCRIPTION",""))
         desc  = r.get("DESCRIPTION","").strip()
         # Support both old column names (COST/PRICE) and new (Sell in Price / Sell out Price)
-        cost_raw  = (r.get("Sell in Price","")  or r.get("COST","")).strip()
-        price_raw = (r.get("Sell out Price","") or r.get("PRICE","")).strip()
+        cost_raw  = (r.get("SELL IN PRICE","")  or r.get("COST","")).strip()
+        price_raw = (r.get("SELL OUT PRICE","") or r.get("PRICE","")).strip()
         try:
             cost_val  = float(cost_raw)  if cost_raw  else None
             price_val = float(price_raw) if price_raw else None
