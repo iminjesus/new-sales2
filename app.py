@@ -4033,6 +4033,86 @@ def monthly_visits():
     return jsonify([{"m": r["m"], "visits": r["visits"]} for r in rows])
 
 
+@app.get("/api/visit_for_shop")
+def visit_for_shop():
+    """Convenience: look up a shop's lat/lng by ship_to and return its
+    monthly visit counts.  Saves you from copying coordinates manually.
+    Params: ship_to (required), [year=2026], [radius=500]
+    """
+    ship_to = (request.args.get("ship_to") or "").strip()
+    if not ship_to:
+        return jsonify({"error": "ship_to required"})
+    try:
+        year = int(request.args.get("year", 2026) or 2026)
+    except (TypeError, ValueError):
+        year = 2026
+    try:
+        radius_m = float(request.args.get("radius", 500) or 500)
+    except (TypeError, ValueError):
+        radius_m = 500.0
+
+    out = {"ship_to": ship_to, "year": year, "radius_m": radius_m}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT ship_to_name, latitude, longitude FROM customer "
+            "WHERE ship_to = %s LIMIT 1",
+            [ship_to],
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({**out, "error": "ship_to not found in customer"})
+        if row["latitude"] is None or row["longitude"] is None:
+            return jsonify({**out, "ship_to_name": row["ship_to_name"],
+                            "error": "shop has no lat/lng in customer table"})
+
+        lat = float(row["latitude"])
+        lng = float(row["longitude"])
+        out["ship_to_name"] = row["ship_to_name"]
+        out["shop_lat"] = lat
+        out["shop_lng"] = lng
+
+        date_col, lat_col, lng_col = _resolve_gps_columns(cur)
+        LAT_D = (radius_m / 111000.0) * 1.2
+        LNG_D = (radius_m / 96000.0)  * 1.2
+
+        if USE_SQLITE:
+            cur.execute(
+                f"SELECT CAST(strftime('%m', {date_col}) AS INTEGER) AS m, "
+                f"COUNT(DISTINCT date({date_col})) AS visits FROM gps "
+                f"WHERE strftime('%Y', {date_col}) = ? "
+                f"AND {lat_col} BETWEEN ? AND ? AND {lng_col} BETWEEN ? AND ? "
+                f"GROUP BY m ORDER BY m",
+                [str(year), lat-LAT_D, lat+LAT_D, lng-LNG_D, lng+LNG_D],
+            )
+        else:
+            cur.execute(
+                f"SELECT MONTH({date_col}) AS m, "
+                f"COUNT(DISTINCT DATE({date_col})) AS visits, "
+                f"GROUP_CONCAT(DISTINCT registration ORDER BY registration) AS regos "
+                f"FROM gps WHERE YEAR({date_col}) = %s "
+                f"AND {lat_col} BETWEEN %s AND %s AND {lng_col} BETWEEN %s AND %s "
+                f"AND (6371000 * ACOS(LEAST(1.0, "
+                f"COS(RADIANS(%s))*COS(RADIANS({lat_col}))"
+                f"*COS(RADIANS({lng_col}) - RADIANS(%s)) "
+                f"+ SIN(RADIANS(%s))*SIN(RADIANS({lat_col}))))) <= %s "
+                f"GROUP BY MONTH({date_col}) ORDER BY m",
+                [year, lat-LAT_D, lat+LAT_D, lng-LNG_D, lng+LNG_D,
+                 lat, lng, lat, radius_m],
+            )
+        out["monthly_visits"] = cur.fetchall()
+        out["total_visit_days"] = sum(r["visits"] for r in out["monthly_visits"])
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    return jsonify(out)
+
+
 @app.get("/api/visit_debug")
 def visit_debug():
     """Diagnose why /api/monthly_visits returns nothing for a shop.
