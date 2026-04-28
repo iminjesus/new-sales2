@@ -301,6 +301,7 @@ async function drawShopCharts(shipToCode, shopLat, shopLng) {
         pointRadius: 4,
         spanGaps: true,
         yAxisID: "y1",
+        order: -1,
         datalabels: { display: false }
       });
     }
