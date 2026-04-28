@@ -3928,6 +3928,38 @@ _GPS_DATE_CANDIDATES = (
 _GPS_LAT_CANDIDATES = ("latitude", "lat", "y")
 _GPS_LNG_CANDIDATES = ("longitude", "lng", "lon", "long", "x")
 
+# Australian national public holidays — used to exclude non-business days
+# from visit counts.  State-specific holidays (Labour Day, Show Day, etc.)
+# are intentionally not included to keep the rule consistent across
+# territories. Add years here as needed.
+AU_HOLIDAYS = frozenset({
+    # 2025
+    "2025-01-01", "2025-01-27", "2025-04-18", "2025-04-21",
+    "2025-04-25", "2025-06-09", "2025-12-25", "2025-12-26",
+    # 2026
+    "2026-01-01", "2026-01-26", "2026-04-03", "2026-04-06",
+    "2026-04-25", "2026-06-08", "2026-12-25", "2026-12-28",
+    # 2027
+    "2027-01-01", "2027-01-26", "2027-03-26", "2027-03-29",
+    "2027-04-26", "2027-06-14", "2027-12-27", "2027-12-28",
+})
+
+def _business_day_filter_sql(date_col):
+    """SQL fragment + params to keep only Mon–Fri non-holiday rows.
+    MySQL DAYOFWEEK: 1=Sun, 7=Sat."""
+    placeholders = ",".join(["%s"] * len(AU_HOLIDAYS))
+    sql = (f"DAYOFWEEK({date_col}) NOT IN (1, 7) "
+           f"AND DATE({date_col}) NOT IN ({placeholders})")
+    return sql, list(AU_HOLIDAYS)
+
+def _is_business_day(d):
+    """d: date or datetime. True if Mon–Fri and not in AU_HOLIDAYS."""
+    if d is None:
+        return False
+    if d.weekday() >= 5:  # 5=Sat, 6=Sun
+        return False
+    return d.strftime("%Y-%m-%d") not in AU_HOLIDAYS
+
 def _resolve_gps_columns(cur):
     """Return (date_col, lat_col, lng_col) by inspecting the gps table.
     Raises RuntimeError if the table or required columns are missing."""
@@ -3971,6 +4003,8 @@ def monthly_visits():
         radius_m = float(request.args.get("radius", 500) or 500)
     except (TypeError, ValueError):
         radius_m = 500.0
+    business_only = (request.args.get("business_days_only", "1").strip().lower()
+                     not in ("0", "false", "no"))
 
     # bbox pre-filter sized from the radius (~111 km per degree lat,
     # ~96 km per degree lng at 30°S)
@@ -4001,6 +4035,12 @@ def monthly_visits():
                               lat - LAT_D, lat + LAT_D,
                               lng - LNG_D, lng + LNG_D])
         else:
+            extra_sql = ""
+            extra_params = []
+            if business_only:
+                bd_sql, bd_params = _business_day_filter_sql(date_col)
+                extra_sql = f"  AND {bd_sql}\n"
+                extra_params = bd_params
             sql = f"""
                 SELECT MONTH({date_col})                  AS m,
                        COUNT(DISTINCT DATE({date_col}))   AS visits
@@ -4013,13 +4053,15 @@ def monthly_visits():
                            * COS(RADIANS({lng_col}) - RADIANS(%s))
                            + SIN(RADIANS(%s)) * SIN(RADIANS({lat_col}))
                        ))) <= %s
+                {extra_sql}
                 GROUP  BY MONTH({date_col})
                 ORDER  BY m
             """
             cur.execute(sql, [year,
                               lat - LAT_D, lat + LAT_D,
                               lng - LNG_D, lng + LNG_D,
-                              lat, lng, lat, radius_m])
+                              lat, lng, lat, radius_m,
+                              *extra_params])
         rows = cur.fetchall() or []
     except Exception as e:
         print("monthly_visits: query failed:", e)
@@ -4050,8 +4092,11 @@ def visit_for_shop():
         radius_m = float(request.args.get("radius", 500) or 500)
     except (TypeError, ValueError):
         radius_m = 500.0
+    business_only = (request.args.get("business_days_only", "1").strip().lower()
+                     not in ("0", "false", "no"))
 
-    out = {"ship_to": ship_to, "year": year, "radius_m": radius_m}
+    out = {"ship_to": ship_to, "year": year, "radius_m": radius_m,
+           "business_days_only": business_only}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -4087,6 +4132,12 @@ def visit_for_shop():
                 [str(year), lat-LAT_D, lat+LAT_D, lng-LNG_D, lng+LNG_D],
             )
         else:
+            extra_sql = ""
+            extra_params = []
+            if business_only:
+                bd_sql, bd_params = _business_day_filter_sql(date_col)
+                extra_sql = f"AND {bd_sql} "
+                extra_params = bd_params
             cur.execute(
                 f"SELECT MONTH({date_col}) AS m, "
                 f"COUNT(DISTINCT DATE({date_col})) AS visits, "
@@ -4097,9 +4148,10 @@ def visit_for_shop():
                 f"COS(RADIANS(%s))*COS(RADIANS({lat_col}))"
                 f"*COS(RADIANS({lng_col}) - RADIANS(%s)) "
                 f"+ SIN(RADIANS(%s))*SIN(RADIANS({lat_col}))))) <= %s "
+                f"{extra_sql}"
                 f"GROUP BY MONTH({date_col}) ORDER BY m",
                 [year, lat-LAT_D, lat+LAT_D, lng-LNG_D, lng+LNG_D,
-                 lat, lng, lat, radius_m],
+                 lat, lng, lat, radius_m, *extra_params],
             )
         out["monthly_visits"] = cur.fetchall()
         out["total_visit_days"] = sum(r["visits"] for r in out["monthly_visits"])
@@ -4443,9 +4495,12 @@ def visit_summary():
         radius_m = 500.0
     with_sales = (request.args.get("with_sales", "1").strip().lower()
                   not in ("0", "false", "no"))
+    business_only = (request.args.get("business_days_only", "1").strip().lower()
+                     not in ("0", "false", "no"))
 
     out = {"params": {"year": year, "radius_m": radius_m,
-                      "with_sales": with_sales}}
+                      "with_sales": with_sales,
+                      "business_days_only": business_only}}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -4458,11 +4513,14 @@ def visit_summary():
             [year],
         )
         gps_rows = cur.fetchall()
+        if business_only:
+            gps_rows = [r for r in gps_rows if _is_business_day(r["d"])]
         out["gps_rows_in_year"] = len(gps_rows)
 
         if with_sales:
             cur.execute(
                 "SELECT c.ship_to, c.ship_to_name, c.ship_to_state, "
+                "       c.bde_state, c.salesman_name, "
                 "       c.latitude, c.longitude "
                 "FROM customer c "
                 "WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL "
@@ -4471,7 +4529,8 @@ def visit_summary():
             )
         else:
             cur.execute(
-                "SELECT ship_to, ship_to_name, ship_to_state, latitude, longitude "
+                "SELECT ship_to, ship_to_name, ship_to_state, "
+                "       bde_state, salesman_name, latitude, longitude "
                 "FROM customer "
                 "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
             )
@@ -4497,8 +4556,13 @@ def visit_summary():
         per_shop = []
         per_month = defaultdict(lambda: {"shops": set(), "visit_days": 0})
         per_state = defaultdict(lambda: {"shops": set(), "visit_days": 0})
+        per_bde   = defaultdict(lambda: {"shops": set(), "visit_days": 0,
+                                         "salesmen": set()})
+        seen_ship_to = set()  # one ship_to can appear in multiple customer rows
 
         for c in customers:
+            if c["ship_to"] in seen_ship_to:
+                continue
             try:
                 cla_deg = float(c["latitude"]); clo_deg = float(c["longitude"])
             except (TypeError, ValueError):
@@ -4520,11 +4584,14 @@ def visit_summary():
 
             if not visit_dates_by_month:
                 continue
+            seen_ship_to.add(c["ship_to"])
             total_days = sum(len(s) for s in visit_dates_by_month.values())
             per_shop.append({
                 "ship_to":       c["ship_to"],
                 "ship_to_name":  c["ship_to_name"],
                 "ship_to_state": c["ship_to_state"],
+                "bde_state":     c["bde_state"],
+                "salesman_name": c["salesman_name"],
                 "visit_days":    total_days,
                 "by_month":      {m: len(s) for m, s in sorted(visit_dates_by_month.items())},
             })
@@ -4534,6 +4601,11 @@ def visit_summary():
             st = c["ship_to_state"] or "?"
             per_state[st]["shops"].add(c["ship_to"])
             per_state[st]["visit_days"] += total_days
+            bde = (c["bde_state"] or "?").strip() or "?"
+            per_bde[bde]["shops"].add(c["ship_to"])
+            per_bde[bde]["visit_days"] += total_days
+            if c["salesman_name"]:
+                per_bde[bde]["salesmen"].add(c["salesman_name"].strip())
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
         out["total_shops_visited"] = len(per_shop)
@@ -4546,6 +4618,14 @@ def visit_summary():
         out["by_state"] = sorted(
             [{"state": s, "shops_visited": len(v["shops"]),
               "visit_days": v["visit_days"]} for s, v in per_state.items()],
+            key=lambda r: r["visit_days"], reverse=True,
+        )
+        out["by_bde"] = sorted(
+            [{"bde": b,
+              "shops_visited": len(v["shops"]),
+              "visit_days": v["visit_days"],
+              "salesmen": sorted(v["salesmen"])}
+             for b, v in per_bde.items()],
             key=lambda r: r["visit_days"], reverse=True,
         )
         out["top_shops"] = per_shop[:20]

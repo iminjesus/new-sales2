@@ -137,6 +137,37 @@ async function loadSalesMap() {
   } else {
     salesMap.setView([-25.0, 133.0], 4);
   }
+
+  loadBdeVisitTable();
+}
+
+async function loadBdeVisitTable() {
+  const tbody = document.querySelector("#bdeVisitTable tbody");
+  const totalsEl = document.getElementById("bdeVisitTotals");
+  if (!tbody) return;
+  try {
+    const data = await fetchJSON("/api/visit_summary?year=2026");
+    const rows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="3" style="padding:6px;color:#999;">No visit data</td></tr>';
+      if (totalsEl) totalsEl.textContent = "";
+      return;
+    }
+    tbody.innerHTML = rows.map(r => `
+      <tr>
+        <td style="padding:3px 6px;border-bottom:1px solid #eee;">${r.bde}</td>
+        <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
+        <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
+      </tr>
+    `).join("");
+    if (totalsEl) {
+      const totShops = data.total_shops_visited || 0;
+      const totDays  = data.total_visit_days || 0;
+      totalsEl.textContent = `Total: ${totShops} shops / ${totDays} visit-days`;
+    }
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="3" style="padding:6px;color:#c00;">Failed to load</td></tr>';
+  }
 }
 
 function monthlyMapOptions() {
