@@ -4414,6 +4414,132 @@ def visit_debug_closest():
         except Exception: pass
     return jsonify(out)
 
+
+@app.get("/api/visit_summary")
+def visit_summary():
+    """Total visit counts across every customer/ship-to.
+    Params: [year=2026], [radius=500]
+    Returns: total shops with ≥1 visit, total visit-days, monthly +
+             per-state breakdown, and the top 20 shops.
+
+    Strategy: load all gps points + all customers with coords into Python,
+    bin gps into a coarse spatial grid, and for each customer scan only
+    the nearby cells. Avoids the unindexed customer×gps SQL JOIN.
+    """
+    if USE_SQLITE:
+        return jsonify({"note": "available only on MySQL"})
+    try:
+        year = int(request.args.get("year", 2026) or 2026)
+    except (TypeError, ValueError):
+        year = 2026
+    try:
+        radius_m = float(request.args.get("radius", 500) or 500)
+    except (TypeError, ValueError):
+        radius_m = 500.0
+
+    out = {"params": {"year": year, "radius_m": radius_m}}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        date_col, lat_col, lng_col = _resolve_gps_columns(cur)
+
+        cur.execute(
+            f"SELECT {lat_col} AS la, {lng_col} AS lo, {date_col} AS d "
+            f"FROM gps WHERE YEAR({date_col}) = %s "
+            f"AND {lat_col} IS NOT NULL AND {lng_col} IS NOT NULL",
+            [year],
+        )
+        gps_rows = cur.fetchall()
+        out["gps_rows_in_year"] = len(gps_rows)
+
+        cur.execute(
+            "SELECT ship_to, ship_to_name, ship_to_state, latitude, longitude "
+            "FROM customer "
+            "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+        )
+        customers = cur.fetchall()
+        out["customers_with_coords"] = len(customers)
+
+        # Spatial grid (cell ≈ 1.1 km).  Search 3×3 cells covers ≤ 1.5 km
+        # which comfortably contains any radius up to ~1 km.  Bumps to 5×5
+        # if the user passes a larger radius.
+        from collections import defaultdict
+        from math import radians, sin, cos, asin, sqrt
+        GRID = 0.01
+        # extend search ring so radius/cell_size_m is fully covered
+        cell_size_m = 1100  # ~0.01° at 30°S
+        ring = max(1, int((radius_m / cell_size_m) + 0.999))
+
+        grid = defaultdict(list)
+        for r in gps_rows:
+            la, lo, d = float(r["la"]), float(r["lo"]), r["d"]
+            grid[(int(la / GRID), int(lo / GRID))].append((la, lo, d))
+
+        R = 6371000.0
+        per_shop = []
+        per_month = defaultdict(lambda: {"shops": set(), "visit_days": 0})
+        per_state = defaultdict(lambda: {"shops": set(), "visit_days": 0})
+
+        for c in customers:
+            try:
+                cla_deg = float(c["latitude"]); clo_deg = float(c["longitude"])
+            except (TypeError, ValueError):
+                continue
+            ci, cj = int(cla_deg / GRID), int(clo_deg / GRID)
+            cla = radians(cla_deg); clo = radians(clo_deg)
+            cos_cla = cos(cla)
+            visit_dates_by_month = defaultdict(set)
+
+            for di in range(-ring, ring + 1):
+                for dj in range(-ring, ring + 1):
+                    for la, lo, d in grid.get((ci + di, cj + dj), ()):
+                        dla = radians(la) - cla
+                        dlo = radians(lo) - clo
+                        h = sin(dla / 2) ** 2 + cos_cla * cos(radians(la)) * sin(dlo / 2) ** 2
+                        dist = 2 * R * asin(min(1.0, sqrt(h)))
+                        if dist <= radius_m:
+                            visit_dates_by_month[d.month].add(d)
+
+            if not visit_dates_by_month:
+                continue
+            total_days = sum(len(s) for s in visit_dates_by_month.values())
+            per_shop.append({
+                "ship_to":       c["ship_to"],
+                "ship_to_name":  c["ship_to_name"],
+                "ship_to_state": c["ship_to_state"],
+                "visit_days":    total_days,
+                "by_month":      {m: len(s) for m, s in sorted(visit_dates_by_month.items())},
+            })
+            for m, s in visit_dates_by_month.items():
+                per_month[m]["shops"].add(c["ship_to"])
+                per_month[m]["visit_days"] += len(s)
+            st = c["ship_to_state"] or "?"
+            per_state[st]["shops"].add(c["ship_to"])
+            per_state[st]["visit_days"] += total_days
+
+        per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
+        out["total_shops_visited"] = len(per_shop)
+        out["total_visit_days"]    = sum(r["visit_days"] for r in per_shop)
+        out["by_month"] = [
+            {"m": m, "shops_visited": len(per_month[m]["shops"]),
+             "visit_days": per_month[m]["visit_days"]}
+            for m in sorted(per_month)
+        ]
+        out["by_state"] = sorted(
+            [{"state": s, "shops_visited": len(v["shops"]),
+              "visit_days": v["visit_days"]} for s, v in per_state.items()],
+            key=lambda r: r["visit_days"], reverse=True,
+        )
+        out["top_shops"] = per_shop[:20]
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    return jsonify(out)
+
 # ==============================================================================
 # REBATE CALCULATOR
 # ==============================================================================
