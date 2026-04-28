@@ -4558,6 +4558,135 @@ def visit_summary():
         except Exception: pass
     return jsonify(out)
 
+
+@app.get("/api/visit_debug_gps_locality")
+def visit_debug_gps_locality():
+    """For each GPS point, find the nearest customer and bucket by
+    distance.  Answers 'is the GPS data even taken AT customer locations,
+    or mostly on highways / depots / homes?'.
+
+    Also breaks down GPS records by registration so we can see the
+    sampling rate (rows per vehicle per day).
+    Params: [year=2026], [with_sales=1]
+    """
+    if USE_SQLITE:
+        return jsonify({"note": "available only on MySQL"})
+    try:
+        year = int(request.args.get("year", 2026) or 2026)
+    except (TypeError, ValueError):
+        year = 2026
+    with_sales = (request.args.get("with_sales", "1").strip().lower()
+                  not in ("0", "false", "no"))
+
+    out = {"params": {"year": year, "with_sales": with_sales}}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        date_col, lat_col, lng_col = _resolve_gps_columns(cur)
+
+        # GPS points for the year
+        cur.execute(
+            f"SELECT {lat_col} AS la, {lng_col} AS lo, {date_col} AS d, "
+            f"       registration AS rego "
+            f"FROM gps WHERE YEAR({date_col}) = %s "
+            f"AND {lat_col} IS NOT NULL AND {lng_col} IS NOT NULL",
+            [year],
+        )
+        gps_rows = cur.fetchall()
+        out["gps_rows_in_year"] = len(gps_rows)
+
+        # Customers (optionally filtered to those with sales)
+        if with_sales:
+            cur.execute(
+                "SELECT c.ship_to, c.latitude, c.longitude FROM customer c "
+                "WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL "
+                "AND EXISTS (SELECT 1 FROM sales_thismonth s "
+                "            WHERE s.ship_to = c.ship_to)"
+            )
+        else:
+            cur.execute(
+                "SELECT ship_to, latitude, longitude FROM customer "
+                "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+            )
+        customers = cur.fetchall()
+        out["customers_considered"] = len(customers)
+
+        # Build customer spatial grid for fast lookup
+        from collections import defaultdict, Counter
+        from math import radians, sin, cos, asin, sqrt
+        GRID = 0.05  # ~5.5 km cells — search 3×3 covers ~15 km
+        cust_grid = defaultdict(list)
+        for c in customers:
+            la, lo = float(c["latitude"]), float(c["longitude"])
+            cust_grid[(int(la / GRID), int(lo / GRID))].append((la, lo, c["ship_to"]))
+
+        R = 6371000.0
+        buckets = Counter()
+        BUCKET_EDGES = (100, 250, 500, 1000, 2500, 5000, 10000, 25000, 100000)
+        no_match = 0  # GPS where there's no customer within the search ring
+
+        for r in gps_rows:
+            gla = float(r["la"]); glo = float(r["lo"])
+            gi, gj = int(gla / GRID), int(glo / GRID)
+            best = None
+            for di in (-1, 0, 1):
+                for dj in (-1, 0, 1):
+                    for cla, clo, _ in cust_grid.get((gi + di, gj + dj), ()):
+                        dla = radians(gla) - radians(cla)
+                        dlo = radians(glo) - radians(clo)
+                        h = sin(dla / 2) ** 2 + cos(radians(cla)) * cos(radians(gla)) * sin(dlo / 2) ** 2
+                        d = 2 * R * asin(min(1.0, sqrt(h)))
+                        if best is None or d < best:
+                            best = d
+            if best is None:
+                no_match += 1
+                continue
+            # bucket: place into the smallest edge it fits under
+            placed = False
+            for edge in BUCKET_EDGES:
+                if best <= edge:
+                    buckets[f"<={edge}m"] += 1
+                    placed = True
+                    break
+            if not placed:
+                buckets[">100km"] += 1
+
+        out["gps_no_match_within_15km"] = no_match
+        out["gps_distance_to_nearest_customer"] = dict(buckets)
+        out["gps_within_500m_of_some_customer_pct"] = round(
+            100 * buckets.get("<=100m", 0) / max(1, len(gps_rows)) +
+            100 * buckets.get("<=250m", 0) / max(1, len(gps_rows)) +
+            100 * buckets.get("<=500m", 0) / max(1, len(gps_rows)),
+            1,
+        )
+
+        # Per-registration sampling rate
+        cur.execute(
+            f"SELECT registration AS rego, COUNT(*) AS n, "
+            f"COUNT(DISTINCT DATE({date_col})) AS days "
+            f"FROM gps WHERE YEAR({date_col}) = %s "
+            f"GROUP BY registration ORDER BY n DESC LIMIT 30",
+            [year],
+        )
+        regs = cur.fetchall()
+        for r in regs:
+            r["rows_per_day"] = round(r["n"] / max(1, r["days"]), 2)
+        out["top_registrations"] = regs
+        cur.execute(
+            f"SELECT COUNT(DISTINCT registration) AS n FROM gps "
+            f"WHERE YEAR({date_col}) = %s",
+            [year],
+        )
+        out["total_distinct_registrations"] = cur.fetchone()["n"]
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    return jsonify(out)
+
 # ==============================================================================
 # REBATE CALCULATOR
 # ==============================================================================
