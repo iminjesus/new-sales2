@@ -4418,9 +4418,14 @@ def visit_debug_closest():
 @app.get("/api/visit_summary")
 def visit_summary():
     """Total visit counts across every customer/ship-to.
-    Params: [year=2026], [radius=500]
+    Params: [year=2026], [radius=500], [with_sales=1]
     Returns: total shops with ≥1 visit, total visit-days, monthly +
              per-state breakdown, and the top 20 shops.
+
+    with_sales=1 (default) restricts the customer set to those that have
+    at least one row in sales_thismonth — i.e. only count shops that are
+    currently transacting, ignoring DNU / inactive accounts. Pass
+    with_sales=0 to count every customer with coords regardless of sales.
 
     Strategy: load all gps points + all customers with coords into Python,
     bin gps into a coarse spatial grid, and for each customer scan only
@@ -4436,8 +4441,11 @@ def visit_summary():
         radius_m = float(request.args.get("radius", 500) or 500)
     except (TypeError, ValueError):
         radius_m = 500.0
+    with_sales = (request.args.get("with_sales", "1").strip().lower()
+                  not in ("0", "false", "no"))
 
-    out = {"params": {"year": year, "radius_m": radius_m}}
+    out = {"params": {"year": year, "radius_m": radius_m,
+                      "with_sales": with_sales}}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -4452,11 +4460,21 @@ def visit_summary():
         gps_rows = cur.fetchall()
         out["gps_rows_in_year"] = len(gps_rows)
 
-        cur.execute(
-            "SELECT ship_to, ship_to_name, ship_to_state, latitude, longitude "
-            "FROM customer "
-            "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
-        )
+        if with_sales:
+            cur.execute(
+                "SELECT c.ship_to, c.ship_to_name, c.ship_to_state, "
+                "       c.latitude, c.longitude "
+                "FROM customer c "
+                "WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL "
+                "  AND EXISTS (SELECT 1 FROM sales_thismonth s "
+                "              WHERE s.ship_to = c.ship_to)"
+            )
+        else:
+            cur.execute(
+                "SELECT ship_to, ship_to_name, ship_to_state, latitude, longitude "
+                "FROM customer "
+                "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+            )
         customers = cur.fetchall()
         out["customers_with_coords"] = len(customers)
 
