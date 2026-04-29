@@ -74,7 +74,8 @@ async function loadSalesMap() {
     return;
   }
 
-  const visitedSet = new Set((summary && summary.visited_ship_tos) || []);
+  const visitsByShipTo = (summary && summary.visits_by_ship_to) || {};
+  const visitedSet = new Set(Object.keys(visitsByShipTo));
 
   const points = [];
 
@@ -117,10 +118,12 @@ async function loadSalesMap() {
     weight:     isVisited ? 1.5  : 1.0
   });
 
+  const visitCount = visitsByShipTo[shipTo] || 0;
   marker.bindPopup(
   `${shipTo} - ${shipNm}<br>` +
   `Region: ${regionVal || "-"}<br>` +
   `BDE: ${bde || "-"}<br>` +
+  `Total Visits (2026): ${visitCount}<br>` +
   `<span id="popup-total">Total (2026): …</span>`
   );
 

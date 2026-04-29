@@ -4643,8 +4643,11 @@ def visit_summary():
             key=lambda r: r["visit_days"], reverse=True,
         )
         out["top_shops"] = per_shop[:20]
-        # Full set of visited ship_tos so the map can fade non-visited markers.
+        # Full set of visited ship_tos + per-shop visit counts so the map can
+        # fade non-visited markers and show counts in popups without an extra
+        # round-trip per shop.
         out["visited_ship_tos"] = [r["ship_to"] for r in per_shop]
+        out["visits_by_ship_to"] = {r["ship_to"]: r["visit_days"] for r in per_shop}
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
