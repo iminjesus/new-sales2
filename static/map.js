@@ -112,9 +112,9 @@ async function loadSalesMap() {
     radius,
     color,
     fillColor: color,
-    fillOpacity: isVisited ? 0.85 : 0.1,
-    opacity:    isVisited ? 1.0  : 0.4,
-    weight:     isVisited ? 1.5  : 0.5
+    fillOpacity: isVisited ? 0.85 : 0.4,
+    opacity:    isVisited ? 1.0  : 0.85,
+    weight:     isVisited ? 1.5  : 1.0
   });
 
   marker.bindPopup(
