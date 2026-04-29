@@ -4556,13 +4556,24 @@ def visit_summary():
         per_shop = []
         per_month = defaultdict(lambda: {"shops": set(), "visit_days": 0})
         per_state = defaultdict(lambda: {"shops": set(), "visit_days": 0})
-        per_bde   = defaultdict(lambda: {"shops": set(), "visit_days": 0,
-                                         "states": set()})
+        per_bde   = defaultdict(lambda: {"all_shops": set(),    # every ship_to assigned to this BDE
+                                         "shops":     set(),    # ship_tos that were actually visited
+                                         "visit_days": 0,
+                                         "states":    set()})
         seen_ship_to = set()  # one ship_to can appear in multiple customer rows
 
         for c in customers:
             if c["ship_to"] in seen_ship_to:
                 continue
+            seen_ship_to.add(c["ship_to"])
+
+            # Track BDE assignment regardless of whether this shop was visited —
+            # we need the denominator (total shops in the BDE's territory) too.
+            bde = (c["salesman_name"] or "").strip() or "(unassigned)"
+            per_bde[bde]["all_shops"].add(c["ship_to"])
+            if c["bde_state"]:
+                per_bde[bde]["states"].add(c["bde_state"].strip())
+
             try:
                 cla_deg = float(c["latitude"]); clo_deg = float(c["longitude"])
             except (TypeError, ValueError):
@@ -4584,7 +4595,6 @@ def visit_summary():
 
             if not visit_dates_by_month:
                 continue
-            seen_ship_to.add(c["ship_to"])
             total_days = sum(len(s) for s in visit_dates_by_month.values())
             per_shop.append({
                 "ship_to":       c["ship_to"],
@@ -4601,11 +4611,8 @@ def visit_summary():
             st = c["ship_to_state"] or "?"
             per_state[st]["shops"].add(c["ship_to"])
             per_state[st]["visit_days"] += total_days
-            bde = (c["salesman_name"] or "").strip() or "(unassigned)"
             per_bde[bde]["shops"].add(c["ship_to"])
             per_bde[bde]["visit_days"] += total_days
-            if c["bde_state"]:
-                per_bde[bde]["states"].add(c["bde_state"].strip())
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
         out["total_shops_visited"] = len(per_shop)
@@ -4622,9 +4629,10 @@ def visit_summary():
         )
         out["by_bde"] = sorted(
             [{"bde": b,
+              "total_shops":   len(v["all_shops"]),
               "shops_visited": len(v["shops"]),
-              "visit_days": v["visit_days"],
-              "states": sorted(v["states"])}
+              "visit_days":    v["visit_days"],
+              "states":        sorted(v["states"])}
              for b, v in per_bde.items()],
             key=lambda r: r["visit_days"], reverse=True,
         )

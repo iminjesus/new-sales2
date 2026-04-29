@@ -149,7 +149,7 @@ async function loadBdeVisitTable() {
     const data = await fetchJSON("/api/visit_summary?year=2026");
     const rows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
     if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="4" style="padding:6px;color:#999;">No visit data</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="padding:6px;color:#999;">No visit data</td></tr>';
       if (totalsEl) totalsEl.textContent = "";
       return;
     }
@@ -157,6 +157,7 @@ async function loadBdeVisitTable() {
       <tr>
         <td style="padding:3px 6px;border-bottom:1px solid #eee;">${r.bde}</td>
         <td style="padding:3px 6px;border-bottom:1px solid #eee;color:#666;">${(r.states || []).join(", ")}</td>
+        <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.total_shops}</td>
         <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
         <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
       </tr>
