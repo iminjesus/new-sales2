@@ -64,11 +64,17 @@ async function loadSalesMap() {
     top_limit:     filters.top_limit || 0 
   }).toString();
 
-  const data = await fetchJSON(`/api/sales_map?${qs}`);
+  const [data, summary] = await Promise.all([
+    fetchJSON(`/api/sales_map?${qs}`),
+    fetchJSON(`/api/visit_summary?year=2026`),
+  ]);
   if (!Array.isArray(data) || data.length === 0) {
     salesMap.setView([-25.0, 133.0], 4);
+    renderBdeVisitTable(summary);
     return;
   }
+
+  const visitedSet = new Set((summary && summary.visited_ship_tos) || []);
 
   const points = [];
 
@@ -101,12 +107,14 @@ async function loadSalesMap() {
   const latNum = +lat;
   const lngNum = +lng;
 
+  const isVisited = visitedSet.has(shipTo);
   const marker = L.circleMarker([latNum, lngNum], {
     radius,
     color,
     fillColor: color,
-    fillOpacity: 0.7,
-    weight: 1
+    fillOpacity: isVisited ? 0.85 : 0.1,
+    opacity:    isVisited ? 1.0  : 0.4,
+    weight:     isVisited ? 1.5  : 0.5
   });
 
   marker.bindPopup(
@@ -138,37 +146,32 @@ async function loadSalesMap() {
     salesMap.setView([-25.0, 133.0], 4);
   }
 
-  loadBdeVisitTable();
+  renderBdeVisitTable(summary);
 }
 
-async function loadBdeVisitTable() {
+function renderBdeVisitTable(data) {
   const tbody = document.querySelector("#bdeVisitTable tbody");
   const totalsEl = document.getElementById("bdeVisitTotals");
   if (!tbody) return;
-  try {
-    const data = await fetchJSON("/api/visit_summary?year=2026");
-    const rows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
-    if (!rows.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="padding:6px;color:#999;">No visit data</td></tr>';
-      if (totalsEl) totalsEl.textContent = "";
-      return;
-    }
-    tbody.innerHTML = rows.map(r => `
-      <tr>
-        <td style="padding:3px 6px;border-bottom:1px solid #eee;">${r.bde}</td>
-        <td style="padding:3px 6px;border-bottom:1px solid #eee;color:#666;">${(r.states || []).join(", ")}</td>
-        <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.total_shops}</td>
-        <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
-        <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
-      </tr>
-    `).join("");
-    if (totalsEl) {
-      const totShops = data.total_shops_visited || 0;
-      const totDays  = data.total_visit_days || 0;
-      totalsEl.textContent = `Total: ${totShops} shops / ${totDays} visit-days`;
-    }
-  } catch (e) {
-    tbody.innerHTML = '<tr><td colspan="4" style="padding:6px;color:#c00;">Failed to load</td></tr>';
+  const rows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:6px;color:#999;">No visit data</td></tr>';
+    if (totalsEl) totalsEl.textContent = "";
+    return;
+  }
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td style="padding:3px 6px;border-bottom:1px solid #eee;">${r.bde}</td>
+      <td style="padding:3px 6px;border-bottom:1px solid #eee;color:#666;">${(r.states || []).join(", ")}</td>
+      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.total_shops}</td>
+      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
+      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
+    </tr>
+  `).join("");
+  if (totalsEl) {
+    const totShops = data.total_shops_visited || 0;
+    const totDays  = data.total_visit_days || 0;
+    totalsEl.textContent = `Total: ${totShops} shops / ${totDays} visit-days`;
   }
 }
 
