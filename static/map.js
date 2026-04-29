@@ -171,7 +171,7 @@ function renderBdeVisitTable(data) {
   if (totalsEl) {
     const totShops = data.total_shops_visited || 0;
     const totDays  = data.total_visit_days || 0;
-    totalsEl.textContent = `Total: ${totShops} shops / ${totDays} visit-days`;
+    totalsEl.textContent = `Total: ${totShops} visited / ${totDays} visits`;
   }
 }
 
