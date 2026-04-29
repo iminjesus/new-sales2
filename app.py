@@ -4517,25 +4517,24 @@ def visit_summary():
             gps_rows = [r for r in gps_rows if _is_business_day(r["d"])]
         out["gps_rows_in_year"] = len(gps_rows)
 
-        if with_sales:
-            cur.execute(
-                "SELECT c.ship_to, c.ship_to_name, c.ship_to_state, "
-                "       c.bde_state, c.salesman_name, "
-                "       c.latitude, c.longitude "
-                "FROM customer c "
-                "WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL "
-                "  AND EXISTS (SELECT 1 FROM sales_thismonth s "
-                "              WHERE s.ship_to = c.ship_to)"
-            )
-        else:
-            cur.execute(
-                "SELECT ship_to, ship_to_name, ship_to_state, "
-                "       bde_state, salesman_name, latitude, longitude "
-                "FROM customer "
-                "WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
-            )
+        # Always pull every customer — BDE assignment count must include
+        # shops without sales and even shops without lat/lng.  The visit
+        # check + with_sales filter is applied per-row inside the loop.
+        cur.execute(
+            "SELECT ship_to, ship_to_name, ship_to_state, "
+            "       bde_state, salesman_name, latitude, longitude "
+            "FROM customer"
+        )
         customers = cur.fetchall()
-        out["customers_with_coords"] = len(customers)
+        out["customers_total"] = len(customers)
+
+        # When with_sales=1, only shops that appear in sales_thismonth count
+        # toward the visit checking — but they still count toward total Shops.
+        shops_with_sales = None
+        if with_sales:
+            cur.execute("SELECT DISTINCT ship_to FROM sales_thismonth")
+            shops_with_sales = {r["ship_to"] for r in cur.fetchall()}
+            out["customers_with_sales"] = len(shops_with_sales)
 
         # Spatial grid (cell ≈ 1.1 km).  Search 3×3 cells covers ≤ 1.5 km
         # which comfortably contains any radius up to ~1 km.  Bumps to 5×5
@@ -4567,12 +4566,19 @@ def visit_summary():
                 continue
             seen_ship_to.add(c["ship_to"])
 
-            # Track BDE assignment regardless of whether this shop was visited —
-            # we need the denominator (total shops in the BDE's territory) too.
+            # Track BDE territory size — every assigned ship_to counts,
+            # regardless of sales activity or whether coords are available.
             bde = (c["salesman_name"] or "").strip() or "(unassigned)"
             per_bde[bde]["all_shops"].add(c["ship_to"])
             if c["bde_state"]:
                 per_bde[bde]["states"].add(c["bde_state"].strip())
+
+            # Visit check needs coords; skip if missing.
+            if c["latitude"] is None or c["longitude"] is None:
+                continue
+            # When with_sales=1, only shops that have sales count toward visits.
+            if shops_with_sales is not None and c["ship_to"] not in shops_with_sales:
+                continue
 
             try:
                 cla_deg = float(c["latitude"]); clo_deg = float(c["longitude"])
