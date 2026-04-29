@@ -365,10 +365,8 @@
   async function fetchAndRenderPrice(){
     const qs = buildQueryParams();
     const d  = await fetchJSON(`/api/carrying_price?${qs}`);
-    const listEl     = document.getElementById("priceList");
-    const purchaseEl = document.getElementById("pricePurchase");
-    if (listEl)     listEl.textContent     = d ? fmtPrice(d.list_price)     : "—";
-    if (purchaseEl) purchaseEl.textContent = d ? fmtPrice(d.purchase_price) : "—";
+    const listEl = document.getElementById("priceList");
+    if (listEl) listEl.textContent = d ? fmtPrice(d.list_price) : "—";
   }
 
   // last fetched base_sales for pipeline rendering
