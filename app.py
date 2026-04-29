@@ -4558,6 +4558,7 @@ def visit_summary():
         per_bde   = defaultdict(lambda: {"all_shops": set(),    # every ship_to assigned to this BDE
                                          "shops":     set(),    # ship_tos that were actually visited
                                          "visit_days": 0,
+                                         "visited_dates": set(), # union of distinct dates with any visit
                                          "states":    set()})
         seen_ship_to = set()  # one ship_to can appear in multiple customer rows
 
@@ -4619,6 +4620,8 @@ def visit_summary():
             per_state[st]["visit_days"] += total_days
             per_bde[bde]["shops"].add(c["ship_to"])
             per_bde[bde]["visit_days"] += total_days
+            for s in visit_dates_by_month.values():
+                per_bde[bde]["visited_dates"].update(s)
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
         out["total_shops_visited"] = len(per_shop)
@@ -4633,11 +4636,19 @@ def visit_summary():
               "visit_days": v["visit_days"]} for s, v in per_state.items()],
             key=lambda r: r["visit_days"], reverse=True,
         )
+        # Reference denominator for "no-visit days": business days that
+        # actually appear in the gps table (so we don't penalise BDEs for
+        # months/days where no GPS data exists at all).
+        active_business_days = {r["d"] for r in gps_rows
+                                if r["d"] is not None and _is_business_day(r["d"])}
+        out["active_business_days"] = len(active_business_days)
+
         out["by_bde"] = sorted(
             [{"bde": b,
               "total_shops":   len(v["all_shops"]),
               "shops_visited": len(v["shops"]),
               "visit_days":    v["visit_days"],
+              "no_visit_days": len(active_business_days - v["visited_dates"]),
               "states":        sorted(v["states"])}
              for b, v in per_bde.items()],
             key=lambda r: r["visit_days"], reverse=True,

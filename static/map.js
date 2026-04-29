@@ -158,7 +158,7 @@ function renderBdeVisitTable(data) {
   if (!tbody) return;
   const rows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="padding:6px;color:#999;">No visit data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="6" style="padding:6px;color:#999;">No visit data</td></tr>';
     if (totalsEl) totalsEl.textContent = "";
     return;
   }
@@ -169,12 +169,14 @@ function renderBdeVisitTable(data) {
       <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.total_shops}</td>
       <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
       <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
+      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;color:#c00;">${r.no_visit_days ?? "-"}</td>
     </tr>
   `).join("");
   if (totalsEl) {
     const totShops = data.total_shops_visited || 0;
     const totDays  = data.total_visit_days || 0;
-    totalsEl.textContent = `Total: ${totShops} visited shop / ${totDays} visits`;
+    const activeDays = data.active_business_days || 0;
+    totalsEl.textContent = `Total: ${totShops} visited shop / ${totDays} visits / ${activeDays} active business days`;
   }
 }
 
