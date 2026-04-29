@@ -287,15 +287,26 @@ def scrape_rows(driver):
             if brand and BRAND.lower() not in brand.lower():
                 continue
 
+            # SKU — appears as "SKU: 1010819" somewhere in the row
+            sku = ""
+            try:
+                row_text = row.text or ""
+                m = re.search(r"SKU\s*[:#]?\s*([A-Za-z0-9\-]+)", row_text)
+                if m:
+                    sku = m.group(1)
+            except Exception:
+                pass
+
             results.append(
                 {
                     "brand": brand,
                     "description": desc,
                     "cost": cost,
                     "price": price,
+                    "sku": sku,
                 }
             )
-            print(f"  {brand:<15} | {desc[:50]} | cost={cost} | price={price}")
+            print(f"  {brand:<15} | SKU={sku:<12} | {desc[:50]} | cost={cost} | price={price}")
 
         except Exception as e:
             print(f"  [WARN] {e}")
@@ -335,7 +346,7 @@ def main():
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE"])
+            writer.writerow(["SIZE", "brand", "SKU", "DESCRIPTION", "COST", "PRICE"])
 
             for query, size in SEARCH_QUERIES:
                 print(f"\n=== Searching: {query}  ({size}) ===")
@@ -351,7 +362,7 @@ def main():
                     rows = scrape_rows(driver)
                     for r in rows:
                         writer.writerow(
-                            [size, r["brand"], r["description"], r["cost"], r["price"]]
+                            [size, r["brand"], r["sku"], r["description"], r["cost"], r["price"]]
                         )
                     f.flush()
                     print(f"  {len(rows)} rows written")
