@@ -4559,7 +4559,7 @@ def visit_summary():
                                          "shops":     set(),    # ship_tos that were actually visited
                                          "visit_days": 0,
                                          "visited_dates": set(), # union of distinct dates with any visit
-                                         "states":    set()})
+                                         "state_counts": defaultdict(int)})
         seen_ship_to = set()  # one ship_to can appear in multiple customer rows
 
         for c in customers:
@@ -4572,7 +4572,7 @@ def visit_summary():
             bde = (c["salesman_name"] or "").strip() or "(unassigned)"
             per_bde[bde]["all_shops"].add(c["ship_to"])
             if c["bde_state"]:
-                per_bde[bde]["states"].add(c["bde_state"].strip())
+                per_bde[bde]["state_counts"][c["bde_state"].strip()] += 1
 
             # Visit check needs coords; skip if missing.
             if c["latitude"] is None or c["longitude"] is None:
@@ -4643,15 +4643,31 @@ def visit_summary():
                                 if r["d"] is not None and _is_business_day(r["d"])}
         out["active_business_days"] = len(active_business_days)
 
+        STATE_ORDER = ["NSW", "QLD", "VIC", "SA", "WA"]
+        def _primary_state(counts):
+            if not counts:
+                return ""
+            # Pick the most-common bde_state for this BDE; on ties, prefer
+            # earlier in STATE_ORDER.
+            return max(counts.items(),
+                       key=lambda kv: (kv[1],
+                                       -STATE_ORDER.index(kv[0]) if kv[0] in STATE_ORDER else -99))[0]
+        def _state_sort_key(s):
+            return STATE_ORDER.index(s) if s in STATE_ORDER else len(STATE_ORDER)
+
+        bde_rows = []
+        for b, v in per_bde.items():
+            bde_rows.append({
+                "bde":           b,
+                "state":         _primary_state(v["state_counts"]),
+                "total_shops":   len(v["all_shops"]),
+                "shops_visited": len(v["shops"]),
+                "visit_days":    v["visit_days"],
+                "no_visit_days": len(active_business_days - v["visited_dates"]),
+            })
         out["by_bde"] = sorted(
-            [{"bde": b,
-              "total_shops":   len(v["all_shops"]),
-              "shops_visited": len(v["shops"]),
-              "visit_days":    v["visit_days"],
-              "no_visit_days": len(active_business_days - v["visited_dates"]),
-              "states":        sorted(v["states"])}
-             for b, v in per_bde.items()],
-            key=lambda r: r["visit_days"], reverse=True,
+            bde_rows,
+            key=lambda r: (_state_sort_key(r["state"]), -r["visit_days"]),
         )
         out["top_shops"] = per_shop[:20]
         # Full set of visited ship_tos + per-shop visit counts so the map can

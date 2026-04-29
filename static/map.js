@@ -164,8 +164,8 @@ function renderBdeVisitTable(data) {
   }
   tbody.innerHTML = rows.map(r => `
     <tr>
+      <td style="padding:3px 6px;border-bottom:1px solid #eee;color:#666;">${r.state || "-"}</td>
       <td style="padding:3px 6px;border-bottom:1px solid #eee;">${r.bde}</td>
-      <td style="padding:3px 6px;border-bottom:1px solid #eee;color:#666;">${(r.states || []).join(", ")}</td>
       <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.total_shops}</td>
       <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
       <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
