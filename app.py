@@ -3929,6 +3929,14 @@ _GPS_LAT_CANDIDATES = ("latitude", "lat", "y")
 _GPS_LNG_CANDIDATES = ("longitude", "lng", "lon", "long", "x")
 _GPS_SALESMAN_CANDIDATES = ("salesmen", "salesman", "salesman_name", "rep", "bde", "registration")
 
+# BDE names to hide from the visit_summary by_bde table (e.g. test
+# entries, old vehicles, names that aren't actual sales reps).
+# Match is case/whitespace-insensitive.
+BDE_EXCLUDE = frozenset({
+    "JO TEDDY",
+    "CHO JUNJONG",
+})
+
 def _resolve_gps_salesman_col(cur):
     """Optional column — returns the salesman/registration column name or
     None if the gps schema doesn't include one."""
@@ -4723,6 +4731,8 @@ def visit_summary():
 
         bde_rows = []
         for norm, v in per_bde.items():
+            if norm in BDE_EXCLUDE:
+                continue
             # No-Visit Days denominator = days where THIS BDE had any GPS
             # recorded.  Subtract the days they actually visited a shop.
             bde_active = active_days_by_bde.get(norm, set())
