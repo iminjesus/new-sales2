@@ -47,10 +47,10 @@ const REGION_STACK_ORDER = ["NSW", "QLD", "VIC", "SA", "WA", "COMMON"];
 /* -------------------------- state & helpers -------------------------- */
 const COLORS=["#374388ff","#90359cff","#3e9150ff","#93b14dff","#d6c635ff","#95E4E5","#275ccfff","#175d96ff","#366592ff","#667c91ff","#FF968A","#FFAEA6"];
 const REGION_SALESMEN={
-  NSW:["LUTTRELL STEVE","Borghese Alessio","NSW SM"],
+  NSW:["LUTTRELL STEVE","Borghese Alessio","Buckley Paul"],
   QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
   VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-  WA:["DAIS Jim","WA SM"]
+  WA:["DAIS Jim","Asim Qureshi"]
 };
 const fmt = (n) => (+n || 0).toLocaleString();
 
