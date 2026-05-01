@@ -446,37 +446,6 @@ app = Flask(__name__, static_folder="static")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
-# ── Public-domain auth gate ───────────────────────────────────────────────────
-# Local access (127.0.0.1, localhost) stays password-less.  Requests whose
-# Host header matches PUBLIC_DOMAIN must present HTTP Basic Auth credentials.
-# Configured via env vars:
-#   PUBLIC_DOMAIN  default 'sales.hkaudashboard.com.au'
-#   SITE_PASSWORD  blank disables the gate entirely
-#   SITE_USERNAME  default 'admin'
-# cloudflared forwards the original Host header by default, so checking
-# request.headers['Host'] reliably distinguishes tunnel traffic from local.
-PUBLIC_DOMAIN = os.getenv("PUBLIC_DOMAIN", "sales.hkaudashboard.com.au").strip().lower()
-SITE_PASSWORD = os.getenv("SITE_PASSWORD", "")
-SITE_USERNAME = os.getenv("SITE_USERNAME", "admin")
-
-@app.before_request
-def _gate_public_domain():
-    if not SITE_PASSWORD:
-        return  # gate disabled
-    host = (request.headers.get("Host") or "").split(":")[0].strip().lower()
-    if not host or PUBLIC_DOMAIN not in host:
-        return  # local / non-public host → no auth required
-    auth = request.authorization
-    if auth and auth.username == SITE_USERNAME and auth.password == SITE_PASSWORD:
-        return  # authenticated
-    from flask import Response
-    return Response(
-        "Authentication required.\n",
-        401,
-        {"WWW-Authenticate": 'Basic realm="HKA Sales Dashboard"'},
-    )
-
-
 @app.errorhandler(500)
 def handle_500(e):
     return jsonify({"error": "internal_server_error", "detail": str(e)}), 500
