@@ -4590,24 +4590,45 @@ def visit_summary():
         per_shop = []
         per_month = defaultdict(lambda: {"shops": set(), "visit_days": 0})
         per_state = defaultdict(lambda: {"shops": set(), "visit_days": 0})
-        per_bde   = defaultdict(lambda: {"all_shops": set(),    # every ship_to assigned to this BDE
-                                         "shops":     set(),    # ship_tos that were actually visited
-                                         "visit_days": 0,
-                                         "visited_dates": set(), # union of distinct dates with any visit
-                                         "state_counts": defaultdict(int)})
+        # per_bde keyed by NORMALIZED salesman name so customer.salesman_name
+        # (territory) and gps.salesmen (visits) line up despite case/whitespace.
+        per_bde = defaultdict(lambda: {
+            "all_shops":    set(),                 # territory from customer.salesman_name
+            "shops":        set(),                 # shops their GPS hit (any shop, not just assigned)
+            "visit_days":   0,
+            "visited_dates": set(),
+            "state_counts": defaultdict(int),
+            "display_name": "",
+        })
         seen_ship_to = set()  # one ship_to can appear in multiple customer rows
+
+        # Pre-seed display names from gps so a BDE who has no customer entries
+        # (e.g. ex-territory) still shows up with their gps-side name.
+        if salesman_col:
+            for r in gps_rows:
+                sm_raw = (r.get("sm") or "").strip()
+                if sm_raw:
+                    norm = sm_raw.upper()
+                    if not per_bde[norm]["display_name"]:
+                        per_bde[norm]["display_name"] = sm_raw
 
         for c in customers:
             if c["ship_to"] in seen_ship_to:
                 continue
             seen_ship_to.add(c["ship_to"])
 
-            # Track BDE territory size — every assigned ship_to counts,
-            # regardless of sales activity or whether coords are available.
-            bde = (c["salesman_name"] or "").strip() or "(unassigned)"
-            per_bde[bde]["all_shops"].add(c["ship_to"])
+            # Territory: every assigned ship_to counts toward the BDE in
+            # customer.salesman_name regardless of sales / coords / visits.
+            cust_name_raw = (c["salesman_name"] or "").strip()
+            cust_name_norm = cust_name_raw.upper() if cust_name_raw else "(UNASSIGNED)"
+            per_bde[cust_name_norm]["all_shops"].add(c["ship_to"])
+            # Customer master casing is authoritative for the display name.
+            if cust_name_raw:
+                per_bde[cust_name_norm]["display_name"] = cust_name_raw
+            elif not per_bde[cust_name_norm]["display_name"]:
+                per_bde[cust_name_norm]["display_name"] = "(unassigned)"
             if c["bde_state"]:
-                per_bde[bde]["state_counts"][c["bde_state"].strip()] += 1
+                per_bde[cust_name_norm]["state_counts"][c["bde_state"].strip()] += 1
 
             # Visit check needs coords; skip if missing.
             if c["latitude"] is None or c["longitude"] is None:
@@ -4625,9 +4646,8 @@ def visit_summary():
             cos_cla = cos(cla)
             # Per-shop (any salesman) → drives map markers + popup totals.
             visit_dates_any = defaultdict(set)
-            # Per-shop, only same salesman → drives BDE table attribution.
-            my_bde_norm = _norm_name(c["salesman_name"])
-            visit_dates_my_bde = defaultdict(set)
+            # Per-shop, per-gps-salesman → attribution for the BDE table.
+            visit_dates_per_bde = defaultdict(lambda: defaultdict(set))  # bde_norm → month → dates
 
             for di in range(-ring, ring + 1):
                 for dj in range(-ring, ring + 1):
@@ -4638,8 +4658,8 @@ def visit_summary():
                         dist = 2 * R * asin(min(1.0, sqrt(h)))
                         if dist <= radius_m:
                             visit_dates_any[d.month].add(d)
-                            if salesman_col and my_bde_norm and gps_sm == my_bde_norm:
-                                visit_dates_my_bde[d.month].add(d)
+                            if salesman_col and gps_sm:
+                                visit_dates_per_bde[gps_sm][d.month].add(d)
 
             # Per-shop (any salesman) — used by map / popup
             if visit_dates_any:
@@ -4660,13 +4680,15 @@ def visit_summary():
                 per_state[st]["shops"].add(c["ship_to"])
                 per_state[st]["visit_days"] += total_days_any
 
-            # Per-BDE (only same-salesman GPS counts) — drives the table
-            if visit_dates_my_bde:
-                total_days_bde = sum(len(s) for s in visit_dates_my_bde.values())
-                per_bde[bde]["shops"].add(c["ship_to"])
-                per_bde[bde]["visit_days"] += total_days_bde
-                for s in visit_dates_my_bde.values():
-                    per_bde[bde]["visited_dates"].update(s)
+            # Per-BDE — credit the visit to whoever's GPS came within radius,
+            # not to the customer's assigned salesman.  A BDE may earn
+            # 'shops_visited' on shops they don't own.
+            for gps_norm, dates_by_month in visit_dates_per_bde.items():
+                total_days_this_bde = sum(len(s) for s in dates_by_month.values())
+                per_bde[gps_norm]["shops"].add(c["ship_to"])
+                per_bde[gps_norm]["visit_days"] += total_days_this_bde
+                for s in dates_by_month.values():
+                    per_bde[gps_norm]["visited_dates"].update(s)
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
         out["total_shops_visited"] = len(per_shop)
@@ -4700,13 +4722,14 @@ def visit_summary():
             return STATE_ORDER.index(s) if s in STATE_ORDER else len(STATE_ORDER)
 
         bde_rows = []
-        for b, v in per_bde.items():
+        for norm, v in per_bde.items():
             # No-Visit Days denominator = days where THIS BDE had any GPS
             # recorded.  Subtract the days they actually visited a shop.
-            bde_active = active_days_by_bde.get(_norm_name(b), set())
-            no_visit_days = len(bde_active - v["visited_dates"])
+            bde_active = active_days_by_bde.get(norm, set())
+            no_visit_days = max(0, len(bde_active) - len(v["visited_dates"]))
+            display = v["display_name"] or norm
             bde_rows.append({
-                "bde":           b,
+                "bde":           display,
                 "state":         _primary_state(v["state_counts"]),
                 "total_shops":   len(v["all_shops"]),
                 "shops_visited": len(v["shops"]),
