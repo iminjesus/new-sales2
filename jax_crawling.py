@@ -244,12 +244,37 @@ return (function() {
             }
         }
 
-        /* Regular price (before "OR BUY") — taken from promo-stripped text */
+        /* Regular price: anchor on the size pattern.
+           Card structure is consistent:
+             [brand] [promo text] [name] [SIZE] [load idx] [PRICE] OR BUY 4 FOR ...
+           so the first "$NN" AFTER the size is always the real per-tyre price,
+           regardless of what promo phrasing appears before it. We search the
+           RAW text (not promo-stripped) so that the indexing matches the page. */
         var price = '';
-        var buyPos = text.toUpperCase().indexOf('OR BUY');
-        var priceIn = buyPos > 0 ? text.substring(0, buyPos) : text;
-        var pm = priceIn.match(/\$([\d,]+(?:\.\d+)?)/);
-        if (pm) price = pm[1].replace(/,/g, '');
+        var rawSizeM = raw.match(/\d{3}\/\d{2}[A-Za-z]\d{2}/);
+        if (!rawSizeM) rawSizeM = raw.match(/\d{3}R\d{2}/i);
+        if (rawSizeM) {
+            var afterSize = raw.substring(rawSizeM.index + rawSizeM[0].length);
+            var buyPos = afterSize.toUpperCase().indexOf('OR BUY');
+            var priceIn = buyPos > 0 ? afterSize.substring(0, buyPos) : afterSize;
+            /* Skip any leftover promo $NN that somehow sits between size and price
+               (e.g. "$100 eGift Card" rendered after size on some layouts). */
+            var pmIter = /\$([\d,]+(?:\.\d+)?)\s*([A-Za-z]{0,15})/g;
+            var pmm;
+            while ((pmm = pmIter.exec(priceIn)) !== null) {
+                var trailing = (pmm[2] || '').toLowerCase();
+                if (/gift|cash|rebate|voucher|reward|bonus/.test(trailing)) continue;
+                price = pmm[1].replace(/,/g, '');
+                break;
+            }
+        }
+        /* Fallback: original promo-stripped method */
+        if (!price) {
+            var buyPos2 = text.toUpperCase().indexOf('OR BUY');
+            var priceIn2 = buyPos2 > 0 ? text.substring(0, buyPos2) : text;
+            var pm = priceIn2.match(/\$([\d,]+(?:\.\d+)?)/);
+            if (pm) price = pm[1].replace(/,/g, '');
+        }
 
         /* Bulk / promo */
         var disc = '';
