@@ -29,7 +29,10 @@ PLANT_HIGH = "42R4"
 SAP_EXPORT_DIR  = r"C:\temp"         # where EXPORT_*.xlsx appears
 SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 
-OUT_CSV = r"C:\temp\mb52_42.csv"   # set to your project raw data folder
+# Resolve relative to this script so any checkout writes into its own
+# rawdata\unlock\ directory (same pattern as sapcrawling_sales.py).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_CSV  = os.path.join(BASE_DIR, "rawdata", "unlock", "mb52_42.csv")
 
 DELETE_XLSX_AFTER_CONVERT = False
 MIN_CSV_SIZE = 200  # bytes
