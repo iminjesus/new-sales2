@@ -3,7 +3,11 @@ import re
 import mysql.connector
 
 # ---------------- CONFIG ----------------
-CSV_PATH = r"E:\01. work\2025\Data_Anal_Website\rawdata\unlock\mb52_42.csv"
+# Resolve path relative to this script so the same code runs on every
+# checkout regardless of where the repo lives (D:\data_anal_website,
+# E:\..., etc.).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "rawdata", "unlock", "mb52_42.csv")
 
 DB_HOST = "localhost"
 DB_USER = "root"
