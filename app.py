@@ -4952,17 +4952,26 @@ def api_rebate_data():
             return jsonify([])
 
         # ?? 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ??
-        # Brand comes from sales_thismonth.brand directly (populated by the
-        # SAP loader); line still comes from carrying since sales_thismonth
-        # doesn't carry PCLT/TBR.
+        # Brand comes from sales_thismonth.brand directly (SAP loader fills it).
+        # Line is derived from material prefix: 1xxx/2xxx → PCLT, 3xxx → TBR.
+        # No carrying join needed.
         cur.execute("""
-            SELECT s.sold_to, s.ship_to, s.brand AS brand, COALESCE(mat.line,'') AS line,
+            SELECT s.sold_to, s.ship_to, s.brand AS brand,
+                   CASE
+                     WHEN LEFT(s.material,1) IN ('1','2') THEN 'PCLT'
+                     WHEN LEFT(s.material,1) = '3'        THEN 'TBR'
+                     ELSE ''
+                   END AS line,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
             FROM sales_thismonth s
-            LEFT JOIN carrying_2602 mat ON mat.m_code = s.material
             WHERE s.brand IN ('HK','LF')
               AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
-            GROUP BY s.sold_to, s.ship_to, s.brand, mat.line
+            GROUP BY s.sold_to, s.ship_to, s.brand,
+                     CASE
+                       WHEN LEFT(s.material,1) IN ('1','2') THEN 'PCLT'
+                       WHEN LEFT(s.material,1) = '3'        THEN 'TBR'
+                       ELSE ''
+                     END
         """)
         ship_sales      = {}   # (sold_to, ship_to, brand) -> {qty, amt}  all lines
         ship_sales_line = {}   # (sold_to, ship_to, brand, line) -> {qty, amt}
