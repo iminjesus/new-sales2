@@ -171,13 +171,16 @@ def load_stock(conn):
 
     col_defs = ",\n  ".join([f"`{c}` TEXT" for c in cols])
 
+    # SAP MB52 export columns can change between versions (e.g. new
+    # 'material_description_local' field).  Recreate the table from the
+    # current CSV header instead of relying on the existing schema —
+    # stock is fully reloaded each run anyway (TRUNCATE_BEFORE_LOAD).
+    drop_sql   = f"DROP TABLE IF EXISTS `{TABLE_NAME}`;"
     create_sql = f"""
-    CREATE TABLE IF NOT EXISTS `{TABLE_NAME}` (
+    CREATE TABLE `{TABLE_NAME}` (
       {col_defs}
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
-
-    truncate_sql = f"TRUNCATE TABLE `{TABLE_NAME}`;"
 
     load_sql = f"""
     LOAD DATA LOCAL INFILE '{mysql_path(CSV_PATH)}'
@@ -192,9 +195,8 @@ def load_stock(conn):
 
     cur = conn.cursor()
     try:
+        cur.execute(drop_sql)
         cur.execute(create_sql)
-        if TRUNCATE_BEFORE_LOAD:
-            cur.execute(truncate_sql)
         cur.execute(load_sql)
         conn.commit()
 
