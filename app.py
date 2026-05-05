@@ -4952,14 +4952,17 @@ def api_rebate_data():
             return jsonify([])
 
         # ?? 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ??
+        # Brand comes from sales_thismonth.brand directly (populated by the
+        # SAP loader); line still comes from carrying since sales_thismonth
+        # doesn't carry PCLT/TBR.
         cur.execute("""
-            SELECT s.sold_to, s.ship_to, mat.brand, COALESCE(mat.line,'') AS line,
+            SELECT s.sold_to, s.ship_to, s.brand AS brand, COALESCE(mat.line,'') AS line,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
             FROM sales_thismonth s
-            JOIN carrying_2602 mat ON mat.m_code = s.material
-            WHERE mat.brand IN ('HK','LF')
+            LEFT JOIN carrying_2602 mat ON mat.m_code = s.material
+            WHERE s.brand IN ('HK','LF')
               AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
-            GROUP BY s.sold_to, s.ship_to, mat.brand, mat.line
+            GROUP BY s.sold_to, s.ship_to, s.brand, mat.line
         """)
         ship_sales      = {}   # (sold_to, ship_to, brand) -> {qty, amt}  all lines
         ship_sales_line = {}   # (sold_to, ship_to, brand, line) -> {qty, amt}
@@ -5394,14 +5397,15 @@ def api_rebate_export():
         """, (brand_filter, brand_filter, stg_filter, stg_filter))
         customers = cur.fetchall()
 
+        # Brand comes from sales_thismonth.brand (no carrying join needed
+        # since this query doesn't read line/product_group/pattern).
         cur.execute("""
-            SELECT s.sold_to, s.ship_to, mat.brand,
+            SELECT s.sold_to, s.ship_to, s.brand AS brand,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
             FROM sales_thismonth s
-            JOIN carrying_2602 mat ON mat.m_code = s.material
-            WHERE mat.brand IN ('HK','LF')
+            WHERE s.brand IN ('HK','LF')
               AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
-            GROUP BY s.sold_to, s.ship_to, mat.brand
+            GROUP BY s.sold_to, s.ship_to, s.brand
         """)
         ship_sales = {}; ship_idx = {}
         for r in cur.fetchall():
