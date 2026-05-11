@@ -626,7 +626,9 @@ def cached_endpoint(ttl_sec: int = 30):
             key = _make_v2_key(fn.__name__, request)
             cached = _cache_get(_GRAPH_CACHE, key)
             if cached is not None:
+                print(f"[cache HIT]  {fn.__name__}")
                 return jsonify(cached)
+            print(f"[cache MISS] {fn.__name__}")
             result = fn(*args, **kwargs)
             try:
                 body = result.get_json(silent=True) if hasattr(result, "get_json") else None
