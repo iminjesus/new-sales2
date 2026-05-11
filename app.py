@@ -576,6 +576,11 @@ def _pct_by_bucket(by_group: Dict[str, List[float]]) -> Dict[str, List[float]]:
 _V2_CACHE_DASH: Dict[str, Tuple[float, Any]] = {}
 _V2_CACHE_DIMS: Dict[str, Tuple[float, Any]] = {}
 _TOP_SOLD_TO_CACHE: Dict[str, Tuple[float, Any]] = {}
+# Graph-view aggregation cache — short-TTL bucket shared across the
+# heavy chart endpoints.  A single page load fires the same query
+# many times (per region / per year / per group_by), and identical
+# query strings will hit cache on every repeat after the first.
+_GRAPH_CACHE: Dict[str, Tuple[float, Any]] = {}
 
 # ---- Fixed Top list computed once at startup (Top 10/20/30) ----
 # Key: (top_limit, value) where value is 'qty' or 'amt'
@@ -607,6 +612,31 @@ def _make_v2_key(prefix: str, req) -> str:
     # stable key: path + sorted query args
     items = sorted((k, _norm(v)) for k, v in req.args.items())
     return prefix + "|" + "&".join([f"{k}={v}" for k, v in items])
+
+
+def cached_endpoint(ttl_sec: int = 30):
+    """Wrap a Flask route so its JSON response is cached in _GRAPH_CACHE
+    keyed by sorted query args.  Caches the decoded JSON body and
+    re-jsonifies on cache hits, so each request gets a fresh Response
+    object (Flask mutates response state during dispatch)."""
+    from functools import wraps
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            key = _make_v2_key(fn.__name__, request)
+            cached = _cache_get(_GRAPH_CACHE, key)
+            if cached is not None:
+                return jsonify(cached)
+            result = fn(*args, **kwargs)
+            try:
+                body = result.get_json(silent=True) if hasattr(result, "get_json") else None
+            except Exception:
+                body = None
+            if body is not None:
+                _cache_set(_GRAPH_CACHE, key, body, ttl_sec=ttl_sec)
+            return result
+        return wrapper
+    return decorator
 
 
 def _make_top_key(f: Dict[str, str], top_limit: int, value: str) -> str:
@@ -2167,6 +2197,7 @@ def v2_dashboard():
 
 # ----------------------------- Daily Sales ---------------------------------
 @app.get("/api/daily_sales")
+@cached_endpoint(60)
 def daily_sales():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
@@ -2244,6 +2275,7 @@ def daily_sales():
 #
 # -------------------- Daily breakdown (stacked by group) -------------------
 @app.get("/api/daily_breakdown")
+@cached_endpoint(60)
 def daily_breakdown():
 
     f = parse_filters(request)
@@ -2911,6 +2943,7 @@ def export_excel_yearly():
 
         # ----------------------------- Monthly Sales ---------------------------------
 @app.get("/api/monthly_sales")
+@cached_endpoint(60)
 def monthly_sales():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
@@ -2994,6 +3027,7 @@ def monthly_sales():
 
 # -------------------- Monthly breakdown (stacked by group) -------------------
 @app.get("/api/monthly_breakdown")
+@cached_endpoint(60)
 def monthly_breakdown():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
@@ -3091,6 +3125,7 @@ def monthly_breakdown():
 
 # ----------------------------- Monthly Target ---------------------------------
 @app.get("/api/monthly_target")
+@cached_endpoint(60)
 def monthly_target():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
@@ -3152,6 +3187,7 @@ def monthly_target():
 from mysql.connector import Error as MySQLError
 
 @app.get("/api/monthly_target_breakdown")
+@cached_endpoint(60)
 def monthly_target_breakdown():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
@@ -3250,6 +3286,7 @@ def monthly_target_breakdown():
             pass
 # ----------------------------- Yearly Sales ---------------------------------
 @app.get("/api/yearly_sales")
+@cached_endpoint(60)
 def yearly_sales():
     f = parse_filters(request)
     value = "qty" if f["metric"] == "qty" else "amt"
@@ -3326,6 +3363,7 @@ def yearly_sales():
 
 # -------------------- Yearly breakdown (stacked by group) -------------------
 @app.get("/api/yearly_breakdown")
+@cached_endpoint(60)
 def yearly_breakdown():
 
     f = parse_filters(request)
