@@ -44,6 +44,7 @@
       div.addEventListener("mousedown", (e) => {
         e.preventDefault();
         onPick(v);
+        ddClose(menuEl);
       });
       menuEl.appendChild(div);
     });
@@ -81,6 +82,51 @@
     }
     document.addEventListener("mousedown", (e) => {
       if (!menu.contains(e.target) && e.target !== inp && e.target !== btn && e.target !== clr){
+        ddClose(menu);
+      }
+    });
+
+    // Keyboard navigation: ↑/↓ move highlight, Enter picks, Esc closes.
+    function activeItems(){ return menu.querySelectorAll(".dd-item"); }
+    function setActiveIdx(idx){
+      const items = activeItems();
+      if (!items.length) return;
+      items.forEach(el => el.classList.remove("dd-item-active"));
+      const i = ((idx % items.length) + items.length) % items.length;
+      const target = items[i];
+      target.classList.add("dd-item-active");
+      target.scrollIntoView({ block: "nearest" });
+    }
+    function currentIdx(){
+      const items = activeItems();
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].classList.contains("dd-item-active")) return i;
+      }
+      return -1;
+    }
+    inp.addEventListener("keydown", (e) => {
+      const open = menu.style.display === "block";
+      if (e.key === "ArrowDown") {
+        if (!open) { openWithCurrent(); setActiveIdx(0); }
+        else { setActiveIdx(currentIdx() + 1); }
+        e.preventDefault();
+      } else if (e.key === "ArrowUp") {
+        if (!open) { openWithCurrent(); setActiveIdx(-1); }
+        else { setActiveIdx(currentIdx() - 1); }
+        e.preventDefault();
+      } else if (e.key === "Enter") {
+        const items = activeItems();
+        const i = currentIdx();
+        if (open && i >= 0 && items[i]) {
+          onPick(items[i].textContent);
+          ddClose(menu);
+          e.preventDefault();
+        } else if (open && items.length === 1) {
+          onPick(items[0].textContent);
+          ddClose(menu);
+          e.preventDefault();
+        }
+      } else if (e.key === "Escape") {
         ddClose(menu);
       }
     });
