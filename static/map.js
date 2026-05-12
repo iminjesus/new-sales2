@@ -183,9 +183,9 @@ function renderBdeVisitTable(data) {
   const tdRedRight = (v) => td(v, "color:#c00;");
 
   // Per-BDE row vs subtotal/total row use the same column layout but
-  // subtotals are bold + light-grey background.
-  const subStyle  = "background:#f3f4f6;font-weight:600;";
-  const totStyle  = "background:#dbeafe;font-weight:700;";
+  // subtotals/total get a darker background for visual separation.
+  const subStyle  = "background:#cbd5e1;font-weight:600;";   // slate-300
+  const totStyle  = "background:#94a3b8;font-weight:700;color:#fff;"; // slate-400
   const subTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${subStyle}${extra}">${v}</td>`;
   const subTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${subStyle}${extra}">${v}</td>`;
   const totTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
@@ -212,8 +212,8 @@ function renderBdeVisitTable(data) {
     // denominator of active days), so the subtotal/total row leaves it
     // blank rather than show a misleading number.
     html += `<tr>
-      ${subTdLeft(b.state, "color:#374151;")}
-      ${subTdLeft("Subtotal")}
+      ${subTdLeft(b.state)}
+      ${subTdLeft("")}
       ${subTd(sShops)}
       ${subTd(sVisitedShops)}
       ${subTd(sVisits)}
@@ -233,12 +233,7 @@ function renderBdeVisitTable(data) {
   </tr>`;
 
   tbody.innerHTML = html;
-  if (totalsEl) {
-    const totShops = data.total_shops_visited || 0;
-    const totDays  = data.total_visit_days || 0;
-    const activeDays = data.active_business_days || 0;
-    totalsEl.textContent = `Total: ${totShops} visited shop / ${totDays} visits / ${activeDays} active business days`;
-  }
+  if (totalsEl) totalsEl.textContent = "";
 }
 
 function monthlyMapOptions() {
