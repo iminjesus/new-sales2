@@ -1583,15 +1583,16 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
         joins += cat_joins
         wh    += cat_where
 
-    # product_group / pattern now live in carrying_2602
-    if f.get("product_group") != "ALL" or f.get("pattern") != "ALL":
+    # product_group / pattern / size all live in carrying_2602
+    if (f.get("product_group") != "ALL" or f.get("pattern") != "ALL" or
+        f.get("material") != "ALL"):
         _ensure_carrying_join("sTop", joins)
     if f.get("product_group") != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f.get("pattern") != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material") != "ALL":
-        wh.append("sTop.material = %s"); params.append(f["material"])
+        wh.append("mat.size = %s"); params.append(f["material"])
 
     where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
@@ -1866,8 +1867,13 @@ def v2_dashboard():
         if f["category"] != "443":
             cj, cw = category_filters_sales("s", f["category"])
             joins_d += cj; wh_d += cw
-        # Ensure carrying join when product_group/pattern filter or group_by needs it
-        if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        # Ensure carrying join when product_group / pattern / material (size)
+        # filter or group_by needs it.  Size is stored on carrying_2602.size
+        # (the dropdown value is the size string, not a material code), so
+        # filtering by size requires the carrying join.
+        if (group_by in ("product_group", "pattern") or
+            f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+            f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_d)
         if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
             _ensure_customer_join("s", joins_d)
@@ -1876,7 +1882,7 @@ def v2_dashboard():
         if f["pattern"] != "ALL":
             wh_d.append("mat.pattern = %s"); params_d.append(f["pattern"])
         if f["material"] != "ALL":
-            wh_d.append("s.material = %s"); params_d.append(f["material"])
+            wh_d.append("mat.size = %s"); params_d.append(f["material"])
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_d.append(f"s.sold_to IN ({placeholders})")
@@ -1934,7 +1940,8 @@ def v2_dashboard():
             needs_carrying_t = True
             wh_t.append("mat.pattern = %s"); params_t.append(f["pattern"])
         if f["material"] != "ALL":
-            wh_t.append("t.material = %s"); params_t.append(f["material"])
+            needs_carrying_t = True
+            wh_t.append("mat.size = %s"); params_t.append(f["material"])
         if needs_carrying_t and carrying_join_t not in joins_t:
             joins_t.append(carrying_join_t)
         if top_sold_to:
@@ -1961,7 +1968,9 @@ def v2_dashboard():
         joins_m, wh_m, params_m = build_customer_filters("s", f, use_sold_to_name=False)
         mj, mw = category_filters_sales("s", f["category"])
         joins_m += mj; wh_m += mw
-        if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        if (group_by in ("product_group", "pattern") or
+            f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+            f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_m)
         if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
             _ensure_customer_join("s", joins_m)
@@ -1970,7 +1979,7 @@ def v2_dashboard():
         if f["pattern"] != "ALL":
             wh_m.append("mat.pattern = %s"); params_m.append(f["pattern"])
         if f["material"] != "ALL":
-            wh_m.append("s.material = %s"); params_m.append(f["material"])
+            wh_m.append("mat.size = %s"); params_m.append(f["material"])
         wh_m.append("s.year IN (2025, 2026)")
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
@@ -2039,7 +2048,8 @@ def v2_dashboard():
             needs_carrying_mt = True
             wh_mt.append("mat.pattern = %s"); params_mt.append(f["pattern"])
         if f["material"] != "ALL":
-            wh_mt.append("t.material = %s"); params_mt.append(f["material"])
+            needs_carrying_mt = True
+            wh_mt.append("mat.size = %s"); params_mt.append(f["material"])
         if needs_carrying_mt and carrying_join_mt not in joins_mt:
             joins_mt.append(carrying_join_mt)
         if top_sold_to:
@@ -2091,7 +2101,9 @@ def v2_dashboard():
         if f["category"] != "443":
             yj, yw = category_filters_sales("s", f["category"])
             joins_y += yj; wh_y += yw
-        if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+        if (group_by in ("product_group", "pattern") or
+            f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+            f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_y)
         if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
             _ensure_customer_join("s", joins_y)
@@ -2100,7 +2112,7 @@ def v2_dashboard():
         if f["pattern"] != "ALL":
             wh_y.append("mat.pattern = %s"); params_y.append(f["pattern"])
         if f["material"] != "ALL":
-            wh_y.append("s.material = %s"); params_y.append(f["material"])
+            wh_y.append("mat.size = %s"); params_y.append(f["material"])
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_y.append(f"s.sold_to IN ({placeholders})")
@@ -2241,8 +2253,8 @@ def daily_sales():
         joins += cat_joins
         wh    += cat_where
 
-    # product_group / pattern now in carrying_2602
-    if f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    # product_group / pattern / size all live in carrying_2602 (alias: mat)
+    if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL":
         _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
@@ -2251,7 +2263,7 @@ def daily_sales():
         wh.append("mat.pattern = %s")
         params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
@@ -2334,7 +2346,9 @@ def daily_breakdown():
         wh    += cat_where
 
     # Carrying/customer join needed for group_by or filter
-    if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    if (group_by in ("product_group", "pattern") or
+        f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+        f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
         _ensure_customer_join("s", joins)
@@ -2343,7 +2357,7 @@ def daily_breakdown():
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
@@ -2597,14 +2611,16 @@ def fetch_table_rows(top_limit: int):
         joins += cat_joins
         wh    += cat_where
 
-    if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL":
+    if (f.get("product_group", "ALL") != "ALL" or
+        f.get("pattern", "ALL") != "ALL" or
+        f.get("material", "ALL") != "ALL"):
         _ensure_carrying_join("s", joins)
     if f.get("product_group", "ALL") != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f.get("pattern", "ALL") != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material", "ALL") != "ALL":
-        wh.append("s.material = %s"); params.append(f["material"])
+        wh.append("mat.size = %s"); params.append(f["material"])
 
     # top filter (sold_to 湲곗?)
     if top_pairs:
@@ -3095,7 +3111,9 @@ def monthly_breakdown():
     joins += cat_joins
     wh    += cat_where
 
-    if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    if (group_by in ("product_group", "pattern") or
+        f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+        f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
         _ensure_customer_join("s", joins)
@@ -3115,7 +3133,7 @@ def monthly_breakdown():
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s");        params.append(f["material"])
+        wh.append("mat.size = %s");          params.append(f["material"])
 
     # Year condition
     wh.append("s.year = %s"); params.append(year)
@@ -3286,7 +3304,8 @@ def monthly_target_breakdown():
         needs_carrying = True
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("t.material = %s");        params.append(f["material"])
+        needs_carrying = True
+        wh.append("mat.size = %s");          params.append(f["material"])
 
     if needs_carrying and carrying_join not in joins:
         joins.append(carrying_join)
@@ -3469,7 +3488,9 @@ def yearly_breakdown():
             ") scus ON scus.sold_to = s.sold_to"
         )
 
-    if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    if (group_by in ("product_group", "pattern") or
+        f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+        f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
         _ensure_customer_join("s", joins)
@@ -3478,7 +3499,7 @@ def yearly_breakdown():
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
@@ -3969,7 +3990,8 @@ def sales_map():
         joins += cat_joins
         wh    += cat_where
 
-    if f["product_group"] != "ALL" or f["pattern"] != "ALL":
+    if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or
+        f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
@@ -3980,7 +4002,7 @@ def sales_map():
         params.append(f["pattern"])
 
     if f["material"] != "ALL":
-        wh.append("s.material = %s")
+        wh.append("mat.size = %s")
         params.append(f["material"])
 
     # only customers with coordinates
