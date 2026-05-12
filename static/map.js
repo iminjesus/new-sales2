@@ -162,16 +162,77 @@ function renderBdeVisitTable(data) {
     if (totalsEl) totalsEl.textContent = "";
     return;
   }
-  tbody.innerHTML = rows.map(r => `
-    <tr>
-      <td style="padding:3px 6px;border-bottom:1px solid #eee;color:#666;">${r.state || "-"}</td>
-      <td style="padding:3px 6px;border-bottom:1px solid #eee;">${r.bde}</td>
-      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.total_shops}</td>
-      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.shops_visited}</td>
-      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;">${r.visit_days}</td>
-      <td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;color:#c00;">${r.no_visit_days ?? "-"}</td>
-    </tr>
-  `).join("");
+
+  // Group rows by state, in the same order the rows arrive (backend
+  // already sorts NSW → QLD → VIC → SA → WA → others), so the table
+  // visually keeps that order while we inject per-state subtotal rows.
+  const buckets = [];   // [{state, rows: [...]}, ...]
+  const seen = new Map();
+  for (const r of rows) {
+    const st = r.state || "-";
+    if (!seen.has(st)) {
+      const b = { state: st, rows: [] };
+      seen.set(st, b);
+      buckets.push(b);
+    }
+    seen.get(st).rows.push(r);
+  }
+
+  const td       = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
+  const tdLeft   = (v, extra = "") => `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
+  const tdRedRight = (v) => td(v, "color:#c00;");
+
+  // Per-BDE row vs subtotal/total row use the same column layout but
+  // subtotals are bold + light-grey background.
+  const subStyle  = "background:#f3f4f6;font-weight:600;";
+  const totStyle  = "background:#dbeafe;font-weight:700;";
+  const subTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${subStyle}${extra}">${v}</td>`;
+  const subTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${subStyle}${extra}">${v}</td>`;
+  const totTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
+  const totTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${totStyle}${extra}">${v}</td>`;
+
+  let html = "";
+  let gShops = 0, gVisitedShops = 0, gVisits = 0;
+  for (const b of buckets) {
+    let sShops = 0, sVisitedShops = 0, sVisits = 0;
+    for (const r of b.rows) {
+      sShops        += +r.total_shops   || 0;
+      sVisitedShops += +r.shops_visited || 0;
+      sVisits       += +r.visit_days    || 0;
+      html += `<tr>
+        ${tdLeft(r.state || "-", "color:#666;")}
+        ${tdLeft(r.bde)}
+        ${td(r.total_shops)}
+        ${td(r.shops_visited)}
+        ${td(r.visit_days)}
+        ${tdRedRight(r.no_visit_days ?? "-")}
+      </tr>`;
+    }
+    // No-Visit Days isn't summable across BDEs (each BDE has their own
+    // denominator of active days), so the subtotal/total row leaves it
+    // blank rather than show a misleading number.
+    html += `<tr>
+      ${subTdLeft(b.state, "color:#374151;")}
+      ${subTdLeft("Subtotal")}
+      ${subTd(sShops)}
+      ${subTd(sVisitedShops)}
+      ${subTd(sVisits)}
+      ${subTd("-")}
+    </tr>`;
+    gShops        += sShops;
+    gVisitedShops += sVisitedShops;
+    gVisits       += sVisits;
+  }
+  html += `<tr>
+    ${totTdLeft("All")}
+    ${totTdLeft("Total")}
+    ${totTd(gShops)}
+    ${totTd(gVisitedShops)}
+    ${totTd(gVisits)}
+    ${totTd("-")}
+  </tr>`;
+
+  tbody.innerHTML = html;
   if (totalsEl) {
     const totShops = data.total_shops_visited || 0;
     const totDays  = data.total_visit_days || 0;
