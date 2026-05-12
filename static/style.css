@@ -493,7 +493,8 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   color: #374151;
   transition: background 0.08s;
 }
-.dd-item:hover { background: #eff6ff; color: #2563eb; }
+.dd-item:hover,
+.dd-item.dd-item-active { background: #eff6ff; color: #2563eb; }
 .dd-empty { padding: 10px; color: #9ca3af; font-size: 12px; }
 
 /* ─── KPI + Profit row desktop layout ───────────────────── */
