@@ -4647,8 +4647,8 @@ def visit_summary():
         radius_m = float(request.args.get("radius", 500) or 500)
     except (TypeError, ValueError):
         radius_m = 500.0
-    with_sales = (request.args.get("with_sales", "1").strip().lower()
-                  not in ("0", "false", "no"))
+    with_sales = (request.args.get("with_sales", "0").strip().lower()
+                  in ("1", "true", "yes"))
     business_only = (request.args.get("business_days_only", "1").strip().lower()
                      not in ("0", "false", "no"))
 
