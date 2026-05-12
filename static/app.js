@@ -2477,6 +2477,7 @@ window.addEventListener("load", async () => {
   bindDropdown({
     inputId: "product_group",
     btnId: "pgBtn",
+    clearId: "pgClear",
     menuId: "pgMenu",
     getOptions: () => __PRODUCT_GROUP_OPTIONS,
     onPick: async (val) => {
