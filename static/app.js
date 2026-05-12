@@ -115,12 +115,56 @@ async function _doFetch(u) {
   }
   throw new Error(`${r.status} ${r.statusText}`);
 }
+// ── Client-side cache + in-flight dedup ─────────────────────────────────
+// Two layers on top of _doFetch:
+//   (1) Response cache: keyed by URL, 5 min TTL. Toggling between filters
+//       you've used recently is instant — no network round-trip at all.
+//   (2) In-flight map: while a URL is in flight, additional callers for
+//       the same URL await the same promise so the server runs one SQL.
+// Cache busted automatically when entries expire; not invalidated by
+// filter changes (filter is encoded in URL, so each filter combination
+// has its own key).
+const _FETCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const _FETCH_CACHE_MAX    = 500;          // bounded so memory doesn't grow forever
+const _fetchCache    = new Map();         // url → { ts, value }
+const _fetchInFlight = new Map();         // url → Promise
+
+function _fetchCachePut(url, value) {
+  // simple LRU-ish: drop oldest insertion when over cap
+  if (_fetchCache.size >= _FETCH_CACHE_MAX) {
+    const firstKey = _fetchCache.keys().next().value;
+    if (firstKey !== undefined) _fetchCache.delete(firstKey);
+  }
+  _fetchCache.set(url, { ts: Date.now(), value });
+}
+function _fetchCacheGet(url) {
+  const hit = _fetchCache.get(url);
+  if (!hit) return undefined;
+  if (Date.now() - hit.ts > _FETCH_CACHE_TTL_MS) {
+    _fetchCache.delete(url);
+    return undefined;
+  }
+  return hit.value;
+}
+
+async function _cachedFetch(u) {
+  const cached = _fetchCacheGet(u);
+  if (cached !== undefined) return cached;
+  const pending = _fetchInFlight.get(u);
+  if (pending) return pending;          // dedup concurrent identical fetches
+  const p = _doFetch(u)
+    .then(v => { _fetchCachePut(u, v); return v; })
+    .finally(() => { _fetchInFlight.delete(u); });
+  _fetchInFlight.set(u, p);
+  return p;
+}
+
 const fetchJSON = async (u) => {
-  try { return await _doFetch(u); }
+  try { return await _cachedFetch(u); }
   catch (e) { console.error('Fetch fail:', u, e.message); return []; }
 };
 const fetchJSON_DIRECT = async (u) => {
-  try { return await _doFetch(u); }
+  try { return await _cachedFetch(u); }
   catch (e) { console.error('Fetch fail (DIRECT):', u, e.message); return []; }
 };
 
