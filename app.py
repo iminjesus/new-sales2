@@ -1821,10 +1821,12 @@ def v2_dashboard():
     }
     if group_by not in group_cols_sales:
         return jsonify({"error": "invalid group_by"}), 400
-    label_col_sales  = ("MIN(COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to))"
+    # scus / tcus = per-sold_to name resolvers — guarantee one label
+    # per sold_to regardless of ship_to row joined.  See SOLD_TO_NAME_JOIN.
+    label_col_sales  = ("MIN(COALESCE(scus.sold_to_name, s.sold_to))"
                        if group_by == "sold_to"
                        else f"COALESCE(NULLIF(TRIM({group_cols_sales[group_by]}),''), 'COMMON')")
-    label_col_target = ("MIN(COALESCE(NULLIF(TRIM(tcus.sold_to_name),''), t.sold_to))"
+    label_col_target = ("MIN(COALESCE(tcus.sold_to_name, t.sold_to))"
                        if group_by == "sold_to"
                        else f"COALESCE(NULLIF(TRIM({group_cols_target[group_by]}),''), 'COMMON')")
 
@@ -1879,6 +1881,14 @@ def v2_dashboard():
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_d.append(f"s.sold_to IN ({placeholders})")
             params_d.extend(top_sold_to)
+        # Add per-sold_to name resolver only for breakdown stack (used below).
+        SCUS_JOIN = (
+            "LEFT JOIN ("
+            "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
+            "  FROM customer GROUP BY sold_to"
+            ") scus ON scus.sold_to = s.sold_to"
+        )
+        joins_d_break = list(joins_d) + ([SCUS_JOIN] if group_by == "sold_to" else [])
         where_d = ("WHERE " + " AND ".join(wh_d)) if wh_d else ""
 
         cur.execute(f"""
@@ -1899,7 +1909,7 @@ def v2_dashboard():
         cur.execute(f"""
             SELECT s.day AS day, {label_col_sales} AS group_label, SUM(s.{value}) AS value
             FROM sales_thismonth s
-            {' '.join(joins_d)}
+            {' '.join(joins_d_break)}
             {where_d}
             GROUP BY s.day, {group_col_d}
             ORDER BY s.day
@@ -1966,6 +1976,7 @@ def v2_dashboard():
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_m.append(f"s.sold_to IN ({placeholders})")
             params_m.extend(top_sold_to)
+        joins_m_break = list(joins_m) + ([SCUS_JOIN] if group_by == "sold_to" else [])
         where_m = ("WHERE " + " AND ".join(wh_m)) if wh_m else ""
 
         cur.execute(f"""
@@ -1989,7 +2000,7 @@ def v2_dashboard():
         cur.execute(f"""
             SELECT s.year AS year, s.month AS month, {label_col_sales} AS group_label, SUM(s.{value}) AS value
             FROM sales_2526 s
-            {' '.join(joins_m)}
+            {' '.join(joins_m_break)}
             {where_m}
             GROUP BY s.year, s.month, {group_col_m}
             ORDER BY s.year, s.month
@@ -2038,7 +2049,7 @@ def v2_dashboard():
         if group_by == "sold_to":
             joins_mt.append(
                 "LEFT JOIN ("
-                "  SELECT sold_to, MIN(sold_to_name) AS sold_to_name "
+                "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
                 "  FROM customer GROUP BY sold_to"
                 ") tcus ON tcus.sold_to = t.sold_to"
             )
@@ -2095,6 +2106,7 @@ def v2_dashboard():
             wh_y.append(f"s.sold_to IN ({placeholders})")
             params_y.extend(top_sold_to)
         wh_y.append("s.year BETWEEN 2021 AND 2025")
+        joins_y_break = list(joins_y) + ([SCUS_JOIN] if group_by == "sold_to" else [])
         where_y = ("WHERE " + " AND ".join(wh_y)) if wh_y else ""
         cur.execute(f"""
             SELECT s.year AS year, SUM(s.{value}) AS value
@@ -2112,7 +2124,7 @@ def v2_dashboard():
         cur.execute(f"""
             SELECT s.year AS year, {label_col_sales} AS group_label, SUM(s.{value}) AS value
             FROM sales_21_25 s
-            {' '.join(joins_y)}
+            {' '.join(joins_y_break)}
             {where_y}
             GROUP BY s.year, {group_col_y}
             ORDER BY s.year
@@ -3071,7 +3083,9 @@ def monthly_breakdown():
         return jsonify({"error": "invalid group_by"}), 400
     group_col = group_cols[group_by]
     if group_by == "sold_to":
-        label_col = "MIN(COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to))"
+        # scus alias = customer aggregated per-sold_to. Lets us resolve a
+        # consistent name regardless of which ship_to a row points at.
+        label_col = "MIN(COALESCE(scus.sold_to_name, s.sold_to))"
     else:
         label_col = f"COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')"
 
@@ -3085,6 +3099,17 @@ def monthly_breakdown():
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
         _ensure_customer_join("s", joins)
+    # scus = per-sold_to name resolver (one row per sold_to). Used as
+    # the label source when group_by == 'sold_to' so the resulting
+    # legend doesn't have a mix of names and raw codes for the same
+    # sold_to depending on which ship_to row was joined.
+    if group_by == "sold_to":
+        joins.append(
+            "LEFT JOIN ("
+            "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
+            "  FROM customer GROUP BY sold_to"
+            ") scus ON scus.sold_to = s.sold_to"
+        )
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
@@ -3233,7 +3258,7 @@ def monthly_target_breakdown():
     group_col = group_cols[group_by]
     # label_col: what shows up in the legend; for sold_to we resolve to name.
     if group_by == "sold_to":
-        label_col = "MIN(COALESCE(NULLIF(TRIM(tcus.sold_to_name),''), t.sold_to))"
+        label_col = "MIN(COALESCE(tcus.sold_to_name, t.sold_to))"
     else:
         label_col = group_col
 
@@ -3245,7 +3270,7 @@ def monthly_target_breakdown():
     if group_by == "sold_to":
         joins.append(
             "LEFT JOIN ("
-            "  SELECT sold_to, MIN(sold_to_name) AS sold_to_name "
+            "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
             "  FROM customer GROUP BY sold_to"
             ") tcus ON tcus.sold_to = t.sold_to"
         )
@@ -3426,7 +3451,7 @@ def yearly_breakdown():
         return jsonify({"error": "invalid group_by"}), 400
     group_col = group_cols[group_by]
     if group_by == "sold_to":
-        label_col = "MIN(COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to))"
+        label_col = "MIN(COALESCE(scus.sold_to_name, s.sold_to))"
     else:
         label_col = f"COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')"
 
@@ -3436,6 +3461,13 @@ def yearly_breakdown():
         cat_joins, cat_where = category_filters_sales("s", f["category"])
         joins += cat_joins
         wh    += cat_where
+    if group_by == "sold_to":
+        joins.append(
+            "LEFT JOIN ("
+            "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
+            "  FROM customer GROUP BY sold_to"
+            ") scus ON scus.sold_to = s.sold_to"
+        )
 
     if group_by in ("product_group", "pattern") or f["product_group"] != "ALL" or f["pattern"] != "ALL":
         _ensure_carrying_join("s", joins)
