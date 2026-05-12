@@ -2404,6 +2404,7 @@ function ddRender(menuEl, items, onPick){
     div.addEventListener("mousedown", (e) => {
       e.preventDefault(); // keep focus
       onPick(v);
+      ddClose(menuEl);    // close after pick
     });
     menuEl.appendChild(div);
   });
