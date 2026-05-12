@@ -76,12 +76,26 @@ async function loadSalesMap() {
 
   const visitsByShipTo = (summary && summary.visits_by_ship_to) || {};
   const visitedSet = new Set(Object.keys(visitsByShipTo));
+  const visitedShops = (summary && Array.isArray(summary.visited_shops))
+                       ? summary.visited_shops : [];
+
+  // BDE-overlay mode: when a single salesman is filter-selected, colour
+  // markers semantically (green / red / orange) instead of by BDE palette
+  // so own-territory vs other-territory visits are obvious at a glance.
+  const selectedBde   = (filters.salesman && filters.salesman !== "ALL")
+                        ? String(filters.salesman) : "";
+  const selectedNorm  = selectedBde.trim().toUpperCase();
+  const bdeMode       = !!selectedBde;
+  const legendEl      = document.getElementById("mapLegend");
+  if (legendEl) legendEl.style.display = bdeMode ? "block" : "none";
+  const COLOR_OWN_VISITED   = "#16a34a";  // green  — own + visited
+  const COLOR_OWN_NOVISIT   = "#dc2626";  // red    — own + not visited
+  const COLOR_OTHER_VISITED = "#f59e0b";  // amber  — other territory + visited
 
   const points = [];
+  const ownShipTos = new Set();
 
   data.forEach(row => {
-  // DEBUG: log first row once
-  // (you'll see target_value and total_value in the console)
   if (!window.__loggedSalesMapRow) {
     console.log("sales_map row:", row);
     window.__loggedSalesMapRow = true;
@@ -91,7 +105,6 @@ async function loadSalesMap() {
   const lng = row.lng ?? row.longitude ?? row.Longitude;
   if (lat == null || lng == null) return;
 
-  // we KNOW from /api/sales_map that keys are total_value and target_value
   const total  = Number(row.total_value || 0);
   const target = Number(row.target_value || 0);
   const ach    = target > 0 ? (total / target) * 100 : 0;
@@ -103,19 +116,37 @@ async function loadSalesMap() {
   const shipNm = row.ship_to_name ?? row.Ship_To_Name ?? "";
   const bde    = row.bde ?? row.BDE ?? row.BDE_Name ?? "";
 
-  const color = getBdeColor(bde);
+  ownShipTos.add(shipTo);
 
   const latNum = +lat;
   const lngNum = +lng;
-
   const isVisited = visitedSet.has(shipTo);
+
+  let fillColor, strokeColor, fillOp, strokeOp, weight;
+  if (bdeMode) {
+    // sales_map is already filtered to the selected BDE's territory,
+    // so every row here is own-territory by definition.
+    fillColor   = isVisited ? COLOR_OWN_VISITED : COLOR_OWN_NOVISIT;
+    strokeColor = fillColor;
+    fillOp      = isVisited ? 0.85 : 0.35;
+    strokeOp    = isVisited ? 1.0  : 0.85;
+    weight      = isVisited ? 1.5  : 1.0;
+  } else {
+    const c = getBdeColor(bde);
+    fillColor   = c;
+    strokeColor = c;
+    fillOp      = isVisited ? 0.85 : 0.4;
+    strokeOp    = isVisited ? 1.0  : 0.85;
+    weight      = isVisited ? 1.5  : 1.0;
+  }
+
   const marker = L.circleMarker([latNum, lngNum], {
     radius,
-    color,
-    fillColor: color,
-    fillOpacity: isVisited ? 0.85 : 0.4,
-    opacity:    isVisited ? 1.0  : 0.85,
-    weight:     isVisited ? 1.5  : 1.0
+    color: strokeColor,
+    fillColor,
+    fillOpacity: fillOp,
+    opacity:     strokeOp,
+    weight
   });
 
   const visitCount = visitsByShipTo[shipTo] || 0;
@@ -138,6 +169,44 @@ async function loadSalesMap() {
   marker.addTo(salesMapLayer);
   points.push([latNum, lngNum]);
 });
+
+  // BDE-overlay extra layer: shops the selected BDE physically visited
+  // that are NOT part of their own territory (orange).  Skipped in
+  // "ALL" mode where every shop already shows in its own colour.
+  if (bdeMode && selectedNorm) {
+    visitedShops.forEach(vs => {
+      const vb = Array.isArray(vs.visited_by) ? vs.visited_by : [];
+      if (!vb.includes(selectedNorm)) return;
+      if (ownShipTos.has(vs.ship_to)) return;
+      const latNum = +vs.latitude;
+      const lngNum = +vs.longitude;
+      if (!isFinite(latNum) || !isFinite(lngNum)) return;
+      const radius = 5;
+      const marker = L.circleMarker([latNum, lngNum], {
+        radius,
+        color: COLOR_OTHER_VISITED,
+        fillColor: COLOR_OTHER_VISITED,
+        fillOpacity: 0.85,
+        opacity: 1.0,
+        weight: 1.5
+      });
+      marker.bindPopup(
+        `${vs.ship_to} - ${vs.ship_to_name || ""}<br>` +
+        `Assigned BDE: ${vs.salesman_name || "-"}<br>` +
+        `Visited by: ${selectedBde}<br>` +
+        `Total Visits (2026): ${vs.visit_days || 0}`
+      );
+      marker.on("click", () => {
+        const titleEl = document.getElementById("shopTitle");
+        if (titleEl) {
+          titleEl.textContent = (vs.ship_to_name || vs.ship_to) + " – Monthly / Yearly";
+        }
+        drawShopCharts(vs.ship_to, latNum, lngNum);
+      });
+      marker.addTo(salesMapLayer);
+      points.push([latNum, lngNum]);
+    });
+  }
 
 
   if (points.length === 1) {

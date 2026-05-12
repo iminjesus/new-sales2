@@ -171,6 +171,18 @@
 
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
     <div id="mapWrapper" class="box" style="flex:2;">
+      <div id="mapLegend" style="display:none;font-size:12px;padding:4px 6px 6px;color:#444;">
+        <span style="margin-right:10px;font-weight:600;">BDE view:</span>
+        <span style="display:inline-flex;align-items:center;margin-right:10px;">
+          <span style="width:10px;height:10px;border-radius:50%;background:#16a34a;display:inline-block;margin-right:4px;"></span>own + visited
+        </span>
+        <span style="display:inline-flex;align-items:center;margin-right:10px;">
+          <span style="width:10px;height:10px;border-radius:50%;background:#dc2626;display:inline-block;margin-right:4px;opacity:.6;"></span>own + not visited
+        </span>
+        <span style="display:inline-flex;align-items:center;">
+          <span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block;margin-right:4px;"></span>visited outside territory
+        </span>
+      </div>
       <div id="salesMap"></div>
     </div>
 

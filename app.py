@@ -4778,7 +4778,9 @@ def visit_summary():
         # (territory) and gps.salesmen (visits) line up despite case/whitespace.
         per_bde = defaultdict(lambda: {
             "all_shops":    set(),                 # territory from customer.salesman_name
-            "shops":        set(),                 # shops their GPS hit (any shop, not just assigned)
+            "shops":        set(),                 # all shops their GPS hit (own + other)
+            "shops_own":    set(),                 # shops in their own territory that they visited
+            "shops_other":  set(),                 # shops outside their territory that they visited
             "visit_days":   0,
             "visited_dates": set(),
             "state_counts": defaultdict(int),
@@ -4852,13 +4854,20 @@ def visit_summary():
             # Per-shop (any salesman) — used by map / popup. Always populated.
             if visit_dates_any:
                 total_days_any = sum(len(s) for s in visit_dates_any.values())
+                # visited_by_norm = list of normalised BDE names who hit this
+                # shop within radius (needed by the map BDE overlay to colour
+                # "other-territory" visits when a BDE is filter-selected).
+                visited_by_norm = sorted(visit_dates_per_bde.keys()) if salesman_col else []
                 per_shop.append({
                     "ship_to":       c["ship_to"],
                     "ship_to_name":  c["ship_to_name"],
                     "ship_to_state": c["ship_to_state"],
                     "bde_state":     c["bde_state"],
                     "salesman_name": c["salesman_name"],
+                    "latitude":      cla_deg,
+                    "longitude":     clo_deg,
                     "visit_days":    total_days_any,
+                    "visited_by":    visited_by_norm,
                     "by_month":      {m: len(s) for m, s in sorted(visit_dates_any.items())},
                 })
                 for m, s in visit_dates_any.items():
@@ -4938,6 +4947,21 @@ def visit_summary():
         # round-trip per shop.
         out["visited_ship_tos"] = [r["ship_to"] for r in per_shop]
         out["visits_by_ship_to"] = {r["ship_to"]: r["visit_days"] for r in per_shop}
+        # Slim list of every visited shop with location + visited_by (norm
+        # names) so the map can render "other-territory visits" when a single
+        # BDE is filter-selected.  Trimmed fields keep payload small.
+        out["visited_shops"] = [
+            {
+                "ship_to":       r["ship_to"],
+                "ship_to_name":  r["ship_to_name"],
+                "salesman_name": r["salesman_name"],
+                "latitude":      r["latitude"],
+                "longitude":     r["longitude"],
+                "visit_days":    r["visit_days"],
+                "visited_by":    r["visited_by"],
+            }
+            for r in per_shop
+        ]
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
     finally:
