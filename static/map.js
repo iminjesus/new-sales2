@@ -150,6 +150,30 @@ async function loadSalesMap() {
   }
 
   renderBdeVisitTable(summary);
+  // Show default charts on the right panel so it isn't empty before a
+  // marker is clicked. Scope follows the current filter (salesman > region > all).
+  drawDefaultShopCharts();
+}
+
+function defaultShopTitle() {
+  if (filters.salesman && filters.salesman !== "ALL") {
+    return filters.salesman + " – Monthly / Yearly";
+  }
+  if (filters.region && filters.region !== "ALL") {
+    return filters.region + " – Monthly / Yearly";
+  }
+  if (filters.sold_to_group && filters.sold_to_group !== "ALL") {
+    return filters.sold_to_group + " – Monthly / Yearly";
+  }
+  return "All Regions – Monthly / Yearly";
+}
+
+function drawDefaultShopCharts() {
+  const titleEl = document.getElementById("shopTitle");
+  if (titleEl) titleEl.textContent = defaultShopTitle();
+  // ship_to=ALL → API returns aggregate for the current filter scope.
+  // No lat/lng so the visit overlay line is skipped (only meaningful per shop).
+  drawShopCharts("ALL", null, null);
 }
 
 function renderBdeVisitTable(data) {
