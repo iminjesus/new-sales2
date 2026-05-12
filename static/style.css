@@ -501,14 +501,17 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 .kpi-profit-row {
   margin-top: 4px;
   display: grid;
-  grid-template-columns: 640px minmax(0, 1fr);
+  /* Table needs ~645px for Region + BDE + This Month + Q1..Q4.
+     Give it 700px so all 7 columns fit (Q3/Q4 are blank now but
+     should still show as columns). */
+  grid-template-columns: 700px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   width: 100%;
   box-sizing: border-box;
 }
 .kpi-profit-row > .kpi-box {
-  width: 640px;
+  width: 700px;
   box-sizing: border-box;
   overflow: hidden;
 }
