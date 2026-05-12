@@ -3558,21 +3558,37 @@ def ship_to_names():
     stg3    = (request.args.get("sold_to_group") or "ALL").strip()
     # child (sold-to name that user picked)
     sold_to = (request.args.get("sold_to") or "ALL").strip()
+    # Top N filter (same baseline as the rest of the dashboard) — when set,
+    # restricts the ship_to list to those belonging to the top sold_to set.
+    top_limit = int(request.args.get("top_limit", 0) or 0)
 
     try:
-        conn = get_connection(); cur = conn.cursor()
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        # Resolve top sold_to set first (if a top filter is active)
+        top_sold_to = None
+        if top_limit > 0:
+            f = parse_filters(request)
+            value = "qty" if f["metric"] == "qty" else "amt"
+            top_sold_to = get_top_sold_to_from_baseline(cur, f, top_limit, value)
+            if not top_sold_to:
+                cur.close(); conn.close()
+                return jsonify([])
 
         where = ["ship_to_name IS NOT NULL", "TRIM(ship_to_name) <> ''"]
         params = []
 
-        # 1) if user picked a specific sold_to_name ??use that
         if sold_to.upper() != "ALL":
             where.append("TRIM(sold_to_name) = %s")
             params.append(sold_to)
-        # 2) otherwise, if user picked a group ??use that
         elif stg3.upper() != "ALL":
             where.append("TRIM(sold_to_group) = %s")
             params.append(stg3)
+
+        if top_sold_to:
+            placeholders = ",".join(["%s"] * len(top_sold_to))
+            where.append(f"sold_to IN ({placeholders})")
+            params.extend(top_sold_to)
 
         where_sql = "WHERE " + " AND ".join(where)
 
@@ -3583,7 +3599,7 @@ def ship_to_names():
             ORDER BY TRIM(ship_to_name)
         """, tuple(params))
 
-        rows_out = [{"code": str(r[0]), "name": r[1]} for r in cur.fetchall()]
+        rows_out = [{"code": str(r["ship_to"]), "name": r["ship_to_name"]} for r in cur.fetchall()]
         cur.close(); conn.close()
         return jsonify(rows_out)
 

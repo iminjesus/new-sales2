@@ -2362,7 +2362,20 @@ let __SHIP_TO_OPTIONS = [];
 
 async function refreshSoldToCustom(){
   const stg = document.getElementById("sold_to_group")?.value || "ALL";
-  const res = await fetchJSON(`/api/sold_to_names?sold_to_group=${encodeURIComponent(stg)}`);
+  // Pass top_limit + filter context so the API can restrict the list
+  // to the top-N sold_to set when Top 10/20/30 is active.
+  const qs = new URLSearchParams({
+    sold_to_group: stg,
+    top_limit: filters.top_limit || 0,
+    metric: filters.metric || "qty",
+    category: filters.category || "ALL",
+    region: filters.region || "ALL",
+    salesman: filters.salesman || "ALL",
+    product_group: filters.product_group || "ALL",
+    pattern: filters.pattern || "ALL",
+    material: filters.material || "ALL",
+  }).toString();
+  const res = await fetchJSON(`/api/sold_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
   __SOLD_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
 }
@@ -2372,14 +2385,22 @@ async function refreshShipToCustom(){
   const soldTo = (document.getElementById("sold_to")?.value || "").trim();
   const qs = new URLSearchParams({
     sold_to_group: stg,
-    sold_to: soldTo ? soldTo : "ALL"
+    sold_to: soldTo ? soldTo : "ALL",
+    top_limit: filters.top_limit || 0,
+    metric: filters.metric || "qty",
+    category: filters.category || "ALL",
+    region: filters.region || "ALL",
+    salesman: filters.salesman || "ALL",
+    product_group: filters.product_group || "ALL",
+    pattern: filters.pattern || "ALL",
+    material: filters.material || "ALL",
   }).toString();
 
   const res = await fetchJSON(`/api/ship_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
   __SHIP_TO_OPTIONS = rows.map(x => {
     if (x === null || x === undefined) return '';
-    if (typeof x === 'object') return x.ship_to_name || x.v || x.name || x.label || '';
+    if (typeof x === 'object') return x.ship_to_name || x.name || x.v || x.label || '';
     return String(x);
   }).filter(Boolean);
 }
