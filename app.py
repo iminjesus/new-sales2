@@ -4771,9 +4771,13 @@ def visit_summary():
             # Visit check needs coords; skip if missing.
             if c["latitude"] is None or c["longitude"] is None:
                 continue
-            # When with_sales=1, only shops that have sales count toward visits.
-            if shops_with_sales is not None and c["ship_to"] not in shops_with_sales:
-                continue
+            # with_sales filter is applied ONLY to BDE attribution below.
+            # Per-shop visit count (used by map popup + visits_by_ship_to)
+            # should reflect every shop regardless of sales — otherwise the
+            # popup says "0 visits" for a shop the chart clearly shows
+            # had GPS visits.
+            shop_has_sales = (shops_with_sales is None
+                              or c["ship_to"] in shops_with_sales)
 
             try:
                 cla_deg = float(c["latitude"]); clo_deg = float(c["longitude"])
@@ -4799,7 +4803,7 @@ def visit_summary():
                             if salesman_col and gps_sm:
                                 visit_dates_per_bde[gps_sm][d.month].add(d)
 
-            # Per-shop (any salesman) — used by map / popup
+            # Per-shop (any salesman) — used by map / popup. Always populated.
             if visit_dates_any:
                 total_days_any = sum(len(s) for s in visit_dates_any.values())
                 per_shop.append({
@@ -4818,15 +4822,16 @@ def visit_summary():
                 per_state[st]["shops"].add(c["ship_to"])
                 per_state[st]["visit_days"] += total_days_any
 
-            # Per-BDE — credit the visit to whoever's GPS came within radius,
-            # not to the customer's assigned salesman.  A BDE may earn
-            # 'shops_visited' on shops they don't own.
-            for gps_norm, dates_by_month in visit_dates_per_bde.items():
-                total_days_this_bde = sum(len(s) for s in dates_by_month.values())
-                per_bde[gps_norm]["shops"].add(c["ship_to"])
-                per_bde[gps_norm]["visit_days"] += total_days_this_bde
-                for s in dates_by_month.values():
-                    per_bde[gps_norm]["visited_dates"].update(s)
+            # Per-BDE — credit the visit to whoever's GPS came within radius.
+            # Restricted to shops that have sales when with_sales=1 (default),
+            # so the BDE table reflects effort on active accounts only.
+            if shop_has_sales:
+                for gps_norm, dates_by_month in visit_dates_per_bde.items():
+                    total_days_this_bde = sum(len(s) for s in dates_by_month.values())
+                    per_bde[gps_norm]["shops"].add(c["ship_to"])
+                    per_bde[gps_norm]["visit_days"] += total_days_this_bde
+                    for s in dates_by_month.values():
+                        per_bde[gps_norm]["visited_dates"].update(s)
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
         out["total_shops_visited"] = len(per_shop)
