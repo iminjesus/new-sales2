@@ -242,7 +242,9 @@ function monthlyMapOptions() {
     maintainAspectRatio: false,
     interaction: { mode: "index", intersect: false },
     plugins: {
-      legend: { position: "right" },
+      legend: { position: "right", align: "start",
+                labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                maxWidth: 140 },
       tooltip: { mode: "index", intersect: false }
     },
     scales: {
@@ -267,7 +269,9 @@ function yearlyMapOptions() {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { position: "right" },
+      legend: { position: "right", align: "start",
+                labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                maxWidth: 140 },
       tooltip: { mode: "index", intersect: false }
     },
     scales: {
