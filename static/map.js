@@ -180,7 +180,15 @@ function renderBdeVisitTable(data) {
   const tbody = document.querySelector("#bdeVisitTable tbody");
   const totalsEl = document.getElementById("bdeVisitTotals");
   if (!tbody) return;
-  const rows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
+  const rawRows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
+  // Drop rows with no resolvable state, or junk BDE names like '#N/A'.
+  const rows = rawRows.filter(r => {
+    const st = (r.state || "").trim();
+    const bde = (r.bde || "").trim();
+    if (!st || st === "-") return false;
+    if (!bde || bde === "#N/A" || bde === "(unassigned)") return false;
+    return true;
+  });
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="6" style="padding:6px;color:#999;">No visit data</td></tr>';
     if (totalsEl) totalsEl.textContent = "";
@@ -193,7 +201,7 @@ function renderBdeVisitTable(data) {
   const buckets = [];   // [{state, rows: [...]}, ...]
   const seen = new Map();
   for (const r of rows) {
-    const st = r.state || "-";
+    const st = r.state;
     if (!seen.has(st)) {
       const b = { state: st, rows: [] };
       seen.set(st, b);
@@ -216,13 +224,14 @@ function renderBdeVisitTable(data) {
   const totTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${totStyle}${extra}">${v}</td>`;
 
   let html = "";
-  let gShops = 0, gVisitedShops = 0, gVisits = 0;
+  let gShops = 0, gVisitedShops = 0, gVisits = 0, gNoVisit = 0;
   for (const b of buckets) {
-    let sShops = 0, sVisitedShops = 0, sVisits = 0;
+    let sShops = 0, sVisitedShops = 0, sVisits = 0, sNoVisit = 0;
     for (const r of b.rows) {
       sShops        += +r.total_shops   || 0;
       sVisitedShops += +r.shops_visited || 0;
       sVisits       += +r.visit_days    || 0;
+      sNoVisit      += +r.no_visit_days || 0;
       html += `<tr>
         ${tdLeft(r.state || "-", "color:#666;")}
         ${tdLeft(r.bde)}
@@ -232,20 +241,18 @@ function renderBdeVisitTable(data) {
         ${tdRedRight(r.no_visit_days ?? "-")}
       </tr>`;
     }
-    // No-Visit Days isn't summable across BDEs (each BDE has their own
-    // denominator of active days), so the subtotal/total row leaves it
-    // blank rather than show a misleading number.
     html += `<tr>
       ${subTdLeft(b.state)}
       ${subTdLeft("")}
       ${subTd(sShops)}
       ${subTd(sVisitedShops)}
       ${subTd(sVisits)}
-      ${subTd("-")}
+      ${subTd(sNoVisit, "color:#c00;")}
     </tr>`;
     gShops        += sShops;
     gVisitedShops += sVisitedShops;
     gVisits       += sVisits;
+    gNoVisit      += sNoVisit;
   }
   html += `<tr>
     ${totTdLeft("All")}
@@ -253,7 +260,7 @@ function renderBdeVisitTable(data) {
     ${totTd(gShops)}
     ${totTd(gVisitedShops)}
     ${totTd(gVisits)}
-    ${totTd("-")}
+    ${totTd(gNoVisit)}
   </tr>`;
 
   tbody.innerHTML = html;
