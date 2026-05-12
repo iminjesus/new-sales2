@@ -1144,10 +1144,14 @@ async function drawMonthlyKPI(){
   ]);
 
   // Build {group_label → fixed-length numeric array} lookups.
+  // Keys are normalised (UPPER + trim) so DB casing variations
+  // (e.g. "BUCKLEY Paul" vs "Buckley Paul") don't break lookups.
+  const norm = (s) => (s == null ? "" : String(s)).trim().toUpperCase();
+
   function buildMonthlyByGroup(rows) {
     const out = {};
     for (const r of (rows || [])) {
-      const g = r.group_label || "COMMON";
+      const g = norm(r.group_label) || "COMMON";
       const m = (+r.month) - 1;
       if (m < 0 || m > 11) continue;
       if (!out[g]) out[g] = new Array(12).fill(0);
@@ -1158,7 +1162,7 @@ async function drawMonthlyKPI(){
   function buildDailyByGroup(rows) {
     const out = {};
     for (const r of (rows || [])) {
-      const g = r.group_label || "COMMON";
+      const g = norm(r.group_label) || "COMMON";
       const d = (+r.day) - 1;
       if (d < 0 || d > 30) continue;
       if (!out[g]) out[g] = new Array(31).fill(0);
@@ -1188,9 +1192,9 @@ async function drawMonthlyKPI(){
   const allBdes = Object.values(REGION_SALESMEN).flat();
 
   function rowFor(bdes) {
-    const sales      = sumArrays(bdes.map(b => salesBy[b]),  12);
-    const targets    = sumArrays(bdes.map(b => targetBy[b]), 12);
-    const dailySales = sumArrays(bdes.map(b => dailyBy[b]),  31);
+    const sales      = sumArrays(bdes.map(b => salesBy[norm(b)]),  12);
+    const targets    = sumArrays(bdes.map(b => targetBy[norm(b)]), 12);
+    const dailySales = sumArrays(bdes.map(b => dailyBy[norm(b)]),  31);
     const q          = kpiByQuarterProrated(sales, targets, dailySales, workingInfo);
     const dailyKPI   = dailyKPIWorkingDays(dailySales, +targets[currentMonthIdx] || 0, workingInfo);
     return { Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI };
