@@ -4183,9 +4183,9 @@ def _resolve_gps_columns(cur):
 @app.get("/api/monthly_visits")
 def monthly_visits():
     """
-    Count GPS visits within 500m of a given lat/lng per month.
+    Count GPS visits within 300m of a given lat/lng per month.
     A 'visit' = at least one GPS record on a calendar day within the radius.
-    Params: lat, lng, year, [radius=500]
+    Params: lat, lng, year, [radius=300]
     Returns: [{"m": 1, "visits": 3}, ...]   (m = month number 1-12)
     """
     try:
@@ -4200,9 +4200,9 @@ def monthly_visits():
         year = 2026
 
     try:
-        radius_m = float(request.args.get("radius", 500) or 500)
+        radius_m = float(request.args.get("radius", 300) or 300)
     except (TypeError, ValueError):
-        radius_m = 500.0
+        radius_m = 300.0
     business_only = (request.args.get("business_days_only", "1").strip().lower()
                      not in ("0", "false", "no"))
 
@@ -4279,7 +4279,7 @@ def monthly_visits():
 def visit_for_shop():
     """Convenience: look up a shop's lat/lng by ship_to and return its
     monthly visit counts.  Saves you from copying coordinates manually.
-    Params: ship_to (required), [year=2026], [radius=500]
+    Params: ship_to (required), [year=2026], [radius=300]
     """
     ship_to = (request.args.get("ship_to") or "").strip()
     if not ship_to:
@@ -4289,9 +4289,9 @@ def visit_for_shop():
     except (TypeError, ValueError):
         year = 2026
     try:
-        radius_m = float(request.args.get("radius", 500) or 500)
+        radius_m = float(request.args.get("radius", 300) or 300)
     except (TypeError, ValueError):
-        radius_m = 500.0
+        radius_m = 300.0
     business_only = (request.args.get("business_days_only", "1").strip().lower()
                      not in ("0", "false", "no"))
 
@@ -4491,16 +4491,16 @@ def visit_debug_topshops():
     """List the top customer ship-tos by GPS visit count for a year, so we can
     confirm the Visit line renders for at least one shop and identify which
     territories actually have GPS coverage.
-    Params: year=2026, radius=500, limit=20
+    Params: year=2026, radius=300, limit=20
     """
     try:
         year = int(request.args.get("year", 2026) or 2026)
     except (TypeError, ValueError):
         year = 2026
     try:
-        radius_m = float(request.args.get("radius", 500) or 500)
+        radius_m = float(request.args.get("radius", 300) or 300)
     except (TypeError, ValueError):
-        radius_m = 500.0
+        radius_m = 300.0
     try:
         limit = int(request.args.get("limit", 20) or 20)
     except (TypeError, ValueError):
@@ -4670,7 +4670,7 @@ def visit_debug_closest():
 @app.get("/api/visit_summary")
 def visit_summary():
     """Total visit counts across every customer/ship-to.
-    Params: [year=2026], [radius=500], [with_sales=1]
+    Params: [year=2026], [radius=300], [with_sales=1]
     Returns: total shops with ≥1 visit, total visit-days, monthly +
              per-state breakdown, and the top 20 shops.
 
@@ -4690,9 +4690,9 @@ def visit_summary():
     except (TypeError, ValueError):
         year = 2026
     try:
-        radius_m = float(request.args.get("radius", 500) or 500)
+        radius_m = float(request.args.get("radius", 300) or 300)
     except (TypeError, ValueError):
-        radius_m = 500.0
+        radius_m = 300.0
     with_sales = (request.args.get("with_sales", "0").strip().lower()
                   in ("1", "true", "yes"))
     business_only = (request.args.get("business_days_only", "1").strip().lower()
