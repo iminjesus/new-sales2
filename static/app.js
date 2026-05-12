@@ -346,7 +346,20 @@ function getCommonOptions(stacked=false, yMax, yTitle){
   return {
     responsive:true,
     plugins:{
-      legend:{position:"right"},
+      legend:{
+        position:"right",
+        align:"start",
+        labels:{
+          boxWidth: 12,
+          boxHeight: 12,
+          padding: 6,
+          font: { size: 11 },
+        },
+        // Reserve enough width for the longest label ("Cumulative Target",
+        // "Sales Amount (2025)", etc.) so right-positioned legends don't
+        // truncate at narrow widths.
+        maxWidth: 140,
+      },
       tooltip:{
         callbacks:{
           title: function(items){
@@ -356,6 +369,7 @@ function getCommonOptions(stacked=false, yMax, yTitle){
         }
       }
     },
+    layout: { padding: { right: 4 } },
     scales:{
       x: xAxisDdMm(stacked),
       y:{ beginAtZero:true, max: yMax ?? undefined, title:{ display: !!yTitle, text: yTitle } }
@@ -736,7 +750,9 @@ async function drawDailyTotals(){
       options: {
         responsive: true,
         plugins: {
-          legend: { position: "right" },
+          legend: { position: "right", align: "start",
+                    labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                    maxWidth: 140 },
           tooltip: { callbacks: { label: c => (c.parsed.y?.toFixed(1) ?? "—") + "%" } }
         },
         scales: {
@@ -770,7 +786,9 @@ async function drawDailyTotals(){
       options: {
         responsive: true,
         plugins: {
-          legend: { position: "right" },
+          legend: { position: "right", align: "start",
+                    labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                    maxWidth: 140 },
           tooltip: { callbacks: { label: c => (c.parsed.y?.toFixed(1) ?? "—") + "%" } }
         },
         scales: {
@@ -827,7 +845,9 @@ async function drawDailyTotals(){
       options: {
         responsive: true,
         plugins: {
-          legend: { position: "right" },
+          legend: { position: "right", align: "start",
+                    labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                    maxWidth: 140 },
           tooltip: { callbacks: { title: items => items[0]?.label } }
         },
         scales: {
