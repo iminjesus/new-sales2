@@ -429,6 +429,35 @@ document.addEventListener("DOMContentLoaded", async () => {
     // ignore parse error
   }
 
+  // Sync visible UI controls with the restored filter state so the user
+  // can see what's currently active (chips/highlights/dropdown inputs).
+  // Without this, filters carry over invisibly and the inputs look empty.
+  const setInput = (id, val) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const v = (val == null || val === "ALL") ? "" : String(val);
+    el.value = v;
+    if (typeof ddUpdateActive === "function") ddUpdateActive(el);
+  };
+  setInput("sold_to",       filters.sold_to);
+  setInput("ship_to",       filters.ship_to);
+  setInput("product_group", filters.product_group);
+  setInput("pattern",       filters.pattern);
+  setInput("material",      filters.material);
+
+  // Native <select> dropdowns (sold_to_group, salesman_name)
+  const stgSel = document.getElementById("sold_to_group");
+  if (stgSel) stgSel.value = filters.sold_to_group || "ALL";
+  const smSel = document.getElementById("salesman_name");
+  if (smSel) smSel.value = filters.salesman || "ALL";
+
+  // Toggle-button groups (category / region / metric / top_limit)
+  if (typeof setActive === "function") {
+    setActive(document.getElementById("catBtns"),    "val",   filters.category || "ALL");
+    setActive(document.getElementById("regionBtns"), "val",   filters.region   || "ALL");
+    setActive(document.getElementById("metricBtns"), "val",   filters.metric   || "qty");
+  }
+
   // Make top-customer buttons reflect current filters.top_limit
   const topCtl = document.getElementById("topCustomerControls");
   if (topCtl) {
