@@ -2429,6 +2429,18 @@ def daily_target():
     joins += cat_joins
     wh    += cat_where
 
+    # Apply product_group / pattern / size filters via carrying_2602 join.
+    carrying_join_dt = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+    if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL"):
+        if carrying_join_dt not in joins:
+            joins.append(carrying_join_dt)
+    if f["product_group"] != "ALL":
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["pattern"] != "ALL":
+        wh.append("mat.pattern = %s"); params.append(f["pattern"])
+    if f["material"] != "ALL":
+        wh.append("mat.size = %s"); params.append(f["material"])
+
     # restrict to the chosen month only
     wh.append("t.month = %s")
     params.append(month)
@@ -3204,6 +3216,18 @@ def monthly_target():
     joins += cat_joins
     wh    += cat_where
 
+    # Apply product_group / pattern / size filters via carrying_2602 join.
+    carrying_join_mt = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+    if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL"):
+        if carrying_join_mt not in joins:
+            joins.append(carrying_join_mt)
+    if f["product_group"] != "ALL":
+        wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["pattern"] != "ALL":
+        wh.append("mat.pattern = %s"); params.append(f["pattern"])
+    if f["material"] != "ALL":
+        wh.append("mat.size = %s"); params.append(f["material"])
+
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
@@ -3917,14 +3941,14 @@ def profit_monthly():
             wh_p    += cat_where_p
 
             # ?? product_group / pattern filter (via carrying_2602) ??
-            if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL":
+            if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL" or f.get("material", "ALL") != "ALL":
                 _ensure_carrying_join("p", joins_p)
             if f.get("product_group", "ALL") != "ALL":
                 wh_p.append("mat.product_group = %s"); params_p.append(f["product_group"])
             if f.get("pattern", "ALL") != "ALL":
                 wh_p.append("mat.pattern = %s"); params_p.append(f["pattern"])
             if f["material"] != "ALL":
-                wh_p.append("p.material = %s"); params_p.append(f["material"])
+                wh_p.append("mat.size = %s"); params_p.append(f["material"])
 
             # ?? top sold_to restriction ??
             if top_sold_to:
