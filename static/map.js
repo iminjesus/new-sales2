@@ -245,39 +245,15 @@ function drawDefaultShopCharts() {
   drawShopCharts("ALL", null, null);
 }
 
-// 12-month inline sparkline.  Renders a tiny SVG bar chart with a per-bar
-// <title> tooltip so hovering shows "<Mon>: <value>".  All sparklines in
-// the same column share a max scale so values are visually comparable.
-const SPARK_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
-                      "Jul","Aug","Sep","Oct","Nov","Dec"];
-function sparkline(values, color, maxVal) {
-  const arr = Array.isArray(values) ? values : [];
-  const n   = 12;
-  const W   = 120, H = 28;            // bigger so bars are actually readable
-  const gap = 1.5;
-  const bw  = (W - gap * (n - 1)) / n;
-  const m   = Math.max(1, maxVal || Math.max(1, ...arr));
-  let bars  = "";
-  for (let i = 0; i < n; i++) {
-    const v = +arr[i] || 0;
-    const x = i * (bw + gap);
-    if (v > 0) {
-      // Ensure tiny non-zero values still draw a visible 2-px sliver.
-      const h = Math.max(2, (v / m) * H);
-      const y = H - h;
-      bars += `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" `
-            + `width="${bw.toFixed(2)}" height="${h.toFixed(2)}" `
-            + `fill="${color}"><title>${SPARK_MONTHS[i]}: ${v}</title></rect>`;
-    } else {
-      // Empty month — faint baseline tick so the 12-column grid is visible
-      // without overpowering the actual data.
-      bars += `<rect x="${x.toFixed(2)}" y="${(H - 1).toFixed(2)}" `
-            + `width="${bw.toFixed(2)}" height="1" fill="#e5e7eb">`
-            + `<title>${SPARK_MONTHS[i]}: 0</title></rect>`;
-    }
-  }
-  return `<svg width="${W}" height="${H}" style="vertical-align:middle;display:block;">${bars}</svg>`;
-}
+const BDE_MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun",
+                          "Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// Metric → (data key on each BDE row, label, base RGB for heat colour).
+const BDE_METRICS = {
+  shops:   { key: "shops_by_month",         label: "Visited Shop",   rgb: [22, 163, 74]  },
+  visits:  { key: "visit_days_by_month",    label: "Visits",         rgb: [37, 99, 235]  },
+  novisit: { key: "no_visit_days_by_month", label: "No-Visit Days",  rgb: [220, 38, 38]  },
+};
 
 // Element-wise sum of 12-month arrays (used for subtotal / total rows).
 function sumMonthly(rows, key) {
@@ -290,137 +266,162 @@ function sumMonthly(rows, key) {
   return out;
 }
 
+// Cached so the metric toggle can re-render without a fresh API call.
+let _lastVisitSummary = null;
+let _bdeMetric        = "shops";
+
+// rgba string scaled to value/max → light shade for small values,
+// near-opaque for the maximum.
+function heatBg(rgb, v, max) {
+  if (!v || max <= 0) return "transparent";
+  const a = Math.min(1, 0.12 + 0.78 * (v / max));
+  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a.toFixed(3)})`;
+}
+
 function renderBdeVisitTable(data) {
-  const tbody = document.querySelector("#bdeVisitTable tbody");
+  // Allow the metric-toggle buttons to call renderBdeVisitTable() with no
+  // args and re-render from the cached payload.
+  if (data) _lastVisitSummary = data;
+  else      data = _lastVisitSummary;
+
+  const tbody  = document.querySelector("#bdeVisitTable tbody");
+  const thead  = document.getElementById("bdeVisitHead");
   const totalsEl = document.getElementById("bdeVisitTotals");
   if (!tbody) return;
+
   const rawRows = (data && Array.isArray(data.by_bde)) ? data.by_bde : [];
-  // Drop rows with no resolvable state, or junk BDE names like '#N/A'.
   const rows = rawRows.filter(r => {
-    const st = (r.state || "").trim();
-    const bde = (r.bde || "").trim();
-    if (!st || st === "-") return false;
+    const st  = (r.state || "").trim();
+    const bde = (r.bde   || "").trim();
+    if (!st  || st  === "-") return false;
     if (!bde || bde === "#N/A" || bde === "(unassigned)") return false;
     return true;
   });
+
+  const metric    = BDE_METRICS[_bdeMetric] || BDE_METRICS.shops;
+  const dataKey   = metric.key;
+  const baseRGB   = metric.rgb;
+
+  // Header: State | BDE | Shops | Total | Jan..Dec
+  if (thead) {
+    let h = `<tr style="background:#f0f0f0;">
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;">State</th>
+      <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;">BDE</th>
+      <th style="text-align:right;padding:4px 6px;border-bottom:1px solid #ccc;">Shops</th>
+      <th style="text-align:right;padding:4px 4px;border-bottom:1px solid #ccc;">Total</th>`;
+    for (const m of BDE_MONTH_LABELS) {
+      h += `<th style="text-align:right;padding:4px 4px;border-bottom:1px solid #ccc;font-weight:500;">${m}</th>`;
+    }
+    h += "</tr>";
+    thead.innerHTML = h;
+  }
+
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="padding:6px;color:#999;">No visit data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="16" style="padding:6px;color:#999;">No visit data</td></tr>';
     if (totalsEl) totalsEl.textContent = "";
     return;
   }
 
-  // Group rows by state, in the same order the rows arrive (backend
-  // already sorts NSW → QLD → VIC → SA → WA → others), so the table
-  // visually keeps that order while we inject per-state subtotal rows.
+  // Group by state, preserving backend order (NSW→QLD→VIC→SA→WA→…).
   const buckets = [];
   const seen = new Map();
   for (const r of rows) {
-    const st = r.state;
-    if (!seen.has(st)) {
-      const b = { state: st, rows: [] };
-      seen.set(st, b);
-      buckets.push(b);
+    if (!seen.has(r.state)) {
+      const b = { state: r.state, rows: [] };
+      seen.set(r.state, b); buckets.push(b);
     }
-    seen.get(st).rows.push(r);
+    seen.get(r.state).rows.push(r);
   }
+  const stateMonthly = buckets.map(b => sumMonthly(b.rows, dataKey));
+  const grandMonthly = sumMonthly(rows, dataKey);
 
-  // Shared max scale per metric so sparklines are visually comparable
-  // across BDEs (including subtotal / total rows, which use summed
-  // arrays).  Compute per-row sums for the subtotal/total scale.
-  const stateSums = buckets.map(b => ({
-    shops:   sumMonthly(b.rows, "shops_by_month"),
-    visits:  sumMonthly(b.rows, "visit_days_by_month"),
-    novisit: sumMonthly(b.rows, "no_visit_days_by_month"),
-  }));
-  const grandSums = {
-    shops:   sumMonthly(rows, "shops_by_month"),
-    visits:  sumMonthly(rows, "visit_days_by_month"),
-    novisit: sumMonthly(rows, "no_visit_days_by_month"),
+  // Max-scale across every visible monthly value (BDE rows + subtotals
+  // + total) so heat shades are consistent within the table.
+  const candidates = [
+    ...rows.flatMap(r => (Array.isArray(r[dataKey]) ? r[dataKey] : [])),
+    ...stateMonthly.flat(),
+    ...grandMonthly,
+  ];
+  const maxVal = Math.max(1, ...candidates);
+
+  const monthCell = (v, extra = "") => {
+    const bg = heatBg(baseRGB, +v || 0, maxVal);
+    return `<td style="text-align:right;padding:3px 4px;border-bottom:1px solid #eee;background:${bg};${extra}">`
+         + `${v || ""}</td>`;
   };
-  const maxOf = (arr) => Math.max(1, ...arr);
-  const maxShops   = Math.max(maxOf(grandSums.shops),
-                              ...rows.map(r => maxOf(r.shops_by_month || [0])));
-  const maxVisits  = Math.max(maxOf(grandSums.visits),
-                              ...rows.map(r => maxOf(r.visit_days_by_month || [0])));
-  const maxNoVisit = Math.max(maxOf(grandSums.novisit),
-                              ...rows.map(r => maxOf(r.no_visit_days_by_month || [0])));
-
-  const COLOR_VISITED  = "#16a34a";   // green
-  const COLOR_VISITS   = "#2563eb";   // blue
-  const COLOR_NO_VISIT = "#dc2626";   // red
-
-  const td       = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
-  const tdLeft   = (v, extra = "") => `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
-  const tdMetric = (spark, total, extra = "") =>
-    `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">
-       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.1;">
-         ${spark}<span style="font-size:11px;">${total}</span>
-       </div>
-     </td>`;
+  const td      = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
+  const tdLeft  = (v, extra = "") => `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
 
   const subStyle = "background:#cbd5e1;font-weight:600;";
   const totStyle = "background:#94a3b8;font-weight:700;color:#fff;";
-  const subTd    = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${subStyle}${extra}">${v}</td>`;
+  const subTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${subStyle}${extra}">${v}</td>`;
   const subTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${subStyle}${extra}">${v}</td>`;
-  const subTdMetric = (spark, total, extra = "") =>
-    `<td style="padding:3px 6px;${subStyle}${extra}">
-       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.1;">
-         ${spark}<span style="font-size:11px;">${total}</span>
-       </div>
-     </td>`;
-  const totTd    = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
+  const totTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
   const totTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${totStyle}${extra}">${v}</td>`;
-  const totTdMetric = (spark, total, extra = "") =>
-    `<td style="padding:3px 6px;${totStyle}${extra}">
-       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.1;">
-         ${spark}<span style="font-size:11px;">${total}</span>
-       </div>
-     </td>`;
+
+  // Total column = the single metric currently displayed (YTD).
+  const totalKey = _bdeMetric === "shops"  ? "shops_visited"
+                 : _bdeMetric === "visits" ? "visit_days"
+                 :                            "no_visit_days";
 
   let html = "";
-  let gShops = 0, gVisitedShops = 0, gVisits = 0, gNoVisit = 0;
+  let gShopsAssigned = 0;
+  let gTotal         = 0;
   buckets.forEach((b, bi) => {
-    let sShops = 0, sVisitedShops = 0, sVisits = 0, sNoVisit = 0;
+    let sShopsAssigned = 0;
+    let sTotal         = 0;
     for (const r of b.rows) {
-      sShops        += +r.total_shops   || 0;
-      sVisitedShops += +r.shops_visited || 0;
-      sVisits       += +r.visit_days    || 0;
-      sNoVisit      += +r.no_visit_days || 0;
+      sShopsAssigned += +r.total_shops || 0;
+      sTotal         += +r[totalKey]   || 0;
+      const arr = Array.isArray(r[dataKey]) ? r[dataKey] : new Array(12).fill(0);
       html += `<tr>
         ${tdLeft(r.state || "-", "color:#666;")}
         ${tdLeft(r.bde)}
         ${td(r.total_shops)}
-        ${tdMetric(sparkline(r.shops_by_month,         COLOR_VISITED,  maxShops),   r.shops_visited)}
-        ${tdMetric(sparkline(r.visit_days_by_month,    COLOR_VISITS,   maxVisits),  r.visit_days)}
-        ${tdMetric(sparkline(r.no_visit_days_by_month, COLOR_NO_VISIT, maxNoVisit), r.no_visit_days ?? "-", "color:#c00;")}
+        ${td(r[totalKey] ?? 0)}
+        ${arr.map(v => monthCell(v)).join("")}
       </tr>`;
     }
-    const ss = stateSums[bi];
     html += `<tr>
       ${subTdLeft(b.state)}
       ${subTdLeft("")}
-      ${subTd(sShops)}
-      ${subTdMetric(sparkline(ss.shops,   COLOR_VISITED,  maxShops),   sVisitedShops)}
-      ${subTdMetric(sparkline(ss.visits,  COLOR_VISITS,   maxVisits),  sVisits)}
-      ${subTdMetric(sparkline(ss.novisit, COLOR_NO_VISIT, maxNoVisit), sNoVisit, "color:#c00;")}
+      ${subTd(sShopsAssigned)}
+      ${subTd(sTotal)}
+      ${stateMonthly[bi].map(v => {
+        const bg = heatBg(baseRGB, v, maxVal);
+        return `<td style="text-align:right;padding:3px 4px;${subStyle}background:${bg};">${v || ""}</td>`;
+      }).join("")}
     </tr>`;
-    gShops        += sShops;
-    gVisitedShops += sVisitedShops;
-    gVisits       += sVisits;
-    gNoVisit      += sNoVisit;
+    gShopsAssigned += sShopsAssigned;
+    gTotal         += sTotal;
   });
   html += `<tr>
     ${totTdLeft("All")}
     ${totTdLeft("Total")}
-    ${totTd(gShops)}
-    ${totTdMetric(sparkline(grandSums.shops,   COLOR_VISITED,  maxShops),   gVisitedShops)}
-    ${totTdMetric(sparkline(grandSums.visits,  COLOR_VISITS,   maxVisits),  gVisits)}
-    ${totTdMetric(sparkline(grandSums.novisit, COLOR_NO_VISIT, maxNoVisit), gNoVisit)}
+    ${totTd(gShopsAssigned)}
+    ${totTd(gTotal)}
+    ${grandMonthly.map(v => {
+      const bg = heatBg(baseRGB, v, maxVal);
+      return `<td style="text-align:right;padding:3px 4px;${totStyle}background:${bg};">${v || ""}</td>`;
+    }).join("")}
   </tr>`;
 
   tbody.innerHTML = html;
   if (totalsEl) totalsEl.textContent = "";
 }
+
+// Wire up the metric-toggle buttons once the DOM is ready.
+document.addEventListener("DOMContentLoaded", () => {
+  const grp = document.getElementById("bdeMetricBtns");
+  if (!grp) return;
+  grp.addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-m]");
+    if (!b) return;
+    _bdeMetric = b.dataset.m;
+    grp.querySelectorAll("button").forEach(x => x.classList.toggle("active", x === b));
+    renderBdeVisitTable();
+  });
+});
 
 function monthlyMapOptions() {
   return {

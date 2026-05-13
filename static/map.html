@@ -197,32 +197,22 @@
         <canvas id="yearlyChart"></canvas>
       </div>
       <div id="bdeVisitTablePane" style="margin-top:8px;">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
           <strong style="font-size:13px;">Number of Visits by BDE (2026, business days only)</strong>
+          <div id="bdeMetricBtns" style="display:flex;gap:4px;margin-left:auto;">
+            <button class="bde-mb btn active" data-m="shops"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">Visited Shop</button>
+            <button class="bde-mb btn" data-m="visits"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">Visits</button>
+            <button class="bde-mb btn" data-m="novisit"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">No-Visit Days</button>
+          </div>
           <span id="bdeVisitTotals" style="font-size:11px;color:#666;"></span>
         </div>
         <table id="bdeVisitTable"
-               style="width:100%;border-collapse:collapse;font-size:12px;">
-          <thead>
-            <tr style="background:#f0f0f0;">
-              <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;">State</th>
-              <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;">BDE</th>
-              <th style="text-align:right;padding:4px 6px;border-bottom:1px solid #ccc;">Shops</th>
-              <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;"
-                  title="Monthly sparkline (Jan–Dec) of unique shops visited, with YTD total on the right">
-                Visited Shop <span style="font-weight:400;color:#888;font-size:10px;">(Jan→Dec / YTD)</span>
-              </th>
-              <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;"
-                  title="Monthly sparkline (Jan–Dec) of total visit days, with YTD total on the right">
-                Visits <span style="font-weight:400;color:#888;font-size:10px;">(Jan→Dec / YTD)</span>
-              </th>
-              <th style="text-align:left;padding:4px 6px;border-bottom:1px solid #ccc;"
-                  title="Monthly sparkline (Jan–Dec) of business days with no shop visit">
-                No-Visit Days <span style="font-weight:400;color:#888;font-size:10px;">(Jan→Dec / YTD)</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody><tr><td colspan="6" style="padding:6px;color:#999;">Loading…</td></tr></tbody>
+               style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead id="bdeVisitHead"></thead>
+          <tbody><tr><td colspan="16" style="padding:6px;color:#999;">Loading…</td></tr></tbody>
         </table>
       </div>
     </div>
