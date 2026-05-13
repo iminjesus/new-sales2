@@ -387,7 +387,7 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
       <div class="btn-row">
         <span class="row-label">View</span>
         <div class="btns">
-          <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Store</button>
+          <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Whole seller</button>
           <button class="btn mode" id="btn-brand" onclick="onModeBrand(this)">By Brand</button>
         </div>
       </div>
