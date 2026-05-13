@@ -145,9 +145,9 @@ with open(src, newline='', encoding='utf-8-sig') as f:
     cols = rdr.fieldnames
     rows = list(rdr)
 
-out_cols = cols + ["correct_lat", "correct_lng",
+out_cols = (["ship_to"] + cols + ["correct_lat", "correct_lng",
                    "coord_status", "confidence",
-                   "expected_state", "note"]
+                   "expected_state", "note"])
 
 missing = []
 with open(out, "w", newline='', encoding='utf-8-sig') as f:
@@ -160,6 +160,7 @@ with open(out, "w", newline='', encoding='utf-8-sig') as f:
             missing.append(st)
             continue
         lat, lng, status, conf, note = c
+        r["ship_to"]         = st
         r["correct_lat"]     = f"{lat:.6f}"
         r["correct_lng"]     = f"{lng:.6f}"
         r["coord_status"]    = status
