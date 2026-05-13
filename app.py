@@ -376,6 +376,13 @@ def category_filters_sales(alias: str, category: str):
     elif cat == "HM":
         joins.append(f"JOIN hm hm ON hm.sold_to = {alias}.sold_to")
 
+    elif cat in ("HK", "LF"):
+        # Brand filter via carrying_2602.  sales_thismonth has its own
+        # brand column but the other sales facts (monthly / yearly) don't,
+        # so go through carrying for a single uniform path.
+        joins.append(_carrying_join(alias))
+        wh.append(f"mat.brand = '{cat}'")
+
     elif cat == "443":
         joins.append(_carrying_join(alias))
         wh.append(f"""
@@ -430,6 +437,10 @@ def category_target_filters(alias: str, category: str):
 
     elif cat == "HM":
         joins.append(f"JOIN hm hm ON hm.sold_to = {alias}.sold_to")
+
+    elif cat in ("HK", "LF"):
+        joins.append(carrying_join)
+        wh.append(f"mat.brand = '{cat}'")
 
     elif cat == "443":
         # product_group lives in carrying_2602 (alias: mat) for target_26
@@ -491,6 +502,10 @@ def category_filters_stock(alias: str, category: str):
     elif cat == "LOWPROFILE":
         joins.append("JOIN lowprofile lp ON CAST(TRIM(lp.Material) AS UNSIGNED) = s.material")
 
+    elif cat in ("HK", "LF"):
+        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
+        wh.append(f"c.brand = '{cat}'")
+
     return joins, wh
 def category_filters_orders(category: str):
     """
@@ -521,6 +536,10 @@ def category_filters_orders(category: str):
     elif cat == "SUV":
         needs_carrying = True
         joins.append("JOIN suv suv ON suv.Pattern = c.pattern")
+
+    elif cat in ("HK", "LF"):
+        needs_carrying = True
+        wh.append(f"c.brand = '{cat}'")
 
     return joins, wh, needs_carrying
 # ------------------------------- v2 helpers -------------------------------
