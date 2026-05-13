@@ -335,13 +335,19 @@ def _ensure_customer_join(alias: str, joins: list) -> None:
         joins.append(j)
 
 
-def category_filters_sales(alias: str, category: str):
+def category_filters_sales(alias: str, category: str, has_brand: bool = False):
     """
     Like category_filters() but for the normalised sales fact tables
     (sales_2601 / sales_2526 / sales_21_25) where line / inch / pattern
     have been removed and now live in carrying_2602 (alias: mat).
 
-    Returns (joins, wheres) ??same contract as category_filters().
+    Returns (joins, wheres) — same contract as category_filters().
+
+    has_brand=True signals the fact table has its own `brand` column
+    (currently only sales_thismonth).  For HK / LF that path filters
+    directly on `{alias}.brand` so we don't drop rows where the
+    material isn't in carrying_2602 (a real case — Rebate brand-tagged
+    sales for materials still missing from the master).
     """
     joins, wh = [], []
     cat = (category or "ALL").upper()
@@ -380,8 +386,11 @@ def category_filters_sales(alias: str, category: str):
         # Brand filter via carrying_2602.  sales_thismonth has its own
         # brand column but the other sales facts (monthly / yearly) don't,
         # so go through carrying for a single uniform path.
-        joins.append(_carrying_join(alias))
-        wh.append(f"mat.brand = '{cat}'")
+        if has_brand:
+            wh.append(f"{alias}.brand = '{cat}'")
+        else:
+            joins.append(_carrying_join(alias))
+            wh.append(f"mat.brand = '{cat}'")
 
     elif cat == "443":
         joins.append(_carrying_join(alias))
@@ -1884,7 +1893,7 @@ def v2_dashboard():
         # ---------------- daily (sales_thismonth + target_26 month) ----------------
         joins_d, wh_d, params_d = build_customer_filters("s", f, use_sold_to_name=False)
         if f["category"] != "443":
-            cj, cw = category_filters_sales("s", f["category"])
+            cj, cw = category_filters_sales("s", f["category"], has_brand=True)
             joins_d += cj; wh_d += cw
         # Ensure carrying join when product_group / pattern / material (size)
         # filter or group_by needs it.  Size is stored on carrying_2602.size
@@ -2268,7 +2277,7 @@ def daily_sales():
 
     # category ??use normalised version for sales tables
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters_sales("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"], has_brand=True)
         joins += cat_joins
         wh    += cat_where
 
@@ -2360,7 +2369,7 @@ def daily_breakdown():
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     if f["category"] != "443":
-        cat_joins, cat_where = category_filters_sales("s", f["category"])
+        cat_joins, cat_where = category_filters_sales("s", f["category"], has_brand=True)
         joins += cat_joins
         wh    += cat_where
 
@@ -2638,7 +2647,7 @@ def fetch_table_rows(top_limit: int):
 
     # category (same rule: skip 443) ??use normalised version
     if f.get("category", "ALL") != "443":
-        cat_joins, cat_where = category_filters_sales("s", f.get("category", "ALL"))
+        cat_joins, cat_where = category_filters_sales("s", f.get("category", "ALL"), has_brand=True)
         joins += cat_joins
         wh    += cat_where
 
