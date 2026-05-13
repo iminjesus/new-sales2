@@ -253,23 +253,30 @@ const SPARK_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
 function sparkline(values, color, maxVal) {
   const arr = Array.isArray(values) ? values : [];
   const n   = 12;
-  const W   = 60, H = 16;
-  const bw  = (W - (n - 1)) / n;     // 1-px gap between bars
+  const W   = 120, H = 28;            // bigger so bars are actually readable
+  const gap = 1.5;
+  const bw  = (W - gap * (n - 1)) / n;
   const m   = Math.max(1, maxVal || Math.max(1, ...arr));
   let bars  = "";
   for (let i = 0; i < n; i++) {
     const v = +arr[i] || 0;
-    const h = v > 0 ? Math.max(1, (v / m) * H) : 0;
-    const x = i * (bw + 1);
-    const y = H - h;
-    const fill = v > 0 ? color : "#e5e7eb";
-    const drawH = v > 0 ? h : 1;
-    const drawY = v > 0 ? y : H - 1;
-    bars += `<rect x="${x.toFixed(2)}" y="${drawY.toFixed(2)}" `
-          + `width="${bw.toFixed(2)}" height="${drawH.toFixed(2)}" `
-          + `fill="${fill}"><title>${SPARK_MONTHS[i]}: ${v}</title></rect>`;
+    const x = i * (bw + gap);
+    if (v > 0) {
+      // Ensure tiny non-zero values still draw a visible 2-px sliver.
+      const h = Math.max(2, (v / m) * H);
+      const y = H - h;
+      bars += `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" `
+            + `width="${bw.toFixed(2)}" height="${h.toFixed(2)}" `
+            + `fill="${color}"><title>${SPARK_MONTHS[i]}: ${v}</title></rect>`;
+    } else {
+      // Empty month — faint baseline tick so the 12-column grid is visible
+      // without overpowering the actual data.
+      bars += `<rect x="${x.toFixed(2)}" y="${(H - 1).toFixed(2)}" `
+            + `width="${bw.toFixed(2)}" height="1" fill="#e5e7eb">`
+            + `<title>${SPARK_MONTHS[i]}: 0</title></rect>`;
+    }
   }
-  return `<svg width="${W}" height="${H}" style="vertical-align:middle;">${bars}</svg>`;
+  return `<svg width="${W}" height="${H}" style="vertical-align:middle;display:block;">${bars}</svg>`;
 }
 
 // Element-wise sum of 12-month arrays (used for subtotal / total rows).
@@ -346,9 +353,9 @@ function renderBdeVisitTable(data) {
   const tdLeft   = (v, extra = "") => `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
   const tdMetric = (spark, total, extra = "") =>
     `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">
-       <span style="display:inline-flex;align-items:center;gap:6px;">
-         ${spark}<span style="min-width:32px;text-align:right;">${total}</span>
-       </span>
+       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.1;">
+         ${spark}<span style="font-size:11px;">${total}</span>
+       </div>
      </td>`;
 
   const subStyle = "background:#cbd5e1;font-weight:600;";
@@ -357,17 +364,17 @@ function renderBdeVisitTable(data) {
   const subTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${subStyle}${extra}">${v}</td>`;
   const subTdMetric = (spark, total, extra = "") =>
     `<td style="padding:3px 6px;${subStyle}${extra}">
-       <span style="display:inline-flex;align-items:center;gap:6px;">
-         ${spark}<span style="min-width:32px;text-align:right;">${total}</span>
-       </span>
+       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.1;">
+         ${spark}<span style="font-size:11px;">${total}</span>
+       </div>
      </td>`;
   const totTd    = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
   const totTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${totStyle}${extra}">${v}</td>`;
   const totTdMetric = (spark, total, extra = "") =>
     `<td style="padding:3px 6px;${totStyle}${extra}">
-       <span style="display:inline-flex;align-items:center;gap:6px;">
-         ${spark}<span style="min-width:32px;text-align:right;">${total}</span>
-       </span>
+       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.1;">
+         ${spark}<span style="font-size:11px;">${total}</span>
+       </div>
      </td>`;
 
   let html = "";
