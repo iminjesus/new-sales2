@@ -4792,11 +4792,13 @@ def visit_summary():
         # Active business days per BDE — denominator for No-Visit Days.
         # 'active' = a day where the BDE has any GPS recorded at all.
         active_days_by_bde = defaultdict(set)
+        active_days_by_bde_by_month = defaultdict(lambda: defaultdict(set))  # bde -> month -> {date}
         if salesman_col:
             for r in gps_rows:
                 sm = _norm_name(r.get("sm"))
                 if sm and r["d"] is not None:
                     active_days_by_bde[sm].add(r["d"])
+                    active_days_by_bde_by_month[sm][r["d"].month].add(r["d"])
 
         R = 6371000.0
         per_shop = []
@@ -4813,6 +4815,10 @@ def visit_summary():
             "visited_dates": set(),
             "state_counts": defaultdict(int),
             "display_name": "",
+            # Monthly sparkline data: each is keyed by calendar month (1-12).
+            "shops_by_month":         defaultdict(set),  # month -> {ship_to}
+            "visit_days_by_month":    defaultdict(int),
+            "visited_dates_by_month": defaultdict(set),  # month -> {date}
         })
         seen_ship_to = set()  # one ship_to can appear in multiple customer rows
 
@@ -4911,10 +4917,14 @@ def visit_summary():
             if shop_has_sales:
                 for gps_norm, dates_by_month in visit_dates_per_bde.items():
                     total_days_this_bde = sum(len(s) for s in dates_by_month.values())
-                    per_bde[gps_norm]["shops"].add(c["ship_to"])
-                    per_bde[gps_norm]["visit_days"] += total_days_this_bde
-                    for s in dates_by_month.values():
-                        per_bde[gps_norm]["visited_dates"].update(s)
+                    bde = per_bde[gps_norm]
+                    bde["shops"].add(c["ship_to"])
+                    bde["visit_days"] += total_days_this_bde
+                    for m, s in dates_by_month.items():
+                        bde["visited_dates"].update(s)
+                        bde["visited_dates_by_month"][m].update(s)
+                        bde["shops_by_month"][m].add(c["ship_to"])
+                        bde["visit_days_by_month"][m] += len(s)
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
         out["total_shops_visited"] = len(per_shop)
@@ -4956,6 +4966,15 @@ def visit_summary():
             bde_active = active_days_by_bde.get(norm, set())
             no_visit_days = max(0, len(bde_active) - len(v["visited_dates"]))
             display = v["display_name"] or norm
+            # Monthly sparkline arrays (length 12, index 0 = January).
+            active_by_month = active_days_by_bde_by_month.get(norm, {})
+            shops_m  = [len(v["shops_by_month"].get(m, ()))      for m in range(1, 13)]
+            visits_m = [int(v["visit_days_by_month"].get(m, 0))  for m in range(1, 13)]
+            no_visit_m = [
+                max(0, len(active_by_month.get(m, ())) -
+                       len(v["visited_dates_by_month"].get(m, ())))
+                for m in range(1, 13)
+            ]
             bde_rows.append({
                 "bde":           display,
                 "state":         _primary_state(v["state_counts"]),
@@ -4964,6 +4983,9 @@ def visit_summary():
                 "visit_days":    v["visit_days"],
                 "active_days":   len(bde_active),
                 "no_visit_days": no_visit_days,
+                "shops_by_month":         shops_m,
+                "visit_days_by_month":    visits_m,
+                "no_visit_days_by_month": no_visit_m,
             })
         out["by_bde"] = sorted(
             bde_rows,

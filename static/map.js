@@ -245,6 +245,44 @@ function drawDefaultShopCharts() {
   drawShopCharts("ALL", null, null);
 }
 
+// 12-month inline sparkline.  Renders a tiny SVG bar chart with a per-bar
+// <title> tooltip so hovering shows "<Mon>: <value>".  All sparklines in
+// the same column share a max scale so values are visually comparable.
+const SPARK_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun",
+                      "Jul","Aug","Sep","Oct","Nov","Dec"];
+function sparkline(values, color, maxVal) {
+  const arr = Array.isArray(values) ? values : [];
+  const n   = 12;
+  const W   = 60, H = 16;
+  const bw  = (W - (n - 1)) / n;     // 1-px gap between bars
+  const m   = Math.max(1, maxVal || Math.max(1, ...arr));
+  let bars  = "";
+  for (let i = 0; i < n; i++) {
+    const v = +arr[i] || 0;
+    const h = v > 0 ? Math.max(1, (v / m) * H) : 0;
+    const x = i * (bw + 1);
+    const y = H - h;
+    const fill = v > 0 ? color : "#e5e7eb";
+    const drawH = v > 0 ? h : 1;
+    const drawY = v > 0 ? y : H - 1;
+    bars += `<rect x="${x.toFixed(2)}" y="${drawY.toFixed(2)}" `
+          + `width="${bw.toFixed(2)}" height="${drawH.toFixed(2)}" `
+          + `fill="${fill}"><title>${SPARK_MONTHS[i]}: ${v}</title></rect>`;
+  }
+  return `<svg width="${W}" height="${H}" style="vertical-align:middle;">${bars}</svg>`;
+}
+
+// Element-wise sum of 12-month arrays (used for subtotal / total rows).
+function sumMonthly(rows, key) {
+  const out = new Array(12).fill(0);
+  for (const r of rows) {
+    const a = r[key];
+    if (!Array.isArray(a)) continue;
+    for (let i = 0; i < 12; i++) out[i] += +a[i] || 0;
+  }
+  return out;
+}
+
 function renderBdeVisitTable(data) {
   const tbody = document.querySelector("#bdeVisitTable tbody");
   const totalsEl = document.getElementById("bdeVisitTotals");
@@ -267,7 +305,7 @@ function renderBdeVisitTable(data) {
   // Group rows by state, in the same order the rows arrive (backend
   // already sorts NSW → QLD → VIC → SA → WA → others), so the table
   // visually keeps that order while we inject per-state subtotal rows.
-  const buckets = [];   // [{state, rows: [...]}, ...]
+  const buckets = [];
   const seen = new Map();
   for (const r of rows) {
     const st = r.state;
@@ -279,22 +317,62 @@ function renderBdeVisitTable(data) {
     seen.get(st).rows.push(r);
   }
 
+  // Shared max scale per metric so sparklines are visually comparable
+  // across BDEs (including subtotal / total rows, which use summed
+  // arrays).  Compute per-row sums for the subtotal/total scale.
+  const stateSums = buckets.map(b => ({
+    shops:   sumMonthly(b.rows, "shops_by_month"),
+    visits:  sumMonthly(b.rows, "visit_days_by_month"),
+    novisit: sumMonthly(b.rows, "no_visit_days_by_month"),
+  }));
+  const grandSums = {
+    shops:   sumMonthly(rows, "shops_by_month"),
+    visits:  sumMonthly(rows, "visit_days_by_month"),
+    novisit: sumMonthly(rows, "no_visit_days_by_month"),
+  };
+  const maxOf = (arr) => Math.max(1, ...arr);
+  const maxShops   = Math.max(maxOf(grandSums.shops),
+                              ...rows.map(r => maxOf(r.shops_by_month || [0])));
+  const maxVisits  = Math.max(maxOf(grandSums.visits),
+                              ...rows.map(r => maxOf(r.visit_days_by_month || [0])));
+  const maxNoVisit = Math.max(maxOf(grandSums.novisit),
+                              ...rows.map(r => maxOf(r.no_visit_days_by_month || [0])));
+
+  const COLOR_VISITED  = "#16a34a";   // green
+  const COLOR_VISITS   = "#2563eb";   // blue
+  const COLOR_NO_VISIT = "#dc2626";   // red
+
   const td       = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
   const tdLeft   = (v, extra = "") => `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">${v}</td>`;
-  const tdRedRight = (v) => td(v, "color:#c00;");
+  const tdMetric = (spark, total, extra = "") =>
+    `<td style="padding:3px 6px;border-bottom:1px solid #eee;${extra}">
+       <span style="display:inline-flex;align-items:center;gap:6px;">
+         ${spark}<span style="min-width:32px;text-align:right;">${total}</span>
+       </span>
+     </td>`;
 
-  // Per-BDE row vs subtotal/total row use the same column layout but
-  // subtotals/total get a darker background for visual separation.
-  const subStyle  = "background:#cbd5e1;font-weight:600;";   // slate-300
-  const totStyle  = "background:#94a3b8;font-weight:700;color:#fff;"; // slate-400
-  const subTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${subStyle}${extra}">${v}</td>`;
+  const subStyle = "background:#cbd5e1;font-weight:600;";
+  const totStyle = "background:#94a3b8;font-weight:700;color:#fff;";
+  const subTd    = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${subStyle}${extra}">${v}</td>`;
   const subTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${subStyle}${extra}">${v}</td>`;
-  const totTd     = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
+  const subTdMetric = (spark, total, extra = "") =>
+    `<td style="padding:3px 6px;${subStyle}${extra}">
+       <span style="display:inline-flex;align-items:center;gap:6px;">
+         ${spark}<span style="min-width:32px;text-align:right;">${total}</span>
+       </span>
+     </td>`;
+  const totTd    = (v, extra = "") => `<td style="text-align:right;padding:3px 6px;${totStyle}${extra}">${v}</td>`;
   const totTdLeft = (v, extra = "") => `<td style="padding:3px 6px;${totStyle}${extra}">${v}</td>`;
+  const totTdMetric = (spark, total, extra = "") =>
+    `<td style="padding:3px 6px;${totStyle}${extra}">
+       <span style="display:inline-flex;align-items:center;gap:6px;">
+         ${spark}<span style="min-width:32px;text-align:right;">${total}</span>
+       </span>
+     </td>`;
 
   let html = "";
   let gShops = 0, gVisitedShops = 0, gVisits = 0, gNoVisit = 0;
-  for (const b of buckets) {
+  buckets.forEach((b, bi) => {
     let sShops = 0, sVisitedShops = 0, sVisits = 0, sNoVisit = 0;
     for (const r of b.rows) {
       sShops        += +r.total_shops   || 0;
@@ -305,31 +383,32 @@ function renderBdeVisitTable(data) {
         ${tdLeft(r.state || "-", "color:#666;")}
         ${tdLeft(r.bde)}
         ${td(r.total_shops)}
-        ${td(r.shops_visited)}
-        ${td(r.visit_days)}
-        ${tdRedRight(r.no_visit_days ?? "-")}
+        ${tdMetric(sparkline(r.shops_by_month,         COLOR_VISITED,  maxShops),   r.shops_visited)}
+        ${tdMetric(sparkline(r.visit_days_by_month,    COLOR_VISITS,   maxVisits),  r.visit_days)}
+        ${tdMetric(sparkline(r.no_visit_days_by_month, COLOR_NO_VISIT, maxNoVisit), r.no_visit_days ?? "-", "color:#c00;")}
       </tr>`;
     }
+    const ss = stateSums[bi];
     html += `<tr>
       ${subTdLeft(b.state)}
       ${subTdLeft("")}
       ${subTd(sShops)}
-      ${subTd(sVisitedShops)}
-      ${subTd(sVisits)}
-      ${subTd(sNoVisit, "color:#c00;")}
+      ${subTdMetric(sparkline(ss.shops,   COLOR_VISITED,  maxShops),   sVisitedShops)}
+      ${subTdMetric(sparkline(ss.visits,  COLOR_VISITS,   maxVisits),  sVisits)}
+      ${subTdMetric(sparkline(ss.novisit, COLOR_NO_VISIT, maxNoVisit), sNoVisit, "color:#c00;")}
     </tr>`;
     gShops        += sShops;
     gVisitedShops += sVisitedShops;
     gVisits       += sVisits;
     gNoVisit      += sNoVisit;
-  }
+  });
   html += `<tr>
     ${totTdLeft("All")}
     ${totTdLeft("Total")}
     ${totTd(gShops)}
-    ${totTd(gVisitedShops)}
-    ${totTd(gVisits)}
-    ${totTd(gNoVisit)}
+    ${totTdMetric(sparkline(grandSums.shops,   COLOR_VISITED,  maxShops),   gVisitedShops)}
+    ${totTdMetric(sparkline(grandSums.visits,  COLOR_VISITS,   maxVisits),  gVisits)}
+    ${totTdMetric(sparkline(grandSums.novisit, COLOR_NO_VISIT, maxNoVisit), gNoVisit)}
   </tr>`;
 
   tbody.innerHTML = html;
