@@ -5827,8 +5827,9 @@ def _ensure_meeting_log_table():
                 created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 bde_email    VARCHAR(120) NOT NULL DEFAULT '',
                 bde_name     VARCHAR(120) NOT NULL DEFAULT '',
-                sold_to      VARCHAR(32)  NOT NULL DEFAULT '',
-                ship_to      VARCHAR(32)  NOT NULL DEFAULT '',
+                sold_to      VARCHAR(64)  NOT NULL DEFAULT '',
+                sold_to_name VARCHAR(160) NOT NULL DEFAULT '',
+                ship_to      VARCHAR(64)  NOT NULL DEFAULT '',
                 met_person   VARCHAR(120) NOT NULL DEFAULT '',
                 notes        TEXT,
                 next_action  TEXT,
@@ -5838,6 +5839,30 @@ def _ensure_meeting_log_table():
                 INDEX  idx_meeting_bde     (bde_name)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # Idempotent widening for tables created by an earlier version
+        # of this function (sold_to was VARCHAR(32) — too narrow for
+        # full sold-to names that the form sends before resolution).
+        for col, defn in (
+            ("sold_to",      "VARCHAR(64)  NOT NULL DEFAULT ''"),
+            ("ship_to",      "VARCHAR(64)  NOT NULL DEFAULT ''"),
+            ("sold_to_name", "VARCHAR(160) NOT NULL DEFAULT ''"),
+        ):
+            try:
+                if col == "sold_to_name":
+                    cur.execute("ALTER TABLE meeting_log "
+                                "ADD COLUMN IF NOT EXISTS sold_to_name "
+                                "VARCHAR(160) NOT NULL DEFAULT '' AFTER sold_to")
+                else:
+                    cur.execute(f"ALTER TABLE meeting_log MODIFY COLUMN {col} {defn}")
+            except Exception as e:
+                # Older MySQL doesn't support IF NOT EXISTS on ADD COLUMN — try plain.
+                if "IF NOT EXISTS" in str(e).upper() or "1064" in str(e):
+                    try:
+                        cur.execute("ALTER TABLE meeting_log "
+                                    "ADD COLUMN sold_to_name VARCHAR(160) NOT NULL DEFAULT '' AFTER sold_to")
+                    except Exception:
+                        pass
+                # Already correct size / column already there — silent.
         conn.commit()
         cur.close(); conn.close()
         os.makedirs(MEETING_PHOTO_DIR, exist_ok=True)
@@ -5887,7 +5912,7 @@ def meeting_post():
     try:
         bde_email = _bde_from_request()
         bde_name  = (request.form.get("bde_name") or "").strip()
-        sold_to   = (request.form.get("sold_to")  or "").strip()
+        sold_in   = (request.form.get("sold_to")  or "").strip()
         ship_to   = (request.form.get("ship_to")  or "").strip()
         met       = (request.form.get("met_person") or "").strip()
         notes     = (request.form.get("notes") or "").strip()
@@ -5897,6 +5922,43 @@ def meeting_post():
             return jsonify({"error": "ship_to is required"}), 400
         if not notes:
             return jsonify({"error": "notes is required"}), 400
+
+        # The Sold-to picker submits the NAME (because /api/sold_to_names
+        # only exposes names).  We resolve it to a sold-to CODE via the
+        # customer master so meeting_log lines up with the rest of the
+        # database.  If lookup fails, fall back to storing the raw input
+        # truncated to fit the column.
+        sold_to, sold_to_name = "", sold_in
+        if sold_in:
+            try:
+                _conn = get_connection()
+                _cur  = _conn.cursor(dictionary=True)
+                # If ship_to is known, prefer the sold_to that actually
+                # owns this ship_to (handles the rare case of two sold_tos
+                # sharing a sold_to_name).
+                if ship_to:
+                    _cur.execute(
+                        "SELECT sold_to, sold_to_name FROM customer "
+                        "WHERE ship_to = %s LIMIT 1", (ship_to,))
+                    r = _cur.fetchone()
+                    if r and r["sold_to"]:
+                        sold_to      = str(r["sold_to"])
+                        sold_to_name = (r["sold_to_name"] or sold_in).strip()
+                if not sold_to:
+                    _cur.execute(
+                        "SELECT sold_to FROM customer "
+                        "WHERE TRIM(sold_to_name) = %s "
+                        "ORDER BY sold_to LIMIT 1", (sold_in,))
+                    r = _cur.fetchone()
+                    if r and r["sold_to"]:
+                        sold_to = str(r["sold_to"])
+                _cur.close(); _conn.close()
+            except Exception as e:
+                print(f"[meeting] sold_to resolve failed: {e}")
+        # Belt-and-braces in case lookup failed and the raw input is huge:
+        sold_to      = (sold_to or sold_in)[:64]
+        sold_to_name = sold_to_name[:160]
+        ship_to      = ship_to[:64]
 
         # Save uploaded photos under static/meeting_photos/YYYY/MM/...
         # using <timestamp>_<ship_to>_<idx>.<ext>.  Up to 5 files honoured;
@@ -5926,10 +5988,10 @@ def meeting_post():
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
             INSERT INTO meeting_log
-                (bde_email, bde_name, sold_to, ship_to, met_person,
-                 notes, next_action, photo_paths)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (bde_email, bde_name, sold_to, ship_to, met,
+                (bde_email, bde_name, sold_to, sold_to_name, ship_to,
+                 met_person, notes, next_action, photo_paths)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (bde_email, bde_name, sold_to, sold_to_name, ship_to, met,
               notes, next_act, ",".join(saved) if saved else None))
         new_id = cur.lastrowid
         conn.commit()
@@ -5961,7 +6023,9 @@ def meeting_list():
                    m.sold_to, m.ship_to, m.met_person,
                    m.notes, m.next_action, m.photo_paths,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
-                   COALESCE(NULLIF(TRIM(c.sold_to_name),''), m.sold_to) AS sold_to_name
+                   COALESCE(NULLIF(TRIM(c.sold_to_name),''),
+                            NULLIF(TRIM(m.sold_to_name),''),
+                            m.sold_to) AS sold_to_name
             FROM meeting_log m
             LEFT JOIN (
                 SELECT ship_to,
