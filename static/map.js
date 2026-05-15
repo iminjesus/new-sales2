@@ -261,6 +261,7 @@ const BDE_METRICS = {
   shops:   { key: "shops_by_month",         label: "Visited Shop",   rgb: [22, 163, 74]  },
   visits:  { key: "visit_days_by_month",    label: "Visits",         rgb: [37, 99, 235]  },
   novisit: { key: "no_visit_days_by_month", label: "No-Visit Days",  rgb: [220, 38, 38]  },
+  logs:    { key: "logs_by_month",          label: "Logs",           rgb: [124, 58, 237] },  // violet
 };
 
 // Element-wise sum of 12-month arrays (used for subtotal / total rows).
@@ -370,6 +371,7 @@ function renderBdeVisitTable(data) {
   // Total column = the single metric currently displayed (YTD).
   const totalKey = _bdeMetric === "shops"  ? "shops_visited"
                  : _bdeMetric === "visits" ? "visit_days"
+                 : _bdeMetric === "logs"   ? "logs_total"
                  :                            "no_visit_days";
 
   let html = "";
