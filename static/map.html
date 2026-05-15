@@ -257,11 +257,56 @@
                 style="background:transparent;border:none;color:#fff;font-size:18px;
                        cursor:pointer;line-height:1;padding:2px 6px;">×</button>
       </div>
-      <div id="visitLogBody" style="overflow:auto;padding:12px 16px;">
+      <div id="visitLogBody" style="overflow:auto;padding:12px 16px;background:#f8fafc;">
         <div style="color:#9ca3af;font-size:12px;text-align:center;padding:18px;">Loading…</div>
       </div>
     </div>
   </div>
+  <style>
+    /* Visit-log card layout (used by the modal) */
+    .vl-card{
+      background:#fff;border:1px solid #e5e7eb;border-radius:8px;
+      box-shadow:0 1px 2px rgba(0,0,0,.03);
+      padding:0;margin:0 0 10px;overflow:hidden;
+    }
+    .vl-head{
+      display:flex;justify-content:space-between;align-items:baseline;
+      gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe;
+    }
+    .vl-bde{font-weight:700;color:#1e3a5f;font-size:13px}
+    .vl-date{color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums}
+    .vl-row{
+      display:flex;align-items:flex-start;gap:10px;
+      padding:7px 12px;border-bottom:1px solid #f1f5f9;
+    }
+    .vl-row:last-of-type{border-bottom:none}
+    .vl-lbl{
+      flex:0 0 86px;font-size:10px;font-weight:600;
+      text-transform:uppercase;letter-spacing:.4px;color:#6b7280;
+      padding-top:2px;
+    }
+    .vl-val{flex:1;font-size:13px;color:#111827;min-width:0}
+    .vl-notes-body{white-space:pre-wrap;line-height:1.45}
+    .vl-next .vl-val{color:#1d4ed8}
+    .vl-met .vl-val{color:#374151;font-style:italic}
+    .vl-photos .vl-val{display:flex;flex-wrap:wrap}
+    .vl-fb-wrap{padding:0 12px 10px}
+    .vl-fb-box{
+      margin-top:2px;padding:8px 10px;border-radius:6px;
+      background:#fef3c7;border-left:3px solid #f59e0b;
+      font-size:12px;color:#78350f;white-space:pre-wrap;
+    }
+    .vl-fb-box .vl-fb-head{
+      display:flex;justify-content:space-between;align-items:center;
+      font-size:10px;font-weight:700;text-transform:uppercase;
+      letter-spacing:.4px;color:#92400e;margin-bottom:3px;
+    }
+    .vl-fb-box .vl-fb-edit{color:#9a3412;text-decoration:none;font-weight:400;text-transform:none;letter-spacing:0;}
+    .vl-fb-add{
+      display:inline-block;margin-top:2px;
+      font-size:11px;color:#2563eb;text-decoration:none;
+    }
+  </style>
   <script>
     function _vlEsc(s){
       return String(s == null ? "" : s)
@@ -272,17 +317,17 @@
       const has = feedback && feedback.trim().length;
       if (has){
         const safeJson = JSON.stringify(feedback);
-        return `<div style="padding:4px 8px;background:#fef3c7;border-left:3px solid #f59e0b;
-                  border-radius:3px;font-size:12px;color:#78350f;white-space:pre-wrap;">
-          <div style="display:flex;justify-content:space-between;gap:6px;">
-            <span><b>Feedback:</b> ${_vlEsc(feedback)}</span>
-            <a href="javascript:void(0)" onclick='_vlToggleFb(${rid}, ${safeJson})'
-               style="font-size:10px;color:#9a3412;">edit</a>
+        return `<div class="vl-fb-box">
+          <div class="vl-fb-head">
+            <span>Feedback</span>
+            <a href="javascript:void(0)" class="vl-fb-edit"
+               onclick='_vlToggleFb(${rid}, ${safeJson})'>edit</a>
           </div>
+          <div>${_vlEsc(feedback)}</div>
         </div>`;
       }
-      return `<a href="javascript:void(0)" onclick="_vlToggleFb(${rid}, '')"
-                 style="font-size:11px;color:#2563eb;">+ Add feedback</a>`;
+      return `<a href="javascript:void(0)" class="vl-fb-add"
+                 onclick="_vlToggleFb(${rid}, '')">+ Add feedback</a>`;
     }
     function _vlToggleFb(rid, current){
       const el = document.getElementById("mapFb-" + rid);
@@ -347,22 +392,39 @@
         const html = rows.map(e => {
           const photos = (e.photo_paths || [])
             .map(p => `<a href="${_vlEsc(p)}" target="_blank">`
-                    + `<img src="${_vlEsc(p)}" style="width:50px;height:50px;`
-                    + `object-fit:cover;border-radius:4px;border:1px solid #e5e7eb;margin-right:4px;">`
+                    + `<img src="${_vlEsc(p)}" style="width:60px;height:60px;`
+                    + `object-fit:cover;border-radius:4px;border:1px solid #e5e7eb;margin:0 4px 4px 0;">`
                     + `</a>`).join("");
-          const next = e.next_action
-            ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${_vlEsc(e.next_action)}</div>` : "";
-          const met = e.met_person
-            ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${_vlEsc(e.met_person)}</div>` : "";
-          return `<div style="padding:10px 0;border-bottom:1px solid #f1f5f9;">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
-              <span style="font-weight:600;color:#1e3a5f;">${_vlEsc(e.bde_name || "—")}</span>
-              <span style="color:#6b7280;font-size:11px;">${_vlEsc(e.visit_date || e.created_at)}</span>
+          const metRow  = e.met_person ? `
+            <div class="vl-row vl-met">
+              <span class="vl-lbl">Met</span>
+              <span class="vl-val">${_vlEsc(e.met_person)}</span>
+            </div>` : "";
+          const notesRow = e.notes ? `
+            <div class="vl-row vl-notes">
+              <span class="vl-lbl">Meeting notes</span>
+              <div class="vl-val vl-notes-body">${_vlEsc(e.notes)}</div>
+            </div>` : "";
+          const nextRow = e.next_action ? `
+            <div class="vl-row vl-next">
+              <span class="vl-lbl">Next step</span>
+              <span class="vl-val">→ ${_vlEsc(e.next_action)}</span>
+            </div>` : "";
+          const photosRow = photos ? `
+            <div class="vl-row vl-photos">
+              <span class="vl-lbl">Photos</span>
+              <div class="vl-val">${photos}</div>
+            </div>` : "";
+          return `<div class="vl-card">
+            <div class="vl-head">
+              <span class="vl-bde">${_vlEsc(e.bde_name || "—")}</span>
+              <span class="vl-date">${_vlEsc(e.visit_date || e.created_at)}</span>
             </div>
-            <div style="margin-top:4px;font-size:13px;color:#111827;white-space:pre-wrap;">${_vlEsc(e.notes || "")}</div>
-            ${next}${met}
-            ${photos ? `<div style="margin-top:6px;">${photos}</div>` : ""}
-            <div id="mapFb-${e.id}" style="margin-top:6px;">${_vlRenderFeedback(e.id, e.feedback)}</div>
+            ${metRow}
+            ${notesRow}
+            ${nextRow}
+            ${photosRow}
+            <div id="mapFb-${e.id}" class="vl-fb-wrap">${_vlRenderFeedback(e.id, e.feedback)}</div>
           </div>`;
         }).join("");
         body.innerHTML = html;
