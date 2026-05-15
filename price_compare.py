@@ -320,6 +320,7 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
     <a href="/stock">Stock</a>
     <a href="/rebate">Rebate</a>
     <a href="/price" class="active">Price</a>
+    <a href="/meeting">Meeting</a>
   </nav>
 </div>
 

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BDE Visit Log</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111827;font-size:13px}
+header{background:#1e3a5f;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:12px}
+header h1{font-size:14px;font-weight:700}
+header .sub{font-size:10px;opacity:.55}
+header .nav{margin-left:auto;display:flex;gap:6px}
+.btn{border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600;border:1px solid #d1d5db;background:#fff;color:#374151}
+.btn:hover{background:#f9fafb}
+.btn-primary{background:#2563eb;color:#fff;border-color:#2563eb}
+.btn-primary:hover{background:#1d4ed8}
+.btn.active{background:#374151;color:#fff;border-color:#374151}
+.container{padding:14px 16px;max-width:980px;margin:0 auto}
+.card{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:12px}
+.card h2{font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media (max-width:640px){.grid{grid-template-columns:1fr}}
+.field{display:flex;flex-direction:column;gap:3px}
+.field label{font-size:11px;color:#6b7280;font-weight:600}
+.field label .req{color:#dc2626}
+.field input,.field select,.field textarea{border:1px solid #d1d5db;border-radius:6px;padding:7px 9px;font-size:13px;font-family:inherit;width:100%;background:#fff}
+.field textarea{resize:vertical;min-height:80px}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:#2563eb}
+.field.col-full{grid-column:1/-1}
+.bde-id-line{font-size:11px;color:#6b7280;padding:6px 9px;background:#f3f4f6;border-radius:6px;margin-bottom:6px}
+.bde-id-line b{color:#1e3a5f}
+.submit-row{display:flex;gap:10px;align-items:center;margin-top:8px}
+#submitMsg{font-size:12px}
+#submitMsg.ok{color:#16a34a}
+#submitMsg.err{color:#dc2626}
+.recent-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.recent-tbl th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb}
+.recent-tbl td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+.recent-tbl tr:hover td{background:#fafafa}
+.recent-tbl .ts{color:#6b7280;font-size:11px;white-space:nowrap}
+.recent-tbl .bde{font-weight:600;color:#1e3a5f}
+.recent-tbl .shop{color:#374151}
+.recent-tbl .notes{color:#111827}
+.recent-tbl .photos a{display:inline-block;margin-right:4px}
+.recent-tbl .photos img{width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #e5e7eb}
+.empty{padding:18px;text-align:center;color:#9ca3af;font-size:12px}
+.filt{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.filt label{font-size:11px;color:#6b7280}
+.filt select,.filt input{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>BDE Visit Log</h1>
+  <span class="sub">post-visit memo · 1 min</span>
+  <div class="nav">
+    <button class="btn" onclick="location.href='/'">Graph View</button>
+    <button class="btn" onclick="location.href='/map'">Map View</button>
+    <button class="btn" onclick="location.href='/stock'">Stock</button>
+    <button class="btn" onclick="location.href='/rebate'">Rebate</button>
+    <button class="btn" onclick="location.href='/price'">Price</button>
+    <button class="btn active">Meeting</button>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- ── New entry form ── -->
+  <div class="card">
+    <h2>New visit</h2>
+    <div id="bdeIdLine" class="bde-id-line" style="display:none;">
+      Signed in as <b id="bdeIdEmail">…</b>
+    </div>
+
+    <form id="meetingForm">
+      <div class="grid">
+        <div class="field">
+          <label>BDE <span class="req">*</span></label>
+          <select id="fBde" required>
+            <option value="">— select —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Visit time</label>
+          <input id="fTime" type="text" readonly value="" style="background:#f9fafb;color:#6b7280;">
+        </div>
+
+        <div class="field">
+          <label>Sold-to <span class="req">*</span></label>
+          <select id="fSold" required>
+            <option value="">— select sold-to —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Ship-to <span class="req">*</span></label>
+          <select id="fShip" required disabled>
+            <option value="">— pick sold-to first —</option>
+          </select>
+        </div>
+
+        <div class="field col-full">
+          <label>Met person <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
+          <input id="fMet" type="text" placeholder="e.g. store manager, owner, …">
+        </div>
+
+        <div class="field col-full">
+          <label>Meeting notes <span class="req">*</span></label>
+          <textarea id="fNotes" required placeholder="What happened — orders, complaints, conversation summary"></textarea>
+        </div>
+
+        <div class="field col-full">
+          <label>Next action <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
+          <input id="fNext" type="text" placeholder="Follow-up needed, deadline, …">
+        </div>
+
+        <div class="field col-full">
+          <label>Photos <span style="color:#9ca3af;font-weight:400;">(optional — up to 5, jpg/png/webp/heic)</span></label>
+          <input id="fPhotos" type="file" accept="image/*" multiple capture="environment">
+        </div>
+      </div>
+
+      <div class="submit-row">
+        <button type="submit" class="btn btn-primary">Submit</button>
+        <span id="submitMsg"></span>
+      </div>
+    </form>
+  </div>
+
+  <!-- ── Recent entries ── -->
+  <div class="card">
+    <h2>Recent entries</h2>
+    <div class="filt">
+      <label>BDE</label>
+      <select id="filtBde"><option value="">All</option></select>
+      <label>Ship-to</label>
+      <input id="filtShip" type="text" placeholder="e.g. A029737" style="width:140px;">
+      <button class="btn" id="btnRefresh">Refresh</button>
+    </div>
+    <div id="recentWrap"><div class="empty">Loading…</div></div>
+  </div>
+
+</div>
+
+<script>
+const fBde   = document.getElementById("fBde");
+const fSold  = document.getElementById("fSold");
+const fShip  = document.getElementById("fShip");
+const fTime  = document.getElementById("fTime");
+const fForm  = document.getElementById("meetingForm");
+const fMsg   = document.getElementById("submitMsg");
+const filtBde  = document.getElementById("filtBde");
+const filtShip = document.getElementById("filtShip");
+
+// Clock for the read-only "visit time" field — purely informational so
+// the BDE sees the timestamp that will be recorded server-side.
+function tickClock(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  fTime.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `
+              + `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+setInterval(tickClock, 30_000); tickClock();
+
+async function fetchJSON(url){
+  const r = await fetch(url, {credentials: "include"});
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+  return r.json();
+}
+
+// Auto-fill the BDE picker from /api/bdes_active.  If Cloudflare Access
+// gave us an authenticated email (via the Cf-Access-Authenticated-User-Email
+// header on the page request), match it to a BDE name; otherwise the user
+// picks manually.  The email shown is for transparency only.
+async function loadBdes(){
+  const list = await fetchJSON("/api/bdes_active").catch(() => []);
+  const opts = ['<option value="">— select —</option>',
+                ...list.map(n => `<option value="${n}">${n}</option>`)];
+  fBde.innerHTML    = opts.join("");
+  filtBde.innerHTML = ['<option value="">All</option>',
+                       ...list.map(n => `<option value="${n}">${n}</option>`)].join("");
+
+  // If the server can see who's logged in via CF Access we surface it
+  // here.  No header → just leave the manual picker.
+  // (Page won't have the CF header itself, but a quick ping endpoint
+  // would; for now this stays manual until we add /api/whoami.)
+}
+
+async function loadSoldTos(){
+  // /api/sold_to_names returns an array of sold_to NAMES (the cascade
+  // expects the picked NAME as ?sold_to=… on /api/ship_to_names).
+  const list = await fetchJSON("/api/sold_to_names?metric=amt").catch(() => []);
+  const opts = ['<option value="">— select sold-to —</option>'];
+  for (const name of list){
+    if (!name) continue;
+    opts.push(`<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`);
+  }
+  fSold.innerHTML = opts.join("");
+}
+
+async function loadShipTosFor(soldToName){
+  fShip.disabled = true;
+  fShip.innerHTML = '<option value="">loading…</option>';
+  if (!soldToName){
+    fShip.innerHTML = '<option value="">— pick sold-to first —</option>';
+    return;
+  }
+  const qs = new URLSearchParams({ sold_to: soldToName, metric: "amt" }).toString();
+  // /api/ship_to_names returns [{code, name}, …] filtered by the picked
+  // sold-to name.  We store the CODE so the dashboard can join cleanly.
+  const list = await fetchJSON("/api/ship_to_names?" + qs).catch(() => []);
+  const opts = ['<option value="">— select ship-to —</option>'];
+  for (const row of list){
+    const code = (row && (row.code || row.ship_to)) || "";
+    const name = (row && (row.name || row.ship_to_name)) || "";
+    if (!code) continue;
+    const label = name ? `${code} — ${name}` : code;
+    opts.push(`<option value="${escapeAttr(code)}">${escapeHtml(label)}</option>`);
+  }
+  fShip.innerHTML = opts.join("");
+  fShip.disabled = false;
+}
+
+function escapeAttr(s){
+  return String(s == null ? "" : s).replace(/"/g, "&quot;").replace(/&/g, "&amp;");
+}
+
+fSold.addEventListener("change", () => loadShipTosFor(fSold.value));
+
+async function loadRecent(){
+  const wrap = document.getElementById("recentWrap");
+  wrap.innerHTML = '<div class="empty">Loading…</div>';
+  const qs = new URLSearchParams();
+  if (filtBde.value)  qs.set("bde",     filtBde.value);
+  if (filtShip.value) qs.set("ship_to", filtShip.value.trim());
+  qs.set("limit", "100");
+  const rows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
+  if (!Array.isArray(rows) || !rows.length){
+    wrap.innerHTML = '<div class="empty">No entries yet.</div>';
+    return;
+  }
+  let h = `<table class="recent-tbl">
+    <thead><tr>
+      <th>Time</th><th>BDE</th><th>Shop</th><th>Notes / Next</th><th>Photos</th>
+    </tr></thead><tbody>`;
+  for (const r of rows){
+    const photos = (r.photo_paths || [])
+      .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
+      .join("");
+    const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
+    h += `<tr>
+      <td class="ts">${r.created_at}</td>
+      <td class="bde">${escapeHtml(r.bde_name || "—")}</td>
+      <td class="shop">${escapeHtml(r.ship_to)}<br><span style="color:#6b7280;font-size:11px;">${escapeHtml(r.ship_to_name || "")}</span></td>
+      <td class="notes">${escapeHtml(r.notes || "")}${next}${r.met_person ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : ""}</td>
+      <td class="photos">${photos}</td>
+    </tr>`;
+  }
+  h += `</tbody></table>`;
+  wrap.innerHTML = h;
+}
+
+function escapeHtml(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+fForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  fMsg.textContent = "Submitting…"; fMsg.className = "";
+  const fd = new FormData();
+  fd.append("bde_name",    fBde.value);
+  fd.append("sold_to",     fSold.value);
+  fd.append("ship_to",     fShip.value);
+  fd.append("met_person",  document.getElementById("fMet").value);
+  fd.append("notes",       document.getElementById("fNotes").value);
+  fd.append("next_action", document.getElementById("fNext").value);
+  const files = document.getElementById("fPhotos").files;
+  for (let i = 0; i < Math.min(files.length, 5); i++){
+    fd.append("photos", files[i]);
+  }
+  try {
+    const r = await fetch("/api/meeting", { method:"POST", body: fd, credentials:"include" });
+    const j = await r.json();
+    if (!r.ok || j.error){
+      fMsg.textContent = "Failed: " + (j.error || r.status);
+      fMsg.className = "err";
+      return;
+    }
+    fMsg.textContent = `Saved (#${j.id})`;
+    fMsg.className = "ok";
+    // Reset writable fields, keep BDE selection.
+    document.getElementById("fNotes").value = "";
+    document.getElementById("fNext").value  = "";
+    document.getElementById("fMet").value   = "";
+    document.getElementById("fPhotos").value = "";
+    fShip.value = "";
+    loadRecent();
+    setTimeout(() => { fMsg.textContent = ""; }, 4000);
+  } catch (err) {
+    fMsg.textContent = "Error: " + err.message;
+    fMsg.className = "err";
+  }
+});
+
+document.getElementById("btnRefresh").addEventListener("click", loadRecent);
+filtBde.addEventListener("change", loadRecent);
+filtShip.addEventListener("change", loadRecent);
+
+(async () => {
+  await loadBdes();
+  await loadSoldTos();
+  await loadRecent();
+})();
+</script>
+</body>
+</html>

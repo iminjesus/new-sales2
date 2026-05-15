@@ -5810,6 +5810,180 @@ def api_rebate_export():
 # Build fixed Top 10/20/30 once at startup (after functions are defined)
 build_global_top_once()
 
+# ------------------------------------------------------------------------------
+# BDE Visit / Meeting Log — page at /meeting, backed by meeting_log table.
+# ------------------------------------------------------------------------------
+
+MEETING_PHOTO_DIR = os.path.join(BASE_DIR, "static", "meeting_photos")
+
+def _ensure_meeting_log_table():
+    """Create the meeting_log table on startup if it doesn't exist."""
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS meeting_log (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                bde_email    VARCHAR(120) NOT NULL DEFAULT '',
+                bde_name     VARCHAR(120) NOT NULL DEFAULT '',
+                sold_to      VARCHAR(32)  NOT NULL DEFAULT '',
+                ship_to      VARCHAR(32)  NOT NULL DEFAULT '',
+                met_person   VARCHAR(120) NOT NULL DEFAULT '',
+                notes        TEXT,
+                next_action  TEXT,
+                photo_paths  TEXT,
+                INDEX  idx_meeting_ship_to (ship_to),
+                INDEX  idx_meeting_created (created_at),
+                INDEX  idx_meeting_bde     (bde_name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.commit()
+        cur.close(); conn.close()
+        os.makedirs(MEETING_PHOTO_DIR, exist_ok=True)
+    except Exception as e:
+        print(f"[meeting_log] schema init failed: {e}")
+
+_ensure_meeting_log_table()
+
+def _bde_from_request():
+    """Best-effort 'who is logged in'.  Cloudflare Access (if it's in
+    front of the app) injects Cf-Access-Authenticated-User-Email; behind
+    Tailscale / local dev that header is absent, so the form also sends
+    bde_name as a fallback (manual pick)."""
+    email = (request.headers.get("Cf-Access-Authenticated-User-Email")
+             or request.headers.get("cf-access-authenticated-user-email")
+             or "").strip().lower()
+    return email
+
+@app.get("/meeting")
+def meeting_page():
+    return send_from_directory("static", "meeting.html")
+
+@app.get("/api/bdes_active")
+def bdes_active():
+    """Distinct salesman names from the customer master, dropdown source
+    for the meeting form."""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT DISTINCT TRIM(salesman_name) AS name
+            FROM customer
+            WHERE salesman_name IS NOT NULL
+              AND TRIM(salesman_name) <> ''
+              AND TRIM(salesman_name) <> '#N/A'
+            ORDER BY name
+        """)
+        out = [r["name"] for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/meeting")
+def meeting_post():
+    """Insert one visit-log entry.  Accepts multipart/form-data so the
+    optional photo uploads (up to 5 files) can come in the same request."""
+    try:
+        bde_email = _bde_from_request()
+        bde_name  = (request.form.get("bde_name") or "").strip()
+        sold_to   = (request.form.get("sold_to")  or "").strip()
+        ship_to   = (request.form.get("ship_to")  or "").strip()
+        met       = (request.form.get("met_person") or "").strip()
+        notes     = (request.form.get("notes") or "").strip()
+        next_act  = (request.form.get("next_action") or "").strip()
+
+        if not ship_to:
+            return jsonify({"error": "ship_to is required"}), 400
+        if not notes:
+            return jsonify({"error": "notes is required"}), 400
+
+        # Save uploaded photos under static/meeting_photos/YYYY/MM/...
+        # using <timestamp>_<ship_to>_<idx>.<ext>.  Up to 5 files honoured;
+        # everything else discarded.
+        saved = []
+        files = request.files.getlist("photos") or []
+        if files:
+            now    = datetime.now()
+            subdir = os.path.join(MEETING_PHOTO_DIR,
+                                  f"{now.year:04d}", f"{now.month:02d}")
+            os.makedirs(subdir, exist_ok=True)
+            ts = now.strftime("%Y%m%d_%H%M%S")
+            for i, f in enumerate(files[:5]):
+                if not f or not f.filename:
+                    continue
+                ext = os.path.splitext(f.filename)[1].lower()
+                if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+                    continue
+                safe_ship = "".join(c for c in ship_to if c.isalnum()) or "X"
+                fname = f"{ts}_{safe_ship}_{i}{ext}"
+                path  = os.path.join(subdir, fname)
+                f.save(path)
+                # Store the URL relative to /static so the frontend can
+                # link straight to it.
+                saved.append(f"/static/meeting_photos/{now.year:04d}/{now.month:02d}/{fname}")
+
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO meeting_log
+                (bde_email, bde_name, sold_to, ship_to, met_person,
+                 notes, next_action, photo_paths)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (bde_email, bde_name, sold_to, ship_to, met,
+              notes, next_act, ",".join(saved) if saved else None))
+        new_id = cur.lastrowid
+        conn.commit()
+        cur.close(); conn.close()
+
+        return jsonify({"ok": True, "id": new_id, "photos": saved})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/api/meeting/list")
+def meeting_list():
+    """Recent entries.  Optional ?ship_to=… / ?bde=… / ?limit=N filters."""
+    try:
+        ship_to = (request.args.get("ship_to") or "").strip()
+        bde     = (request.args.get("bde")     or "").strip()
+        limit   = max(1, min(500, int(request.args.get("limit", 100) or 100)))
+
+        wh, params = [], []
+        if ship_to:
+            wh.append("m.ship_to = %s"); params.append(ship_to)
+        if bde:
+            wh.append("m.bde_name = %s"); params.append(bde)
+        where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT m.id, m.created_at, m.bde_email, m.bde_name,
+                   m.sold_to, m.ship_to, m.met_person,
+                   m.notes, m.next_action, m.photo_paths,
+                   COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
+                   COALESCE(NULLIF(TRIM(c.sold_to_name),''), m.sold_to) AS sold_to_name
+            FROM meeting_log m
+            LEFT JOIN (
+                SELECT ship_to,
+                       MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
+                       MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
+                FROM customer GROUP BY ship_to
+            ) c ON c.ship_to = m.ship_to
+            {where_sql}
+            ORDER BY m.created_at DESC
+            LIMIT {limit}
+        """, tuple(params))
+        rows = cur.fetchall()
+        for r in rows:
+            r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M")
+            r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
+        cur.close(); conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
     from price_compare import price_dashboard, load_all_months, build_data

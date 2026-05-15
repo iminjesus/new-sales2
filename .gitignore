@@ -14,3 +14,6 @@ BobJane_*.csv
 # Misc
 *.log
 .env
+
+# User-uploaded photos from /meeting (kept on disk, not tracked)
+static/meeting_photos/
