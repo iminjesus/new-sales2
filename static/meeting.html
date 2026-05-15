@@ -34,6 +34,39 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 #submitMsg{font-size:12px}
 #submitMsg.ok{color:#16a34a}
 #submitMsg.err{color:#dc2626}
+
+/* ── Custom searchable dropdown (same UX as the rest of the dashboard) ── */
+.dd{position:relative;display:flex;flex-direction:column;gap:3px;width:100%}
+.dd-wrap{display:flex;align-items:stretch;width:100%}
+.dd-wrap input{
+  flex:1;min-width:0;padding:7px 9px;
+  border:1px solid #d1d5db;border-right:none;border-radius:6px 0 0 6px;
+  font-size:13px;color:#374151;background:#fff;outline:none;
+  transition:border-color .12s,background .12s
+}
+.dd-wrap input:focus{border-color:#2563eb}
+.dd-wrap input:disabled{opacity:.55;cursor:not-allowed;background:#f3f4f6}
+.dd-btn{
+  padding:5px 9px;border:1px solid #d1d5db;border-right:none;
+  background:#f3f4f6;cursor:pointer;font-size:11px;color:#6b7280;
+  transition:background .12s;user-select:none
+}
+.dd-btn:hover:not(:disabled){background:#e5e7eb}
+.dd-btn:disabled{opacity:.5;cursor:not-allowed}
+.dd-btn.dd-clear-btn{color:#9ca3af}
+.dd-btn.dd-clear-btn:hover{background:#fee2e2;color:#ef4444}
+.dd-btn.dd-last{border-right:1px solid #d1d5db;border-radius:0 6px 6px 0}
+.dd.dd-active .dd-wrap input{border-color:#2563eb;background:#eff6ff;color:#1d4ed8;font-weight:600}
+.dd.dd-active .dd-btn{border-color:#2563eb;background:#dbeafe;color:#1d4ed8}
+.dd-menu{
+  position:absolute;top:calc(100% + 4px);left:0;right:0;
+  max-height:280px;overflow:auto;background:#fff;
+  border:1px solid #e5e7eb;border-radius:8px;
+  box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:9999;display:none
+}
+.dd-item{padding:7px 10px;cursor:pointer;white-space:nowrap;font-size:12px;color:#374151;overflow:hidden;text-overflow:ellipsis}
+.dd-item:hover,.dd-item.dd-item-active{background:#eff6ff;color:#2563eb}
+.dd-empty{padding:10px;color:#9ca3af;font-size:12px}
 .recent-tbl{width:100%;border-collapse:collapse;font-size:12px}
 .recent-tbl th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb}
 .recent-tbl td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
@@ -89,15 +122,25 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 
         <div class="field">
           <label>Sold-to <span class="req">*</span></label>
-          <select id="fSold" required>
-            <option value="">— select sold-to —</option>
-          </select>
+          <div class="dd" id="ddSold">
+            <div class="dd-wrap">
+              <input id="fSold" type="text" placeholder="Search sold-to…" autocomplete="off">
+              <button class="dd-btn dd-clear-btn" type="button" id="fSoldClear" title="Clear" tabindex="-1">×</button>
+              <button class="dd-btn dd-last" type="button" id="fSoldOpen" title="Show all" tabindex="-1">▼</button>
+            </div>
+            <div class="dd-menu" id="fSoldMenu"></div>
+          </div>
         </div>
         <div class="field">
           <label>Ship-to <span class="req">*</span></label>
-          <select id="fShip" required disabled>
-            <option value="">— pick sold-to first —</option>
-          </select>
+          <div class="dd" id="ddShip">
+            <div class="dd-wrap">
+              <input id="fShip" type="text" placeholder="— pick sold-to first —" autocomplete="off" disabled>
+              <button class="dd-btn dd-clear-btn" type="button" id="fShipClear" title="Clear" tabindex="-1" disabled>×</button>
+              <button class="dd-btn dd-last" type="button" id="fShipOpen" title="Show all" tabindex="-1" disabled>▼</button>
+            </div>
+            <div class="dd-menu" id="fShipMenu"></div>
+          </div>
         </div>
 
         <div class="field col-full">
@@ -153,6 +196,103 @@ const fMsg   = document.getElementById("submitMsg");
 const filtBde  = document.getElementById("filtBde");
 const filtShip = document.getElementById("filtShip");
 
+// ── Custom searchable dropdown ───────────────────────────────────
+// options = [{label, value}, …].  bindPicker wires the input/button/menu
+// so typing filters the list and clicking an item stores the chosen
+// value on `picker.value`.  Same UX as the dashboard's bindDropdown but
+// trimmed to just what /meeting needs (single-select, no chips).
+function ddOpen(menu){ menu.style.display = "block"; }
+function ddClose(menu){ menu.style.display = "none"; }
+function ddRender(menu, items, onPick){
+  menu.innerHTML = "";
+  if (!items || !items.length){
+    const div = document.createElement("div");
+    div.className = "dd-empty"; div.textContent = "No matches";
+    menu.appendChild(div); return;
+  }
+  items.slice(0, 500).forEach(opt => {
+    const div = document.createElement("div");
+    div.className = "dd-item";
+    div.textContent = opt.label;
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault(); onPick(opt); ddClose(menu);
+    });
+    menu.appendChild(div);
+  });
+}
+function ddFilter(opts, q){
+  const s = (q || "").trim().toLowerCase();
+  if (!s) return opts;
+  return opts.filter(o => o.label.toLowerCase().includes(s));
+}
+
+function bindPicker({inputId, openBtnId, clearBtnId, menuId, onChange}){
+  const inp  = document.getElementById(inputId);
+  const open = document.getElementById(openBtnId);
+  const clr  = document.getElementById(clearBtnId);
+  const menu = document.getElementById(menuId);
+  const ddEl = inp.closest(".dd");
+
+  const state = { options: [], value: "", label: "" };
+
+  function setActive(on){ if (ddEl) ddEl.classList.toggle("dd-active", !!on); }
+
+  function pick(opt){
+    state.value = opt.value;
+    state.label = opt.label;
+    inp.value   = opt.label;
+    setActive(true);
+    if (onChange) onChange(opt);
+  }
+
+  function showAll(){ ddRender(menu, state.options, pick); ddOpen(menu); }
+  function showFiltered(){ ddRender(menu, ddFilter(state.options, inp.value), pick); ddOpen(menu); }
+
+  open.addEventListener("click", () => showAll());
+  inp.addEventListener("focus", () => showFiltered());
+  inp.addEventListener("input", () => {
+    // typing invalidates the previous pick until they actually select again
+    state.value = "";
+    setActive(false);
+    showFiltered();
+  });
+  clr.addEventListener("click", () => {
+    state.value = ""; state.label = ""; inp.value = "";
+    setActive(false); ddClose(menu);
+    if (onChange) onChange(null);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!menu.contains(e.target) && e.target !== inp
+        && e.target !== open && e.target !== clr){
+      ddClose(menu);
+    }
+  });
+
+  return {
+    setOptions(opts){ state.options = opts || []; },
+    setDisabled(b){
+      inp.disabled = b; open.disabled = b; clr.disabled = b;
+      if (b){ state.value = ""; state.label = ""; inp.value = ""; setActive(false); }
+    },
+    value(){ return state.value; },
+    label(){ return state.label; },
+    reset(){
+      state.value = ""; state.label = ""; inp.value = "";
+      setActive(false); ddClose(menu);
+    },
+  };
+}
+
+const soldPicker = bindPicker({
+  inputId: "fSold", openBtnId: "fSoldOpen",
+  clearBtnId: "fSoldClear", menuId: "fSoldMenu",
+  onChange: (opt) => loadShipTosFor(opt ? opt.value : ""),
+});
+const shipPicker = bindPicker({
+  inputId: "fShip", openBtnId: "fShipOpen",
+  clearBtnId: "fShipClear", menuId: "fShipMenu",
+});
+
 // Clock for the read-only "visit time" field — purely informational so
 // the BDE sees the timestamp that will be recorded server-side.
 function tickClock(){
@@ -189,44 +329,39 @@ async function loadBdes(){
 
 async function loadSoldTos(){
   // /api/sold_to_names returns an array of sold_to NAMES (the cascade
-  // expects the picked NAME as ?sold_to=… on /api/ship_to_names).
+  // expects the picked NAME as ?sold_to=… on /api/ship_to_names), so
+  // label == value for this picker.
   const list = await fetchJSON("/api/sold_to_names?metric=amt").catch(() => []);
-  const opts = ['<option value="">— select sold-to —</option>'];
-  for (const name of list){
-    if (!name) continue;
-    opts.push(`<option value="${escapeAttr(name)}">${escapeHtml(name)}</option>`);
-  }
-  fSold.innerHTML = opts.join("");
+  const opts = list
+    .filter(n => n)
+    .map(n => ({ label: n, value: n }));
+  soldPicker.setOptions(opts);
 }
 
 async function loadShipTosFor(soldToName){
-  fShip.disabled = true;
-  fShip.innerHTML = '<option value="">loading…</option>';
   if (!soldToName){
-    fShip.innerHTML = '<option value="">— pick sold-to first —</option>';
+    shipPicker.setOptions([]);
+    shipPicker.setDisabled(true);
+    document.getElementById("fShip").placeholder = "— pick sold-to first —";
     return;
   }
+  shipPicker.setDisabled(false);
+  document.getElementById("fShip").placeholder = "Loading…";
   const qs = new URLSearchParams({ sold_to: soldToName, metric: "amt" }).toString();
   // /api/ship_to_names returns [{code, name}, …] filtered by the picked
-  // sold-to name.  We store the CODE so the dashboard can join cleanly.
+  // sold-to name.  We store the CODE so the dashboard can join cleanly,
+  // but the label keeps both for searchability.
   const list = await fetchJSON("/api/ship_to_names?" + qs).catch(() => []);
-  const opts = ['<option value="">— select ship-to —</option>'];
+  const opts = [];
   for (const row of list){
     const code = (row && (row.code || row.ship_to)) || "";
     const name = (row && (row.name || row.ship_to_name)) || "";
     if (!code) continue;
-    const label = name ? `${code} — ${name}` : code;
-    opts.push(`<option value="${escapeAttr(code)}">${escapeHtml(label)}</option>`);
+    opts.push({ label: name ? `${code} — ${name}` : code, value: code });
   }
-  fShip.innerHTML = opts.join("");
-  fShip.disabled = false;
+  shipPicker.setOptions(opts);
+  document.getElementById("fShip").placeholder = "Search ship-to…";
 }
-
-function escapeAttr(s){
-  return String(s == null ? "" : s).replace(/"/g, "&quot;").replace(/&/g, "&amp;");
-}
-
-fSold.addEventListener("change", () => loadShipTosFor(fSold.value));
 
 async function loadRecent(){
   const wrap = document.getElementById("recentWrap");
@@ -269,11 +404,15 @@ function escapeHtml(s){
 
 fForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  if (!fBde.value)         { fMsg.textContent = "BDE is required";      fMsg.className = "err"; return; }
+  if (!soldPicker.value()) { fMsg.textContent = "Sold-to is required";  fMsg.className = "err"; return; }
+  if (!shipPicker.value()) { fMsg.textContent = "Ship-to is required";  fMsg.className = "err"; return; }
+
   fMsg.textContent = "Submitting…"; fMsg.className = "";
   const fd = new FormData();
   fd.append("bde_name",    fBde.value);
-  fd.append("sold_to",     fSold.value);
-  fd.append("ship_to",     fShip.value);
+  fd.append("sold_to",     soldPicker.value());
+  fd.append("ship_to",     shipPicker.value());
   fd.append("met_person",  document.getElementById("fMet").value);
   fd.append("notes",       document.getElementById("fNotes").value);
   fd.append("next_action", document.getElementById("fNext").value);
@@ -296,7 +435,7 @@ fForm.addEventListener("submit", async (e) => {
     document.getElementById("fNext").value  = "";
     document.getElementById("fMet").value   = "";
     document.getElementById("fPhotos").value = "";
-    fShip.value = "";
+    shipPicker.reset();
     loadRecent();
     setTimeout(() => { fMsg.textContent = ""; }, 4000);
   } catch (err) {
