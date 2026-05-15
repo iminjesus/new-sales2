@@ -155,7 +155,11 @@ async function loadSalesMap() {
   `Region: ${regionVal || "-"}<br>` +
   `BDE: ${bde || "-"}<br>` +
   `Total Visits (2026): ${visitCount}<br>` +
-  `<span id="popup-total">Total (2026): …</span>`
+  `<span id="popup-total">Total (2026): …</span><br>` +
+  `<button type="button" onclick="openVisitLogModal('${shipTo}','${(shipNm || '').replace(/'/g,"\\'")}')"`
+  + ` style="margin-top:6px;font-size:11px;padding:3px 8px;cursor:pointer;`
+  + `border:1px solid #2563eb;background:#eff6ff;color:#1d4ed8;border-radius:4px;">`
+  + `📝 View visit logs</button>`
   );
 
   marker.on("click", () => {
@@ -194,7 +198,11 @@ async function loadSalesMap() {
         `${vs.ship_to} - ${vs.ship_to_name || ""}<br>` +
         `Assigned BDE: ${vs.salesman_name || "-"}<br>` +
         `Visited by: ${selectedBde}<br>` +
-        `Total Visits (2026): ${vs.visit_days || 0}`
+        `Total Visits (2026): ${vs.visit_days || 0}<br>` +
+        `<button type="button" onclick="openVisitLogModal('${vs.ship_to}','${(vs.ship_to_name || '').replace(/'/g,"\\'")}')"`
+        + ` style="margin-top:6px;font-size:11px;padding:3px 8px;cursor:pointer;`
+        + `border:1px solid #2563eb;background:#eff6ff;color:#1d4ed8;border-radius:4px;">`
+        + `📝 View visit logs</button>`
       );
       marker.on("click", () => {
         const titleEl = document.getElementById("shopTitle");

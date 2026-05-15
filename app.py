@@ -4927,6 +4927,42 @@ def visit_summary():
                         bde["visit_days_by_month"][m] += len(s)
 
         per_shop.sort(key=lambda r: r["visit_days"], reverse=True)
+
+        # ── meeting_log fold-in ──────────────────────────────────────
+        # Manually-logged visits count even when no GPS landed within
+        # the radius (remote shops, GPS off, etc).  We treat each
+        # (bde, ship_to, date) tuple as one visit day to avoid double-
+        # counting multiple memos written for the same call.
+        try:
+            cur.execute(
+                "SELECT bde_name, ship_to, DATE(created_at) AS d "
+                "FROM meeting_log WHERE YEAR(created_at) = %s",
+                [year],
+            )
+            for r in cur.fetchall():
+                norm = (r.get("bde_name") or "").strip().upper()
+                ship = (r.get("ship_to")  or "").strip()
+                d    = r.get("d")
+                if not norm or not ship or d is None:
+                    continue
+                if business_only and not _is_business_day(d):
+                    continue
+                bde = per_bde[norm]
+                if not bde["display_name"]:
+                    bde["display_name"] = r["bde_name"].strip()
+                # only count once per (shop, date) for this BDE
+                if d in bde["visited_dates_by_month"].get(d.month, set()):
+                    continue
+                bde["shops"].add(ship)
+                bde["shops_by_month"][d.month].add(ship)
+                bde["visited_dates"].add(d)
+                bde["visited_dates_by_month"][d.month].add(d)
+                bde["visit_days_by_month"][d.month] += 1
+                bde["visit_days"] += 1
+        except Exception as e:
+            # meeting_log table may not exist on a brand-new install yet
+            print(f"[visit_summary] meeting_log fold-in skipped: {e}")
+
         out["total_shops_visited"] = len(per_shop)
         out["total_visit_days"]    = sum(r["visit_days"] for r in per_shop)
         out["by_month"] = [
