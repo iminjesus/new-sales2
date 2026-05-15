@@ -98,20 +98,6 @@
       <select id="salesman_name"><option value="ALL">ALL</option></select>
     </div>
 
-    <div class="filter-sep"></div>
-
-    <div id="shopStatusBtns" style="display:flex; gap:5px; align-items:center;">
-      <label style="font-size:11px;color:#6b7280;margin-right:4px;">Shop status:</label>
-      <button class="btn active" data-status="ALL"
-              title="All shops">All</button>
-      <button class="btn" data-status="LOGS"
-              title="Only shops with at least one meeting log entry">Logs</button>
-      <button class="btn" data-status="VISIT"
-              title="Only shops with at least one GPS visit">Visit</button>
-      <button class="btn" data-status="NOVISIT"
-              title="Only shops with no GPS visit yet">No-visit</button>
-    </div>
-
     <div style="display:flex; align-items:center; gap:5px;">
       <label>Sold-to Group:</label>
       <select id="sold_to_group"><option value="ALL">ALL</option></select>
@@ -188,6 +174,39 @@
 
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
     <div id="mapWrapper" class="box" style="flex:2;">
+      <!-- Shop-status filter directly above the map for quick toggling -->
+      <div id="shopStatusBtns"
+           style="display:flex;gap:6px;align-items:center;margin-bottom:6px;
+                  padding:6px 8px;background:#f8fafc;border:1px solid #e5e7eb;
+                  border-radius:6px;">
+        <label style="font-size:11px;color:#6b7280;font-weight:600;
+                      text-transform:uppercase;letter-spacing:.4px;
+                      margin-right:4px;">Shop status</label>
+        <button class="ss-btn ss-all active" data-status="ALL"
+                title="Show every shop">All</button>
+        <button class="ss-btn ss-logs" data-status="LOGS"
+                title="Only shops with at least one meeting log entry">📝 Logs</button>
+        <button class="ss-btn ss-visit" data-status="VISIT"
+                title="Only shops with at least one GPS visit">📍 Visit</button>
+        <button class="ss-btn ss-novisit" data-status="NOVISIT"
+                title="Only shops with no GPS visit yet">🚫 No-visit</button>
+      </div>
+      <style>
+        .ss-btn{
+          font-size:12px;font-weight:600;padding:5px 12px;
+          border-radius:5px;cursor:pointer;border:1.5px solid transparent;
+          background:#fff;color:#374151;transition:all .12s;
+        }
+        .ss-btn:hover{filter:brightness(.97)}
+        .ss-all          { border-color:#9ca3af; color:#374151; }
+        .ss-all.active   { background:#374151; color:#fff; border-color:#374151; }
+        .ss-logs         { border-color:#a78bfa; color:#6d28d9; }
+        .ss-logs.active  { background:#7c3aed; color:#fff; border-color:#7c3aed; }
+        .ss-visit        { border-color:#86efac; color:#15803d; }
+        .ss-visit.active { background:#16a34a; color:#fff; border-color:#16a34a; }
+        .ss-novisit      { border-color:#fca5a5; color:#b91c1c; }
+        .ss-novisit.active{background:#dc2626;color:#fff;border-color:#dc2626;}
+      </style>
       <div id="mapLegend" style="display:none;font-size:12px;padding:4px 6px 6px;color:#444;">
         <span style="margin-right:10px;font-weight:600;">BDE view:</span>
         <span style="display:inline-flex;align-items:center;margin-right:10px;">
