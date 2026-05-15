@@ -6028,14 +6028,64 @@ def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                            visit_date, met_person, notes, next_action, None)
     _send_mail_async(to_list, cc_list, subject, html)
 
-def _notify_feedback(rid, log_row, feedback_text):
-    """Email the original BDE when feedback lands on their log."""
-    author = _lookup_bde_email(log_row.get("bde_name") or "")
-    if not author:
+def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
+    """Email everyone in the feedback thread when a new comment lands.
+
+    Recipients = original BDE + every prior commenter's email +
+    Hayden/JJ + State Manager — minus the person who just typed
+    (no point mailing yourself back).  Each thread participant sees
+    the entire conversation chronologically in the message body.
+    """
+    if not log_row or not thread:
         return
-    subject = (f"[BDE Visit] Feedback on your {log_row.get('visit_date','')} "
-               f"visit — {log_row.get('ship_to','')}")
-    html = _email_log_html(
+    me = (current_author_email or "").strip().lower()
+
+    # Gather participants
+    participants = set()
+    bde_email = (log_row.get("bde_email") or "").strip().lower() \
+                or (_lookup_bde_email(log_row.get("bde_name") or "") or "").lower()
+    if bde_email: participants.add(bde_email)
+    for t in thread:
+        em = (t.get("author_email") or "").strip().lower()
+        if em: participants.add(em)
+        # If we only have the name, resolve via the directory.
+        if not em:
+            resolved = _lookup_bde_email(t.get("author_name") or "")
+            if resolved: participants.add(resolved.lower())
+
+    # Always-notify recipients
+    for em in ALWAYS_TO:
+        participants.add(em.lower())
+    state    = _lookup_bde_state(log_row.get("bde_name") or "")
+    sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
+    if sm_email: participants.add(sm_email.lower())
+
+    # Don't mail the person who just commented.
+    if me: participants.discard(me)
+    if not participants:
+        return
+
+    last  = thread[-1]
+    actor = (last.get("author_name") or last.get("author_email") or "Someone")
+    subj  = (f"[BDE Visit] {actor} commented on {log_row.get('bde_name','')}'s "
+             f"{log_row.get('visit_date','')} visit — {log_row.get('ship_to','')}")
+
+    # Build the thread block in HTML so the reader gets the full
+    # conversation, latest at the bottom (chronological reading order).
+    thread_html_parts = []
+    for t in thread:
+        meta = (f"<div style='font-size:11px;color:#6b7280;margin-bottom:2px;'>"
+                f"<b>{_esc_html(t.get('author_name') or t.get('author_email') or '—')}</b> "
+                f"· {_esc_html(t.get('created_at') or '')}</div>")
+        body_div = (f"<div style='white-space:pre-wrap;font-size:13px;color:#111827;"
+                    f"padding:6px 10px;border-left:3px solid #f59e0b;"
+                    f"background:#fef3c7;border-radius:4px;margin-bottom:6px;'>"
+                    f"{_esc_html(t.get('text') or '')}</div>")
+        thread_html_parts.append(meta + body_div)
+    thread_html = "".join(thread_html_parts)
+
+    # Log card + thread
+    card = _email_log_html(
         rid,
         log_row.get("bde_name") or "",
         log_row.get("sold_to_name") or log_row.get("sold_to") or "",
@@ -6045,9 +6095,21 @@ def _notify_feedback(rid, log_row, feedback_text):
         log_row.get("met_person") or "",
         log_row.get("notes") or "",
         log_row.get("next_action") or "",
-        feedback_text,
+        None,           # feedback is shown as a thread below instead
     )
-    _send_mail_async([author], [], subject, html)
+    link = f"{DASHBOARD_URL}/meeting"
+    full = (
+        f"{card}"
+        f"<div style='margin-top:14px;font-family:-apple-system,Segoe UI,sans-serif;"
+        f"font-size:13px;color:#111827;'>"
+        f"<div style='font-weight:700;color:#1e3a5f;margin-bottom:6px;'>Feedback thread</div>"
+        f"{thread_html}"
+        f"<div style='margin-top:10px;font-size:11px;color:#6b7280;'>"
+        f"Reply by adding feedback on the dashboard: "
+        f"<a href='{link}'>{link}</a></div>"
+        f"</div>"
+    )
+    _send_mail_async(list(participants), [], subj, full)
 
 def _ensure_meeting_log_table():
     """Create the meeting_log table on startup if it doesn't exist."""
@@ -6073,6 +6135,22 @@ def _ensure_meeting_log_table():
                 INDEX  idx_meeting_bde     (bde_name)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # Threaded feedback — each row = one comment in the conversation
+        # on a meeting_log entry.  Replaces the single TEXT column on
+        # meeting_log (which is kept around as a denormalised "latest"
+        # cache for older code paths).
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS meeting_feedback (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                meeting_id   INT NOT NULL,
+                created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                author_email VARCHAR(120) NOT NULL DEFAULT '',
+                author_name  VARCHAR(120) NOT NULL DEFAULT '',
+                text         TEXT NOT NULL,
+                INDEX idx_fb_meeting (meeting_id),
+                INDEX idx_fb_created (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
         # Idempotent migration for older meeting_log tables.
         migrations = [
             "ALTER TABLE meeting_log MODIFY COLUMN sold_to VARCHAR(64) NOT NULL DEFAULT ''",
@@ -6091,16 +6169,29 @@ def _ensure_meeting_log_table():
                 cur.execute(f"ALTER TABLE meeting_log "
                             f"ADD COLUMN {col} {defn} AFTER {after}")
             except Exception:
-                # Already present — silent.
                 pass
-        # Backfill visit_date from created_at on rows where it's the
-        # default sentinel (older inserts that predate this column).
+        # One-time migration: if meeting_feedback is empty but some
+        # meeting_log rows still carry single-string feedback, lift
+        # those into the thread as a "(legacy)" first comment.
+        try:
+            cur.execute("SELECT COUNT(*) FROM meeting_feedback")
+            (n,) = cur.fetchone()
+            if n == 0:
+                cur.execute("""
+                    INSERT INTO meeting_feedback
+                        (meeting_id, created_at, author_email, author_name, text)
+                    SELECT id, created_at, '', '(legacy)', feedback
+                    FROM meeting_log
+                    WHERE feedback IS NOT NULL AND TRIM(feedback) <> ''
+                """)
+        except Exception as e:
+            print(f"[meeting_feedback] legacy backfill skipped: {e}")
+        # Backfill visit_date from created_at where it's still the sentinel.
         try:
             cur.execute("UPDATE meeting_log SET visit_date = DATE(created_at) "
                         "WHERE visit_date = '1970-01-01'")
         except Exception:
             pass
-        # Add helpful index after the column exists.
         try:
             cur.execute("ALTER TABLE meeting_log "
                         "ADD INDEX idx_meeting_visit_date (visit_date)")
@@ -6127,6 +6218,19 @@ def _bde_from_request():
 @app.get("/meeting")
 def meeting_page():
     return send_from_directory("static", "meeting.html")
+
+@app.get("/api/people")
+def people_directory():
+    """Names that can leave feedback — BDEs + State Managers + Hayden + JJ.
+    Sourced from the hardcoded _BDE_DIRECTORY so it works without DB."""
+    out = []
+    seen = set()
+    for nm, em, st in _BDE_DIRECTORY:
+        key = nm.upper()
+        if key in seen: continue
+        seen.add(key)
+        out.append({"name": nm, "email": em, "state": st})
+    return jsonify(out)
 
 @app.get("/api/bdes_active")
 def bdes_active():
@@ -6285,23 +6389,52 @@ def meeting_post():
 
 @app.post("/api/meeting/feedback")
 def meeting_feedback():
-    """Update only the feedback column on an existing meeting_log row.
-    Accepts JSON {id, feedback} or form fields with the same names."""
+    """Append a comment to a meeting_log's feedback thread.
+
+    Body (JSON or form):  id, text, author_name
+      • id           – meeting_log.id to comment on
+      • text         – the comment body
+      • author_name  – display name (resolved to email via the BDE
+                       directory; falls back to the CF Access header
+                       if running behind Cloudflare Access).
+
+    The same payload key still accepts 'feedback' for backward compat
+    with the older single-string call shape.
+    """
     try:
-        body = request.get_json(silent=True) or {}
-        rid  = body.get("id") or request.form.get("id")
-        fb   = (body.get("feedback") if "feedback" in body
-                else request.form.get("feedback")) or ""
+        body  = request.get_json(silent=True) or {}
+        rid   = body.get("id") or request.form.get("id")
+        text  = (body.get("text") or body.get("feedback")
+                 or request.form.get("text") or request.form.get("feedback")
+                 or "").strip()
+        a_nm  = (body.get("author_name") or request.form.get("author_name") or "").strip()
         try:
             rid = int(rid)
         except (TypeError, ValueError):
             return jsonify({"error": "invalid id"}), 400
-        fb = fb.strip()
+        if not text:
+            return jsonify({"error": "text is required"}), 400
+
+        # Resolve author email: prefer CF Access header → fall back to
+        # directory lookup by the picked name.
+        a_email = _bde_from_request() or _lookup_bde_email(a_nm) or ""
+
         conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            INSERT INTO meeting_feedback
+                (meeting_id, author_email, author_name, text)
+            VALUES (%s, %s, %s, %s)
+        """, (rid, a_email, a_nm, text))
+        new_fb_id = cur.lastrowid
+
+        # Keep meeting_log.feedback as a denormalised "latest comment"
+        # cache so existing list queries that only read that column
+        # still surface something useful.
         cur.execute("UPDATE meeting_log SET feedback=%s WHERE id=%s",
-                    (fb if fb else None, rid))
-        # Pull the row + friendly names so the notification email has
-        # the full visit context (notes, next action, etc.).
+                    (text, rid))
+
+        # Re-read the meeting_log row + everyone who has already
+        # commented on this thread → those are the email recipients.
         cur.execute("""
             SELECT m.id, m.visit_date, m.bde_name, m.bde_email,
                    m.sold_to, m.sold_to_name, m.ship_to,
@@ -6317,18 +6450,32 @@ def meeting_feedback():
         log_row = cur.fetchone()
         if log_row and log_row.get("visit_date"):
             log_row["visit_date"] = log_row["visit_date"].strftime("%Y-%m-%d")
+
+        cur.execute("""
+            SELECT id, created_at, author_email, author_name, text
+            FROM meeting_feedback
+            WHERE meeting_id = %s
+            ORDER BY created_at ASC, id ASC
+        """, (rid,))
+        thread = cur.fetchall()
+        for t in thread:
+            if t.get("created_at"):
+                t["created_at"] = t["created_at"].strftime("%Y-%m-%d %H:%M")
+
         conn.commit()
         cur.close(); conn.close()
 
-        # Notify the original BDE that someone left them feedback.
-        # Only when feedback is non-empty (no email for "clear feedback").
-        if fb and log_row:
-            try:
-                _notify_feedback(rid, log_row, fb)
-            except Exception as e:
-                print(f"[meeting] notify_feedback failed: {e}")
+        # Notify everyone touching this thread (original BDE +
+        # everyone who has commented before + Hayden/JJ + State Manager)
+        # except the person who just typed this comment.
+        try:
+            _notify_feedback_thread(rid, log_row, thread,
+                                    current_author_email=a_email)
+        except Exception as e:
+            print(f"[meeting] notify_feedback_thread failed: {e}")
 
-        return jsonify({"ok": True, "id": rid, "feedback": fb})
+        return jsonify({"ok": True, "id": rid, "feedback_id": new_fb_id,
+                        "thread": thread})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -6370,10 +6517,25 @@ def meeting_list():
             LIMIT {limit}
         """, tuple(params))
         rows = cur.fetchall()
+        ids = [r["id"] for r in rows] if rows else []
+        thread_by_meeting = {}
+        if ids:
+            placeholders = ",".join(["%s"] * len(ids))
+            cur.execute(f"""
+                SELECT id, meeting_id, created_at, author_email, author_name, text
+                FROM meeting_feedback
+                WHERE meeting_id IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+            """, tuple(ids))
+            for t in cur.fetchall():
+                if t.get("created_at"):
+                    t["created_at"] = t["created_at"].strftime("%Y-%m-%d %H:%M")
+                thread_by_meeting.setdefault(t["meeting_id"], []).append(t)
         for r in rows:
             r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M") if r["created_at"] else ""
             r["visit_date"] = r["visit_date"].strftime("%Y-%m-%d") if r["visit_date"] else ""
             r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
+            r["thread"]      = thread_by_meeting.get(r["id"], [])
         cur.close(); conn.close()
         return jsonify(rows)
     except Exception as e:

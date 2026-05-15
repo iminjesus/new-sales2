@@ -393,7 +393,7 @@ async function loadRecent(){
     // Feedback block: shows the value if set, with an Edit pencil; if
     // empty, shows an "+ Add feedback" link.  Inline form swaps in via
     // toggleFeedbackEditor(id).
-    const fbBlock = renderFeedbackBlock(r.id, r.feedback);
+    const fbBlock = renderFeedbackBlock(r.id, r.thread || []);
     h += `<tr>
       <td class="ts">${r.visit_date || r.created_at}</td>
       <td class="bde">${escapeHtml(r.bde_name || "—")}</td>
@@ -412,52 +412,82 @@ function escapeHtml(s){
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-// Feedback display + inline edit.  The element with id="fb-<row id>"
-// is swapped between "view" and "edit" mode by toggleFeedbackEditor.
-function renderFeedbackBlock(rid, feedback){
-  const has = feedback && feedback.trim().length;
-  if (has){
-    return `<div id="fb-${rid}" style="margin-top:4px;padding:4px 8px;
-              background:#fef3c7;border-left:3px solid #f59e0b;border-radius:3px;
-              font-size:12px;color:#78350f;white-space:pre-wrap;">
-      <div style="display:flex;justify-content:space-between;gap:6px;">
-        <span><b>Feedback:</b> ${escapeHtml(feedback)}</span>
-        <a href="javascript:void(0)" onclick="toggleFeedbackEditor(${rid}, ${JSON.stringify(feedback)})"
-           style="font-size:10px;color:#9a3412;">edit</a>
+// Feedback thread — list of comments + an "Add feedback" composer.
+// People dropdown is preloaded once from /api/people so commenters
+// can pick their identity (BDE / SM / Hayden / JJ).
+let _peopleCache = null;
+async function _ensurePeople(){
+  if (_peopleCache) return _peopleCache;
+  _peopleCache = await fetchJSON("/api/people").catch(() => []);
+  return _peopleCache;
+}
+function _peopleOptions(){
+  return (_peopleCache || []).map(p =>
+    `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`
+  ).join("");
+}
+
+function renderFeedbackBlock(rid, thread){
+  const items = (thread || []).map(t => `
+    <div style="margin-bottom:6px;">
+      <div style="font-size:10px;color:#6b7280;margin-bottom:2px;">
+        <b>${escapeHtml(t.author_name || t.author_email || "—")}</b>
+        · ${escapeHtml(t.created_at || "")}
       </div>
-    </div>`;
-  }
-  return `<div id="fb-${rid}" style="margin-top:3px;">
-    <a href="javascript:void(0)" onclick="toggleFeedbackEditor(${rid}, '')"
+      <div style="padding:5px 9px;background:#fef3c7;border-left:3px solid #f59e0b;
+                  border-radius:3px;font-size:12px;color:#78350f;white-space:pre-wrap;">
+        ${escapeHtml(t.text || "")}
+      </div>
+    </div>`).join("");
+  return `<div id="fb-${rid}" style="margin-top:6px;">
+    ${items}
+    <a href="javascript:void(0)" onclick="openFeedbackComposer(${rid})"
        style="font-size:11px;color:#2563eb;">+ Add feedback</a>
   </div>`;
 }
-function toggleFeedbackEditor(rid, current){
+async function openFeedbackComposer(rid){
+  await _ensurePeople();
   const el = document.getElementById("fb-" + rid);
   if (!el) return;
-  el.innerHTML = `
-    <textarea id="fbInp-${rid}"
-      style="width:100%;min-height:48px;font-size:12px;padding:6px;
-             border:1px solid #d1d5db;border-radius:4px;font-family:inherit;"
-    >${escapeHtml(current || "")}</textarea>
-    <div style="margin-top:4px;display:flex;gap:6px;">
-      <button type="button" onclick="saveFeedback(${rid})"
-        style="font-size:11px;padding:3px 10px;background:#2563eb;color:#fff;
-               border:none;border-radius:4px;cursor:pointer;">Save</button>
-      <button type="button" onclick="loadRecent()"
-        style="font-size:11px;padding:3px 10px;background:#f3f4f6;color:#374151;
-               border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+  // Preserve the existing thread above the composer so it stays visible.
+  const above = el.innerHTML.replace(/<a [^>]*onclick="openFeedbackComposer[\s\S]*?<\/a>/, "");
+  el.innerHTML = above + `
+    <div style="margin-top:4px;padding:8px;background:#f9fafb;
+                border:1px solid #e5e7eb;border-radius:5px;">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;">
+        <span style="font-size:10px;color:#6b7280;font-weight:600;">FROM</span>
+        <select id="fbWho-${rid}" style="font-size:12px;padding:3px 6px;
+                border:1px solid #d1d5db;border-radius:4px;">
+          <option value="">— select —</option>${_peopleOptions()}
+        </select>
+      </div>
+      <textarea id="fbInp-${rid}"
+        placeholder="Your reply…"
+        style="width:100%;min-height:54px;font-size:12px;padding:6px;
+               border:1px solid #d1d5db;border-radius:4px;font-family:inherit;"
+      ></textarea>
+      <div style="margin-top:5px;display:flex;gap:6px;">
+        <button type="button" onclick="saveFeedback(${rid})"
+          style="font-size:11px;padding:3px 12px;background:#2563eb;color:#fff;
+                 border:none;border-radius:4px;cursor:pointer;">Post</button>
+        <button type="button" onclick="loadRecent()"
+          style="font-size:11px;padding:3px 10px;background:#fff;color:#374151;
+                 border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+      </div>
     </div>`;
 }
 async function saveFeedback(rid){
+  const who = document.getElementById("fbWho-" + rid);
   const inp = document.getElementById("fbInp-" + rid);
-  if (!inp) return;
+  if (!who || !inp) return;
+  if (!who.value){ alert("Please pick who you are."); return; }
+  if (!inp.value.trim()){ alert("Type a comment first."); return; }
   try {
     const r = await fetch("/api/meeting/feedback", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       credentials: "include",
-      body: JSON.stringify({ id: rid, feedback: inp.value }),
+      body: JSON.stringify({ id: rid, text: inp.value, author_name: who.value }),
     });
     const j = await r.json();
     if (!r.ok || j.error){ alert("Save failed: " + (j.error || r.status)); return; }
