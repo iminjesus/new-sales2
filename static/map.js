@@ -78,6 +78,19 @@ async function loadSalesMap() {
   const visitedSet = new Set(Object.keys(visitsByShipTo));
   const visitedShops = (summary && Array.isArray(summary.visited_shops))
                        ? summary.visited_shops : [];
+  const loggedSet  = new Set((summary && summary.logged_ship_tos) || []);
+
+  // Status filter — All / Logs / Visit / No-visit — composes with the
+  // other filters (Region, Salesman, Sold-to, Top N, etc.) by simply
+  // skipping markers that don't match.
+  const statusMode = (window._shopStatusFilter || "ALL");
+  const passesStatus = (shipTo) => {
+    if (statusMode === "ALL")     return true;
+    if (statusMode === "LOGS")    return loggedSet.has(shipTo);
+    if (statusMode === "VISIT")   return visitedSet.has(shipTo);
+    if (statusMode === "NOVISIT") return !visitedSet.has(shipTo);
+    return true;
+  };
 
   // BDE-overlay mode: when a single salesman is filter-selected, colour
   // markers semantically (green / red / orange) instead of by BDE palette
@@ -117,6 +130,9 @@ async function loadSalesMap() {
   const bde    = row.bde ?? row.BDE ?? row.BDE_Name ?? "";
 
   ownShipTos.add(shipTo);
+
+  // Shop-status filter — hide markers that don't match.
+  if (!passesStatus(shipTo)) return;
 
   const latNum = +lat;
   const lngNum = +lng;
@@ -182,6 +198,10 @@ async function loadSalesMap() {
       const vb = Array.isArray(vs.visited_by) ? vs.visited_by : [];
       if (!vb.includes(selectedNorm)) return;
       if (ownShipTos.has(vs.ship_to)) return;
+      // BDE-overlay markers are by definition GPS-visited.  Apply the
+      // same status filter so "No-visit" hides them and "Logs" keeps
+      // only those that also have a meeting_log entry.
+      if (!passesStatus(vs.ship_to)) return;
       const latNum = +vs.latitude;
       const lngNum = +vs.longitude;
       if (!isFinite(latNum) || !isFinite(lngNum)) return;
@@ -423,14 +443,30 @@ function renderBdeVisitTable(data) {
 // Wire up the metric-toggle buttons once the DOM is ready.
 document.addEventListener("DOMContentLoaded", () => {
   const grp = document.getElementById("bdeMetricBtns");
-  if (!grp) return;
-  grp.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-m]");
-    if (!b) return;
-    _bdeMetric = b.dataset.m;
-    grp.querySelectorAll("button").forEach(x => x.classList.toggle("active", x === b));
-    renderBdeVisitTable();
-  });
+  if (grp){
+    grp.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-m]");
+      if (!b) return;
+      _bdeMetric = b.dataset.m;
+      grp.querySelectorAll("button").forEach(x => x.classList.toggle("active", x === b));
+      renderBdeVisitTable();
+    });
+  }
+
+  // Shop-status chip row (All / Logs / Visit / No-visit) — picks one
+  // mutually-exclusive filter that re-renders the map without going
+  // back to the API (filters cached data in loadSalesMap).
+  const stat = document.getElementById("shopStatusBtns");
+  if (stat){
+    stat.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-status]");
+      if (!b) return;
+      window._shopStatusFilter = b.dataset.status || "ALL";
+      stat.querySelectorAll("button").forEach(x =>
+        x.classList.toggle("active", x === b));
+      if (typeof loadSalesMap === "function") loadSalesMap();
+    });
+  }
 });
 
 function monthlyMapOptions() {

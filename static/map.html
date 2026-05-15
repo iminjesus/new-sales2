@@ -98,6 +98,20 @@
       <select id="salesman_name"><option value="ALL">ALL</option></select>
     </div>
 
+    <div class="filter-sep"></div>
+
+    <div id="shopStatusBtns" style="display:flex; gap:5px; align-items:center;">
+      <label style="font-size:11px;color:#6b7280;margin-right:4px;">Shop status:</label>
+      <button class="btn active" data-status="ALL"
+              title="All shops">All</button>
+      <button class="btn" data-status="LOGS"
+              title="Only shops with at least one meeting log entry">Logs</button>
+      <button class="btn" data-status="VISIT"
+              title="Only shops with at least one GPS visit">Visit</button>
+      <button class="btn" data-status="NOVISIT"
+              title="Only shops with no GPS visit yet">No-visit</button>
+    </div>
+
     <div style="display:flex; align-items:center; gap:5px;">
       <label>Sold-to Group:</label>
       <select id="sold_to_group"><option value="ALL">ALL</option></select>

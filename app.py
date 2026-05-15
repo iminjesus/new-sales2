@@ -4946,14 +4946,16 @@ def visit_summary():
         # logged vs effort tracked.  Each row in meeting_log is one
         # tally point; no dedupe (a BDE who writes two memos for the
         # same call genuinely logged twice).
+        logged_ship_tos = set()
         try:
             cur.execute(
-                "SELECT bde_name, visit_date AS d "
+                "SELECT bde_name, ship_to, visit_date AS d "
                 "FROM meeting_log WHERE YEAR(visit_date) = %s",
                 [year],
             )
             for r in cur.fetchall():
                 norm = (r.get("bde_name") or "").strip().upper()
+                ship = (r.get("ship_to")  or "").strip()
                 d    = r.get("d")
                 if not norm or d is None:
                     continue
@@ -4964,10 +4966,13 @@ def visit_summary():
                     bde["display_name"] = r["bde_name"].strip()
                 bde["logs_total"] += 1
                 bde["logs_by_month"][d.month] += 1
+                if ship:
+                    logged_ship_tos.add(ship)
         except Exception as e:
             # meeting_log table may not exist on a brand-new install yet
             print(f"[visit_summary] meeting_log tally skipped: {e}")
 
+        out["logged_ship_tos"] = sorted(logged_ship_tos)
         out["total_shops_visited"] = len(per_shop)
         out["total_visit_days"]    = sum(r["visit_days"] for r in per_shop)
         out["by_month"] = [
