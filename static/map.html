@@ -268,6 +268,62 @@
         .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
         .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
     }
+    function _vlRenderFeedback(rid, feedback){
+      const has = feedback && feedback.trim().length;
+      if (has){
+        const safeJson = JSON.stringify(feedback);
+        return `<div style="padding:4px 8px;background:#fef3c7;border-left:3px solid #f59e0b;
+                  border-radius:3px;font-size:12px;color:#78350f;white-space:pre-wrap;">
+          <div style="display:flex;justify-content:space-between;gap:6px;">
+            <span><b>Feedback:</b> ${_vlEsc(feedback)}</span>
+            <a href="javascript:void(0)" onclick='_vlToggleFb(${rid}, ${safeJson})'
+               style="font-size:10px;color:#9a3412;">edit</a>
+          </div>
+        </div>`;
+      }
+      return `<a href="javascript:void(0)" onclick="_vlToggleFb(${rid}, '')"
+                 style="font-size:11px;color:#2563eb;">+ Add feedback</a>`;
+    }
+    function _vlToggleFb(rid, current){
+      const el = document.getElementById("mapFb-" + rid);
+      if (!el) return;
+      el.innerHTML = `
+        <textarea id="vlFbInp-${rid}"
+          style="width:100%;min-height:48px;font-size:12px;padding:6px;
+                 border:1px solid #d1d5db;border-radius:4px;font-family:inherit;"
+        >${_vlEsc(current || "")}</textarea>
+        <div style="margin-top:4px;display:flex;gap:6px;">
+          <button type="button" onclick="_vlSaveFb(${rid})"
+            style="font-size:11px;padding:3px 10px;background:#2563eb;color:#fff;
+                   border:none;border-radius:4px;cursor:pointer;">Save</button>
+          <button type="button" onclick="_vlCancelFb(${rid})"
+            style="font-size:11px;padding:3px 10px;background:#f3f4f6;color:#374151;
+                   border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+        </div>`;
+    }
+    function _vlCancelFb(rid){
+      const el = document.getElementById("mapFb-" + rid);
+      const orig = (window._vlLastRows || []).find(x => x.id === rid);
+      if (el) el.innerHTML = _vlRenderFeedback(rid, orig ? orig.feedback : "");
+    }
+    async function _vlSaveFb(rid){
+      const inp = document.getElementById("vlFbInp-" + rid);
+      if (!inp) return;
+      try {
+        const r = await fetch("/api/meeting/feedback", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          credentials:"include",
+          body: JSON.stringify({ id: rid, feedback: inp.value }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.error){ alert("Save failed: " + (j.error || r.status)); return; }
+        const el = document.getElementById("mapFb-" + rid);
+        if (el) el.innerHTML = _vlRenderFeedback(rid, inp.value);
+        // update cached row so Cancel later uses the new value
+        const row = (window._vlLastRows || []).find(x => x.id === rid);
+        if (row) row.feedback = inp.value;
+      } catch (err){ alert("Error: " + err.message); }
+    }
     function closeVisitLogModal(){
       const el = document.getElementById("visitLogBackdrop");
       if (el) el.style.display = "none";
@@ -306,9 +362,13 @@
             <div style="margin-top:4px;font-size:13px;color:#111827;white-space:pre-wrap;">${_vlEsc(e.notes || "")}</div>
             ${next}${met}
             ${photos ? `<div style="margin-top:6px;">${photos}</div>` : ""}
+            <div id="mapFb-${e.id}" style="margin-top:6px;">${_vlRenderFeedback(e.id, e.feedback)}</div>
           </div>`;
         }).join("");
         body.innerHTML = html;
+        // Stash payload so a Cancel inside the editor can restore the
+        // original value without a full refetch.
+        window._vlLastRows = rows;
       } catch (err){
         body.innerHTML = `<div style="color:#dc2626;font-size:12px;padding:18px;">Error: ${_vlEsc(err.message)}</div>`;
       }

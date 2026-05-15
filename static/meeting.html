@@ -159,6 +159,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         </div>
 
         <div class="field col-full">
+          <label>Feedback <span style="color:#9ca3af;font-weight:400;">(optional — can also be added later from the list below or from Map View)</span></label>
+          <textarea id="fFeedback" placeholder="Manager / team feedback on this visit"></textarea>
+        </div>
+
+        <div class="field col-full">
           <label>Photos <span style="color:#9ca3af;font-weight:400;">(optional — up to 5, jpg/png/webp/heic)</span></label>
           <input id="fPhotos" type="file" accept="image/*" multiple capture="environment">
         </div>
@@ -377,18 +382,23 @@ async function loadRecent(){
   }
   let h = `<table class="recent-tbl">
     <thead><tr>
-      <th>Visit date</th><th>BDE</th><th>Shop</th><th>Notes / Next</th><th>Photos</th>
+      <th>Visit date</th><th>BDE</th><th>Shop</th><th>Notes / Next / Feedback</th><th>Photos</th>
     </tr></thead><tbody>`;
   for (const r of rows){
     const photos = (r.photo_paths || [])
       .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
       .join("");
     const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
+    const met  = r.met_person  ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : "";
+    // Feedback block: shows the value if set, with an Edit pencil; if
+    // empty, shows an "+ Add feedback" link.  Inline form swaps in via
+    // toggleFeedbackEditor(id).
+    const fbBlock = renderFeedbackBlock(r.id, r.feedback);
     h += `<tr>
       <td class="ts">${r.visit_date || r.created_at}</td>
       <td class="bde">${escapeHtml(r.bde_name || "—")}</td>
       <td class="shop">${escapeHtml(r.ship_to)}<br><span style="color:#6b7280;font-size:11px;">${escapeHtml(r.ship_to_name || "")}</span></td>
-      <td class="notes">${escapeHtml(r.notes || "")}${next}${r.met_person ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : ""}</td>
+      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }
@@ -400,6 +410,59 @@ function escapeHtml(s){
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Feedback display + inline edit.  The element with id="fb-<row id>"
+// is swapped between "view" and "edit" mode by toggleFeedbackEditor.
+function renderFeedbackBlock(rid, feedback){
+  const has = feedback && feedback.trim().length;
+  if (has){
+    return `<div id="fb-${rid}" style="margin-top:4px;padding:4px 8px;
+              background:#fef3c7;border-left:3px solid #f59e0b;border-radius:3px;
+              font-size:12px;color:#78350f;white-space:pre-wrap;">
+      <div style="display:flex;justify-content:space-between;gap:6px;">
+        <span><b>Feedback:</b> ${escapeHtml(feedback)}</span>
+        <a href="javascript:void(0)" onclick="toggleFeedbackEditor(${rid}, ${JSON.stringify(feedback)})"
+           style="font-size:10px;color:#9a3412;">edit</a>
+      </div>
+    </div>`;
+  }
+  return `<div id="fb-${rid}" style="margin-top:3px;">
+    <a href="javascript:void(0)" onclick="toggleFeedbackEditor(${rid}, '')"
+       style="font-size:11px;color:#2563eb;">+ Add feedback</a>
+  </div>`;
+}
+function toggleFeedbackEditor(rid, current){
+  const el = document.getElementById("fb-" + rid);
+  if (!el) return;
+  el.innerHTML = `
+    <textarea id="fbInp-${rid}"
+      style="width:100%;min-height:48px;font-size:12px;padding:6px;
+             border:1px solid #d1d5db;border-radius:4px;font-family:inherit;"
+    >${escapeHtml(current || "")}</textarea>
+    <div style="margin-top:4px;display:flex;gap:6px;">
+      <button type="button" onclick="saveFeedback(${rid})"
+        style="font-size:11px;padding:3px 10px;background:#2563eb;color:#fff;
+               border:none;border-radius:4px;cursor:pointer;">Save</button>
+      <button type="button" onclick="loadRecent()"
+        style="font-size:11px;padding:3px 10px;background:#f3f4f6;color:#374151;
+               border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+    </div>`;
+}
+async function saveFeedback(rid){
+  const inp = document.getElementById("fbInp-" + rid);
+  if (!inp) return;
+  try {
+    const r = await fetch("/api/meeting/feedback", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      credentials: "include",
+      body: JSON.stringify({ id: rid, feedback: inp.value }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error){ alert("Save failed: " + (j.error || r.status)); return; }
+    loadRecent();
+  } catch (err){ alert("Error: " + err.message); }
 }
 
 fForm.addEventListener("submit", async (e) => {
@@ -417,6 +480,7 @@ fForm.addEventListener("submit", async (e) => {
   fd.append("met_person",  document.getElementById("fMet").value);
   fd.append("notes",       document.getElementById("fNotes").value);
   fd.append("next_action", document.getElementById("fNext").value);
+  fd.append("feedback",    document.getElementById("fFeedback").value);
   const files = document.getElementById("fPhotos").files;
   for (let i = 0; i < Math.min(files.length, 5); i++){
     fd.append("photos", files[i]);
@@ -432,10 +496,11 @@ fForm.addEventListener("submit", async (e) => {
     fMsg.textContent = `Saved (#${j.id})`;
     fMsg.className = "ok";
     // Reset writable fields, keep BDE selection.
-    document.getElementById("fNotes").value = "";
-    document.getElementById("fNext").value  = "";
-    document.getElementById("fMet").value   = "";
-    document.getElementById("fPhotos").value = "";
+    document.getElementById("fNotes").value    = "";
+    document.getElementById("fNext").value     = "";
+    document.getElementById("fMet").value      = "";
+    document.getElementById("fFeedback").value = "";
+    document.getElementById("fPhotos").value   = "";
     shipPicker.reset();
     loadRecent();
     setTimeout(() => { fMsg.textContent = ""; }, 4000);

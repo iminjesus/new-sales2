@@ -5888,6 +5888,7 @@ def _ensure_meeting_log_table():
         for col, defn, after in (
             ("sold_to_name", "VARCHAR(160) NOT NULL DEFAULT ''", "sold_to"),
             ("visit_date",   "DATE NOT NULL DEFAULT '1970-01-01'", "created_at"),
+            ("feedback",     "TEXT", "next_action"),
         ):
             try:
                 cur.execute(f"ALTER TABLE meeting_log "
@@ -5962,6 +5963,7 @@ def meeting_post():
         met       = (request.form.get("met_person") or "").strip()
         notes     = (request.form.get("notes") or "").strip()
         next_act  = (request.form.get("next_action") or "").strip()
+        feedback  = (request.form.get("feedback") or "").strip()
         visit_in  = (request.form.get("visit_date") or "").strip()
 
         if not ship_to:
@@ -6048,16 +6050,41 @@ def meeting_post():
         cur.execute("""
             INSERT INTO meeting_log
                 (visit_date, bde_email, bde_name, sold_to, sold_to_name,
-                 ship_to, met_person, notes, next_action, photo_paths)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 ship_to, met_person, notes, next_action, feedback, photo_paths)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (visit_date_obj, bde_email, bde_name, sold_to, sold_to_name,
               ship_to, met, notes, next_act,
+              feedback if feedback else None,
               ",".join(saved) if saved else None))
         new_id = cur.lastrowid
         conn.commit()
         cur.close(); conn.close()
 
         return jsonify({"ok": True, "id": new_id, "photos": saved})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/meeting/feedback")
+def meeting_feedback():
+    """Update only the feedback column on an existing meeting_log row.
+    Accepts JSON {id, feedback} or form fields with the same names."""
+    try:
+        body = request.get_json(silent=True) or {}
+        rid  = body.get("id") or request.form.get("id")
+        fb   = (body.get("feedback") if "feedback" in body
+                else request.form.get("feedback")) or ""
+        try:
+            rid = int(rid)
+        except (TypeError, ValueError):
+            return jsonify({"error": "invalid id"}), 400
+        fb = fb.strip()
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("UPDATE meeting_log SET feedback=%s WHERE id=%s",
+                    (fb if fb else None, rid))
+        conn.commit()
+        cur.close(); conn.close()
+        return jsonify({"ok": True, "id": rid, "feedback": fb})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -6082,7 +6109,7 @@ def meeting_list():
             SELECT m.id, m.created_at, m.visit_date,
                    m.bde_email, m.bde_name,
                    m.sold_to, m.ship_to, m.met_person,
-                   m.notes, m.next_action, m.photo_paths,
+                   m.notes, m.next_action, m.feedback, m.photo_paths,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
                    COALESCE(NULLIF(TRIM(c.sold_to_name),''),
                             NULLIF(TRIM(m.sold_to_name),''),
