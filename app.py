@@ -16,6 +16,14 @@ from datetime import datetime
 import traceback
 USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Pick up SMTP / DB creds from .env (gitignored).  Silent no-op if
+# python-dotenv isn't installed — the platform env vars still apply.
+try:
+    from dotenv import load_dotenv as _load_dotenv  # type: ignore
+    _load_dotenv(os.path.join(BASE_DIR, ".env"))
+except ImportError:
+    pass
 SQLITE_PATH = os.path.join(BASE_DIR, "snapshot.db")
 
 # MySQL connection pool (reduces connect() overhead per request)
@@ -5852,6 +5860,194 @@ build_global_top_once()
 
 MEETING_PHOTO_DIR = os.path.join(BASE_DIR, "static", "meeting_photos")
 
+# ── Mail config ────────────────────────────────────────────────────
+# All settings overridable via .env so the SMTP credentials never live
+# in the repo.  Defaults target Microsoft 365 Exchange Online SMTP for
+# the dashboard mailbox provided by IT.
+MAIL_FROM      = os.getenv("MAIL_FROM",      "dashboard@hankooktyre.com.au")
+SMTP_HOST      = os.getenv("SMTP_HOST",      "smtp.office365.com")
+SMTP_PORT      = int(os.getenv("SMTP_PORT",  "587"))
+SMTP_USER      = os.getenv("SMTP_USER",      MAIL_FROM)
+SMTP_PASSWORD  = os.getenv("SMTP_PASSWORD",  "")  # MUST be set in .env to actually send
+SMTP_USE_TLS   = (os.getenv("SMTP_USE_TLS",  "1") == "1")
+DASHBOARD_URL  = os.getenv("DASHBOARD_URL",  "https://sales.hkaudashboard.com")
+MAIL_DEBUG     = (os.getenv("MAIL_DEBUG",    "0") == "1")
+
+# ── BDE / state-manager directory ──────────────────────────────────
+# (name, email, state).  State picks the State Manager recipient and
+# also lets the system map ex-staff names that may still appear in
+# customer.salesman_name to a current address.
+_BDE_DIRECTORY = [
+    # NSW
+    ("Peter Robinson",   "peter.robinson@hankooktyre.com.au",   "NSW"),
+    ("Paul Buckley",     "paul.buckley@hankooktyre.com.au",     "NSW"),
+    ("Alessio Borghese", "alessio.borghese@hankooktyre.com.au", "NSW"),
+    # QLD
+    ("Aaron Marsh",      "aaron.marsh@hankooktyre.com.au",      "QLD"),
+    ("Steven Spires",    "steven.spires@hankooktyre.com.au",    "QLD"),
+    ("Adam Maclure",     "adam.maclure@hankooktyre.com.au",     "QLD"),
+    # VIC / SA / TAS (one SM covers all three)
+    ("Calvin Hobkirk",   "calvin.hobkirk@hankooktyre.com.au",   "VIC"),
+    ("Kelley Bilston",   "kelley.bilston@hankooktyre.com.au",   "VIC"),
+    ("Nicola Bellotto",  "nicola.bellotto@hankooktyre.com.au",  "VIC"),
+    ("Jason Gultjaeff",  "jason.gultjaeff@hankooktyre.com.au",  "SA"),
+    # WA
+    ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA"),
+    ("Jim Dais",         "jim.dais@hankooktyre.com.au",         "WA"),
+    # Always-CC recipients (also listed here so feedback to them is routable)
+    ("Hayden Begbie",    "hayden.begbie@hankooktyre.com.au",    "NSW"),
+    ("JJ Cho",           "junjong.cho@hankooktyre.com.au",      "NSW"),
+    ("Junjong Cho",      "junjong.cho@hankooktyre.com.au",      "NSW"),
+]
+STATE_MANAGER_EMAIL = {
+    "NSW": "paul.buckley@hankooktyre.com.au",
+    "QLD": "aaron.marsh@hankooktyre.com.au",
+    "VIC": "calvin.hobkirk@hankooktyre.com.au",
+    "SA":  "calvin.hobkirk@hankooktyre.com.au",
+    "TAS": "calvin.hobkirk@hankooktyre.com.au",
+    "WA":  "asim.qureshi@hankooktyre.com.au",
+}
+ALWAYS_TO = ["hayden.begbie@hankooktyre.com.au",
+             "junjong.cho@hankooktyre.com.au"]
+
+def _bde_name_keys(full_name):
+    """Generate uppercase lookup keys for both 'First Last' and 'Last First'."""
+    if not full_name: return set()
+    parts = full_name.strip().upper().split()
+    if len(parts) < 2: return {full_name.strip().upper()}
+    return {" ".join(parts), " ".join(reversed(parts))}
+
+_BDE_EMAIL_MAP, _BDE_STATE_MAP = {}, {}
+for _n, _e, _s in _BDE_DIRECTORY:
+    for _k in _bde_name_keys(_n):
+        _BDE_EMAIL_MAP.setdefault(_k, _e)
+        _BDE_STATE_MAP.setdefault(_k, _s)
+
+def _lookup_bde_email(name):
+    return _BDE_EMAIL_MAP.get((name or "").strip().upper())
+
+def _lookup_bde_state(name):
+    return _BDE_STATE_MAP.get((name or "").strip().upper())
+
+def _send_mail_async(to_list, cc_list, subject, html_body):
+    """Background-thread SMTP send so the API response isn't blocked."""
+    import smtplib, threading, re as _re
+    from email.message import EmailMessage
+
+    if not (to_list or cc_list):
+        return
+    if not SMTP_PASSWORD:
+        if MAIL_DEBUG:
+            print(f"[mail] would send to {to_list} cc {cc_list}: {subject}")
+        else:
+            print(f"[mail] SMTP_PASSWORD not set — skipping send "
+                  f"(to {to_list}, subject={subject!r})")
+        return
+
+    def _run():
+        try:
+            msg = EmailMessage()
+            msg["From"] = MAIL_FROM
+            msg["To"]   = ", ".join(to_list or [])
+            if cc_list: msg["Cc"] = ", ".join(cc_list)
+            msg["Subject"] = subject
+            # Plain-text fallback: strip tags + decode entities.
+            txt = _re.sub(r"<[^>]+>", "", html_body)
+            txt = txt.replace("&nbsp;", " ").replace("&amp;", "&")
+            msg.set_content(txt)
+            msg.add_alternative(html_body, subtype="html")
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+                if SMTP_USE_TLS: s.starttls()
+                if SMTP_USER and SMTP_PASSWORD:
+                    s.login(SMTP_USER, SMTP_PASSWORD)
+                s.send_message(msg, from_addr=MAIL_FROM,
+                               to_addrs=(to_list or []) + (cc_list or []))
+            if MAIL_DEBUG:
+                print(f"[mail] sent: {subject} → {to_list} cc {cc_list}")
+        except Exception as e:
+            traceback.print_exc()
+            print(f"[mail] send failed: {e}")
+    threading.Thread(target=_run, daemon=True).start()
+
+def _esc_html(s):
+    return (str(s or "")
+            .replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+            .replace("\n","<br>"))
+
+def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
+                    visit_date, met_person, notes, next_action, feedback):
+    rows = []
+    def _row(lbl, val):
+        return (f'<tr><td style="padding:4px 10px;color:#6b7280;font-size:11px;'
+                f'text-transform:uppercase;letter-spacing:.4px;width:120px;'
+                f'vertical-align:top;">{_esc_html(lbl)}</td>'
+                f'<td style="padding:4px 10px;color:#111827;font-size:13px;'
+                f'vertical-align:top;">{val}</td></tr>')
+    rows.append(_row("BDE",         _esc_html(bde_name)))
+    rows.append(_row("Visit date",  _esc_html(visit_date)))
+    rows.append(_row("Sold-to",     _esc_html(sold_to_name)))
+    rows.append(_row("Ship-to",     f"{_esc_html(ship_to)} — {_esc_html(ship_to_name)}"))
+    if met_person:
+        rows.append(_row("Met",      _esc_html(met_person)))
+    rows.append(_row("Notes",       f'<div style="white-space:pre-wrap;">{_esc_html(notes)}</div>'))
+    if next_action:
+        rows.append(_row("Next step", _esc_html(next_action)))
+    if feedback:
+        rows.append(_row("Feedback",
+                        f'<div style="background:#fef3c7;border-left:3px solid #f59e0b;'
+                        f'padding:6px 8px;color:#78350f;white-space:pre-wrap;">'
+                        f'{_esc_html(feedback)}</div>'))
+    link = f"{DASHBOARD_URL}/meeting"
+    return (
+        f'<div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:13px;color:#111827;">'
+        f'<div style="background:#1e3a5f;color:#fff;padding:10px 14px;border-radius:6px 6px 0 0;'
+        f'font-weight:700;">BDE Visit Log #{rid}</div>'
+        f'<table style="border-collapse:collapse;background:#fff;width:100%;'
+        f'border:1px solid #e5e7eb;border-top:none;border-radius:0 0 6px 6px;">'
+        f'{"".join(rows)}</table>'
+        f'<div style="margin-top:10px;font-size:11px;color:#6b7280;">'
+        f'View / reply on the dashboard: <a href="{link}">{link}</a></div>'
+        f'</div>'
+    )
+
+def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
+                    visit_date, met_person, notes, next_action):
+    """Email Hayden + JJ + the State Manager of the BDE's state.  CC the
+    BDE author so they have a record of what was sent on their behalf."""
+    state    = _lookup_bde_state(bde_name)
+    sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
+    author   = _lookup_bde_email(bde_name)
+    to_list  = list(ALWAYS_TO)
+    if sm_email and sm_email not in to_list:
+        to_list.append(sm_email)
+    cc_list  = [author] if author and author not in to_list else []
+    subject  = (f"[BDE Visit] {bde_name} → {ship_to} "
+                f"{ship_to_name or ''} ({visit_date})")
+    html = _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
+                           visit_date, met_person, notes, next_action, None)
+    _send_mail_async(to_list, cc_list, subject, html)
+
+def _notify_feedback(rid, log_row, feedback_text):
+    """Email the original BDE when feedback lands on their log."""
+    author = _lookup_bde_email(log_row.get("bde_name") or "")
+    if not author:
+        return
+    subject = (f"[BDE Visit] Feedback on your {log_row.get('visit_date','')} "
+               f"visit — {log_row.get('ship_to','')}")
+    html = _email_log_html(
+        rid,
+        log_row.get("bde_name") or "",
+        log_row.get("sold_to_name") or log_row.get("sold_to") or "",
+        log_row.get("ship_to") or "",
+        log_row.get("ship_to_name") or "",
+        log_row.get("visit_date") or "",
+        log_row.get("met_person") or "",
+        log_row.get("notes") or "",
+        log_row.get("next_action") or "",
+        feedback_text,
+    )
+    _send_mail_async([author], [], subject, html)
+
 def _ensure_meeting_log_table():
     """Create the meeting_log table on startup if it doesn't exist."""
     try:
@@ -6057,8 +6253,29 @@ def meeting_post():
               feedback if feedback else None,
               ",".join(saved) if saved else None))
         new_id = cur.lastrowid
+        # Pull the resolved ship_to_name back out so the notification
+        # email can show a friendly label without an extra round trip.
+        ship_nm = ""
+        try:
+            cur.execute("SELECT MIN(NULLIF(TRIM(ship_to_name),'')) FROM customer "
+                        "WHERE ship_to = %s", (ship_to,))
+            r = cur.fetchone()
+            if r and r[0]: ship_nm = r[0]
+        except Exception:
+            pass
         conn.commit()
         cur.close(); conn.close()
+
+        # Fire-and-forget notification: Hayden + JJ + State Manager,
+        # CC the BDE author.  Runs in a background thread so the form
+        # POST returns immediately.
+        try:
+            _notify_new_log(new_id, bde_name, sold_to_name or sold_to,
+                            ship_to, ship_nm,
+                            visit_date_obj.strftime("%Y-%m-%d"),
+                            met, notes, next_act)
+        except Exception as e:
+            print(f"[meeting] notify_new_log failed: {e}")
 
         return jsonify({"ok": True, "id": new_id, "photos": saved})
     except Exception as e:
@@ -6079,11 +6296,37 @@ def meeting_feedback():
         except (TypeError, ValueError):
             return jsonify({"error": "invalid id"}), 400
         fb = fb.strip()
-        conn = get_connection(); cur = conn.cursor()
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
         cur.execute("UPDATE meeting_log SET feedback=%s WHERE id=%s",
                     (fb if fb else None, rid))
+        # Pull the row + friendly names so the notification email has
+        # the full visit context (notes, next action, etc.).
+        cur.execute("""
+            SELECT m.id, m.visit_date, m.bde_name, m.bde_email,
+                   m.sold_to, m.sold_to_name, m.ship_to,
+                   m.met_person, m.notes, m.next_action,
+                   COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name
+            FROM meeting_log m
+            LEFT JOIN (
+                SELECT ship_to, MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name
+                FROM customer GROUP BY ship_to
+            ) c ON c.ship_to = m.ship_to
+            WHERE m.id = %s
+        """, (rid,))
+        log_row = cur.fetchone()
+        if log_row and log_row.get("visit_date"):
+            log_row["visit_date"] = log_row["visit_date"].strftime("%Y-%m-%d")
         conn.commit()
         cur.close(); conn.close()
+
+        # Notify the original BDE that someone left them feedback.
+        # Only when feedback is non-empty (no email for "clear feedback").
+        if fb and log_row:
+            try:
+                _notify_feedback(rid, log_row, fb)
+            except Exception as e:
+                print(f"[meeting] notify_feedback failed: {e}")
+
         return jsonify({"ok": True, "id": rid, "feedback": fb})
     except Exception as e:
         traceback.print_exc()
