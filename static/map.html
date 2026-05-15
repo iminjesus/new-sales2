@@ -301,7 +301,7 @@
           return `<div style="padding:10px 0;border-bottom:1px solid #f1f5f9;">
             <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
               <span style="font-weight:600;color:#1e3a5f;">${_vlEsc(e.bde_name || "—")}</span>
-              <span style="color:#6b7280;font-size:11px;">${_vlEsc(e.created_at)}</span>
+              <span style="color:#6b7280;font-size:11px;">${_vlEsc(e.visit_date || e.created_at)}</span>
             </div>
             <div style="margin-top:4px;font-size:13px;color:#111827;white-space:pre-wrap;">${_vlEsc(e.notes || "")}</div>
             ${next}${met}

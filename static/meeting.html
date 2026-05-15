@@ -116,8 +116,8 @@ header .nav{margin-left:auto;display:flex;gap:6px}
           </select>
         </div>
         <div class="field">
-          <label>Visit time</label>
-          <input id="fTime" type="text" readonly value="" style="background:#f9fafb;color:#6b7280;">
+          <label>Visit date <span class="req">*</span></label>
+          <input id="fVisitDate" type="date" required>
         </div>
 
         <div class="field">
@@ -187,14 +187,24 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 </div>
 
 <script>
-const fBde   = document.getElementById("fBde");
-const fSold  = document.getElementById("fSold");
-const fShip  = document.getElementById("fShip");
-const fTime  = document.getElementById("fTime");
-const fForm  = document.getElementById("meetingForm");
-const fMsg   = document.getElementById("submitMsg");
-const filtBde  = document.getElementById("filtBde");
-const filtShip = document.getElementById("filtShip");
+const fBde       = document.getElementById("fBde");
+const fSold      = document.getElementById("fSold");
+const fShip      = document.getElementById("fShip");
+const fVisitDate = document.getElementById("fVisitDate");
+const fForm      = document.getElementById("meetingForm");
+const fMsg       = document.getElementById("submitMsg");
+const filtBde    = document.getElementById("filtBde");
+const filtShip   = document.getElementById("filtShip");
+
+// Default visit date to today (editable so a BDE can log a past visit).
+// Cap the picker at today so future dates can't be picked.
+(function initVisitDate(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  const iso = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  fVisitDate.value = iso;
+  fVisitDate.max   = iso;
+})();
 
 // ── Custom searchable dropdown ───────────────────────────────────
 // options = [{label, value}, …].  bindPicker wires the input/button/menu
@@ -293,16 +303,6 @@ const shipPicker = bindPicker({
   clearBtnId: "fShipClear", menuId: "fShipMenu",
 });
 
-// Clock for the read-only "visit time" field — purely informational so
-// the BDE sees the timestamp that will be recorded server-side.
-function tickClock(){
-  const d = new Date();
-  const pad = n => String(n).padStart(2,"0");
-  fTime.value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `
-              + `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-setInterval(tickClock, 30_000); tickClock();
-
 async function fetchJSON(url){
   const r = await fetch(url, {credentials: "include"});
   if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
@@ -377,7 +377,7 @@ async function loadRecent(){
   }
   let h = `<table class="recent-tbl">
     <thead><tr>
-      <th>Time</th><th>BDE</th><th>Shop</th><th>Notes / Next</th><th>Photos</th>
+      <th>Visit date</th><th>BDE</th><th>Shop</th><th>Notes / Next</th><th>Photos</th>
     </tr></thead><tbody>`;
   for (const r of rows){
     const photos = (r.photo_paths || [])
@@ -385,7 +385,7 @@ async function loadRecent(){
       .join("");
     const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
     h += `<tr>
-      <td class="ts">${r.created_at}</td>
+      <td class="ts">${r.visit_date || r.created_at}</td>
       <td class="bde">${escapeHtml(r.bde_name || "—")}</td>
       <td class="shop">${escapeHtml(r.ship_to)}<br><span style="color:#6b7280;font-size:11px;">${escapeHtml(r.ship_to_name || "")}</span></td>
       <td class="notes">${escapeHtml(r.notes || "")}${next}${r.met_person ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : ""}</td>
@@ -411,6 +411,7 @@ fForm.addEventListener("submit", async (e) => {
   fMsg.textContent = "Submitting…"; fMsg.className = "";
   const fd = new FormData();
   fd.append("bde_name",    fBde.value);
+  fd.append("visit_date",  fVisitDate.value);
   fd.append("sold_to",     soldPicker.value());
   fd.append("ship_to",     shipPicker.value());
   fd.append("met_person",  document.getElementById("fMet").value);

@@ -4940,8 +4940,8 @@ def visit_summary():
         # same call genuinely logged twice).
         try:
             cur.execute(
-                "SELECT bde_name, DATE(created_at) AS d "
-                "FROM meeting_log WHERE YEAR(created_at) = %s",
+                "SELECT bde_name, visit_date AS d "
+                "FROM meeting_log WHERE YEAR(visit_date) = %s",
                 [year],
             )
             for r in cur.fetchall():
@@ -5861,6 +5861,7 @@ def _ensure_meeting_log_table():
             CREATE TABLE IF NOT EXISTS meeting_log (
                 id           INT AUTO_INCREMENT PRIMARY KEY,
                 created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                visit_date   DATE NOT NULL,
                 bde_email    VARCHAR(120) NOT NULL DEFAULT '',
                 bde_name     VARCHAR(120) NOT NULL DEFAULT '',
                 sold_to      VARCHAR(64)  NOT NULL DEFAULT '',
@@ -5871,34 +5872,42 @@ def _ensure_meeting_log_table():
                 next_action  TEXT,
                 photo_paths  TEXT,
                 INDEX  idx_meeting_ship_to (ship_to),
-                INDEX  idx_meeting_created (created_at),
+                INDEX  idx_meeting_visit_date (visit_date),
                 INDEX  idx_meeting_bde     (bde_name)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
-        # Idempotent widening for tables created by an earlier version
-        # of this function (sold_to was VARCHAR(32) — too narrow for
-        # full sold-to names that the form sends before resolution).
-        for col, defn in (
-            ("sold_to",      "VARCHAR(64)  NOT NULL DEFAULT ''"),
-            ("ship_to",      "VARCHAR(64)  NOT NULL DEFAULT ''"),
-            ("sold_to_name", "VARCHAR(160) NOT NULL DEFAULT ''"),
+        # Idempotent migration for older meeting_log tables.
+        migrations = [
+            "ALTER TABLE meeting_log MODIFY COLUMN sold_to VARCHAR(64) NOT NULL DEFAULT ''",
+            "ALTER TABLE meeting_log MODIFY COLUMN ship_to VARCHAR(64) NOT NULL DEFAULT ''",
+        ]
+        for sql in migrations:
+            try: cur.execute(sql)
+            except Exception: pass
+        # Add columns that may not exist on legacy tables.
+        for col, defn, after in (
+            ("sold_to_name", "VARCHAR(160) NOT NULL DEFAULT ''", "sold_to"),
+            ("visit_date",   "DATE NOT NULL DEFAULT '1970-01-01'", "created_at"),
         ):
             try:
-                if col == "sold_to_name":
-                    cur.execute("ALTER TABLE meeting_log "
-                                "ADD COLUMN IF NOT EXISTS sold_to_name "
-                                "VARCHAR(160) NOT NULL DEFAULT '' AFTER sold_to")
-                else:
-                    cur.execute(f"ALTER TABLE meeting_log MODIFY COLUMN {col} {defn}")
-            except Exception as e:
-                # Older MySQL doesn't support IF NOT EXISTS on ADD COLUMN — try plain.
-                if "IF NOT EXISTS" in str(e).upper() or "1064" in str(e):
-                    try:
-                        cur.execute("ALTER TABLE meeting_log "
-                                    "ADD COLUMN sold_to_name VARCHAR(160) NOT NULL DEFAULT '' AFTER sold_to")
-                    except Exception:
-                        pass
-                # Already correct size / column already there — silent.
+                cur.execute(f"ALTER TABLE meeting_log "
+                            f"ADD COLUMN {col} {defn} AFTER {after}")
+            except Exception:
+                # Already present — silent.
+                pass
+        # Backfill visit_date from created_at on rows where it's the
+        # default sentinel (older inserts that predate this column).
+        try:
+            cur.execute("UPDATE meeting_log SET visit_date = DATE(created_at) "
+                        "WHERE visit_date = '1970-01-01'")
+        except Exception:
+            pass
+        # Add helpful index after the column exists.
+        try:
+            cur.execute("ALTER TABLE meeting_log "
+                        "ADD INDEX idx_meeting_visit_date (visit_date)")
+        except Exception:
+            pass
         conn.commit()
         cur.close(); conn.close()
         os.makedirs(MEETING_PHOTO_DIR, exist_ok=True)
@@ -5953,11 +5962,25 @@ def meeting_post():
         met       = (request.form.get("met_person") or "").strip()
         notes     = (request.form.get("notes") or "").strip()
         next_act  = (request.form.get("next_action") or "").strip()
+        visit_in  = (request.form.get("visit_date") or "").strip()
 
         if not ship_to:
             return jsonify({"error": "ship_to is required"}), 400
         if not notes:
             return jsonify({"error": "notes is required"}), 400
+
+        # Visit date: YYYY-MM-DD; default to today if blank/invalid.
+        # Capped at today so BDE can backfill past visits but can't
+        # invent future ones.
+        from datetime import date as _date_cls
+        visit_date_obj = _date_cls.today()
+        if visit_in:
+            try:
+                visit_date_obj = datetime.strptime(visit_in, "%Y-%m-%d").date()
+            except ValueError:
+                pass
+        if visit_date_obj > _date_cls.today():
+            visit_date_obj = _date_cls.today()
 
         # The Sold-to picker submits the NAME (because /api/sold_to_names
         # only exposes names).  We resolve it to a sold-to CODE via the
@@ -6024,11 +6047,12 @@ def meeting_post():
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
             INSERT INTO meeting_log
-                (bde_email, bde_name, sold_to, sold_to_name, ship_to,
-                 met_person, notes, next_action, photo_paths)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (bde_email, bde_name, sold_to, sold_to_name, ship_to, met,
-              notes, next_act, ",".join(saved) if saved else None))
+                (visit_date, bde_email, bde_name, sold_to, sold_to_name,
+                 ship_to, met_person, notes, next_action, photo_paths)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (visit_date_obj, bde_email, bde_name, sold_to, sold_to_name,
+              ship_to, met, notes, next_act,
+              ",".join(saved) if saved else None))
         new_id = cur.lastrowid
         conn.commit()
         cur.close(); conn.close()
@@ -6055,7 +6079,8 @@ def meeting_list():
 
         conn = get_connection(); cur = conn.cursor(dictionary=True)
         cur.execute(f"""
-            SELECT m.id, m.created_at, m.bde_email, m.bde_name,
+            SELECT m.id, m.created_at, m.visit_date,
+                   m.bde_email, m.bde_name,
                    m.sold_to, m.ship_to, m.met_person,
                    m.notes, m.next_action, m.photo_paths,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
@@ -6070,12 +6095,13 @@ def meeting_list():
                 FROM customer GROUP BY ship_to
             ) c ON c.ship_to = m.ship_to
             {where_sql}
-            ORDER BY m.created_at DESC
+            ORDER BY m.visit_date DESC, m.created_at DESC
             LIMIT {limit}
         """, tuple(params))
         rows = cur.fetchall()
         for r in rows:
-            r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M")
+            r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M") if r["created_at"] else ""
+            r["visit_date"] = r["visit_date"].strftime("%Y-%m-%d") if r["visit_date"] else ""
             r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
         cur.close(); conn.close()
         return jsonify(rows)
