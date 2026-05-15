@@ -6219,6 +6219,53 @@ def _bde_from_request():
 def meeting_page():
     return send_from_directory("static", "meeting.html")
 
+@app.get("/api/mail_test")
+def mail_test():
+    """Diagnostic: try sending one test email to a given address.
+    Use ?to=you@example.com.  Reports whether SMTP creds are loaded,
+    what the helper would do, and (if it attempts to send) the exact
+    error if it fails — so the user can see what's wrong without
+    digging into server logs."""
+    to = (request.args.get("to") or "").strip()
+    if not to:
+        return jsonify({"error": "missing ?to=email"}), 400
+
+    report = {
+        "mail_from":          MAIL_FROM,
+        "smtp_host":          SMTP_HOST,
+        "smtp_port":          SMTP_PORT,
+        "smtp_user":          SMTP_USER,
+        "smtp_password_set":  bool(SMTP_PASSWORD),
+        "smtp_use_tls":       SMTP_USE_TLS,
+        "to":                 to,
+    }
+    if not SMTP_PASSWORD:
+        report["result"] = "SKIPPED — SMTP_PASSWORD is empty in .env"
+        return jsonify(report)
+
+    # Send synchronously so the error (if any) makes it back in the
+    # HTTP response.  Identical SMTP path to _send_mail_async otherwise.
+    import smtplib
+    from email.message import EmailMessage
+    try:
+        msg = EmailMessage()
+        msg["From"]    = MAIL_FROM
+        msg["To"]      = to
+        msg["Subject"] = "[BDE Visit] SMTP test from the dashboard"
+        msg.set_content("This is a test message from the dashboard.  "
+                        "If you got it, SMTP is wired up correctly.")
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            s.set_debuglevel(1)
+            if SMTP_USE_TLS: s.starttls()
+            if SMTP_USER and SMTP_PASSWORD:
+                s.login(SMTP_USER, SMTP_PASSWORD)
+            s.send_message(msg, from_addr=MAIL_FROM, to_addrs=[to])
+        report["result"] = "SENT — check the inbox (and spam)"
+        return jsonify(report)
+    except Exception as e:
+        report["result"] = f"FAILED — {type(e).__name__}: {e}"
+        return jsonify(report), 500
+
 @app.get("/api/people")
 def people_directory():
     """Names that can leave feedback — BDEs + State Managers + Hayden + JJ.
