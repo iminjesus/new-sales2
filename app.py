@@ -5861,15 +5861,19 @@ build_global_top_once()
 MEETING_PHOTO_DIR = os.path.join(BASE_DIR, "static", "meeting_photos")
 
 # ── Mail config ────────────────────────────────────────────────────
-# All settings overridable via .env so the SMTP credentials never live
-# in the repo.  Defaults target Microsoft 365 Exchange Online SMTP for
-# the dashboard mailbox provided by IT.
+# All settings overridable via .env so SMTP / Graph credentials never
+# live in the repo.  Two delivery paths are supported, in order of
+# preference: Microsoft Graph API (modern auth, recommended) →
+# Exchange SMTP (legacy, blocked by Security Defaults).
 MAIL_FROM      = os.getenv("MAIL_FROM",      "dashboard@hankooktyre.com.au")
 SMTP_HOST      = os.getenv("SMTP_HOST",      "smtp.office365.com")
 SMTP_PORT      = int(os.getenv("SMTP_PORT",  "587"))
 SMTP_USER      = os.getenv("SMTP_USER",      MAIL_FROM)
-SMTP_PASSWORD  = os.getenv("SMTP_PASSWORD",  "")  # MUST be set in .env to actually send
+SMTP_PASSWORD  = os.getenv("SMTP_PASSWORD",  "")
 SMTP_USE_TLS   = (os.getenv("SMTP_USE_TLS",  "1") == "1")
+GRAPH_TENANT_ID     = os.getenv("GRAPH_TENANT_ID",     "")
+GRAPH_CLIENT_ID     = os.getenv("GRAPH_CLIENT_ID",     "")
+GRAPH_CLIENT_SECRET = os.getenv("GRAPH_CLIENT_SECRET", "")
 DASHBOARD_URL  = os.getenv("DASHBOARD_URL",  "https://sales.hkaudashboard.com")
 MAIL_DEBUG     = (os.getenv("MAIL_DEBUG",    "0") == "1")
 
@@ -5930,44 +5934,108 @@ def _lookup_bde_email(name):
 def _lookup_bde_state(name):
     return _BDE_STATE_MAP.get((name or "").strip().upper())
 
-def _send_mail_async(to_list, cc_list, subject, html_body):
-    """Background-thread SMTP send so the API response isn't blocked."""
-    import smtplib, threading, re as _re
-    from email.message import EmailMessage
+# ── Microsoft Graph token cache ────────────────────────────────────
+# Tokens live ~1h; we cache and refresh ~60s before expiry.
+_GRAPH_TOKEN = {"access_token": None, "expires_at": 0.0}
 
+def _get_graph_token():
+    import time as _time, requests as _rq
+    now = _time.time()
+    cached = _GRAPH_TOKEN["access_token"]
+    if cached and _GRAPH_TOKEN["expires_at"] > now + 60:
+        return cached
+    if not (GRAPH_TENANT_ID and GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET):
+        raise RuntimeError("Graph creds not set: GRAPH_TENANT_ID / "
+                           "GRAPH_CLIENT_ID / GRAPH_CLIENT_SECRET")
+    r = _rq.post(
+        f"https://login.microsoftonline.com/{GRAPH_TENANT_ID}/oauth2/v2.0/token",
+        data={
+            "client_id":     GRAPH_CLIENT_ID,
+            "client_secret": GRAPH_CLIENT_SECRET,
+            "scope":         "https://graph.microsoft.com/.default",
+            "grant_type":    "client_credentials",
+        },
+        timeout=15,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"token endpoint {r.status_code}: {r.text[:300]}")
+    j = r.json()
+    _GRAPH_TOKEN["access_token"] = j["access_token"]
+    _GRAPH_TOKEN["expires_at"]   = now + int(j.get("expires_in", 3600))
+    return _GRAPH_TOKEN["access_token"]
+
+def _graph_send(to_list, cc_list, subject, html_body):
+    """Send via Microsoft Graph /sendMail.  Raises on failure."""
+    import requests as _rq
+    token = _get_graph_token()
+    payload = {
+        "message": {
+            "subject": subject,
+            "body":    {"contentType": "HTML", "content": html_body},
+            "from":    {"emailAddress": {"address": MAIL_FROM}},
+            "toRecipients": [{"emailAddress": {"address": x}} for x in (to_list or [])],
+            "ccRecipients": [{"emailAddress": {"address": x}} for x in (cc_list or [])],
+        },
+        "saveToSentItems": "true",
+    }
+    r = _rq.post(
+        f"https://graph.microsoft.com/v1.0/users/{MAIL_FROM}/sendMail",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type":  "application/json"},
+        json=payload, timeout=20,
+    )
+    if r.status_code not in (200, 202):
+        raise RuntimeError(f"graph sendMail {r.status_code}: {r.text[:400]}")
+
+def _smtp_send(to_list, cc_list, subject, html_body):
+    """Legacy SMTP send.  Raises on failure."""
+    import smtplib, re as _re
+    from email.message import EmailMessage
+    if not SMTP_PASSWORD:
+        raise RuntimeError("SMTP_PASSWORD not set")
+    msg = EmailMessage()
+    msg["From"] = MAIL_FROM
+    msg["To"]   = ", ".join(to_list or [])
+    if cc_list: msg["Cc"] = ", ".join(cc_list)
+    msg["Subject"] = subject
+    txt = _re.sub(r"<[^>]+>", "", html_body)
+    txt = txt.replace("&nbsp;", " ").replace("&amp;", "&")
+    msg.set_content(txt)
+    msg.add_alternative(html_body, subtype="html")
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+        if SMTP_USE_TLS: s.starttls()
+        if SMTP_USER and SMTP_PASSWORD:
+            s.login(SMTP_USER, SMTP_PASSWORD)
+        s.send_message(msg, from_addr=MAIL_FROM,
+                       to_addrs=(to_list or []) + (cc_list or []))
+
+def _send_mail_async(to_list, cc_list, subject, html_body):
+    """Pick Graph if creds present, else SMTP, else just log.  Runs the
+    actual delivery on a background thread so the API request returns
+    immediately."""
+    import threading
     if not (to_list or cc_list):
         return
-    if not SMTP_PASSWORD:
+    if GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET and GRAPH_TENANT_ID:
+        path, sender = "graph", _graph_send
+    elif SMTP_PASSWORD:
+        path, sender = "smtp",  _smtp_send
+    else:
         if MAIL_DEBUG:
             print(f"[mail] would send to {to_list} cc {cc_list}: {subject}")
         else:
-            print(f"[mail] SMTP_PASSWORD not set — skipping send "
+            print(f"[mail] no Graph or SMTP creds set — skipping "
                   f"(to {to_list}, subject={subject!r})")
         return
 
     def _run():
         try:
-            msg = EmailMessage()
-            msg["From"] = MAIL_FROM
-            msg["To"]   = ", ".join(to_list or [])
-            if cc_list: msg["Cc"] = ", ".join(cc_list)
-            msg["Subject"] = subject
-            # Plain-text fallback: strip tags + decode entities.
-            txt = _re.sub(r"<[^>]+>", "", html_body)
-            txt = txt.replace("&nbsp;", " ").replace("&amp;", "&")
-            msg.set_content(txt)
-            msg.add_alternative(html_body, subtype="html")
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-                if SMTP_USE_TLS: s.starttls()
-                if SMTP_USER and SMTP_PASSWORD:
-                    s.login(SMTP_USER, SMTP_PASSWORD)
-                s.send_message(msg, from_addr=MAIL_FROM,
-                               to_addrs=(to_list or []) + (cc_list or []))
+            sender(to_list, cc_list, subject, html_body)
             if MAIL_DEBUG:
-                print(f"[mail] sent: {subject} → {to_list} cc {cc_list}")
+                print(f"[mail/{path}] sent: {subject} → {to_list} cc {cc_list}")
         except Exception as e:
             traceback.print_exc()
-            print(f"[mail] send failed: {e}")
+            print(f"[mail/{path}] send failed: {e}")
     threading.Thread(target=_run, daemon=True).start()
 
 def _esc_html(s):
@@ -6221,50 +6289,52 @@ def meeting_page():
 
 @app.get("/api/mail_test")
 def mail_test():
-    """Diagnostic: try sending one test email to a given address.
-    Use ?to=you@example.com.  Reports whether SMTP creds are loaded,
-    what the helper would do, and (if it attempts to send) the exact
-    error if it fails — so the user can see what's wrong without
-    digging into server logs."""
+    """Diagnostic: try sending one test email synchronously so any error
+    surfaces in the HTTP response.  Picks Graph if creds are set, else
+    SMTP.  Use ?to=you@example.com."""
     to = (request.args.get("to") or "").strip()
     if not to:
         return jsonify({"error": "missing ?to=email"}), 400
 
     report = {
         "mail_from":          MAIL_FROM,
+        "graph_tenant_set":   bool(GRAPH_TENANT_ID),
+        "graph_client_set":   bool(GRAPH_CLIENT_ID),
+        "graph_secret_set":   bool(GRAPH_CLIENT_SECRET),
         "smtp_host":          SMTP_HOST,
         "smtp_port":          SMTP_PORT,
         "smtp_user":          SMTP_USER,
         "smtp_password_set":  bool(SMTP_PASSWORD),
-        "smtp_use_tls":       SMTP_USE_TLS,
         "to":                 to,
     }
-    if not SMTP_PASSWORD:
-        report["result"] = "SKIPPED — SMTP_PASSWORD is empty in .env"
-        return jsonify(report)
+    subject = "[BDE Visit] Mail-path test from the dashboard"
+    body    = ("<p>This is a test message from the dashboard.</p>"
+               "<p>If you got it, mail delivery is wired up correctly.</p>")
 
-    # Send synchronously so the error (if any) makes it back in the
-    # HTTP response.  Identical SMTP path to _send_mail_async otherwise.
-    import smtplib
-    from email.message import EmailMessage
-    try:
-        msg = EmailMessage()
-        msg["From"]    = MAIL_FROM
-        msg["To"]      = to
-        msg["Subject"] = "[BDE Visit] SMTP test from the dashboard"
-        msg.set_content("This is a test message from the dashboard.  "
-                        "If you got it, SMTP is wired up correctly.")
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-            s.set_debuglevel(1)
-            if SMTP_USE_TLS: s.starttls()
-            if SMTP_USER and SMTP_PASSWORD:
-                s.login(SMTP_USER, SMTP_PASSWORD)
-            s.send_message(msg, from_addr=MAIL_FROM, to_addrs=[to])
-        report["result"] = "SENT — check the inbox (and spam)"
-        return jsonify(report)
-    except Exception as e:
-        report["result"] = f"FAILED — {type(e).__name__}: {e}"
-        return jsonify(report), 500
+    if GRAPH_TENANT_ID and GRAPH_CLIENT_ID and GRAPH_CLIENT_SECRET:
+        report["path"] = "graph"
+        try:
+            _graph_send([to], [], subject, body)
+            report["result"] = "SENT via Microsoft Graph — check inbox (and spam)"
+            return jsonify(report)
+        except Exception as e:
+            report["result"] = f"FAILED — {type(e).__name__}: {e}"
+            return jsonify(report), 500
+
+    if SMTP_PASSWORD:
+        report["path"] = "smtp"
+        try:
+            _smtp_send([to], [], subject, body)
+            report["result"] = "SENT via SMTP — check inbox (and spam)"
+            return jsonify(report)
+        except Exception as e:
+            report["result"] = f"FAILED — {type(e).__name__}: {e}"
+            return jsonify(report), 500
+
+    report["path"]   = "none"
+    report["result"] = ("SKIPPED — set GRAPH_TENANT_ID / GRAPH_CLIENT_ID / "
+                        "GRAPH_CLIENT_SECRET (recommended) or SMTP_PASSWORD in .env")
+    return jsonify(report)
 
 @app.get("/api/people")
 def people_directory():
