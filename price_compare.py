@@ -203,6 +203,7 @@ _HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tyre Price Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
@@ -306,6 +307,34 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 .ctable.idxtbl thead th.th-month { background: #37474F; }
 .idx-title { font-size: 12px; font-weight: 700; color: #37474F;
              padding: 12px 12px 4px 12px; letter-spacing: .03em; text-transform: uppercase; }
+
+/* ── Mobile / tablet ─────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  body { height: auto; overflow: auto; }
+  .hdr { padding: 8px 12px; flex-wrap: wrap; gap: 6px; }
+  .hdr h1, .hdr .title { font-size: 14px !important; }
+  .hdr .nav { width: 100%; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+  .hdr .nav a { font-size: 11px !important; padding: 4px 8px !important; flex: 1 1 auto; text-align: center; }
+  /* Stack the two main panels vertically */
+  .main, .body, .layout { flex-direction: column !important; height: auto !important; }
+  .left, .right { width: 100% !important; border-right: none !important;
+                  border-bottom: 1px solid #d0d5dd; }
+  /* Tables: horizontal scroll wrapper + smaller font */
+  .left, .right { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .btable, .ctable { font-size: 11px !important; min-width: 480px; }
+  .btable th, .btable td, .ctable th, .ctable td {
+    padding: 5px 6px !important; white-space: nowrap;
+  }
+  /* Chart container: shorter on mobile */
+  .chart-wrap { height: 280px !important; }
+  /* Filter / button rows wrap nicely */
+  .filters, .btns, .toolbar { flex-wrap: wrap !important; gap: 5px !important; }
+  .btns button, .filters select { font-size: 11px !important; padding: 4px 8px !important; }
+}
+@media (max-width: 480px) {
+  .hdr h1, .hdr .title { font-size: 12px !important; }
+  .btable, .ctable { min-width: 360px; }
+}
 </style>
 </head>
 <body>
