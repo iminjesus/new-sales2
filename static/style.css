@@ -513,13 +513,27 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 .kpi-profit-row > .kpi-box {
   width: 700px;
   box-sizing: border-box;
-  overflow: hidden;
+  overflow-x: auto;          /* let the 7-col table scroll horizontally
+                                 instead of clipping when the screen is
+                                 narrower than 700px */
 }
 .kpi-profit-row > .profit-box {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
   overflow: hidden;
+}
+
+/* Mid-range screens (tablet / narrow desktop): the desktop grid
+   forces the KPI box to 700px which leaves the profit chart with
+   too little room.  Stack them vertically below 1100px. */
+@media (max-width: 1100px) {
+  .kpi-profit-row { grid-template-columns: 1fr !important; }
+  .kpi-profit-row > .kpi-box,
+  .kpi-profit-row > .profit-box {
+    width: 100% !important;
+    min-width: 0;
+  }
 }
 .profit-chart-canvas {
   display: block;
@@ -577,6 +591,15 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   .kpi-profit-row > .kpi-box {
     width: 100%;
     min-width: 0;
+    overflow-x: auto;        /* table scrolls when narrower than column-widths sum */
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Table itself: shrink-friendly but still readable — let column-width
+     rules below decide the actual width.  No fixed min so it can shrink
+     to fit the parent. */
+  #kpiByRegion {
+    min-width: 0 !important;
+    width: max-content !important;
   }
 
   /* KPI table: smaller font and columns */
