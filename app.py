@@ -501,16 +501,20 @@ def _release_db_conns(exc):
     """Safety net: any pooled connection that get_connection() handed out
     during this request gets returned to the pool here, even if the
     handler raised an exception before its own cur.close()/conn.close().
-    Prevents the pool from leaking under SQL errors."""
-    bucket = getattr(g, "_db_conns", None) or []
+    Prevents the pool from leaking under SQL errors.
+
+    Cheap: no is_connected() ping — just call .close() and let
+    mysql-connector silently no-op when the conn was already returned
+    by the handler."""
+    bucket = getattr(g, "_db_conns", None)
+    if not bucket:
+        return
     for conn in bucket:
         try:
-            if conn and conn.is_connected():
-                conn.close()
+            conn.close()
         except Exception:
             pass
-    try: g._db_conns = []
-    except Exception: pass
+    g._db_conns = []
 
 def category_filters_stock(alias: str, category: str):
     joins, wh = [], []
