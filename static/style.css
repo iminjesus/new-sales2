@@ -548,7 +548,33 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 
 /* ─── Mobile responsive ─────────────────────────────────── */
 @media (max-width: 768px) {
-  body { margin: 8px; }
+  body { margin: 8px; padding-top: 46px; }
+
+  /* View-switch nav (Graph / Map / Stock / Rebate / Price / Meeting)
+     pinned to the very top of the viewport on mobile, separated from
+     the rest of the filters.  Always visible, scrolls horizontally if
+     it doesn't fit. */
+  #viewSwitch {
+    position: fixed !important;
+    top: 0; left: 0; right: 0;
+    z-index: 1000;
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 6px 6px;
+    margin: 0 !important;
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 4px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  #viewSwitch .btn {
+    flex: 0 0 auto;
+    font-size: 11px !important;
+    padding: 5px 10px !important;
+    white-space: nowrap;
+  }
 
   h2 { font-size: 15px !important; }
   h3 { font-size: 12px; margin: 0 0 6px; }

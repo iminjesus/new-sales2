@@ -310,11 +310,18 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 
 /* ── Mobile / tablet ─────────────────────────────────────────────── */
 @media (max-width: 900px) {
-  body { height: auto; overflow: auto; }
+  body { height: auto; overflow: auto; padding-top: 46px; }
   .hdr { padding: 8px 12px; flex-wrap: wrap; gap: 6px; }
   .hdr h1, .hdr .title { font-size: 14px !important; }
-  .hdr .nav { width: 100%; display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
-  .hdr .nav a { font-size: 11px !important; padding: 4px 8px !important; flex: 1 1 auto; text-align: center; }
+  /* Pin the nav to the very top of the viewport on mobile so it's
+     always one tap away from any of the dashboard pages. */
+  .hdr .nav {
+    position: fixed !important; top: 0; left: 0; right: 0; z-index: 1000;
+    margin: 0 !important; background: #1F4E79; border-bottom: 1px solid #163C5C;
+    padding: 6px 6px; display: flex; flex-wrap: nowrap; overflow-x: auto;
+    -webkit-overflow-scrolling: touch; gap: 4px; width: auto;
+  }
+  .hdr .nav a { flex: 0 0 auto; font-size: 11px !important; padding: 5px 10px !important; text-align: center; white-space: nowrap; }
   /* Stack the two main panels vertically */
   .main, .body, .layout { flex-direction: column !important; height: auto !important; }
   .left, .right { width: 100% !important; border-right: none !important;

@@ -21,12 +21,19 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .card h2{font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:10px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
 @media (max-width:640px){
+  body{padding-top:46px}
   .grid{grid-template-columns:1fr}
   header{flex-wrap:wrap;padding:8px 12px;gap:6px}
   header h1{font-size:13px}
   header .sub{display:none}
-  header .nav{margin-left:0;width:100%;flex-wrap:wrap;gap:4px}
-  header .nav .btn{font-size:10px;padding:4px 8px;flex:1 1 auto}
+  /* Pin the nav strip to the very top so it's always one tap away */
+  header .nav{
+    position:fixed !important;top:0;left:0;right:0;z-index:1000;
+    margin:0 !important;background:#1e3a5f;border-bottom:1px solid #15314e;
+    padding:6px 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;gap:4px;width:auto;
+  }
+  header .nav .btn{flex:0 0 auto;font-size:11px;padding:5px 10px;white-space:nowrap}
   .container{padding:8px}
   .card{padding:10px}
   /* Recent entries table — horizontal scroll wrapper so all 5 cols fit */

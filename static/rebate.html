@@ -83,13 +83,29 @@ tr.ship-row td:first-child{padding-left:28px}
 .ul{font-size:9px;color:#6b7280}
 .empty{text-align:center;padding:40px;color:#9ca3af}
 #loading{padding:20px;text-align:center;color:#6b7280;display:none}
+
+/* Mobile — pin nav to viewport top, rest of header below it */
+@media (max-width: 768px){
+  body{padding-top:46px}
+  header{flex-wrap:wrap;padding:8px 12px}
+  header h1{font-size:13px}
+  header .sub{display:none}
+  #viewSwitch{
+    position:fixed !important;top:0;left:0;right:0;z-index:1000;
+    margin:0 !important;background:#fff;border-bottom:1px solid #e5e7eb;
+    padding:6px 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;gap:4px;
+    box-shadow:0 1px 4px rgba(0,0,0,.08);
+  }
+  #viewSwitch .btn{flex:0 0 auto;font-size:11px !important;padding:5px 10px !important;white-space:nowrap}
+}
 </style>
 </head>
 <body>
 <header>
   <h1>Rebate Calculator</h1>
   <span class="sub">sales_thismonth cumulative data</span>
-  <div style="margin-left:auto;display:flex;gap:6px">
+  <div id="viewSwitch" style="margin-left:auto;display:flex;gap:6px">
     <button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="window.location.href='/'">Graph View</button>
     <button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="window.location.href='/map'">Map View</button>
     <button class="btn btn-outline" style="font-size:11px;padding:4px 10px" onclick="window.location.href='/stock'">Stock</button>
