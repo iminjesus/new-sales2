@@ -735,10 +735,11 @@ def get_connection():
         "use_pure": True,
     }
 
-    # pool_size 50: a single dashboard page-load can fire 15-20 concurrent
-    # API calls under threaded=True.  Pool must comfortably exceed peak
-    # concurrency, otherwise PoolError leaks slow down the next request.
-    pool_size = int(os.getenv("DB_POOL_SIZE", "50"))
+    # pool_size 32: mysql-connector-python caps the pool at 32.  With
+    # the teardown_request safety net below making sure no connection
+    # leaks past a single request, 32 is comfortable for a single
+    # dashboard tab's 15-20 concurrent calls.
+    pool_size = int(os.getenv("DB_POOL_SIZE", "32"))
     pool_name = os.getenv("DB_POOL_NAME", "hka_pool")
 
     if _MYSQL_POOL is None:
