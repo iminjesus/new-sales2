@@ -2622,22 +2622,75 @@ async function applyRoleScope() {
       sel.disabled = true;
       sel.title = `Locked: ${me.name} (${me.role})`;
     }
+    // A BDE also belongs to one region — disable every region chip
+    // except theirs so they can't widen the view by clicking around.
+    if (me.state) {
+      filters.region = me.state;
+      _lockRegion(me.state, `Locked: ${me.name} (BDE — ${me.state})`);
+    }
+    // Group By: "region" / "salesman" buckets collapse to a single row
+    // for a single BDE, so disable those options and fall back to a
+    // meaningful default.
+    _disableGroupByOptions(["region", "salesman"], "sold_to_group");
   }
   // Region lock (SM role).  Mark the matching chip active, disable the rest.
   if (me.lock_region) {
     filters.region = me.lock_region;
-    document.querySelectorAll("#regionBtns .btn").forEach(b => {
-      const is = b.dataset.val === me.lock_region;
-      b.classList.toggle("active", is);
-      if (!is) {
-        b.disabled = true;
-        b.style.opacity = "0.4";
-        b.style.cursor  = "not-allowed";
-        b.title = `Locked: ${me.name} (State Manager — ${me.state})`;
-      }
-    });
+    _lockRegion(me.lock_region,
+                `Locked: ${me.name} (State Manager — ${me.state})`);
+    // Salesman dropdown: still useful for an SM to drill down to one
+    // of their BDEs, but it should only list this state's BDEs.
+    _populateSalesmanForRegion(me.lock_region);
+    // Group By "region" collapses to a single row for one state, so
+    // disable that option.  "salesman" remains so the SM can break
+    // their state down by BDE.
+    _disableGroupByOptions(["region"], "salesman");
   }
   _renderRoleBadge(me);
+}
+
+// Helpers used by applyRoleScope ------------------------------------
+function _lockRegion(region, title) {
+  document.querySelectorAll("#regionBtns .btn").forEach(b => {
+    const is = b.dataset.val === region;
+    b.classList.toggle("active", is);
+    if (!is) {
+      b.disabled = true;
+      b.style.opacity = "0.4";
+      b.style.cursor = "not-allowed";
+      b.title = title;
+    } else {
+      b.title = title;
+    }
+  });
+}
+function _populateSalesmanForRegion(region) {
+  const sel = document.getElementById("salesman_name");
+  if (!sel) return;
+  const list = (typeof REGION_SALESMEN !== "undefined" && REGION_SALESMEN[region]) || [];
+  if (typeof populateSelect === "function") {
+    populateSelect(sel, [...new Set(list)].sort());
+  }
+}
+function _disableGroupByOptions(values, fallback) {
+  const sel = document.getElementById("group_by");
+  if (!sel) return;
+  let needSwitch = false;
+  [...sel.options].forEach(o => {
+    if (values.includes(o.value)) {
+      o.disabled = true;
+      o.title = "Not available for your role";
+      if (sel.value === o.value) needSwitch = true;
+    }
+  });
+  if (needSwitch) {
+    const target = [...sel.options].find(o => o.value === fallback && !o.disabled)
+                 || [...sel.options].find(o => !o.disabled);
+    if (target) {
+      sel.value = target.value;
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
 }
 function _renderRoleBadge(me) {
   if (document.getElementById("roleBadge")) return;
