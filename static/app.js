@@ -1276,12 +1276,30 @@ async function drawMonthlyKPI(){
     return { Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI };
   }
 
-  rows.push({ region: "All", bde: "All", ...rowFor(allBdes) });
-  for (const region of REGIONS) {
-    const bdes = REGION_SALESMEN[region] || [];
-    rows.push({ region, bde: "All", ...rowFor(bdes) });
+  // Role-based scope filter on the rendered breakdown:
+  //   BDE  → only their own row.
+  //   SM   → only their state's region block.
+  //   ALL  → everything (default).
+  const me = window._me || {};
+  const lockBde    = (me.lock_salesman || "").trim().toUpperCase();
+  const lockRegion = (me.lock_region   || "").trim().toUpperCase();
+
+  if (lockBde) {
+    rows.push({ region: me.state || "—", bde: me.name, ...rowFor([me.name]) });
+  } else if (lockRegion) {
+    const bdes = REGION_SALESMEN[lockRegion] || [];
+    rows.push({ region: lockRegion, bde: "All", ...rowFor(bdes) });
     for (const bde of bdes) {
-      rows.push({ region, bde, ...rowFor([bde]) });
+      rows.push({ region: lockRegion, bde, ...rowFor([bde]) });
+    }
+  } else {
+    rows.push({ region: "All", bde: "All", ...rowFor(allBdes) });
+    for (const region of REGIONS) {
+      const bdes = REGION_SALESMEN[region] || [];
+      rows.push({ region, bde: "All", ...rowFor(bdes) });
+      for (const bde of bdes) {
+        rows.push({ region, bde, ...rowFor([bde]) });
+      }
     }
   }
 

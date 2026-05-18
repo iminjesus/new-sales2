@@ -5890,28 +5890,31 @@ MAIL_DEBUG     = (os.getenv("MAIL_DEBUG",    "0") == "1")
 #         "SM"   → locked to their state's region filter.
 #         "ALL"  → no scope restriction (leadership / dashboard ops).
 _BDE_DIRECTORY = [
+    # Name MUST match the customer.salesman_name format used by the
+    # database / REGION_SALESMEN constant in app.js — generally
+    # "Lastname Firstname" with the case the DB stores, otherwise the
+    # lock_salesman value won't match any rows.
     # NSW
-    ("Peter Robinson",   "peter.robinson@hankooktyre.com.au",   "NSW", "BDE"),
-    ("Paul Buckley",     "paul.buckley@hankooktyre.com.au",     "NSW", "SM"),
-    ("Alessio Borghese", "alessio.borghese@hankooktyre.com.au", "NSW", "BDE"),
+    ("Robinson Peter",   "peter.robinson@hankooktyre.com.au",   "NSW", "BDE"),
+    ("Buckley Paul",     "paul.buckley@hankooktyre.com.au",     "NSW", "SM"),
+    ("Borghese Alessio", "alessio.borghese@hankooktyre.com.au", "NSW", "BDE"),
     # QLD
-    ("Aaron Marsh",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
-    ("Steven Spires",    "steven.spires@hankooktyre.com.au",    "QLD", "BDE"),
-    ("Adam Maclure",     "adam.maclure@hankooktyre.com.au",     "QLD", "BDE"),
+    ("Marsh Aaron",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
+    ("Spires Steven",    "steven.spires@hankooktyre.com.au",    "QLD", "BDE"),
+    ("Maclure Adam",     "adam.maclure@hankooktyre.com.au",     "QLD", "BDE"),
     # VIC / SA / TAS (one SM covers all three; the region filter
     # groups SA/TAS shops under VIC)
-    ("Calvin Hobkirk",   "calvin.hobkirk@hankooktyre.com.au",   "VIC", "SM"),
-    ("Kelley Bilston",   "kelley.bilston@hankooktyre.com.au",   "VIC", "BDE"),
-    ("Nicola Bellotto",  "nicola.bellotto@hankooktyre.com.au",  "VIC", "BDE"),
-    ("Jason Gultjaeff",  "jason.gultjaeff@hankooktyre.com.au",  "SA",  "BDE"),
+    ("Hobkirk Calvin",   "calvin.hobkirk@hankooktyre.com.au",   "VIC", "SM"),
+    ("Bilston Kelley",   "kelley.bilston@hankooktyre.com.au",   "VIC", "BDE"),
+    ("Bellotto Nicola",  "nicola.bellotto@hankooktyre.com.au",  "VIC", "BDE"),
+    ("Gultjaeff Jason",  "jason.gultjaeff@hankooktyre.com.au",  "SA",  "BDE"),
     # WA
     ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA",  "SM"),
-    ("Jim Dais",         "jim.dais@hankooktyre.com.au",         "WA",  "BDE"),
+    ("DAIS Jim",         "jim.dais@hankooktyre.com.au",         "WA",  "BDE"),
     # Leadership / dashboard ops — full scope
-    ("Hayden Begbie",    "hayden.begbie@hankooktyre.com.au",    "NSW", "ALL"),
-    ("JJ Cho",           "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
-    ("Junjong Cho",      "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
-    ("Jayden Bhang",     "jayden.bhang@hankooktyre.com.au",     "NSW", "ALL"),
+    ("Begbie Hayden",    "hayden.begbie@hankooktyre.com.au",    "NSW", "ALL"),
+    ("Cho JunJong",      "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
+    ("Bhang Jayden",     "jayden.bhang@hankooktyre.com.au",     "NSW", "ALL"),
 ]
 STATE_MANAGER_EMAIL = {
     "NSW": "paul.buckley@hankooktyre.com.au",
