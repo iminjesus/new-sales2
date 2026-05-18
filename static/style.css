@@ -649,6 +649,64 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
     height: 200px !important;
   }
 
+  /* BDE visit table on the map page has 16 columns (State, BDE,
+     Shops, Total, Jan..Dec) — wrap it in horizontal-scroll so the
+     numbers stay readable instead of being squashed into illegible
+     2-px wide cells. */
+  #bdeVisitTablePane {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  #bdeVisitTable {
+    min-width: 720px;
+    font-size: 11px !important;
+  }
+  #bdeVisitTable th,
+  #bdeVisitTable td {
+    padding: 3px 4px !important;
+    white-space: nowrap;
+  }
+  /* Metric-toggle buttons above the table: keep them readable */
+  #bdeMetricBtns { flex-wrap: wrap; }
+  #bdeMetricBtns .btn {
+    font-size: 10px !important;
+    padding: 2px 6px !important;
+  }
+
+  /* Shop-status chips above the map — let them wrap to a second line
+     instead of overflowing.  Tighter padding so they still fit nicely. */
+  #shopStatusBtns {
+    flex-wrap: wrap !important;
+    gap: 4px !important;
+    padding: 5px 6px !important;
+  }
+  #shopStatusBtns label { width: 100%; margin-bottom: 2px; }
+  .ss-btn {
+    font-size: 11px !important;
+    padding: 4px 8px !important;
+  }
+  .ss-count { font-size: 10px !important; padding: 0 5px !important; }
+
+  /* Map legend: smaller text + wrap */
+  #mapLegend { font-size: 10px !important; }
+  #mapLegend > span { margin-right: 6px !important; }
+
+  /* Visit-log modal — full-screen on phones so feedback threads with
+     forwarded emails or photos don't get clipped behind the dialog
+     border. */
+  #visitLogBackdrop { padding: 0 !important; align-items: stretch !important; }
+  #visitLogDialog {
+    max-width: 100% !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+  }
+  .vl-lbl { flex: 0 0 70px !important; font-size: 9px !important; }
+  .vl-val { font-size: 12px !important; }
+  .vl-bde { font-size: 12px !important; }
+
+  /* Meeting page: tighten the card padding, photo thumbnails smaller */
+  #bdeVisitTotals { font-size: 10px !important; }
+
   /* ── Stock page ── */
   #stockLayout {
     flex-direction: column !important;
