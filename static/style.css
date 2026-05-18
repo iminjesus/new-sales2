@@ -579,9 +579,18 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
   h2 { font-size: 15px !important; }
   h3 { font-size: 12px; margin: 0 0 6px; }
 
-  /* Filter panel: collapsed by default on mobile */
-  #filterPanel { display: none; }
-  #filterPanel.open { display: block; }
+  /* Filter panel collapsed by default on mobile.  Use max-height/
+     overflow so children still participate in layout — important
+     because #viewSwitch lives inside the panel but needs to escape
+     to the top of the viewport via position:fixed regardless of
+     whether the user has opened the panel. */
+  #filterPanel {
+    max-height: 0;
+    overflow: hidden;
+    padding: 0;
+    margin: 0;
+  }
+  #filterPanel.open { max-height: none; overflow: visible; }
 
   /* Toggle button: visible on mobile */
   .filter-toggle-btn {
