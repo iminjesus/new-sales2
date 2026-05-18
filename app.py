@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, jsonify, send_file,send_from_directory
+﻿from flask import Flask, request, jsonify, send_file,send_from_directory, g, has_request_context
 from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
 import mysql.connector
@@ -496,6 +496,22 @@ def add_cache_headers(response):
         response.headers['Pragma'] = 'no-cache'
     return response
 
+@app.teardown_request
+def _release_db_conns(exc):
+    """Safety net: any pooled connection that get_connection() handed out
+    during this request gets returned to the pool here, even if the
+    handler raised an exception before its own cur.close()/conn.close().
+    Prevents the pool from leaking under SQL errors."""
+    bucket = getattr(g, "_db_conns", None) or []
+    for conn in bucket:
+        try:
+            if conn and conn.is_connected():
+                conn.close()
+        except Exception:
+            pass
+    try: g._db_conns = []
+    except Exception: pass
+
 def category_filters_stock(alias: str, category: str):
     joins, wh = [], []
     cat = (category or "ALL").upper()
@@ -719,9 +735,10 @@ def get_connection():
         "use_pure": True,
     }
 
-    # pool_size 25: page load fires ~15 concurrent API calls with threaded=True,
-    # so pool must be larger than peak concurrency to avoid PoolError.
-    pool_size = int(os.getenv("DB_POOL_SIZE", "25"))
+    # pool_size 50: a single dashboard page-load can fire 15-20 concurrent
+    # API calls under threaded=True.  Pool must comfortably exceed peak
+    # concurrency, otherwise PoolError leaks slow down the next request.
+    pool_size = int(os.getenv("DB_POOL_SIZE", "50"))
     pool_name = os.getenv("DB_POOL_NAME", "hka_pool")
 
     if _MYSQL_POOL is None:
@@ -741,6 +758,18 @@ def get_connection():
             conn = _MYSQL_POOL.get_connection()
             try:
                 conn.ping(reconnect=True, attempts=2, delay=1)
+            except Exception:
+                pass
+            # Track this connection on the current Flask request context
+            # so the teardown_request hook below can guarantee it's
+            # returned to the pool even when a handler raises an
+            # exception before its own cur.close() / conn.close().
+            try:
+                if has_request_context():
+                    bucket = getattr(g, "_db_conns", None)
+                    if bucket is None:
+                        bucket = []; g._db_conns = bucket
+                    bucket.append(conn)
             except Exception:
                 pass
             return conn
