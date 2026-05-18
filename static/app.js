@@ -433,8 +433,20 @@ document.getElementById('regionBtns').addEventListener("click",e=>{
   const all=Object.values(REGION_SALESMEN).flat();
   const list=filters.region==="ALL"?all:(REGION_SALESMEN[filters.region]||[]);
   populateSelect(document.getElementById('salesman_name'),[...new Set(list)].sort());
-  filters.salesman = 'ALL';
-  document.getElementById('salesman_name').value = 'ALL';
+  // Honour a locked salesman (BDE role) — don't let a region click
+  // reset the dropdown to "ALL" and leak data outside their scope.
+  const lockedSalesman = window._me && window._me.lock_salesman;
+  if (lockedSalesman) {
+    const sel = document.getElementById('salesman_name');
+    if (sel && ![...sel.options].some(o => o.value === lockedSalesman)) {
+      sel.add(new Option(lockedSalesman, lockedSalesman));
+    }
+    filters.salesman = lockedSalesman;
+    if (sel) { sel.value = lockedSalesman; sel.disabled = true; }
+  } else {
+    filters.salesman = 'ALL';
+    document.getElementById('salesman_name').value = 'ALL';
+  }
   refreshAllDebounced();
 });
 
@@ -2294,7 +2306,11 @@ function refreshAllDebounced(){
 
 (async function start(){
   await initControls();
-  
+  // Apply role-based filter locks BEFORE the first data refresh so the
+  // initial KPI / chart fetch already carries the right scope (BDE
+  // locked to own salesman, SM locked to own state).
+  await applyRoleScope();
+
   [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
   await refreshAllWithKpi();
   
@@ -2561,12 +2577,18 @@ async function refreshMaterialsCustom(){
 // filter values + show a small "Logged in as: …" badge.  Idempotent;
 // every page that imports app.js gets it.
 async function applyRoleScope() {
-  let me;
-  try {
-    const r = await fetch("/api/whoami", { credentials: "include" });
-    me = await r.json();
-  } catch (e) { return; }
-  window._me = me;
+  // Idempotent: cache the whoami response so duplicate calls (e.g. one
+  // from app.js start() and one from map.js DOMContentLoaded) only do
+  // the network round-trip once.  Always re-applies the lock to the UI
+  // though so a late-loaded select / button still gets disabled.
+  let me = window._me;
+  if (!me) {
+    try {
+      const r = await fetch("/api/whoami", { credentials: "include" });
+      me = await r.json();
+    } catch (e) { return; }
+    window._me = me;
+  }
   if (!me || !me.logged_in) return;   // local / Tailscale → no scope
 
   // Salesman lock (BDE role).  Set the global filter, force the
@@ -2617,10 +2639,6 @@ function _renderRoleBadge(me) {
 }
 
 window.addEventListener("load", async () => {
-  // Apply role-based filter locks BEFORE the first data refresh so
-  // the initial requests already carry the right scope.
-  await applyRoleScope();
-
   // initial load
   await refreshPatternsCustom();
   await refreshMaterialsCustom();

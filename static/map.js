@@ -685,6 +685,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     // ignore parse error
   }
 
+  // Wait for role-based locks before the first map fetch.  applyRoleScope
+  // is idempotent — if app.js already ran it, this is a no-op.
+  if (typeof applyRoleScope === "function") {
+    try { await applyRoleScope(); } catch(e) {}
+  }
+
   // Sync visible UI controls with the restored filter state so the user
   // can see what's currently active (chips/highlights/dropdown inputs).
   // Without this, filters carry over invisibly and the inputs look empty.
