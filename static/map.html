@@ -184,21 +184,30 @@
                       text-transform:uppercase;letter-spacing:.4px;
                       margin-right:4px;">Shop status</label>
         <button class="ss-btn ss-all active" data-status="ALL"
-                title="Show every shop">All</button>
+                title="Show every shop">All <span class="ss-count" data-c="ALL">–</span></button>
         <button class="ss-btn ss-logs" data-status="LOGS"
-                title="Only shops with at least one meeting log entry">📝 Logs</button>
+                title="Only shops with at least one meeting log entry">📝 Logs <span class="ss-count" data-c="LOGS">–</span></button>
         <button class="ss-btn ss-visit" data-status="VISIT"
-                title="Only shops with at least one GPS visit">📍 Visit</button>
+                title="Only shops with at least one GPS visit">📍 Visit <span class="ss-count" data-c="VISIT">–</span></button>
         <button class="ss-btn ss-novisit" data-status="NOVISIT"
-                title="Only shops with no GPS visit yet">🚫 No-visit</button>
+                title="Only shops with no GPS visit yet">🚫 No-visit <span class="ss-count" data-c="NOVISIT">–</span></button>
       </div>
       <style>
         .ss-btn{
           font-size:12px;font-weight:600;padding:5px 12px;
           border-radius:5px;cursor:pointer;border:1.5px solid transparent;
           background:#fff;color:#374151;transition:all .12s;
+          display:inline-flex;align-items:center;gap:6px;
         }
         .ss-btn:hover{filter:brightness(.97)}
+        .ss-count{
+          font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+          background:rgba(0,0,0,.06);color:inherit;
+          padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;
+        }
+        .ss-btn.active .ss-count{
+          background:rgba(255,255,255,.25);
+        }
         .ss-all          { border-color:#9ca3af; color:#374151; }
         .ss-all.active   { background:#374151; color:#fff; border-color:#374151; }
         .ss-logs         { border-color:#a78bfa; color:#6d28d9; }

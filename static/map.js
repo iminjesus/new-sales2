@@ -92,6 +92,29 @@ async function loadSalesMap() {
     return true;
   };
 
+  // Status-chip badge counts.  Computed over the full filtered dataset
+  // (other filters already applied server-side) BEFORE applying the
+  // status filter itself, so the user sees how many shops fall into
+  // each bucket regardless of which chip is currently active.
+  let cAll = 0, cLogs = 0, cVisit = 0, cNoVisit = 0;
+  const _seen = new Set();
+  data.forEach(row => {
+    const sh = row.ship_to ?? row.Ship_To ?? "";
+    if (!sh || _seen.has(sh)) return;
+    _seen.add(sh);
+    cAll += 1;
+    if (loggedSet.has(sh))       cLogs    += 1;
+    if (visitedSet.has(sh))      cVisit   += 1;
+    else                         cNoVisit += 1;
+  });
+  document.querySelectorAll(".ss-count").forEach(el => {
+    const k = el.dataset.c;
+    el.textContent = (k === "ALL"     ? cAll
+                    : k === "LOGS"    ? cLogs
+                    : k === "VISIT"   ? cVisit
+                    : k === "NOVISIT" ? cNoVisit : 0).toLocaleString();
+  });
+
   // BDE-overlay mode: when a single salesman is filter-selected, colour
   // markers semantically (green / red / orange) instead of by BDE palette
   // so own-territory vs other-territory visits are obvious at a glance.
