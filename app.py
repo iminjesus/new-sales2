@@ -5883,30 +5883,35 @@ DASHBOARD_URL  = os.getenv("DASHBOARD_URL",  "https://sales.hkaudashboard.com")
 MAIL_DEBUG     = (os.getenv("MAIL_DEBUG",    "0") == "1")
 
 # ── BDE / state-manager directory ──────────────────────────────────
-# (name, email, state).  State picks the State Manager recipient and
-# also lets the system map ex-staff names that may still appear in
-# customer.salesman_name to a current address.
+# (name, email, state, role).
+#   role = "BDE"  → locked to their own salesman name (own territory
+#                   + amber overlay markers on the map for shops they
+#                   visited outside that territory).
+#         "SM"   → locked to their state's region filter.
+#         "ALL"  → no scope restriction (leadership / dashboard ops).
 _BDE_DIRECTORY = [
     # NSW
-    ("Peter Robinson",   "peter.robinson@hankooktyre.com.au",   "NSW"),
-    ("Paul Buckley",     "paul.buckley@hankooktyre.com.au",     "NSW"),
-    ("Alessio Borghese", "alessio.borghese@hankooktyre.com.au", "NSW"),
+    ("Peter Robinson",   "peter.robinson@hankooktyre.com.au",   "NSW", "BDE"),
+    ("Paul Buckley",     "paul.buckley@hankooktyre.com.au",     "NSW", "SM"),
+    ("Alessio Borghese", "alessio.borghese@hankooktyre.com.au", "NSW", "BDE"),
     # QLD
-    ("Aaron Marsh",      "aaron.marsh@hankooktyre.com.au",      "QLD"),
-    ("Steven Spires",    "steven.spires@hankooktyre.com.au",    "QLD"),
-    ("Adam Maclure",     "adam.maclure@hankooktyre.com.au",     "QLD"),
-    # VIC / SA / TAS (one SM covers all three)
-    ("Calvin Hobkirk",   "calvin.hobkirk@hankooktyre.com.au",   "VIC"),
-    ("Kelley Bilston",   "kelley.bilston@hankooktyre.com.au",   "VIC"),
-    ("Nicola Bellotto",  "nicola.bellotto@hankooktyre.com.au",  "VIC"),
-    ("Jason Gultjaeff",  "jason.gultjaeff@hankooktyre.com.au",  "SA"),
+    ("Aaron Marsh",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
+    ("Steven Spires",    "steven.spires@hankooktyre.com.au",    "QLD", "BDE"),
+    ("Adam Maclure",     "adam.maclure@hankooktyre.com.au",     "QLD", "BDE"),
+    # VIC / SA / TAS (one SM covers all three; the region filter
+    # groups SA/TAS shops under VIC)
+    ("Calvin Hobkirk",   "calvin.hobkirk@hankooktyre.com.au",   "VIC", "SM"),
+    ("Kelley Bilston",   "kelley.bilston@hankooktyre.com.au",   "VIC", "BDE"),
+    ("Nicola Bellotto",  "nicola.bellotto@hankooktyre.com.au",  "VIC", "BDE"),
+    ("Jason Gultjaeff",  "jason.gultjaeff@hankooktyre.com.au",  "SA",  "BDE"),
     # WA
-    ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA"),
-    ("Jim Dais",         "jim.dais@hankooktyre.com.au",         "WA"),
-    # Always-CC recipients (also listed here so feedback to them is routable)
-    ("Hayden Begbie",    "hayden.begbie@hankooktyre.com.au",    "NSW"),
-    ("JJ Cho",           "junjong.cho@hankooktyre.com.au",      "NSW"),
-    ("Junjong Cho",      "junjong.cho@hankooktyre.com.au",      "NSW"),
+    ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA",  "SM"),
+    ("Jim Dais",         "jim.dais@hankooktyre.com.au",         "WA",  "BDE"),
+    # Leadership / dashboard ops — full scope
+    ("Hayden Begbie",    "hayden.begbie@hankooktyre.com.au",    "NSW", "ALL"),
+    ("JJ Cho",           "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
+    ("Junjong Cho",      "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
+    ("Jayden Bhang",     "jayden.bhang@hankooktyre.com.au",     "NSW", "ALL"),
 ]
 STATE_MANAGER_EMAIL = {
     "NSW": "paul.buckley@hankooktyre.com.au",
@@ -5927,17 +5932,24 @@ def _bde_name_keys(full_name):
     if len(parts) < 2: return {full_name.strip().upper()}
     return {" ".join(parts), " ".join(reversed(parts))}
 
-_BDE_EMAIL_MAP, _BDE_STATE_MAP = {}, {}
-for _n, _e, _s in _BDE_DIRECTORY:
+_BDE_EMAIL_MAP, _BDE_STATE_MAP, _BDE_ROLE_MAP = {}, {}, {}
+_EMAIL_TO_DIR = {}     # email → (canonical_name, state, role)
+for _entry in _BDE_DIRECTORY:
+    _n, _e, _s, _r = _entry
+    _EMAIL_TO_DIR.setdefault(_e.lower(), (_n, _s, _r))
     for _k in _bde_name_keys(_n):
         _BDE_EMAIL_MAP.setdefault(_k, _e)
         _BDE_STATE_MAP.setdefault(_k, _s)
+        _BDE_ROLE_MAP.setdefault(_k, _r)
 
 def _lookup_bde_email(name):
     return _BDE_EMAIL_MAP.get((name or "").strip().upper())
 
 def _lookup_bde_state(name):
     return _BDE_STATE_MAP.get((name or "").strip().upper())
+
+def _lookup_bde_role(name):
+    return _BDE_ROLE_MAP.get((name or "").strip().upper())
 
 # ── Microsoft Graph token cache ────────────────────────────────────
 # Tokens live ~1h; we cache and refresh ~60s before expiry.
@@ -6291,6 +6303,45 @@ def _bde_from_request():
 @app.get("/meeting")
 def meeting_page():
     return send_from_directory("static", "meeting.html")
+
+@app.get("/api/whoami")
+def whoami():
+    """Identify the current user from Cloudflare Access and return
+    the scope locks the frontend should apply.
+
+    BDE  → lock_salesman = own name (own territory + amber overlay
+           markers for shops visited outside it on the map).
+    SM   → lock_region   = own state.
+    ALL  → no locks (leadership / Hayden / JJ / dashboard ops).
+
+    No CF header (Tailscale / local dev) or unknown email → no locks
+    so internal access from the office network keeps working."""
+    email = _bde_from_request()
+    out = {
+        "email":          email,
+        "name":           "",
+        "role":           "ALL",
+        "state":          "",
+        "lock_salesman":  None,
+        "lock_region":    None,
+        "logged_in":      bool(email),
+    }
+    if not email:
+        return jsonify(out)
+    found = _EMAIL_TO_DIR.get(email.lower())
+    if not found:
+        # Recognised by CF but not in our directory — let them in with
+        # full scope so we don't accidentally lock out a new hire.
+        return jsonify(out)
+    name, state, role = found
+    out["name"]  = name
+    out["state"] = state
+    out["role"]  = role
+    if role == "BDE":
+        out["lock_salesman"] = name
+    elif role == "SM":
+        out["lock_region"]   = state
+    return jsonify(out)
 
 @app.get("/api/mail_test")
 def mail_test():

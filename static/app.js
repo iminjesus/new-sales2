@@ -2557,7 +2557,70 @@ async function refreshMaterialsCustom(){
 }
 
 // bind once on load
+// Role-based scope — call whoami once, then force / lock the right
+// filter values + show a small "Logged in as: …" badge.  Idempotent;
+// every page that imports app.js gets it.
+async function applyRoleScope() {
+  let me;
+  try {
+    const r = await fetch("/api/whoami", { credentials: "include" });
+    me = await r.json();
+  } catch (e) { return; }
+  window._me = me;
+  if (!me || !me.logged_in) return;   // local / Tailscale → no scope
+
+  // Salesman lock (BDE role).  Set the global filter, force the
+  // salesman <select> value, and disable it so the user can't escape.
+  if (me.lock_salesman) {
+    filters.salesman = me.lock_salesman;
+    const sel = document.getElementById("salesman_name");
+    if (sel) {
+      if (![...sel.options].some(o => o.value === me.lock_salesman)) {
+        sel.add(new Option(me.lock_salesman, me.lock_salesman));
+      }
+      sel.value = me.lock_salesman;
+      sel.disabled = true;
+      sel.title = `Locked: ${me.name} (${me.role})`;
+    }
+  }
+  // Region lock (SM role).  Mark the matching chip active, disable the rest.
+  if (me.lock_region) {
+    filters.region = me.lock_region;
+    document.querySelectorAll("#regionBtns .btn").forEach(b => {
+      const is = b.dataset.val === me.lock_region;
+      b.classList.toggle("active", is);
+      if (!is) {
+        b.disabled = true;
+        b.style.opacity = "0.4";
+        b.style.cursor  = "not-allowed";
+        b.title = `Locked: ${me.name} (State Manager — ${me.state})`;
+      }
+    });
+  }
+  _renderRoleBadge(me);
+}
+function _renderRoleBadge(me) {
+  if (document.getElementById("roleBadge")) return;
+  const tag = document.createElement("div");
+  tag.id = "roleBadge";
+  const scope = me.lock_salesman ? `BDE · ${me.lock_salesman}`
+              : me.lock_region   ? `State Manager · ${me.lock_region}`
+              :                     `${me.role || "ALL"} · full scope`;
+  tag.innerHTML = `<span style="opacity:.7;">Signed in as</span> `
+                + `<b>${me.name || me.email}</b> · `
+                + `<span style="color:#2563eb;">${scope}</span>`;
+  tag.style.cssText = "position:fixed;bottom:6px;right:8px;z-index:5000;"
+    + "background:rgba(255,255,255,.92);padding:4px 10px;border-radius:14px;"
+    + "border:1px solid #e5e7eb;font-size:11px;color:#374151;"
+    + "box-shadow:0 1px 3px rgba(0,0,0,.08);pointer-events:none;";
+  document.body.appendChild(tag);
+}
+
 window.addEventListener("load", async () => {
+  // Apply role-based filter locks BEFORE the first data refresh so
+  // the initial requests already carry the right scope.
+  await applyRoleScope();
+
   // initial load
   await refreshPatternsCustom();
   await refreshMaterialsCustom();
