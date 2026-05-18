@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, jsonify, send_file,send_from_directory, g, has_request_context
+﻿from flask import Flask, request, jsonify, send_file,send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
 import mysql.connector
@@ -496,26 +496,6 @@ def add_cache_headers(response):
         response.headers['Pragma'] = 'no-cache'
     return response
 
-@app.teardown_request
-def _release_db_conns(exc):
-    """Safety net: any pooled connection that get_connection() handed out
-    during this request gets returned to the pool here, even if the
-    handler raised an exception before its own cur.close()/conn.close().
-    Prevents the pool from leaking under SQL errors.
-
-    Cheap: no is_connected() ping — just call .close() and let
-    mysql-connector silently no-op when the conn was already returned
-    by the handler."""
-    bucket = getattr(g, "_db_conns", None)
-    if not bucket:
-        return
-    for conn in bucket:
-        try:
-            conn.close()
-        except Exception:
-            pass
-    g._db_conns = []
-
 def category_filters_stock(alias: str, category: str):
     joins, wh = [], []
     cat = (category or "ALL").upper()
@@ -763,18 +743,6 @@ def get_connection():
             conn = _MYSQL_POOL.get_connection()
             try:
                 conn.ping(reconnect=True, attempts=2, delay=1)
-            except Exception:
-                pass
-            # Track this connection on the current Flask request context
-            # so the teardown_request hook below can guarantee it's
-            # returned to the pool even when a handler raises an
-            # exception before its own cur.close() / conn.close().
-            try:
-                if has_request_context():
-                    bucket = getattr(g, "_db_conns", None)
-                    if bucket is None:
-                        bucket = []; g._db_conns = bucket
-                    bucket.append(conn)
             except Exception:
                 pass
             return conn
