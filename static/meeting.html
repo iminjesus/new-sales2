@@ -959,10 +959,16 @@ function _maybeJumpToFeedbackFromHash(){
     return;
   }
   _pendingFbJump = null;
+  // Clear the URL hash so subsequent loadRecent() calls (Cancel, Post,
+  // posting another comment) don't re-trigger this jump.  We're past
+  // the "land on the email link" moment now.
+  if (window.location.hash){
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
   // Persistently highlight the visit row + add a "Leave your comment
   // here" banner above the composer so a recipient arriving from an
   // email link has zero doubt where to type.  The highlight stays put
-  // until the user posts (loadRecent() re-renders) or navigates away.
+  // until the user posts or cancels (loadRecent() re-renders).
   const row = el.closest("tr") || el;
   row.classList.add("fb-target-row");
   el.classList.add("fb-target-block");
@@ -1057,11 +1063,32 @@ async function openFeedbackComposer(rid){
         <button type="button" onclick="saveFeedback(${rid})"
           style="font-size:11px;padding:3px 12px;background:#2563eb;color:#fff;
                  border:none;border-radius:4px;cursor:pointer;">Post</button>
-        <button type="button" onclick="loadRecent()"
+        <button type="button" onclick="cancelFeedbackComposer()"
           style="font-size:11px;padding:3px 10px;background:#fff;color:#374151;
                  border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
       </div>
     </div>`;
+  // Auto-fill FROM with the logged-in user's name (matched by email
+  // against the people directory).  Saves a manual pick when the
+  // recipient just wants to type a quick reply.
+  const meEmail = (window._me && window._me.email || "").toLowerCase();
+  if (meEmail){
+    const match = (_peopleCache || []).find(p =>
+      (p.email || "").toLowerCase() === meEmail);
+    if (match){
+      const sel = document.getElementById("fbWho-" + rid);
+      if (sel) sel.value = match.name;
+    }
+  }
+}
+
+// Cancel = restore the normal "all entries" view: drop the deep-link
+// state (highlight + URL hash) and re-render the recent list.
+function cancelFeedbackComposer(){
+  if (window.location.hash){
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  loadRecent();
 }
 async function saveFeedback(rid){
   const who = document.getElementById("fbWho-" + rid);
