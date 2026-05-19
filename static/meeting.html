@@ -126,11 +126,29 @@ header .nav{margin-left:auto;display:flex;gap:6px}
   header .nav .btn{flex:0 0 auto;font-size:11px;padding:5px 10px;white-space:nowrap}
   .container{padding:8px}
   .card{padding:10px}
-  /* Recent entries table — horizontal scroll wrapper so all 5 cols fit */
-  #recentWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .recent-tbl{min-width:560px;font-size:11px}
-  .recent-tbl th,.recent-tbl td{padding:5px 6px}
+  /* Recent entries table — let the table fit the viewport instead of
+     scrolling horizontally.  table-layout:fixed + word-break lets long
+     notes wrap, and a compact Visit-date column + small photos keep the
+     three-column layout readable on a 360 px phone. */
+  #recentWrap{overflow-x:hidden}
+  .recent-tbl{font-size:11px;table-layout:fixed;width:100%}
+  .recent-tbl th,.recent-tbl td{padding:5px 6px;word-break:break-word;overflow-wrap:anywhere}
+  .recent-tbl th:nth-child(1),.recent-tbl td:nth-child(1){width:58px}
+  .recent-tbl th:nth-child(3),.recent-tbl td:nth-child(3){width:72px}
+  .recent-tbl .ts{white-space:normal;font-size:10px;line-height:1.25}
+  .recent-tbl .photos{padding-left:2px;padding-right:2px}
+  .recent-tbl .photos a{margin-right:2px;margin-bottom:2px}
   .recent-tbl .photos img{width:30px;height:30px}
+  /* Shop / purpose group banners may contain long shop names — let
+     them wrap too so they don't push the table wider than the card. */
+  .recent-tbl .grp-bde td,
+  .recent-tbl .grp-shop td,
+  .recent-tbl .grp-purp td{word-break:break-word;overflow-wrap:anywhere;white-space:normal}
+  /* The visit row uses inline padding-left:36px as an indent, which
+     wastes a lot of the narrow first column on mobile.  Shrink it. */
+  .recent-tbl tbody tr:not(.grp-bde):not(.grp-shop):not(.grp-purp) td:first-child{padding-left:8px !important}
+  .recent-tbl .grp-shop td{padding-left:10px !important}
+  .recent-tbl .grp-purp td{padding-left:14px !important}
   .filt{flex-wrap:wrap;gap:4px}
   .filt select,.filt input{font-size:11px}
   /* Searchable dropdowns: full-width on mobile (no fixed 150px input) */
