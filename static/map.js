@@ -85,13 +85,15 @@ async function loadSalesMap() {
   for (const k of Object.keys(loggedByPurpose)) {
     purposeSets[k] = new Set(loggedByPurpose[k] || []);
   }
-  const purposeMode = (window._purposeFilter || "ALL");
+  // Default Purpose state on page load is "" (OFF) — no purpose filter
+  // applied, every shop is plotted including those with no log entry.
+  // Clicking the "All" button explicitly switches to ALL = "every shop
+  // that has at least one logged visit (any purpose)".  Clicking the
+  // currently-active button toggles back to OFF.
+  const purposeMode = (window._purposeFilter == null ? "" : window._purposeFilter);
   const passesPurpose = (shipTo) => {
-    // Purpose row "All" = no purpose restriction → every shop passes
-    // (logged or not), so BDEs can see which customers still have no
-    // log entry against them.  Use the Shop-status row "Logs" button
-    // to restrict to logged shops only.
-    if (purposeMode === "ALL") return true;
+    if (!purposeMode)              return true;            // OFF — no filter
+    if (purposeMode === "ALL")     return loggedSet.has(shipTo);
     const set = purposeSets[purposeMode];
     return set ? set.has(shipTo) : false;
   };
@@ -532,18 +534,22 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Purpose filter — same toggle pattern, drives passesPurpose().
+  // Purpose filter — toggle-off goes to "" (OFF = no purpose filter,
+  // show every shop including un-logged).  "All" button now means
+  // "every shop with at least one logged visit (any purpose)" and is
+  // an explicit click, not the page-load default.
   const purp = document.getElementById("purposeFilterBtns");
   if (purp){
     purp.addEventListener("click", (e) => {
       const b = e.target.closest("button[data-purpose]");
       if (!b) return;
-      const clicked = b.dataset.purpose || "ALL";
-      const current = window._purposeFilter || "ALL";
-      const next = (clicked === current && clicked !== "ALL") ? "ALL" : clicked;
+      const clicked = b.dataset.purpose || "";
+      const current = window._purposeFilter || "";
+      // Same-button click = toggle off (back to "show everything").
+      const next = (clicked === current) ? "" : clicked;
       window._purposeFilter = next;
       purp.querySelectorAll("button[data-purpose]").forEach(x =>
-        x.classList.toggle("active", x.dataset.purpose === next));
+        x.classList.toggle("active", next !== "" && x.dataset.purpose === next));
       if (typeof loadSalesMap === "function") loadSalesMap();
     });
   }
