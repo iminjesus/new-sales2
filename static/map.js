@@ -522,8 +522,13 @@ document.addEventListener("DOMContentLoaded", () => {
       window._shopStatusFilter = val || "ALL";
       stat.querySelectorAll("button[data-status]").forEach(x =>
         x.classList.toggle("active", x.dataset.status === window._shopStatusFilter));
-      if (ssClear) ssClear.style.display =
-        (window._shopStatusFilter && window._shopStatusFilter !== "ALL") ? "inline-block" : "none";
+      // Clear button stays in the row always so the user can see it
+      // exists; it just goes inert/dim while the filter is on ALL.
+      if (ssClear){
+        const on = (window._shopStatusFilter && window._shopStatusFilter !== "ALL");
+        ssClear.style.opacity = on ? "1" : ".35";
+        ssClear.style.pointerEvents = on ? "auto" : "none";
+      }
       if (typeof loadSalesMap === "function") loadSalesMap();
     };
     stat.addEventListener("click", (e) => {
@@ -542,8 +547,11 @@ document.addEventListener("DOMContentLoaded", () => {
       window._purposeFilter = val || "ALL";
       purp.querySelectorAll("button[data-purpose]").forEach(x =>
         x.classList.toggle("active", x.dataset.purpose === window._purposeFilter));
-      if (pfClear) pfClear.style.display =
-        (window._purposeFilter && window._purposeFilter !== "ALL") ? "inline-block" : "none";
+      if (pfClear){
+        const on = (window._purposeFilter && window._purposeFilter !== "ALL");
+        pfClear.style.opacity = on ? "1" : ".35";
+        pfClear.style.pointerEvents = on ? "auto" : "none";
+      }
       if (typeof loadSalesMap === "function") loadSalesMap();
     };
     purp.addEventListener("click", (e) => {
