@@ -273,6 +273,31 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .recent-tbl .notes{color:#111827}
 .recent-tbl .photos a{display:inline-block;margin-right:4px}
 .recent-tbl .photos img{width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #e5e7eb}
+
+/* ── Deep-link target (arrived via "Make a comment" in an email) ── */
+/* Persistent highlight on the visit row so the user can see at a
+   glance which entry needs their feedback.  The pulsing ring on the
+   composer block reinforces "type here". */
+.recent-tbl tr.fb-target-row td{
+  background:#fef3c7 !important;
+  border-top:2px solid #f59e0b;border-bottom:2px solid #f59e0b;
+  box-shadow:inset 4px 0 0 #f59e0b;
+}
+.fb-target-block{
+  margin:6px -4px !important;padding:6px 8px;
+  background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;
+  animation:fbPulse 1.6s ease-in-out infinite;
+}
+@keyframes fbPulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}
+  50%   {box-shadow:0 0 0 8px rgba(245,158,11,0)}
+}
+.fb-jump-banner{
+  font-size:12px;font-weight:700;color:#92400e;
+  background:#fde68a;border:1px solid #f59e0b;
+  padding:6px 10px;border-radius:5px;margin:6px 0 4px;
+  text-align:center;letter-spacing:.3px;
+}
 .empty{padding:18px;text-align:center;color:#9ca3af;font-size:12px}
 .filt{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
 .filt label{font-size:11px;color:#6b7280}
@@ -934,16 +959,30 @@ function _maybeJumpToFeedbackFromHash(){
     return;
   }
   _pendingFbJump = null;
-  // Flash a yellow highlight on the visit row that owns this fb block.
+  // Persistently highlight the visit row + add a "Leave your comment
+  // here" banner above the composer so a recipient arriving from an
+  // email link has zero doubt where to type.  The highlight stays put
+  // until the user posts (loadRecent() re-renders) or navigates away.
   const row = el.closest("tr") || el;
-  row.style.transition = "background-color .6s ease";
-  row.style.backgroundColor = "#fef3c7";
-  setTimeout(() => { row.style.backgroundColor = ""; }, 2200);
+  row.classList.add("fb-target-row");
+  el.classList.add("fb-target-block");
   el.scrollIntoView({behavior:"smooth", block:"center"});
   // Open the composer so the user can just start typing.
   const rid = parseInt(target.slice(4), 10);
   if (!isNaN(rid)) setTimeout(() => {
     openFeedbackComposer(rid);
+    // Inject a banner above the composer so it's unmistakably the
+    // place to type a reply.
+    const block = document.getElementById("fb-" + rid);
+    if (block && !block.querySelector(".fb-jump-banner")){
+      const composerBox = block.querySelector("div[style*='background:#f9fafb']");
+      if (composerBox){
+        const banner = document.createElement("div");
+        banner.className = "fb-jump-banner";
+        banner.innerHTML = "💬 Leave your comment here ↓";
+        composerBox.parentNode.insertBefore(banner, composerBox);
+      }
+    }
     // openFeedbackComposer injects the textarea synchronously, so
     // we can focus it immediately afterwards.
     const ta = document.getElementById("fbInp-" + rid);
