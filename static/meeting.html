@@ -23,16 +23,19 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .planner-layout{display:grid;grid-template-columns:260px minmax(0,1.2fr) minmax(0,1.05fr);gap:14px;align-items:start}
 @media (max-width:1100px){
   .planner-layout{grid-template-columns:1fr}
-  /* On stacked-mobile layout reorder so the user lands on calendar
-     + form first, palette in the middle, history at the bottom.
-     Also shrink the chip list so swiping past it is easy. */
-  .planner-left   {order:1}
-  .planner-palette{order:2}
-  .planner-right  {order:3}
-  .palette-list{max-height:170px}
+  /* Make planner-left "invisible" in the grid so its two children
+     (calendar, form) become direct grid items.  That lets us slot
+     the palette BETWEEN them on mobile, which makes the drag from
+     palette → calendar a single short swipe. */
+  .planner-left{display:contents}
+  .plan-board       {order:1}   /* calendar */
+  .planner-palette  {order:2}   /* ship-to palette */
+  .form-card        {order:3}   /* new visit form */
+  .planner-right    {order:4}   /* recent entries */
+  .palette-list{max-height:110px}
 }
 @media (max-width:640px){
-  .palette-list{max-height:130px}
+  .palette-list{max-height:90px}
 }
 
 /* ── Calendar planner ─────────────────────────────────── */
@@ -299,7 +302,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
   </div>
 
   <!-- ── New entry form (left bottom — under Calendar + Palette) ── -->
-  <div class="card">
+  <div class="card form-card">
     <h2>New visit</h2>
     <div id="bdeIdLine" class="bde-id-line" style="display:none;">
       Signed in as <b id="bdeIdEmail">…</b>
