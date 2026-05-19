@@ -6825,39 +6825,23 @@ def meeting_plan_delete(plan_id):
 
 @app.get("/api/meeting_plan/shop_to_options")
 def meeting_plan_shop_options():
-    """Slim ship_to list for the drag-and-drop palette.  Filtered to
-    the signed-in user's scope: a BDE only sees the shops they're
-    assigned to + shops they've already visited; an SM sees their
-    state; ALL sees everything."""
+    """Slim ship_to list for the drag-and-drop palette.  Returns the
+    full customer master (capped at 3000) so a BDE can plan visits
+    outside their assigned territory too — matches the form-side
+    behaviour."""
     try:
-        email = _bde_from_request()
-        me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
-        role  = me[2] if me else "ALL"
-        state = me[1] if me else None
-        bde   = me[0] if me else None
-
-        wh, params = [
-            "ship_to IS NOT NULL", "TRIM(ship_to_name) <> ''"
-        ], []
-        if role == "BDE" and bde:
-            wh.append("UPPER(TRIM(salesman_name)) = %s")
-            params.append(bde.upper())
-        elif role == "SM" and state:
-            wh.append("bde_state = %s")
-            params.append(state)
-
         conn = get_connection(); cur = conn.cursor(dictionary=True)
-        cur.execute(f"""
+        cur.execute("""
             SELECT DISTINCT ship_to,
                    MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
                    MIN(sold_to)                       AS sold_to,
                    MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
             FROM customer
-            WHERE {' AND '.join(wh)}
+            WHERE ship_to IS NOT NULL AND TRIM(ship_to_name) <> ''
             GROUP BY ship_to
             ORDER BY MIN(TRIM(ship_to_name))
             LIMIT 3000
-        """, tuple(params))
+        """)
         rows = cur.fetchall()
         cur.close(); conn.close()
         return jsonify(rows)
