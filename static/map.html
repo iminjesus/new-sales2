@@ -192,6 +192,54 @@
         <button class="ss-btn ss-novisit" data-status="NOVISIT"
                 title="Only shops with no GPS visit yet">🚫 No-visit <span class="ss-count" data-c="NOVISIT">–</span></button>
       </div>
+
+      <div id="purposeFilterBtns"
+           style="display:flex;gap:6px;align-items:center;margin-bottom:6px;
+                  padding:6px 8px;background:#f8fafc;border:1px solid #e5e7eb;
+                  border-radius:6px;flex-wrap:wrap;">
+        <label style="font-size:11px;color:#6b7280;font-weight:600;
+                      text-transform:uppercase;letter-spacing:.4px;
+                      margin-right:4px;">Purpose</label>
+        <button class="pf-btn pf-all active"  data-purpose="ALL"
+                title="All shops">All <span class="pf-count" data-p="ALL">–</span></button>
+        <button class="pf-btn pf-promo"      data-purpose="Promotion"
+                title="Shops with a Promotion log">📣 Promotion <span class="pf-count" data-p="Promotion">–</span></button>
+        <button class="pf-btn pf-intro"      data-purpose="Product introduction"
+                title="Shops with a Product introduction log">🆕 Product intro <span class="pf-count" data-p="Product introduction">–</span></button>
+        <button class="pf-btn pf-claim"      data-purpose="Claim support"
+                title="Shops with a Claim support log">🛠 Claim <span class="pf-count" data-p="Claim support">–</span></button>
+        <button class="pf-btn pf-rebate"     data-purpose="Rebate follow-up"
+                title="Shops with a Rebate follow-up log">💸 Rebate <span class="pf-count" data-p="Rebate follow-up">–</span></button>
+        <button class="pf-btn pf-other"      data-purpose="Other"
+                title="Shops with an Other-purpose log (or purpose missing)">… Other <span class="pf-count" data-p="Other">–</span></button>
+      </div>
+      <style>
+        .pf-btn{
+          font-size:12px;font-weight:600;padding:5px 12px;
+          border-radius:5px;cursor:pointer;border:1.5px solid transparent;
+          background:#fff;color:#374151;transition:all .12s;
+          display:inline-flex;align-items:center;gap:6px;
+        }
+        .pf-btn:hover{filter:brightness(.97)}
+        .pf-count{
+          font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+          background:rgba(0,0,0,.06);color:inherit;
+          padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;
+        }
+        .pf-btn.active .pf-count{background:rgba(255,255,255,.25)}
+        .pf-all          { border-color:#9ca3af; color:#374151; }
+        .pf-all.active   { background:#374151; color:#fff; border-color:#374151; }
+        .pf-promo        { border-color:#fdba74; color:#c2410c; }
+        .pf-promo.active { background:#ea580c; color:#fff; border-color:#ea580c; }
+        .pf-intro        { border-color:#86efac; color:#15803d; }
+        .pf-intro.active { background:#16a34a; color:#fff; border-color:#16a34a; }
+        .pf-claim        { border-color:#fca5a5; color:#b91c1c; }
+        .pf-claim.active { background:#dc2626; color:#fff; border-color:#dc2626; }
+        .pf-rebate       { border-color:#c4b5fd; color:#6d28d9; }
+        .pf-rebate.active{ background:#7c3aed; color:#fff; border-color:#7c3aed; }
+        .pf-other        { border-color:#cbd5e1; color:#475569; }
+        .pf-other.active { background:#64748b; color:#fff; border-color:#64748b; }
+      </style>
       <style>
         .ss-btn{
           font-size:12px;font-weight:600;padding:5px 12px;

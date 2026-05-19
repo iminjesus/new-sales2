@@ -4949,15 +4949,21 @@ def visit_summary():
         # tally point; no dedupe (a BDE who writes two memos for the
         # same call genuinely logged twice).
         logged_ship_tos = set()
+        # Per-purpose ship-to lists so the map can offer a Purpose
+        # filter row (All / Promotion / Product introduction / Claim
+        # support / Rebate follow-up / Other).
+        from collections import defaultdict as _dd
+        logged_by_purpose = _dd(set)
         try:
             cur.execute(
-                "SELECT bde_name, ship_to, visit_date AS d "
+                "SELECT bde_name, ship_to, visit_purpose, visit_date AS d "
                 "FROM meeting_log WHERE YEAR(visit_date) = %s",
                 [year],
             )
             for r in cur.fetchall():
                 norm = (r.get("bde_name") or "").strip().upper()
                 ship = (r.get("ship_to")  or "").strip()
+                purp = (r.get("visit_purpose") or "").strip() or "Other"
                 d    = r.get("d")
                 if not norm or d is None:
                     continue
@@ -4970,11 +4976,15 @@ def visit_summary():
                 bde["logs_by_month"][d.month] += 1
                 if ship:
                     logged_ship_tos.add(ship)
+                    logged_by_purpose[purp].add(ship)
         except Exception as e:
             # meeting_log table may not exist on a brand-new install yet
             print(f"[visit_summary] meeting_log tally skipped: {e}")
 
         out["logged_ship_tos"] = sorted(logged_ship_tos)
+        out["logged_ship_tos_by_purpose"] = {
+            p: sorted(s) for p, s in logged_by_purpose.items()
+        }
         out["total_shops_visited"] = len(per_shop)
         out["total_visit_days"]    = sum(r["visit_days"] for r in per_shop)
         out["by_month"] = [

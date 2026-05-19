@@ -79,6 +79,18 @@ async function loadSalesMap() {
   const visitedShops = (summary && Array.isArray(summary.visited_shops))
                        ? summary.visited_shops : [];
   const loggedSet  = new Set((summary && summary.logged_ship_tos) || []);
+  // Per-purpose ship-to sets — drives the Purpose filter row.
+  const loggedByPurpose = (summary && summary.logged_ship_tos_by_purpose) || {};
+  const purposeSets = {};
+  for (const k of Object.keys(loggedByPurpose)) {
+    purposeSets[k] = new Set(loggedByPurpose[k] || []);
+  }
+  const purposeMode = (window._purposeFilter || "ALL");
+  const passesPurpose = (shipTo) => {
+    if (purposeMode === "ALL") return true;
+    const set = purposeSets[purposeMode];
+    return set ? set.has(shipTo) : false;
+  };
 
   // Status filter — All / Logs / Visit / No-visit — composes with the
   // other filters (Region, Salesman, Sold-to, Top N, etc.) by simply
@@ -113,6 +125,20 @@ async function loadSalesMap() {
                     : k === "LOGS"    ? cLogs
                     : k === "VISIT"   ? cVisit
                     : k === "NOVISIT" ? cNoVisit : 0).toLocaleString();
+  });
+  // Purpose-row counts — intersect each purpose's logged set with the
+  // shops currently visible in `data` (i.e. respecting other filters).
+  const visibleShipTos = new Set(data.map(r => r.ship_to ?? r.Ship_To ?? "").filter(Boolean));
+  const cByPurpose = {};
+  let cPurposeAll = visibleShipTos.size;
+  for (const k of Object.keys(purposeSets)) {
+    let n = 0;
+    purposeSets[k].forEach(s => { if (visibleShipTos.has(s)) n += 1; });
+    cByPurpose[k] = n;
+  }
+  document.querySelectorAll(".pf-count").forEach(el => {
+    const k = el.dataset.p;
+    el.textContent = (k === "ALL" ? cPurposeAll : (cByPurpose[k] || 0)).toLocaleString();
   });
 
   // BDE-overlay mode: when a single salesman is filter-selected, colour
@@ -156,6 +182,7 @@ async function loadSalesMap() {
 
   // Shop-status filter — hide markers that don't match.
   if (!passesStatus(shipTo)) return;
+  if (!passesPurpose(shipTo)) return;
 
   const latNum = +lat;
   const lngNum = +lng;
@@ -225,6 +252,7 @@ async function loadSalesMap() {
       // same status filter so "No-visit" hides them and "Logs" keeps
       // only those that also have a meeting_log entry.
       if (!passesStatus(vs.ship_to)) return;
+      if (!passesPurpose(vs.ship_to)) return;
       const latNum = +vs.latitude;
       const lngNum = +vs.longitude;
       if (!isFinite(latNum) || !isFinite(lngNum)) return;
@@ -486,6 +514,19 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!b) return;
       window._shopStatusFilter = b.dataset.status || "ALL";
       stat.querySelectorAll("button").forEach(x =>
+        x.classList.toggle("active", x === b));
+      if (typeof loadSalesMap === "function") loadSalesMap();
+    });
+  }
+
+  // Purpose filter — same toggle pattern, drives passesPurpose().
+  const purp = document.getElementById("purposeFilterBtns");
+  if (purp){
+    purp.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-purpose]");
+      if (!b) return;
+      window._purposeFilter = b.dataset.purpose || "ALL";
+      purp.querySelectorAll("button").forEach(x =>
         x.classList.toggle("active", x === b));
       if (typeof loadSalesMap === "function") loadSalesMap();
     });
