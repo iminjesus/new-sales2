@@ -110,6 +110,27 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 #submitMsg.ok{color:#16a34a}
 #submitMsg.err{color:#dc2626}
 
+/* ── Selected shop banner (set from palette click) ──────── */
+.selected-shop{
+  display:flex;align-items:center;gap:8px;
+  padding:9px 12px;border:1.5px dashed #cbd5e1;border-radius:8px;
+  background:#f8fafc;font-size:13px;color:#334155;line-height:1.3;
+}
+.selected-shop.selected-shop-empty{color:#94a3b8;font-style:italic}
+.selected-shop.selected-shop-set{
+  background:#eff6ff;border:1.5px solid #2563eb;color:#1e3a5f;font-style:normal;font-weight:600;
+}
+.selected-shop .ss-icon{font-size:14px}
+.selected-shop .ss-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.selected-shop .ss-sub{font-size:11px;color:#6b7280;font-weight:400;margin-left:4px}
+.selected-shop .ss-clear{
+  border:none;background:transparent;color:#dc2626;font-size:18px;
+  cursor:pointer;line-height:1;padding:0 4px;font-weight:700;
+}
+.ship-chip.selected{
+  background:#dbeafe !important;border-color:#2563eb !important;color:#1d4ed8 !important;font-weight:600
+}
+
 /* ── Purpose of visit — radio-button card group ─────────── */
 .purpose-cards{display:flex;gap:6px;flex-wrap:wrap}
 .purpose-cards input[type="radio"]{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
@@ -213,11 +234,22 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     </div>
 
     <div class="plan-section">
-      <div class="palette-row-tag">Ship-to · drag onto a date above</div>
-      <div style="font-size:10px;color:#9ca3af;margin-bottom:6px;">
-        Tip: pick a Sold-to in the form on the right to narrow the
-        list below.  Search box filters within whatever's shown.
+      <div class="palette-row-tag">Ship-to · click to log, drag to schedule</div>
+
+      <div style="margin-bottom:6px;">
+        <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
+          Sold-to <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(optional — narrows the list below)</span>
+        </label>
+        <div class="dd" id="palSoldDd" style="width:100%;">
+          <div class="dd-wrap">
+            <input id="palSold" type="text" placeholder="Search sold-to…" autocomplete="off">
+            <button class="dd-btn dd-clear-btn" type="button" id="palSoldClear" title="Clear" tabindex="-1">×</button>
+            <button class="dd-btn dd-last" type="button" id="palSoldOpen" title="Show all" tabindex="-1">▼</button>
+          </div>
+          <div class="dd-menu" id="palSoldMenu"></div>
+        </div>
       </div>
+
       <input id="shipSearch" class="palette-input" type="text"
              placeholder="Search ship-to by name or code…" autocomplete="off">
       <div class="palette-count" id="shipCount"></div>
@@ -251,27 +283,17 @@ header .nav{margin-left:auto;display:flex;gap:6px}
           <input id="fVisitDate" type="date" required>
         </div>
 
-        <div class="field">
-          <label>Sold-to <span style="color:#9ca3af;font-weight:400;">(optional — auto-filled when Ship-to is picked)</span></label>
-          <div class="dd" id="ddSold">
-            <div class="dd-wrap">
-              <input id="fSold" type="text" placeholder="Search sold-to…" autocomplete="off">
-              <button class="dd-btn dd-clear-btn" type="button" id="fSoldClear" title="Clear" tabindex="-1">×</button>
-              <button class="dd-btn dd-last" type="button" id="fSoldOpen" title="Show all" tabindex="-1">▼</button>
-            </div>
-            <div class="dd-menu" id="fSoldMenu"></div>
+        <div class="field col-full">
+          <label>Selected shop <span class="req">*</span>
+            <span style="color:#9ca3af;font-weight:400;">(click a ship-to on the left palette)</span>
+          </label>
+          <div id="selectedShop" class="selected-shop selected-shop-empty">
+            <span class="ss-icon">📍</span>
+            <span class="ss-text">No ship-to selected — pick one from the palette ←</span>
+            <button type="button" id="selectedShopClear" class="ss-clear" title="Clear" style="display:none;">×</button>
           </div>
-        </div>
-        <div class="field">
-          <label>Ship-to <span class="req">*</span></label>
-          <div class="dd" id="ddShip">
-            <div class="dd-wrap">
-              <input id="fShip" type="text" placeholder="Search ship-to…" autocomplete="off">
-              <button class="dd-btn dd-clear-btn" type="button" id="fShipClear" title="Clear" tabindex="-1">×</button>
-              <button class="dd-btn dd-last" type="button" id="fShipOpen" title="Show all" tabindex="-1">▼</button>
-            </div>
-            <div class="dd-menu" id="fShipMenu"></div>
-          </div>
+          <input type="hidden" id="fSoldHidden">
+          <input type="hidden" id="fShipHidden">
         </div>
 
         <div class="field col-full">
@@ -463,37 +485,43 @@ function bindPicker({inputId, openBtnId, clearBtnId, menuId, onChange}){
   return api;
 }
 
-// soldPicker is the SINGLE source of truth for the Sold-to filter —
-// it drives both the form's Ship-to dropdown AND the calendar
-// palette's chip list filter.
-const soldPicker = bindPicker({
-  inputId: "fSold", openBtnId: "fSoldOpen",
-  clearBtnId: "fSoldClear", menuId: "fSoldMenu",
-  onChange: (opt) => {
-    const val = opt ? opt.value : "";
-    loadShipTosFor(val);
-    // Also narrow the calendar palette to the same Sold-to.
-    _palSoldFilter = val;
-    if (typeof renderShipList === "function") renderShipList();
-  },
+// Form's Sold-to / Ship-to pickers were removed — the LEFT palette
+// is now the single shop picker.  The form reads the selected
+// ship-to via _selectedShop (set by clicking a palette chip).
+let _selectedShop = null;   // {ship_to, ship_to_name, sold_to, sold_to_name}
+
+function _setSelectedShop(row){
+  _selectedShop = row || null;
+  const box = document.getElementById("selectedShop");
+  const clr = document.getElementById("selectedShopClear");
+  if (!box) return;
+  if (row){
+    box.classList.remove("selected-shop-empty");
+    box.classList.add("selected-shop-set");
+    box.querySelector(".ss-text").innerHTML =
+      `${escapeHtml(row.ship_to_name || row.ship_to)} ` +
+      `<span class="ss-sub">${escapeHtml(row.ship_to)} · ${escapeHtml(row.sold_to_name || "")}</span>`;
+    if (clr) clr.style.display = "inline-block";
+    document.getElementById("fSoldHidden").value = row.sold_to_name || row.sold_to || "";
+    document.getElementById("fShipHidden").value = row.ship_to || "";
+  } else {
+    box.classList.add("selected-shop-empty");
+    box.classList.remove("selected-shop-set");
+    box.querySelector(".ss-text").textContent =
+      "No ship-to selected — pick one from the palette ←";
+    if (clr) clr.style.display = "none";
+    document.getElementById("fSoldHidden").value = "";
+    document.getElementById("fShipHidden").value = "";
+  }
+  // Highlight the matching chip in the palette
+  document.querySelectorAll(".ship-chip").forEach(el => {
+    el.classList.toggle("selected", row && el.dataset.ship === row.ship_to);
+  });
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const clr = document.getElementById("selectedShopClear");
+  if (clr) clr.addEventListener("click", () => _setSelectedShop(null));
 });
-const shipPicker = bindPicker({
-  inputId: "fShip", openBtnId: "fShipOpen",
-  clearBtnId: "fShipClear", menuId: "fShipMenu",
-  onChange: (opt) => {
-    // Picking a ship-to directly: when Sold-to is empty, auto-fill it
-    // from the ship-to's parent so the form shows the full chain.
-    // (Server-side resolves sold_to from ship_to anyway, but this
-    // keeps the UI honest.)
-    if (!opt || soldPicker.value()) return;
-    const meta = _shipToParent.get(opt.value);
-    if (meta && meta.sold_to_name){
-      const sel = (soldPicker.__options || []).find(o => o.value === meta.sold_to_name);
-      if (sel) soldPicker.setValue(sel);
-    }
-  },
-});
-const _shipToParent = new Map(); // ship_to → {sold_to, sold_to_name}
 
 async function fetchJSON(url){
   const r = await fetch(url, {credentials: "include"});
@@ -534,58 +562,9 @@ async function loadBdes(){
   } catch (e) { /* whoami optional — manual pick still works */ }
 }
 
-async function loadSoldTos(){
-  // /api/sold_to_names returns an array of sold_to NAMES (the cascade
-  // expects the picked NAME as ?sold_to=… on /api/ship_to_names), so
-  // label == value for this picker.
-  const list = await fetchJSON("/api/sold_to_names?metric=amt").catch(() => []);
-  const opts = list
-    .filter(n => n)
-    .map(n => ({ label: n, value: n }));
-  soldPicker.setOptions(opts);
-}
-
-async function loadShipTosFor(soldToName){
-  // Empty soldToName = load all ship-tos (no parent filter).  Ship-to
-  // picker stays enabled either way — the user can pick a ship-to
-  // without first choosing a Sold-to.
-  shipPicker.setDisabled(false);
-  document.getElementById("fShip").placeholder = "Loading…";
-  const params = { metric: "amt" };
-  if (soldToName) params.sold_to = soldToName;
-  const qs = new URLSearchParams(params).toString();
-  const list = await fetchJSON("/api/ship_to_names?" + qs).catch(() => []);
-  const opts = [];
-  for (const row of list){
-    const code = (row && (row.code || row.ship_to)) || "";
-    const name = (row && (row.name || row.ship_to_name)) || "";
-    if (!code) continue;
-    opts.push({ label: name ? `${code} — ${name}` : code, value: code });
-  }
-  shipPicker.setOptions(opts);
-  document.getElementById("fShip").placeholder = soldToName
-    ? `Search ship-to (within ${soldToName})…`
-    : "Search ship-to…";
-
-  // If we just loaded the full list, refresh the ship_to → parent
-  // sold-to map so picking a ship directly can auto-fill Sold-to.
-  if (!soldToName){
-    _shipToParent.clear();
-    // /api/ship_to_names without a sold-to param doesn't return sold_to
-    // info, so fetch a separate batch with names attached.
-    try {
-      const r = await fetchJSON("/api/meeting_plan/shop_to_options").catch(() => []);
-      for (const row of (r || [])){
-        if (row.ship_to){
-          _shipToParent.set(row.ship_to, {
-            sold_to:      row.sold_to || "",
-            sold_to_name: row.sold_to_name || "",
-          });
-        }
-      }
-    } catch(e) { /* non-fatal */ }
-  }
-}
+// loadSoldTos / loadShipTosFor were tied to the form's Sold-to /
+// Ship-to pickers, which have been removed.  Selection now happens
+// entirely through the palette below the calendar.
 
 async function loadRecent(){
   const wrap = document.getElementById("recentWrap");
@@ -717,21 +696,22 @@ async function saveFeedback(rid){
 
 fForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!fBde.value)         { fMsg.textContent = "BDE is required";          fMsg.className = "err"; return; }
-  if (!shipPicker.value()) { fMsg.textContent = "Ship-to is required";      fMsg.className = "err"; return; }
+  if (!fBde.value) { fMsg.textContent = "BDE is required"; fMsg.className = "err"; return; }
+  if (!_selectedShop || !_selectedShop.ship_to) {
+    fMsg.textContent = "Please pick a Ship-to from the palette ←";
+    fMsg.className = "err"; return;
+  }
   const purposeEl = document.querySelector('input[name="visit_purpose"]:checked');
   if (!purposeEl) {
     fMsg.textContent = "Purpose of visit is required"; fMsg.className = "err"; return;
   }
-  // Sold-to is optional — the server resolves it from the picked
-  // ship-to (and stores both code + name for display).
 
   fMsg.textContent = "Submitting…"; fMsg.className = "";
   const fd = new FormData();
   fd.append("bde_name",      fBde.value);
   fd.append("visit_date",    fVisitDate.value);
-  fd.append("sold_to",       soldPicker.value());
-  fd.append("ship_to",       shipPicker.value());
+  fd.append("sold_to",       _selectedShop.sold_to_name || _selectedShop.sold_to || "");
+  fd.append("ship_to",       _selectedShop.ship_to);
   fd.append("visit_purpose", purposeEl.value);
   fd.append("met_person",    document.getElementById("fMet").value);
   fd.append("notes",         document.getElementById("fNotes").value);
@@ -758,7 +738,7 @@ fForm.addEventListener("submit", async (e) => {
     document.getElementById("fFeedback").value = "";
     document.getElementById("fPhotos").value   = "";
     document.querySelectorAll('input[name="visit_purpose"]').forEach(r => { r.checked = false; });
-    shipPicker.reset();
+    _setSelectedShop(null);
     loadRecent();
     setTimeout(() => { fMsg.textContent = ""; }, 4000);
   } catch (err) {
@@ -925,14 +905,31 @@ function renderCalendar(){
   });
 }
 
-// Palette filter state — driven by the form's soldPicker (no separate
-// picker on the palette side).  Empty string = show every ship-to.
+// Palette Sold-to picker (re-instated as the single source of truth
+// for both meeting-log target + calendar drag source).
 let _palSoldFilter = "";
+const palSoldPicker = bindPicker({
+  inputId: "palSold", openBtnId: "palSoldOpen",
+  clearBtnId: "palSoldClear", menuId: "palSoldMenu",
+  onChange: (opt) => {
+    _palSoldFilter = opt ? opt.value : "";
+    renderShipList();
+  },
+});
 
 async function loadShipOptions(){
   const rows = await fetchJSON("/api/meeting_plan/shop_to_options").catch(() => []);
   _shipOptions = Array.isArray(rows) ? rows : [];
-
+  // Build the Sold-to options for the palette picker.
+  const seen = new Set(), soldOpts = [];
+  for (const r of _shipOptions){
+    const nm = (r.sold_to_name || "").trim();
+    if (!nm || seen.has(nm)) continue;
+    seen.add(nm);
+    soldOpts.push({ label: nm, value: nm });
+  }
+  soldOpts.sort((a, b) => a.label.localeCompare(b.label));
+  palSoldPicker.setOptions(soldOpts);
   renderShipList();
 }
 
@@ -966,12 +963,19 @@ function renderShipList(){
     list.innerHTML = '<div class="palette-empty">No matches</div>';
     return;
   }
-  list.innerHTML = filtered.map(r => `
-    <div class="ship-chip" draggable="true" data-ship="${_attr(r.ship_to)}"
-         title="${_attr(r.sold_to_name || '')} — ${_attr(r.ship_to_name || '')}">
+  const selShip = _selectedShop ? _selectedShop.ship_to : "";
+  list.innerHTML = filtered.map(r => {
+    const sel = (r.ship_to === selShip) ? " selected" : "";
+    return `
+    <div class="ship-chip${sel}" draggable="true" data-ship="${_attr(r.ship_to)}"
+         title="Click to log this visit · Drag onto a date to schedule\n${_attr(r.sold_to_name || '')} — ${_attr(r.ship_to_name || '')}">
       <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(r.ship_to_name || r.ship_to)}</span>
       <span class="sc-code">${escapeHtml(r.ship_to)}</span>
-    </div>`).join("");
+    </div>`;
+  }).join("");
+  // Build a quick lookup from chip element → row, so click / drag handlers
+  // don't have to re-search _shipOptions each time.
+  const byShip = new Map(filtered.map(r => [r.ship_to, r]));
   list.querySelectorAll(".ship-chip").forEach(el => {
     el.addEventListener("dragstart", (e) => {
       e.dataTransfer.effectAllowed = "copy";
@@ -979,6 +983,10 @@ function renderShipList(){
       el.classList.add("dragging");
     });
     el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("click", () => {
+      const row = byShip.get(el.dataset.ship);
+      if (row) _setSelectedShop(row);
+    });
   });
 }
 
@@ -1006,11 +1014,6 @@ document.getElementById("shipSearch").addEventListener("input", renderShipList);
 
 (async () => {
   await loadBdes();
-  await loadSoldTos();
-  // Pre-load ALL ship-tos so the picker is usable without first
-  // selecting a Sold-to.  Also primes _shipToParent so picking a
-  // ship-to directly can auto-fill its parent Sold-to.
-  await loadShipTosFor("");
   await loadRecent();
   await loadShipOptions();
   await loadPlansForMonth();
