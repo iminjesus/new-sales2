@@ -402,6 +402,76 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 </div>
 
 <script>
+// ─── Touch → HTML5 drag-and-drop polyfill ──────────────────────────
+// HTML5 drag events don't fire on mobile.  This tiny shim translates
+// touch input into dragstart / dragover / drop on the same elements
+// so the rest of the code can stay pointer-agnostic.
+(function setupTouchDnD(){
+  if (!('ontouchstart' in window)) return;          // pointer-only env
+  let src = null, ghost = null, lastOver = null, dt = null;
+  function _dt(){
+    const bag = {};
+    return {
+      _bag: bag,
+      effectAllowed: "copy",
+      setData(t, v){ bag[t] = v; },
+      getData(t){ return bag[t] || ""; },
+      types: { includes(t){ return t in bag; } },
+    };
+  }
+  function _under(x, y){
+    if (ghost) ghost.style.display = "none";
+    const el = document.elementFromPoint(x, y);
+    if (ghost) ghost.style.display = "";
+    return el;
+  }
+  function _fire(target, type){
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "dataTransfer", { value: dt, writable: false });
+    target.dispatchEvent(e);
+    return e;
+  }
+  function _mkGhost(el){
+    const r = el.getBoundingClientRect();
+    const g = el.cloneNode(true);
+    g.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;`
+      + `width:${r.width}px;pointer-events:none;opacity:.8;z-index:99999;`
+      + `transform:rotate(2deg);box-shadow:0 6px 18px rgba(0,0,0,.25);`;
+    document.body.appendChild(g);
+    return g;
+  }
+  document.addEventListener("touchstart", (e) => {
+    const t = e.target.closest('[draggable="true"]');
+    if (!t) return;
+    src = t; dt = _dt();
+    _fire(t, "dragstart");
+    ghost = _mkGhost(t);
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!src) return;
+    e.preventDefault();
+    const tch = e.touches[0];
+    if (ghost){
+      ghost.style.left = (tch.clientX - ghost.offsetWidth / 2) + "px";
+      ghost.style.top  = (tch.clientY - 18) + "px";
+    }
+    const over = _under(tch.clientX, tch.clientY);
+    if (over !== lastOver){
+      if (lastOver) _fire(lastOver, "dragleave");
+      lastOver = over;
+    }
+    if (over) _fire(over, "dragover");
+  }, { passive: false });
+  document.addEventListener("touchend", (e) => {
+    if (!src) return;
+    const tch = e.changedTouches[0];
+    const over = _under(tch.clientX, tch.clientY);
+    if (over) _fire(over, "drop");
+    _fire(src, "dragend");
+    if (ghost) ghost.remove();
+    src = null; ghost = null; lastOver = null; dt = null;
+  }, { passive: true });
+})();
 const fBde       = document.getElementById("fBde");
 const fSold      = document.getElementById("fSold");
 const fShip      = document.getElementById("fShip");
