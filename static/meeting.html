@@ -558,11 +558,12 @@ document.addEventListener("DOMContentLoaded", () => {
   const box = document.getElementById("selectedShop");
   if (!box) return;
   box.addEventListener("dragover", (e) => {
-    if (e.dataTransfer.types.includes("text/ship_to")){
-      e.preventDefault();
-      box.style.borderColor = "#2563eb";
-      box.style.background  = "#dbeafe";
-    }
+    // Always preventDefault so drop fires — type-check happens at
+    // drop time below.  Firefox in particular doesn't surface custom
+    // types on dragover for security reasons.
+    e.preventDefault();
+    box.style.borderColor = "#2563eb";
+    box.style.background  = "#dbeafe";
   });
   box.addEventListener("dragleave", () => {
     box.style.borderColor = "";
@@ -589,14 +590,18 @@ document.addEventListener("DOMContentLoaded", () => {
   function _fdHide(){ fd.classList.remove("show"); fd.classList.remove("drag-over"); }
   document.addEventListener("dragstart", (e) => {
     const el = e.target;
-    if (el && el.classList &&
-        (el.classList.contains("ship-chip") || el.classList.contains("plan-chip"))){
+    if (!el || !el.classList) return;
+    // Show the floating drop banner whenever any ship-to bearing
+    // element starts being dragged — palette chips, calendar plan
+    // chips, AND Recent-entries shop group banners.
+    if (el.classList.contains("ship-chip")
+        || el.classList.contains("plan-chip")
+        || el.classList.contains("grp-shop")){
       _fdShow();
     }
   });
   document.addEventListener("dragend", _fdHide);
   fd.addEventListener("dragover", (e) => {
-    if (!e.dataTransfer.types.includes("text/ship_to")) return;
     e.preventDefault();
     fd.classList.add("drag-over");
   });
@@ -904,9 +909,20 @@ fForm.addEventListener("submit", async (e) => {
 });
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
+// Debounced input → live filter without hammering the API on every
+// keystroke.
+let _filtTimer = null;
+function _filtTrigger(){
+  clearTimeout(_filtTimer);
+  _filtTimer = setTimeout(loadRecent, 220);
+}
 filtBde.addEventListener("change", loadRecent);
+filtShip.addEventListener("input",  _filtTrigger);
 filtShip.addEventListener("change", loadRecent);
-if (filtSold) filtSold.addEventListener("change", loadRecent);
+if (filtSold){
+  filtSold.addEventListener("input",  _filtTrigger);
+  filtSold.addEventListener("change", loadRecent);
+}
 
 // ──────────────────────────────────────────────────────────────────
 // Calendar planner + ship-to palette with drag-and-drop

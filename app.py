@@ -6894,16 +6894,16 @@ def meeting_list():
 
         wh, params = [], []
         if ship_to:
-            wh.append("m.ship_to = %s"); params.append(ship_to)
+            # Partial match — user often types a prefix like "A029".
+            wh.append("m.ship_to LIKE %s"); params.append(f"%{ship_to}%")
         if bde:
             wh.append("m.bde_name = %s"); params.append(bde)
         if sold_to:
-            # Match against either the stored sold_to code OR the
-            # denormalised sold_to_name (which is what the form picker
-            # gives us).  Also fall back to the customer master via the
-            # join below in case meeting_log row predates sold_to_name.
-            wh.append("(m.sold_to = %s OR TRIM(m.sold_to_name) = %s)")
-            params.extend([sold_to, sold_to])
+            # Partial match against the sold_to code OR the denormalised
+            # sold_to_name (which is what the form picker stores).
+            like = f"%{sold_to}%"
+            wh.append("(m.sold_to LIKE %s OR TRIM(m.sold_to_name) LIKE %s)")
+            params.extend([like, like])
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
         conn = get_connection(); cur = conn.cursor(dictionary=True)
