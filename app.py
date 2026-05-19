@@ -6295,6 +6295,36 @@ def _ensure_meeting_log_table():
 
 _ensure_meeting_log_table()
 
+def _ensure_meeting_plan_table():
+    """One-row-per-planned-visit table backing the drag-and-drop
+    calendar on /meeting.  Independent from meeting_log: a plan is
+    intent (\"visit this shop next Tuesday\"), a log is the memo
+    written after the actual visit."""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS meeting_plan (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                plan_date    DATE NOT NULL,
+                ship_to      VARCHAR(64) NOT NULL,
+                sold_to      VARCHAR(64) NOT NULL DEFAULT '',
+                ship_to_name VARCHAR(160) NOT NULL DEFAULT '',
+                sold_to_name VARCHAR(160) NOT NULL DEFAULT '',
+                bde_email    VARCHAR(120) NOT NULL DEFAULT '',
+                bde_name     VARCHAR(120) NOT NULL DEFAULT '',
+                created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_plan_date    (plan_date),
+                INDEX idx_plan_ship_to (ship_to),
+                INDEX idx_plan_bde     (bde_email),
+                INDEX idx_plan_bde_nm  (bde_name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[meeting_plan] schema init failed: {e}")
+
+_ensure_meeting_plan_table()
+
 def _bde_from_request():
     """Best-effort 'who is logged in'.  Cloudflare Access (if it's in
     front of the app) injects Cf-Access-Authenticated-User-Email; behind
@@ -6654,6 +6684,183 @@ def meeting_feedback():
 
         return jsonify({"ok": True, "id": rid, "feedback_id": new_fb_id,
                         "thread": thread})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# ── /meeting calendar planner ──────────────────────────────────────
+@app.get("/api/meeting_plan")
+def meeting_plan_list():
+    """Return scheduled visits for a month (Y/M).  When the caller is
+    a BDE (Cf-Access header maps to a BDE in _BDE_DIRECTORY) only their
+    own plans come back; everyone else sees the full team's plans."""
+    try:
+        year  = int(request.args.get("year")  or datetime.now().year)
+        month = int(request.args.get("month") or datetime.now().month)
+    except Exception:
+        return jsonify({"error": "year/month must be integers"}), 400
+
+    email = _bde_from_request()
+    role  = _EMAIL_TO_DIR.get(email.lower(), (None, None, "ALL"))[2] if email else "ALL"
+    bde_name_lock = _EMAIL_TO_DIR.get(email.lower(), (None, None, None))[0] if email else None
+
+    wh = ["YEAR(plan_date) = %s", "MONTH(plan_date) = %s"]
+    params = [year, month]
+    if role == "BDE" and bde_name_lock:
+        wh.append("UPPER(bde_name) = %s")
+        params.append(bde_name_lock.upper())
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT id, plan_date, ship_to, sold_to,
+                   ship_to_name, sold_to_name,
+                   bde_email, bde_name
+            FROM meeting_plan
+            WHERE {' AND '.join(wh)}
+            ORDER BY plan_date, id
+        """, tuple(params))
+        rows = cur.fetchall()
+        for r in rows:
+            if r.get("plan_date"):
+                r["plan_date"] = r["plan_date"].strftime("%Y-%m-%d")
+        cur.close(); conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/meeting_plan")
+def meeting_plan_create():
+    """Schedule one ship_to on a date.  Body (JSON or form):
+    {date: YYYY-MM-DD, ship_to: <code>, bde_name: <name> }
+    bde_name is sent by the client (selected in the form) — for BDE
+    role we override with their own name to prevent scheduling on
+    behalf of someone else."""
+    try:
+        body  = request.get_json(silent=True) or {}
+        date  = (body.get("date")     or request.form.get("date")     or "").strip()
+        ship  = (body.get("ship_to")  or request.form.get("ship_to")  or "").strip()
+        bdenm = (body.get("bde_name") or request.form.get("bde_name") or "").strip()
+        if not date or not ship:
+            return jsonify({"error": "date and ship_to are required"}), 400
+        try:
+            plan_d = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"error": "date must be YYYY-MM-DD"}), 400
+
+        # BDE-scope: force the planner to be the signed-in BDE.
+        email = _bde_from_request()
+        found = _EMAIL_TO_DIR.get(email.lower()) if email else None
+        if found and found[2] == "BDE":
+            bdenm = found[0]
+            bde_email = email
+        else:
+            bde_email = email or ""
+
+        # Resolve sold_to + names from customer master so the calendar
+        # chip can show a friendly label without a separate lookup.
+        sold_to, sold_to_name, ship_to_name = "", "", ""
+        try:
+            conn = get_connection(); cur = conn.cursor(dictionary=True)
+            cur.execute("""
+                SELECT MIN(sold_to)      AS sold_to,
+                       MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name,
+                       MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name
+                FROM customer
+                WHERE ship_to = %s
+            """, (ship,))
+            r = cur.fetchone()
+            if r:
+                sold_to      = str(r.get("sold_to") or "")
+                sold_to_name = r.get("sold_to_name") or ""
+                ship_to_name = r.get("ship_to_name") or ""
+            cur.close(); conn.close()
+        except Exception:
+            pass
+
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO meeting_plan
+                (plan_date, ship_to, sold_to, ship_to_name, sold_to_name,
+                 bde_email, bde_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (plan_d, ship[:64], sold_to[:64], ship_to_name[:160], sold_to_name[:160],
+              bde_email[:120], bdenm[:120]))
+        new_id = cur.lastrowid
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True, "id": new_id,
+                        "plan_date":   plan_d.strftime("%Y-%m-%d"),
+                        "ship_to":     ship,
+                        "ship_to_name": ship_to_name,
+                        "sold_to":     sold_to,
+                        "sold_to_name": sold_to_name,
+                        "bde_name":    bdenm,
+                        "bde_email":   bde_email})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.delete("/api/meeting_plan/<int:plan_id>")
+def meeting_plan_delete(plan_id):
+    try:
+        # If signed-in user is a BDE, restrict delete to their own rows.
+        email = _bde_from_request()
+        found = _EMAIL_TO_DIR.get(email.lower()) if email else None
+        bde_scope = found[0] if (found and found[2] == "BDE") else None
+
+        conn = get_connection(); cur = conn.cursor()
+        if bde_scope:
+            cur.execute("DELETE FROM meeting_plan "
+                        "WHERE id = %s AND UPPER(bde_name) = %s",
+                        (plan_id, bde_scope.upper()))
+        else:
+            cur.execute("DELETE FROM meeting_plan WHERE id = %s", (plan_id,))
+        n = cur.rowcount
+        conn.commit(); cur.close(); conn.close()
+        return jsonify({"ok": True, "deleted": n})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/api/meeting_plan/shop_to_options")
+def meeting_plan_shop_options():
+    """Slim ship_to list for the drag-and-drop palette.  Filtered to
+    the signed-in user's scope: a BDE only sees the shops they're
+    assigned to + shops they've already visited; an SM sees their
+    state; ALL sees everything."""
+    try:
+        email = _bde_from_request()
+        me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
+        role  = me[2] if me else "ALL"
+        state = me[1] if me else None
+        bde   = me[0] if me else None
+
+        wh, params = [
+            "ship_to IS NOT NULL", "TRIM(ship_to_name) <> ''"
+        ], []
+        if role == "BDE" and bde:
+            wh.append("UPPER(TRIM(salesman_name)) = %s")
+            params.append(bde.upper())
+        elif role == "SM" and state:
+            wh.append("bde_state = %s")
+            params.append(state)
+
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT DISTINCT ship_to,
+                   MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
+                   MIN(sold_to)                       AS sold_to,
+                   MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
+            FROM customer
+            WHERE {' AND '.join(wh)}
+            GROUP BY ship_to
+            ORDER BY MIN(TRIM(ship_to_name))
+            LIMIT 3000
+        """, tuple(params))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        return jsonify(rows)
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

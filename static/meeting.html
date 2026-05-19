@@ -16,7 +16,39 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .btn-primary{background:#2563eb;color:#fff;border-color:#2563eb}
 .btn-primary:hover{background:#1d4ed8}
 .btn.active{background:#374151;color:#fff;border-color:#374151}
-.container{padding:14px 16px;max-width:980px;margin:0 auto}
+.container{padding:14px 16px;max-width:1480px;margin:0 auto}
+.planner-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:12px;align-items:start}
+@media (max-width:980px){.planner-layout{grid-template-columns:1fr}}
+
+/* ── Calendar planner ─────────────────────────────────── */
+.plan-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.plan-toolbar button{font-size:11px;padding:4px 10px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:5px;cursor:pointer}
+.plan-toolbar button:hover{background:#f3f4f6}
+.plan-month{font-weight:700;color:#1e3a5f;font-size:13px;flex:1}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;background:#e5e7eb;border:1px solid #e5e7eb;border-radius:5px;overflow:hidden}
+.cal-head,.cal-cell{background:#fff;padding:4px 5px;min-height:78px;display:flex;flex-direction:column;font-size:11px}
+.cal-head{min-height:0;background:#f8fafc;font-weight:600;color:#6b7280;text-align:center;font-size:10px;padding:5px 0;text-transform:uppercase;letter-spacing:.4px}
+.cal-cell.dim{background:#fafafa;color:#cbd5e1}
+.cal-cell.today{background:#fff7ed}
+.cal-cell .d-num{font-weight:600;color:#374151;font-size:11px;margin-bottom:2px}
+.cal-cell.today .d-num{color:#ea580c}
+.cal-cell.drag-over{background:#dbeafe;outline:2px dashed #2563eb;outline-offset:-2px}
+.cal-cell .chips{display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.plan-chip{background:#dcfce7;border:1px solid #86efac;color:#14532d;font-size:10px;padding:1px 5px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:space-between;gap:3px}
+.plan-chip:hover{background:#bbf7d0}
+.plan-chip .pc-rm{color:#dc2626;font-weight:700}
+
+/* Ship-to palette */
+.palette-input{width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;margin-bottom:6px}
+.palette-input:focus{outline:none;border-color:#2563eb}
+.palette-list{max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:2px}
+.ship-chip{padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;font-size:11px;color:#374151;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px}
+.ship-chip:active{cursor:grabbing}
+.ship-chip:hover{background:#eff6ff;border-color:#93c5fd}
+.ship-chip .sc-code{color:#6b7280;font-family:monospace;font-size:10px}
+.ship-chip.dragging{opacity:.5}
+.palette-empty{color:#9ca3af;font-size:11px;padding:8px;text-align:center}
+.palette-count{font-size:10px;color:#9ca3af;margin-bottom:4px;text-align:right}
 .card{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:12px}
 .card h2{font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:10px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
@@ -129,6 +161,9 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 
 <div class="container">
 
+<div class="planner-layout">
+<div class="planner-left">
+
   <!-- ── New entry form ── -->
   <div class="card">
     <h2>New visit</h2>
@@ -217,6 +252,38 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     </div>
     <div id="recentWrap"><div class="empty">Loading…</div></div>
   </div>
+
+</div><!-- /planner-left -->
+
+<div class="planner-right">
+
+  <!-- ── Monthly calendar ── -->
+  <div class="card">
+    <div class="plan-toolbar">
+      <button type="button" id="calPrev">‹</button>
+      <span class="plan-month" id="calMonthLabel">…</span>
+      <button type="button" id="calToday">Today</button>
+      <button type="button" id="calNext">›</button>
+    </div>
+    <div id="calGrid" class="cal-grid"></div>
+    <div style="font-size:10px;color:#9ca3af;margin-top:6px;">
+      Tip: drag a ship-to chip from below onto a date.  Click a chip on the calendar to remove.
+    </div>
+  </div>
+
+  <!-- ── Ship-to palette (drag source) ── -->
+  <div class="card">
+    <h2>Ship-to (drag onto calendar)</h2>
+    <input id="shipSearch" class="palette-input" type="text"
+           placeholder="Search by name or code…" autocomplete="off">
+    <div class="palette-count" id="shipCount"></div>
+    <div id="shipList" class="palette-list">
+      <div class="palette-empty">Loading…</div>
+    </div>
+  </div>
+
+</div><!-- /planner-right -->
+</div><!-- /planner-layout -->
 
 </div>
 
@@ -573,10 +640,188 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
 filtBde.addEventListener("change", loadRecent);
 filtShip.addEventListener("change", loadRecent);
 
+// ──────────────────────────────────────────────────────────────────
+// Calendar planner + ship-to palette with drag-and-drop
+// ──────────────────────────────────────────────────────────────────
+const MONTHS = ["January","February","March","April","May","June",
+                "July","August","September","October","November","December"];
+const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// Current month being viewed.
+const _calState = { year: (new Date()).getFullYear(), month: (new Date()).getMonth() + 1 };
+let _planRowsByDate = {};   // "YYYY-MM-DD" → [ {id, ship_to, ship_to_name, bde_name}, … ]
+let _shipOptions    = [];   // [{ship_to, ship_to_name, sold_to, sold_to_name}, …]
+
+function _isoDate(y, m, d) {
+  const pad = n => String(n).padStart(2,"0");
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+
+async function loadPlansForMonth(){
+  const qs = new URLSearchParams({year: _calState.year, month: _calState.month}).toString();
+  const rows = await fetchJSON("/api/meeting_plan?" + qs).catch(() => []);
+  _planRowsByDate = {};
+  for (const r of (rows || [])) {
+    const d = r.plan_date;
+    if (!d) continue;
+    (_planRowsByDate[d] = _planRowsByDate[d] || []).push(r);
+  }
+}
+
+function renderCalendar(){
+  const root = document.getElementById("calGrid");
+  const label = document.getElementById("calMonthLabel");
+  if (!root) return;
+  const {year, month} = _calState;
+  if (label) label.textContent = `${MONTHS[month-1]} ${year}`;
+
+  // First day of month, total days, grid starting on Sunday.
+  const first    = new Date(year, month - 1, 1);
+  const dow      = first.getDay();   // 0=Sun
+  const daysInM  = new Date(year, month, 0).getDate();
+  const todayIso = (() => { const t = new Date();
+    return _isoDate(t.getFullYear(), t.getMonth()+1, t.getDate()); })();
+
+  let html = "";
+  for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
+  // Leading blanks
+  for (let i = 0; i < dow; i++) html += `<div class="cal-cell dim"></div>`;
+  // Day cells
+  for (let d = 1; d <= daysInM; d++) {
+    const iso = _isoDate(year, month, d);
+    const isToday = (iso === todayIso) ? " today" : "";
+    const chips = (_planRowsByDate[iso] || []).map(r => `
+      <div class="plan-chip" data-id="${r.id}" title="${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
+        <span>${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 18))}</span>
+        <span class="pc-rm">×</span>
+      </div>`).join("");
+    html += `<div class="cal-cell${isToday}" data-date="${iso}">
+      <span class="d-num">${d}</span>
+      <div class="chips">${chips}</div>
+    </div>`;
+  }
+  // Trailing blanks to fill last row (optional, keeps grid even)
+  const cellsUsed = dow + daysInM;
+  const trailing  = (7 - (cellsUsed % 7)) % 7;
+  for (let i = 0; i < trailing; i++) html += `<div class="cal-cell dim"></div>`;
+  root.innerHTML = html;
+
+  // Wire drop targets
+  root.querySelectorAll(".cal-cell[data-date]").forEach(cell => {
+    cell.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      cell.classList.add("drag-over");
+    });
+    cell.addEventListener("dragleave", () => cell.classList.remove("drag-over"));
+    cell.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      cell.classList.remove("drag-over");
+      const ship = e.dataTransfer.getData("text/ship_to");
+      const date = cell.dataset.date;
+      if (!ship || !date) return;
+      const bde = (window._me && window._me.lock_salesman) || document.getElementById("fBde").value || "";
+      try {
+        const r = await fetch("/api/meeting_plan", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          credentials:"include",
+          body: JSON.stringify({ date, ship_to: ship, bde_name: bde }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.error){ alert("Failed: " + (j.error || r.status)); return; }
+        await loadPlansForMonth();
+        renderCalendar();
+      } catch (err) { alert("Error: " + err.message); }
+    });
+  });
+  // Click chip to remove
+  root.querySelectorAll(".plan-chip").forEach(c => {
+    c.addEventListener("click", async () => {
+      const id = c.dataset.id;
+      if (!id) return;
+      if (!confirm("Remove this planned visit?")) return;
+      try {
+        const r = await fetch(`/api/meeting_plan/${id}`, {
+          method:"DELETE", credentials:"include",
+        });
+        const j = await r.json();
+        if (!r.ok || j.error){ alert("Delete failed: " + (j.error || r.status)); return; }
+        await loadPlansForMonth();
+        renderCalendar();
+      } catch (err) { alert("Error: " + err.message); }
+    });
+  });
+}
+
+async function loadShipOptions(){
+  const rows = await fetchJSON("/api/meeting_plan/shop_to_options").catch(() => []);
+  _shipOptions = Array.isArray(rows) ? rows : [];
+  renderShipList();
+}
+
+function renderShipList(){
+  const list = document.getElementById("shipList");
+  const cnt  = document.getElementById("shipCount");
+  const q    = (document.getElementById("shipSearch").value || "").trim().toLowerCase();
+  const filtered = !q ? _shipOptions.slice(0, 200)
+    : _shipOptions.filter(r =>
+        (r.ship_to || "").toLowerCase().includes(q) ||
+        (r.ship_to_name || "").toLowerCase().includes(q) ||
+        (r.sold_to_name || "").toLowerCase().includes(q)
+      ).slice(0, 200);
+  if (cnt) {
+    cnt.textContent = q
+      ? `${filtered.length} of ${_shipOptions.length} match`
+      : `${_shipOptions.length} ship-tos (showing first 200)`;
+  }
+  if (!filtered.length){
+    list.innerHTML = '<div class="palette-empty">No matches</div>';
+    return;
+  }
+  list.innerHTML = filtered.map(r => `
+    <div class="ship-chip" draggable="true" data-ship="${_attr(r.ship_to)}"
+         title="${_attr(r.sold_to_name || '')} — ${_attr(r.ship_to_name || '')}">
+      <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(r.ship_to_name || r.ship_to)}</span>
+      <span class="sc-code">${escapeHtml(r.ship_to)}</span>
+    </div>`).join("");
+  list.querySelectorAll(".ship-chip").forEach(el => {
+    el.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", el.dataset.ship);
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+  });
+}
+
+function _attr(s){
+  return String(s == null ? "" : s).replace(/"/g, "&quot;").replace(/&/g, "&amp;");
+}
+
+document.getElementById("calPrev").addEventListener("click", async () => {
+  _calState.month -= 1;
+  if (_calState.month < 1){ _calState.month = 12; _calState.year -= 1; }
+  await loadPlansForMonth(); renderCalendar();
+});
+document.getElementById("calNext").addEventListener("click", async () => {
+  _calState.month += 1;
+  if (_calState.month > 12){ _calState.month = 1; _calState.year += 1; }
+  await loadPlansForMonth(); renderCalendar();
+});
+document.getElementById("calToday").addEventListener("click", async () => {
+  const t = new Date();
+  _calState.year = t.getFullYear();
+  _calState.month = t.getMonth() + 1;
+  await loadPlansForMonth(); renderCalendar();
+});
+document.getElementById("shipSearch").addEventListener("input", renderShipList);
+
 (async () => {
   await loadBdes();
   await loadSoldTos();
   await loadRecent();
+  await loadShipOptions();
+  await loadPlansForMonth();
+  renderCalendar();
 })();
 </script>
 </body>
