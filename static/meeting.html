@@ -521,6 +521,33 @@ function _setSelectedShop(row){
 document.addEventListener("DOMContentLoaded", () => {
   const clr = document.getElementById("selectedShopClear");
   if (clr) clr.addEventListener("click", () => _setSelectedShop(null));
+
+  // Make the "Selected shop" banner a drop target too so drag-and-drop
+  // works for the form just like it does for the calendar.
+  const box = document.getElementById("selectedShop");
+  if (!box) return;
+  box.addEventListener("dragover", (e) => {
+    if (e.dataTransfer.types.includes("text/ship_to")){
+      e.preventDefault();
+      box.style.borderColor = "#2563eb";
+      box.style.background  = "#dbeafe";
+    }
+  });
+  box.addEventListener("dragleave", () => {
+    box.style.borderColor = "";
+    box.style.background  = "";
+  });
+  box.addEventListener("drop", (e) => {
+    e.preventDefault();
+    box.style.borderColor = "";
+    box.style.background  = "";
+    const ship = e.dataTransfer.getData("text/ship_to");
+    if (!ship) return;
+    // Resolve full row from cached palette options so we can store
+    // sold_to / sold_to_name alongside the ship-to.
+    const row = (_shipOptions || []).find(r => r.ship_to === ship);
+    _setSelectedShop(row || { ship_to: ship });
+  });
 });
 
 async function fetchJSON(url){
