@@ -43,9 +43,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .cal-cell.today .d-num{color:#ea580c}
 .cal-cell.drag-over{background:#dbeafe;outline:2px dashed #2563eb;outline-offset:-2px}
 .cal-cell .chips{display:flex;flex-direction:column;gap:2px;overflow:hidden}
-.plan-chip{background:#dcfce7;border:1px solid #86efac;color:#14532d;font-size:10px;padding:1px 5px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:space-between;gap:3px}
-.plan-chip:hover{background:#bbf7d0}
-.plan-chip .pc-rm{color:#dc2626;font-weight:700}
+.plan-chip{background:#dcfce7;border:1px solid #86efac;color:#14532d;font-size:10px;padding:1px 5px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:space-between;gap:3px;line-height:1.4}
+.plan-chip:hover{filter:brightness(.92)}
+.plan-chip .pc-rm{color:currentColor;font-weight:700;opacity:.65;margin-left:2px}
+.plan-chip:hover .pc-rm{opacity:1}
 
 /* Ship-to palette — sits directly below the calendar in the same
    card.  Shorter than the calendar itself so the calendar dominates
@@ -813,6 +814,15 @@ function renderCalendar(){
   const me = window._me || {};
   const colorByBde = !me.lock_salesman;
 
+  // Two-letter initials so the BDE who planned a chip is identifiable
+  // even when two BDEs happen to hash to similar palette hues.
+  function _initials(nm){
+    const parts = String(nm || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
   let html = "";
   for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
   for (let i = 0; i < dow; i++) html += `<div class="cal-cell dim"></div>`;
@@ -821,13 +831,20 @@ function renderCalendar(){
     const isToday = (iso === todayIso) ? " today" : "";
     const chips = (_planRowsByDate[iso] || []).map(r => {
       let style = "";
+      let badge = "";
       if (colorByBde && r.bde_name) {
         const c = _planColorFor(r.bde_name);
-        style = `style="background:${_hexWithAlpha(c, 0x22)};border-color:${c};color:${c};"`;
+        // Solid colour background + white text so the chip stands
+        // out against the cell (today-cell amber was bleeding through
+        // the previous 13%-alpha background).
+        style = `style="background:${c};border-color:${c};color:#fff;"`;
+        badge = `<span style="background:rgba(255,255,255,.28);color:#fff;
+                  font-weight:700;font-size:9px;padding:0 4px;border-radius:6px;
+                  margin-right:3px;">${_initials(r.bde_name)}</span>`;
       }
       return `<div class="plan-chip" data-id="${r.id}" ${style}
                    title="${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
-        <span>${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 18))}</span>
+        <span style="display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;">${badge}${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 16))}</span>
         <span class="pc-rm">×</span>
       </div>`;
     }).join("");
