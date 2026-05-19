@@ -951,15 +951,21 @@ function renderCalendar(){
     const chips = (_planRowsByDate[iso] || []).map(r => {
       let style = "";
       let badge = "";
+      const logged = !!r.logged;
       if (colorByBde && r.bde_name) {
         const c = _planColorFor(r.bde_name);
-        // Solid colour background + white text so the chip stands
-        // out against the cell (today-cell amber was bleeding through
-        // the previous 13%-alpha background).
-        style = `style="background:${c};border-color:${c};color:#fff;"`;
+        // Logged plan = full colour (the visit actually happened);
+        // unlogged plan = faded so the user can see at a glance which
+        // dates still need a log entry.
+        const op = logged ? 1 : 0.40;
+        style = `style="background:${c};border-color:${c};color:#fff;opacity:${op};"`;
         badge = `<span style="background:rgba(255,255,255,.28);color:#fff;
                   font-weight:700;font-size:9px;padding:0 4px;border-radius:6px;
                   margin-right:3px;">${_initials(r.bde_name)}</span>`;
+      } else {
+        // Default-green fallback uses the same opacity rule.
+        const op = logged ? 1 : 0.40;
+        style = `style="opacity:${op};"`;
       }
       return `<div class="plan-chip" data-id="${r.id}"
                    data-ship="${_attr(r.ship_to || '')}"

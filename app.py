@@ -6739,17 +6739,24 @@ def meeting_plan_list():
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
         cur.execute(f"""
-            SELECT id, plan_date, ship_to, sold_to,
-                   ship_to_name, sold_to_name,
-                   bde_email, bde_name
-            FROM meeting_plan
+            SELECT p.id, p.plan_date, p.ship_to, p.sold_to,
+                   p.ship_to_name, p.sold_to_name,
+                   p.bde_email, p.bde_name,
+                   EXISTS(
+                     SELECT 1 FROM meeting_log m
+                     WHERE m.ship_to = p.ship_to
+                       AND YEAR(m.visit_date)  = YEAR(p.plan_date)
+                       AND MONTH(m.visit_date) = MONTH(p.plan_date)
+                   ) AS logged
+            FROM meeting_plan p
             WHERE {' AND '.join(wh)}
-            ORDER BY plan_date, id
+            ORDER BY p.plan_date, p.id
         """, tuple(params))
         rows = cur.fetchall()
         for r in rows:
             if r.get("plan_date"):
                 r["plan_date"] = r["plan_date"].strftime("%Y-%m-%d")
+            r["logged"] = bool(r.get("logged"))
         cur.close(); conn.close()
         return jsonify(rows)
     except Exception as e:
