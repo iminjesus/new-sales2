@@ -85,15 +85,13 @@ async function loadSalesMap() {
   for (const k of Object.keys(loggedByPurpose)) {
     purposeSets[k] = new Set(loggedByPurpose[k] || []);
   }
-  // Default Purpose state on page load is "" (OFF) — no purpose filter
-  // applied, every shop is plotted including those with no log entry.
-  // Clicking the "All" button explicitly switches to ALL = "every shop
-  // that has at least one logged visit (any purpose)".  Clicking the
-  // currently-active button toggles back to OFF.
+  // Purpose row: no button active = no purpose filter (every shop is
+  // plotted, including un-logged ones).  Click a Purpose button to
+  // narrow to that purpose; click the active button again to clear.
+  // For "all logged shops" use the Shop-status row's Logs button.
   const purposeMode = (window._purposeFilter == null ? "" : window._purposeFilter);
   const passesPurpose = (shipTo) => {
-    if (!purposeMode)              return true;            // OFF — no filter
-    if (purposeMode === "ALL")     return loggedSet.has(shipTo);
+    if (!purposeMode) return true;                 // no filter
     const set = purposeSets[purposeMode];
     return set ? set.has(shipTo) : false;
   };
