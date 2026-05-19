@@ -869,8 +869,13 @@ function renderCalendar(){
                   font-weight:700;font-size:9px;padding:0 4px;border-radius:6px;
                   margin-right:3px;">${_initials(r.bde_name)}</span>`;
       }
-      return `<div class="plan-chip" data-id="${r.id}" ${style}
-                   title="${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
+      return `<div class="plan-chip" data-id="${r.id}"
+                   data-ship="${_attr(r.ship_to || '')}"
+                   data-ship-name="${_attr(r.ship_to_name || '')}"
+                   data-sold="${_attr(r.sold_to || '')}"
+                   data-sold-name="${_attr(r.sold_to_name || '')}"
+                   draggable="true" ${style}
+                   title="Click × to remove · Drag onto the form on the right to log this visit\n${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
         <span style="display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;">${badge}${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 16))}</span>
         <span class="pc-rm">×</span>
       </div>`;
@@ -913,9 +918,27 @@ function renderCalendar(){
       } catch (err) { alert("Error: " + err.message); }
     });
   });
-  // Click chip to remove
+  // Plan chip wiring:
+  //   × button click  → delete the plan
+  //   chip drag       → drop on Selected-shop banner = log the visit
+  //                      drop on another calendar date = (handled by the
+  //                      date drop handler above, but creates a new plan
+  //                      rather than moving the old one — fine for now)
   root.querySelectorAll(".plan-chip").forEach(c => {
-    c.addEventListener("click", async () => {
+    // Drag source for re-using a planned shop in the form.
+    c.addEventListener("dragstart", (e) => {
+      const ship = c.dataset.ship || "";
+      if (!ship) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", ship);
+      c.classList.add("dragging");
+    });
+    c.addEventListener("dragend", () => c.classList.remove("dragging"));
+    // × on the right of the chip is the delete handle.
+    const rm = c.querySelector(".pc-rm");
+    if (!rm) return;
+    rm.addEventListener("click", async (e) => {
+      e.stopPropagation();
       const id = c.dataset.id;
       if (!id) return;
       if (!confirm("Remove this planned visit?")) return;
