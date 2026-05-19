@@ -6894,16 +6894,27 @@ def meeting_list():
 
         wh, params = [], []
         if ship_to:
-            # Partial match — user often types a prefix like "A029".
-            wh.append("m.ship_to LIKE %s"); params.append(f"%{ship_to}%")
+            # Partial match against either the ship_to code OR the
+            # shop name (from customer master via the LEFT JOIN below).
+            like = f"%{ship_to}%"
+            wh.append("(m.ship_to LIKE %s "
+                      "  OR EXISTS (SELECT 1 FROM customer cc "
+                      "             WHERE cc.ship_to = m.ship_to "
+                      "             AND TRIM(cc.ship_to_name) LIKE %s))")
+            params.extend([like, like])
         if bde:
             wh.append("m.bde_name = %s"); params.append(bde)
         if sold_to:
-            # Partial match against the sold_to code OR the denormalised
-            # sold_to_name (which is what the form picker stores).
+            # Partial match against any of: sold_to code, the
+            # denormalised sold_to_name stored on the log row, and
+            # the customer master's sold_to_name for the ship_to.
             like = f"%{sold_to}%"
-            wh.append("(m.sold_to LIKE %s OR TRIM(m.sold_to_name) LIKE %s)")
-            params.extend([like, like])
+            wh.append("(m.sold_to LIKE %s "
+                      "  OR TRIM(m.sold_to_name) LIKE %s "
+                      "  OR EXISTS (SELECT 1 FROM customer cc "
+                      "             WHERE cc.ship_to = m.ship_to "
+                      "             AND TRIM(cc.sold_to_name) LIKE %s))")
+            params.extend([like, like, like])
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
         conn = get_connection(); cur = conn.cursor(dictionary=True)
