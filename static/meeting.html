@@ -382,12 +382,16 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     <div class="filt">
       <label>BDE</label>
       <select id="filtBde"><option value="">All</option></select>
-      <label>Sold-to</label>
-      <input id="filtSold" type="text" placeholder="e.g. JAX TYRES & AUTO" list="filtSoldList" style="width:180px;">
-      <datalist id="filtSoldList"></datalist>
-      <label>Ship-to</label>
-      <input id="filtShip" type="text" placeholder="e.g. A029737" style="width:140px;">
-      <button class="btn" id="btnRefresh">Refresh</button>
+      <span id="filtShopBadge" style="font-size:11px;color:#1e3a5f;display:none;">
+        <span style="color:#6b7280;">Shop:</span>
+        <b id="filtShopBadgeText"></b>
+        <a href="javascript:void(0)" id="filtShopBadgeClear"
+           style="color:#dc2626;margin-left:4px;font-weight:700;">×</a>
+      </span>
+      <span style="color:#9ca3af;font-size:11px;">
+        Pick a shop in the palette ← to filter by shop
+      </span>
+      <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
     </div>
     <div id="recentWrap"><div class="empty">Loading…</div></div>
   </div>
@@ -405,8 +409,6 @@ const fVisitDate = document.getElementById("fVisitDate");
 const fForm      = document.getElementById("meetingForm");
 const fMsg       = document.getElementById("submitMsg");
 const filtBde    = document.getElementById("filtBde");
-const filtShip   = document.getElementById("filtShip");
-const filtSold   = document.getElementById("filtSold");
 
 // Default visit date to today (editable so a BDE can log a past visit).
 // Cap the picker at today so future dates can't be picked.
@@ -525,6 +527,21 @@ function _setSelectedShop(row){
   _selectedShop = row || null;
   const box = document.getElementById("selectedShop");
   const clr = document.getElementById("selectedShopClear");
+  // Refresh Recent entries to show only this shop's history.
+  // (loadRecent reads _selectedShop directly.)
+  if (typeof loadRecent === "function") loadRecent();
+  // Show/hide the badge next to the BDE filter.
+  const badge = document.getElementById("filtShopBadge");
+  const badgeTxt = document.getElementById("filtShopBadgeText");
+  if (badge && badgeTxt){
+    if (row){
+      badge.style.display = "inline";
+      badgeTxt.textContent = (row.ship_to || "") +
+        (row.ship_to_name ? " · " + row.ship_to_name : "");
+    } else {
+      badge.style.display = "none";
+    }
+  }
   if (!box) return;
   if (row){
     box.classList.remove("selected-shop-empty");
@@ -663,9 +680,12 @@ async function loadRecent(){
   const wrap = document.getElementById("recentWrap");
   wrap.innerHTML = '<div class="empty">Loading…</div>';
   const qs = new URLSearchParams();
-  if (filtBde.value)  qs.set("bde",     filtBde.value);
-  if (filtShip.value) qs.set("ship_to", filtShip.value.trim());
-  if (filtSold && filtSold.value) qs.set("sold_to", filtSold.value.trim());
+  if (filtBde.value) qs.set("bde", filtBde.value);
+  // Ship-to filter comes from the palette's selected shop, not a
+  // separate input field — single source of truth, same as the form.
+  if (_selectedShop && _selectedShop.ship_to){
+    qs.set("ship_to", _selectedShop.ship_to);
+  }
   qs.set("limit", "100");
   const rows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
   if (!Array.isArray(rows) || !rows.length){
@@ -752,18 +772,6 @@ async function loadRecent(){
     });
   });
 
-  // Populate the Sold-to filter datalist from sold-to names seen
-  // in the current set so the user can autocomplete.
-  const dl = document.getElementById("filtSoldList");
-  if (dl){
-    const seen = new Set();
-    dl.innerHTML = rows
-      .map(r => (r.sold_to_name || "").trim())
-      .filter(n => n && !seen.has(n) && seen.add(n))
-      .sort((a,b) => a.localeCompare(b))
-      .map(n => `<option value="${escapeHtml(n)}">`)
-      .join("");
-  }
 }
 
 function escapeHtml(s){
@@ -909,20 +917,11 @@ fForm.addEventListener("submit", async (e) => {
 });
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
-// Debounced input → live filter without hammering the API on every
-// keystroke.
-let _filtTimer = null;
-function _filtTrigger(){
-  clearTimeout(_filtTimer);
-  _filtTimer = setTimeout(loadRecent, 220);
-}
 filtBde.addEventListener("change", loadRecent);
-filtShip.addEventListener("input",  _filtTrigger);
-filtShip.addEventListener("change", loadRecent);
-if (filtSold){
-  filtSold.addEventListener("input",  _filtTrigger);
-  filtSold.addEventListener("change", loadRecent);
-}
+// "Shop" badge × clears the palette selection (which also re-renders
+// Recent entries via _setSelectedShop's loadRecent call).
+const _shopBadgeClear = document.getElementById("filtShopBadgeClear");
+if (_shopBadgeClear) _shopBadgeClear.addEventListener("click", () => _setSelectedShop(null));
 
 // ──────────────────────────────────────────────────────────────────
 // Calendar planner + ship-to palette with drag-and-drop
