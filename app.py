@@ -6066,7 +6066,8 @@ def _esc_html(s):
             .replace("\n","<br>"))
 
 def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
-                    visit_date, met_person, notes, next_action, feedback):
+                    visit_date, met_person, notes, next_action, feedback,
+                    visit_purpose=""):
     rows = []
     def _row(lbl, val):
         return (f'<tr><td style="padding:4px 10px;color:#6b7280;font-size:11px;'
@@ -6078,6 +6079,8 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
     rows.append(_row("Visit date",  _esc_html(visit_date)))
     rows.append(_row("Sold-to",     _esc_html(sold_to_name)))
     rows.append(_row("Ship-to",     f"{_esc_html(ship_to)} — {_esc_html(ship_to_name)}"))
+    if visit_purpose:
+        rows.append(_row("Purpose",  _esc_html(visit_purpose)))
     if met_person:
         rows.append(_row("Met",      _esc_html(met_person)))
     rows.append(_row("Notes",       f'<div style="white-space:pre-wrap;">{_esc_html(notes)}</div>'))
@@ -6102,7 +6105,8 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
     )
 
 def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
-                    visit_date, met_person, notes, next_action):
+                    visit_date, met_person, notes, next_action,
+                    visit_purpose=""):
     """Email Hayden + JJ + the State Manager of the BDE's state.  CC the
     BDE author so they have a record of what was sent on their behalf."""
     state    = _lookup_bde_state(bde_name)
@@ -6115,7 +6119,8 @@ def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
     subject  = (f"[BDE Visit] {bde_name} → {ship_to} "
                 f"{ship_to_name or ''} ({visit_date})")
     html = _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
-                           visit_date, met_person, notes, next_action, None)
+                           visit_date, met_person, notes, next_action, None,
+                           visit_purpose=visit_purpose)
     _send_mail_async(to_list, cc_list, subject, html)
 
 def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
@@ -6251,9 +6256,10 @@ def _ensure_meeting_log_table():
             except Exception: pass
         # Add columns that may not exist on legacy tables.
         for col, defn, after in (
-            ("sold_to_name", "VARCHAR(160) NOT NULL DEFAULT ''", "sold_to"),
-            ("visit_date",   "DATE NOT NULL DEFAULT '1970-01-01'", "created_at"),
-            ("feedback",     "TEXT", "next_action"),
+            ("sold_to_name",  "VARCHAR(160) NOT NULL DEFAULT ''", "sold_to"),
+            ("visit_date",    "DATE NOT NULL DEFAULT '1970-01-01'", "created_at"),
+            ("feedback",      "TEXT",                              "next_action"),
+            ("visit_purpose", "VARCHAR(40) NOT NULL DEFAULT ''",   "ship_to"),
         ):
             try:
                 cur.execute(f"ALTER TABLE meeting_log "
@@ -6474,11 +6480,17 @@ def meeting_post():
         next_act  = (request.form.get("next_action") or "").strip()
         feedback  = (request.form.get("feedback") or "").strip()
         visit_in  = (request.form.get("visit_date") or "").strip()
+        purpose   = (request.form.get("visit_purpose") or "").strip()
 
         if not ship_to:
             return jsonify({"error": "ship_to is required"}), 400
         if not notes:
             return jsonify({"error": "notes is required"}), 400
+        if not purpose:
+            return jsonify({"error": "visit_purpose is required"}), 400
+        if purpose not in ("Promotion", "Product introduction",
+                           "Claim support", "Rebate follow-up", "Other"):
+            return jsonify({"error": "invalid visit_purpose"}), 400
 
         # Visit date: YYYY-MM-DD; default to today if blank/invalid.
         # Capped at today so BDE can backfill past visits but can't
@@ -6559,10 +6571,11 @@ def meeting_post():
         cur.execute("""
             INSERT INTO meeting_log
                 (visit_date, bde_email, bde_name, sold_to, sold_to_name,
-                 ship_to, met_person, notes, next_action, feedback, photo_paths)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 ship_to, visit_purpose, met_person, notes, next_action,
+                 feedback, photo_paths)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (visit_date_obj, bde_email, bde_name, sold_to, sold_to_name,
-              ship_to, met, notes, next_act,
+              ship_to, purpose, met, notes, next_act,
               feedback if feedback else None,
               ",".join(saved) if saved else None))
         new_id = cur.lastrowid
@@ -6586,7 +6599,8 @@ def meeting_post():
             _notify_new_log(new_id, bde_name, sold_to_name or sold_to,
                             ship_to, ship_nm,
                             visit_date_obj.strftime("%Y-%m-%d"),
-                            met, notes, next_act)
+                            met, notes, next_act,
+                            visit_purpose=purpose)
         except Exception as e:
             print(f"[meeting] notify_new_log failed: {e}")
 
@@ -6880,7 +6894,7 @@ def meeting_list():
         cur.execute(f"""
             SELECT m.id, m.created_at, m.visit_date,
                    m.bde_email, m.bde_name,
-                   m.sold_to, m.ship_to, m.met_person,
+                   m.sold_to, m.ship_to, m.visit_purpose, m.met_person,
                    m.notes, m.next_action, m.feedback, m.photo_paths,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
                    COALESCE(NULLIF(TRIM(c.sold_to_name),''),

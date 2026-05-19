@@ -266,6 +266,18 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         </div>
 
         <div class="field col-full">
+          <label>Purpose of visit <span class="req">*</span></label>
+          <select id="fPurpose" required>
+            <option value="">— select —</option>
+            <option value="Promotion">Promotion</option>
+            <option value="Product introduction">Product introduction</option>
+            <option value="Claim support">Claim support</option>
+            <option value="Rebate follow-up">Rebate follow-up</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
+        <div class="field col-full">
           <label>Met person <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
           <input id="fMet" type="text" placeholder="e.g. store manager, owner, …">
         </div>
@@ -569,6 +581,7 @@ async function loadRecent(){
     const photos = (r.photo_paths || [])
       .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
       .join("");
+    const purp = r.visit_purpose ? `<div style="display:inline-block;font-size:10px;font-weight:600;color:#1e3a5f;background:#e0e7ff;padding:1px 7px;border-radius:8px;margin-bottom:3px;">${escapeHtml(r.visit_purpose)}</div>` : "";
     const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
     const met  = r.met_person  ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : "";
     // Feedback block: shows the value if set, with an Edit pencil; if
@@ -579,7 +592,7 @@ async function loadRecent(){
       <td class="ts">${r.visit_date || r.created_at}</td>
       <td class="bde">${escapeHtml(r.bde_name || "—")}</td>
       <td class="shop">${escapeHtml(r.ship_to)}<br><span style="color:#6b7280;font-size:11px;">${escapeHtml(r.ship_to_name || "")}</span></td>
-      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${fbBlock}</td>
+      <td class="notes">${purp}${escapeHtml(r.notes || "")}${next}${met}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }
@@ -678,20 +691,24 @@ async function saveFeedback(rid){
 
 fForm.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!fBde.value)         { fMsg.textContent = "BDE is required";      fMsg.className = "err"; return; }
-  if (!shipPicker.value()) { fMsg.textContent = "Ship-to is required";  fMsg.className = "err"; return; }
+  if (!fBde.value)         { fMsg.textContent = "BDE is required";          fMsg.className = "err"; return; }
+  if (!shipPicker.value()) { fMsg.textContent = "Ship-to is required";      fMsg.className = "err"; return; }
+  if (!document.getElementById("fPurpose").value) {
+    fMsg.textContent = "Purpose of visit is required"; fMsg.className = "err"; return;
+  }
   // Sold-to is optional — the server resolves it from the picked
   // ship-to (and stores both code + name for display).
 
   fMsg.textContent = "Submitting…"; fMsg.className = "";
   const fd = new FormData();
-  fd.append("bde_name",    fBde.value);
-  fd.append("visit_date",  fVisitDate.value);
-  fd.append("sold_to",     soldPicker.value());
-  fd.append("ship_to",     shipPicker.value());
-  fd.append("met_person",  document.getElementById("fMet").value);
-  fd.append("notes",       document.getElementById("fNotes").value);
-  fd.append("next_action", document.getElementById("fNext").value);
+  fd.append("bde_name",      fBde.value);
+  fd.append("visit_date",    fVisitDate.value);
+  fd.append("sold_to",       soldPicker.value());
+  fd.append("ship_to",       shipPicker.value());
+  fd.append("visit_purpose", document.getElementById("fPurpose").value);
+  fd.append("met_person",    document.getElementById("fMet").value);
+  fd.append("notes",         document.getElementById("fNotes").value);
+  fd.append("next_action",   document.getElementById("fNext").value);
   fd.append("feedback",    document.getElementById("fFeedback").value);
   const files = document.getElementById("fPhotos").files;
   for (let i = 0; i < Math.min(files.length, 5); i++){
@@ -713,6 +730,7 @@ fForm.addEventListener("submit", async (e) => {
     document.getElementById("fMet").value      = "";
     document.getElementById("fFeedback").value = "";
     document.getElementById("fPhotos").value   = "";
+    document.getElementById("fPurpose").value  = "";
     shipPicker.reset();
     loadRecent();
     setTimeout(() => { fMsg.textContent = ""; }, 4000);
