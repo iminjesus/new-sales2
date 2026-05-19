@@ -191,6 +191,13 @@
                 title="Only shops with at least one GPS visit">📍 Visit <span class="ss-count" data-c="VISIT">–</span></button>
         <button class="ss-btn ss-novisit" data-status="NOVISIT"
                 title="Only shops with no GPS visit yet — click again to clear">🚫 No-visit <span class="ss-count" data-c="NOVISIT">–</span></button>
+        <button type="button" id="ssShowAllBtn"
+                title="Show every shop — clears this filter"
+                style="margin-left:8px;border:1.5px solid #1e3a5f;
+                       background:#1e3a5f;color:#fff;border-radius:5px;
+                       padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;">
+          ✕ Show all shops
+        </button>
       </div>
 
       <div id="purposeFilterBtns"
@@ -213,6 +220,13 @@
                 title="Shops with a Rebate follow-up log">💸 Rebate <span class="pf-count" data-p="Rebate follow-up">–</span></button>
         <button class="pf-btn pf-other"      data-purpose="Other"
                 title="Shops with an Other-purpose log (or purpose missing) — click again to clear">… Other <span class="pf-count" data-p="Other">–</span></button>
+        <button type="button" id="pfShowAllBtn"
+                title="Clear the purpose filter — show every shop"
+                style="margin-left:8px;border:1.5px solid #1e3a5f;
+                       background:#1e3a5f;color:#fff;border-radius:5px;
+                       padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;">
+          ✕ Show all shops
+        </button>
       </div>
       <style>
         .pf-btn{
@@ -580,6 +594,6 @@
   <!-- shared dashboard logic -->
   <script src="/static/app.js?v=20260331" defer></script>
   <!-- small map-specific layer that reuses app.js -->
-  <script src="/static/map.js?v=20260331" defer></script>
+  <script src="/static/map.js?v=20260519b" defer></script>
 </body>
 </html>

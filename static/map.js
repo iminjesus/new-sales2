@@ -511,44 +511,54 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Shop-status chip row (All / Logs / Visit / No-visit) — picks one
-  // mutually-exclusive filter that re-renders the map without going
-  // back to the API (filters cached data in loadSalesMap).  Clicking
-  // the already-active button toggles it off (back to ALL) so the
-  // user can return to "show everything" without hunting for a Clear.
+  // Shop-status chip row (All / Logs / Visit / No-visit).  Three ways
+  // to return to "show all shops":
+  //   1. Click the active button again (toggle off → ALL)
+  //   2. Click the All button
+  //   3. Click the explicit "✕ Show all shops" reset button
+  // All three are wired through one resetShopStatus() helper so the
+  // behaviour can't drift between them.
   const stat = document.getElementById("shopStatusBtns");
   if (stat){
+    const applyShopStatus = (next) => {
+      window._shopStatusFilter = next || "ALL";
+      stat.querySelectorAll("button[data-status]").forEach(x =>
+        x.classList.toggle("active", x.dataset.status === window._shopStatusFilter));
+      if (typeof loadSalesMap === "function") loadSalesMap();
+    };
     stat.addEventListener("click", (e) => {
+      // Explicit reset button — always returns to "All".
+      if (e.target.closest("#ssShowAllBtn")) { applyShopStatus("ALL"); return; }
       const b = e.target.closest("button[data-status]");
       if (!b) return;
       const clicked = b.dataset.status || "ALL";
       const current = window._shopStatusFilter || "ALL";
       // Toggle off if user clicks the currently-active non-ALL button.
       const next = (clicked === current && clicked !== "ALL") ? "ALL" : clicked;
-      window._shopStatusFilter = next;
-      stat.querySelectorAll("button[data-status]").forEach(x =>
-        x.classList.toggle("active", x.dataset.status === next));
-      if (typeof loadSalesMap === "function") loadSalesMap();
+      applyShopStatus(next);
     });
   }
 
-  // Purpose filter — toggle-off goes to "" (OFF = no purpose filter,
-  // show every shop including un-logged).  "All" button now means
-  // "every shop with at least one logged visit (any purpose)" and is
-  // an explicit click, not the page-load default.
+  // Purpose row.  No "All" button — empty selection means "every shop"
+  // (including un-logged).  Three ways to clear the filter:
+  //   1. Click the active Purpose button again
+  //   2. Click the explicit "✕ Show all shops" reset button
   const purp = document.getElementById("purposeFilterBtns");
   if (purp){
+    const applyPurpose = (next) => {
+      window._purposeFilter = next || "";
+      purp.querySelectorAll("button[data-purpose]").forEach(x =>
+        x.classList.toggle("active", window._purposeFilter !== "" &&
+                                     x.dataset.purpose === window._purposeFilter));
+      if (typeof loadSalesMap === "function") loadSalesMap();
+    };
     purp.addEventListener("click", (e) => {
+      if (e.target.closest("#pfShowAllBtn")) { applyPurpose(""); return; }
       const b = e.target.closest("button[data-purpose]");
       if (!b) return;
       const clicked = b.dataset.purpose || "";
       const current = window._purposeFilter || "";
-      // Same-button click = toggle off (back to "show everything").
-      const next = (clicked === current) ? "" : clicked;
-      window._purposeFilter = next;
-      purp.querySelectorAll("button[data-purpose]").forEach(x =>
-        x.classList.toggle("active", next !== "" && x.dataset.purpose === next));
-      if (typeof loadSalesMap === "function") loadSalesMap();
+      applyPurpose(clicked === current ? "" : clicked);
     });
   }
 });
