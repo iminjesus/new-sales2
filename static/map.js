@@ -87,10 +87,11 @@ async function loadSalesMap() {
   }
   const purposeMode = (window._purposeFilter || "ALL");
   const passesPurpose = (shipTo) => {
-    // "All" in the Purpose row = every shop with at least one logged
-    // visit (any purpose).  No filter is applied to non-logged shops —
-    // the count and the marker set both restrict to loggedSet.
-    if (purposeMode === "ALL") return loggedSet.has(shipTo);
+    // Purpose row "All" = no purpose restriction → every shop passes
+    // (logged or not), so BDEs can see which customers still have no
+    // log entry against them.  Use the Shop-status row "Logs" button
+    // to restrict to logged shops only.
+    if (purposeMode === "ALL") return true;
     const set = purposeSets[purposeMode];
     return set ? set.has(shipTo) : false;
   };
