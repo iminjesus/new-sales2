@@ -7014,6 +7014,11 @@ def meeting_list():
             r["visit_date"] = r["visit_date"].strftime("%Y-%m-%d") if r["visit_date"] else ""
             r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
             r["thread"]      = thread_by_meeting.get(r["id"], [])
+            # Frontend State filter uses this — group SA/TAS under VIC
+            # (same as the State Manager mapping) so the 4 main state
+            # buttons cover every BDE.
+            st = _resolve_bde_state(r.get("bde_name") or "") or ""
+            r["bde_state"] = "VIC" if st in ("SA", "TAS") else st
         cur.close(); conn.close()
         return jsonify(rows)
     except Exception as e:

@@ -302,6 +302,16 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .filt{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
 .filt label{font-size:11px;color:#6b7280}
 .filt select,.filt input{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:12px}
+/* Filter row for Recent entries (State / BDE / Purpose) */
+.filt-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.filt-tag{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px}
+.filt-row select{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:12px}
+.seg{display:inline-flex;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;background:#fff}
+.seg-btn{border:none;background:#fff;color:#374151;padding:4px 10px;font-size:11px;cursor:pointer;border-right:1px solid #e5e7eb;font-weight:500}
+.seg-btn:last-child{border-right:none}
+.seg-btn:hover{background:#f3f4f6}
+.seg-btn.active{background:#2563eb;color:#fff}
+.seg-btn:disabled{opacity:.4;cursor:not-allowed;background:#fff !important;color:#9ca3af}
 </style>
 </head>
 <body>
@@ -468,8 +478,16 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 <div class="planner-right">
   <div class="card" id="recentSection">
     <h2>Recent entries</h2>
-    <div class="filt">
-      <label>BDE</label>
+    <div class="filt-row">
+      <span class="filt-tag">State</span>
+      <div class="seg" id="filtStateSeg">
+        <button type="button" class="seg-btn active" data-st="">All</button>
+        <button type="button" class="seg-btn" data-st="NSW">NSW</button>
+        <button type="button" class="seg-btn" data-st="QLD">QLD</button>
+        <button type="button" class="seg-btn" data-st="VIC">VIC</button>
+        <button type="button" class="seg-btn" data-st="WA">WA</button>
+      </div>
+      <span class="filt-tag" style="margin-left:8px;">BDE</span>
       <select id="filtBde"><option value="">All</option></select>
       <span id="filtShopBadge" style="font-size:11px;color:#1e3a5f;display:none;">
         <span style="color:#6b7280;">Shop:</span>
@@ -477,10 +495,21 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         <a href="javascript:void(0)" id="filtShopBadgeClear"
            style="color:#dc2626;margin-left:4px;font-weight:700;">×</a>
       </span>
-      <span style="color:#9ca3af;font-size:11px;">
+      <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
+    </div>
+    <div class="filt-row" style="margin-top:4px;">
+      <span class="filt-tag">Purpose</span>
+      <div class="seg" id="filtPurposeSeg">
+        <button type="button" class="seg-btn active" data-pp="">All</button>
+        <button type="button" class="seg-btn" data-pp="Promotion">Promotion</button>
+        <button type="button" class="seg-btn" data-pp="Product introduction">Product intro</button>
+        <button type="button" class="seg-btn" data-pp="Claim support">Claim</button>
+        <button type="button" class="seg-btn" data-pp="Rebate follow-up">Rebate</button>
+        <button type="button" class="seg-btn" data-pp="Other">Other</button>
+      </div>
+      <span style="color:#9ca3af;font-size:11px;margin-left:8px;">
         Pick a shop in the palette ← to filter by shop
       </span>
-      <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
     </div>
     <div id="recentWrap"><div class="empty">Loading…</div></div>
   </div>
@@ -804,6 +833,10 @@ async function fetchJSON(url){
 // picks manually.  The email shown is for transparency only.
 async function loadBdes(){
   const list = await fetchJSON("/api/bdes_active").catch(() => []);
+  _allBdeNames = list.slice();        // cached so State filter can re-narrow it
+  // Make sure the people directory is loaded — rebuildBdeDropdown needs
+  // per-BDE state to filter by State button.
+  await _ensurePeople();
   const opts = ['<option value="">— select —</option>',
                 ...list.map(n => `<option value="${n}">${n}</option>`)];
   fBde.innerHTML    = opts.join("");
@@ -828,12 +861,35 @@ async function loadBdes(){
         fBde.title = `Locked: ${who.name} (BDE)`;
       }
     }
+    // SM users are locked to their state — pre-select the matching
+    // State seg button and disable the others.  Falls through to "All"
+    // for ALL-role users (Hayden / JJ / Jayden) so leadership sees
+    // everything by default.
+    if (who && who.lock_region){
+      const st = (who.lock_region === "SA" || who.lock_region === "TAS")
+                 ? "VIC" : who.lock_region;
+      _filtState = st;
+      document.querySelectorAll("#filtStateSeg .seg-btn").forEach(b => {
+        const active = (b.dataset.st === st);
+        b.classList.toggle("active", active);
+        if (b.dataset.st !== st) b.disabled = true;
+      });
+      rebuildBdeDropdown();
+    }
   } catch (e) { /* whoami optional — manual pick still works */ }
 }
 
 // loadSoldTos / loadShipTosFor were tied to the form's Sold-to /
 // Ship-to pickers, which have been removed.  Selection now happens
 // entirely through the palette below the calendar.
+
+// State + Purpose filters live entirely client-side: we fetch the rows
+// once (filtered by BDE / ship-to only) and then re-render in place
+// whenever a segmented-button toggles.  Saves a server round-trip on
+// every filter click.
+let _recentRows = [];
+let _filtState  = "";    // "" = All, else "NSW"/"QLD"/"VIC"/"WA"
+let _filtPurp   = "";    // "" = All, else exact visit_purpose value
 
 async function loadRecent(){
   const wrap = document.getElementById("recentWrap");
@@ -846,9 +902,26 @@ async function loadRecent(){
     qs.set("ship_to", _selectedShop.ship_to);
   }
   qs.set("limit", "100");
-  const rows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
-  if (!Array.isArray(rows) || !rows.length){
+  _recentRows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
+  if (!Array.isArray(_recentRows)) _recentRows = [];
+  renderRecentRows();
+}
+
+function renderRecentRows(){
+  const wrap = document.getElementById("recentWrap");
+  if (!_recentRows.length){
     wrap.innerHTML = '<div class="empty">No entries yet.</div>';
+    _maybeJumpToFeedbackFromHash();
+    return;
+  }
+  // Apply the State + Purpose filters client-side.
+  const rows = _recentRows.filter(r => {
+    if (_filtState && (r.bde_state || "") !== _filtState) return false;
+    if (_filtPurp  && (r.visit_purpose || "") !== _filtPurp)  return false;
+    return true;
+  });
+  if (!rows.length){
+    wrap.innerHTML = '<div class="empty">No entries match the current filters.</div>';
     return;
   }
   // Group by BDE → Shop → Purpose, with visit dates listed beneath.
@@ -1164,6 +1237,57 @@ fForm.addEventListener("submit", async (e) => {
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
 filtBde.addEventListener("change", loadRecent);
+
+// State segmented buttons — filter BOTH the visible rows AND the BDE
+// dropdown so the dropdown only contains BDEs from the chosen state.
+// Re-renders client-side only (no API round-trip).
+document.getElementById("filtStateSeg").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn || btn.disabled) return;
+  _filtState = btn.dataset.st || "";
+  document.querySelectorAll("#filtStateSeg .seg-btn")
+    .forEach(b => b.classList.toggle("active", b === btn));
+  rebuildBdeDropdown();
+  // If the currently selected BDE doesn't belong to this state, drop
+  // them and refetch so the row set reflects "this state only".
+  if (filtBde.value && ![...filtBde.options].some(o => o.value === filtBde.value)){
+    filtBde.value = "";
+    loadRecent();
+  } else {
+    renderRecentRows();
+  }
+});
+
+// Purpose segmented buttons — pure client-side filter.
+document.getElementById("filtPurposeSeg").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn || btn.disabled) return;
+  _filtPurp = btn.dataset.pp || "";
+  document.querySelectorAll("#filtPurposeSeg .seg-btn")
+    .forEach(b => b.classList.toggle("active", b === btn));
+  renderRecentRows();
+});
+
+// Rebuild the BDE dropdown so it only lists BDEs whose state matches
+// the current _filtState (people directory tells us each BDE's state).
+// Called whenever the State segment changes or after loadBdes() has
+// populated _peopleCache.
+function rebuildBdeDropdown(){
+  if (!_allBdeNames || !_allBdeNames.length) return;
+  const cache = _peopleCache || [];
+  const stateOf = (name) => {
+    const p = cache.find(x => (x.name || "").toUpperCase() === (name || "").toUpperCase());
+    if (!p) return "";
+    return (p.state === "SA" || p.state === "TAS") ? "VIC" : (p.state || "");
+  };
+  const prev = filtBde.value;
+  const names = _allBdeNames.filter(n => !_filtState || stateOf(n) === _filtState);
+  filtBde.innerHTML = ['<option value="">All</option>',
+                       ...names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`)].join("");
+  // Keep the previous selection if it still belongs to this state.
+  if (prev && names.includes(prev)) filtBde.value = prev;
+}
+let _allBdeNames = [];
 // "Shop" badge × clears the palette selection (which also re-renders
 // Recent entries via _setSelectedShop's loadRecent call).
 const _shopBadgeClear = document.getElementById("filtShopBadgeClear");
