@@ -72,9 +72,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .plan-toolbar button:hover{background:#f3f4f6}
 .plan-month{font-weight:700;color:#1e3a5f;font-size:13px;flex:1}
 /* Weekends narrower (0.7fr) so the working week (Mon-Fri) gets the
-   width it actually needs. */
-.cal-grid{display:grid;grid-template-columns:.7fr 1fr 1fr 1fr 1fr 1fr .7fr;gap:3px;background:#e5e7eb;border:1px solid #e5e7eb;border-radius:5px;overflow:hidden}
-.cal-head,.cal-cell{background:#fff;padding:4px 5px;min-height:78px;display:flex;flex-direction:column;font-size:11px}
+   width it actually needs.  minmax(0,...) is critical — without it
+   long unbreakable chip text inside a cell sets the column's
+   min-content size and pushes the rightmost columns off-screen. */
+.cal-grid{display:grid;grid-template-columns:minmax(0,.7fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,.7fr);gap:3px;background:#e5e7eb;border:1px solid #e5e7eb;border-radius:5px;overflow:hidden}
+.cal-head,.cal-cell{background:#fff;padding:4px 5px;min-height:78px;display:flex;flex-direction:column;font-size:11px;min-width:0}
 .cal-head{min-height:0;background:#f8fafc;font-weight:600;color:#6b7280;text-align:center;font-size:10px;padding:5px 0;text-transform:uppercase;letter-spacing:.4px}
 .cal-cell.dim{background:#fafafa;color:#cbd5e1}
 .cal-cell.today{background:#fff7ed}
