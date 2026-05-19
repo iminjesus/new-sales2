@@ -110,6 +110,25 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 #submitMsg.ok{color:#16a34a}
 #submitMsg.err{color:#dc2626}
 
+/* ── Purpose of visit — radio-button card group ─────────── */
+.purpose-cards{display:flex;gap:6px;flex-wrap:wrap}
+.purpose-cards input[type="radio"]{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
+.purpose-card{
+  flex:1 1 calc(20% - 6px);min-width:110px;
+  padding:9px 10px;border:1.5px solid #d1d5db;border-radius:8px;
+  background:#fff;cursor:pointer;text-align:center;
+  font-size:12px;font-weight:500;color:#374151;
+  transition:all .12s;user-select:none;
+}
+.purpose-card:hover{border-color:#93c5fd;background:#eff6ff}
+.purpose-cards input[type="radio"]:checked + .purpose-card{
+  background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600;
+  box-shadow:0 1px 3px rgba(37,99,235,.25);
+}
+@media (max-width:640px){
+  .purpose-card{flex:1 1 calc(50% - 6px);font-size:11px;padding:7px 8px}
+}
+
 /* ── Custom searchable dropdown (same UX as the rest of the dashboard) ── */
 .dd{position:relative;display:flex;flex-direction:column;gap:3px;width:100%}
 .dd-wrap{display:flex;align-items:stretch;width:100%}
@@ -268,14 +287,22 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 
         <div class="field col-full">
           <label>Purpose of visit <span class="req">*</span></label>
-          <select id="fPurpose" required>
-            <option value="">— select —</option>
-            <option value="Promotion">Promotion</option>
-            <option value="Product introduction">Product introduction</option>
-            <option value="Claim support">Claim support</option>
-            <option value="Rebate follow-up">Rebate follow-up</option>
-            <option value="Other">Other</option>
-          </select>
+          <div class="purpose-cards">
+            <input type="radio" id="purp-promo"  name="visit_purpose" value="Promotion">
+            <label for="purp-promo"  class="purpose-card">Promotion</label>
+
+            <input type="radio" id="purp-intro"  name="visit_purpose" value="Product introduction">
+            <label for="purp-intro"  class="purpose-card">Product introduction</label>
+
+            <input type="radio" id="purp-claim"  name="visit_purpose" value="Claim support">
+            <label for="purp-claim"  class="purpose-card">Claim support</label>
+
+            <input type="radio" id="purp-rebate" name="visit_purpose" value="Rebate follow-up">
+            <label for="purp-rebate" class="purpose-card">Rebate follow-up</label>
+
+            <input type="radio" id="purp-other"  name="visit_purpose" value="Other">
+            <label for="purp-other"  class="purpose-card">Other</label>
+          </div>
         </div>
 
         <div class="field col-full">
@@ -694,7 +721,8 @@ fForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!fBde.value)         { fMsg.textContent = "BDE is required";          fMsg.className = "err"; return; }
   if (!shipPicker.value()) { fMsg.textContent = "Ship-to is required";      fMsg.className = "err"; return; }
-  if (!document.getElementById("fPurpose").value) {
+  const purposeEl = document.querySelector('input[name="visit_purpose"]:checked');
+  if (!purposeEl) {
     fMsg.textContent = "Purpose of visit is required"; fMsg.className = "err"; return;
   }
   // Sold-to is optional — the server resolves it from the picked
@@ -706,7 +734,7 @@ fForm.addEventListener("submit", async (e) => {
   fd.append("visit_date",    fVisitDate.value);
   fd.append("sold_to",       soldPicker.value());
   fd.append("ship_to",       shipPicker.value());
-  fd.append("visit_purpose", document.getElementById("fPurpose").value);
+  fd.append("visit_purpose", purposeEl.value);
   fd.append("met_person",    document.getElementById("fMet").value);
   fd.append("notes",         document.getElementById("fNotes").value);
   fd.append("next_action",   document.getElementById("fNext").value);
@@ -731,7 +759,7 @@ fForm.addEventListener("submit", async (e) => {
     document.getElementById("fMet").value      = "";
     document.getElementById("fFeedback").value = "";
     document.getElementById("fPhotos").value   = "";
-    document.getElementById("fPurpose").value  = "";
+    document.querySelectorAll('input[name="visit_purpose"]').forEach(r => { r.checked = false; });
     shipPicker.reset();
     loadRecent();
     setTimeout(() => { fMsg.textContent = ""; }, 4000);
