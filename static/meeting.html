@@ -382,6 +382,9 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     <div class="filt">
       <label>BDE</label>
       <select id="filtBde"><option value="">All</option></select>
+      <label>Sold-to</label>
+      <input id="filtSold" type="text" placeholder="e.g. JAX TYRES & AUTO" list="filtSoldList" style="width:180px;">
+      <datalist id="filtSoldList"></datalist>
       <label>Ship-to</label>
       <input id="filtShip" type="text" placeholder="e.g. A029737" style="width:140px;">
       <button class="btn" id="btnRefresh">Refresh</button>
@@ -403,6 +406,7 @@ const fForm      = document.getElementById("meetingForm");
 const fMsg       = document.getElementById("submitMsg");
 const filtBde    = document.getElementById("filtBde");
 const filtShip   = document.getElementById("filtShip");
+const filtSold   = document.getElementById("filtSold");
 
 // Default visit date to today (editable so a BDE can log a past visit).
 // Cap the picker at today so future dates can't be picked.
@@ -656,6 +660,7 @@ async function loadRecent(){
   const qs = new URLSearchParams();
   if (filtBde.value)  qs.set("bde",     filtBde.value);
   if (filtShip.value) qs.set("ship_to", filtShip.value.trim());
+  if (filtSold && filtSold.value) qs.set("sold_to", filtSold.value.trim());
   qs.set("limit", "100");
   const rows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
   if (!Array.isArray(rows) || !rows.length){
@@ -691,11 +696,19 @@ async function loadRecent(){
         ${escapeHtml(bdeKey || "—")}</td></tr>`;
       lastBde = bdeKey; lastShip = null; lastPurp = null;
     }
-    // Shop sub-banner.
+    // Shop sub-banner.  The banner itself is a drag source so the
+    // user can grab a past-visited ship-to and drop it on the
+    // calendar (schedule again) or the Selected-shop banner (log a
+    // new visit) without finding it in the palette.
     if (shipKey !== lastShip){
       h += `<tr class="grp-shop"><td colspan="3"
+        draggable="true"
+        data-ship="${_attr(shipKey)}" data-ship-name="${_attr(r.ship_to_name || '')}"
+        data-sold="${_attr(r.sold_to || '')}" data-sold-name="${_attr(r.sold_to_name || '')}"
+        title="Drag this shop onto a calendar date or the Selected-shop banner"
         style="background:#eff6ff;color:#1e3a5f;padding:5px 10px 5px 22px;
-               font-size:12px;font-weight:600;border-top:1px solid #dbeafe;">
+               font-size:12px;font-weight:600;border-top:1px solid #dbeafe;cursor:grab;">
+        <span style="display:inline-block;color:#94a3b8;font-size:10px;margin-right:6px;">⋮⋮</span>
         ${escapeHtml(shipKey)} · <span style="font-weight:400;">${escapeHtml(r.ship_to_name || "")}</span>
         ${r.sold_to_name ? `<span style="color:#6b7280;font-weight:400;font-size:11px;"> — ${escapeHtml(r.sold_to_name)}</span>` : ""}
       </td></tr>`;
@@ -722,6 +735,30 @@ async function loadRecent(){
   }
   h += `</tbody></table>`;
   wrap.innerHTML = h;
+
+  // Wire the shop-row banners as drag sources — drop on calendar
+  // date = schedule, drop on Selected-shop = log a new visit.
+  wrap.querySelectorAll(".grp-shop[draggable]").forEach(el => {
+    el.addEventListener("dragstart", (e) => {
+      const ship = el.dataset.ship || "";
+      if (!ship) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", ship);
+    });
+  });
+
+  // Populate the Sold-to filter datalist from sold-to names seen
+  // in the current set so the user can autocomplete.
+  const dl = document.getElementById("filtSoldList");
+  if (dl){
+    const seen = new Set();
+    dl.innerHTML = rows
+      .map(r => (r.sold_to_name || "").trim())
+      .filter(n => n && !seen.has(n) && seen.add(n))
+      .sort((a,b) => a.localeCompare(b))
+      .map(n => `<option value="${escapeHtml(n)}">`)
+      .join("");
+  }
 }
 
 function escapeHtml(s){
@@ -869,6 +906,7 @@ fForm.addEventListener("submit", async (e) => {
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
 filtBde.addEventListener("change", loadRecent);
 filtShip.addEventListener("change", loadRecent);
+if (filtSold) filtSold.addEventListener("change", loadRecent);
 
 // ──────────────────────────────────────────────────────────────────
 // Calendar planner + ship-to palette with drag-and-drop

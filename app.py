@@ -6884,10 +6884,12 @@ def meeting_plan_shop_options():
 
 @app.get("/api/meeting/list")
 def meeting_list():
-    """Recent entries.  Optional ?ship_to=… / ?bde=… / ?limit=N filters."""
+    """Recent entries.  Optional ?ship_to=… / ?bde=… / ?sold_to=… /
+    ?limit=N filters."""
     try:
         ship_to = (request.args.get("ship_to") or "").strip()
         bde     = (request.args.get("bde")     or "").strip()
+        sold_to = (request.args.get("sold_to") or "").strip()
         limit   = max(1, min(500, int(request.args.get("limit", 100) or 100)))
 
         wh, params = [], []
@@ -6895,6 +6897,13 @@ def meeting_list():
             wh.append("m.ship_to = %s"); params.append(ship_to)
         if bde:
             wh.append("m.bde_name = %s"); params.append(bde)
+        if sold_to:
+            # Match against either the stored sold_to code OR the
+            # denormalised sold_to_name (which is what the form picker
+            # gives us).  Also fall back to the customer master via the
+            # join below in case meeting_log row predates sold_to_name.
+            wh.append("(m.sold_to = %s OR TRIM(m.sold_to_name) = %s)")
+            params.extend([sold_to, sold_to])
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
         conn = get_connection(); cur = conn.cursor(dictionary=True)
