@@ -24,17 +24,24 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 @media (max-width:1100px){.planner-layout{grid-template-columns:1fr}}
 
 /* ── Calendar planner ─────────────────────────────────── */
-/* Calendar + palette share one card so they look like one tool.
-   A thin top border on the palette is the visual divider. */
-.plan-board{padding:0;overflow:hidden}
-.plan-board .plan-section{padding:12px 14px}
-.plan-board .plan-section + .plan-section{border-top:2px dashed #e5e7eb;background:#fafbff}
+/* Palette + calendar share one card.  Palette is a narrow left
+   column so chips are right next to the drop target (the calendar).
+   On narrow screens they stack vertically again. */
+.plan-board{padding:0;overflow:hidden;display:grid;grid-template-columns:260px minmax(0,1fr)}
+.plan-board .plan-section{padding:12px 14px;min-width:0}
+.plan-board .plan-section + .plan-section{border-left:2px dashed #e5e7eb;background:#fafbff}
+@media (max-width:780px){
+  .plan-board{grid-template-columns:1fr}
+  .plan-board .plan-section + .plan-section{border-left:none;border-top:2px dashed #e5e7eb}
+}
 
 .plan-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .plan-toolbar button{font-size:11px;padding:4px 10px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:5px;cursor:pointer}
 .plan-toolbar button:hover{background:#f3f4f6}
 .plan-month{font-weight:700;color:#1e3a5f;font-size:13px;flex:1}
-.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;background:#e5e7eb;border:1px solid #e5e7eb;border-radius:5px;overflow:hidden}
+/* Weekends narrower (0.7fr) so the working week (Mon-Fri) gets the
+   width it actually needs. */
+.cal-grid{display:grid;grid-template-columns:.7fr 1fr 1fr 1fr 1fr 1fr .7fr;gap:3px;background:#e5e7eb;border:1px solid #e5e7eb;border-radius:5px;overflow:hidden}
 .cal-head,.cal-cell{background:#fff;padding:4px 5px;min-height:78px;display:flex;flex-direction:column;font-size:11px}
 .cal-head{min-height:0;background:#f8fafc;font-weight:600;color:#6b7280;text-align:center;font-size:10px;padding:5px 0;text-transform:uppercase;letter-spacing:.4px}
 .cal-cell.dim{background:#fafafa;color:#cbd5e1}
@@ -55,7 +62,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .palette-row-tag::before{content:"";flex:0 0 16px;height:2px;background:#2563eb;border-radius:2px}
 .palette-input{width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;margin-bottom:6px}
 .palette-input:focus{outline:none;border-color:#2563eb}
-.palette-list{max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:2px}
+/* Palette now sits in its own column beside the calendar, so it
+   can use a lot more vertical space — match the calendar's height
+   roughly so the eye doesn't see a short stub. */
+.palette-list{max-height:380px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:2px}
 .ship-chip{padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;font-size:11px;color:#374151;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px}
 .ship-chip:active{cursor:grabbing}
 .ship-chip:hover{background:#eff6ff;border-color:#93c5fd}
