@@ -906,7 +906,53 @@ async function loadRecent(){
     });
   });
 
+  // If the user arrived via a "Make a comment" link in an email
+  // (URL hash like #fb-123), scroll the matching entry into view,
+  // flash a highlight on it, and auto-open the feedback composer.
+  _maybeJumpToFeedbackFromHash();
 }
+
+// Deep-link handler — invoked after every renderRecentList() pass.
+// Reads window.location.hash and, if it points at a feedback block,
+// reveals + highlights + opens the composer for that entry.  Clears
+// the in-progress flag so subsequent loadRecent() calls (e.g. after
+// posting a comment) don't re-trigger the jump.
+let _pendingFbJump = null;
+function _maybeJumpToFeedbackFromHash(){
+  const target = _pendingFbJump || (window.location.hash || "").match(/^#fb-(\d+)$/)?.[0];
+  if (!target) return;
+  const el = document.getElementById(target.slice(1));   // "fb-123"
+  if (!el){
+    // Entry not present in the current Recent list — most likely
+    // filtered out by the BDE filter or the selected shop.  Clear
+    // both filters once, reload, and try again on the next pass.
+    if (_pendingFbJump) { _pendingFbJump = null; return; }   // give up after 1 retry
+    _pendingFbJump = target;
+    if (filtBde && filtBde.value) filtBde.value = "";
+    _setSelectedShop(null);
+    loadRecent();
+    return;
+  }
+  _pendingFbJump = null;
+  // Flash a yellow highlight on the visit row that owns this fb block.
+  const row = el.closest("tr") || el;
+  row.style.transition = "background-color .6s ease";
+  row.style.backgroundColor = "#fef3c7";
+  setTimeout(() => { row.style.backgroundColor = ""; }, 2200);
+  el.scrollIntoView({behavior:"smooth", block:"center"});
+  // Open the composer so the user can just start typing.
+  const rid = parseInt(target.slice(4), 10);
+  if (!isNaN(rid)) setTimeout(() => {
+    openFeedbackComposer(rid);
+    // openFeedbackComposer injects the textarea synchronously, so
+    // we can focus it immediately afterwards.
+    const ta = document.getElementById("fbInp-" + rid);
+    if (ta) { ta.focus(); ta.scrollIntoView({behavior:"smooth", block:"center"}); }
+  }, 350);
+}
+// Also re-trigger when the hash changes while the page is already
+// open (e.g. user clicks another email link in the same tab).
+window.addEventListener("hashchange", () => { loadRecent(); });
 
 function escapeHtml(s){
   return String(s == null ? "" : s)

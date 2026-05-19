@@ -6101,7 +6101,8 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                         f'<div style="background:#fef3c7;border-left:3px solid #f59e0b;'
                         f'padding:6px 8px;color:#78350f;white-space:pre-wrap;">'
                         f'{_esc_html(feedback)}</div>'))
-    link = f"{DASHBOARD_URL}/meeting"
+    link        = f"{DASHBOARD_URL}/meeting"
+    comment_url = f"{DASHBOARD_URL}/meeting#fb-{rid}"
     return (
         f'<div style="font-family:-apple-system,Segoe UI,sans-serif;font-size:13px;color:#111827;">'
         f'<div style="background:#1e3a5f;color:#fff;padding:10px 14px;border-radius:6px 6px 0 0;'
@@ -6109,8 +6110,15 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
         f'<table style="border-collapse:collapse;background:#fff;width:100%;'
         f'border:1px solid #e5e7eb;border-top:none;border-radius:0 0 6px 6px;">'
         f'{"".join(rows)}</table>'
+        f'<div style="margin-top:12px;text-align:center;">'
+        f'<a href="{comment_url}" '
+        f'style="display:inline-block;background:#2563eb;color:#fff;'
+        f'padding:9px 22px;border-radius:6px;text-decoration:none;'
+        f'font-weight:600;font-size:13px;">💬 Make a comment</a>'
+        f'</div>'
         f'<div style="margin-top:10px;font-size:11px;color:#6b7280;">'
-        f'View / reply on the dashboard: <a href="{link}">{link}</a></div>'
+        f'Opens the feedback box for this visit on the dashboard. '
+        f'Full log list: <a href="{link}">{link}</a></div>'
         f'</div>'
     )
 
@@ -6232,15 +6240,22 @@ def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
         log_row.get("next_action") or "",
         None,           # feedback is shown as a thread below instead
     )
-    link = f"{DASHBOARD_URL}/meeting"
+    link        = f"{DASHBOARD_URL}/meeting"
+    comment_url = f"{DASHBOARD_URL}/meeting#fb-{rid}"
     full = (
         f"{card}"
         f"<div style='margin-top:14px;font-family:-apple-system,Segoe UI,sans-serif;"
         f"font-size:13px;color:#111827;'>"
         f"<div style='font-weight:700;color:#1e3a5f;margin-bottom:6px;'>Feedback thread</div>"
         f"{thread_html}"
+        f"<div style='margin-top:12px;text-align:center;'>"
+        f"<a href='{comment_url}' "
+        f"style='display:inline-block;background:#2563eb;color:#fff;"
+        f"padding:9px 22px;border-radius:6px;text-decoration:none;"
+        f"font-weight:600;font-size:13px;'>💬 Make a comment</a>"
+        f"</div>"
         f"<div style='margin-top:10px;font-size:11px;color:#6b7280;'>"
-        f"Reply by adding feedback on the dashboard: "
+        f"Reply opens the feedback box for this visit on the dashboard. "
         f"<a href='{link}'>{link}</a></div>"
         f"</div>"
     )
