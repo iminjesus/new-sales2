@@ -6,6 +6,10 @@
 <title>BDE Visit Log</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
+/* Prevent any single oversized element from blowing out the viewport on
+   mobile (BDEs are mostly on phones, so a horizontal scrollbar = the
+   whole layout reads zoomed-out). */
+html,body{max-width:100vw;overflow-x:hidden}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111827;font-size:13px}
 header{background:#1e3a5f;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:12px}
 header h1{font-size:14px;font-weight:700}
@@ -16,13 +20,13 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .btn-primary{background:#2563eb;color:#fff;border-color:#2563eb}
 .btn-primary:hover{background:#1d4ed8}
 .btn.active{background:#374151;color:#fff;border-color:#374151}
-.container{padding:14px 22px;max-width:1800px;margin:0 auto}
+.container{padding:14px 22px;max-width:1800px;margin:0 auto;min-width:0}
 /* Three columns on a wide monitor: palette (narrow drag source) /
    calendar + form (the planning + log writing area) / Recent
    entries (history).  Stacks under 1100 px. */
 .planner-layout{display:grid;grid-template-columns:260px minmax(0,1.2fr) minmax(0,1.05fr);gap:14px;align-items:start}
 @media (max-width:1100px){
-  .planner-layout{grid-template-columns:1fr}
+  .planner-layout{grid-template-columns:minmax(0,1fr)}
   /* Make planner-left "invisible" in the grid so its two children
      (calendar, form) become direct grid items.  That lets us slot
      the palette BETWEEN them on mobile, which makes the drag from
@@ -47,6 +51,17 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 }
 @media (max-width:640px){
   .palette-list{max-height:150px}
+  /* Compact calendar so 7 columns fit a 360-414px phone without
+     forcing horizontal scroll. */
+  .plan-board{padding:8px 8px}
+  .cal-grid{gap:2px}
+  .cal-head,.cal-cell{padding:3px 2px;min-height:54px;font-size:10px}
+  .cal-head{font-size:9px;padding:3px 0}
+  .cal-cell .d-num{font-size:10px;margin-bottom:1px}
+  .plan-chip{font-size:9px;padding:1px 3px;line-height:1.3}
+  .plan-toolbar{gap:5px}
+  .plan-toolbar button{padding:3px 7px;font-size:10px}
+  .plan-month{font-size:12px}
 }
 
 /* ── Calendar planner ─────────────────────────────────── */
@@ -190,7 +205,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
   box-shadow:0 1px 3px rgba(37,99,235,.25);
 }
 @media (max-width:640px){
-  .purpose-card{flex:1 1 calc(50% - 6px);font-size:11px;padding:7px 8px}
+  /* min-width:110px (desktop) × 5 cards would force horizontal
+     overflow on a 360px phone — drop it on small screens so cards
+     can shrink to 2-per-row freely. */
+  .purpose-card{flex:1 1 calc(50% - 6px);min-width:0;font-size:11px;padding:7px 8px}
 }
 
 /* ── Custom searchable dropdown (same UX as the rest of the dashboard) ── */
