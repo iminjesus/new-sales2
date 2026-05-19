@@ -658,26 +658,61 @@ async function loadRecent(){
     wrap.innerHTML = '<div class="empty">No entries yet.</div>';
     return;
   }
+  // Group by BDE → Shop → Purpose, with visit dates listed beneath.
+  // Backend already sorts in this order; we just inject header rows
+  // whenever (bde, shop, purpose) changes so the visual hierarchy is
+  // obvious and a shop's history reads top-to-bottom.
   let h = `<table class="recent-tbl">
     <thead><tr>
-      <th>Visit date</th><th>BDE</th><th>Shop</th><th>Notes / Next / Feedback</th><th>Photos</th>
+      <th>Visit date</th><th>Notes / Next / Feedback</th><th>Photos</th>
     </tr></thead><tbody>`;
+  let lastBde = null, lastShip = null, lastPurp = null;
   for (const r of rows){
     const photos = (r.photo_paths || [])
       .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
       .join("");
-    const purp = r.visit_purpose ? `<div style="display:inline-block;font-size:10px;font-weight:600;color:#1e3a5f;background:#e0e7ff;padding:1px 7px;border-radius:8px;margin-bottom:3px;">${escapeHtml(r.visit_purpose)}</div>` : "";
     const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
     const met  = r.met_person  ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : "";
-    // Feedback block: shows the value if set, with an Edit pencil; if
-    // empty, shows an "+ Add feedback" link.  Inline form swaps in via
-    // toggleFeedbackEditor(id).
     const fbBlock = renderFeedbackBlock(r.id, r.thread || []);
+
+    const bdeKey  = r.bde_name || "";
+    const shipKey = r.ship_to  || "";
+    const purpKey = r.visit_purpose || "";
+
+    // BDE banner — top-level grouping.
+    if (bdeKey !== lastBde){
+      h += `<tr class="grp-bde"><td colspan="3"
+        style="background:#1e3a5f;color:#fff;padding:6px 10px;
+               font-size:12px;font-weight:700;letter-spacing:.3px;">
+        ${escapeHtml(bdeKey || "—")}</td></tr>`;
+      lastBde = bdeKey; lastShip = null; lastPurp = null;
+    }
+    // Shop sub-banner.
+    if (shipKey !== lastShip){
+      h += `<tr class="grp-shop"><td colspan="3"
+        style="background:#eff6ff;color:#1e3a5f;padding:5px 10px 5px 22px;
+               font-size:12px;font-weight:600;border-top:1px solid #dbeafe;">
+        ${escapeHtml(shipKey)} · <span style="font-weight:400;">${escapeHtml(r.ship_to_name || "")}</span>
+        ${r.sold_to_name ? `<span style="color:#6b7280;font-weight:400;font-size:11px;"> — ${escapeHtml(r.sold_to_name)}</span>` : ""}
+      </td></tr>`;
+      lastShip = shipKey; lastPurp = null;
+    }
+    // Purpose sub-sub-banner.
+    if (purpKey !== lastPurp){
+      h += `<tr class="grp-purp"><td colspan="3"
+        style="background:#f8fafc;color:#374151;padding:3px 10px 3px 36px;
+               font-size:11px;font-weight:600;">
+        <span style="display:inline-block;font-size:10px;font-weight:600;color:#1e3a5f;background:#e0e7ff;padding:1px 7px;border-radius:8px;">
+          ${escapeHtml(purpKey || "—")}
+        </span>
+      </td></tr>`;
+      lastPurp = purpKey;
+    }
+    // Visit row — only date + notes + photos now that BDE / Shop /
+    // Purpose are conveyed by the group headers above.
     h += `<tr>
-      <td class="ts">${r.visit_date || r.created_at}</td>
-      <td class="bde">${escapeHtml(r.bde_name || "—")}</td>
-      <td class="shop">${escapeHtml(r.ship_to)}<br><span style="color:#6b7280;font-size:11px;">${escapeHtml(r.ship_to_name || "")}</span></td>
-      <td class="notes">${purp}${escapeHtml(r.notes || "")}${next}${met}${fbBlock}</td>
+      <td class="ts" style="padding-left:36px;">${r.visit_date || r.created_at}</td>
+      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }

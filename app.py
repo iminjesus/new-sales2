@@ -6908,7 +6908,8 @@ def meeting_list():
                 FROM customer GROUP BY ship_to
             ) c ON c.ship_to = m.ship_to
             {where_sql}
-            ORDER BY m.visit_date DESC, m.created_at DESC
+            ORDER BY m.bde_name ASC, m.ship_to ASC,
+                     m.visit_purpose ASC, m.visit_date DESC, m.created_at DESC
             LIMIT {limit}
         """, tuple(params))
         rows = cur.fetchall()
