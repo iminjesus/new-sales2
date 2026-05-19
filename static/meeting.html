@@ -241,21 +241,8 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 <div class="planner-layout">
 <div class="planner-left">
 
-  <!-- ── Calendar + ship-to palette (single visual unit) ── -->
+  <!-- ── Palette (top) + calendar (bottom) — single visual unit ── -->
   <div class="card plan-board">
-    <div class="plan-section">
-      <div class="plan-toolbar">
-        <button type="button" id="calPrev">‹</button>
-        <span class="plan-month" id="calMonthLabel">…</span>
-        <button type="button" id="calToday">Today</button>
-        <button type="button" id="calNext">›</button>
-      </div>
-      <div id="calGrid" class="cal-grid"></div>
-      <div style="font-size:10px;color:#9ca3af;margin-top:6px;">
-        Tip: drag a ship-to chip from below onto a date.  Click a chip on the calendar to remove.
-      </div>
-    </div>
-
     <div class="plan-section">
       <div class="palette-row-tag">Ship-to · click to log, drag to schedule</div>
 
@@ -278,6 +265,19 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       <div class="palette-count" id="shipCount"></div>
       <div id="shipList" class="palette-list">
         <div class="palette-empty">Loading…</div>
+      </div>
+    </div>
+
+    <div class="plan-section">
+      <div class="plan-toolbar">
+        <button type="button" id="calPrev">‹</button>
+        <span class="plan-month" id="calMonthLabel">…</span>
+        <button type="button" id="calToday">Today</button>
+        <button type="button" id="calNext">›</button>
+      </div>
+      <div id="calGrid" class="cal-grid"></div>
+      <div style="font-size:10px;color:#9ca3af;margin-top:6px;">
+        Tip: drag a ship-to chip from the palette above onto a date.  Click × on a chip to remove.
       </div>
     </div>
   </div>
