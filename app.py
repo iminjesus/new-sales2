@@ -6494,7 +6494,7 @@ def people_directory():
     Sourced from the hardcoded _BDE_DIRECTORY so it works without DB."""
     out = []
     seen = set()
-    for nm, em, st in _BDE_DIRECTORY:
+    for nm, em, st, _role in _BDE_DIRECTORY:
         key = nm.upper()
         if key in seen: continue
         seen.add(key)
