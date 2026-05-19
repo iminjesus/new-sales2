@@ -214,21 +214,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 
     <div class="plan-section">
       <div class="palette-row-tag">Ship-to · drag onto a date above</div>
-
-      <div style="margin-bottom:6px;">
-        <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
-          Sold-to <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(optional — narrows the list below)</span>
-        </label>
-        <div class="dd" id="palSoldDd" style="width:100%;">
-          <div class="dd-wrap">
-            <input id="palSold" type="text" placeholder="Search sold-to…" autocomplete="off">
-            <button class="dd-btn dd-clear-btn" type="button" id="palSoldClear" title="Clear" tabindex="-1">×</button>
-            <button class="dd-btn dd-last" type="button" id="palSoldOpen" title="Show all" tabindex="-1">▼</button>
-          </div>
-          <div class="dd-menu" id="palSoldMenu"></div>
-        </div>
+      <div style="font-size:10px;color:#9ca3af;margin-bottom:6px;">
+        Tip: pick a Sold-to in the form on the right to narrow the
+        list below.  Search box filters within whatever's shown.
       </div>
-
       <input id="shipSearch" class="palette-input" type="text"
              placeholder="Search ship-to by name or code…" autocomplete="off">
       <div class="palette-count" id="shipCount"></div>
@@ -474,10 +463,19 @@ function bindPicker({inputId, openBtnId, clearBtnId, menuId, onChange}){
   return api;
 }
 
+// soldPicker is the SINGLE source of truth for the Sold-to filter —
+// it drives both the form's Ship-to dropdown AND the calendar
+// palette's chip list filter.
 const soldPicker = bindPicker({
   inputId: "fSold", openBtnId: "fSoldOpen",
   clearBtnId: "fSoldClear", menuId: "fSoldMenu",
-  onChange: (opt) => loadShipTosFor(opt ? opt.value : ""),
+  onChange: (opt) => {
+    const val = opt ? opt.value : "";
+    loadShipTosFor(val);
+    // Also narrow the calendar palette to the same Sold-to.
+    _palSoldFilter = val;
+    if (typeof renderShipList === "function") renderShipList();
+  },
 });
 const shipPicker = bindPicker({
   inputId: "fShip", openBtnId: "fShipOpen",
@@ -927,37 +925,13 @@ function renderCalendar(){
   });
 }
 
-// Palette-side Sold-to filter (mirrors the New-visit form's
-// cascade): picking a Sold-to narrows the ship-to chip list to
-// children of that parent.  Optional — leaving it empty shows
-// every ship-to.
+// Palette filter state — driven by the form's soldPicker (no separate
+// picker on the palette side).  Empty string = show every ship-to.
 let _palSoldFilter = "";
-const palSoldPicker = bindPicker({
-  inputId: "palSold", openBtnId: "palSoldOpen",
-  clearBtnId: "palSoldClear", menuId: "palSoldMenu",
-  onChange: (opt) => {
-    _palSoldFilter = opt ? opt.value : "";
-    renderShipList();
-  },
-});
 
 async function loadShipOptions(){
   const rows = await fetchJSON("/api/meeting_plan/shop_to_options").catch(() => []);
   _shipOptions = Array.isArray(rows) ? rows : [];
-
-  // Build the Sold-to filter options from the unique sold-to names
-  // that appear in the ship list.  Each option's value is the sold_to
-  // NAME (matches how we filter below).
-  const soldOpts = [];
-  const seen = new Set();
-  for (const r of _shipOptions){
-    const nm = (r.sold_to_name || "").trim();
-    if (!nm || seen.has(nm)) continue;
-    seen.add(nm);
-    soldOpts.push({ label: nm, value: nm });
-  }
-  soldOpts.sort((a, b) => a.label.localeCompare(b.label));
-  palSoldPicker.setOptions(soldOpts);
 
   renderShipList();
 }
