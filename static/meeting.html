@@ -110,6 +110,22 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 #submitMsg.ok{color:#16a34a}
 #submitMsg.err{color:#dc2626}
 
+/* ── Floating drop banner (visible only during a chip drag) ── */
+.floating-drop{
+  position:fixed;top:8px;left:50%;transform:translateX(-50%);
+  background:#2563eb;color:#fff;padding:11px 26px;border-radius:24px;
+  font-size:13px;font-weight:600;letter-spacing:.3px;
+  box-shadow:0 6px 22px rgba(37,99,235,.45);
+  z-index:11000;display:none;pointer-events:none;
+  border:2px dashed rgba(255,255,255,.55);
+}
+.floating-drop.show{display:block;pointer-events:auto;animation:fdpop .15s ease-out}
+.floating-drop.drag-over{
+  background:#1d4ed8;transform:translateX(-50%) scale(1.06);
+  box-shadow:0 8px 28px rgba(29,78,216,.55);
+}
+@keyframes fdpop{from{transform:translateX(-50%) scale(.85);opacity:0}to{transform:translateX(-50%) scale(1);opacity:1}}
+
 /* ── Selected shop banner (set from palette click) ──────── */
 .selected-shop{
   display:flex;align-items:center;gap:8px;
@@ -199,6 +215,13 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 </style>
 </head>
 <body>
+
+<!-- Floating drop banner — appears only while a ship-to / plan chip
+     is being dragged so the user can drop close to the cursor
+     instead of aiming at the form on the far side of the page. -->
+<div id="floatingDrop" class="floating-drop">
+  <span class="fd-text">📍 Drop here to log this visit</span>
+</div>
 
 <header>
   <h1>BDE Visit Log</h1>
@@ -545,6 +568,36 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!ship) return;
     // Resolve full row from cached palette options so we can store
     // sold_to / sold_to_name alongside the ship-to.
+    const row = (_shipOptions || []).find(r => r.ship_to === ship);
+    _setSelectedShop(row || { ship_to: ship });
+  });
+
+  // ── Floating drop banner ─────────────────────────────────────
+  // Shown only while a ship-to / plan chip is mid-drag.  Drop on it
+  // = same as dropping on the in-form Selected-shop banner.
+  const fd = document.getElementById("floatingDrop");
+  if (!fd) return;
+  function _fdShow(){ fd.classList.add("show"); }
+  function _fdHide(){ fd.classList.remove("show"); fd.classList.remove("drag-over"); }
+  document.addEventListener("dragstart", (e) => {
+    const el = e.target;
+    if (el && el.classList &&
+        (el.classList.contains("ship-chip") || el.classList.contains("plan-chip"))){
+      _fdShow();
+    }
+  });
+  document.addEventListener("dragend", _fdHide);
+  fd.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes("text/ship_to")) return;
+    e.preventDefault();
+    fd.classList.add("drag-over");
+  });
+  fd.addEventListener("dragleave", () => fd.classList.remove("drag-over"));
+  fd.addEventListener("drop", (e) => {
+    e.preventDefault();
+    _fdHide();
+    const ship = e.dataTransfer.getData("text/ship_to");
+    if (!ship) return;
     const row = (_shipOptions || []).find(r => r.ship_to === ship);
     _setSelectedShop(row || { ship_to: ship });
   });
