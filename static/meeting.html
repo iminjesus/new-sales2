@@ -1085,6 +1085,20 @@ function renderCalendar(){
       c.classList.add("dragging");
     });
     c.addEventListener("dragend", () => c.classList.remove("dragging"));
+    // Click on the chip body (anywhere except the × delete handle)
+    // selects this shop in the palette → form's Selected-shop banner
+    // + Recent entries auto-filters to its history.
+    c.addEventListener("click", (e) => {
+      if (e.target.closest(".pc-rm")) return;  // × → delete handler below
+      const ship = c.dataset.ship || "";
+      if (!ship) return;
+      _setSelectedShop({
+        ship_to:      ship,
+        ship_to_name: c.dataset.shipName || "",
+        sold_to:      c.dataset.sold     || "",
+        sold_to_name: c.dataset.soldName || "",
+      });
+    });
     // × on the right of the chip is the delete handle.
     const rm = c.querySelector(".pc-rm");
     if (!rm) return;
