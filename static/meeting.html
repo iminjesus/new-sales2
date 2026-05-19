@@ -16,11 +16,20 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .btn-primary{background:#2563eb;color:#fff;border-color:#2563eb}
 .btn-primary:hover{background:#1d4ed8}
 .btn.active{background:#374151;color:#fff;border-color:#374151}
-.container{padding:14px 16px;max-width:1480px;margin:0 auto}
-.planner-layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:12px;align-items:start}
-@media (max-width:980px){.planner-layout{grid-template-columns:1fr}}
+.container{padding:14px 22px;max-width:1800px;margin:0 auto}
+/* Calendar+palette on the LEFT (visually one unit), form + recent
+   entries on the RIGHT.  Form side gets a touch more width since it
+   contains the notes textarea + recent entries table. */
+.planner-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:14px;align-items:start}
+@media (max-width:1100px){.planner-layout{grid-template-columns:1fr}}
 
 /* ── Calendar planner ─────────────────────────────────── */
+/* Calendar + palette share one card so they look like one tool.
+   A thin top border on the palette is the visual divider. */
+.plan-board{padding:0;overflow:hidden}
+.plan-board .plan-section{padding:12px 14px}
+.plan-board .plan-section + .plan-section{border-top:2px dashed #e5e7eb;background:#fafbff}
+
 .plan-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
 .plan-toolbar button{font-size:11px;padding:4px 10px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:5px;cursor:pointer}
 .plan-toolbar button:hover{background:#f3f4f6}
@@ -38,10 +47,14 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .plan-chip:hover{background:#bbf7d0}
 .plan-chip .pc-rm{color:#dc2626;font-weight:700}
 
-/* Ship-to palette */
+/* Ship-to palette — sits directly below the calendar in the same
+   card.  Shorter than the calendar itself so the calendar dominates
+   the panel; chip list is the scrolling area. */
+.palette-row-tag{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.palette-row-tag::before{content:"";flex:0 0 16px;height:2px;background:#2563eb;border-radius:2px}
 .palette-input{width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;margin-bottom:6px}
 .palette-input:focus{outline:none;border-color:#2563eb}
-.palette-list{max-height:340px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:2px}
+.palette-list{max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:2px}
 .ship-chip{padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;font-size:11px;color:#374151;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px}
 .ship-chip:active{cursor:grabbing}
 .ship-chip:hover{background:#eff6ff;border-color:#93c5fd}
@@ -164,6 +177,51 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 <div class="planner-layout">
 <div class="planner-left">
 
+  <!-- ── Calendar + ship-to palette (single visual unit) ── -->
+  <div class="card plan-board">
+    <div class="plan-section">
+      <div class="plan-toolbar">
+        <button type="button" id="calPrev">‹</button>
+        <span class="plan-month" id="calMonthLabel">…</span>
+        <button type="button" id="calToday">Today</button>
+        <button type="button" id="calNext">›</button>
+      </div>
+      <div id="calGrid" class="cal-grid"></div>
+      <div style="font-size:10px;color:#9ca3af;margin-top:6px;">
+        Tip: drag a ship-to chip from below onto a date.  Click a chip on the calendar to remove.
+      </div>
+    </div>
+
+    <div class="plan-section">
+      <div class="palette-row-tag">Ship-to · drag onto a date above</div>
+
+      <div style="margin-bottom:6px;">
+        <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
+          Sold-to <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(optional — narrows the list below)</span>
+        </label>
+        <div class="dd" id="palSoldDd" style="width:100%;">
+          <div class="dd-wrap">
+            <input id="palSold" type="text" placeholder="Search sold-to…" autocomplete="off">
+            <button class="dd-btn dd-clear-btn" type="button" id="palSoldClear" title="Clear" tabindex="-1">×</button>
+            <button class="dd-btn dd-last" type="button" id="palSoldOpen" title="Show all" tabindex="-1">▼</button>
+          </div>
+          <div class="dd-menu" id="palSoldMenu"></div>
+        </div>
+      </div>
+
+      <input id="shipSearch" class="palette-input" type="text"
+             placeholder="Search ship-to by name or code…" autocomplete="off">
+      <div class="palette-count" id="shipCount"></div>
+      <div id="shipList" class="palette-list">
+        <div class="palette-empty">Loading…</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /planner-left -->
+
+<div class="planner-right">
+
   <!-- ── New entry form ── -->
   <div class="card">
     <h2>New visit</h2>
@@ -251,50 +309,6 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       <button class="btn" id="btnRefresh">Refresh</button>
     </div>
     <div id="recentWrap"><div class="empty">Loading…</div></div>
-  </div>
-
-</div><!-- /planner-left -->
-
-<div class="planner-right">
-
-  <!-- ── Monthly calendar ── -->
-  <div class="card">
-    <div class="plan-toolbar">
-      <button type="button" id="calPrev">‹</button>
-      <span class="plan-month" id="calMonthLabel">…</span>
-      <button type="button" id="calToday">Today</button>
-      <button type="button" id="calNext">›</button>
-    </div>
-    <div id="calGrid" class="cal-grid"></div>
-    <div style="font-size:10px;color:#9ca3af;margin-top:6px;">
-      Tip: drag a ship-to chip from below onto a date.  Click a chip on the calendar to remove.
-    </div>
-  </div>
-
-  <!-- ── Ship-to palette (drag source) ── -->
-  <div class="card">
-    <h2>Ship-to (drag onto calendar)</h2>
-
-    <div style="margin-bottom:6px;">
-      <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
-        Sold-to <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(optional — narrows the list below)</span>
-      </label>
-      <div class="dd" id="palSoldDd" style="width:100%;">
-        <div class="dd-wrap">
-          <input id="palSold" type="text" placeholder="Search sold-to…" autocomplete="off">
-          <button class="dd-btn dd-clear-btn" type="button" id="palSoldClear" title="Clear" tabindex="-1">×</button>
-          <button class="dd-btn dd-last" type="button" id="palSoldOpen" title="Show all" tabindex="-1">▼</button>
-        </div>
-        <div class="dd-menu" id="palSoldMenu"></div>
-      </div>
-    </div>
-
-    <input id="shipSearch" class="palette-input" type="text"
-           placeholder="Search ship-to by name or code…" autocomplete="off">
-    <div class="palette-count" id="shipCount"></div>
-    <div id="shipList" class="palette-list">
-      <div class="palette-empty">Loading…</div>
-    </div>
   </div>
 
 </div><!-- /planner-right -->
