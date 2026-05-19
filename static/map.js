@@ -87,7 +87,10 @@ async function loadSalesMap() {
   }
   const purposeMode = (window._purposeFilter || "ALL");
   const passesPurpose = (shipTo) => {
-    if (purposeMode === "ALL") return true;
+    // "All" in the Purpose row = every shop with at least one logged
+    // visit (any purpose).  No filter is applied to non-logged shops —
+    // the count and the marker set both restrict to loggedSet.
+    if (purposeMode === "ALL") return loggedSet.has(shipTo);
     const set = purposeSets[purposeMode];
     return set ? set.has(shipTo) : false;
   };
@@ -130,7 +133,10 @@ async function loadSalesMap() {
   // shops currently visible in `data` (i.e. respecting other filters).
   const visibleShipTos = new Set(data.map(r => r.ship_to ?? r.Ship_To ?? "").filter(Boolean));
   const cByPurpose = {};
-  let cPurposeAll = visibleShipTos.size;
+  // Purpose=All counts ANY logged shop in the visible set (union of
+  // every purpose).  Matches Shop-status Logs.
+  let cPurposeAll = 0;
+  visibleShipTos.forEach(s => { if (loggedSet.has(s)) cPurposeAll += 1; });
   for (const k of Object.keys(purposeSets)) {
     let n = 0;
     purposeSets[k].forEach(s => { if (visibleShipTos.has(s)) n += 1; });
