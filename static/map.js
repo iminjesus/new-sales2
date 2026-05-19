@@ -512,53 +512,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Shop-status chip row (All / Logs / Visit / No-visit) — picks one
   // mutually-exclusive filter that re-renders the map without going
-  // back to the API (filters cached data in loadSalesMap).  The
-  // adjacent ✕ Clear button resets to ALL; it's only visible while a
-  // non-default filter is active.
+  // back to the API (filters cached data in loadSalesMap).  Clicking
+  // the already-active button toggles it off (back to ALL) so the
+  // user can return to "show everything" without hunting for a Clear.
   const stat = document.getElementById("shopStatusBtns");
   if (stat){
-    const ssClear = document.getElementById("ssClearBtn");
-    const setShopStatus = (val) => {
-      window._shopStatusFilter = val || "ALL";
-      stat.querySelectorAll("button[data-status]").forEach(x =>
-        x.classList.toggle("active", x.dataset.status === window._shopStatusFilter));
-      // Clear button stays in the row always so the user can see it
-      // exists; it just goes inert/dim while the filter is on ALL.
-      if (ssClear){
-        const on = (window._shopStatusFilter && window._shopStatusFilter !== "ALL");
-        ssClear.style.opacity = on ? "1" : ".35";
-        ssClear.style.pointerEvents = on ? "auto" : "none";
-      }
-      if (typeof loadSalesMap === "function") loadSalesMap();
-    };
     stat.addEventListener("click", (e) => {
-      if (e.target.closest("#ssClearBtn")) { setShopStatus("ALL"); return; }
       const b = e.target.closest("button[data-status]");
       if (!b) return;
-      setShopStatus(b.dataset.status);
+      const clicked = b.dataset.status || "ALL";
+      const current = window._shopStatusFilter || "ALL";
+      // Toggle off if user clicks the currently-active non-ALL button.
+      const next = (clicked === current && clicked !== "ALL") ? "ALL" : clicked;
+      window._shopStatusFilter = next;
+      stat.querySelectorAll("button[data-status]").forEach(x =>
+        x.classList.toggle("active", x.dataset.status === next));
+      if (typeof loadSalesMap === "function") loadSalesMap();
     });
   }
 
   // Purpose filter — same toggle pattern, drives passesPurpose().
   const purp = document.getElementById("purposeFilterBtns");
   if (purp){
-    const pfClear = document.getElementById("pfClearBtn");
-    const setPurpose = (val) => {
-      window._purposeFilter = val || "ALL";
-      purp.querySelectorAll("button[data-purpose]").forEach(x =>
-        x.classList.toggle("active", x.dataset.purpose === window._purposeFilter));
-      if (pfClear){
-        const on = (window._purposeFilter && window._purposeFilter !== "ALL");
-        pfClear.style.opacity = on ? "1" : ".35";
-        pfClear.style.pointerEvents = on ? "auto" : "none";
-      }
-      if (typeof loadSalesMap === "function") loadSalesMap();
-    };
     purp.addEventListener("click", (e) => {
-      if (e.target.closest("#pfClearBtn")) { setPurpose("ALL"); return; }
       const b = e.target.closest("button[data-purpose]");
       if (!b) return;
-      setPurpose(b.dataset.purpose);
+      const clicked = b.dataset.purpose || "ALL";
+      const current = window._purposeFilter || "ALL";
+      const next = (clicked === current && clicked !== "ALL") ? "ALL" : clicked;
+      window._purposeFilter = next;
+      purp.querySelectorAll("button[data-purpose]").forEach(x =>
+        x.classList.toggle("active", x.dataset.purpose === next));
+      if (typeof loadSalesMap === "function") loadSalesMap();
     });
   }
 });
