@@ -185,7 +185,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         </div>
 
         <div class="field">
-          <label>Sold-to <span class="req">*</span></label>
+          <label>Sold-to <span style="color:#9ca3af;font-weight:400;">(optional — auto-filled when Ship-to is picked)</span></label>
           <div class="dd" id="ddSold">
             <div class="dd-wrap">
               <input id="fSold" type="text" placeholder="Search sold-to…" autocomplete="off">
@@ -199,9 +199,9 @@ header .nav{margin-left:auto;display:flex;gap:6px}
           <label>Ship-to <span class="req">*</span></label>
           <div class="dd" id="ddShip">
             <div class="dd-wrap">
-              <input id="fShip" type="text" placeholder="— pick sold-to first —" autocomplete="off" disabled>
-              <button class="dd-btn dd-clear-btn" type="button" id="fShipClear" title="Clear" tabindex="-1" disabled>×</button>
-              <button class="dd-btn dd-last" type="button" id="fShipOpen" title="Show all" tabindex="-1" disabled>▼</button>
+              <input id="fShip" type="text" placeholder="Search ship-to…" autocomplete="off">
+              <button class="dd-btn dd-clear-btn" type="button" id="fShipClear" title="Clear" tabindex="-1">×</button>
+              <button class="dd-btn dd-last" type="button" id="fShipOpen" title="Show all" tabindex="-1">▼</button>
             </div>
             <div class="dd-menu" id="fShipMenu"></div>
           </div>
@@ -379,11 +379,20 @@ function bindPicker({inputId, openBtnId, clearBtnId, menuId, onChange}){
     }
   });
 
-  return {
-    setOptions(opts){ state.options = opts || []; },
+  const api = {
+    setOptions(opts){ state.options = opts || []; api.__options = state.options; },
     setDisabled(b){
       inp.disabled = b; open.disabled = b; clr.disabled = b;
       if (b){ state.value = ""; state.label = ""; inp.value = ""; setActive(false); }
+    },
+    setValue(opt){
+      // Programmatic pick — same effect as a user click but skips the
+      // onChange callback so we don't trigger cascades on auto-fill.
+      if (!opt) return;
+      state.value = opt.value;
+      state.label = opt.label;
+      inp.value   = opt.label;
+      setActive(true);
     },
     value(){ return state.value; },
     label(){ return state.label; },
@@ -391,7 +400,9 @@ function bindPicker({inputId, openBtnId, clearBtnId, menuId, onChange}){
       state.value = ""; state.label = ""; inp.value = "";
       setActive(false); ddClose(menu);
     },
+    __options: [],
   };
+  return api;
 }
 
 const soldPicker = bindPicker({
@@ -402,7 +413,20 @@ const soldPicker = bindPicker({
 const shipPicker = bindPicker({
   inputId: "fShip", openBtnId: "fShipOpen",
   clearBtnId: "fShipClear", menuId: "fShipMenu",
+  onChange: (opt) => {
+    // Picking a ship-to directly: when Sold-to is empty, auto-fill it
+    // from the ship-to's parent so the form shows the full chain.
+    // (Server-side resolves sold_to from ship_to anyway, but this
+    // keeps the UI honest.)
+    if (!opt || soldPicker.value()) return;
+    const meta = _shipToParent.get(opt.value);
+    if (meta && meta.sold_to_name){
+      const sel = (soldPicker.__options || []).find(o => o.value === meta.sold_to_name);
+      if (sel) soldPicker.setValue(sel);
+    }
+  },
 });
+const _shipToParent = new Map(); // ship_to → {sold_to, sold_to_name}
 
 async function fetchJSON(url){
   const r = await fetch(url, {credentials: "include"});
@@ -422,10 +446,23 @@ async function loadBdes(){
   filtBde.innerHTML = ['<option value="">All</option>',
                        ...list.map(n => `<option value="${n}">${n}</option>`)].join("");
 
-  // If the server can see who's logged in via CF Access we surface it
-  // here.  No header → just leave the manual picker.
-  // (Page won't have the CF header itself, but a quick ping endpoint
-  // would; for now this stays manual until we add /api/whoami.)
+  // Auto-fill the BDE dropdown with the signed-in user (any role).
+  // For BDE role we also disable the dropdown so they can't submit
+  // on someone else's behalf.  SM / ALL stay editable.
+  try {
+    const who = await fetchJSON("/api/whoami").catch(() => null);
+    if (who && who.logged_in && who.name){
+      // Add the user as an option if it isn't already present
+      if (![...fBde.options].some(o => o.value === who.name)){
+        fBde.add(new Option(who.name, who.name));
+      }
+      fBde.value = who.name;
+      if (who.role === "BDE"){
+        fBde.disabled = true;
+        fBde.title = `Locked: ${who.name} (BDE)`;
+      }
+    }
+  } catch (e) { /* whoami optional — manual pick still works */ }
 }
 
 async function loadSoldTos(){
@@ -440,18 +477,14 @@ async function loadSoldTos(){
 }
 
 async function loadShipTosFor(soldToName){
-  if (!soldToName){
-    shipPicker.setOptions([]);
-    shipPicker.setDisabled(true);
-    document.getElementById("fShip").placeholder = "— pick sold-to first —";
-    return;
-  }
+  // Empty soldToName = load all ship-tos (no parent filter).  Ship-to
+  // picker stays enabled either way — the user can pick a ship-to
+  // without first choosing a Sold-to.
   shipPicker.setDisabled(false);
   document.getElementById("fShip").placeholder = "Loading…";
-  const qs = new URLSearchParams({ sold_to: soldToName, metric: "amt" }).toString();
-  // /api/ship_to_names returns [{code, name}, …] filtered by the picked
-  // sold-to name.  We store the CODE so the dashboard can join cleanly,
-  // but the label keeps both for searchability.
+  const params = { metric: "amt" };
+  if (soldToName) params.sold_to = soldToName;
+  const qs = new URLSearchParams(params).toString();
   const list = await fetchJSON("/api/ship_to_names?" + qs).catch(() => []);
   const opts = [];
   for (const row of list){
@@ -461,7 +494,28 @@ async function loadShipTosFor(soldToName){
     opts.push({ label: name ? `${code} — ${name}` : code, value: code });
   }
   shipPicker.setOptions(opts);
-  document.getElementById("fShip").placeholder = "Search ship-to…";
+  document.getElementById("fShip").placeholder = soldToName
+    ? `Search ship-to (within ${soldToName})…`
+    : "Search ship-to…";
+
+  // If we just loaded the full list, refresh the ship_to → parent
+  // sold-to map so picking a ship directly can auto-fill Sold-to.
+  if (!soldToName){
+    _shipToParent.clear();
+    // /api/ship_to_names without a sold-to param doesn't return sold_to
+    // info, so fetch a separate batch with names attached.
+    try {
+      const r = await fetchJSON("/api/meeting_plan/shop_to_options").catch(() => []);
+      for (const row of (r || [])){
+        if (row.ship_to){
+          _shipToParent.set(row.ship_to, {
+            sold_to:      row.sold_to || "",
+            sold_to_name: row.sold_to_name || "",
+          });
+        }
+      }
+    } catch(e) { /* non-fatal */ }
+  }
 }
 
 async function loadRecent(){
@@ -594,8 +648,9 @@ async function saveFeedback(rid){
 fForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!fBde.value)         { fMsg.textContent = "BDE is required";      fMsg.className = "err"; return; }
-  if (!soldPicker.value()) { fMsg.textContent = "Sold-to is required";  fMsg.className = "err"; return; }
   if (!shipPicker.value()) { fMsg.textContent = "Ship-to is required";  fMsg.className = "err"; return; }
+  // Sold-to is optional — the server resolves it from the picked
+  // ship-to (and stores both code + name for display).
 
   fMsg.textContent = "Submitting…"; fMsg.className = "";
   const fd = new FormData();
@@ -818,6 +873,10 @@ document.getElementById("shipSearch").addEventListener("input", renderShipList);
 (async () => {
   await loadBdes();
   await loadSoldTos();
+  // Pre-load ALL ship-tos so the picker is usable without first
+  // selecting a Sold-to.  Also primes _shipToParent so picking a
+  // ship-to directly can auto-fill its parent Sold-to.
+  await loadShipTosFor("");
   await loadRecent();
   await loadShipOptions();
   await loadPlansForMonth();
