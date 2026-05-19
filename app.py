@@ -6114,20 +6114,50 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
         f'</div>'
     )
 
+def _resolve_bde_state(bde_name):
+    """Try the hardcoded directory first; if the BDE isn't there (new
+    hire, name format drift, etc.) fall back to the customer master
+    via salesman_name → bde_state.  Empty string when nothing matches."""
+    s = _lookup_bde_state(bde_name)
+    if s: return s
+    if not bde_name: return ""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute(
+            "SELECT bde_state FROM customer "
+            "WHERE UPPER(TRIM(salesman_name)) = %s "
+            "AND bde_state IS NOT NULL AND TRIM(bde_state) <> '' "
+            "ORDER BY (CASE WHEN bde_state IN ('NSW','QLD','VIC','SA','WA') "
+            "          THEN 0 ELSE 1 END) "
+            "LIMIT 1",
+            (bde_name.strip().upper(),),
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        return (row[0] or "").strip() if row else ""
+    except Exception as e:
+        print(f"[mail] _resolve_bde_state DB fallback failed: {e}")
+        return ""
+
 def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action,
                     visit_purpose=""):
-    """Email Hayden + JJ + the State Manager of the BDE's state.  CC the
-    BDE author so they have a record of what was sent on their behalf."""
-    state    = _lookup_bde_state(bde_name)
+    """Email Hayden + JJ + Jayden + the State Manager of the BDE's
+    state.  CC the BDE author so they have a record of what was sent
+    on their behalf."""
+    state    = _resolve_bde_state(bde_name)
     sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
     author   = _lookup_bde_email(bde_name)
     to_list  = list(ALWAYS_TO)
-    if sm_email and sm_email not in to_list:
+    if sm_email and sm_email.lower() not in [x.lower() for x in to_list]:
         to_list.append(sm_email)
-    cc_list  = [author] if author and author not in to_list else []
+    cc_list  = [author] if author and author.lower() not in [x.lower() for x in to_list] else []
     subject  = (f"[BDE Visit] {bde_name} → {ship_to} "
                 f"{ship_to_name or ''} ({visit_date})")
+    # Surface the resolution so any "SM not getting mail" issue is
+    # diagnosable from the console log without code changes.
+    print(f"[mail] new_log #{rid} bde={bde_name!r} state={state!r} "
+          f"sm={sm_email!r} → to={to_list} cc={cc_list}")
     html = _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                            visit_date, met_person, notes, next_action, None,
                            visit_purpose=visit_purpose)
