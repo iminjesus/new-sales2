@@ -6691,9 +6691,12 @@ def meeting_feedback():
 # ── /meeting calendar planner ──────────────────────────────────────
 @app.get("/api/meeting_plan")
 def meeting_plan_list():
-    """Return scheduled visits for a month (Y/M).  When the caller is
-    a BDE (Cf-Access header maps to a BDE in _BDE_DIRECTORY) only their
-    own plans come back; everyone else sees the full team's plans."""
+    """Return scheduled visits for a month (Y/M).  Scope filter mirrors
+    the rest of the dashboard:
+      • BDE → only their own plans.
+      • SM  → plans by any BDE who belongs to their state.
+      • ALL → everyone (Hayden / JJ / Jayden / unknown emails).
+    """
     try:
         year  = int(request.args.get("year")  or datetime.now().year)
         month = int(request.args.get("month") or datetime.now().month)
@@ -6701,14 +6704,23 @@ def meeting_plan_list():
         return jsonify({"error": "year/month must be integers"}), 400
 
     email = _bde_from_request()
-    role  = _EMAIL_TO_DIR.get(email.lower(), (None, None, "ALL"))[2] if email else "ALL"
-    bde_name_lock = _EMAIL_TO_DIR.get(email.lower(), (None, None, None))[0] if email else None
+    me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
+    role  = me[2] if me else "ALL"
+    bde   = me[0] if me else None
+    state = me[1] if me else None
 
     wh = ["YEAR(plan_date) = %s", "MONTH(plan_date) = %s"]
     params = [year, month]
-    if role == "BDE" and bde_name_lock:
+    if role == "BDE" and bde:
         wh.append("UPPER(bde_name) = %s")
-        params.append(bde_name_lock.upper())
+        params.append(bde.upper())
+    elif role == "SM" and state:
+        # All BDEs whose home state matches this SM
+        state_bdes = [n for (n, _e, s, _r) in _BDE_DIRECTORY if s == state]
+        if state_bdes:
+            placeholders = ",".join(["%s"] * len(state_bdes))
+            wh.append(f"UPPER(bde_name) IN ({placeholders})")
+            params.extend([n.upper() for n in state_bdes])
 
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)

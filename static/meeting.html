@@ -463,11 +463,13 @@ async function loadBdes(){
 
   // Auto-fill the BDE dropdown with the signed-in user (any role).
   // For BDE role we also disable the dropdown so they can't submit
-  // on someone else's behalf.  SM / ALL stay editable.
+  // on someone else's behalf.  SM / ALL stay editable.  whoami is
+  // also stashed on window._me so the calendar renderer can colour
+  // chips by BDE for SM / ALL viewers.
   try {
     const who = await fetchJSON("/api/whoami").catch(() => null);
+    if (who) window._me = who;
     if (who && who.logged_in && who.name){
-      // Add the user as an option if it isn't already present
       if (![...fBde.options].some(o => o.value === who.name)){
         fBde.add(new Option(who.name, who.name));
       }
@@ -722,6 +724,26 @@ const _calState = { year: (new Date()).getFullYear(), month: (new Date()).getMon
 let _planRowsByDate = {};   // "YYYY-MM-DD" → [ {id, ship_to, ship_to_name, bde_name}, … ]
 let _shipOptions    = [];   // [{ship_to, ship_to_name, sold_to, sold_to_name}, …]
 
+// Stable per-BDE colour palette so each BDE's planned visits get a
+// distinct colour when an SM / Hayden / JJ is viewing.  Same anchor
+// hues as the Map View BDE palette.
+const _BDE_PLAN_COLORS = [
+  "#16a34a", "#2563eb", "#dc2626", "#ea580c",
+  "#7c3aed", "#0891b2", "#db2777", "#65a30d",
+  "#4338ca", "#b45309",
+];
+function _planColorFor(bdeName){
+  const s = String(bdeName || "").trim().toUpperCase();
+  if (!s) return _BDE_PLAN_COLORS[0];
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) >>> 0;
+  return _BDE_PLAN_COLORS[h % _BDE_PLAN_COLORS.length];
+}
+function _hexWithAlpha(hex, alpha02){
+  // hex like "#16a34a" + integer alpha 0-255 → "#16a34a26" etc.
+  return hex + alpha02.toString(16).padStart(2, "0");
+}
+
 function _isoDate(y, m, d) {
   const pad = n => String(n).padStart(2,"0");
   return `${y}-${pad(m)}-${pad(d)}`;
@@ -752,19 +774,31 @@ function renderCalendar(){
   const todayIso = (() => { const t = new Date();
     return _isoDate(t.getFullYear(), t.getMonth()+1, t.getDate()); })();
 
+  // When the viewer is BDE-locked the calendar shows only their own
+  // plans (server-side filter), so leave the default green.  Otherwise
+  // (SM / ALL) colour each chip by the BDE who planned it so the
+  // owner is obvious at a glance.
+  const me = window._me || {};
+  const colorByBde = !me.lock_salesman;
+
   let html = "";
   for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
-  // Leading blanks
   for (let i = 0; i < dow; i++) html += `<div class="cal-cell dim"></div>`;
-  // Day cells
   for (let d = 1; d <= daysInM; d++) {
     const iso = _isoDate(year, month, d);
     const isToday = (iso === todayIso) ? " today" : "";
-    const chips = (_planRowsByDate[iso] || []).map(r => `
-      <div class="plan-chip" data-id="${r.id}" title="${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
+    const chips = (_planRowsByDate[iso] || []).map(r => {
+      let style = "";
+      if (colorByBde && r.bde_name) {
+        const c = _planColorFor(r.bde_name);
+        style = `style="background:${_hexWithAlpha(c, 0x22)};border-color:${c};color:${c};"`;
+      }
+      return `<div class="plan-chip" data-id="${r.id}" ${style}
+                   title="${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
         <span>${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 18))}</span>
         <span class="pc-rm">×</span>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     html += `<div class="cal-cell${isToday}" data-date="${iso}">
       <span class="d-num">${d}</span>
       <div class="chips">${chips}</div>
