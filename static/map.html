@@ -191,6 +191,13 @@
                 title="Only shops with at least one GPS visit">📍 Visit <span class="ss-count" data-c="VISIT">–</span></button>
         <button class="ss-btn ss-novisit" data-status="NOVISIT"
                 title="Only shops with no GPS visit yet">🚫 No-visit <span class="ss-count" data-c="NOVISIT">–</span></button>
+        <button class="ss-clear" id="ssClearBtn" type="button"
+                title="Clear filter — back to All"
+                style="display:none;margin-left:4px;border:1px solid #fca5a5;
+                       background:#fef2f2;color:#dc2626;border-radius:4px;
+                       padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;">
+          ✕ Clear
+        </button>
       </div>
 
       <div id="purposeFilterBtns"
@@ -212,6 +219,13 @@
                 title="Shops with a Rebate follow-up log">💸 Rebate <span class="pf-count" data-p="Rebate follow-up">–</span></button>
         <button class="pf-btn pf-other"      data-purpose="Other"
                 title="Shops with an Other-purpose log (or purpose missing)">… Other <span class="pf-count" data-p="Other">–</span></button>
+        <button class="pf-clear" id="pfClearBtn" type="button"
+                title="Clear filter — back to All"
+                style="display:none;margin-left:4px;border:1px solid #fca5a5;
+                       background:#fef2f2;color:#dc2626;border-radius:4px;
+                       padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer;">
+          ✕ Clear
+        </button>
       </div>
       <style>
         .pf-btn{

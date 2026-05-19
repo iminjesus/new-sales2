@@ -512,29 +512,45 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Shop-status chip row (All / Logs / Visit / No-visit) — picks one
   // mutually-exclusive filter that re-renders the map without going
-  // back to the API (filters cached data in loadSalesMap).
+  // back to the API (filters cached data in loadSalesMap).  The
+  // adjacent ✕ Clear button resets to ALL; it's only visible while a
+  // non-default filter is active.
   const stat = document.getElementById("shopStatusBtns");
   if (stat){
+    const ssClear = document.getElementById("ssClearBtn");
+    const setShopStatus = (val) => {
+      window._shopStatusFilter = val || "ALL";
+      stat.querySelectorAll("button[data-status]").forEach(x =>
+        x.classList.toggle("active", x.dataset.status === window._shopStatusFilter));
+      if (ssClear) ssClear.style.display =
+        (window._shopStatusFilter && window._shopStatusFilter !== "ALL") ? "inline-block" : "none";
+      if (typeof loadSalesMap === "function") loadSalesMap();
+    };
     stat.addEventListener("click", (e) => {
+      if (e.target.closest("#ssClearBtn")) { setShopStatus("ALL"); return; }
       const b = e.target.closest("button[data-status]");
       if (!b) return;
-      window._shopStatusFilter = b.dataset.status || "ALL";
-      stat.querySelectorAll("button").forEach(x =>
-        x.classList.toggle("active", x === b));
-      if (typeof loadSalesMap === "function") loadSalesMap();
+      setShopStatus(b.dataset.status);
     });
   }
 
   // Purpose filter — same toggle pattern, drives passesPurpose().
   const purp = document.getElementById("purposeFilterBtns");
   if (purp){
+    const pfClear = document.getElementById("pfClearBtn");
+    const setPurpose = (val) => {
+      window._purposeFilter = val || "ALL";
+      purp.querySelectorAll("button[data-purpose]").forEach(x =>
+        x.classList.toggle("active", x.dataset.purpose === window._purposeFilter));
+      if (pfClear) pfClear.style.display =
+        (window._purposeFilter && window._purposeFilter !== "ALL") ? "inline-block" : "none";
+      if (typeof loadSalesMap === "function") loadSalesMap();
+    };
     purp.addEventListener("click", (e) => {
+      if (e.target.closest("#pfClearBtn")) { setPurpose("ALL"); return; }
       const b = e.target.closest("button[data-purpose]");
       if (!b) return;
-      window._purposeFilter = b.dataset.purpose || "ALL";
-      purp.querySelectorAll("button").forEach(x =>
-        x.classList.toggle("active", x === b));
-      if (typeof loadSalesMap === "function") loadSalesMap();
+      setPurpose(b.dataset.purpose);
     });
   }
 });
