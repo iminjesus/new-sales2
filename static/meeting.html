@@ -32,10 +32,21 @@ header .nav{margin-left:auto;display:flex;gap:6px}
   .planner-palette  {order:2}   /* ship-to palette */
   .form-card        {order:3}   /* new visit form */
   .planner-right    {order:4}   /* recent entries */
-  .palette-list{max-height:110px}
+  /* Highlight the palette as the obvious "selection area" on mobile.
+     Coloured border + tinted background + sticky label so it reads
+     as "this is where you pick a shop". */
+  .planner-palette .card{
+    border:2px solid #2563eb;background:#f0f7ff;
+    box-shadow:0 1px 6px rgba(37,99,235,.15);
+  }
+  .palette-row-tag{font-size:11px;color:#1d4ed8}
+  .palette-row-tag::before{background:#1d4ed8}
+  /* With only 5 chips by default the list itself is naturally short,
+     so the max-height just caps it if the user opens search results. */
+  .palette-list{max-height:170px}
 }
 @media (max-width:640px){
-  .palette-list{max-height:90px}
+  .palette-list{max-height:150px}
 }
 
 /* ── Calendar planner ─────────────────────────────────── */
@@ -259,7 +270,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 <!-- ── Column 1: Ship-to palette (drag source) ── -->
 <div class="planner-palette">
   <div class="card">
-    <div class="palette-row-tag">Ship-to · click to log, drag to schedule</div>
+    <div class="palette-row-tag">Pick a shop · click to log, drag to schedule</div>
 
     <div style="margin-bottom:6px;">
       <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
@@ -1242,7 +1253,12 @@ function renderShipList(){
   const base = _palSoldFilter
     ? _shipOptions.filter(r => (r.sold_to_name || "") === _palSoldFilter)
     : _shipOptions;
-  const filtered = !q ? base.slice(0, 200)
+  // On mobile keep the default chip list short (5) so the palette
+  // doesn't dominate the screen — the user types into the search box
+  // when they need a specific shop.  On desktop show up to 200.
+  const isMobile = window.matchMedia("(max-width:1100px)").matches;
+  const defaultLimit = isMobile ? 5 : 200;
+  const filtered = !q ? base.slice(0, defaultLimit)
     : base.filter(r =>
         (r.ship_to || "").toLowerCase().includes(q) ||
         (r.ship_to_name || "").toLowerCase().includes(q) ||
@@ -1256,7 +1272,7 @@ function renderShipList(){
     } else {
       cnt.textContent = `${total} ship-tos` +
                         (_palSoldFilter ? ` in ${_palSoldFilter}` : "") +
-                        (total > 200 ? " (showing first 200)" : "");
+                        (total > defaultLimit ? ` (showing first ${defaultLimit} — type to search)` : "");
     }
   }
   if (!filtered.length){
@@ -1311,6 +1327,10 @@ document.getElementById("calToday").addEventListener("click", async () => {
   await loadPlansForMonth(); renderCalendar();
 });
 document.getElementById("shipSearch").addEventListener("input", renderShipList);
+// Re-render the chip list when the viewport crosses the mobile
+// breakpoint (rotation, window resize) — the default chip count
+// differs on mobile vs desktop.
+window.matchMedia("(max-width:1100px)").addEventListener("change", renderShipList);
 
 (async () => {
   await loadBdes();
