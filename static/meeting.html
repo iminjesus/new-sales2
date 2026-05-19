@@ -282,11 +282,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     </div>
   </div>
 
-</div><!-- /planner-left -->
-
-<div class="planner-right">
-
-  <!-- ── New entry form ── -->
+  <!-- ── New entry form (left bottom — under Calendar + Palette) ── -->
   <div class="card">
     <h2>New visit</h2>
     <div id="bdeIdLine" class="bde-id-line" style="display:none;">
@@ -372,23 +368,25 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     </form>
   </div>
 
-</div><!-- /planner-right -->
-</div><!-- /planner-layout -->
+</div><!-- /planner-left -->
 
-<!-- ── Recent entries — full-width row below, room to grow with the
-     team's history.  BDE → Shop → Purpose → Visit-date grouping
-     handled inside loadRecent(). ── -->
-<div class="card" id="recentSection" style="margin-top:14px;">
-  <h2>Recent entries</h2>
-  <div class="filt">
-    <label>BDE</label>
-    <select id="filtBde"><option value="">All</option></select>
-    <label>Ship-to</label>
-    <input id="filtShip" type="text" placeholder="e.g. A029737" style="width:140px;">
-    <button class="btn" id="btnRefresh">Refresh</button>
+<!-- ── Recent entries — full-height right column.  BDE → Shop →
+     Purpose → Visit-date grouping handled inside loadRecent(). ── -->
+<div class="planner-right">
+  <div class="card" id="recentSection">
+    <h2>Recent entries</h2>
+    <div class="filt">
+      <label>BDE</label>
+      <select id="filtBde"><option value="">All</option></select>
+      <label>Ship-to</label>
+      <input id="filtShip" type="text" placeholder="e.g. A029737" style="width:140px;">
+      <button class="btn" id="btnRefresh">Refresh</button>
+    </div>
+    <div id="recentWrap"><div class="empty">Loading…</div></div>
   </div>
-  <div id="recentWrap"><div class="empty">Loading…</div></div>
-</div>
+</div><!-- /planner-right -->
+
+</div><!-- /planner-layout -->
 
 </div>
 
