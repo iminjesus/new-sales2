@@ -6077,7 +6077,7 @@ def _esc_html(s):
 
 def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action, feedback,
-                    visit_purpose="", prep_notes=""):
+                    visit_purpose="", prep_notes="", prep_history=None):
     rows = []
     def _row(lbl, val):
         return (f'<tr><td style="padding:4px 10px;color:#6b7280;font-size:11px;'
@@ -6096,6 +6096,23 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                         f'<div style="background:#eff6ff;border-left:3px solid #2563eb;'
                         f'padding:6px 8px;color:#1e3a5f;white-space:pre-wrap;">'
                         f'{_esc_html(prep_notes)}</div>'))
+    # Older prep notes for this same ship_to (from prior submissions
+    # — typically the "Meeting Preparation" entries written before
+    # the visit happened).  Shown chronologically so the reader has
+    # the full prep context in one place.
+    if prep_history:
+        history_html = "".join(
+            f'<div style="margin-top:4px;padding:6px 8px;background:#f8fafc;'
+            f'border-left:3px solid #94a3b8;border-radius:3px;font-size:12px;'
+            f'color:#334155;">'
+            f'<div style="font-size:10px;color:#6b7280;margin-bottom:2px;">'
+            f'<b>{_esc_html(h.get("bde_name") or "")}</b> · '
+            f'{_esc_html(h.get("visit_date") or "")}</div>'
+            f'<div style="white-space:pre-wrap;">{_esc_html(h.get("prep_notes") or "")}</div>'
+            f'</div>'
+            for h in prep_history
+        )
+        rows.append(_row("Prep history", history_html))
     if met_person:
         rows.append(_row("Met",      _esc_html(met_person)))
     if notes:
@@ -6153,6 +6170,37 @@ def _resolve_bde_state(bde_name):
         print(f"[mail] _resolve_bde_state DB fallback failed: {e}")
         return ""
 
+def _fetch_prep_history(ship_to, exclude_id=None):
+    """Return every prior prep_notes entry for this ship_to so an
+    actual-log notification can carry forward the prep context (the
+    BDE writes the visit log into a fresh textarea on purpose; this
+    keeps the email recipients seeing what was prepped beforehand)."""
+    if not ship_to:
+        return []
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        sql = (
+            "SELECT id, visit_date, bde_name, prep_notes "
+            "FROM meeting_log "
+            "WHERE ship_to = %s "
+            "  AND prep_notes IS NOT NULL AND TRIM(prep_notes) <> '' "
+        )
+        params = [ship_to]
+        if exclude_id is not None:
+            sql += "AND id <> %s "
+            params.append(exclude_id)
+        sql += "ORDER BY visit_date ASC, id ASC"
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+        for r in rows:
+            if r.get("visit_date"):
+                r["visit_date"] = r["visit_date"].strftime("%Y-%m-%d")
+        cur.close(); conn.close()
+        return rows
+    except Exception as e:
+        print(f"[mail] _fetch_prep_history failed: {e}")
+        return []
+
 def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action,
                     visit_purpose="", plan_bde_email="", prep_notes=""):
@@ -6177,10 +6225,12 @@ def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
     # diagnosable from the console log without code changes.
     print(f"[mail] new_log #{rid} bde={bde_name!r} state={state!r} "
           f"sm={sm_email!r} plan_bde={plan_bde_email!r} → to={to_list} cc={cc_list}")
+    prep_history = _fetch_prep_history(ship_to, exclude_id=rid)
     html = _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                            visit_date, met_person, notes, next_action, None,
                            visit_purpose=visit_purpose,
-                           prep_notes=prep_notes)
+                           prep_notes=prep_notes,
+                           prep_history=prep_history)
     _send_mail_async(to_list, cc_list, subject, html)
 
 def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
@@ -6246,7 +6296,11 @@ def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
         thread_html_parts.append(meta + body_div)
     thread_html = "".join(thread_html_parts)
 
-    # Log card + thread
+    # Log card + thread.  prep_history pulls every prior prep entry
+    # for this ship_to so the reader of a feedback notification still
+    # sees the full context, not just whatever was on this one row.
+    prep_history = _fetch_prep_history(log_row.get("ship_to") or "",
+                                       exclude_id=rid)
     card = _email_log_html(
         rid,
         log_row.get("bde_name") or "",
@@ -6260,6 +6314,7 @@ def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
         None,           # feedback is shown as a thread below instead
         visit_purpose=log_row.get("visit_purpose") or "",
         prep_notes=log_row.get("prep_notes") or "",
+        prep_history=prep_history,
     )
     link        = f"{DASHBOARD_URL}/meeting"
     comment_url = f"{DASHBOARD_URL}/meeting#fb-{rid}"
