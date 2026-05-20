@@ -426,6 +426,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
           <label>Meeting Preparation
             <span style="color:#9ca3af;font-weight:400;">(optional — pre-visit notes, talking points, things to ask)</span>
           </label>
+          <!-- Read-only block populated from prior prep_notes for the
+               currently-selected shop.  Shown only when at least one
+               previous prep exists, so the BDE can reference it
+               without typing it again into the textarea below. -->
+          <div id="prevPrep" style="display:none;margin-bottom:6px;"></div>
           <textarea id="fPrep" name="prep_notes"
             placeholder="Pre-visit prep — talking points, recent issues to raise, materials to bring …"
             style="min-height:60px;"></textarea>
@@ -934,6 +939,7 @@ function renderRecentRows(){
   if (!_recentRows.length){
     wrap.innerHTML = '<div class="empty">No entries yet.</div>';
     _maybeJumpToFeedbackFromHash();
+    _renderPrevPrepNotes();
     return;
   }
   // Apply the State + Purpose filters client-side.
@@ -1031,6 +1037,43 @@ function renderRecentRows(){
   // (URL hash like #fb-123), scroll the matching entry into view,
   // flash a highlight on it, and auto-open the feedback composer.
   _maybeJumpToFeedbackFromHash();
+  // Refresh the "Previous prep notes" reference block in the form so
+  // it shows the prep history for the currently-selected shop.
+  _renderPrevPrepNotes();
+}
+
+// Read-only display above the Meeting Preparation textarea.  Shows
+// every prep_notes entry written so far for the selected shop so the
+// BDE can reference them while writing the actual visit log.  Stays
+// hidden when no shop is selected or no prep notes exist for it.
+function _renderPrevPrepNotes(){
+  const box = document.getElementById("prevPrep");
+  if (!box) return;
+  if (!_selectedShop || !_selectedShop.ship_to){
+    box.style.display = "none"; box.innerHTML = ""; return;
+  }
+  const matches = (_recentRows || [])
+    .filter(r => r.ship_to === _selectedShop.ship_to)
+    .filter(r => (r.prep_notes || "").trim());
+  if (!matches.length){
+    box.style.display = "none"; box.innerHTML = ""; return;
+  }
+  const items = matches.map(r => `
+    <div style="margin-bottom:5px;padding:6px 9px;background:#eff6ff;
+                border-left:3px solid #2563eb;border-radius:3px;
+                font-size:11px;color:#1e3a5f;">
+      <div style="font-size:10px;color:#6b7280;margin-bottom:3px;">
+        <b>${escapeHtml(r.bde_name || "")}</b>
+        · ${escapeHtml(r.visit_date || "")}
+      </div>
+      <div style="white-space:pre-wrap;">${escapeHtml(r.prep_notes)}</div>
+    </div>`).join("");
+  box.style.display = "block";
+  box.innerHTML =
+    `<div style="font-size:10px;font-weight:700;color:#6b7280;
+                  text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;">
+       ↓ Previous prep notes for this shop (reference)
+     </div>${items}`;
 }
 
 // Deep-link handler — invoked after every renderRecentList() pass.
