@@ -147,10 +147,15 @@ let expanded      = new Set(); // sold_to group keys open (ship-to toggle)
 let currentPage   = 0;
 let lastMeta      = {};        // last API response metadata
 let activeRegion  = "ALL";     // region filter
+let lockedBde     = "";        // role-scope: BDE locked to themselves
+let lockedRegion  = "";        // role-scope: SM locked to their state
 
 // ─── region button logic ──────────────────────────────────────────────────
 const REGION_CLASSES = {ALL:"r-all", NSW:"r-nsw", QLD:"r-qld", VIC:"r-vic", WA:"r-wa"};
 function setRegion(r){
+  // Honour the role-scope lock — a State Manager can't widen out of
+  // their state, so a click on a non-locked region is ignored.
+  if (lockedRegion && r !== lockedRegion) return;
   activeRegion = r;
   document.querySelectorAll(".rbtn").forEach(b => b.classList.remove("active"));
   const cls = REGION_CLASSES[r] || "r-all";
@@ -158,9 +163,56 @@ function setRegion(r){
   fetchPage(0);
 }
 
+// ─── Role-based scope (matches graph/map views) ───────────────────────────
+// BDE role → backend filters rows to their salesman_name.
+// SM  role → locked to their state's region; other region buttons disabled.
+// ALL role → no restrictions.
+async function applyRoleScope(){
+  try {
+    const r  = await fetch("/api/whoami", { credentials:"include" });
+    const me = await r.json();
+    window._me = me;
+    if (!me || !me.logged_in) return;
+    if (me.lock_salesman) lockedBde = me.lock_salesman;
+    if (me.lock_region){
+      lockedRegion = me.lock_region;
+      // Pre-select the locked region and disable every other button.
+      activeRegion = lockedRegion;
+      document.querySelectorAll(".rbtn").forEach(b => {
+        const val = (b.textContent || "").trim().toUpperCase();
+        const isLocked = (val === lockedRegion);
+        b.classList.toggle("active", isLocked);
+        if (val !== lockedRegion){
+          b.disabled = true;
+          b.style.opacity = "0.4";
+          b.style.cursor  = "not-allowed";
+          b.title = `Locked: ${me.name} (State Manager — ${me.state})`;
+        }
+      });
+    }
+    _renderRoleBadge(me);
+  } catch (e) { /* local dev / no Cloudflare → no scope */ }
+}
+function _renderRoleBadge(me){
+  if (document.getElementById("roleBadge")) return;
+  const scope = me.lock_salesman ? `BDE · ${me.lock_salesman}`
+              : me.lock_region   ? `State Manager · ${me.lock_region}`
+              :                     `${me.role || "ALL"} · full scope`;
+  const tag = document.createElement("div");
+  tag.id = "roleBadge";
+  tag.innerHTML = `<span style="opacity:.7;">Signed in as</span> `
+                + `<b>${me.name || me.email}</b> · `
+                + `<span style="color:#2563eb;">${scope}</span>`;
+  tag.style.cssText = "position:fixed;bottom:6px;right:8px;z-index:5000;"
+    + "background:rgba(255,255,255,.92);padding:4px 10px;border-radius:14px;"
+    + "border:1px solid #e5e7eb;font-size:11px;color:#374151;"
+    + "box-shadow:0 1px 3px rgba(0,0,0,.08);pointer-events:none;";
+  document.body.appendChild(tag);
+}
+
 // ─── build query params from current UI state ─────────────────────────────
 function buildQS(page){
-  return new URLSearchParams({
+  const params = {
     search:        document.getElementById("f_search").value.trim(),
     show:          "ALL",
     sort:          sortCol,
@@ -168,7 +220,11 @@ function buildQS(page){
     region:        activeRegion,
     page:          page ?? currentPage,
     page_size:     40,
-  });
+  };
+  // Role scope — BDE users always send their own salesman_name so the
+  // backend filters out every other BDE's portion of shared sold_tos.
+  if (lockedBde) params.bde = lockedBde;
+  return new URLSearchParams(params);
 }
 
 let _searchTimer = null;
@@ -499,7 +555,10 @@ function esc(s){
 }
 function escAttr(s){return String(s||"").replace(/"/g,"&quot;");}
 
-load();
+// Wait for /api/whoami to come back before the first fetch so the
+// backend always gets the BDE/Region scope on the very first request
+// (matches the graph/map view behaviour).
+(async () => { await applyRoleScope(); load(); })();
 </script>
 </body>
 </html>

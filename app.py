@@ -5394,6 +5394,10 @@ def api_rebate_data():
     brand_filter  = request.args.get("territory",     "ALL").upper()  # UI still sends 'territory'
     stg_filter    = request.args.get("sold_to_group", "ALL")
     region_filter = request.args.get("region",        "ALL").upper()
+    # BDE filter — matches the role-scope lock used by graph/map views.
+    # Comparison is case-insensitive on salesman_name so name casing in
+    # the customer master doesn't make a BDE invisible to themselves.
+    bde_filter    = (request.args.get("bde") or "").strip()
     search      = request.args.get("search",  "").strip().lower()
     show        = request.args.get("show",    "ALL").upper()
     sort_col    = request.args.get("sort",    "actual")
@@ -5751,6 +5755,13 @@ def api_rebate_data():
                     })
 
         # ?? 6. Client-side-style filters applied server-side ?????????????????
+        # Role-scope BDE filter applied first so the summary cards (region
+        # totals etc.) only reflect what this BDE actually owns.  Region
+        # buttons still let them switch between regions, but they only
+        # ever see their own slice.
+        if bde_filter:
+            bf = bde_filter.strip().upper()
+            rows = [r for r in rows if (r["bde"] or "").strip().upper() == bf]
         if search:
             rows = [r for r in rows if
                     search in r["sold_to_name"].lower() or
