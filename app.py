@@ -4951,7 +4951,7 @@ def visit_summary():
         logged_ship_tos = set()
         # Per-purpose ship-to lists so the map can offer a Purpose
         # filter row (All / Promotion / Product introduction / Claim
-        # support / Rebate follow-up / Other).
+        # support / Rebate follow-up / Stock / Other).
         from collections import defaultdict as _dd
         logged_by_purpose = _dd(set)
         try:
@@ -6825,7 +6825,8 @@ def meeting_post():
         if notes and not purpose:
             return jsonify({"error": "visit_purpose is required when notes is provided"}), 400
         if purpose and purpose not in ("Promotion", "Product introduction",
-                                       "Claim support", "Rebate follow-up", "Other"):
+                                       "Claim support", "Rebate follow-up",
+                                       "Stock", "Other"):
             return jsonify({"error": "invalid visit_purpose"}), 400
 
         # Visit date: YYYY-MM-DD; default to today if blank/invalid.

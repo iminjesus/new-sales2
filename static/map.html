@@ -218,6 +218,8 @@
                 title="Shops with a Claim support log">🛠 Claim <span class="pf-count" data-p="Claim support">–</span></button>
         <button class="pf-btn pf-rebate"     data-purpose="Rebate follow-up"
                 title="Shops with a Rebate follow-up log">💸 Rebate <span class="pf-count" data-p="Rebate follow-up">–</span></button>
+        <button class="pf-btn pf-stock"      data-purpose="Stock"
+                title="Shops with a Stock log">📦 Stock <span class="pf-count" data-p="Stock">–</span></button>
         <button class="pf-btn pf-other"      data-purpose="Other"
                 title="Shops with an Other-purpose log (or purpose missing) — click again to clear">… Other <span class="pf-count" data-p="Other">–</span></button>
         <button type="button" id="pfShowAllBtn"
@@ -252,6 +254,8 @@
         .pf-claim.active { background:#dc2626; color:#fff; border-color:#dc2626; }
         .pf-rebate       { border-color:#c4b5fd; color:#6d28d9; }
         .pf-rebate.active{ background:#7c3aed; color:#fff; border-color:#7c3aed; }
+        .pf-stock        { border-color:#7dd3fc; color:#0369a1; }
+        .pf-stock.active { background:#0284c7; color:#fff; border-color:#0284c7; }
         .pf-other        { border-color:#cbd5e1; color:#475569; }
         .pf-other.active { background:#64748b; color:#fff; border-color:#64748b; }
       </style>
@@ -594,6 +598,6 @@
   <!-- shared dashboard logic -->
   <script src="/static/app.js?v=20260331" defer></script>
   <!-- small map-specific layer that reuses app.js -->
-  <script src="/static/map.js?v=20260519b" defer></script>
+  <script src="/static/map.js?v=20260520" defer></script>
 </body>
 </html>
