@@ -6846,6 +6846,7 @@ def meeting_plan_list():
                      WHERE m.ship_to = p.ship_to
                        AND YEAR(m.visit_date)  = YEAR(p.plan_date)
                        AND MONTH(m.visit_date) = MONTH(p.plan_date)
+                       AND m.notes IS NOT NULL AND TRIM(m.notes) <> ''
                    ) AS logged
             FROM meeting_plan p
             WHERE {' AND '.join(wh)}
