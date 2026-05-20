@@ -6077,7 +6077,7 @@ def _esc_html(s):
 
 def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action, feedback,
-                    visit_purpose=""):
+                    visit_purpose="", prep_notes=""):
     rows = []
     def _row(lbl, val):
         return (f'<tr><td style="padding:4px 10px;color:#6b7280;font-size:11px;'
@@ -6091,9 +6091,15 @@ def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
     rows.append(_row("Ship-to",     f"{_esc_html(ship_to)} — {_esc_html(ship_to_name)}"))
     if visit_purpose:
         rows.append(_row("Purpose",  _esc_html(visit_purpose)))
+    if prep_notes:
+        rows.append(_row("Prep",
+                        f'<div style="background:#eff6ff;border-left:3px solid #2563eb;'
+                        f'padding:6px 8px;color:#1e3a5f;white-space:pre-wrap;">'
+                        f'{_esc_html(prep_notes)}</div>'))
     if met_person:
         rows.append(_row("Met",      _esc_html(met_person)))
-    rows.append(_row("Notes",       f'<div style="white-space:pre-wrap;">{_esc_html(notes)}</div>'))
+    if notes:
+        rows.append(_row("Notes",       f'<div style="white-space:pre-wrap;">{_esc_html(notes)}</div>'))
     if next_action:
         rows.append(_row("Next step", _esc_html(next_action)))
     if feedback:
@@ -6149,7 +6155,7 @@ def _resolve_bde_state(bde_name):
 
 def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action,
-                    visit_purpose="", plan_bde_email=""):
+                    visit_purpose="", plan_bde_email="", prep_notes=""):
     """Email Hayden + JJ + Jayden + the State Manager of the BDE's
     state.  CC the BDE author so they have a record of what was sent
     on their behalf.  Also CC the original scheduling BDE (plan_bde_email)
@@ -6173,7 +6179,8 @@ def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
           f"sm={sm_email!r} plan_bde={plan_bde_email!r} → to={to_list} cc={cc_list}")
     html = _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                            visit_date, met_person, notes, next_action, None,
-                           visit_purpose=visit_purpose)
+                           visit_purpose=visit_purpose,
+                           prep_notes=prep_notes)
     _send_mail_async(to_list, cc_list, subject, html)
 
 def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
@@ -6251,6 +6258,8 @@ def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
         log_row.get("notes") or "",
         log_row.get("next_action") or "",
         None,           # feedback is shown as a thread below instead
+        visit_purpose=log_row.get("visit_purpose") or "",
+        prep_notes=log_row.get("prep_notes") or "",
     )
     link        = f"{DASHBOARD_URL}/meeting"
     comment_url = f"{DASHBOARD_URL}/meeting#fb-{rid}"
@@ -6687,7 +6696,8 @@ def meeting_post():
                             visit_date_obj.strftime("%Y-%m-%d"),
                             met, notes, next_act,
                             visit_purpose=purpose,
-                            plan_bde_email=plan_bde_email)
+                            plan_bde_email=plan_bde_email,
+                            prep_notes=prep)
         except Exception as e:
             print(f"[meeting] notify_new_log failed: {e}")
 
@@ -6748,6 +6758,7 @@ def meeting_feedback():
             SELECT m.id, m.visit_date, m.bde_name, m.bde_email,
                    m.plan_bde_name, m.plan_bde_email,
                    m.sold_to, m.sold_to_name, m.ship_to,
+                   m.visit_purpose, m.prep_notes,
                    m.met_person, m.notes, m.next_action,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name
             FROM meeting_log m
