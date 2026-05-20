@@ -5219,6 +5219,80 @@ def visit_debug_gps_locality():
 def rebate_page():
     return send_from_directory("static", "rebate.html")
 
+@app.get("/api/rebate_assignment_check")
+def api_rebate_assignment_check():
+    """Diagnostic for 'why isn't BDE X showing shop Y on the rebate page?'.
+
+    Query params:
+      bde   – salesman_name to look up (e.g. 'Borghese Alessio')
+      sold  – optional, restrict to ship_tos under a sold_to_name
+              containing this string (e.g. 'JAX' or 'JAXQUICKFIT')
+
+    Returns:
+      total_ship_tos              – ship_to count assigned to that BDE
+      ship_to_breakdown_by_sold   – sold_to_name → count of ship_tos
+      filtered_sold_ship_tos      – matching ship_tos for ?sold=…
+      jax_assignment_summary      – every BDE that owns any JAX ship_to
+                                    (case insensitive sold_to_name LIKE %JAX%)
+    """
+    bde   = (request.args.get("bde")  or "").strip()
+    sold  = (request.args.get("sold") or "").strip()
+    out   = {}
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        # BDE-specific stats
+        if bde:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM customer "
+                "WHERE UPPER(TRIM(salesman_name)) = UPPER(TRIM(%s))",
+                (bde,))
+            out["total_ship_tos"] = (cur.fetchone() or {}).get("n", 0)
+
+            cur.execute(
+                "SELECT sold_to_name, COUNT(*) AS n FROM customer "
+                "WHERE UPPER(TRIM(salesman_name)) = UPPER(TRIM(%s)) "
+                "GROUP BY sold_to_name "
+                "ORDER BY n DESC, sold_to_name "
+                "LIMIT 80",
+                (bde,))
+            out["ship_to_breakdown_by_sold"] = cur.fetchall()
+
+            if sold:
+                like = f"%{sold}%"
+                cur.execute(
+                    "SELECT sold_to, sold_to_name, ship_to, ship_to_name, bde_state "
+                    "FROM customer "
+                    "WHERE UPPER(TRIM(salesman_name)) = UPPER(TRIM(%s)) "
+                    "  AND UPPER(sold_to_name) LIKE UPPER(%s) "
+                    "ORDER BY ship_to_name "
+                    "LIMIT 200",
+                    (bde, like))
+                out["filtered_sold_ship_tos"] = cur.fetchall()
+
+        # Cross-cutting summary: who owns JAX ship_tos right now?
+        cur.execute(
+            "SELECT TRIM(salesman_name) AS bde, bde_state, COUNT(*) AS n "
+            "FROM customer "
+            "WHERE UPPER(sold_to_name) LIKE '%JAX%' "
+            "   OR UPPER(ship_to_name) LIKE 'JAX %' "
+            "GROUP BY TRIM(salesman_name), bde_state "
+            "ORDER BY n DESC")
+        out["jax_assignment_summary"] = cur.fetchall()
+
+        # All distinct salesman_name spellings — to catch case/format drift
+        # (e.g. 'Borghese Alessio' vs 'BORGHESE Alessio' vs 'Alessio Borghese').
+        cur.execute(
+            "SELECT salesman_name, COUNT(*) AS n FROM customer "
+            "GROUP BY salesman_name ORDER BY n DESC")
+        out["all_salesman_names"] = cur.fetchall()
+
+        cur.close(); conn.close()
+        return jsonify(out)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.get("/api/rebate_data")
 def api_rebate_data():
     """
