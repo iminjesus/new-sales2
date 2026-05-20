@@ -6149,10 +6149,11 @@ def _resolve_bde_state(bde_name):
 
 def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action,
-                    visit_purpose=""):
+                    visit_purpose="", plan_bde_email=""):
     """Email Hayden + JJ + Jayden + the State Manager of the BDE's
     state.  CC the BDE author so they have a record of what was sent
-    on their behalf."""
+    on their behalf.  Also CC the original scheduling BDE (plan_bde_email)
+    if the log was created from someone else's calendar plan."""
     state    = _resolve_bde_state(bde_name)
     sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
     author   = _lookup_bde_email(bde_name)
@@ -6160,12 +6161,16 @@ def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
     if sm_email and sm_email.lower() not in [x.lower() for x in to_list]:
         to_list.append(sm_email)
     cc_list  = [author] if author and author.lower() not in [x.lower() for x in to_list] else []
+    if plan_bde_email and plan_bde_email.lower() != (author or "").lower() \
+       and plan_bde_email.lower() not in [x.lower() for x in to_list] \
+       and plan_bde_email.lower() not in [x.lower() for x in cc_list]:
+        cc_list.append(plan_bde_email)
     subject  = (f"[BDE Visit] {bde_name} → {ship_to} "
                 f"{ship_to_name or ''} ({visit_date})")
     # Surface the resolution so any "SM not getting mail" issue is
     # diagnosable from the console log without code changes.
     print(f"[mail] new_log #{rid} bde={bde_name!r} state={state!r} "
-          f"sm={sm_email!r} → to={to_list} cc={cc_list}")
+          f"sm={sm_email!r} plan_bde={plan_bde_email!r} → to={to_list} cc={cc_list}")
     html = _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                            visit_date, met_person, notes, next_action, None,
                            visit_purpose=visit_purpose)
@@ -6202,6 +6207,13 @@ def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
     state    = _lookup_bde_state(log_row.get("bde_name") or "")
     sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
     if sm_email: participants.add(sm_email.lower())
+    # Original scheduling BDE — if the log was created from a calendar
+    # chip planned by someone else (e.g. a manager logged a visit on
+    # behalf of the BDE who scheduled it), make sure that BDE is in the
+    # loop on every comment.
+    plan_em = (log_row.get("plan_bde_email") or "").strip().lower() \
+              or (_lookup_bde_email(log_row.get("plan_bde_name") or "") or "").lower()
+    if plan_em: participants.add(plan_em)
 
     # Don't mail the person who just commented.
     if me: participants.discard(me)
@@ -6311,10 +6323,15 @@ def _ensure_meeting_log_table():
             except Exception: pass
         # Add columns that may not exist on legacy tables.
         for col, defn, after in (
-            ("sold_to_name",  "VARCHAR(160) NOT NULL DEFAULT ''", "sold_to"),
-            ("visit_date",    "DATE NOT NULL DEFAULT '1970-01-01'", "created_at"),
-            ("feedback",      "TEXT",                              "next_action"),
-            ("visit_purpose", "VARCHAR(40) NOT NULL DEFAULT ''",   "ship_to"),
+            ("sold_to_name",   "VARCHAR(160) NOT NULL DEFAULT ''", "sold_to"),
+            ("visit_date",     "DATE NOT NULL DEFAULT '1970-01-01'", "created_at"),
+            ("feedback",       "TEXT",                              "next_action"),
+            ("visit_purpose",  "VARCHAR(40) NOT NULL DEFAULT ''",   "ship_to"),
+            # Meeting Preparation note + the BDE who originally scheduled
+            # the visit on the calendar (so feedback emails CC them).
+            ("prep_notes",     "TEXT",                              "feedback"),
+            ("plan_bde_email", "VARCHAR(120) NOT NULL DEFAULT ''",  "bde_email"),
+            ("plan_bde_name",  "VARCHAR(120) NOT NULL DEFAULT ''",  "plan_bde_email"),
         ):
             try:
                 cur.execute(f"ALTER TABLE meeting_log "
@@ -6536,6 +6553,12 @@ def meeting_post():
         feedback  = (request.form.get("feedback") or "").strip()
         visit_in  = (request.form.get("visit_date") or "").strip()
         purpose   = (request.form.get("visit_purpose") or "").strip()
+        prep      = (request.form.get("prep_notes") or "").strip()
+        # If the user landed on the form by clicking a calendar chip,
+        # the frontend passes the original scheduling BDE's name so we
+        # can email them when feedback is later added on this log.
+        plan_bde_name  = (request.form.get("plan_bde_name") or "").strip()
+        plan_bde_email = _lookup_bde_email(plan_bde_name) or "" if plan_bde_name else ""
 
         if not ship_to:
             return jsonify({"error": "ship_to is required"}), 400
@@ -6625,13 +6648,18 @@ def meeting_post():
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
             INSERT INTO meeting_log
-                (visit_date, bde_email, bde_name, sold_to, sold_to_name,
+                (visit_date, bde_email, bde_name,
+                 plan_bde_email, plan_bde_name,
+                 sold_to, sold_to_name,
                  ship_to, visit_purpose, met_person, notes, next_action,
-                 feedback, photo_paths)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (visit_date_obj, bde_email, bde_name, sold_to, sold_to_name,
+                 feedback, prep_notes, photo_paths)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (visit_date_obj, bde_email, bde_name,
+              plan_bde_email, plan_bde_name,
+              sold_to, sold_to_name,
               ship_to, purpose, met, notes, next_act,
               feedback if feedback else None,
+              prep if prep else None,
               ",".join(saved) if saved else None))
         new_id = cur.lastrowid
         # Pull the resolved ship_to_name back out so the notification
@@ -6655,7 +6683,8 @@ def meeting_post():
                             ship_to, ship_nm,
                             visit_date_obj.strftime("%Y-%m-%d"),
                             met, notes, next_act,
-                            visit_purpose=purpose)
+                            visit_purpose=purpose,
+                            plan_bde_email=plan_bde_email)
         except Exception as e:
             print(f"[meeting] notify_new_log failed: {e}")
 
@@ -6714,6 +6743,7 @@ def meeting_feedback():
         # commented on this thread → those are the email recipients.
         cur.execute("""
             SELECT m.id, m.visit_date, m.bde_name, m.bde_email,
+                   m.plan_bde_name, m.plan_bde_email,
                    m.sold_to, m.sold_to_name, m.ship_to,
                    m.met_person, m.notes, m.next_action,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name
@@ -6976,8 +7006,9 @@ def meeting_list():
         cur.execute(f"""
             SELECT m.id, m.created_at, m.visit_date,
                    m.bde_email, m.bde_name,
+                   m.plan_bde_name, m.plan_bde_email,
                    m.sold_to, m.ship_to, m.visit_purpose, m.met_person,
-                   m.notes, m.next_action, m.feedback, m.photo_paths,
+                   m.notes, m.next_action, m.feedback, m.prep_notes, m.photo_paths,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
                    COALESCE(NULLIF(TRIM(c.sold_to_name),''),
                             NULLIF(TRIM(m.sold_to_name),''),

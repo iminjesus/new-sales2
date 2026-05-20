@@ -416,6 +416,19 @@ header .nav{margin-left:auto;display:flex;gap:6px}
           </div>
           <input type="hidden" id="fSoldHidden">
           <input type="hidden" id="fShipHidden">
+          <!-- Set when the user lands here by clicking a calendar plan
+               chip; tells the backend which BDE originally scheduled
+               this visit so feedback comments email them too. -->
+          <input type="hidden" id="fPlanBde" name="plan_bde_name">
+        </div>
+
+        <div class="field col-full">
+          <label>Meeting Preparation
+            <span style="color:#9ca3af;font-weight:400;">(optional — pre-visit notes, talking points, things to ask)</span>
+          </label>
+          <textarea id="fPrep" name="prep_notes"
+            placeholder="Pre-visit prep — talking points, recent issues to raise, materials to bring …"
+            style="min-height:60px;"></textarea>
         </div>
 
         <div class="field col-full">
@@ -713,6 +726,11 @@ let _selectedShop = null;   // {ship_to, ship_to_name, sold_to, sold_to_name}
 
 function _setSelectedShop(row){
   _selectedShop = row || null;
+  // Any selection from outside a calendar chip (palette click, drag-drop)
+  // breaks the link to "this shop came from a planned chip", so drop
+  // the plan-BDE.  The chip click handler re-sets it after this call.
+  const planHid = document.getElementById("fPlanBde");
+  if (planHid) planHid.value = "";
   const box = document.getElementById("selectedShop");
   const clr = document.getElementById("selectedShopClear");
   // Refresh Recent entries to show only this shop's history.
@@ -938,6 +956,7 @@ function renderRecentRows(){
       .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
       .join("");
     const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
+    const prep = r.prep_notes ? `<div style="margin-top:4px;padding:5px 8px;background:#eff6ff;border-left:3px solid #2563eb;border-radius:3px;font-size:11px;color:#1e3a5f;"><b style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;">Prep</b><div style="white-space:pre-wrap;">${escapeHtml(r.prep_notes)}</div></div>` : "";
     const met  = r.met_person  ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : "";
     const fbBlock = renderFeedbackBlock(r.id, r.thread || []);
 
@@ -986,7 +1005,7 @@ function renderRecentRows(){
     // Purpose are conveyed by the group headers above.
     h += `<tr>
       <td class="ts" style="padding-left:36px;">${r.visit_date || r.created_at}</td>
-      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${fbBlock}</td>
+      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${prep}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }
@@ -1205,6 +1224,8 @@ fForm.addEventListener("submit", async (e) => {
   fd.append("notes",         document.getElementById("fNotes").value);
   fd.append("next_action",   document.getElementById("fNext").value);
   fd.append("feedback",    document.getElementById("fFeedback").value);
+  fd.append("prep_notes",     document.getElementById("fPrep").value);
+  fd.append("plan_bde_name",  document.getElementById("fPlanBde").value);
   const files = document.getElementById("fPhotos").files;
   for (let i = 0; i < Math.min(files.length, 5); i++){
     fd.append("photos", files[i]);
@@ -1224,9 +1245,10 @@ fForm.addEventListener("submit", async (e) => {
     document.getElementById("fNext").value     = "";
     document.getElementById("fMet").value      = "";
     document.getElementById("fFeedback").value = "";
+    document.getElementById("fPrep").value     = "";
     document.getElementById("fPhotos").value   = "";
     document.querySelectorAll('input[name="visit_purpose"]').forEach(r => { r.checked = false; });
-    _setSelectedShop(null);
+    _setSelectedShop(null);   // also clears fPlanBde
     loadRecent();
     setTimeout(() => { fMsg.textContent = ""; }, 4000);
   } catch (err) {
@@ -1395,6 +1417,7 @@ function renderCalendar(){
                    data-ship-name="${_attr(r.ship_to_name || '')}"
                    data-sold="${_attr(r.sold_to || '')}"
                    data-sold-name="${_attr(r.sold_to_name || '')}"
+                   data-bde="${_attr(r.bde_name || '')}"
                    draggable="true" ${style}
                    title="Click × to remove · Drag onto the form on the right to log this visit\n${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
         <span style="display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;">${badge}${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 16))}</span>
@@ -1457,7 +1480,10 @@ function renderCalendar(){
     c.addEventListener("dragend", () => c.classList.remove("dragging"));
     // Click on the chip body (anywhere except the × delete handle)
     // selects this shop in the palette → form's Selected-shop banner
-    // + Recent entries auto-filters to its history.
+    // + Recent entries auto-filters to its history.  Also pre-fills
+    // the form's BDE picker with the BDE who originally scheduled
+    // this plan, and stashes their name on the form so the submit
+    // POST can route comment emails back to them.
     c.addEventListener("click", (e) => {
       if (e.target.closest(".pc-rm")) return;  // × → delete handler below
       const ship = c.dataset.ship || "";
@@ -1468,6 +1494,22 @@ function renderCalendar(){
         sold_to:      c.dataset.sold     || "",
         sold_to_name: c.dataset.soldName || "",
       });
+      const planBde = c.dataset.bde || "";
+      if (planBde){
+        const fBdeEl = document.getElementById("fBde");
+        if (fBdeEl && !fBdeEl.disabled){
+          // Add the plan-BDE as an option if the dropdown doesn't
+          // already have it (BDEs not in /api/bdes_active still need to
+          // be picked when their plan chip is clicked).
+          if (![...fBdeEl.options].some(o => o.value === planBde)){
+            fBdeEl.add(new Option(planBde, planBde));
+          }
+          fBdeEl.value = planBde;
+        }
+        // Stash for the submit POST.
+        const planBdeHid = document.getElementById("fPlanBde");
+        if (planBdeHid) planBdeHid.value = planBde;
+      }
     });
     // × on the right of the chip is the delete handle.
     const rm = c.querySelector(".pc-rm");
