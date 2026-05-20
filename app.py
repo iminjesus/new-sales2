@@ -5293,6 +5293,87 @@ def api_rebate_assignment_check():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
+@app.get("/api/rebate_structure_check")
+def api_rebate_structure_check():
+    """Diagnostic: what rebate structure is a sold_to mapped to, and how
+    does the rebate calc bucket its ship_tos by BDE?  Hit like:
+      /api/rebate_structure_check?sold_to=731942
+    Returns:
+      structures           – every (brand, structure_name) row from
+                              rebate_customer_map for this sold_to
+      structure_path       – 'PER_SHIP_TO' (AJT/ABJ/ATP/APP/ACD) or
+                              'BDE_GROUPED' (everything else)
+      bde_breakdown        – per-BDE counts:
+                              owned_in_customer  – customer.salesman_name
+                                                    rows for this sold_to
+                              with_sales_thismonth – of those, how many
+                                                    have a sales_thismonth
+                                                    row this period
+    """
+    sold = (request.args.get("sold_to") or "").strip()
+    if not sold:
+        return jsonify({"error": "sold_to is required"}), 400
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        cur.execute(
+            "SELECT brand, structure_name FROM rebate_customer_map "
+            "WHERE sold_to = %s", (sold,))
+        structures = cur.fetchall()
+
+        SHIP_TO_STRUCT_KEYS = ('AJT', 'ABJ', 'ATP', 'APP', 'ACD')
+        path = "BDE_GROUPED"
+        for s in structures:
+            nm = (s.get("structure_name") or "").upper()
+            if any(k in nm for k in SHIP_TO_STRUCT_KEYS):
+                path = "PER_SHIP_TO"; break
+
+        cur.execute(
+            "SELECT TRIM(c.salesman_name) AS bde, "
+            "       COUNT(DISTINCT c.ship_to) AS owned_in_customer, "
+            "       COUNT(DISTINCT CASE WHEN EXISTS("
+            "           SELECT 1 FROM sales_thismonth s "
+            "           WHERE s.ship_to = c.ship_to "
+            "             AND s.brand IN ('HK','LF') "
+            "             AND (s.so_type IS NULL OR s.so_type <> 'ZWH2')"
+            "       ) THEN c.ship_to END) AS with_sales_thismonth "
+            "FROM customer c "
+            "WHERE c.sold_to = %s "
+            "GROUP BY TRIM(c.salesman_name) "
+            "ORDER BY owned_in_customer DESC",
+            (sold,))
+        breakdown = cur.fetchall()
+
+        # Cross-check from the sales-side: which ship_tos in
+        # sales_thismonth carry this sold_to, and who do they map back to
+        # via customer.salesman_name (this is exactly what the rebate
+        # BDE-grouping loop sees).
+        cur.execute(
+            "SELECT TRIM(c.salesman_name) AS bde, "
+            "       COUNT(DISTINCT s.ship_to) AS sales_ship_tos "
+            "FROM sales_thismonth s "
+            "LEFT JOIN customer c ON c.ship_to = s.ship_to "
+            "WHERE s.sold_to = %s "
+            "  AND s.brand IN ('HK','LF') "
+            "  AND (s.so_type IS NULL OR s.so_type <> 'ZWH2') "
+            "GROUP BY TRIM(c.salesman_name) "
+            "ORDER BY sales_ship_tos DESC",
+            (sold,))
+        sales_side = cur.fetchall()
+
+        cur.close(); conn.close()
+        return jsonify({
+            "sold_to":           sold,
+            "structures":        structures,
+            "structure_path":    path,
+            "bde_breakdown":     breakdown,
+            "sales_side_bde":    sales_side,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.get("/api/rebate_data")
 def api_rebate_data():
     """
@@ -5379,8 +5460,13 @@ def api_rebate_data():
             ship_idx_line.setdefault((st, br, ln), set()).add(sh)
 
         # ?? 3. Customer lookup (ship_to ??name, bde_state, salesman) ??????????
-        cur.execute("SELECT ship_to, ship_to_name, bde_state, salesman_name FROM customer")
-        ship_cust_map = {}   # ship_to str -> {name, state, bde}
+        cur.execute("SELECT ship_to, ship_to_name, bde_state, salesman_name, sold_to FROM customer")
+        ship_cust_map  = {}   # ship_to str -> {name, state, bde}
+        sold_to_ships  = {}   # sold_to str -> set(ship_to) from customer master.
+                              # Lets the rebate calc surface a BDE row even when
+                              # all of that BDE's ship_tos for a sold_to have
+                              # zero sales this month (otherwise they're hidden
+                              # because ship_idx is sales-based).
         for r in cur.fetchall():
             sh = str(r["ship_to"])
             ship_cust_map[sh] = {
@@ -5388,6 +5474,9 @@ def api_rebate_data():
                 "state": (r["bde_state"] or "").strip() or "-",
                 "bde":   (r["salesman_name"] or "").strip() or "-",
             }
+            stk = str(r["sold_to"] or "")
+            if stk:
+                sold_to_ships.setdefault(stk, set()).add(sh)
         name_map = {sh: v["name"] for sh, v in ship_cust_map.items()}
 
         # Build BDE ??region mapping: for each BDE, use the most common state among
@@ -5560,8 +5649,18 @@ def api_rebate_data():
                     # Group ship_tos by their BDE ??one row per BDE per sold_to.
                     # This ensures every salesman sees their own portion of shared accounts
                     # like JAXQUICKFIT whose 94 ship_tos span multiple BDEs.
+                    #
+                    # ship_set above only contains ship_tos with sales this
+                    # month.  Union in the customer-master ship_tos for this
+                    # sold_to so every BDE who *owns* a ship_to under this
+                    # sold_to also gets a row — even if all their shops have
+                    # zero sales this month.  That makes accounts visible to
+                    # the BDE on the rebate page (otherwise they'd silently
+                    # disappear when there are no sales at all).
+                    full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
+                    full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
                     bde_groups = {}  # bde_name -> {region, qty, amt, ship_details}
-                    for sh in sorted(ship_set):
+                    for sh in sorted(full_ship_set):
                         q, a = _get_sales(sh)
                         sh_info_local = ship_cust_map.get(sh, {})
                         sh_bde   = sh_info_local.get("bde",   "-") or sold_to_bde
