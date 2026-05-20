@@ -5793,7 +5793,14 @@ def api_rebate_data():
         grp_map = {}
         brand_order = {"HK": 0, "LF": 1, "TTL": 2}
         for r in rows:
-            key = r["region"] + "|" + r["sold_to"]
+            # Include BDE in the group key.  For PER_SHIP_TO structures
+            # (AJT etc.) each ship_to row already carries its own BDE; the
+            # frontend keys its display tree by region+bde.  Without BDE
+            # here, every NSW row for JAX 731942 collapses into a single
+            # group whose label is whichever row landed first — so
+            # LUTTRELL's 26 ship_tos and Alessio's 21 show up under one
+            # BDE only.
+            key = r["region"] + "|" + r["sold_to"] + "|" + (r["bde"] or "-")
             if key not in grp_map:
                 grp_map[key] = {
                     "key": key,
