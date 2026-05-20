@@ -6562,12 +6562,15 @@ def meeting_post():
 
         if not ship_to:
             return jsonify({"error": "ship_to is required"}), 400
-        if not notes:
-            return jsonify({"error": "notes is required"}), 400
-        if not purpose:
-            return jsonify({"error": "visit_purpose is required"}), 400
-        if purpose not in ("Promotion", "Product introduction",
-                           "Claim support", "Rebate follow-up", "Other"):
+        # Prep-only submissions are allowed: a row that only carries
+        # Meeting Preparation (pre-visit) is valid.  A row with notes
+        # (a real visit log) still requires purpose.
+        if not notes and not prep:
+            return jsonify({"error": "notes or prep_notes is required"}), 400
+        if notes and not purpose:
+            return jsonify({"error": "visit_purpose is required when notes is provided"}), 400
+        if purpose and purpose not in ("Promotion", "Product introduction",
+                                       "Claim support", "Rebate follow-up", "Other"):
             return jsonify({"error": "invalid visit_purpose"}), 400
 
         # Visit date: YYYY-MM-DD; default to today if blank/invalid.

@@ -432,7 +432,9 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         </div>
 
         <div class="field col-full">
-          <label>Purpose of visit <span class="req">*</span></label>
+          <label>Purpose of visit
+            <span style="color:#9ca3af;font-weight:400;">(required for an actual visit log · skip if you're only saving Meeting Preparation)</span>
+          </label>
           <div class="purpose-cards">
             <input type="radio" id="purp-promo"  name="visit_purpose" value="Promotion">
             <label for="purp-promo"  class="purpose-card">Promotion</label>
@@ -457,8 +459,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         </div>
 
         <div class="field col-full">
-          <label>Meeting notes <span class="req">*</span></label>
-          <textarea id="fNotes" required placeholder="What happened — orders, complaints, conversation summary"></textarea>
+          <label>Meeting notes
+            <span style="color:#9ca3af;font-weight:400;">(required for an actual visit log · skip if you're only saving Meeting Preparation)</span>
+          </label>
+          <textarea id="fNotes" placeholder="What happened — orders, complaints, conversation summary"></textarea>
         </div>
 
         <div class="field col-full">
@@ -1208,9 +1212,20 @@ fForm.addEventListener("submit", async (e) => {
     fMsg.textContent = "Please pick a Ship-to from the palette ←";
     fMsg.className = "err"; return;
   }
+  // Validation rule: either Meeting notes (= actual visit log) OR
+  // Meeting Preparation must have content.  When the user filled in
+  // Meeting notes we treat it as a real visit log and require
+  // Purpose; otherwise (prep-only) Purpose is optional.
+  const prepVal  = document.getElementById("fPrep").value.trim();
+  const notesVal = document.getElementById("fNotes").value.trim();
   const purposeEl = document.querySelector('input[name="visit_purpose"]:checked');
-  if (!purposeEl) {
-    fMsg.textContent = "Purpose of visit is required"; fMsg.className = "err"; return;
+  if (!notesVal && !prepVal){
+    fMsg.textContent = "Fill in Meeting Preparation or Meeting notes";
+    fMsg.className = "err"; return;
+  }
+  if (notesVal && !purposeEl){
+    fMsg.textContent = "Purpose of visit is required when Meeting notes is filled";
+    fMsg.className = "err"; return;
   }
 
   fMsg.textContent = "Submitting…"; fMsg.className = "";
@@ -1219,7 +1234,7 @@ fForm.addEventListener("submit", async (e) => {
   fd.append("visit_date",    fVisitDate.value);
   fd.append("sold_to",       _selectedShop.sold_to_name || _selectedShop.sold_to || "");
   fd.append("ship_to",       _selectedShop.ship_to);
-  fd.append("visit_purpose", purposeEl.value);
+  fd.append("visit_purpose", purposeEl ? purposeEl.value : "");
   fd.append("met_person",    document.getElementById("fMet").value);
   fd.append("notes",         document.getElementById("fNotes").value);
   fd.append("next_action",   document.getElementById("fNext").value);
