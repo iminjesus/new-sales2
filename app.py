@@ -5446,6 +5446,7 @@ def api_rebate_data():
     stg_filter    = request.args.get("sold_to_group", "ALL")
     region_filter = request.args.get("region",        "ALL").upper()
     sales_tbl     = _rebate_sales_table(request.args.get("month"))  # source table per month button
+    export_fmt    = (request.args.get("export") or "").strip().lower()  # 'xlsx' -> download
     # BDE filter — matches the role-scope lock used by graph/map views.
     # Comparison is case-insensitive on salesman_name so name casing in
     # the customer master doesn't make a BDE invisible to themselves.
@@ -5959,6 +5960,56 @@ def api_rebate_data():
         # Apply region filter to rows (after computing region_totals)
         if region_filter != "ALL":
             rows = [r for r in rows if (r["region"] or "").strip().upper() == region_filter]
+
+        # Excel download of exactly what the current filters produced (reuses
+        # the same computed rows + HQ/VR box, so it matches the screen).
+        if export_fmt == "xlsx":
+            from io import BytesIO
+            from datetime import date
+            from flask import Response
+            wb = Workbook()
+            ws = wb.active; ws.title = "Rebate"
+            hdr = ["Region", "BDE", "Sold-To", "Sold-To Name", "Ship-To",
+                   "Ship-To Name", "Brand", "Type", "Structure", "Qty",
+                   "Amount", "Rate %", "Next %", "Need Qty", "Need Amt",
+                   "Rebate", "In Total"]
+            ws.append(hdr)
+            for cell in ws[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", fgColor="1E3A5F")
+            for r in sorted(rows, key=lambda x: (x["region"] or "", x["bde"] or "",
+                                                 x["sold_to_name"] or "", -x["actual"])):
+                ws.append([
+                    r["region"], r["bde"], r["sold_to"], r["sold_to_name"],
+                    r["ship_to"], r["ship_to_name"], r["brand"],
+                    "Store" if r["scope"] == "SR" else r["scope"],
+                    r["structure_name"], r["actual_qty"], r["actual_amt"],
+                    r["curr_rate"],
+                    r["next_rate"]   if r["next_rate"]   is not None else "",
+                    r["needed_qty"]  if r["needed_qty"]  is not None else "",
+                    r["needed_amt"]  if r["needed_amt"]  is not None else "",
+                    r["curr_rebate"], "Y" if r.get("rollup", True) else "N",
+                ])
+            # HQ / VR rebate (the top box) on its own sheet
+            ws2 = wb.create_sheet("HQ_VR Rebate")
+            ws2.append(["Sold-To", "Sold-To Name", "Group", "Rebate", "Detail"])
+            for c in ws2[1]:
+                c.font = Font(bold=True, color="FFFFFF")
+                c.fill = PatternFill("solid", fgColor="BE123C")
+            for h in hq_box_out["items"]:
+                detail = "; ".join(f'{p["structure_name"]} {p["rate"]}% = {p["rebate"]}'
+                                   for p in h.get("parts", []))
+                ws2.append([h["sold_to"], h["sold_to_name"], h.get("sold_to_group", ""),
+                            h["rebate"], detail])
+            ws2.append([])
+            ws2.append(["TOTAL", "", "", hq_box_out["total"], ""])
+            bio = BytesIO(); wb.save(bio); bio.seek(0)
+            mon = (request.args.get("month") or "thismonth")
+            fname = f"rebate_{mon}_{date.today().isoformat()}.xlsx"
+            return Response(
+                bio.getvalue(),
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": f"attachment;filename={fname}"})
 
         # ?? 8. Group by (region, sold_to) with brand sub-groups ??????????????
         grp_map = {}

@@ -141,6 +141,10 @@ tr.ship-row td:first-child{padding-left:28px}
       <button class="rbtn m-btn"         data-month="2604"      onclick="setMonth('2604')">Apr</button>
     </div>
   </div>
+  <div style="margin-left:auto;align-self:flex-end">
+    <button class="rbtn" style="background:#16a34a;color:#fff;border-color:transparent"
+            onclick="exportXLSX()" title="현재 검색/필터 결과를 엑셀로 다운로드">⬇ Excel</button>
+  </div>
 </div>
 
 <div id="loading">Loading rebate data…</div>
@@ -577,11 +581,12 @@ function badgePairHtml(badge1, badge2){
   return `${b1} ${terrBadgeHtml(badge2)}`;
 }
 
-// ─── export – server generates CSV ───────────────────────────────────────────
-function exportCSV(){
+// ─── export – server builds an .xlsx from the current filters/search ─────────
+function exportXLSX(){
   const qs = buildQS(0);
   qs.set("page_size", 99999);
-  window.location = `/api/rebate_export?${qs}`;
+  qs.set("export", "xlsx");
+  window.location = `/api/rebate_data?${qs}`;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
