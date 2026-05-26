@@ -5608,22 +5608,20 @@ def api_rebate_data():
         # helpers above): _SR -> per ship_to; _HQ/_VR/_IT/_WTY -> per sold_to
         # on the full sold_to total; no suffix -> per sold_to (BDE-grouped).
 
-        def _atp_variants(struct_name, brand):
-            """Return list of (atp_brand, atp_line, brand_key, badges) to process separately.
-            AL_ATP: two entries ??PCLT and TBR (each HK+LF combined).
-            HK_ATP: one entry ??HK brand, TBR line.
-            Others: one entry ??normal brand/unit (resolved later).
+        def _rebate_brand_line(struct_name):
+            """From the structure name tokens decide which sales to count:
+              token0 brand : HK | LF | ALL(=HK+LF)
+              token1 line  : PCLT | TBR | ALL(=all lines)
+            Returns (brands_list, line_filter_or_None, brand_key_for_display).
             """
-            if "ATP" not in struct_name:
-                return [(None, None, brand, None)]   # badges resolved later
-            if struct_name.startswith("AL_ATP"):
-                return [
-                    (None,  "PCLT", "PCLT", ["PCLT", "Q"]),   # HK+LF combined
-                    ("HK",  "TBR",  "TBR",  ["TBR",  "Q"]),   # HK only
-                ]
-            if struct_name.startswith("HK_ATP"):
-                return [("HK", "TBR", "HK_TBR", ["HK", "TBR", "Q"])]
-            return [(None, None, brand, None)]
+            tk = struct_name.split("_")
+            bt = (tk[0] if len(tk) > 0 else "ALL").upper()
+            lt = (tk[1] if len(tk) > 1 else "ALL").upper()
+            brands    = ["HK", "LF"] if bt == "ALL" else [bt]
+            line_filt = lt if lt in ("PCLT", "TBR") else None
+            brand_key = "TTL" if bt == "ALL" else bt
+            return brands, line_filt, brand_key
+
 
         rows = []
         for c in customers:
@@ -5641,20 +5639,17 @@ def api_rebate_data():
             is_ship_to_struct = (scope == "SR")
             is_secondary      = scope in ("HQ", "VR", "IT", "WTY")
 
-            for atp_brand, atp_line, brand_key, badges_override in _atp_variants(struct, brand):
+            for brands, line_filt, brand_key in [_rebate_brand_line(struct)]:
 
-                # Collect ship_tos for this variant
-                if atp_line:
-                    if atp_brand:   # HK_ATP: HK brand, specific line
-                        ship_set = ship_idx_line.get((sold_to, atp_brand, atp_line), set()).copy()
-                    else:           # AL_ATP: HK+LF brands, specific line (PCLT or TBR)
-                        ship_set = (ship_idx_line.get((sold_to, "HK", atp_line), set()) |
-                                    ship_idx_line.get((sold_to, "LF", atp_line), set()))
-                elif brand_key == "TTL":
-                    ship_set = (ship_idx.get((sold_to, "HK"), set()) |
-                                ship_idx.get((sold_to, "LF"), set()))
-                else:
-                    ship_set = ship_idx.get((sold_to, brand_key), set()).copy()
+                # ship_tos with sales for this structure's brand(s) and line.
+                # line_filt PCLT/TBR -> only that line (material prefix 1,2=PCLT
+                # 3=TBR); None -> all lines (brand-level totals).
+                ship_set = set()
+                for _br in brands:
+                    if line_filt:
+                        ship_set |= ship_idx_line.get((sold_to, _br, line_filt), set())
+                    else:
+                        ship_set |= ship_idx.get((sold_to, _br), set())
 
                 # Only keep ship_tos that are known in the customer table
                 ship_set = {sh for sh in ship_set if sh in ship_cust_map}
@@ -5688,33 +5683,22 @@ def api_rebate_data():
                     if sold_to_region == "-":
                         sold_to_region = state_cnt.most_common(1)[0][0] if state_cnt else "-"
 
-                # Badge labels for UI
-                if badges_override is not None:
-                    badges = list(badges_override)
-                else:
-                    badges = [brand_key, unit]
-                # Tag secondary scopes (HQ/VR/IT/WTY) so they read as a
-                # distinct rebate program in the UI.
+                # Badge labels for UI: brand, then line (PCLT/TBR) if filtered,
+                # then unit; secondary scopes (HQ/VR/IT/WTY) get a scope tag.
+                badges = [brand_key] + ([line_filt] if line_filt else []) + [unit]
                 if is_secondary:
                     badges = badges + [scope]
 
-                def _get_sales(sh, _atp_brand=atp_brand, _atp_line=atp_line, _brand_key=brand_key):
-                    """Return (qty, amt) for this ship_to for this variant."""
-                    if _atp_line:
-                        if _atp_brand:
-                            d = ship_sales_line.get((sold_to, sh, _atp_brand, _atp_line), {"qty": 0.0, "amt": 0.0})
-                            return d["qty"], d["amt"]
-                        else:   # AL_ATP: HK+LF brands, single line (PCLT or TBR)
-                            hk = ship_sales_line.get((sold_to, sh, "HK", _atp_line), {"qty": 0.0, "amt": 0.0})
-                            lf = ship_sales_line.get((sold_to, sh, "LF", _atp_line), {"qty": 0.0, "amt": 0.0})
-                            return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
-                    elif _brand_key == "TTL":
-                        hk = ship_sales.get((sold_to, sh, "HK"), {"qty": 0.0, "amt": 0.0})
-                        lf = ship_sales.get((sold_to, sh, "LF"), {"qty": 0.0, "amt": 0.0})
-                        return hk["qty"] + lf["qty"], hk["amt"] + lf["amt"]
-                    else:
-                        d = ship_sales.get((sold_to, sh, _brand_key), {"qty": 0.0, "amt": 0.0})
-                        return d["qty"], d["amt"]
+                def _get_sales(sh, _brands=brands, _line=line_filt):
+                    """(qty, amt) summed over this structure's brand(s)/line."""
+                    q = a = 0.0
+                    for _br in _brands:
+                        if _line:
+                            d = ship_sales_line.get((sold_to, sh, _br, _line), {"qty": 0.0, "amt": 0.0})
+                        else:
+                            d = ship_sales.get((sold_to, sh, _br), {"qty": 0.0, "amt": 0.0})
+                        q += d["qty"]; a += d["amt"]
+                    return q, a
 
                 if is_ship_to_struct:
                     # _SR → per ship_to, but ship_tos sharing a map Group are
@@ -6060,10 +6044,10 @@ def api_rebate_data():
                 g["grp_actual"]      += r["actual"]
                 g["grp_actual_qty"]  += r["actual_qty"]
                 g["grp_actual_amt"]  += r["actual_amt"]
-            # Brand sub-group key includes scope so an _SR block and an _HQ
-            # block of the same brand render as separate rows (731942: HK SR
-            # ship_tos vs HK HQ total).
-            bkey = r["brand"] + "|" + r["scope"]
+            # One display block per structure, so different structures that
+            # share a brand_key (e.g. two TTL/HK_TBR/… or an _SR vs _HQ of the
+            # same brand) never merge into one block.
+            bkey = r["structure_name"]
             if bkey not in g["brands"]:
                 g["brands"][bkey] = {
                     "brand": r["brand"], "unit": r["unit"],
