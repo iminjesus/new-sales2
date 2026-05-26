@@ -465,6 +465,17 @@ function renderPage(data){
 
   // ── Render 4-level hierarchy ─────────────────────────────────────────────
   let bodyHtml = "";
+
+  // Grand total across all regions shown (already double-count-safe: region
+  // node totals only include the counted/rollup rows).
+  let gQty = 0, gAmt = 0, gReb = 0;
+  regionMap.forEach(rn => { gQty += rn.qty; gAmt += rn.amt; gReb += rn.rebate; });
+  bodyHtml += `<tr class="region-hdr" style="background:#0b1220">
+    <td colspan="12"><b>TOTAL · all regions shown</b>
+      <span style="font-weight:400;margin-left:12px;opacity:.85"><span class="lbl" style="color:rgba(255,255,255,.5)">qty</span>${fmt(gQty)} u &nbsp;·&nbsp; <span class="lbl" style="color:rgba(255,255,255,.5)">amt</span>$${fmt(gAmt)} &nbsp;·&nbsp; <span class="lbl" style="color:rgba(255,255,255,.5)">rebate</span>$${fmt(gReb)}</span>
+    </td>
+  </tr>`;
+
   sortedRegions.forEach(([rKey, rNode]) => {
     bodyHtml += `<tr class="region-hdr">
       <td colspan="12"><b>${esc(rNode.region)}</b>
