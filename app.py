@@ -5455,6 +5455,20 @@ def api_rebate_data():
         if not customers:
             return jsonify([])
 
+        # Ship_to -> Group map (for _SR group summing).  The map lists
+        # individual ship_tos with a manual Group number for SR structures.
+        # ship_tos sharing a Group are summed and the tier is applied to the
+        # group total; every member then displays that same group figure
+        # (even when members sit under different BDEs).
+        ship_grp = {}   # (sold_to, structure_name, ship_to) -> group label
+        cur.execute("""
+            SELECT sold_to, structure_name, ship_to, grp
+            FROM rebate_customer_map
+            WHERE grp IS NOT NULL AND grp <> '' AND ship_to IS NOT NULL AND ship_to <> ''
+        """)
+        for r in cur.fetchall():
+            ship_grp[(str(r["sold_to"]), r["structure_name"], str(r["ship_to"]))] = str(r["grp"])
+
         # ?? 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ??
         # Brand comes from sales_thismonth.brand directly (SAP loader fills it).
         # Line is derived from material prefix: 1xxx/2xxx → PCLT, 3xxx → TBR.
@@ -5671,20 +5685,48 @@ def api_rebate_data():
                         return d["qty"], d["amt"]
 
                 if is_ship_to_struct:
-                    # _SR → one row per ship_to (BDE from each ship_to's own record)
-                    calc_items = []
+                    # _SR → per ship_to, but ship_tos sharing a map Group are
+                    # summed and the tier applied to the group total.  Every
+                    # member then displays that same group figure (qty/amt/
+                    # rate/rebate) while staying under its own BDE.  A ship_to
+                    # with no Group is its own singleton.
+                    grp_totals = {}   # group_key -> {qty, amt, members:[...]}
                     for sh in sorted(ship_set):
                         q, a = _get_sales(sh)
                         sh_info_local = ship_cust_map.get(sh, {})
-                        calc_items.append({
-                            "sh":           sh,
-                            "qty":          q,
-                            "amt":          a,
-                            "bde":          sh_info_local.get("bde",   "-") or sold_to_bde,
-                            "region":       sh_info_local.get("state", "-") or sold_to_region,
-                            "sold_to_basis": False,
-                            "ship_details": [],
+                        gk = ship_grp.get((sold_to, struct, sh))
+                        group_key = ("G", gk) if gk else ("S", sh)
+                        gt = grp_totals.setdefault(group_key, {"qty": 0.0, "amt": 0.0, "members": []})
+                        gt["qty"] += q
+                        gt["amt"] += a
+                        gt["members"].append({
+                            "sh":     sh,
+                            "bde":    sh_info_local.get("bde",   "-") or sold_to_bde,
+                            "region": sh_info_local.get("state", "-") or sold_to_region,
                         })
+                    calc_items = []
+                    for group_key, gt in grp_totals.items():
+                        members = gt["members"]
+                        # Count the group's rebate ONCE toward region/BDE totals,
+                        # attributed to the BDE that owns the most members; the
+                        # other members show the same figure but are display-only
+                        # so a cross-BDE group isn't summed twice.
+                        dom_bde = Counter(m["bde"] for m in members).most_common(1)[0][0]
+                        primary_taken = False
+                        for m in members:
+                            is_primary = (not primary_taken) and (m["bde"] == dom_bde)
+                            if is_primary:
+                                primary_taken = True
+                            calc_items.append({
+                                "sh":            m["sh"],
+                                "qty":           gt["qty"],   # group total → same number for all members
+                                "amt":           gt["amt"],
+                                "bde":           m["bde"],
+                                "region":        m["region"],
+                                "sold_to_basis": False,
+                                "ship_details":  [],
+                                "rollup":        is_primary,
+                            })
                 elif is_secondary:
                     # _HQ/_VR/_IT/_WTY → a single headquarters-level rebate on the
                     # FULL sold_to total (all ship_tos summed), NOT split per BDE.
@@ -5781,6 +5823,7 @@ def api_rebate_data():
                     row_region  = item["region"]
                     row_stbasis = item["sold_to_basis"]
                     row_details = item["ship_details"]
+                    row_rollup  = item.get("rollup", True)
 
                     actual = actual_qty if unit == "Q" else actual_amt
 
@@ -5803,6 +5846,7 @@ def api_rebate_data():
                         "badges":         badges,
                         "structure_name": struct,
                         "scope":          scope,
+                        "rollup":         row_rollup,
                         "sold_to_basis":  row_stbasis,
                         "ship_details":   row_details,
                         "unit":           unit,
@@ -5845,11 +5889,14 @@ def api_rebate_data():
         REGION_KEYS = ["NSW", "QLD", "VIC", "WA"]
         region_totals = {rk: {"rebate": 0.0, "qty": 0.0, "amt": 0.0} for rk in REGION_KEYS}
         for r in rows:
+            if not r.get("rollup", True):
+                continue   # display-only _SR group duplicate
             rk = (r["region"] or "").strip().upper()
             if rk in region_totals:
                 region_totals[rk]["rebate"] += r["curr_rebate"]
-                region_totals[rk]["qty"]    += r["actual_qty"]
-                region_totals[rk]["amt"]    += r["actual_amt"]
+                if r["scope"] in ("SR", "BASE"):   # secondary scope sales overlap SR/base
+                    region_totals[rk]["qty"] += r["actual_qty"]
+                    region_totals[rk]["amt"] += r["actual_amt"]
         for rk in region_totals:
             region_totals[rk] = {k: round(v, 2) for k, v in region_totals[rk].items()}
 
@@ -5858,7 +5905,7 @@ def api_rebate_data():
             "has_next":  sum(1 for r in rows if r["next_rate"] is not None and r["actual"] > 0),
             "max_tier":  sum(1 for r in rows if r["next_rate"] is None and r["curr_rate"] > 0),
             "zero_sales": sum(1 for r in rows if r["actual"] == 0),
-            "est_total":  round(sum(r["curr_rebate"] for r in rows), 2),
+            "est_total":  round(sum(r["curr_rebate"] for r in rows if r.get("rollup", True)), 2),
             "region_totals": region_totals,
         }
 
@@ -5889,16 +5936,22 @@ def api_rebate_data():
                     "brands": {},
                 }
             g = grp_map[key]
+            # rollup=False rows are display-only duplicates: members of an _SR
+            # Group that aren't the group's primary BDE row.  They still render
+            # (so every ship_to shows the shared group figure) but must not be
+            # summed into the totals, else a multi-member group would multiply.
+            do_rollup = r.get("rollup", True)
             # Secondary scopes (HQ/VR/IT/WTY) are a separate rebate program on
             # the same underlying sales — count their rebate toward the sold_to
             # total but NOT their qty/amt (those are already counted by the
             # SR/base rows), otherwise the sold_to's sales would double up.
-            g["grp_curr_rebate"] += r["curr_rebate"]
-            g["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
-            if r["scope"] in ("SR", "BASE"):
-                g["grp_actual"]      += r["actual"]
-                g["grp_actual_qty"]  += r["actual_qty"]
-                g["grp_actual_amt"]  += r["actual_amt"]
+            if do_rollup:
+                g["grp_curr_rebate"] += r["curr_rebate"]
+                g["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
+                if r["scope"] in ("SR", "BASE"):
+                    g["grp_actual"]      += r["actual"]
+                    g["grp_actual_qty"]  += r["actual_qty"]
+                    g["grp_actual_amt"]  += r["actual_amt"]
             # Brand sub-group key includes scope so an _SR block and an _HQ
             # block of the same brand render as separate rows (731942: HK SR
             # ship_tos vs HK HQ total).
@@ -5913,11 +5966,12 @@ def api_rebate_data():
                     "grp_curr_rebate": 0.0, "grp_est": 0.0, "items": [],
                 }
             b = g["brands"][bkey]
-            b["grp_actual"]      += r["actual"]
-            b["grp_actual_qty"]  += r["actual_qty"]
-            b["grp_actual_amt"]  += r["actual_amt"]
-            b["grp_curr_rebate"] += r["curr_rebate"]
-            b["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
+            if do_rollup:
+                b["grp_actual"]      += r["actual"]
+                b["grp_actual_qty"]  += r["actual_qty"]
+                b["grp_actual_amt"]  += r["actual_amt"]
+                b["grp_curr_rebate"] += r["curr_rebate"]
+                b["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
             b["items"].append(r)
 
         # Convert brands dict to sorted list (HK → LF → TTL; within a brand,
