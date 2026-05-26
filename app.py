@@ -5318,6 +5318,12 @@ def _rebate_scope(struct):
     return "SR" if suf == "SR" else (suf or "BASE")
 
 
+# Sales order types (sales_thismonth.so_type) that count toward rebates.
+# Only these are included in every rebate query / diagnostic below.
+REBATE_SO_TYPES = ("ZWH1", "ZCR1", "ZDR1", "ZDF1", "ZRE1", "ZREN")
+_REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
+
+
 @app.get("/api/rebate_structure_check")
 def api_rebate_structure_check():
     """Diagnostic: what rebate structure is a sold_to mapped to, and how
@@ -5365,7 +5371,7 @@ def api_rebate_structure_check():
             "           SELECT 1 FROM sales_thismonth s "
             "           WHERE s.ship_to = c.ship_to "
             "             AND s.brand IN ('HK','LF') "
-            "             AND (s.so_type IS NULL OR s.so_type <> 'ZWH2')"
+            "             AND s.so_type IN " + _REBATE_SO_TYPES_IN + " "
             "       ) THEN c.ship_to END) AS with_sales_thismonth "
             "FROM customer c "
             "WHERE c.sold_to = %s "
@@ -5385,7 +5391,7 @@ def api_rebate_structure_check():
             "LEFT JOIN customer c ON c.ship_to = s.ship_to "
             "WHERE s.sold_to = %s "
             "  AND s.brand IN ('HK','LF') "
-            "  AND (s.so_type IS NULL OR s.so_type <> 'ZWH2') "
+            "  AND s.so_type IN " + _REBATE_SO_TYPES_IN + " "
             "GROUP BY TRIM(c.salesman_name) "
             "ORDER BY sales_ship_tos DESC",
             (sold,))
@@ -5491,7 +5497,7 @@ def api_rebate_data():
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
             FROM sales_thismonth s
             WHERE s.brand IN ('HK','LF')
-              AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
+              AND s.so_type IN """ + _REBATE_SO_TYPES_IN + """
             GROUP BY s.sold_to, s.ship_to, s.brand,
                      CASE
                        WHEN LEFT(s.material,1) IN ('1','2') THEN 'PCLT'
@@ -6074,7 +6080,7 @@ def api_rebate_export():
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
             FROM sales_thismonth s
             WHERE s.brand IN ('HK','LF')
-              AND (s.so_type IS NULL OR s.so_type != 'ZWH2')
+              AND s.so_type IN """ + _REBATE_SO_TYPES_IN + """
             GROUP BY s.sold_to, s.ship_to, s.brand
         """)
         ship_sales = {}; ship_idx = {}
