@@ -17,8 +17,8 @@ Category code convention (underscore separated):
              (absent)  -> calculate per SOLD_TO
              HQ/VR/IT/WTY/…           -> calculate per SOLD_TO
 
-DB connection reuses the same env vars app.py uses
-(DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME).
+DB connection reuses the same env vars / defaults as app.py's get_connection
+(DB_HOST=127.0.0.1, DB_PORT=3306, DB_USER=root, DB_PASS='', DB_NAME=my_new_database).
 """
 import os, csv, sys, argparse
 
@@ -149,9 +149,10 @@ def main():
     conn = mysql.connector.connect(
         host=os.getenv("DB_HOST", "127.0.0.1"),
         port=int(os.getenv("DB_PORT", "3306")),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER", "root"),
+        password=os.getenv("DB_PASS", ""),
+        database=os.getenv("DB_NAME", "my_new_database"),
+        use_pure=True,
     )
     cur = conn.cursor()
 
