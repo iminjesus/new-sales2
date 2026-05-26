@@ -277,12 +277,26 @@ function renderPage(data){
     </div>`;
   }).join("");
 
+  // HQ / VR rebate (Store-rebate accounts only) — shown separately from the
+  // per-State Store-rebate cards.
+  const hq = s.hq_box || {total:0, items:[]};
+  const hqTip = (hq.items || []).slice(0, 30)
+    .map(it => `${esc(it.sold_to_name||it.sold_to)} (${it.sold_to})  $${fmt(it.rebate)}`)
+    .join("&#10;");
+  const hqCard = `<div class="stat-card" title="${hqTip}"
+        style="border-color:#be123c;background:#fff1f2">
+      <div class="label" style="color:#be123c;font-weight:700">HQ / VR Rebate</div>
+      <div class="value" style="color:#be123c;font-size:16px">$${fmt(hq.total)}</div>
+      <div class="label" style="color:#9f1239">${(hq.items||[]).length} sold-to</div>
+    </div>`;
+
   document.getElementById("summary").innerHTML = `
     ${regionCards}
     <div class="stat-card total-card" style="cursor:pointer" onclick="setRegion('ALL')">
       <div class="label">4-Region Total</div>
       <div class="value" style="font-size:16px">$${fmt(grandTotal)}</div>
-    </div>`;
+    </div>
+    ${hqCard}`;
 
   if(!data.groups.length){
     document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
@@ -319,18 +333,10 @@ function renderPage(data){
     const bKey = rKey + "|" + (g.bde || "-");
     if (!rNode.bdes.has(bKey)) rNode.bdes.set(bKey, {bde:g.bde||"-", rKey, groups:[], qty:0, amt:0, rebate:0});
     const bNode = rNode.bdes.get(bKey);
-    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR.
-    // Secondary scopes (HQ/VR/IT/WTY) are a separate rebate program on the same
-    // sales — count their rebate but NOT their qty/amt (already counted by the
-    // SR/base block) so the region/BDE sales totals don't double up.
+    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR
     g.brands.forEach(b => {
-      const secondary = b.scope && b.scope!=="SR" && b.scope!=="BASE";
-      if(!secondary){
-        rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt;
-        bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt;
-      }
-      rNode.rebate += b.grp_curr_rebate;
-      bNode.rebate += b.grp_curr_rebate;
+      rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt; rNode.rebate += b.grp_curr_rebate;
+      bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt; bNode.rebate += b.grp_curr_rebate;
     });
     bNode.groups.push(g);
   });
@@ -475,9 +481,13 @@ function renderPage(data){
         </tr>`;
         if (isOpen) {
           g.brands.forEach(b => {
+            const scopeTitle = b.scope==="SR" ? "Store rebate"
+                             : (b.scope && b.scope!=="BASE") ? b.scope+" rebate" : "";
+            const titleHtml = scopeTitle
+              ? `<span style="font-weight:700;color:#1e3a8a;margin-right:6px">${scopeTitle}</span>` : "";
             bodyHtml += `<tr class="brand-hdr">
               <td></td>
-              <td colspan="2" style="padding-left:56px">${badgesHtml(b.badges)}
+              <td colspan="2" style="padding-left:56px">${titleHtml}${badgesHtml(b.badges)}
                 <span style="font-size:11px;color:#6b7280;margin-left:6px">${esc(b.structure_name)}</span>
               </td>
               <td></td>

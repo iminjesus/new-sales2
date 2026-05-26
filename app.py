@@ -5469,6 +5469,14 @@ def api_rebate_data():
         for r in cur.fetchall():
             ship_grp[(str(r["sold_to"]), r["structure_name"], str(r["ship_to"]))] = str(r["grp"])
 
+        # sold_tos that carry a Store rebate (_SR) structure.  For these, the
+        # secondary HQ/VR/IT/WTY rebates are pulled out of the per-BDE/State
+        # table and combined into the top summary box instead.  sold_tos with
+        # NO _SR structure keep their HQ/VR in the table (BDE/State as before).
+        sr_sold_tos = {str(c["sold_to"]) for c in customers
+                       if _rebate_is_ship_to(c["structure_name"])}
+        hq_box = {}   # sold_to -> {sold_to, sold_to_name, sold_to_group, rebate, parts:[...]}
+
         # ?? 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ??
         # Brand comes from sales_thismonth.brand directly (SAP loader fills it).
         # Line is derived from material prefix: 1xxx/2xxx → PCLT, 3xxx → TBR.
@@ -5727,35 +5735,38 @@ def api_rebate_data():
                                 "ship_details":  [],
                                 "rollup":        is_primary,
                             })
-                elif is_secondary:
-                    # _HQ/_VR/_IT/_WTY → a single headquarters-level rebate on the
-                    # FULL sold_to total (all ship_tos summed), NOT split per BDE.
-                    # An account like 731942 (JAX) carries an _SR per-ship_to
-                    # structure AND an _HQ structure; the _SR rows are emitted
-                    # above and this _HQ row is shown separately (own scope block).
+                elif is_secondary and sold_to in sr_sold_tos:
+                    # _HQ/_VR/_IT/_WTY for an account that ALSO has a Store
+                    # rebate (_SR): compute one rebate on the FULL sold_to total
+                    # and fold it into the top summary box (combined across HQ/
+                    # VR/etc).  No per-BDE/State table rows for these.
                     full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
                     full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
                     tot_q = tot_a = 0.0
-                    hq_details = []
-                    for sh in sorted(full_ship_set):
+                    for sh in full_ship_set:
                         q, a = _get_sales(sh)
                         tot_q += q; tot_a += a
-                        sh_info_local = ship_cust_map.get(sh, {})
-                        hq_details.append({
-                            "ship_to":      sh,
-                            "ship_to_name": sh_info_local.get("name") or sh,
-                            "actual_qty":   round(q, 2),
-                            "actual_amt":   round(a, 2),
-                        })
-                    calc_items = [{
-                        "sh":            sold_to,
-                        "qty":           tot_q,
-                        "amt":           tot_a,
-                        "bde":           sold_to_bde,
-                        "region":        sold_to_region,
-                        "sold_to_basis": True,
-                        "ship_details":  hq_details,
-                    }]
+                    hq_actual = tot_q if unit == "Q" else tot_a
+                    hq_curr, _ = _calc_tier(hq_actual, tiers, top_order)
+                    hq_rebate = round(tot_a * hq_curr["rate"] / 100, 2)
+                    box = hq_box.setdefault(sold_to, {
+                        "sold_to":       sold_to,
+                        "sold_to_name":  c["sold_to_name"] or st_info.get("name") or sold_to,
+                        "sold_to_group": sold_to_group,
+                        "rebate":        0.0,
+                        "parts":         [],
+                    })
+                    box["rebate"] += hq_rebate
+                    box["parts"].append({
+                        "scope":          scope,
+                        "brand":          brand_key,
+                        "structure_name": struct,
+                        "rate":           hq_curr["rate"],
+                        "actual_qty":     round(tot_q, 2),
+                        "actual_amt":     round(tot_a, 2),
+                        "rebate":         hq_rebate,
+                    })
+                    calc_items = []   # nothing in the per-BDE/State table
                 else:
                     # Group ship_tos by their BDE ??one row per BDE per sold_to.
                     # This ensures every salesman sees their own portion of shared accounts
@@ -5885,6 +5896,19 @@ def api_rebate_data():
         elif show == "ZERO":
             rows = [r for r in rows if r["actual"] == 0]
 
+        # Top-box HQ/VR rebate (Store-rebate accounts only).  Respects the
+        # search filter (sold_to name/code) but NOT region/BDE — HQ ignores
+        # State/BDE by design.
+        hq_items = sorted(hq_box.values(), key=lambda x: x["rebate"], reverse=True)
+        if search:
+            hq_items = [h for h in hq_items
+                        if search in (h["sold_to_name"] or "").lower()
+                        or search in str(h["sold_to"])]
+        hq_box_out = {
+            "total": round(sum(h["rebate"] for h in hq_items), 2),
+            "items": [{**h, "rebate": round(h["rebate"], 2)} for h in hq_items],
+        }
+
         # ?? 7. Summary stats (over all filtered rows) ?????????????????????????
         REGION_KEYS = ["NSW", "QLD", "VIC", "WA"]
         region_totals = {rk: {"rebate": 0.0, "qty": 0.0, "amt": 0.0} for rk in REGION_KEYS}
@@ -5894,9 +5918,8 @@ def api_rebate_data():
             rk = (r["region"] or "").strip().upper()
             if rk in region_totals:
                 region_totals[rk]["rebate"] += r["curr_rebate"]
-                if r["scope"] in ("SR", "BASE"):   # secondary scope sales overlap SR/base
-                    region_totals[rk]["qty"] += r["actual_qty"]
-                    region_totals[rk]["amt"] += r["actual_amt"]
+                region_totals[rk]["qty"]    += r["actual_qty"]
+                region_totals[rk]["amt"]    += r["actual_amt"]
         for rk in region_totals:
             region_totals[rk] = {k: round(v, 2) for k, v in region_totals[rk].items()}
 
@@ -5907,6 +5930,7 @@ def api_rebate_data():
             "zero_sales": sum(1 for r in rows if r["actual"] == 0),
             "est_total":  round(sum(r["curr_rebate"] for r in rows if r.get("rollup", True)), 2),
             "region_totals": region_totals,
+            "hq_box": hq_box_out,
         }
 
         # Apply region filter to rows (after computing region_totals)
@@ -5940,18 +5964,14 @@ def api_rebate_data():
             # Group that aren't the group's primary BDE row.  They still render
             # (so every ship_to shows the shared group figure) but must not be
             # summed into the totals, else a multi-member group would multiply.
+            # (HQ/VR of _SR accounts never reach here — they go to the top box.)
             do_rollup = r.get("rollup", True)
-            # Secondary scopes (HQ/VR/IT/WTY) are a separate rebate program on
-            # the same underlying sales — count their rebate toward the sold_to
-            # total but NOT their qty/amt (those are already counted by the
-            # SR/base rows), otherwise the sold_to's sales would double up.
             if do_rollup:
                 g["grp_curr_rebate"] += r["curr_rebate"]
                 g["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
-                if r["scope"] in ("SR", "BASE"):
-                    g["grp_actual"]      += r["actual"]
-                    g["grp_actual_qty"]  += r["actual_qty"]
-                    g["grp_actual_amt"]  += r["actual_amt"]
+                g["grp_actual"]      += r["actual"]
+                g["grp_actual_qty"]  += r["actual_qty"]
+                g["grp_actual_amt"]  += r["actual_amt"]
             # Brand sub-group key includes scope so an _SR block and an _HQ
             # block of the same brand render as separate rows (731942: HK SR
             # ship_tos vs HK HQ total).
