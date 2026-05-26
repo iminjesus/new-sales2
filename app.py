@@ -5990,6 +5990,20 @@ def api_rebate_data():
                     r["needed_amt"]  if r["needed_amt"]  is not None else "",
                     r["curr_rebate"], "Y" if r.get("rollup", True) else "N",
                 ])
+            # Sum-safe TOTAL: counts each _SR group once (rollup rows only) so
+            # cross-State/BDE group duplicates ("In Total"=N) aren't added twice.
+            counted = [r for r in rows if r.get("rollup", True)]
+            tot_qty = round(sum(r["actual_qty"]  for r in counted), 2)
+            tot_amt = round(sum(r["actual_amt"]  for r in counted), 2)
+            tot_reb = round(sum(r["curr_rebate"] for r in counted), 2)
+            ws.append([])
+            total_row = ["TOTAL (group dups excluded)", "", "", "", "", "", "", "", "",
+                         tot_qty, tot_amt, "", "", "", "", tot_reb, ""]
+            ws.append(total_row)
+            for cell in ws[ws.max_row]:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill("solid", fgColor="DBEAFE")
+
             # HQ / VR rebate (the top box) on its own sheet
             ws2 = wb.create_sheet("HQ_VR Rebate")
             ws2.append(["Sold-To", "Sold-To Name", "Group", "Rebate", "Detail"])
