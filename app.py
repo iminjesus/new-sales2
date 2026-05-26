@@ -5294,6 +5294,30 @@ def api_rebate_assignment_check():
         return jsonify({"error": str(e)}), 500
 
 
+# ─── Rebate calc-basis helpers ───────────────────────────────────────────────
+# The trailing token of a structure name designates how it is calculated:
+#   _SR                       -> per SHIP_TO  (JAX/AJT, BJ/ABJ, TP/ATP, ACD, APP,
+#                                              ATW, ABZ, Mobis, AVW …)
+#   _HQ / _VR / _IT / _WTY    -> per SOLD_TO, on the full sold_to total
+#   (no suffix)               -> per SOLD_TO  (base structure)
+# This replaces the old hardcoded substring list {AJT,ABJ,ATP,APP,ACD}, which
+# mis-classified HQ/VR variants (e.g. 731942's HK_ALL_AJT_Q_HQ) as per-ship_to
+# and missed the SR variants of ATW/ABZ/Mobis/AVW.
+_REBATE_SUFFIXES = ("SR", "HQ", "VR", "IT", "WTY")
+
+def _rebate_suffix(struct):
+    last = (struct or "").rsplit("_", 1)[-1].upper()
+    return last if last in _REBATE_SUFFIXES else ""
+
+def _rebate_is_ship_to(struct):
+    return _rebate_suffix(struct) == "SR"
+
+def _rebate_scope(struct):
+    """Display/grouping scope: SR | HQ | VR | IT | WTY | BASE."""
+    suf = _rebate_suffix(struct)
+    return "SR" if suf == "SR" else (suf or "BASE")
+
+
 @app.get("/api/rebate_structure_check")
 def api_rebate_structure_check():
     """Diagnostic: what rebate structure is a sold_to mapped to, and how
@@ -5322,12 +5346,17 @@ def api_rebate_structure_check():
             "WHERE sold_to = %s", (sold,))
         structures = cur.fetchall()
 
-        SHIP_TO_STRUCT_KEYS = ('AJT', 'ABJ', 'ATP', 'APP', 'ACD')
+        # Per-ship_to if ANY mapped structure carries the _SR suffix.
         path = "BDE_GROUPED"
         for s in structures:
-            nm = (s.get("structure_name") or "").upper()
-            if any(k in nm for k in SHIP_TO_STRUCT_KEYS):
+            if _rebate_is_ship_to(s.get("structure_name") or ""):
                 path = "PER_SHIP_TO"; break
+        # Annotate each structure with its own calc basis (mixed SR + HQ/VR
+        # accounts like 731942 carry both).
+        for s in structures:
+            s["calc_basis"] = ("SHIP_TO" if _rebate_is_ship_to(s.get("structure_name") or "")
+                               else "SOLD_TO")
+            s["scope"] = _rebate_scope(s.get("structure_name") or "")
 
         cur.execute(
             "SELECT TRIM(c.salesman_name) AS bde, "
@@ -5529,9 +5558,9 @@ def api_rebate_data():
                 nxt = None
             return curr, nxt
 
-        # AJT/ABJ/ATP/APP/ACD: calculate per ship_to; others: aggregate to sold_to level
-        # Determined by structure name (not sold_to_group DB field)
-        SHIP_TO_STRUCT_KEYS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
+        # Calc basis is driven by the structure-name suffix (see _rebate_*
+        # helpers above): _SR -> per ship_to; _HQ/_VR/_IT/_WTY -> per sold_to
+        # on the full sold_to total; no suffix -> per sold_to (BDE-grouped).
 
         def _atp_variants(struct_name, brand):
             """Return list of (atp_brand, atp_line, brand_key, badges) to process separately.
@@ -5562,6 +5591,9 @@ def api_rebate_data():
             unit      = sd["unit"]       # A=Amount, Q=Qty
             tiers     = sd["tiers"]
             top_order = sd["top_order"]
+            scope     = _rebate_scope(struct)            # SR | HQ | VR | IT | WTY | BASE
+            is_ship_to_struct = (scope == "SR")
+            is_secondary      = scope in ("HQ", "VR", "IT", "WTY")
 
             for atp_brand, atp_line, brand_key, badges_override in _atp_variants(struct, brand):
 
@@ -5612,9 +5644,13 @@ def api_rebate_data():
 
                 # Badge labels for UI
                 if badges_override is not None:
-                    badges = badges_override
+                    badges = list(badges_override)
                 else:
                     badges = [brand_key, unit]
+                # Tag secondary scopes (HQ/VR/IT/WTY) so they read as a
+                # distinct rebate program in the UI.
+                if is_secondary:
+                    badges = badges + [scope]
 
                 def _get_sales(sh, _atp_brand=atp_brand, _atp_line=atp_line, _brand_key=brand_key):
                     """Return (qty, amt) for this ship_to for this variant."""
@@ -5634,8 +5670,8 @@ def api_rebate_data():
                         d = ship_sales.get((sold_to, sh, _brand_key), {"qty": 0.0, "amt": 0.0})
                         return d["qty"], d["amt"]
 
-                if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
-                    # One row per ship_to ??BDE comes from each ship_to's own customer record
+                if is_ship_to_struct:
+                    # _SR → one row per ship_to (BDE from each ship_to's own record)
                     calc_items = []
                     for sh in sorted(ship_set):
                         q, a = _get_sales(sh)
@@ -5649,6 +5685,35 @@ def api_rebate_data():
                             "sold_to_basis": False,
                             "ship_details": [],
                         })
+                elif is_secondary:
+                    # _HQ/_VR/_IT/_WTY → a single headquarters-level rebate on the
+                    # FULL sold_to total (all ship_tos summed), NOT split per BDE.
+                    # An account like 731942 (JAX) carries an _SR per-ship_to
+                    # structure AND an _HQ structure; the _SR rows are emitted
+                    # above and this _HQ row is shown separately (own scope block).
+                    full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
+                    full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
+                    tot_q = tot_a = 0.0
+                    hq_details = []
+                    for sh in sorted(full_ship_set):
+                        q, a = _get_sales(sh)
+                        tot_q += q; tot_a += a
+                        sh_info_local = ship_cust_map.get(sh, {})
+                        hq_details.append({
+                            "ship_to":      sh,
+                            "ship_to_name": sh_info_local.get("name") or sh,
+                            "actual_qty":   round(q, 2),
+                            "actual_amt":   round(a, 2),
+                        })
+                    calc_items = [{
+                        "sh":            sold_to,
+                        "qty":           tot_q,
+                        "amt":           tot_a,
+                        "bde":           sold_to_bde,
+                        "region":        sold_to_region,
+                        "sold_to_basis": True,
+                        "ship_details":  hq_details,
+                    }]
                 else:
                     # Group ship_tos by their BDE ??one row per BDE per sold_to.
                     # This ensures every salesman sees their own portion of shared accounts
@@ -5737,6 +5802,7 @@ def api_rebate_data():
                         "brand":          brand_key,
                         "badges":         badges,
                         "structure_name": struct,
+                        "scope":          scope,
                         "sold_to_basis":  row_stbasis,
                         "ship_details":   row_details,
                         "unit":           unit,
@@ -5823,15 +5889,24 @@ def api_rebate_data():
                     "brands": {},
                 }
             g = grp_map[key]
-            g["grp_actual"]      += r["actual"]
-            g["grp_actual_qty"]  += r["actual_qty"]
-            g["grp_actual_amt"]  += r["actual_amt"]
+            # Secondary scopes (HQ/VR/IT/WTY) are a separate rebate program on
+            # the same underlying sales — count their rebate toward the sold_to
+            # total but NOT their qty/amt (those are already counted by the
+            # SR/base rows), otherwise the sold_to's sales would double up.
             g["grp_curr_rebate"] += r["curr_rebate"]
             g["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
-            bkey = r["brand"]
+            if r["scope"] in ("SR", "BASE"):
+                g["grp_actual"]      += r["actual"]
+                g["grp_actual_qty"]  += r["actual_qty"]
+                g["grp_actual_amt"]  += r["actual_amt"]
+            # Brand sub-group key includes scope so an _SR block and an _HQ
+            # block of the same brand render as separate rows (731942: HK SR
+            # ship_tos vs HK HQ total).
+            bkey = r["brand"] + "|" + r["scope"]
             if bkey not in g["brands"]:
                 g["brands"][bkey] = {
                     "brand": r["brand"], "unit": r["unit"],
+                    "scope": r["scope"],
                     "badges": r["badges"],
                     "structure_name": r["structure_name"],
                     "grp_actual": 0.0, "grp_actual_qty": 0.0, "grp_actual_amt": 0.0,
@@ -5845,9 +5920,14 @@ def api_rebate_data():
             b["grp_est"]         += r["est_rebate"] if r["est_rebate"] else 0.0
             b["items"].append(r)
 
-        # Convert brands dict to sorted list (HK ??LF ??TTL)
+        # Convert brands dict to sorted list (HK → LF → TTL; within a brand,
+        # the SR/base block first, then the HQ/VR/IT/WTY programs).
+        scope_order = {"SR": 0, "BASE": 0, "HQ": 1, "VR": 2, "IT": 3, "WTY": 4}
         for g in grp_map.values():
-            g["brands"] = sorted(g["brands"].values(), key=lambda b: brand_order.get(b["brand"], 99))
+            g["brands"] = sorted(
+                g["brands"].values(),
+                key=lambda b: (brand_order.get(b["brand"], 99),
+                               scope_order.get(b.get("scope", "BASE"), 9)))
 
         groups = list(grp_map.values())
         summary["total_groups"] = len(groups)
@@ -5959,7 +6039,6 @@ def api_rebate_export():
             if curr["tier"] >= top_order: nxt=None
             return curr, nxt
 
-        SHIP_TO_STRUCT_KEYS = {'AJT', 'ABJ', 'ATP', 'APP', 'ACD'}
         rows=[]
         for c in customers:
             struct=c["structure_name"]; brand=c["brand"]; sold_to=str(c["sold_to"])
@@ -5991,8 +6070,8 @@ def api_rebate_export():
                     if sold_to_region_ex == "-":
                         sold_to_region_ex = sc.most_common(1)[0][0] if sc else "-"
 
-            if any(k in struct for k in SHIP_TO_STRUCT_KEYS):
-                # One row per ship_to
+            if _rebate_is_ship_to(struct):
+                # _SR → one row per ship_to
                 calc_items=[]
                 for sh in sorted(ship_set):
                     if brand=="TTL":

@@ -319,10 +319,18 @@ function renderPage(data){
     const bKey = rKey + "|" + (g.bde || "-");
     if (!rNode.bdes.has(bKey)) rNode.bdes.set(bKey, {bde:g.bde||"-", rKey, groups:[], qty:0, amt:0, rebate:0});
     const bNode = rNode.bdes.get(bKey);
-    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR
+    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR.
+    // Secondary scopes (HQ/VR/IT/WTY) are a separate rebate program on the same
+    // sales — count their rebate but NOT their qty/amt (already counted by the
+    // SR/base block) so the region/BDE sales totals don't double up.
     g.brands.forEach(b => {
-      rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt; rNode.rebate += b.grp_curr_rebate;
-      bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt; bNode.rebate += b.grp_curr_rebate;
+      const secondary = b.scope && b.scope!=="SR" && b.scope!=="BASE";
+      if(!secondary){
+        rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt;
+        bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt;
+      }
+      rNode.rebate += b.grp_curr_rebate;
+      bNode.rebate += b.grp_curr_rebate;
     });
     bNode.groups.push(g);
   });
