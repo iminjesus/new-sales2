@@ -5323,6 +5323,21 @@ def _rebate_scope(struct):
 REBATE_SO_TYPES = ("ZWH1", "ZCR1", "ZDR1", "ZDF1", "ZRE1", "ZREN")
 _REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
 
+# Sales source table per ?month=... button on the rebate page.  A whitelist —
+# the resolved value is the only thing interpolated into the FROM clause, so an
+# unknown month can never inject a table name.
+REBATE_SALES_TABLES = {
+    "thismonth": "sales_thismonth",
+    "2601": "sales_2601",
+    "2602": "sales_2602",
+    "2603": "sales_2603",
+    "2604": "sales_2604",
+}
+
+def _rebate_sales_table(month_arg):
+    return REBATE_SALES_TABLES.get((month_arg or "thismonth").strip().lower(),
+                                   "sales_thismonth")
+
 
 @app.get("/api/rebate_structure_check")
 def api_rebate_structure_check():
@@ -5344,6 +5359,7 @@ def api_rebate_structure_check():
     sold = (request.args.get("sold_to") or "").strip()
     if not sold:
         return jsonify({"error": "sold_to is required"}), 400
+    sales_tbl = _rebate_sales_table(request.args.get("month"))
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
 
@@ -5368,7 +5384,7 @@ def api_rebate_structure_check():
             "SELECT TRIM(c.salesman_name) AS bde, "
             "       COUNT(DISTINCT c.ship_to) AS owned_in_customer, "
             "       COUNT(DISTINCT CASE WHEN EXISTS("
-            "           SELECT 1 FROM sales_thismonth s "
+            "           SELECT 1 FROM " + sales_tbl + " s "
             "           WHERE s.ship_to = c.ship_to "
             "             AND s.brand IN ('HK','LF') "
             "             AND s.so_type IN " + _REBATE_SO_TYPES_IN + " "
@@ -5387,7 +5403,7 @@ def api_rebate_structure_check():
         cur.execute(
             "SELECT TRIM(c.salesman_name) AS bde, "
             "       COUNT(DISTINCT s.ship_to) AS sales_ship_tos "
-            "FROM sales_thismonth s "
+            "FROM " + sales_tbl + " s "
             "LEFT JOIN customer c ON c.ship_to = s.ship_to "
             "WHERE s.sold_to = %s "
             "  AND s.brand IN ('HK','LF') "
@@ -5429,6 +5445,7 @@ def api_rebate_data():
     brand_filter  = request.args.get("territory",     "ALL").upper()  # UI still sends 'territory'
     stg_filter    = request.args.get("sold_to_group", "ALL")
     region_filter = request.args.get("region",        "ALL").upper()
+    sales_tbl     = _rebate_sales_table(request.args.get("month"))  # source table per month button
     # BDE filter — matches the role-scope lock used by graph/map views.
     # Comparison is case-insensitive on salesman_name so name casing in
     # the customer master doesn't make a BDE invisible to themselves.
@@ -5495,7 +5512,7 @@ def api_rebate_data():
                      ELSE ''
                    END AS line,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
-            FROM sales_thismonth s
+            FROM """ + sales_tbl + """ s
             WHERE s.brand IN ('HK','LF')
               AND s.so_type IN """ + _REBATE_SO_TYPES_IN + """
             GROUP BY s.sold_to, s.ship_to, s.brand,
@@ -6059,6 +6076,7 @@ def api_rebate_export():
     search       = request.args.get("search",  "").strip().lower()
     show         = request.args.get("show",    "ALL").upper()
     sort_dir     = request.args.get("dir",     "desc")
+    sales_tbl    = _rebate_sales_table(request.args.get("month"))
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -6078,7 +6096,7 @@ def api_rebate_export():
         cur.execute("""
             SELECT s.sold_to, s.ship_to, s.brand AS brand,
                    SUM(s.qty) AS qty, SUM(s.amt) AS amt
-            FROM sales_thismonth s
+            FROM """ + sales_tbl + """ s
             WHERE s.brand IN ('HK','LF')
               AND s.so_type IN """ + _REBATE_SO_TYPES_IN + """
             GROUP BY s.sold_to, s.ship_to, s.brand
