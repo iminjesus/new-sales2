@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Rebuild the rebate_structure + rebate_customer_map tables from the two
-simplified CSVs in data/rebate/.
+source CSVs kept in rawdata/unlock/.
+
+The loader picks the most recently modified file matching each name pattern,
+so the workflow is: drop the updated CSV(s) into rawdata/unlock/ and re-run
+this script.  Patterns:
+    structure : rebate_structure*.csv
+    map       : rebate_category*.csv  (or rebate_customer_map*.csv)
+Override with env vars REBATE_RAW_DIR / REBATE_STRUCT_CSV / REBATE_MAP_CSV.
 
 Usage:
     python load_rebate_structure.py --dry-run        # parse + validate only
@@ -20,10 +27,22 @@ Category code convention (underscore separated):
 DB connection reuses the same env vars / defaults as app.py's get_connection
 (DB_HOST=127.0.0.1, DB_PORT=3306, DB_USER=root, DB_PASS='', DB_NAME=my_new_database).
 """
-import os, csv, sys, argparse
+import os, csv, sys, argparse, glob
 
-STRUCT_CSV = os.path.join("data", "rebate", "rebate_structure.csv")
-MAP_CSV    = os.path.join("data", "rebate", "rebate_customer_map.csv")
+RAW_DIR = os.getenv("REBATE_RAW_DIR", os.path.join("rawdata", "unlock"))
+
+def _newest(*patterns):
+    """Newest (by mtime, then name) file in RAW_DIR matching any pattern."""
+    cands = []
+    for p in patterns:
+        cands += glob.glob(os.path.join(RAW_DIR, p))
+    if not cands:
+        return None
+    return max(cands, key=lambda f: (os.path.getmtime(f), f))
+
+STRUCT_CSV = os.getenv("REBATE_STRUCT_CSV") or _newest("rebate_structure*.csv")
+MAP_CSV    = os.getenv("REBATE_MAP_CSV") or _newest(
+                 "rebate_category*.csv", "rebate_customer_map*.csv")
 
 
 def clean_num(s):
@@ -122,6 +141,17 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="parse + validate, print summary, do not touch the DB")
     args = ap.parse_args()
+
+    missing = []
+    if not STRUCT_CSV or not os.path.exists(STRUCT_CSV):
+        missing.append("structure (rebate_structure*.csv)")
+    if not MAP_CSV or not os.path.exists(MAP_CSV):
+        missing.append("map (rebate_category*.csv / rebate_customer_map*.csv)")
+    if missing:
+        sys.exit(f"[error] source CSV not found in {RAW_DIR!r}: {', '.join(missing)}. "
+                 f"Save the file(s) there or set REBATE_STRUCT_CSV / REBATE_MAP_CSV.")
+    print(f"[src] structure : {STRUCT_CSV}")
+    print(f"[src] map       : {MAP_CSV}")
 
     structs, dupes, issues = parse_structures(STRUCT_CSV)
     mappings = parse_map(MAP_CSV)
