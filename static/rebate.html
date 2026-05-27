@@ -456,7 +456,7 @@ function renderPage(data){
           <td><span class="rn"><span class="lbl">next</span>${r.next_rate!=null?r.next_rate+"%":"—"}</span></td>
           <td>${needQHtml}</td>
           <td>${needAHtml}</td>
-          <td><span class="est"><span class="lbl">rebate</span>${r.curr_rebate>0?"$"+fmt(r.curr_rebate):"—"}</span></td>
+          <td><span class="est"><span class="lbl">rebate</span>${money(r.curr_rebate)}</span></td>
           <td><div class="tier-list">${dots}</div></td>
         </tr>`;
       }
@@ -540,7 +540,7 @@ function renderPage(data){
               <td><span class="lbl">qty</span>${fmt(b.grp_actual_qty)} <span class="ul">u</span></td>
               <td><span class="lbl">amt</span>$${fmt(b.grp_actual_amt)}</td>
               <td colspan="4"></td>
-              <td><span class="est"><span class="lbl">rebate</span>${b.grp_curr_rebate>0?"$"+fmt(b.grp_curr_rebate):"—"}</span> <span class="ul">(${shipCount(b)} ship-to)</span></td>
+              <td><span class="est"><span class="lbl">rebate</span>${money(b.grp_curr_rebate)}</span> <span class="ul">(${shipCount(b)} ship-to)</span></td>
               <td></td>
             </tr>`;
             bodyHtml += renderShipRows(b);
@@ -614,6 +614,12 @@ function exportXLSX(){
 function fmt(n){
   if(n==null||n==="") return "—";
   return Number(n).toLocaleString(undefined,{maximumFractionDigits:1});
+}
+// Signed dollar amount: -383.9 -> "-$383.9", 0 -> "—"
+function money(n){
+  n = Number(n||0);
+  if(n===0) return "—";
+  return (n<0?"-$":"$") + fmt(Math.abs(n));
 }
 function esc(s){
   return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
