@@ -5881,6 +5881,7 @@ def api_rebate_data():
                         "actual_qty":     round(actual_qty, 2),
                         "actual_amt":     round(actual_amt, 2),
                         "actual":         round(actual, 2),
+                        "tier_actual":    round(basis, 2),
                         "curr_rate":      curr_tier["rate"],
                         "curr_threshold": curr_tier["threshold"],
                         "next_threshold": next_tier["threshold"] if next_tier else None,

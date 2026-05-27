@@ -392,12 +392,13 @@ function renderPage(data){
         // Sold-to basis: compute tier info from aggregated sold-to values
         const validT = r.tiers.filter(t=>t.rate>0);
         const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
-        const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
+        const ta     = (r.tier_actual!=null ? r.tier_actual : r.actual);
+        const pct    = Math.min(100, maxT>0 ? ta/maxT*100 : 0);
         const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a" : pct>=50 ? "#f59e0b" : "#3b82f6";
         const dots   = validT.map(t=>{
           let cls="fut";
-          if(t.threshold<=r.actual && t.rate>0) cls="past";
-          else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
+          if(t.threshold<=ta && t.rate>0) cls="past";
+          else if(t===validT.find(x=>x.threshold>ta && x.rate>0)) cls="curr";
           const lbl = r.unit==="Q" ? fmt(t.threshold)+" u" : "$"+fmt(t.threshold);
           return `<span class="td ${cls}" title="${lbl} → ${t.rate}%">${t.rate}%</span>`;
         }).join("");
@@ -428,12 +429,13 @@ function renderPage(data){
         // Ship-to basis: per-ship-to rebate calculation
         const validT = r.tiers.filter(t=>t.rate>0);
         const maxT   = validT.length ? validT[validT.length-1].threshold : 1;
-        const pct    = Math.min(100, maxT>0 ? r.actual/maxT*100 : 0);
+        const ta     = (r.tier_actual!=null ? r.tier_actual : r.actual);
+        const pct    = Math.min(100, maxT>0 ? ta/maxT*100 : 0);
         const barClr = r.next_rate==null && r.curr_rate>0 ? "#16a34a" : pct>=50 ? "#f59e0b" : "#3b82f6";
         const dots   = validT.map(t=>{
           let cls="fut";
-          if(t.threshold<=r.actual && t.rate>0) cls="past";
-          else if(t===validT.find(x=>x.threshold>r.actual && x.rate>0)) cls="curr";
+          if(t.threshold<=ta && t.rate>0) cls="past";
+          else if(t===validT.find(x=>x.threshold>ta && x.rate>0)) cls="curr";
           const lbl = r.unit==="Q" ? fmt(t.threshold)+" u" : "$"+fmt(t.threshold);
           return `<span class="td ${cls}" title="${lbl} → ${t.rate}%">${t.rate}%</span>`;
         }).join("");
