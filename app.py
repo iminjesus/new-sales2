@@ -5786,34 +5786,28 @@ def api_rebate_data():
                     })
                     calc_items = []   # nothing in the per-BDE/State table
                 else:
-                    # Group ship_tos by their BDE ??one row per BDE per sold_to.
-                    # This ensures every salesman sees their own portion of shared accounts
-                    # like JAXQUICKFIT whose 94 ship_tos span multiple BDEs.
-                    #
-                    # ship_set above only contains ship_tos with sales this
-                    # month.  Union in the customer-master ship_tos for this
-                    # sold_to so every BDE who *owns* a ship_to under this
-                    # sold_to also gets a row — even if all their shops have
-                    # zero sales this month.  That makes accounts visible to
-                    # the BDE on the rebate page (otherwise they'd silently
-                    # disappear when there are no sales at all).
+                    # sold_to-level rebate (base, or HQ/VR of a non-Store-rebate
+                    # account).  The tier is on the FULL sold_to total — NOT per
+                    # BDE/State.  We still keep one row per BDE/State (every
+                    # salesman sees their shops), but each row shows that same
+                    # full-total figure and the rebate is rolled up only once
+                    # (on the BDE with the most shops) so it isn't double-counted
+                    # across BDEs/States.
                     full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
                     full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
                     bde_groups = {}  # bde_name -> {region, qty, amt, ship_details}
+                    full_q = full_a = 0.0
                     for sh in sorted(full_ship_set):
                         q, a = _get_sales(sh)
+                        full_q += q; full_a += a
                         sh_info_local = ship_cust_map.get(sh, {})
                         sh_bde   = sh_info_local.get("bde",   "-") or sold_to_bde
                         sh_state = sh_info_local.get("state", "-") or sold_to_region
                         grp = bde_groups.setdefault(sh_bde, {
                             "bde":          sh_bde,
                             "region":       sh_state,
-                            "qty":          0.0,
-                            "amt":          0.0,
                             "ship_details": [],
                         })
-                        grp["qty"] += q
-                        grp["amt"] += a
                         grp["ship_details"].append({
                             "ship_to":      sh,
                             "ship_to_name": sh_info_local.get("name") or sh,
@@ -5821,18 +5815,26 @@ def api_rebate_data():
                             "actual_amt":   round(a, 2),
                         })
 
-                    calc_items = [
-                        {
-                            "sh":           sold_to,
-                            "qty":          grp["qty"],
-                            "amt":          grp["amt"],
-                            "bde":          grp["bde"],
-                            "region":       grp["region"],
+                    # primary (rebate-bearing) row = BDE owning the most shops
+                    dom_bde = max(bde_groups,
+                                  key=lambda b: len(bde_groups[b]["ship_details"])) if bde_groups else None
+                    calc_items = []
+                    primary_taken = False
+                    for bde_name in sorted(bde_groups):
+                        grp = bde_groups[bde_name]
+                        is_primary = (not primary_taken) and (bde_name == dom_bde)
+                        if is_primary:
+                            primary_taken = True
+                        calc_items.append({
+                            "sh":            sold_to,
+                            "qty":           full_q,   # full sold_to total -> same on every BDE row
+                            "amt":           full_a,
+                            "bde":           grp["bde"],
+                            "region":        grp["region"],
                             "sold_to_basis": True,
-                            "ship_details": grp["ship_details"],
-                        }
-                        for grp in sorted(bde_groups.values(), key=lambda x: x["bde"])
-                    ]
+                            "ship_details":  grp["ship_details"],
+                            "rollup":        is_primary,
+                        })
                     if not calc_items:
                         calc_items = [{
                             "sh":           sold_to,
@@ -5842,6 +5844,7 @@ def api_rebate_data():
                             "region":       sold_to_region,
                             "sold_to_basis": True,
                             "ship_details": [],
+                            "rollup":       True,
                         }]
 
                 for item in calc_items:
