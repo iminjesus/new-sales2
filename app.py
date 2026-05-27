@@ -5518,6 +5518,7 @@ def api_rebate_data():
         sr_sold_tos = {str(c["sold_to"]) for c in customers
                        if _rebate_is_ship_to(c["structure_name"])}
         hq_box = {}   # sold_to -> {sold_to, sold_to_name, sold_to_group, rebate, parts:[...]}
+        hq_by_region = {}   # region -> HQ/VR rebate (each store's amount x rate, by its region)
 
         # ?? 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ??
         # Brand comes from sales_thismonth.brand directly (SAP loader fills it).
@@ -5770,12 +5771,17 @@ def api_rebate_data():
                     # VR/etc).  No per-BDE/State table rows for these.
                     full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
                     tot_q = tot_a = 0.0
+                    store_amts = []   # (region, amt) per store, to split the HQ/VR by region
                     for sh in full_ship_set:
                         q, a = _get_sales(sh)
                         tot_q += q; tot_a += a
+                        reg = _or_default(ship_cust_map.get(sh, {}).get("state"), sold_to_region)
+                        store_amts.append((reg, a))
                     hq_actual = tot_q if unit == "Q" else tot_a
                     hq_curr, _ = _calc_tier(hq_actual, tiers, top_order)
                     hq_rebate = round(tot_a * hq_curr["rate"] / 100, 2)
+                    for reg, a in store_amts:   # split this HQ/VR across regions by store sales
+                        hq_by_region[reg] = hq_by_region.get(reg, 0.0) + a * hq_curr["rate"] / 100
                     box = hq_box.setdefault(sold_to, {
                         "sold_to":       sold_to,
                         "sold_to_name":  c["sold_to_name"] or st_info.get("name") or sold_to,
@@ -5949,6 +5955,16 @@ def api_rebate_data():
         for rk in region_totals:
             region_totals[rk] = {k: round(v, 2) for k, v in region_totals[rk].items()}
 
+        # Store-rebate (table) total, HQ/VR total, and the grand total split by
+        # region: region card = Store/base rebate in that region + the HQ/VR
+        # allocated to it (each store's amount x rate).  The 4 region cards sum
+        # to the grand total.
+        store_total = round(sum(rt["rebate"] for rt in region_totals.values()), 2)
+        hq_total    = hq_box_out["total"]
+        grand_total = round(store_total + hq_total, 2)
+        region_grand = {rk: round(region_totals[rk]["rebate"] + hq_by_region.get(rk, 0.0), 2)
+                        for rk in REGION_KEYS}
+
         summary = {
             "total_ship_to": len(rows),
             "has_next":  sum(1 for r in rows if r["next_rate"] is not None and r["actual"] > 0),
@@ -5956,6 +5972,10 @@ def api_rebate_data():
             "zero_sales": sum(1 for r in rows if r["actual"] == 0),
             "est_total":  round(sum(r["curr_rebate"] for r in rows if r.get("rollup", True)), 2),
             "region_totals": region_totals,
+            "region_grand":  region_grand,
+            "store_total":   store_total,
+            "hq_total":      hq_total,
+            "grand_total":   grand_total,
             "hq_box": hq_box_out,
         }
 

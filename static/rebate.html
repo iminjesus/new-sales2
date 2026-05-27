@@ -287,49 +287,50 @@ function load(){ fetchPage(0); }
 function renderPage(data){
   const s  = data.summary;
   const rt = s.region_totals || {};
+  const rg = s.region_grand  || {};   // grand total (Store + HQ/VR) per region
   const REGIONS = ["NSW","QLD","VIC","WA"];
   const REGION_COLORS = {NSW:"#1d4ed8", QLD:"#b45309", VIC:"#6d28d9", WA:"#065f46"};
-  const grandTotal = REGIONS.reduce((acc, r) => acc + (rt[r]?.rebate || 0), 0);
+  const storeTotal = s.store_total || 0;          // Store/base rebate (table)
+  const hqTotal    = s.hq_total || 0;             // HQ/VR rebate (box)
+  const grandTotal = (s.grand_total!=null) ? s.grand_total : (storeTotal + hqTotal);
 
+  // Region cards show the GRAND total (Store + HQ/VR) split by region — they
+  // sum to the Grand Total card.
   const regionCards = REGIONS.map(r => {
-    const v = rt[r] || {};
     const isActive = activeRegion === r;
     const col = REGION_COLORS[r];
     return `<div class="stat-card" style="cursor:pointer;border-color:${isActive?col:'#e5e7eb'};outline:${isActive?`2px solid ${col}`:'none'}"
               onclick="setRegion(activeRegion==='${r}'?'ALL':'${r}')">
       <div class="label" style="color:${col};font-weight:700">${r}</div>
-      <div class="value" style="color:${col};font-size:16px">$${fmt(v.rebate)}</div>
+      <div class="value" style="color:${col};font-size:16px">${money(rg[r])}</div>
     </div>`;
   }).join("");
 
-  // HQ / VR rebate (Store-rebate accounts only) — shown separately from the
-  // per-State Store-rebate cards.
   const hq = s.hq_box || {total:0, items:[]};
   const hqTip = (hq.items || []).slice(0, 30)
-    .map(it => `${esc(it.sold_to_name||it.sold_to)} (${it.sold_to})  $${fmt(it.rebate)}`)
+    .map(it => `${esc(it.sold_to_name||it.sold_to)} (${it.sold_to})  ${money(it.rebate)}`)
     .join("&#10;");
+  const storeCard = `<div class="stat-card total-card" style="cursor:pointer" onclick="setRegion('ALL')">
+      <div class="label">Store Rebate</div>
+      <div class="value" style="font-size:16px">${money(storeTotal)}</div>
+    </div>`;
   const hqCard = `<div class="stat-card" title="${hqTip}"
         style="border-color:#be123c;background:#fff1f2">
       <div class="label" style="color:#be123c;font-weight:700">HQ / VR Rebate</div>
-      <div class="value" style="color:#be123c;font-size:16px">$${fmt(hq.total)}</div>
+      <div class="value" style="color:#be123c;font-size:16px">${money(hqTotal)}</div>
       <div class="label" style="color:#9f1239">${(hq.items||[]).length} sold-to</div>
     </div>`;
-
-  const combinedTotal = grandTotal + (hq.total || 0);
-  const combinedCard = `<div class="stat-card total-card"
+  const grandCard = `<div class="stat-card total-card"
         style="background:#0b3b2e;border-color:transparent">
       <div class="label" style="color:rgba(255,255,255,.7)">Grand Total (Store + HQ/VR)</div>
-      <div class="value" style="font-size:16px;color:#fff">$${fmt(combinedTotal)}</div>
+      <div class="value" style="font-size:16px;color:#fff">${money(grandTotal)}</div>
     </div>`;
 
   document.getElementById("summary").innerHTML = `
     ${regionCards}
-    <div class="stat-card total-card" style="cursor:pointer" onclick="setRegion('ALL')">
-      <div class="label">4-Region Total</div>
-      <div class="value" style="font-size:16px">$${fmt(grandTotal)}</div>
-    </div>
+    ${storeCard}
     ${hqCard}
-    ${combinedCard}`;
+    ${grandCard}`;
 
   if(!data.groups.length){
     document.getElementById("table-wrap").innerHTML = '<div class="empty">No data found</div>';
