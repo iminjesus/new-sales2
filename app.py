@@ -5339,6 +5339,14 @@ def _rebate_sales_table(month_arg):
                                    "sales_thismonth")
 
 
+def _rebate_region(state):
+    """Region used on the rebate view.  South Australia is reported under VIC
+    (the 4 region cards are NSW/QLD/VIC/WA), so SA sales/rebate roll into VIC
+    instead of falling outside every card."""
+    s = (state or "").strip()
+    return "VIC" if s.upper() == "SA" else s
+
+
 @app.get("/api/rebate_structure_check")
 def api_rebate_structure_check():
     """Diagnostic: what rebate structure is a sold_to mapped to, and how
@@ -5550,7 +5558,7 @@ def api_rebate_data():
             sh = str(r["ship_to"])
             ship_cust_map[sh] = {
                 "name":  r["ship_to_name"] or sh,
-                "state": (r["bde_state"] or "").strip() or "-",
+                "state": _rebate_region(r["bde_state"]) or "-",
                 "bde":   (r["salesman_name"] or "").strip() or "-",
             }
             stk = str(r["sold_to"] or "")
@@ -6162,7 +6170,7 @@ def api_rebate_export():
             sh = str(r["ship_to"])
             ship_cust_map_ex[sh] = {
                 "name":  r["ship_to_name"] or sh,
-                "state": (r["bde_state"]    or "").strip() or "-",
+                "state": _rebate_region(r["bde_state"]) or "-",
                 "bde":   (r["salesman_name"] or "").strip() or "-",
             }
         name_map = {sh: v["name"] for sh, v in ship_cust_map_ex.items()}
