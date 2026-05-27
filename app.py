@@ -5661,8 +5661,10 @@ def api_rebate_data():
                     else:
                         ship_set |= ship_idx.get((sold_to, _br), set())
 
-                # Only keep ship_tos that are known in the customer table
-                ship_set = {sh for sh in ship_set if sh in ship_cust_map}
+                # Keep every ship_to that has sales for this sold_to, even if it
+                # isn't in the customer master (e.g. A018377 — qty 0 but an
+                # amount, or credits/returns) — those still count toward the
+                # rebate.  Region/BDE fall back to the sold_to's when unknown.
 
                 if not ship_set:
                     ship_set.add(sold_to)   # show zero row so sold_to is visible
@@ -5759,7 +5761,6 @@ def api_rebate_data():
                     # and fold it into the top summary box (combined across HQ/
                     # VR/etc).  No per-BDE/State table rows for these.
                     full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
-                    full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
                     tot_q = tot_a = 0.0
                     for sh in full_ship_set:
                         q, a = _get_sales(sh)
@@ -5794,7 +5795,6 @@ def api_rebate_data():
                     # counted once with its own amount, summing to the correct
                     # sold_to total.
                     full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
-                    full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
                     full_q = full_a = 0.0
                     per_store = []
                     for sh in sorted(full_ship_set):
