@@ -5348,6 +5348,14 @@ def _rebate_region(state):
     s = (state or "").strip()
     return _REBATE_REGION_MAP.get(s.upper(), s)
 
+def _or_default(val, dflt):
+    """val unless it's blank or the '-' placeholder, in which case dflt.  Used
+    so ship_tos missing from the customer master (no region/BDE) fall back to
+    the sold_to's region/BDE instead of becoming an orphan '-' that drops out
+    of the 4 region cards."""
+    v = (val or "").strip()
+    return v if v and v != "-" else dflt
+
 
 @app.get("/api/rebate_structure_check")
 def api_rebate_structure_check():
@@ -5729,8 +5737,8 @@ def api_rebate_data():
                         gt["amt"] += a
                         gt["members"].append({
                             "sh":     sh,
-                            "bde":    sh_info_local.get("bde",   "-") or sold_to_bde,
-                            "region": sh_info_local.get("state", "-") or sold_to_region,
+                            "bde":    _or_default(sh_info_local.get("bde"),   sold_to_bde),
+                            "region": _or_default(sh_info_local.get("state"), sold_to_region),
                         })
                     calc_items = []
                     for group_key, gt in grp_totals.items():
@@ -5805,8 +5813,8 @@ def api_rebate_data():
                             "sh":     sh,
                             "qty":    q,
                             "amt":    a,
-                            "bde":    info.get("bde",   "-") or sold_to_bde,
-                            "region": info.get("state", "-") or sold_to_region,
+                            "bde":    _or_default(info.get("bde"),   sold_to_bde),
+                            "region": _or_default(info.get("state"), sold_to_region),
                         })
                     calc_items = [{
                         "sh":            st["sh"],
