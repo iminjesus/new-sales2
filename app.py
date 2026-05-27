@@ -5787,54 +5787,39 @@ def api_rebate_data():
                     calc_items = []   # nothing in the per-BDE/State table
                 else:
                     # sold_to-level rebate (base, or HQ/VR of a non-Store-rebate
-                    # account).  The tier is on the FULL sold_to total — NOT per
-                    # BDE/State.  We still keep one row per BDE/State (every
-                    # salesman sees their shops), but each row shows that same
-                    # full-total figure and the rebate is rolled up only once
-                    # (on the BDE with the most shops) so it isn't double-counted
-                    # across BDEs/States.
+                    # account).  The tier QUALIFIES on the full sold_to total, but
+                    # each Store earns the rebate on its OWN sales at that rate —
+                    # so every store shows its own qty/amt/rebate (not one shared
+                    # group number).  No rollup gating needed: each store is
+                    # counted once with its own amount, summing to the correct
+                    # sold_to total.
                     full_ship_set = ship_set | sold_to_ships.get(sold_to, set())
                     full_ship_set = {sh for sh in full_ship_set if sh in ship_cust_map}
-                    bde_groups = {}  # bde_name -> {region, qty, amt, ship_details}
                     full_q = full_a = 0.0
+                    per_store = []
                     for sh in sorted(full_ship_set):
                         q, a = _get_sales(sh)
                         full_q += q; full_a += a
-                        sh_info_local = ship_cust_map.get(sh, {})
-                        sh_bde   = sh_info_local.get("bde",   "-") or sold_to_bde
-                        sh_state = sh_info_local.get("state", "-") or sold_to_region
-                        grp = bde_groups.setdefault(sh_bde, {
-                            "bde":          sh_bde,
-                            "region":       sh_state,
-                            "ship_details": [],
+                        info = ship_cust_map.get(sh, {})
+                        per_store.append({
+                            "sh":     sh,
+                            "qty":    q,
+                            "amt":    a,
+                            "bde":    info.get("bde",   "-") or sold_to_bde,
+                            "region": info.get("state", "-") or sold_to_region,
                         })
-                        grp["ship_details"].append({
-                            "ship_to":      sh,
-                            "ship_to_name": sh_info_local.get("name") or sh,
-                            "actual_qty":   round(q, 2),
-                            "actual_amt":   round(a, 2),
-                        })
-
-                    # primary (rebate-bearing) row = BDE owning the most shops
-                    dom_bde = max(bde_groups,
-                                  key=lambda b: len(bde_groups[b]["ship_details"])) if bde_groups else None
-                    calc_items = []
-                    primary_taken = False
-                    for bde_name in sorted(bde_groups):
-                        grp = bde_groups[bde_name]
-                        is_primary = (not primary_taken) and (bde_name == dom_bde)
-                        if is_primary:
-                            primary_taken = True
-                        calc_items.append({
-                            "sh":            sold_to,
-                            "qty":           full_q,   # full sold_to total -> same on every BDE row
-                            "amt":           full_a,
-                            "bde":           grp["bde"],
-                            "region":        grp["region"],
-                            "sold_to_basis": True,
-                            "ship_details":  grp["ship_details"],
-                            "rollup":        is_primary,
-                        })
+                    calc_items = [{
+                        "sh":            st["sh"],
+                        "qty":           st["qty"],
+                        "amt":           st["amt"],
+                        "bde":           st["bde"],
+                        "region":        st["region"],
+                        "sold_to_basis": False,
+                        "ship_details":  [],
+                        "tier_basis_q":  full_q,   # tier qualifies on the sold_to total
+                        "tier_basis_a":  full_a,
+                        "rollup":        True,
+                    } for st in per_store]
                     if not calc_items:
                         calc_items = [{
                             "sh":           sold_to,
@@ -5842,8 +5827,10 @@ def api_rebate_data():
                             "amt":          0.0,
                             "bde":          sold_to_bde,
                             "region":       sold_to_region,
-                            "sold_to_basis": True,
+                            "sold_to_basis": False,
                             "ship_details": [],
+                            "tier_basis_q": 0.0,
+                            "tier_basis_a": 0.0,
                             "rollup":       True,
                         }]
 
@@ -5859,11 +5846,20 @@ def api_rebate_data():
 
                     actual = actual_qty if unit == "Q" else actual_amt
 
-                    curr_tier, next_tier = _calc_tier(actual, tiers, top_order)
+                    # The tier (rate / next / needed) qualifies on the basis —
+                    # the group/sold_to total for sold_to-level rebates — while
+                    # the rebate is earned on THIS row's own amount.  Rows that
+                    # don't set a basis (SR group members, box) use their own
+                    # value, so the rate matches what they display.
+                    basis_qty = item.get("tier_basis_q", actual_qty)
+                    basis_amt = item.get("tier_basis_a", actual_amt)
+                    basis = basis_qty if unit == "Q" else basis_amt
+
+                    curr_tier, next_tier = _calc_tier(basis, tiers, top_order)
                     curr_rebate = round(actual_amt * curr_tier["rate"] / 100, 2)
                     est_rebate  = round(next_tier["threshold"] * next_tier["rate"] / 100, 2) if next_tier else None
-                    needed_qty = round(next_tier["threshold"] - actual_qty, 2) if next_tier and unit == "Q" else None
-                    needed_amt = round(next_tier["threshold"] - actual_amt, 2) if next_tier and unit == "A" else None
+                    needed_qty = round(next_tier["threshold"] - basis_qty, 2) if next_tier and unit == "Q" else None
+                    needed_amt = round(next_tier["threshold"] - basis_amt, 2) if next_tier and unit == "A" else None
 
                     sh_info = ship_cust_map.get(sh, {})
                     rows.append({
