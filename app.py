@@ -5339,12 +5339,14 @@ def _rebate_sales_table(month_arg):
                                    "sales_thismonth")
 
 
+_REBATE_REGION_MAP = {"SA": "VIC", "TAS": "VIC", "NT": "VIC", "ACT": "NSW"}
+
 def _rebate_region(state):
-    """Region used on the rebate view.  South Australia is reported under VIC
-    (the 4 region cards are NSW/QLD/VIC/WA), so SA sales/rebate roll into VIC
-    instead of falling outside every card."""
+    """Region used on the rebate view.  The 4 region cards are NSW/QLD/VIC/WA;
+    the smaller states/territories roll into one of them (SA/TAS/NT -> VIC,
+    ACT -> NSW) so their sales/rebate don't fall outside every card."""
     s = (state or "").strip()
-    return "VIC" if s.upper() == "SA" else s
+    return _REBATE_REGION_MAP.get(s.upper(), s)
 
 
 @app.get("/api/rebate_structure_check")
