@@ -5511,6 +5511,24 @@ def api_rebate_data():
         for r in cur.fetchall():
             ship_grp[(str(r["sold_to"]), r["structure_name"], str(r["ship_to"]))] = str(r["grp"])
 
+        # Sold_to-level grouping: rows with grp filled and ship_to EMPTY bundle
+        # multiple sold_tos together for tier qualification on non-_SR
+        # structures (e.g. HK_ALL_DIA_A_VR with 3 sold_tos sharing group "1").
+        # tier basis = sum of all group members; each sold_to/store still earns
+        # on its own amount x the resulting rate, so totals are sum-correct.
+        sold_to_grp  = {}   # (structure_name, sold_to) -> grp label
+        grp_to_solds = {}   # (structure_name, grp)     -> set of sold_tos
+        cur.execute("""
+            SELECT sold_to, structure_name, grp
+            FROM rebate_customer_map
+            WHERE grp IS NOT NULL AND grp <> ''
+              AND (ship_to IS NULL OR ship_to = '')
+        """)
+        for r in cur.fetchall():
+            k = (r["structure_name"], str(r["sold_to"]))
+            sold_to_grp[k] = str(r["grp"])
+            grp_to_solds.setdefault((r["structure_name"], str(r["grp"])), set()).add(str(r["sold_to"]))
+
         # sold_tos that carry a Store rebate (_SR) structure.  For these, the
         # secondary HQ/VR/IT/WTY rebates are pulled out of the per-BDE/State
         # table and combined into the top summary box instead.  sold_tos with
@@ -5546,6 +5564,8 @@ def api_rebate_data():
         ship_sales_line = {}   # (sold_to, ship_to, brand, line) -> {qty, amt}
         ship_idx        = {}   # (sold_to, brand) -> set{ship_to}
         ship_idx_line   = {}   # (sold_to, brand, line) -> set{ship_to}
+        sold_brand_tot      = {}   # (sold_to, brand) -> {qty, amt}  per sold_to
+        sold_brand_line_tot = {}   # (sold_to, brand, line) -> {qty, amt}
         for r in cur.fetchall():
             st, sh, br, ln = str(r["sold_to"]), str(r["ship_to"]), r["brand"], r["line"]
             qty, amt = float(r["qty"] or 0), float(r["amt"] or 0)
@@ -5556,6 +5576,11 @@ def api_rebate_data():
             ship_sales_line[(st, sh, br, ln)] = {"qty": qty, "amt": amt}
             ship_idx.setdefault((st, br), set()).add(sh)
             ship_idx_line.setdefault((st, br, ln), set()).add(sh)
+            # per-sold_to roll-ups (for sold_to-group tier basis)
+            agg2 = sold_brand_tot.setdefault((st, br), {"qty": 0.0, "amt": 0.0})
+            agg2["qty"] += qty; agg2["amt"] += amt
+            agg3 = sold_brand_line_tot.setdefault((st, br, ln), {"qty": 0.0, "amt": 0.0})
+            agg3["qty"] += qty; agg3["amt"] += amt
 
         # ?? 3. Customer lookup (ship_to ??name, bde_state, salesman) ??????????
         cur.execute("SELECT ship_to, ship_to_name, bde_state, salesman_name, sold_to FROM customer")
@@ -5640,6 +5665,17 @@ def api_rebate_data():
             line_filt = lt if lt in ("PCLT", "TBR") else None
             brand_key = "TTL" if bt == "ALL" else bt
             return brands, line_filt, brand_key
+
+        def _sold_to_qa(st_id, brand_list, line):
+            """(qty, amt) for one sold_to summed over the given brands/line."""
+            q = a = 0.0
+            for br in brand_list:
+                if line:
+                    d = sold_brand_line_tot.get((st_id, br, line), {"qty": 0.0, "amt": 0.0})
+                else:
+                    d = sold_brand_tot.get((st_id, br), {"qty": 0.0, "amt": 0.0})
+                q += d["qty"]; a += d["amt"]
+            return q, a
 
 
         rows = []
@@ -5777,7 +5813,19 @@ def api_rebate_data():
                         tot_q += q; tot_a += a
                         reg = _or_default(ship_cust_map.get(sh, {}).get("state"), sold_to_region)
                         store_amts.append((reg, a))
-                    hq_actual = tot_q if unit == "Q" else tot_a
+                    # Tier qualifies on the sold_to GROUP total when this
+                    # sold_to is bundled with others via the map's Group column;
+                    # otherwise on this sold_to's own total.  Each sold_to still
+                    # earns on its own amount x the resulting rate.
+                    grp_label = sold_to_grp.get((struct, sold_to))
+                    if grp_label:
+                        bq = ba = 0.0
+                        for _gs in grp_to_solds.get((struct, grp_label), {sold_to}):
+                            _q, _a = _sold_to_qa(_gs, brands, line_filt)
+                            bq += _q; ba += _a
+                    else:
+                        bq, ba = tot_q, tot_a
+                    hq_actual = bq if unit == "Q" else ba
                     hq_curr, _ = _calc_tier(hq_actual, tiers, top_order)
                     hq_rebate = round(tot_a * hq_curr["rate"] / 100, 2)
                     for reg, a in store_amts:   # split this HQ/VR across regions by store sales
@@ -5822,6 +5870,15 @@ def api_rebate_data():
                             "bde":    _or_default(info.get("bde"),   sold_to_bde),
                             "region": _or_default(info.get("state"), sold_to_region),
                         })
+                    # tier basis = sold_to GROUP total if grouped, else own total
+                    grp_label = sold_to_grp.get((struct, sold_to))
+                    if grp_label:
+                        bq = ba = 0.0
+                        for _gs in grp_to_solds.get((struct, grp_label), {sold_to}):
+                            _q, _a = _sold_to_qa(_gs, brands, line_filt)
+                            bq += _q; ba += _a
+                    else:
+                        bq, ba = full_q, full_a
                     calc_items = [{
                         "sh":            st["sh"],
                         "qty":           st["qty"],
@@ -5830,8 +5887,8 @@ def api_rebate_data():
                         "region":        st["region"],
                         "sold_to_basis": False,
                         "ship_details":  [],
-                        "tier_basis_q":  full_q,   # tier qualifies on the sold_to total
-                        "tier_basis_a":  full_a,
+                        "tier_basis_q":  bq,   # tier qualifies on the (group) total
+                        "tier_basis_a":  ba,
                         "rollup":        True,
                     } for st in per_store]
                     if not calc_items:
