@@ -970,7 +970,7 @@ function renderRecentRows(){
       .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
       .join("");
     // Own-entry actions: visible to the original BDE author only.
-    const owns = _isMine(r.bde_email);
+    const owns = _isMine(r.bde_email, r.bde_name);
     const actions = owns
       ? `<div style="margin-top:4px;font-size:10px;">
            <a href="javascript:void(0)" data-t="${_attr(r.notes || '')}"
@@ -1173,11 +1173,15 @@ function _peopleOptions(){
   ).join("");
 }
 
-// Current user's email (for "본인이 쓴 것" — own-entry edit/delete controls).
+// Current user's email/name (for own-entry edit/delete controls).  Legacy
+// rows may carry only bde_name (no email), so fall back to name match.
 function _meEmail(){ return ((window._me && window._me.email) || "").toLowerCase(); }
-function _isMine(email){
-  const me = _meEmail();
-  return !!me && (email || "").toLowerCase() === me;
+function _meName (){ return ((window._me && window._me.name)  || "").toLowerCase(); }
+function _isMine(email, name){
+  const e  = (email || "").toLowerCase();
+  const n  = (name  || "").toLowerCase();
+  const me = _meEmail(), mn = _meName();
+  return (!!me && e === me) || (!!mn && n === mn);
 }
 
 async function editEntry(id, currentNotes){
@@ -1227,7 +1231,7 @@ function _ownerActionsHtml(buttons){
 
 function renderFeedbackBlock(rid, thread){
   const items = (thread || []).map(t => {
-    const mine = _isMine(t.author_email);
+    const mine = _isMine(t.author_email, t.author_name);
     const actions = mine
       ? _ownerActionsHtml(
           `<a href="javascript:void(0)" onclick="editFeedback(${t.id}, this.dataset.t)"

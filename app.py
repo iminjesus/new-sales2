@@ -7129,16 +7129,20 @@ def bdes_active():
 
 
 def _meeting_owner_or_403(cur, mid):
-    """Return (ok, owner_email).  ok is False with the row missing/forbidden."""
-    me = (_bde_from_request() or "").strip().lower()
-    if not me:
+    """Return (ok, owner_email).  ok is False with the row missing/forbidden.
+    Legacy rows may have a blank bde_email — match by bde_name in that case."""
+    me_email = (_bde_from_request() or "").strip().lower()
+    if not me_email:
         return False, None
-    cur.execute("SELECT bde_email FROM meeting_log WHERE id=%s", (mid,))
+    me_name = (_EMAIL_TO_DIR.get(me_email) or ("", "", ""))[0].strip().lower()
+    cur.execute("SELECT bde_email, bde_name FROM meeting_log WHERE id=%s", (mid,))
     row = cur.fetchone()
     if not row:
         return False, None
-    owner = (row.get("bde_email") or "").strip().lower()
-    return (owner == me), owner
+    o_email = (row.get("bde_email") or "").strip().lower()
+    o_name  = (row.get("bde_name")  or "").strip().lower()
+    ok = (o_email and o_email == me_email) or (me_name and o_name == me_name)
+    return bool(ok), o_email
 
 @app.patch("/api/meeting/<int:mid>")
 def meeting_patch(mid):
@@ -7198,16 +7202,19 @@ def meeting_feedback_patch(fid):
     text = (body.get("text") or "").strip()
     if not text:
         return jsonify({"error": "text is required"}), 400
-    me = (_bde_from_request() or "").strip().lower()
-    if not me:
+    me_email = (_bde_from_request() or "").strip().lower()
+    if not me_email:
         return jsonify({"error": "auth required"}), 401
+    me_name = (_EMAIL_TO_DIR.get(me_email) or ("", "", ""))[0].strip().lower()
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
-        cur.execute("SELECT author_email, meeting_id FROM meeting_feedback WHERE id=%s", (fid,))
+        cur.execute("SELECT author_email, author_name, meeting_id FROM meeting_feedback WHERE id=%s", (fid,))
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
-        if (row.get("author_email") or "").strip().lower() != me:
+        o_email = (row.get("author_email") or "").strip().lower()
+        o_name  = (row.get("author_name")  or "").strip().lower()
+        if not ((o_email and o_email == me_email) or (me_name and o_name == me_name)):
             return jsonify({"error": "forbidden"}), 403
         cur.execute("UPDATE meeting_feedback SET text=%s WHERE id=%s", (text, fid))
         # Refresh the denormalised latest-feedback cache on meeting_log
@@ -7230,16 +7237,19 @@ def meeting_feedback_patch(fid):
 @app.delete("/api/meeting/feedback/<int:fid>")
 def meeting_feedback_delete(fid):
     """Delete one's own feedback comment."""
-    me = (_bde_from_request() or "").strip().lower()
-    if not me:
+    me_email = (_bde_from_request() or "").strip().lower()
+    if not me_email:
         return jsonify({"error": "auth required"}), 401
+    me_name = (_EMAIL_TO_DIR.get(me_email) or ("", "", ""))[0].strip().lower()
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
-        cur.execute("SELECT author_email, meeting_id FROM meeting_feedback WHERE id=%s", (fid,))
+        cur.execute("SELECT author_email, author_name, meeting_id FROM meeting_feedback WHERE id=%s", (fid,))
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
-        if (row.get("author_email") or "").strip().lower() != me:
+        o_email = (row.get("author_email") or "").strip().lower()
+        o_name  = (row.get("author_name")  or "").strip().lower()
+        if not ((o_email and o_email == me_email) or (me_name and o_name == me_name)):
             return jsonify({"error": "forbidden"}), 403
         mid = row["meeting_id"]
         cur.execute("DELETE FROM meeting_feedback WHERE id=%s", (fid,))
