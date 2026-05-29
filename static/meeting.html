@@ -1527,18 +1527,11 @@ function renderCalendar(){
     return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
-  let html = "";
-  for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
-  // Leading dim cells = trailing days of the previous month.
-  const prevLast = new Date(year, month - 1, 0).getDate();   // last day of prev month
-  for (let i = 0; i < dow; i++) {
-    const d = prevLast - dow + 1 + i;
-    html += `<div class="cal-cell dim"><span class="d-num">${d}</span></div>`;
-  }
-  for (let d = 1; d <= daysInM; d++) {
-    const iso = _isoDate(year, month, d);
-    const isToday = (iso === todayIso) ? " today" : "";
-    const chips = (_planRowsByDate[iso] || []).map(r => {
+  // Renders one calendar cell.  Used for in-month days and for the dim
+  // overflow cells (previous / next month) so chips drop and render the
+  // same way on adjacent-month dates.
+  function _chipsHtml(iso){
+    return (_planRowsByDate[iso] || []).map(r => {
       let style = "";
       let badge = "";
       const logged = !!r.logged;
@@ -1569,16 +1562,38 @@ function renderCalendar(){
         <span class="pc-rm">×</span>
       </div>`;
     }).join("");
-    html += `<div class="cal-cell${isToday}" data-date="${iso}">
+  }
+  function _cellHtml(y, m, d, dim){
+    const iso = _isoDate(y, m, d);
+    const isToday = (iso === todayIso) ? " today" : "";
+    const dimCls  = dim ? " dim" : "";
+    return `<div class="cal-cell${dimCls}${isToday}" data-date="${iso}">
       <span class="d-num">${d}</span>
-      <div class="chips">${chips}</div>
+      <div class="chips">${_chipsHtml(iso)}</div>
     </div>`;
+  }
+
+  let html = "";
+  for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
+  // Leading dim cells = trailing days of the previous month.
+  const prevYear  = (month === 1) ? year - 1 : year;
+  const prevMonth = (month === 1) ? 12       : month - 1;
+  const prevLast  = new Date(year, month - 1, 0).getDate();
+  for (let i = 0; i < dow; i++) {
+    const d = prevLast - dow + 1 + i;
+    html += _cellHtml(prevYear, prevMonth, d, true);
+  }
+  // Current month
+  for (let d = 1; d <= daysInM; d++) {
+    html += _cellHtml(year, month, d, false);
   }
   // Trailing dim cells = leading days of the next month.
   const cellsUsed = dow + daysInM;
   const trailing  = (7 - (cellsUsed % 7)) % 7;
+  const nextYear  = (month === 12) ? year + 1 : year;
+  const nextMonth = (month === 12) ? 1        : month + 1;
   for (let i = 0; i < trailing; i++) {
-    html += `<div class="cal-cell dim"><span class="d-num">${i + 1}</span></div>`;
+    html += _cellHtml(nextYear, nextMonth, i + 1, true);
   }
   root.innerHTML = html;
 
