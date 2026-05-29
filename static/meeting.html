@@ -79,6 +79,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .cal-head,.cal-cell{background:#fff;padding:4px 5px;min-height:78px;display:flex;flex-direction:column;font-size:11px;min-width:0}
 .cal-head{min-height:0;background:#f8fafc;font-weight:600;color:#6b7280;text-align:center;font-size:10px;padding:5px 0;text-transform:uppercase;letter-spacing:.4px}
 .cal-cell.dim{background:#fafafa;color:#cbd5e1}
+.cal-cell.dim .d-num{color:#cbd5e1;font-weight:500}
 .cal-cell.today{background:#fff7ed}
 .cal-cell .d-num{font-weight:600;color:#374151;font-size:11px;margin-bottom:2px}
 .cal-cell.today .d-num{color:#ea580c}
@@ -1528,7 +1529,12 @@ function renderCalendar(){
 
   let html = "";
   for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
-  for (let i = 0; i < dow; i++) html += `<div class="cal-cell dim"></div>`;
+  // Leading dim cells = trailing days of the previous month.
+  const prevLast = new Date(year, month - 1, 0).getDate();   // last day of prev month
+  for (let i = 0; i < dow; i++) {
+    const d = prevLast - dow + 1 + i;
+    html += `<div class="cal-cell dim"><span class="d-num">${d}</span></div>`;
+  }
   for (let d = 1; d <= daysInM; d++) {
     const iso = _isoDate(year, month, d);
     const isToday = (iso === todayIso) ? " today" : "";
@@ -1568,10 +1574,12 @@ function renderCalendar(){
       <div class="chips">${chips}</div>
     </div>`;
   }
-  // Trailing blanks to fill last row (optional, keeps grid even)
+  // Trailing dim cells = leading days of the next month.
   const cellsUsed = dow + daysInM;
   const trailing  = (7 - (cellsUsed % 7)) % 7;
-  for (let i = 0; i < trailing; i++) html += `<div class="cal-cell dim"></div>`;
+  for (let i = 0; i < trailing; i++) {
+    html += `<div class="cal-cell dim"><span class="d-num">${i + 1}</span></div>`;
+  }
   root.innerHTML = html;
 
   // Wire drop targets
