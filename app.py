@@ -5469,6 +5469,9 @@ def api_rebate_data():
     # Comparison is case-insensitive on salesman_name so name casing in
     # the customer master doesn't make a BDE invisible to themselves.
     bde_filter    = (request.args.get("bde") or "").strip()
+    line_filter   = (request.args.get("line") or "ALL").upper()        # PCLT | TBR | ALL
+    sold_to_filter = (request.args.get("sold_to") or "").strip()       # exact name or code
+    ship_to_filter = (request.args.get("ship_to") or "").strip()
     search      = request.args.get("search",  "").strip().lower()
     show        = request.args.get("show",    "ALL").upper()
     sort_col    = request.args.get("sort",    "actual")
@@ -5490,9 +5493,10 @@ def api_rebate_data():
             FROM rebate_customer_map m
             LEFT JOIN customer c ON c.sold_to = m.sold_to
             WHERE (%s = 'ALL' OR m.brand = %s)
+              AND (%s = 'ALL' OR m.line = %s)
               AND (%s = 'ALL' OR c.sold_to_group = %s)
             GROUP BY m.sold_to, m.brand, m.structure_name
-        """, (brand_filter, brand_filter, stg_filter, stg_filter))
+        """, (brand_filter, brand_filter, line_filter, line_filter, stg_filter, stg_filter))
         customers = cur.fetchall()
         if not customers:
             return jsonify([])
@@ -5972,6 +5976,14 @@ def api_rebate_data():
         if bde_filter:
             bf = bde_filter.strip().upper()
             rows = [r for r in rows if (r["bde"] or "").strip().upper() == bf]
+        if sold_to_filter and sold_to_filter.upper() != "ALL":
+            sf = sold_to_filter.upper()
+            rows = [r for r in rows if (r["sold_to_name"] or "").strip().upper() == sf
+                    or str(r["sold_to"]).upper() == sf]
+        if ship_to_filter and ship_to_filter.upper() != "ALL":
+            shf = ship_to_filter.upper()
+            rows = [r for r in rows if (r["ship_to_name"] or "").strip().upper() == shf
+                    or str(r["ship_to"]).upper() == shf]
         if search:
             rows = [r for r in rows if
                     search in r["sold_to_name"].lower() or
@@ -6030,6 +6042,7 @@ def api_rebate_data():
             "est_total":  round(sum(r["curr_rebate"] for r in rows if r.get("rollup", True)), 2),
             "region_totals": region_totals,
             "region_grand":  region_grand,
+            "hq_by_region":  {rk: round(hq_by_region.get(rk, 0.0), 2) for rk in REGION_KEYS},
             "store_total":   store_total,
             "hq_total":      hq_total,
             "grand_total":   grand_total,

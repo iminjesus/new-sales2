@@ -36,6 +36,10 @@ header .sub{font-size:10px;opacity:.55}
 .rbtn.r-vic.active{background:#6d28d9}
 .rbtn.r-wa.active{background:#065f46}
 .rbtn.m-btn.active{background:#0f766e}
+.rbtn.b-btn.active{background:#0369a1}
+.rbtn.l-btn.active{background:#9333ea}
+.filters select,.filters input[type="text"].picker{border:1px solid #d1d5db;border-radius:6px;padding:5px 8px;font-size:12px;background:#fff;color:#374151;min-width:140px}
+.filters select:focus,.filters input.picker:focus{border-color:#2563eb;outline:none}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}
 /* Region header rows (level 1) */
@@ -141,6 +145,40 @@ tr.ship-row td:first-child{padding-left:28px}
       <button class="rbtn m-btn"         data-month="2604"      onclick="setMonth('2604')">Apr</button>
     </div>
   </div>
+  <div>
+    <label>Brand</label>
+    <div class="region-btns" id="brand-btns">
+      <button class="rbtn b-btn active" data-brand="ALL"  onclick="setBrand('ALL')">All</button>
+      <button class="rbtn b-btn"         data-brand="HK"   onclick="setBrand('HK')">HK</button>
+      <button class="rbtn b-btn"         data-brand="LF"   onclick="setBrand('LF')">LF</button>
+    </div>
+  </div>
+  <div>
+    <label>Line</label>
+    <div class="region-btns" id="line-btns">
+      <button class="rbtn l-btn active" data-line="ALL"  onclick="setLine('ALL')">All</button>
+      <button class="rbtn l-btn"         data-line="PCLT" onclick="setLine('PCLT')">PCLT</button>
+      <button class="rbtn l-btn"         data-line="TBR"  onclick="setLine('TBR')">TBR</button>
+    </div>
+  </div>
+  <div>
+    <label>Salesman</label>
+    <select id="f_salesman" onchange="setSalesman(this.value)"><option value="ALL">ALL</option></select>
+  </div>
+  <div>
+    <label>Sold-to</label>
+    <input type="text" id="f_soldto" class="picker" list="soldToList"
+           placeholder="Search Sold-to..." autocomplete="off"
+           onchange="setSoldTo(this.value)" onfocus="loadSoldToList()">
+    <datalist id="soldToList"></datalist>
+  </div>
+  <div>
+    <label>Ship-to</label>
+    <input type="text" id="f_shipto" class="picker" list="shipToList"
+           placeholder="Search Ship-to..." autocomplete="off"
+           onchange="setShipTo(this.value)" onfocus="loadShipToList()">
+    <datalist id="shipToList"></datalist>
+  </div>
   <div style="margin-left:auto;align-self:flex-end">
     <button class="rbtn" style="background:#16a34a;color:#fff;border-color:transparent"
             onclick="exportXLSX()" title="현재 검색/필터 결과를 엑셀로 다운로드">⬇ Excel</button>
@@ -163,6 +201,19 @@ let currentPage   = 0;
 let lastMeta      = {};        // last API response metadata
 let activeRegion  = "ALL";     // region filter
 let activeMonth   = "thismonth"; // sales source: thismonth | 2601..2604
+let activeBrand   = "ALL";     // HK | LF | ALL  (territory)
+let activeLine    = "ALL";     // PCLT | TBR | ALL
+let activeBde     = "";        // salesman_name (exact); '' = ALL
+let activeSoldTo  = "";        // sold_to name or code (exact); '' = ALL
+let activeShipTo  = "";
+let soldToLoaded  = false;
+let shipToLoaded  = false;
+const REGION_SALESMEN={
+  NSW:["LUTTRELL STEVE","Borghese Alessio","Buckley Paul"],
+  QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
+  VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
+  WA:["DAIS Jim","Asim Qureshi"]
+};
 let lockedBde     = "";        // role-scope: BDE locked to themselves
 let lockedRegion  = "";        // role-scope: SM locked to their state
 
@@ -185,6 +236,54 @@ function setMonth(m){
   document.querySelectorAll("#month-btns .rbtn").forEach(b =>
     b.classList.toggle("active", b.dataset.month === m));
   fetchPage(0);
+}
+
+// ─── Brand / Line / Salesman / Sold-to / Ship-to controls ──────────────────
+function setBrand(b){
+  activeBrand = b;
+  document.querySelectorAll("#brand-btns .rbtn").forEach(x =>
+    x.classList.toggle("active", x.dataset.brand === b));
+  fetchPage(0);
+}
+function setLine(l){
+  activeLine = l;
+  document.querySelectorAll("#line-btns .rbtn").forEach(x =>
+    x.classList.toggle("active", x.dataset.line === l));
+  fetchPage(0);
+}
+function setSalesman(v){ activeBde = (v && v !== "ALL") ? v : ""; fetchPage(0); }
+function setSoldTo(v){   activeSoldTo = (v || "").trim();          fetchPage(0); }
+function setShipTo(v){   activeShipTo = (v || "").trim();          fetchPage(0); }
+
+function populateSalesmanOptions(){
+  const sel = document.getElementById("f_salesman");
+  if(!sel) return;
+  const all = [...new Set(Object.values(REGION_SALESMEN).flat())]
+              .sort((a,b)=>a.localeCompare(b));
+  // keep ALL + add salesmen
+  sel.innerHTML = '<option value="ALL">ALL</option>' +
+    all.map(n=>`<option value="${n}">${n}</option>`).join("");
+}
+
+async function loadSoldToList(){
+  if(soldToLoaded) return;
+  try{
+    const r = await fetch("/api/sold_to_names?top_limit=0");
+    const j = await r.json();
+    const dl = document.getElementById("soldToList");
+    dl.innerHTML = (j || []).map(n => `<option value="${String(n).replace(/"/g,'&quot;')}">`).join("");
+    soldToLoaded = true;
+  }catch(e){ /* ignore */ }
+}
+async function loadShipToList(){
+  if(shipToLoaded) return;
+  try{
+    const r = await fetch("/api/ship_to_names");
+    const j = await r.json();
+    const dl = document.getElementById("shipToList");
+    dl.innerHTML = (j || []).map(n => `<option value="${String(n).replace(/"/g,'&quot;')}">`).join("");
+    shipToLoaded = true;
+  }catch(e){ /* ignore */ }
 }
 
 // ─── Role-based scope (matches graph/map views) ───────────────────────────
@@ -243,9 +342,14 @@ function buildQS(page){
     dir:           sortDir,
     region:        activeRegion,
     month:         activeMonth,
+    territory:     activeBrand,
+    line:          activeLine,
     page:          page ?? currentPage,
     page_size:     40,
   };
+  if (activeBde)    params.bde     = activeBde;
+  if (activeSoldTo) params.sold_to = activeSoldTo;
+  if (activeShipTo) params.ship_to = activeShipTo;
   // Role scope — BDE users always send their own salesman_name so the
   // backend filters out every other BDE's portion of shared sold_tos.
   if (lockedBde) params.bde = lockedBde;
@@ -290,9 +394,18 @@ function renderPage(data){
   const rg = s.region_grand  || {};   // grand total (Store + HQ/VR) per region
   const REGIONS = ["NSW","QLD","VIC","WA"];
   const REGION_COLORS = {NSW:"#1d4ed8", QLD:"#b45309", VIC:"#6d28d9", WA:"#065f46"};
-  const storeTotal = s.store_total || 0;          // Store/base rebate (table)
-  const hqTotal    = s.hq_total || 0;             // HQ/VR rebate (box)
-  const grandTotal = (s.grand_total!=null) ? s.grand_total : (storeTotal + hqTotal);
+  // When a region is selected, the three summary cards (Store / HQ-VR / Grand)
+  // narrow to that region's slice — clicking the region card "interacts" with
+  // them.  ALL = global totals.
+  const hqByRegion = s.hq_by_region || {};
+  const totalStore = s.store_total || 0;
+  const totalHq    = s.hq_total || 0;
+  const totalGrand = (s.grand_total!=null) ? s.grand_total : (totalStore + totalHq);
+  const sel        = activeRegion;
+  const inRegion   = sel !== "ALL" && rt[sel];
+  const storeTotal = inRegion ? (rt[sel].rebate || 0) : totalStore;
+  const hqTotal    = inRegion ? (hqByRegion[sel] || 0) : totalHq;
+  const grandTotal = inRegion ? ((rg[sel] != null) ? rg[sel] : (storeTotal + hqTotal)) : totalGrand;
 
   // Region cards show the GRAND total (Store + HQ/VR) split by region — they
   // sum to the Grand Total card.
@@ -310,19 +423,20 @@ function renderPage(data){
   const hqTip = (hq.items || []).slice(0, 30)
     .map(it => `${esc(it.sold_to_name||it.sold_to)} (${it.sold_to})  ${money(it.rebate)}`)
     .join("&#10;");
+  const scope = inRegion ? ` · ${sel}` : "";
   const storeCard = `<div class="stat-card total-card" style="cursor:pointer" onclick="setRegion('ALL')">
-      <div class="label">Store Rebate</div>
+      <div class="label">Store Rebate${scope}</div>
       <div class="value" style="font-size:16px">${money(storeTotal)}</div>
     </div>`;
   const hqCard = `<div class="stat-card" title="${hqTip}"
         style="border-color:#be123c;background:#fff1f2">
-      <div class="label" style="color:#be123c;font-weight:700">HQ / VR Rebate</div>
+      <div class="label" style="color:#be123c;font-weight:700">HQ / VR Rebate${scope}</div>
       <div class="value" style="color:#be123c;font-size:16px">${money(hqTotal)}</div>
       <div class="label" style="color:#9f1239">${(hq.items||[]).length} sold-to</div>
     </div>`;
   const grandCard = `<div class="stat-card total-card"
         style="background:#0b3b2e;border-color:transparent">
-      <div class="label" style="color:rgba(255,255,255,.7)">Grand Total (Store + HQ/VR)</div>
+      <div class="label" style="color:rgba(255,255,255,.7)">Grand Total (Store + HQ/VR)${scope}</div>
       <div class="value" style="font-size:16px;color:#fff">${money(grandTotal)}</div>
     </div>`;
 
@@ -630,7 +744,7 @@ function escAttr(s){return String(s||"").replace(/"/g,"&quot;");}
 // Wait for /api/whoami to come back before the first fetch so the
 // backend always gets the BDE/Region scope on the very first request
 // (matches the graph/map view behaviour).
-(async () => { await applyRoleScope(); load(); })();
+(async () => { await applyRoleScope(); populateSalesmanOptions(); load(); })();
 </script>
 </body>
 </html>
