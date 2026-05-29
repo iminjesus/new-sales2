@@ -7127,6 +7127,139 @@ def bdes_active():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+def _meeting_owner_or_403(cur, mid):
+    """Return (ok, owner_email).  ok is False with the row missing/forbidden."""
+    me = (_bde_from_request() or "").strip().lower()
+    if not me:
+        return False, None
+    cur.execute("SELECT bde_email FROM meeting_log WHERE id=%s", (mid,))
+    row = cur.fetchone()
+    if not row:
+        return False, None
+    owner = (row.get("bde_email") or "").strip().lower()
+    return (owner == me), owner
+
+@app.patch("/api/meeting/<int:mid>")
+def meeting_patch(mid):
+    """Edit one's own meeting_log row.  Only the original author (matched by
+    bde_email) can update notes / next_action / prep_notes / met_person /
+    visit_purpose / visit_date."""
+    body = request.get_json(silent=True) or {}
+    allowed = ("notes", "next_action", "prep_notes",
+               "met_person", "visit_purpose", "visit_date")
+    updates = {k: (body[k] or "").strip() if isinstance(body[k], str) else body[k]
+               for k in allowed if k in body}
+    if "visit_purpose" in updates and updates["visit_purpose"] and \
+       updates["visit_purpose"] not in ("Promotion", "Product introduction",
+                                        "Claim support", "Rebate follow-up",
+                                        "Stock", "Other"):
+        return jsonify({"error": "invalid visit_purpose"}), 400
+    if not updates:
+        return jsonify({"error": "no fields"}), 400
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        ok, _ = _meeting_owner_or_403(cur, mid)
+        if not ok:
+            return jsonify({"error": "forbidden"}), 403
+        sets   = ", ".join(f"{k}=%s" for k in updates)
+        params = list(updates.values()) + [mid]
+        cur.execute(f"UPDATE meeting_log SET {sets} WHERE id=%s", params)
+        conn.commit()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+@app.delete("/api/meeting/<int:mid>")
+def meeting_delete(mid):
+    """Delete one's own meeting_log row (and its feedback thread)."""
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        ok, _ = _meeting_owner_or_403(cur, mid)
+        if not ok:
+            return jsonify({"error": "forbidden"}), 403
+        cur.execute("DELETE FROM meeting_feedback WHERE meeting_id=%s", (mid,))
+        cur.execute("DELETE FROM meeting_log WHERE id=%s", (mid,))
+        conn.commit()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+@app.patch("/api/meeting/feedback/<int:fid>")
+def meeting_feedback_patch(fid):
+    """Edit one's own feedback comment."""
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    me = (_bde_from_request() or "").strip().lower()
+    if not me:
+        return jsonify({"error": "auth required"}), 401
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT author_email, meeting_id FROM meeting_feedback WHERE id=%s", (fid,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        if (row.get("author_email") or "").strip().lower() != me:
+            return jsonify({"error": "forbidden"}), 403
+        cur.execute("UPDATE meeting_feedback SET text=%s WHERE id=%s", (text, fid))
+        # Refresh the denormalised latest-feedback cache on meeting_log
+        cur.execute("""
+            SELECT text FROM meeting_feedback
+            WHERE meeting_id=%s
+            ORDER BY created_at DESC, id DESC LIMIT 1
+        """, (row["meeting_id"],))
+        last = cur.fetchone()
+        cur.execute("UPDATE meeting_log SET feedback=%s WHERE id=%s",
+                    (last["text"] if last else None, row["meeting_id"]))
+        conn.commit()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+@app.delete("/api/meeting/feedback/<int:fid>")
+def meeting_feedback_delete(fid):
+    """Delete one's own feedback comment."""
+    me = (_bde_from_request() or "").strip().lower()
+    if not me:
+        return jsonify({"error": "auth required"}), 401
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT author_email, meeting_id FROM meeting_feedback WHERE id=%s", (fid,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        if (row.get("author_email") or "").strip().lower() != me:
+            return jsonify({"error": "forbidden"}), 403
+        mid = row["meeting_id"]
+        cur.execute("DELETE FROM meeting_feedback WHERE id=%s", (fid,))
+        cur.execute("""
+            SELECT text FROM meeting_feedback
+            WHERE meeting_id=%s
+            ORDER BY created_at DESC, id DESC LIMIT 1
+        """, (mid,))
+        last = cur.fetchone()
+        cur.execute("UPDATE meeting_log SET feedback=%s WHERE id=%s",
+                    (last["text"] if last else None, mid))
+        conn.commit()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+
 @app.post("/api/meeting")
 def meeting_post():
     """Insert one visit-log entry.  Accepts multipart/form-data so the

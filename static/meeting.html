@@ -969,6 +969,16 @@ function renderRecentRows(){
     const photos = (r.photo_paths || [])
       .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
       .join("");
+    // Own-entry actions: visible to the original BDE author only.
+    const owns = _isMine(r.bde_email);
+    const actions = owns
+      ? `<div style="margin-top:4px;font-size:10px;">
+           <a href="javascript:void(0)" data-t="${_attr(r.notes || '')}"
+              onclick="editEntry(${r.id}, this.dataset.t)"
+              style="color:#2563eb;margin-right:8px;">edit</a>
+           <a href="javascript:void(0)" onclick="deleteEntry(${r.id})"
+              style="color:#dc2626;">delete</a>
+         </div>` : "";
     const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
     const prep = r.prep_notes ? `<div style="margin-top:4px;padding:5px 8px;background:#eff6ff;border-left:3px solid #2563eb;border-radius:3px;font-size:11px;color:#1e3a5f;"><b style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;">Prep</b><div style="white-space:pre-wrap;">${escapeHtml(r.prep_notes)}</div></div>` : "";
     const met  = r.met_person  ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : "";
@@ -1019,7 +1029,7 @@ function renderRecentRows(){
     // Purpose are conveyed by the group headers above.
     h += `<tr>
       <td class="ts" style="padding-left:36px;">${r.visit_date || r.created_at}</td>
-      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${prep}${fbBlock}</td>
+      <td class="notes">${escapeHtml(r.notes || "")}${next}${met}${prep}${actions}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }
@@ -1163,18 +1173,81 @@ function _peopleOptions(){
   ).join("");
 }
 
+// Current user's email (for "본인이 쓴 것" — own-entry edit/delete controls).
+function _meEmail(){ return ((window._me && window._me.email) || "").toLowerCase(); }
+function _isMine(email){
+  const me = _meEmail();
+  return !!me && (email || "").toLowerCase() === me;
+}
+
+async function editEntry(id, currentNotes){
+  const next = window.prompt("Edit notes:", currentNotes || "");
+  if (next == null) return;            // cancelled
+  const t = next.trim();
+  if (!t){ alert("Notes can't be empty."); return; }
+  const r = await fetch("/api/meeting/" + id, {
+    method:"PATCH", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({notes: t})
+  });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Edit failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+async function deleteEntry(id){
+  if (!confirm("Delete this visit log? (Feedback comments on it will also be removed.)")) return;
+  const r = await fetch("/api/meeting/" + id, {method:"DELETE"});
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Delete failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+async function editFeedback(fid, currentText){
+  const next = window.prompt("Edit feedback:", currentText || "");
+  if (next == null) return;
+  const t = next.trim();
+  if (!t){ alert("Comment can't be empty."); return; }
+  const r = await fetch("/api/meeting/feedback/" + fid, {
+    method:"PATCH", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({text: t})
+  });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Edit failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+async function deleteFeedback(fid){
+  if (!confirm("Delete this comment?")) return;
+  const r = await fetch("/api/meeting/feedback/" + fid, {method:"DELETE"});
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Delete failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+
+function _ownerActionsHtml(buttons){
+  return `<span style="margin-left:6px;font-size:10px;">${buttons}</span>`;
+}
+
 function renderFeedbackBlock(rid, thread){
-  const items = (thread || []).map(t => `
+  const items = (thread || []).map(t => {
+    const mine = _isMine(t.author_email);
+    const actions = mine
+      ? _ownerActionsHtml(
+          `<a href="javascript:void(0)" onclick="editFeedback(${t.id}, this.dataset.t)"
+              data-t="${_attr(t.text || '')}"
+              style="color:#2563eb;margin-right:6px;">edit</a>` +
+          `<a href="javascript:void(0)" onclick="deleteFeedback(${t.id})"
+              style="color:#dc2626;">delete</a>`)
+      : "";
+    return `
     <div style="margin-bottom:6px;">
       <div style="font-size:10px;color:#6b7280;margin-bottom:2px;">
         <b>${escapeHtml(t.author_name || t.author_email || "—")}</b>
-        · ${escapeHtml(t.created_at || "")}
+        · ${escapeHtml(t.created_at || "")}${actions}
       </div>
       <div style="padding:5px 9px;background:#fef3c7;border-left:3px solid #f59e0b;
                   border-radius:3px;font-size:12px;color:#78350f;white-space:pre-wrap;">
         ${escapeHtml(t.text || "")}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   return `<div id="fb-${rid}" style="margin-top:6px;">
     ${items}
     <a href="javascript:void(0)" onclick="openFeedbackComposer(${rid})"
