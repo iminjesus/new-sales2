@@ -26,7 +26,7 @@ def init_driver():
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
     driver = webdriver.Chrome(options=options)
-    driver.set_script_timeout(60)
+    driver.set_script_timeout(120)
     return driver
 
 
@@ -118,6 +118,12 @@ return (function(startIdx) {
         dedupKeys.add(key);
 
         results.push({ title: title, price: price, saveText: saveText, promo: promo });
+    }
+    /* Remove the cards we processed so the page stays lightweight even after
+       dozens of Load More clicks (the extraction JS slows down dramatically
+       as the DOM grows past a couple thousand cards). */
+    for (var ri = 0; ri < cards.length; ri++) {
+        try { cards[ri].remove(); } catch (e) {}
     }
     return results;
 })(arguments[0]);
@@ -253,8 +259,8 @@ def main():
         time.sleep(5)   # wait for AJAX initial load
 
         total         = 0
-        extracted_idx = 0   # how many cards already extracted
-        stale         = 0
+        stale         = 0   # consecutive "no new cards appeared"
+        extract_fail  = 0   # consecutive "cards appeared but extraction returned 0"
         click_num     = 0
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
@@ -263,6 +269,8 @@ def main():
                              "PRICE", "DISC_PRICE", "PROMO", "SAVE_TEXT"])
 
             # ── Extract initial page ──────────────────────────────────────────
+            # The extractor now removes the cards it processed, so we always
+            # extract "from 0" — whatever is currently on the page is new.
             initial_count = count_cards(driver)
             print(f"Initial load: {initial_count} cards")
             raw  = extract_from(driver, 0)
@@ -270,10 +278,12 @@ def main():
             write_rows(writer, rows)
             f.flush()
             total         += len(rows)
-            extracted_idx  = initial_count
             print(f"  ── saved {len(rows)}  (total: {total})\n")
 
             # ── Load More loop ────────────────────────────────────────────────
+            # Each iteration: click → wait for cards to appear → extract → the
+            # extractor removes them from the DOM, so the page stays small and
+            # the JS never runs out of time.
             while click_num < MAX_CLICKS:
                 found = click_load_more(driver)
                 if not found:
@@ -282,17 +292,18 @@ def main():
 
                 click_num += 1
 
-                # Adaptive wait: poll until count rises (max 6s)
+                # Adaptive wait: poll until at least one card is on the page
+                # (after our previous removal the count was 0, so any card
+                # means the click actually loaded new ones).
                 deadline = time.time() + 6.0
-                after = extracted_idx
+                after = 0
                 while time.time() < deadline:
                     time.sleep(0.3)
                     after = count_cards(driver)
-                    if after > extracted_idx:
+                    if after > 0:
                         break
 
-                added = after - extracted_idx
-                if added == 0:
+                if after == 0:
                     stale += 1
                     print(f"  Click {click_num:>3}: +0  [stale {stale}/5]")
                     if stale >= 5:
@@ -302,14 +313,22 @@ def main():
 
                 stale = 0
 
-                # Extract ONLY the new cards
-                raw  = extract_from(driver, extracted_idx)
+                # Extract everything currently on the page (the removal step
+                # inside _JS_EXTRACT will clean up after itself).
+                raw  = extract_from(driver, 0)
                 rows = process_raw(raw)
+                if rows:
+                    extract_fail = 0
+                else:
+                    extract_fail += 1
                 write_rows(writer, rows)
                 f.flush()
-                total         += len(rows)
-                extracted_idx  = after
-                print(f"  Click {click_num:>3}: +{added:>3} cards → {len(rows):>3} products  (total: {total})")
+                total += len(rows)
+                tag = "" if rows else f"  [extract failed {extract_fail}/5]"
+                print(f"  Click {click_num:>3}: +{after:>3} cards → {len(rows):>3} products  (total: {total}){tag}")
+                if extract_fail >= 5:
+                    print("  Too many extraction failures in a row — stopping")
+                    break
 
         print(f"\nFinished. {total} products saved → {OUTPUT_FILE}")
 
