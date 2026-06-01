@@ -202,12 +202,21 @@ return (function() {
             }
         }
 
-        /* Regular price (before "OR BUY") */
+        /* Regular per-tyre price — skip any $X that lives inside a promo
+           banner like "BUY 4 & GET $100 EGIFT CARD" or "OR BUY 4 FOR $X".
+           Walk every $-match and pick the first one that ISN'T promo-tagged. */
         var price = '';
-        var buyPos = text.toUpperCase().indexOf('OR BUY');
-        var priceIn = buyPos > 0 ? text.substring(0, buyPos) : text;
-        var pm = priceIn.match(/\$([\d,]+(?:\.\d+)?)/);
-        if (pm) price = pm[1].replace(/,/g, '');
+        var priceRe = /\$([\d,]+(?:\.\d+)?)/g;
+        var pm;
+        while ((pm = priceRe.exec(text)) !== null) {
+            var i = pm.index;
+            var ctxBefore = text.substring(Math.max(0, i - 30), i).toUpperCase();
+            var ctxAround = text.substring(Math.max(0, i - 40), i + 60).toUpperCase();
+            if (/GIFT\s*CARD|EGIFT/.test(ctxAround)) continue;   // egift card promo
+            if (/OR\s+BUY|BUY\s+\d+\s*[&+]\s*GET/.test(ctxBefore)) continue;  // bulk promo
+            price = pm[1].replace(/,/g, '');
+            break;
+        }
 
         /* Bulk / promo */
         var disc = '', promo = '';
