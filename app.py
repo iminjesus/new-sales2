@@ -309,15 +309,15 @@ def category_filters(alias: str, category: str):
     return joins, wh
 
 
-# ?? Helpers for normalised sales tables (line/product_group/pattern/inch live in carrying_2602) ??
+# ?? Helpers for normalised sales tables (line/product_group/pattern/inch live in carrying_26) ??
 
 def _carrying_join(alias: str) -> str:
-    """Returns the LEFT JOIN clause for carrying_2602 using alias 'mat'."""
-    return f"LEFT JOIN carrying_2602 mat ON mat.m_code = {alias}.material"
+    """Returns the LEFT JOIN clause for carrying_26 using alias 'mat'."""
+    return f"LEFT JOIN carrying_26 mat ON mat.m_code = {alias}.material"
 
 
 def _ensure_carrying_join(alias: str, joins: list) -> None:
-    """Adds the carrying_2602 join to 'joins' if it is not already present."""
+    """Adds the carrying_26 join to 'joins' if it is not already present."""
     j = _carrying_join(alias)
     if j not in joins:
         joins.append(j)
@@ -347,14 +347,14 @@ def category_filters_sales(alias: str, category: str, has_brand: bool = False):
     """
     Like category_filters() but for the normalised sales fact tables
     (sales_2601 / sales_2526 / sales_21_25) where line / inch / pattern
-    have been removed and now live in carrying_2602 (alias: mat).
+    have been removed and now live in carrying_26 (alias: mat).
 
     Returns (joins, wheres) — same contract as category_filters().
 
     has_brand=True signals the fact table has its own `brand` column
     (currently only sales_thismonth).  For HK / LF that path filters
     directly on `{alias}.brand` so we don't drop rows where the
-    material isn't in carrying_2602 (a real case — Rebate brand-tagged
+    material isn't in carrying_26 (a real case — Rebate brand-tagged
     sales for materials still missing from the master).
     """
     joins, wh = [], []
@@ -391,7 +391,7 @@ def category_filters_sales(alias: str, category: str, has_brand: bool = False):
         joins.append(f"JOIN hm hm ON hm.sold_to = {alias}.sold_to")
 
     elif cat in ("HK", "LF"):
-        # Brand filter via carrying_2602.  sales_thismonth has its own
+        # Brand filter via carrying_26.  sales_thismonth has its own
         # brand column but the other sales facts (monthly / yearly) don't,
         # so go through carrying for a single uniform path.
         if has_brand:
@@ -418,7 +418,7 @@ def category_target_filters(alias: str, category: str):
     """
     Returns (joins, wheres) for target_26 table.
     target_26 has a material column; line/inch/pattern attributes live in
-    carrying_2602 so we JOIN that table (alias: mat) for category filtering,
+    carrying_26 so we JOIN that table (alias: mat) for category filtering,
     exactly like category_filters_sales() does for sales fact tables.
     """
     joins, wh = [], []
@@ -427,7 +427,7 @@ def category_target_filters(alias: str, category: str):
     if cat == "ALL":
         return joins, wh
 
-    carrying_join = f"LEFT JOIN carrying_2602 mat ON mat.m_code = {alias}.material"
+    carrying_join = f"LEFT JOIN carrying_26 mat ON mat.m_code = {alias}.material"
 
     if cat == "PCLT":
         joins.append(carrying_join)
@@ -460,8 +460,8 @@ def category_target_filters(alias: str, category: str):
         wh.append(f"mat.brand = '{cat}'")
 
     elif cat == "443":
-        # product_group lives in carrying_2602 (alias: mat) for target_26
-        joins.append(f"LEFT JOIN carrying_2602 mat ON mat.m_code = {alias}.material")
+        # product_group lives in carrying_26 (alias: mat) for target_26
+        joins.append(f"LEFT JOIN carrying_26 mat ON mat.m_code = {alias}.material")
         wh.append(f"""EXISTS (
             SELECT 1 FROM `443_25` p443
             WHERE p443.month = {alias}.month
@@ -513,14 +513,14 @@ def category_filters_stock(alias: str, category: str):
         joins.append("JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) = s.material")
 
     elif cat == "SUV":
-        # stock?먮뒗 pattern???놁쓣 ???덉쑝??carrying_2602濡쒕???pattern 媛?몄?????        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
+        # stock?먮뒗 pattern???놁쓣 ???덉쑝??carrying_26濡쒕???pattern 媛?몄?????        joins.append("JOIN carrying_26 c ON c.m_code = s.material")
         joins.append("JOIN suv suv ON suv.Pattern = c.pattern")
 
     elif cat == "LOWPROFILE":
         joins.append("JOIN lowprofile lp ON CAST(TRIM(lp.Material) AS UNSIGNED) = s.material")
 
     elif cat in ("HK", "LF"):
-        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
+        joins.append("JOIN carrying_26 c ON c.m_code = s.material")
         wh.append(f"c.brand = '{cat}'")
 
     return joins, wh
@@ -896,7 +896,7 @@ def api_stock():
         """
 
         # carrying join (for prod_group/pattern filters, and for PCLT/TBR if you implement via product_group)
-        joins.append("JOIN carrying_2602 c ON c.m_code = s.material")
+        joins.append("JOIN carrying_26 c ON c.m_code = s.material")
 
         # plant filter
         wh.append(f"s.plant IN ({','.join(['%s']*len(plants))})")
@@ -918,7 +918,7 @@ def api_stock():
             wh.append("c.size LIKE %s")
             params.append(f"%{material}%")
 
-        # category chip handling ??carrying_2602 c is already joined above
+        # category chip handling ??carrying_26 c is already joined above
         if category == "PCLT":
             wh.append("c.line = 'PCLT'")
         elif category == "TBR":
@@ -1137,7 +1137,7 @@ def api_sales_stats_by_state():
                 or category in ("PCLT", "TBR", "18PLUS", "SUV", "443")
             )
             if needs_carrying:
-                joins.append(f"JOIN carrying_2602 c ON c.m_code = {tbl_alias}.material")
+                joins.append(f"JOIN carrying_26 c ON c.m_code = {tbl_alias}.material")
             if prod_group and prod_group != "ALL":
                 wh.append("c.product_group = %s"); params.append(prod_group)
             if pattern:
@@ -1331,7 +1331,7 @@ def api_orders():
         """
 
         if needs_carrying:
-            joins.append("JOIN carrying_2602 c ON c.m_code = o.material")
+            joins.append("JOIN carrying_26 c ON c.m_code = o.material")
 
         joins += cat_joins
 
@@ -1471,7 +1471,7 @@ def api_incoming():
         """
 
         if needs_carrying:
-            joins.append("JOIN carrying_2602 c ON c.m_code = o.material")
+            joins.append("JOIN carrying_26 c ON c.m_code = o.material")
 
         joins += cat_joins
 
@@ -1621,7 +1621,7 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
         joins += cat_joins
         wh    += cat_where
 
-    # product_group / pattern / size all live in carrying_2602
+    # product_group / pattern / size all live in carrying_26
     if (f.get("product_group") != "ALL" or f.get("pattern") != "ALL" or
         f.get("material") != "ALL"):
         _ensure_carrying_join("sTop", joins)
@@ -1742,10 +1742,10 @@ def v2_dimensions():
         """, tuple(params))
         ship_to_names = [r["v"] for r in cur.fetchall()]
 
-        # Product groups ??from material master (carrying_2602)
+        # Product groups ??from material master (carrying_26)
         cur.execute("""
             SELECT DISTINCT TRIM(product_group) AS v
-            FROM carrying_2602
+            FROM carrying_26
             WHERE product_group IS NOT NULL AND TRIM(product_group) <> ''
             ORDER BY TRIM(product_group)
         """)
@@ -1755,7 +1755,7 @@ def v2_dimensions():
         if pg and pg != "ALL":
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern) AS v
-                FROM carrying_2602
+                FROM carrying_26
                 WHERE product_group = %s
                   AND pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
@@ -1763,7 +1763,7 @@ def v2_dimensions():
         else:
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern) AS v
-                FROM carrying_2602
+                FROM carrying_26
                 WHERE pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
             """)
@@ -1778,7 +1778,7 @@ def v2_dimensions():
         w2_sql = ("WHERE " + " AND ".join(w2)) if w2 else ""
         cur.execute(f"""
             SELECT DISTINCT size AS v
-            FROM carrying_2602
+            FROM carrying_26
             {w2_sql}
             ORDER BY size
         """, tuple(p2))
@@ -1906,7 +1906,7 @@ def v2_dashboard():
             cj, cw = category_filters_sales("s", f["category"], has_brand=True)
             joins_d += cj; wh_d += cw
         # Ensure carrying join when product_group / pattern / material (size)
-        # filter or group_by needs it.  Size is stored on carrying_2602.size
+        # filter or group_by needs it.  Size is stored on carrying_26.size
         # (the dropdown value is the size string, not a material code), so
         # filtering by size requires the carrying join.
         if (group_by in ("product_group", "pattern") or
@@ -1969,7 +1969,7 @@ def v2_dashboard():
         tj, tw = category_target_filters("t", f["category"])
         joins_t += tj; wh_t += tw
         wh_t.append("t.month = %s"); params_t.append(month)
-        carrying_join_t = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+        carrying_join_t = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
         needs_carrying_t = False
         if f["product_group"] != "ALL":
             needs_carrying_t = True
@@ -2076,8 +2076,8 @@ def v2_dashboard():
         joins_mt, wh_mt, params_mt = build_target_filters("t", f)
         tj2, tw2 = category_target_filters("t", f["category"])
         joins_mt += tj2; wh_mt += tw2
-        # carrying_2602 needed for product_group/pattern (not stored in target_26 directly)
-        carrying_join_mt = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+        # carrying_26 needed for product_group/pattern (not stored in target_26 directly)
+        carrying_join_mt = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
         needs_carrying_mt = group_by in ("product_group", "pattern")
         if f["product_group"] != "ALL":
             needs_carrying_mt = True
@@ -2291,7 +2291,7 @@ def daily_sales():
         joins += cat_joins
         wh    += cat_where
 
-    # product_group / pattern / size all live in carrying_2602 (alias: mat)
+    # product_group / pattern / size all live in carrying_26 (alias: mat)
     if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL":
         _ensure_carrying_join("s", joins)
     if f["product_group"] != "ALL":
@@ -2467,8 +2467,8 @@ def daily_target():
     joins += cat_joins
     wh    += cat_where
 
-    # Apply product_group / pattern / size filters via carrying_2602 join.
-    carrying_join_dt = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+    # Apply product_group / pattern / size filters via carrying_26 join.
+    carrying_join_dt = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
     if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL"):
         if carrying_join_dt not in joins:
             joins.append(carrying_join_dt)
@@ -3254,8 +3254,8 @@ def monthly_target():
     joins += cat_joins
     wh    += cat_where
 
-    # Apply product_group / pattern / size filters via carrying_2602 join.
-    carrying_join_mt = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+    # Apply product_group / pattern / size filters via carrying_26 join.
+    carrying_join_mt = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
     if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL"):
         if carrying_join_mt not in joins:
             joins.append(carrying_join_mt)
@@ -3355,8 +3355,8 @@ def monthly_target_breakdown():
             ") tcus ON tcus.sold_to = t.sold_to"
         )
 
-    # carrying_2602 join needed for group_by or filter on product_group/pattern
-    carrying_join = "LEFT JOIN carrying_2602 mat ON mat.m_code = t.material"
+    # carrying_26 join needed for group_by or filter on product_group/pattern
+    carrying_join = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
     needs_carrying = group_by in ("product_group", "pattern")
 
     if f["product_group"] != "ALL":
@@ -3769,7 +3769,7 @@ def product_group():
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
             SELECT DISTINCT TRIM(product_group)
-            FROM carrying_2602
+            FROM carrying_26
             WHERE product_group IS NOT NULL AND TRIM(product_group) <> ''
             ORDER BY TRIM(product_group)
         """)
@@ -3788,7 +3788,7 @@ def patterns():
         if product_group and product_group != "ALL":
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern)
-                FROM carrying_2602
+                FROM carrying_26
                 WHERE product_group = %s
                   AND pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
@@ -3796,7 +3796,7 @@ def patterns():
         else:
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern)
-                FROM carrying_2602
+                FROM carrying_26
                 WHERE pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
             """)
@@ -3835,7 +3835,7 @@ def materials():
 
         cur.execute(f"""
             SELECT DISTINCT size
-            FROM carrying_2602
+            FROM carrying_26
             {where_sql}
             ORDER BY size
         """, tuple(params))
@@ -3850,7 +3850,7 @@ def materials():
 
 @app.get("/api/carrying_price")
 def carrying_price():
-    """Return avg list_price and purchase_price from carrying_2602 for current filter."""
+    """Return avg list_price and purchase_price from carrying_26 for current filter."""
     product_group = (request.args.get("product_group") or "ALL").strip()
     pattern       = (request.args.get("pattern")       or "").strip()
     material      = (request.args.get("material")      or "").strip()
@@ -3877,7 +3877,7 @@ def carrying_price():
         cur.execute(f"""
             SELECT AVG(NULLIF(list_price, 0)) AS list_price,
                    AVG(NULLIF(purchase_price, 0)) AS purchase_price
-            FROM carrying_2602
+            FROM carrying_26
             {where_sql}
         """, tuple(params))
 
@@ -3973,12 +3973,12 @@ def profit_monthly():
                     )
                     params_p.append(st)
 
-            # ?? category filter (via carrying_2602, same as sales tables) ??
+            # ?? category filter (via carrying_26, same as sales tables) ??
             cat_joins_p, cat_where_p = category_filters_sales("p", f.get("category", "ALL"))
             joins_p += cat_joins_p
             wh_p    += cat_where_p
 
-            # ?? product_group / pattern filter (via carrying_2602) ??
+            # ?? product_group / pattern filter (via carrying_26) ??
             if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL" or f.get("material", "ALL") != "ALL":
                 _ensure_carrying_join("p", joins_p)
             if f.get("product_group", "ALL") != "ALL":
