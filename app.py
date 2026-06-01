@@ -5332,6 +5332,7 @@ REBATE_SALES_TABLES = {
     "2602": "sales_2602",
     "2603": "sales_2603",
     "2604": "sales_2604",
+    "2605": "sales_2605",
 }
 
 def _rebate_sales_table(month_arg):
