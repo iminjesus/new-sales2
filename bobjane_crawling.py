@@ -166,12 +166,17 @@ KNOWN_BRANDS = [
 
 
 def extract_size_from_title(title):
-    m = re.search(r'(\d{3}/\d{2}[A-Za-z]\d{2})', title)
+    # Accept one OR two letters between the aspect-ratio and rim-diameter:
+    # R (standard), ZR (Z-rated speed) — Michelin/Pirelli/Tracmax write
+    # high-speed tyres as "225/40ZR18" so the old single-letter regex left
+    # the SIZE blank.  Normalise ZR -> R so the size matches the comparison
+    # dropdown which only carries R sizes.
+    m = re.search(r'(\d{3}/\d{2}[A-Za-z]{1,2}\d{2})', title)
     if m:
-        return m.group(1).upper()
-    m = re.search(r'(\d{3}[A-Za-z]\d{2})', title)
+        return m.group(1).upper().replace("ZR", "R")
+    m = re.search(r'(\d{3}[A-Za-z]{1,2}\d{2})', title)
     if m:
-        return m.group(1).upper()
+        return m.group(1).upper().replace("ZR", "R")
     return ""
 
 
