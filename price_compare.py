@@ -112,6 +112,20 @@ def load_compare_base():
 
 
 def build_data(monthly):
+    # Sentinel values that should be treated as "no price" — these creep in
+    # from the source data and otherwise show up as nonsensical points on the
+    # chart ($0 collapses the line, $999 floats far above everything).
+    VOID_PRICES = {0, 999}
+    def _norm(p):
+        if p is None:
+            return None
+        try:
+            if float(p) in VOID_PRICES:
+                return None
+        except (TypeError, ValueError):
+            return None
+        return p
+
     months       = sorted(monthly.keys())
     month_labels = [_month_label(m) for m in months]
     sizes        = list(SIZE_CATEGORY.keys())
@@ -139,6 +153,13 @@ def build_data(monthly):
                 jx_desc, jx_price, *_        = best_jax(size, abbr, jx_lk, t_desc)
                 _tw_desc, _tw_cost, tw_price  = best_tw(size, abbr, tw_lk)
                 _twi_desc, _, twi_price          = best_twi(size, abbr, tw_lk)
+                # Void the meaningless sentinels (0 / 999) so the chart and
+                # tables treat them as missing instead of plotting them.
+                t_price  = _norm(t_price)
+                bj_price = _norm(bj_price)
+                jx_price = _norm(jx_price)
+                tw_price = _norm(tw_price)
+                twi_price = _norm(twi_price)
 
                 size_data[size][abbr]["tempe"].append(t_price)
                 size_data[size][abbr]["bj"].append(bj_price)
