@@ -1390,6 +1390,9 @@ fForm.addEventListener("submit", async (e) => {
     document.querySelectorAll('input[name="visit_purpose"]').forEach(r => { r.checked = false; });
     _setSelectedShop(null);   // also clears fPlanBde
     loadRecent();
+    // Refresh the calendar so the just-logged plan chip flips from
+    // faded to full colour without needing a page reload.
+    loadPlansForMonth().then(renderCalendar).catch(() => {});
     setTimeout(() => { fMsg.textContent = ""; }, 4000);
   } catch (err) {
     fMsg.textContent = "Error: " + err.message;
