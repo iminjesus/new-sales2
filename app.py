@@ -619,11 +619,6 @@ _TOP_SOLD_TO_CACHE: Dict[str, Tuple[float, Any]] = {}
 _GRAPH_CACHE: Dict[str, Tuple[float, Any]] = {}
 
 # ---- Fixed Top list computed once at startup (Top 10/20/30) ----
-# Key: (top_limit, value) where value is 'qty' or 'amt'
-_GLOBAL_TOP_FIXED: Dict[Tuple[int, str], List[str]] = {}
-_GLOBAL_TOP_READY = False
-
-
 def _cache_get(cache: Dict[str, Tuple[float, Any]], key: str):
     now = time()
     hit = cache.get(key)
@@ -1551,76 +1546,14 @@ def api_incoming():
         })
     finally:
         cur.close()
-        conn.close()       
-def build_global_top_once():
-    """Compute Top 10/20/30 once at server startup (no filters).
-    This avoids expensive GROUP BY / ORDER BY SUM on every request.
-    """
-    global _GLOBAL_TOP_READY
-    if _GLOBAL_TOP_READY:
-        return
-    print("[INIT] Building fixed Top 10/20/30 once...")
+        conn.close()
 
-    conn = get_connection()
-    if not conn:
-        print("[INIT] DB not ready; skipping fixed Top build")
-        return
-
-    cur = conn.cursor(dictionary=True)
-    try:
-        for val in ("qty", "amt"):
-            for limit in (10, 20, 30):
-                sql = f"""
-                    SELECT sold_to
-                    FROM sales_2526
-                    WHERE year = 2026
-                    GROUP BY sold_to
-                    ORDER BY SUM({val}) DESC
-                    LIMIT {limit}
-                """
-                cur.execute(sql)
-                rows = cur.fetchall() or []
-                _GLOBAL_TOP_FIXED[(int(limit), str(val))] = [r.get("sold_to") for r in rows if r.get("sold_to") is not None]
-        _GLOBAL_TOP_READY = True
-        print("[INIT] Fixed Top ready:", {k: len(v) for k, v in _GLOBAL_TOP_FIXED.items()})
-    except Exception as e:
-        print("[INIT] Fixed Top build failed:", e)
-    finally:
-        try:
-            cur.close(); conn.close()
-        except Exception:
-            pass
 
 def get_top_sold_to_from_baseline(cur, f, top_limit, value):
     """Top N sold_to based on 2026 sales (sales_2526 filtered to year=2026).
     Dynamic per filter: when region/salesman/category/etc are set, ranking
     runs within that slice — so clicking NSW + Top 10 gives the NSW top 10,
     not the country-wide top 10."""
-    try:
-        tl = int(top_limit or 0)
-    except Exception:
-        tl = 0
-    val_key = str(value or "qty")
-    # Fast path: only when ALL filters are at default ("ALL").  Any selected
-    # region/salesman/category/product_group/pattern/material/sold_to_group/
-    # sold_to/ship_to means the ranking must be recomputed for that slice.
-    _f = f or {}
-    no_filters = (
-        _f.get("region",        "ALL") == "ALL" and
-        _f.get("salesman",      "ALL") == "ALL" and
-        _f.get("sold_to_group", "ALL") == "ALL" and
-        _f.get("sold_to",       "ALL") == "ALL" and
-        _f.get("ship_to",       "ALL") == "ALL" and
-        _f.get("category",      "ALL") == "ALL" and
-        _f.get("product_group", "ALL") == "ALL" and
-        _f.get("pattern",       "ALL") == "ALL" and
-        _f.get("material",      "ALL") == "ALL"
-    )
-    if no_filters:
-        fixed = _GLOBAL_TOP_FIXED.get((tl, val_key))
-        if fixed is not None:
-            return fixed
-
     if not top_limit or top_limit <= 0:
         return None
 
@@ -2663,10 +2596,10 @@ def fetch_table_rows(top_limit: int):
         for d in range(1, 32)
     ])
 
-    # ---------- STEP 1: use GLOBAL TOP (prebuilt once) ----------
+    # ---------- STEP 1: Top-N sold_to (dynamic per current filter slice) ----------
     top_pairs = None
     if top_limit in (10, 20, 30):
-        sold_to_list = _GLOBAL_TOP_FIXED.get((int(top_limit), metric), [])
+        sold_to_list = get_top_sold_to_from_baseline(cur, f, int(top_limit), metric)
         if sold_to_list:
             top_pairs = [{"sold_to": s} for s in sold_to_list]
 
@@ -6411,10 +6344,6 @@ def api_rebate_export():
         return jsonify({"error":str(e)}),500
     finally:
         cur.close(); conn.close()
-
-# ------------------------------------------------------------------------------
-# Build fixed Top 10/20/30 once at startup (after functions are defined)
-build_global_top_once()
 
 # ------------------------------------------------------------------------------
 # BDE Visit / Meeting Log — page at /meeting, backed by meeting_log table.
