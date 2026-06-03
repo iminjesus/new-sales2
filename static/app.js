@@ -2412,6 +2412,20 @@ async function refreshSoldToCustom(){
   const res = await fetchJSON(`/api/sold_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
   __SOLD_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+  // If the Sold-to dropdown is currently open (user changed region/top while
+  // browsing the list), force it to re-render with the new options.  Without
+  // this the stale list keeps showing until they click outside and reopen.
+  _redrawOpenDD("sold_to", "soldToMenu");
+}
+
+// Helper: if a custom dropdown's menu is open, trigger its input-event
+// handler so it re-reads getOptions() and re-renders with the latest data.
+function _redrawOpenDD(inputId, menuId){
+  const menu = document.getElementById(menuId);
+  const inp  = document.getElementById(inputId);
+  if (menu && inp && menu.style.display === "block"){
+    inp.dispatchEvent(new Event("input"));
+  }
 }
 
 async function refreshShipToCustom(){
@@ -2437,6 +2451,7 @@ async function refreshShipToCustom(){
     if (typeof x === 'object') return x.ship_to_name || x.name || x.v || x.label || '';
     return String(x);
   }).filter(Boolean);
+  _redrawOpenDD("ship_to", "shipToMenu");
 }
 
 function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
