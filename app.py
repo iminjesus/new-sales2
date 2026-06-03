@@ -1573,6 +1573,7 @@ def build_global_top_once():
                 sql = f"""
                     SELECT sold_to
                     FROM sales_2526
+                    WHERE year = 2026
                     GROUP BY sold_to
                     ORDER BY SUM({val}) DESC
                     LIMIT {limit}
@@ -1591,19 +1592,34 @@ def build_global_top_once():
             pass
 
 def get_top_sold_to_from_baseline(cur, f, top_limit, value):
-    """Get Top N sold_to based on sales_2526 (baseline).
-    This is a hot path when the UI uses top_limit; cache it briefly.
-    """
-    # Fast path: fixed Top 10/20/30 computed once at startup (no filters).
-    # This completely removes baseline Top-N queries from the request path.
+    """Top N sold_to based on 2026 sales (sales_2526 filtered to year=2026).
+    Dynamic per filter: when region/salesman/category/etc are set, ranking
+    runs within that slice — so clicking NSW + Top 10 gives the NSW top 10,
+    not the country-wide top 10."""
     try:
         tl = int(top_limit or 0)
     except Exception:
         tl = 0
     val_key = str(value or "qty")
-    fixed = _GLOBAL_TOP_FIXED.get((tl, val_key))
-    if fixed is not None:
-        return fixed
+    # Fast path: only when ALL filters are at default ("ALL").  Any selected
+    # region/salesman/category/product_group/pattern/material/sold_to_group/
+    # sold_to/ship_to means the ranking must be recomputed for that slice.
+    _f = f or {}
+    no_filters = (
+        _f.get("region",        "ALL") == "ALL" and
+        _f.get("salesman",      "ALL") == "ALL" and
+        _f.get("sold_to_group", "ALL") == "ALL" and
+        _f.get("sold_to",       "ALL") == "ALL" and
+        _f.get("ship_to",       "ALL") == "ALL" and
+        _f.get("category",      "ALL") == "ALL" and
+        _f.get("product_group", "ALL") == "ALL" and
+        _f.get("pattern",       "ALL") == "ALL" and
+        _f.get("material",      "ALL") == "ALL"
+    )
+    if no_filters:
+        fixed = _GLOBAL_TOP_FIXED.get((tl, val_key))
+        if fixed is not None:
+            return fixed
 
     if not top_limit or top_limit <= 0:
         return None
@@ -1632,7 +1648,10 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
     if f.get("material") != "ALL":
         wh.append("mat.size = %s"); params.append(f["material"])
 
-    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    # Always restrict to 2026 — the ranking is "this year's top sold_tos
+    # within the selected slice", not last year's.
+    wh.append("sTop.year = 2026")
+    where_sql = "WHERE " + " AND ".join(wh)
 
     sql = f"""
       SELECT sTop.sold_to
