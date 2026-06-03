@@ -1659,6 +1659,16 @@ function renderCalendar(){
         sold_to:      c.dataset.sold     || "",
         sold_to_name: c.dataset.soldName || "",
       });
+      // Carry the chip's calendar date into the Visit date field so the
+      // BDE doesn't have to retype it.  Skip if the chip is in the future
+      // (the date input is capped at today, so future plans would fail
+      // validation on submit).
+      const cell = c.closest(".cal-cell");
+      const chipDate = cell ? (cell.dataset.date || "") : "";
+      if (chipDate && fVisitDate){
+        const maxIso = fVisitDate.max || "";
+        if (!maxIso || chipDate <= maxIso) fVisitDate.value = chipDate;
+      }
       const planBde = c.dataset.bde || "";
       if (planBde){
         const fBdeEl = document.getElementById("fBde");
