@@ -427,7 +427,7 @@ document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
   refreshAllDebounced();
 });
-document.getElementById('regionBtns').addEventListener("click",e=>{
+document.getElementById('regionBtns').addEventListener("click", async (e) => {
   if(!e.target.classList.contains("btn"))return;
   filters.region=e.target.dataset.val; setActive(document.getElementById('regionBtns'),"val",filters.region);
   const all=Object.values(REGION_SALESMEN).flat();
@@ -447,6 +447,10 @@ document.getElementById('regionBtns').addEventListener("click",e=>{
     filters.salesman = 'ALL';
     document.getElementById('salesman_name').value = 'ALL';
   }
+  // Region change must also refetch the Sold-to / Ship-to option lists so
+  // that Top-N (and the dropdown contents) reflect the new region slice.
+  await refreshSoldToCustom();
+  await refreshShipToCustom();
   refreshAllDebounced();
 });
 
