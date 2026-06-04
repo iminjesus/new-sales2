@@ -968,11 +968,31 @@ function renderRecentRows(){
     wrap.innerHTML = '<div class="empty">No entries match the current filters.</div>';
     return;
   }
+  // === AI FEATURE START === (one button summarising all visible rows)
+  const aiHeader = _aiEnabled ? `
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                margin-bottom:8px;padding:6px 10px;background:#faf5ff;
+                border:1px solid #e9d5ff;border-radius:6px;font-size:11px;
+                color:#581c87;">
+      <span>
+        <b>✨ AI digest</b> of the <b>${rows.length}</b> visible
+        ${rows.length === 1 ? "entry" : "entries"} (after filters).
+      </span>
+      <a href="javascript:void(0)" id="aiDigestBtn"
+         style="color:#7c3aed;font-weight:700;text-decoration:underline;cursor:pointer;">
+        Ask AI
+      </a>
+    </div>
+    <div id="aiDigestPanel" style="display:none;margin-bottom:10px;padding:10px 12px;
+         background:#faf5ff;border:1px solid #e9d5ff;border-radius:6px;
+         font-size:12px;color:#581c87;"></div>
+  ` : "";
+  // === AI FEATURE END ===
   // Group by BDE → Shop → Purpose, with visit dates listed beneath.
   // Backend already sorts in this order; we just inject header rows
   // whenever (bde, shop, purpose) changes so the visual hierarchy is
   // obvious and a shop's history reads top-to-bottom.
-  let h = `<table class="recent-tbl">
+  let h = `${aiHeader}<table class="recent-tbl">
     <thead><tr>
       <th>Visit date</th><th>Notes / Next / Feedback</th><th>Photos</th>
     </tr></thead><tbody>`;
@@ -1000,15 +1020,6 @@ function renderRecentRows(){
     // the user can tell who wrote what and when.
     const author = `<div style="color:#6b7280;font-size:10px;margin-bottom:4px;">by ${escapeHtml(r.bde_name || "—")}${r.created_at ? ` · ${escapeHtml(r.created_at)}` : ""}</div>`;
     const fbBlock = renderFeedbackBlock(r.id, r.thread || []);
-    // === AI FEATURE START === (per-row Ask AI button + result panel)
-    const aiBtn = _aiEnabled ? `<a href="javascript:void(0)" class="ai-btn"
-        data-id="${r.id}"
-        style="color:#7c3aed;margin-right:8px;font-weight:600;">✨ Ask AI</a>` : "";
-    const aiPanel = _aiEnabled ? `<div class="ai-panel" id="ai-panel-${r.id}"
-        style="display:none;margin-top:6px;padding:8px 10px;background:#faf5ff;
-               border:1px solid #e9d5ff;border-radius:6px;font-size:11px;
-               color:#581c87;"></div>` : "";
-    // === AI FEATURE END ===
 
     const bdeKey  = r.bde_name || "";
     const shipKey = r.ship_to  || "";
@@ -1055,17 +1066,19 @@ function renderRecentRows(){
     // Purpose are conveyed by the group headers above.
     h += `<tr>
       <td class="ts" style="padding-left:36px;">${r.visit_date || r.created_at}</td>
-      <td class="notes">${author}${prep}${notesBody}${next}${met}${actions}${aiBtn ? `<div style="margin-top:4px;font-size:10px;">${aiBtn}</div>` : ""}${aiPanel}${fbBlock}</td>
+      <td class="notes">${author}${prep}${notesBody}${next}${met}${actions}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }
   h += `</tbody></table>`;
   wrap.innerHTML = h;
 
-  // === AI FEATURE START === (per-row Ask AI click handler)
-  wrap.querySelectorAll(".ai-btn").forEach(btn => {
-    btn.addEventListener("click", (e) => _aiHandleClick(btn));
-  });
+  // === AI FEATURE START === (top digest button)
+  // Stash the filtered-row IDs on the panel so _aiDigestClick can read
+  // them; refreshing the panel (via filter change) updates this set.
+  wrap.__aiVisibleIds = rows.map(r => r.id);
+  const aiBtn = document.getElementById("aiDigestBtn");
+  if (aiBtn) aiBtn.addEventListener("click", () => _aiDigestClick(wrap));
   // === AI FEATURE END ===
 
   // Wire the shop-row banners as drag sources — drop on calendar
@@ -1944,7 +1957,7 @@ document.getElementById("shipSearch").addEventListener("input", renderShipList);
 // differs on mobile vs desktop.
 window.matchMedia("(max-width:1100px)").addEventListener("change", renderShipList);
 
-// === AI FEATURE START === (status probe + click handler + renderer)
+// === AI FEATURE START === (status probe + digest click + renderer)
 async function _aiProbeStatus(){
   try {
     const j = await fetchJSON("/api/ai_status");
@@ -1954,39 +1967,46 @@ async function _aiProbeStatus(){
 }
 function _aiRender(j){
   const fmt = (txt) =>
-    `<div style="white-space:pre-wrap;line-height:1.4;">${escapeHtml(txt || "—")}</div>`;
-  const stamp = j.created_at
-    ? `<span style="color:#9ca3af;font-weight:400;"> · ${escapeHtml(j.created_at)}${j.cached ? " (cached)" : ""}</span>`
-    : "";
+    `<div style="white-space:pre-wrap;line-height:1.45;">${escapeHtml(txt || "—")}</div>`;
   const model = j.model ? `<span style="color:#9ca3af;font-weight:400;"> · ${escapeHtml(j.model)}</span>` : "";
+  const count = j.count ? `<span style="color:#9ca3af;font-weight:400;"> · ${j.count} entries</span>` : "";
   return `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-      <b style="text-transform:uppercase;letter-spacing:.3px;font-size:10px;">✨ AI summary${model}${stamp}</b>
-      <a href="javascript:void(0)" class="ai-regen" style="font-size:10px;color:#7c3aed;">Regenerate</a>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <b style="text-transform:uppercase;letter-spacing:.3px;font-size:10px;">✨ AI digest${model}${count}</b>
+      <a href="javascript:void(0)" class="ai-regen" style="font-size:11px;color:#7c3aed;text-decoration:underline;">Regenerate</a>
     </div>
-    <div style="margin-bottom:6px;">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:2px;">Summary</div>
+    <div style="margin-bottom:8px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:3px;">Summary</div>
       ${fmt(j.summary)}
     </div>
     <div>
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:2px;">Strategy</div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:3px;">Strategy</div>
       ${fmt(j.strategy)}
     </div>
   `;
 }
-async function _aiHandleClick(btn, opts){
+async function _aiDigestClick(wrap, opts){
   opts = opts || {};
-  const id = btn.dataset.id;
-  const panel = document.getElementById("ai-panel-" + id);
+  const panel = document.getElementById("aiDigestPanel");
   if (!panel) return;
   if (!opts.regen && panel.style.display === "block"){
     panel.style.display = "none"; return;
   }
+  const ids = (wrap && wrap.__aiVisibleIds) || [];
+  if (!ids.length){
+    panel.style.display = "block";
+    panel.innerHTML = `<span style="color:#dc2626;">No entries to summarise.</span>`;
+    return;
+  }
   panel.style.display = "block";
-  panel.innerHTML = `<em style="color:#7c3aed;">Asking AI…</em>`;
+  panel.innerHTML = `<em style="color:#7c3aed;">Asking AI to digest ${ids.length} ${ids.length === 1 ? "entry" : "entries"}…</em>`;
   try {
-    const url = `/api/meeting/${id}/ai_summary${opts.regen ? "?regen=1" : ""}`;
-    const r = await fetch(url, { method: "POST", credentials: "include" });
+    const r = await fetch("/api/meeting/ai_digest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ ids }),
+    });
     const j = await r.json();
     if (!r.ok){
       panel.innerHTML = `<span style="color:#dc2626;">${escapeHtml(j.error || ("AI error " + r.status))}</span>`;
@@ -1994,7 +2014,7 @@ async function _aiHandleClick(btn, opts){
     }
     panel.innerHTML = _aiRender(j);
     const regen = panel.querySelector(".ai-regen");
-    if (regen) regen.addEventListener("click", () => _aiHandleClick(btn, { regen: true }));
+    if (regen) regen.addEventListener("click", () => _aiDigestClick(wrap, { regen: true }));
   } catch (err){
     panel.innerHTML = `<span style="color:#dc2626;">${escapeHtml(err.message)}</span>`;
   }
