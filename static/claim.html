@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hankook — Claim form</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     background:#f3f4f6;color:#111827;font-size:14px;-webkit-text-size-adjust:100%}
+header{background:#1e3a5f;color:#fff;padding:14px 18px;display:flex;
+       align-items:center;justify-content:space-between}
+header .brand{font-size:15px;font-weight:700;letter-spacing:.3px}
+header .sub{font-size:11px;opacity:.8}
+.wrap{max-width:560px;margin:0 auto;padding:14px}
+.card{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);
+      padding:16px;margin-bottom:14px}
+.shop{display:flex;align-items:center;gap:10px;padding:12px 14px;background:#eff6ff;
+      border:1px solid #dbeafe;border-radius:8px;margin-bottom:14px}
+.shop .pin{font-size:18px}
+.shop .name{font-weight:700;color:#1e3a5f}
+.shop .code{font-size:11px;color:#6b7280;font-family:ui-monospace,monospace}
+.shop .cust{font-size:11px;color:#6b7280;margin-top:2px}
+h2{font-size:15px;font-weight:700;color:#1e3a5f;margin:0 0 12px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:4px}
+.field label .req{color:#dc2626;margin-left:2px}
+.field input,.field select,.field textarea{
+  width:100%;padding:10px 11px;border:1px solid #d1d5db;border-radius:6px;
+  font-size:14px;background:#fff;color:#111827;-webkit-appearance:none;appearance:none
+}
+.field input:focus,.field select:focus,.field textarea:focus{
+  outline:none;border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.15)
+}
+.field textarea{min-height:110px;resize:vertical}
+.field .hint{font-size:11px;color:#6b7280;margin-top:3px}
+.row2{display:flex;gap:8px}
+.row2 .field{flex:1}
+.honey{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+.btn{display:block;width:100%;background:#2563eb;color:#fff;border:none;
+     border-radius:8px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;
+     box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.btn:disabled{background:#9ca3af;cursor:not-allowed}
+.btn.secondary{background:#fff;color:#1f2937;border:1px solid #d1d5db}
+.msg{margin-top:10px;font-size:13px;padding:10px 12px;border-radius:6px;display:none}
+.msg.ok{background:#dcfce7;color:#14532d;display:block}
+.msg.err{background:#fee2e2;color:#991b1b;display:block}
+.photo-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.photo-list img{width:54px;height:54px;object-fit:cover;border-radius:5px;
+                border:1px solid #e5e7eb}
+.thread{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.bubble{padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.45;
+        white-space:pre-wrap;word-break:break-word;max-width:88%}
+.bubble.them{align-self:flex-start;background:#eff6ff;border:1px solid #dbeafe;color:#1e3a5f}
+.bubble.us{align-self:flex-end;background:#dcfce7;border:1px solid #bbf7d0;color:#14532d}
+.bubble .who{font-size:10px;font-weight:700;text-transform:uppercase;
+             letter-spacing:.3px;opacity:.7;margin-bottom:3px}
+.bubble .when{font-size:10px;opacity:.7;margin-top:3px}
+.bubble .ph{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+.bubble .ph img{width:50px;height:50px;object-fit:cover;border-radius:4px}
+.claim-card{padding:12px;border:1px solid #e5e7eb;border-radius:8px;
+            margin-bottom:10px;background:#fafafa}
+.claim-head{display:flex;justify-content:space-between;align-items:center;
+            font-size:11px;color:#6b7280;margin-bottom:6px}
+.claim-title{font-weight:700;color:#1e3a5f;margin-bottom:2px}
+.status{font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;
+        text-transform:uppercase;letter-spacing:.3px}
+.status.New{background:#fef3c7;color:#92400e}
+.status.Reviewing{background:#dbeafe;color:#1e40af}
+.status\\.Awaiting{background:#fef3c7;color:#92400e}
+.status\\.Resolved{background:#dcfce7;color:#166534}
+.status\\.Rejected{background:#fee2e2;color:#991b1b}
+.reply-box{margin-top:8px}
+.reply-box textarea{width:100%;min-height:60px;padding:8px;border:1px solid #d1d5db;
+                    border-radius:6px;font-size:13px;font-family:inherit}
+.loading{text-align:center;padding:24px;color:#6b7280;font-size:13px}
+.err-banner{padding:14px;background:#fee2e2;color:#991b1b;border-radius:8px;
+            font-size:13px;text-align:center}
+@media (max-width:380px){
+  .row2{flex-direction:column}
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="brand">Hankook Australia</div>
+    <div class="sub">Claim submission</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="root">
+    <div class="loading">Loading shop information…</div>
+  </div>
+</div>
+
+<script>
+const SHIP_TO = location.pathname.split("/").filter(Boolean).pop() || "";
+const root = document.getElementById("root");
+
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts || {});
+  let j = null;
+  try { j = await r.json(); } catch { /* non-JSON */ }
+  if (!r.ok){
+    const msg = (j && j.error) || r.statusText || ("HTTP " + r.status);
+    throw new Error(msg);
+  }
+  return j || {};
+}
+
+function statusPill(s){
+  const cls = ["status", esc(s).replace(/\s+/g,".")].join(" ");
+  return `<span class="${cls}">${esc(s)}</span>`;
+}
+
+function bubble(m){
+  const isUs = m.author_type === "customer";
+  const photos = (m.photo_paths || []).filter(Boolean)
+    .map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" alt=""></a>`)
+    .join("");
+  return `
+    <div class="bubble ${isUs ? "us" : "them"}">
+      <div class="who">${esc(m.author_name || (isUs ? "You" : "Hankook"))}</div>
+      <div>${esc(m.text || "")}</div>
+      ${photos ? `<div class="ph">${photos}</div>` : ""}
+      <div class="when">${esc(m.created_at || "")}</div>
+    </div>`;
+}
+
+async function renderHome(){
+  let shop = null;
+  try {
+    shop = await fetchJSON(`/api/claim/shop/${encodeURIComponent(SHIP_TO)}`);
+  } catch (e){
+    root.innerHTML = `<div class="err-banner">Shop code <b>${esc(SHIP_TO)}</b> not recognised.<br>
+      Please check the link from your Hankook BDE.</div>`;
+    return;
+  }
+  let prior = { claims: [] };
+  try { prior = await fetchJSON(`/api/claim/by_ship/${encodeURIComponent(SHIP_TO)}`); }
+  catch {}
+  root.innerHTML = `
+    <div class="shop">
+      <div class="pin">📍</div>
+      <div style="flex:1;">
+        <div class="name">${esc(shop.ship_to_name || shop.ship_to)}</div>
+        <div class="code">${esc(shop.ship_to)}</div>
+        ${shop.sold_to_name ? `<div class="cust">${esc(shop.sold_to_name)}</div>` : ""}
+      </div>
+    </div>
+
+    ${ prior.claims && prior.claims.length ? `
+      <div class="card">
+        <h2>Your claims (${prior.claims.length})</h2>
+        ${prior.claims.map(c => `
+          <div class="claim-card">
+            <div class="claim-head">
+              <span>${esc(c.created_at || "")}</span>
+              ${statusPill(c.status || "New")}
+            </div>
+            <div class="claim-title">#${c.id} · ${esc(c.claim_type || "Other")}</div>
+            <div style="font-size:12px;color:#374151;margin-bottom:6px;white-space:pre-wrap;">${esc((c.description||"").slice(0,200))}${(c.description||"").length>200?"…":""}</div>
+            <div class="thread">${(c.thread || []).map(bubble).join("")}</div>
+            <div class="reply-box">
+              <textarea id="reply-${c.id}" placeholder="Reply to Hankook…"></textarea>
+              <input type="file" id="reply-photos-${c.id}" accept="image/*" multiple style="margin-top:6px;font-size:12px;">
+              <button class="btn" style="margin-top:6px;padding:10px;" onclick="sendReply(${c.id})">Send reply</button>
+              <div id="reply-msg-${c.id}" class="msg"></div>
+            </div>
+          </div>
+        `).join("")}
+      </div>` : ""
+    }
+
+    <div class="card">
+      <h2>New claim</h2>
+      <form id="cForm" autocomplete="on">
+        <input type="text" name="website" class="honey" tabindex="-1" autocomplete="off">
+
+        <div class="row2">
+          <div class="field">
+            <label>Your name <span class="req">*</span></label>
+            <input type="text" name="contact_name" required maxlength="120">
+          </div>
+          <div class="field">
+            <label>Phone <span class="req">*</span></label>
+            <input type="tel" name="contact_phone" required maxlength="40" inputmode="tel">
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Email <span class="hint">(so we can send updates)</span></label>
+          <input type="email" name="contact_email" maxlength="160" inputmode="email">
+        </div>
+
+        <div class="field">
+          <label>Claim type <span class="req">*</span></label>
+          <select name="claim_type" required>
+            <option value="">— Select —</option>
+            <option>Warranty</option>
+            <option>Workmanship</option>
+            <option>Delivery</option>
+            <option>Pricing</option>
+            <option>Other</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label>Tyre size / product code <span class="hint">(if applicable)</span></label>
+          <input type="text" name="product_size" maxlength="80" placeholder="e.g. 225/45R17 Ventus V12">
+        </div>
+
+        <div class="field">
+          <label>Describe the issue <span class="req">*</span></label>
+          <textarea name="description" required placeholder="What happened, when, how many tyres affected…"></textarea>
+        </div>
+
+        <div class="field">
+          <label>Photos <span class="hint">(up to 5 — tyre damage, receipts, vehicle, etc.)</span></label>
+          <input type="file" name="photos" multiple accept="image/*">
+        </div>
+
+        <button type="submit" class="btn" id="submitBtn">Submit claim</button>
+        <div id="submitMsg" class="msg"></div>
+      </form>
+    </div>
+  `;
+
+  document.getElementById("cForm").addEventListener("submit", submitClaim);
+}
+
+async function submitClaim(e){
+  e.preventDefault();
+  const form = e.target;
+  const btn  = document.getElementById("submitBtn");
+  const msg  = document.getElementById("submitMsg");
+  msg.className = "msg";
+  msg.textContent = "";
+  btn.disabled = true; btn.textContent = "Submitting…";
+  try {
+    const fd = new FormData(form);
+    const r = await fetch(`/api/claim/by_ship/${encodeURIComponent(SHIP_TO)}`, {
+      method: "POST", body: fd,
+    });
+    const j = await r.json();
+    if (!r.ok){
+      msg.className = "msg err";
+      msg.textContent = j.error || ("HTTP " + r.status);
+    } else {
+      msg.className = "msg ok";
+      msg.textContent = `Thanks — your claim #${j.id} has been submitted. We will be in touch shortly.`;
+      form.reset();
+      // Reload so the new claim appears in the prior-claims block.
+      setTimeout(renderHome, 1200);
+    }
+  } catch (err){
+    msg.className = "msg err";
+    msg.textContent = err.message;
+  }
+  btn.disabled = false; btn.textContent = "Submit claim";
+}
+
+async function sendReply(cid){
+  const ta  = document.getElementById("reply-" + cid);
+  const ph  = document.getElementById("reply-photos-" + cid);
+  const msg = document.getElementById("reply-msg-" + cid);
+  msg.className = "msg"; msg.textContent = "";
+  const text = (ta.value || "").trim();
+  if (!text){
+    msg.className = "msg err"; msg.textContent = "Type a reply first.";
+    return;
+  }
+  const fd = new FormData();
+  fd.append("ship_to", SHIP_TO);
+  fd.append("text", text);
+  fd.append("website", "");   // honeypot
+  for (const f of (ph.files || [])) fd.append("photos", f);
+  try {
+    const r = await fetch(`/api/claim/${cid}/customer_reply`, { method: "POST", body: fd });
+    const j = await r.json();
+    if (!r.ok){
+      msg.className = "msg err"; msg.textContent = j.error || ("HTTP " + r.status);
+    } else {
+      ta.value = ""; ph.value = "";
+      msg.className = "msg ok"; msg.textContent = "Reply sent.";
+      setTimeout(renderHome, 800);
+    }
+  } catch (err){
+    msg.className = "msg err"; msg.textContent = err.message;
+  }
+}
+
+renderHome();
+</script>
+</body>
+</html>

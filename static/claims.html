@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claims management — Hankook</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     background:#f3f4f6;color:#111827;font-size:13px}
+header{background:#1e3a5f;color:#fff;padding:10px 20px;display:flex;
+       align-items:center;gap:12px;justify-content:space-between}
+header .brand{font-size:14px;font-weight:700}
+header .nav a{color:#cbd5e1;text-decoration:none;font-size:12px;margin-left:14px}
+header .nav a:hover{color:#fff}
+.layout{display:grid;grid-template-columns:380px 1fr;gap:14px;padding:14px;
+        max-width:1500px;margin:0 auto}
+.panel{background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);
+       padding:12px}
+h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
+.filters{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.filters select,.filters input{padding:7px 9px;border:1px solid #d1d5db;
+                                border-radius:6px;font-size:12px;background:#fff}
+.seg{display:flex;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden}
+.seg button{flex:1;border:none;background:#fff;color:#374151;padding:5px 8px;
+            font-size:11px;cursor:pointer;border-right:1px solid #e5e7eb;font-weight:500}
+.seg button:last-child{border-right:none}
+.seg button.active{background:#2563eb;color:#fff}
+.list{max-height:calc(100vh - 220px);overflow-y:auto;display:flex;flex-direction:column;gap:6px}
+.row{padding:9px 11px;border:1px solid #e5e7eb;border-radius:6px;background:#fff;cursor:pointer}
+.row:hover{background:#f9fafb}
+.row.selected{background:#eff6ff;border-color:#93c5fd}
+.row .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.row .nm{font-weight:700;color:#1e3a5f;font-size:12px}
+.row .meta{font-size:10px;color:#6b7280;margin-top:2px}
+.row .preview{font-size:11px;color:#374151;margin-top:4px;
+              overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .badges{display:flex;gap:4px;align-items:center}
+.status{font-size:9px;font-weight:700;padding:1px 7px;border-radius:8px;
+        text-transform:uppercase;letter-spacing:.3px}
+.status.New{background:#fef3c7;color:#92400e}
+.status.Reviewing{background:#dbeafe;color:#1e40af}
+.status[data-s="Awaiting customer"]{background:#fde68a;color:#92400e}
+.status.Resolved{background:#dcfce7;color:#166534}
+.status.Rejected{background:#fee2e2;color:#991b1b}
+.msg-count{font-size:9px;color:#6b7280;background:#f3f4f6;padding:1px 6px;border-radius:8px;font-weight:600}
+.detail-empty{padding:60px 20px;text-align:center;color:#9ca3af;font-size:13px}
+.detail-head{display:flex;justify-content:space-between;align-items:flex-start;
+             padding-bottom:10px;border-bottom:1px solid #e5e7eb;margin-bottom:12px}
+.detail-head h3{font-size:14px;color:#1e3a5f;margin:0 0 3px}
+.detail-head .sub{font-size:11px;color:#6b7280}
+.detail-head .controls{display:flex;gap:6px;align-items:center}
+.detail-head select{padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:4px 12px;font-size:12px;margin-bottom:12px}
+.kv b{color:#6b7280;font-weight:600;font-size:11px}
+.thread{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+.bubble{padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.45;
+        white-space:pre-wrap;word-break:break-word;max-width:78%}
+.bubble.customer{align-self:flex-start;background:#eff6ff;border:1px solid #dbeafe;color:#1e3a5f}
+.bubble.internal{align-self:flex-end;background:#dcfce7;border:1px solid #bbf7d0;color:#14532d}
+.bubble .who{font-size:9px;font-weight:700;text-transform:uppercase;
+             letter-spacing:.3px;opacity:.7;margin-bottom:3px}
+.bubble .when{font-size:9px;opacity:.7;margin-top:3px}
+.bubble .ph{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+.bubble .ph img{width:60px;height:60px;object-fit:cover;border-radius:4px;border:1px solid #e5e7eb}
+.reply{margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb}
+.reply textarea{width:100%;min-height:70px;padding:9px;border:1px solid #d1d5db;
+                border-radius:6px;font-size:12px;font-family:inherit;resize:vertical}
+.reply .actions{margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.btn{padding:7px 14px;border-radius:6px;border:none;background:#2563eb;color:#fff;
+     font-size:12px;font-weight:600;cursor:pointer}
+.btn:hover{background:#1d4ed8}
+.btn:disabled{background:#9ca3af;cursor:not-allowed}
+.btn.sec{background:#fff;color:#374151;border:1px solid #d1d5db}
+.msg{padding:8px 10px;border-radius:5px;font-size:11px;margin-top:6px;display:none}
+.msg.ok{background:#dcfce7;color:#14532d;display:block}
+.msg.err{background:#fee2e2;color:#991b1b;display:block}
+.photos a{display:inline-block;margin:2px 4px 2px 0}
+.photos img{width:60px;height:60px;object-fit:cover;border-radius:5px;border:1px solid #e5e7eb}
+@media (max-width:980px){
+  .layout{grid-template-columns:1fr}
+  .list{max-height:300px}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Claims management</div>
+  <div class="nav">
+    <a href="/">Sales Dashboard</a>
+    <a href="/meeting">Visit Log</a>
+    <a href="/claims">Claims</a>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- LEFT: filters + list -->
+  <div class="panel">
+    <h2>Claims</h2>
+    <div class="filters">
+      <div class="seg" id="statusSeg">
+        <button data-st="" class="active">All</button>
+        <button data-st="New">New</button>
+        <button data-st="Reviewing">Reviewing</button>
+        <button data-st="Resolved">Resolved</button>
+      </div>
+      <div class="seg" id="stateSeg">
+        <button data-st="" class="active">All</button>
+        <button data-st="NSW">NSW</button>
+        <button data-st="QLD">QLD</button>
+        <button data-st="VIC">VIC</button>
+        <button data-st="WA">WA</button>
+      </div>
+      <input id="q" type="text" placeholder="Search shop / customer / contact…">
+    </div>
+    <div class="list" id="list"></div>
+  </div>
+
+  <!-- RIGHT: detail / thread -->
+  <div class="panel" id="detail">
+    <div class="detail-empty">Pick a claim on the left to view details.</div>
+  </div>
+</div>
+
+<script>
+const list   = document.getElementById("list");
+const detail = document.getElementById("detail");
+const filters = { status: "", state: "", q: "" };
+let _claims = [], _selectedId = null, _statuses = [];
+
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+async function fetchJSON(url, opts){
+  const r = await fetch(url, opts || {});
+  let j = null;
+  try { j = await r.json(); } catch {}
+  if (!r.ok) throw new Error((j && j.error) || ("HTTP " + r.status));
+  return j || {};
+}
+function statusPill(s){
+  return `<span class="status" data-s="${esc(s)}">${esc(s)}</span>`;
+}
+
+async function loadList(){
+  const qs = new URLSearchParams();
+  if (filters.status) qs.set("status", filters.status);
+  if (filters.state)  qs.set("state", filters.state);
+  if (filters.q)      qs.set("q", filters.q);
+  list.innerHTML = `<div style="color:#9ca3af;padding:10px;font-size:11px;">Loading…</div>`;
+  try {
+    const j = await fetchJSON("/api/claims?" + qs.toString());
+    _claims = j.claims || [];
+    _statuses = j.statuses || [];
+    renderList();
+    if (_selectedId && _claims.some(c => c.id === _selectedId)){
+      loadDetail(_selectedId);
+    }
+  } catch (e){
+    list.innerHTML = `<div style="color:#dc2626;padding:10px;font-size:11px;">${esc(e.message)}</div>`;
+  }
+}
+function renderList(){
+  if (!_claims.length){
+    list.innerHTML = `<div style="color:#9ca3af;padding:14px;text-align:center;font-size:12px;">No claims match.</div>`;
+    return;
+  }
+  list.innerHTML = _claims.map(c => `
+    <div class="row ${c.id === _selectedId ? "selected" : ""}" data-id="${c.id}">
+      <div class="top">
+        <div style="flex:1;min-width:0;">
+          <div class="nm">${esc(c.ship_to_name || c.ship_to)}</div>
+          <div class="meta">${esc(c.contact_name || "")} · ${esc(c.claim_type || "—")} · ${esc(c.created_at || "")}</div>
+          <div class="preview">${esc((c.description||"").slice(0,80))}</div>
+        </div>
+        <div class="badges">
+          ${statusPill(c.status || "New")}
+          ${c.msg_count ? `<span class="msg-count">💬 ${c.msg_count}</span>` : ""}
+        </div>
+      </div>
+    </div>
+  `).join("");
+  list.querySelectorAll(".row").forEach(el => {
+    el.addEventListener("click", () => loadDetail(parseInt(el.dataset.id, 10)));
+  });
+}
+
+async function loadDetail(id){
+  _selectedId = id;
+  renderList();
+  detail.innerHTML = `<div style="color:#9ca3af;padding:14px;font-size:12px;">Loading…</div>`;
+  try {
+    const j = await fetchJSON("/api/claim/" + id);
+    renderDetail(j.claim, j.thread || []);
+  } catch (e){
+    detail.innerHTML = `<div class="detail-empty" style="color:#dc2626;">${esc(e.message)}</div>`;
+  }
+}
+
+function bubble(m){
+  const photos = (m.photo_paths || []).filter(Boolean)
+    .map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" alt=""></a>`).join("");
+  return `
+    <div class="bubble ${esc(m.author_type)}">
+      <div class="who">${esc(m.author_name || m.author_type)}</div>
+      <div>${esc(m.text || "")}</div>
+      ${photos ? `<div class="ph">${photos}</div>` : ""}
+      <div class="when">${esc(m.created_at || "")}</div>
+    </div>`;
+}
+
+function renderDetail(c, thread){
+  const photos = (c.photo_paths || []).filter(Boolean)
+    .map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" alt=""></a>`).join("");
+  const statusOptions = _statuses.map(s =>
+    `<option value="${esc(s)}" ${s === c.status ? "selected" : ""}>${esc(s)}</option>`
+  ).join("");
+  detail.innerHTML = `
+    <div class="detail-head">
+      <div>
+        <h3>#${c.id} · ${esc(c.ship_to_name || c.ship_to)}</h3>
+        <div class="sub">${esc(c.sold_to_name || "")} · ${esc(c.ship_to || "")}</div>
+      </div>
+      <div class="controls">
+        ${statusPill(c.status || "New")}
+        <select id="statusSel">${statusOptions}</select>
+      </div>
+    </div>
+
+    <div class="kv">
+      <b>Contact</b>   <span>${esc(c.contact_name || "")}${c.contact_phone ? " · " + esc(c.contact_phone) : ""}${c.contact_email ? " · " + esc(c.contact_email) : ""}</span>
+      <b>Type</b>      <span>${esc(c.claim_type || "—")}</span>
+      <b>Product</b>   <span>${esc(c.product_size || "—")}</span>
+      <b>Submitted</b> <span>${esc(c.created_at || "")}</span>
+      ${c.resolved_at ? `<b>Resolved</b><span>${esc(c.resolved_at)}</span>` : ""}
+    </div>
+
+    ${photos ? `<div class="photos" style="margin-bottom:10px;">${photos}</div>` : ""}
+
+    <div style="font-weight:700;font-size:11px;text-transform:uppercase;color:#6b7280;letter-spacing:.3px;margin-bottom:6px;">Conversation</div>
+    <div class="thread">${thread.map(bubble).join("")}</div>
+
+    <div class="reply">
+      <textarea id="replyText" placeholder="Reply to the customer…"></textarea>
+      <div class="actions">
+        <span style="font-size:11px;color:#9ca3af;">Customer will receive an email if they provided one.</span>
+        <button class="btn" id="sendReplyBtn">Send reply</button>
+      </div>
+      <div id="replyMsg" class="msg"></div>
+    </div>
+  `;
+  document.getElementById("statusSel").addEventListener("change", async (e) => {
+    try {
+      await fetchJSON(`/api/claim/${c.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: e.target.value }),
+      });
+      loadList();
+    } catch (err){ alert("Update failed: " + err.message); }
+  });
+  document.getElementById("sendReplyBtn").addEventListener("click", async () => {
+    const ta = document.getElementById("replyText");
+    const msg = document.getElementById("replyMsg");
+    msg.className = "msg"; msg.textContent = "";
+    const text = (ta.value || "").trim();
+    if (!text){ msg.className = "msg err"; msg.textContent = "Type a reply first."; return; }
+    try {
+      await fetchJSON(`/api/claim/${c.id}/internal_reply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      ta.value = "";
+      msg.className = "msg ok"; msg.textContent = "Reply sent.";
+      loadDetail(c.id); loadList();
+    } catch (err){
+      msg.className = "msg err"; msg.textContent = err.message;
+    }
+  });
+  // If URL has #id, ensure we're on the right one when arriving via email.
+  if (location.hash && parseInt(location.hash.replace("#",""), 10) !== c.id){
+    history.replaceState(null, "", "#" + c.id);
+  }
+}
+
+// Wire filters
+document.getElementById("statusSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  filters.status = b.dataset.st;
+  [...e.currentTarget.children].forEach(x => x.classList.toggle("active", x === b));
+  loadList();
+});
+document.getElementById("stateSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  filters.state = b.dataset.st;
+  [...e.currentTarget.children].forEach(x => x.classList.toggle("active", x === b));
+  loadList();
+});
+let _qTimer = null;
+document.getElementById("q").addEventListener("input", (e) => {
+  filters.q = e.target.value;
+  clearTimeout(_qTimer);
+  _qTimer = setTimeout(loadList, 300);
+});
+
+// Boot
+loadList().then(() => {
+  // Deep-link via URL hash (#123)
+  const h = parseInt(location.hash.replace("#",""), 10);
+  if (h) loadDetail(h);
+});
+</script>
+</body>
+</html>

@@ -7904,6 +7904,470 @@ def meeting_ai_digest():
 # === AI FEATURE END ===
 
 
+# ─────────────────────────────────────────────────────────────────────
+# CLAIM portal — public form at /claim/<ship_to_code> + threaded back
+# and forth at /claims for internal team.  Wrapped in START/END markers
+# for easy revert.  No login on the customer side: the URL itself
+# identifies the shop, supplemented by a honeypot field for bot spam.
+# ─────────────────────────────────────────────────────────────────────
+# === CLAIM FEATURE START ===
+CLAIM_PHOTO_DIR = os.path.join(BASE_DIR, "static", "claim_photos")
+CLAIM_TYPES = ("Warranty", "Workmanship", "Delivery", "Pricing", "Other")
+CLAIM_STATUSES = ("New", "Reviewing", "Awaiting customer", "Resolved", "Rejected")
+
+def _ensure_claim_tables():
+    try:
+        os.makedirs(CLAIM_PHOTO_DIR, exist_ok=True)
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS claim_submission (
+                id            INT AUTO_INCREMENT PRIMARY KEY,
+                ship_to       VARCHAR(64)  NOT NULL,
+                sold_to       VARCHAR(64)  NOT NULL DEFAULT '',
+                ship_to_name  VARCHAR(160) NOT NULL DEFAULT '',
+                sold_to_name  VARCHAR(160) NOT NULL DEFAULT '',
+                contact_name  VARCHAR(120) NOT NULL DEFAULT '',
+                contact_phone VARCHAR(40)  NOT NULL DEFAULT '',
+                contact_email VARCHAR(160) NOT NULL DEFAULT '',
+                claim_type    VARCHAR(40)  NOT NULL DEFAULT '',
+                product_size  VARCHAR(80)  NOT NULL DEFAULT '',
+                description   TEXT,
+                photo_paths   TEXT,
+                status        VARCHAR(40)  NOT NULL DEFAULT 'New',
+                assigned_to   VARCHAR(120) NOT NULL DEFAULT '',
+                created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                resolved_at   TIMESTAMP    NULL,
+                INDEX idx_ship    (ship_to),
+                INDEX idx_status  (status),
+                INDEX idx_created (created_at)
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS claim_message (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                claim_id     INT NOT NULL,
+                author_type  VARCHAR(20)  NOT NULL DEFAULT 'customer',
+                author_name  VARCHAR(120) NOT NULL DEFAULT '',
+                author_email VARCHAR(160) NOT NULL DEFAULT '',
+                text         TEXT,
+                photo_paths  TEXT,
+                created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_claim   (claim_id),
+                INDEX idx_created (created_at)
+            )
+        """)
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[claim] schema init failed: {e}")
+_ensure_claim_tables()
+
+def _claim_lookup_shop(ship_to):
+    """Resolve ship_to → (ship_to_name, sold_to, sold_to_name, bde_state, salesman_name)."""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT ship_to, ship_to_name, sold_to, sold_to_name, "
+            "       bde_state, salesman_name "
+            "FROM customer WHERE ship_to = %s LIMIT 1",
+            (ship_to,),
+        )
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        return row
+    except Exception as e:
+        print(f"[claim] _claim_lookup_shop failed: {e}")
+        return None
+
+def _claim_save_photos(files, prefix):
+    """Save uploaded photo files under static/claim_photos/YYYY/MM/.
+    Returns a list of public /static URLs."""
+    saved = []
+    if not files: return saved
+    now = datetime.now()
+    subdir = os.path.join(CLAIM_PHOTO_DIR, f"{now.year:04d}", f"{now.month:02d}")
+    os.makedirs(subdir, exist_ok=True)
+    ts = now.strftime("%Y%m%d_%H%M%S")
+    safe = "".join(c for c in (prefix or "X") if c.isalnum()) or "X"
+    for i, f in enumerate(files[:5]):
+        if not f or not f.filename:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+            continue
+        fname = f"{ts}_{safe}_{i}{ext}"
+        path  = os.path.join(subdir, fname)
+        f.save(path)
+        saved.append(f"/static/claim_photos/{now.year:04d}/{now.month:02d}/{fname}")
+    return saved
+
+def _claim_notify_new(claim_id, shop, contact_name, claim_type, description):
+    """Email BDE/SM/leadership when a new claim is submitted."""
+    state = shop.get("bde_state") if shop else None
+    state = STATE_REMAP.get(state, state) if state else None
+    sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
+    bde_email = _lookup_bde_email(shop.get("salesman_name") if shop else "")
+    to_list = list(ALWAYS_TO)
+    if sm_email and sm_email.lower() not in [x.lower() for x in to_list]:
+        to_list.append(sm_email)
+    if bde_email and bde_email.lower() not in [x.lower() for x in to_list]:
+        to_list.append(bde_email)
+    subject = f"[Claim #{claim_id}] {shop.get('ship_to_name') if shop else ''} — {claim_type or 'New claim'}"
+    link = f"{DASHBOARD_URL.rstrip('/')}/claims#{claim_id}"
+    safe_desc = _esc_html((description or "")[:600])
+    html = (
+        f"<p>A new claim was submitted.</p>"
+        f"<table style='border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px;'>"
+        f"<tr><td><b>Shop</b></td><td>{_esc_html(shop.get('ship_to_name') if shop else '')} "
+        f"({_esc_html(shop.get('ship_to') if shop else '')})</td></tr>"
+        f"<tr><td><b>Customer</b></td><td>{_esc_html(shop.get('sold_to_name') if shop else '')}</td></tr>"
+        f"<tr><td><b>Contact</b></td><td>{_esc_html(contact_name or '')}</td></tr>"
+        f"<tr><td><b>Type</b></td><td>{_esc_html(claim_type or '')}</td></tr>"
+        f"<tr><td><b>Description</b></td><td><pre style='white-space:pre-wrap;'>{safe_desc}</pre></td></tr>"
+        f"</table>"
+        f"<p><a href='{link}'>Open claim #{claim_id} in the dashboard →</a></p>"
+    )
+    _send_mail_async(to_list, [], subject, html)
+
+def _claim_notify_reply(claim_id, author_type, author_name, text):
+    """Notify the other side when a new message lands on a thread."""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT ship_to, ship_to_name, sold_to_name, contact_email, "
+            "       contact_name, assigned_to "
+            "FROM claim_submission WHERE id = %s", (claim_id,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row: return
+        link = f"{DASHBOARD_URL.rstrip('/')}/claims#{claim_id}"
+        cust_link = f"{DASHBOARD_URL.rstrip('/')}/claim/{row['ship_to']}"
+        safe_text = _esc_html((text or "")[:600])
+        if author_type == "customer":
+            shop = _claim_lookup_shop(row["ship_to"])
+            state = shop.get("bde_state") if shop else None
+            state = STATE_REMAP.get(state, state) if state else None
+            sm_email  = STATE_MANAGER_EMAIL.get(state) if state else None
+            bde_email = _lookup_bde_email(shop.get("salesman_name") if shop else "")
+            to_list = list(ALWAYS_TO)
+            if sm_email and sm_email.lower() not in [x.lower() for x in to_list]:
+                to_list.append(sm_email)
+            if bde_email and bde_email.lower() not in [x.lower() for x in to_list]:
+                to_list.append(bde_email)
+            subject = f"[Claim #{claim_id}] Customer replied — {row['ship_to_name']}"
+            html = (f"<p><b>{_esc_html(author_name or row['contact_name'] or 'Customer')}</b> "
+                    f"replied on claim #{claim_id} ({_esc_html(row['ship_to_name'])}):</p>"
+                    f"<pre style='white-space:pre-wrap;font-family:Arial,sans-serif;'>{safe_text}</pre>"
+                    f"<p><a href='{link}'>Open claim →</a></p>")
+            _send_mail_async(to_list, [], subject, html)
+        else:
+            if row.get("contact_email"):
+                subject = f"[Hankook Claim #{claim_id}] Reply from our team"
+                html = (f"<p>Our team replied to your claim:</p>"
+                        f"<pre style='white-space:pre-wrap;font-family:Arial,sans-serif;'>{safe_text}</pre>"
+                        f"<p><a href='{cust_link}'>View and respond →</a></p>")
+                _send_mail_async([row["contact_email"]], [], subject, html)
+    except Exception as e:
+        print(f"[claim] _claim_notify_reply failed: {e}")
+
+# ── Customer-facing routes ───────────────────────────────────────────
+@app.get("/claim/<ship_to>")
+def claim_page(ship_to):
+    return send_from_directory("static", "claim.html")
+
+@app.get("/api/claim/shop/<ship_to>")
+def claim_shop_info(ship_to):
+    shop = _claim_lookup_shop(ship_to)
+    if not shop:
+        return jsonify({"error": "Shop code not recognised", "ship_to": ship_to}), 404
+    return jsonify({
+        "ship_to":      shop["ship_to"],
+        "ship_to_name": shop.get("ship_to_name") or "",
+        "sold_to":      shop.get("sold_to") or "",
+        "sold_to_name": shop.get("sold_to_name") or "",
+    })
+
+@app.get("/api/claim/by_ship/<ship_to>")
+def claim_list_for_shop(ship_to):
+    """Customer-side: list this shop's prior claims + threads so they
+    can check on status and continue any open conversation."""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT id, claim_type, status, created_at, resolved_at,
+                   contact_name, description
+            FROM claim_submission
+            WHERE ship_to = %s
+            ORDER BY created_at DESC
+            LIMIT 50
+        """, (ship_to,))
+        claims = cur.fetchall()
+        ids = [c["id"] for c in claims]
+        threads = {}
+        if ids:
+            ph = ",".join(["%s"] * len(ids))
+            cur.execute(f"""
+                SELECT id, claim_id, author_type, author_name, text,
+                       photo_paths, created_at
+                FROM claim_message
+                WHERE claim_id IN ({ph})
+                ORDER BY created_at ASC, id ASC
+            """, tuple(ids))
+            for m in cur.fetchall():
+                if m.get("created_at"):
+                    m["created_at"] = m["created_at"].strftime("%Y-%m-%d %H:%M")
+                m["photo_paths"] = m["photo_paths"].split(",") if m["photo_paths"] else []
+                threads.setdefault(m["claim_id"], []).append(m)
+        for c in claims:
+            if c.get("created_at"):
+                c["created_at"] = c["created_at"].strftime("%Y-%m-%d %H:%M")
+            if c.get("resolved_at"):
+                c["resolved_at"] = c["resolved_at"].strftime("%Y-%m-%d %H:%M")
+            c["thread"] = threads.get(c["id"], [])
+        cur.close(); conn.close()
+        return jsonify({"claims": claims})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/claim/by_ship/<ship_to>")
+def claim_create(ship_to):
+    # Honeypot — bots fill every field, real users don't see this one.
+    if (request.form.get("website") or "").strip():
+        return jsonify({"error": "spam"}), 400
+    shop = _claim_lookup_shop(ship_to)
+    if not shop:
+        return jsonify({"error": "Shop code not recognised"}), 404
+    contact_name  = (request.form.get("contact_name")  or "").strip()[:120]
+    contact_phone = (request.form.get("contact_phone") or "").strip()[:40]
+    contact_email = (request.form.get("contact_email") or "").strip()[:160]
+    claim_type    = (request.form.get("claim_type")    or "").strip()[:40]
+    product_size  = (request.form.get("product_size")  or "").strip()[:80]
+    description   = (request.form.get("description")   or "").strip()
+    if not contact_name or not contact_phone:
+        return jsonify({"error": "Name and phone are required"}), 400
+    if not description:
+        return jsonify({"error": "Please describe the issue"}), 400
+    if claim_type and claim_type not in CLAIM_TYPES:
+        claim_type = "Other"
+    photos = _claim_save_photos(request.files.getlist("photos"), ship_to)
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claim_submission
+                (ship_to, sold_to, ship_to_name, sold_to_name,
+                 contact_name, contact_phone, contact_email,
+                 claim_type, product_size, description, photo_paths,
+                 status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'New')
+        """, (
+            ship_to, shop.get("sold_to") or "",
+            shop.get("ship_to_name") or "", shop.get("sold_to_name") or "",
+            contact_name, contact_phone, contact_email,
+            claim_type, product_size, description,
+            ",".join(photos) if photos else None,
+        ))
+        cid = cur.lastrowid
+        # First message: mirror the description so the thread reads as
+        # a normal conversation from message #1.
+        cur.execute("""
+            INSERT INTO claim_message
+                (claim_id, author_type, author_name, author_email, text, photo_paths)
+            VALUES (%s, 'customer', %s, %s, %s, %s)
+        """, (cid, contact_name, contact_email, description,
+              ",".join(photos) if photos else None))
+        cur.close(); conn.close()
+        _claim_notify_new(cid, shop, contact_name, claim_type, description)
+        return jsonify({"id": cid, "status": "New"})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/claim/<int:cid>/customer_reply")
+def claim_customer_reply(cid):
+    """Customer-side reply.  Requires the same ship_to in the body so a
+    leaked claim id alone can't be used to talk on someone else's thread."""
+    if (request.form.get("website") or "").strip():
+        return jsonify({"error": "spam"}), 400
+    ship_to = (request.form.get("ship_to") or "").strip()
+    text    = (request.form.get("text") or "").strip()
+    name    = (request.form.get("contact_name") or "").strip()[:120]
+    email   = (request.form.get("contact_email") or "").strip()[:160]
+    if not ship_to or not text:
+        return jsonify({"error": "ship_to and text are required"}), 400
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT ship_to FROM claim_submission WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row or row["ship_to"] != ship_to:
+            cur.close(); conn.close()
+            return jsonify({"error": "Claim not found for this shop"}), 404
+        photos = _claim_save_photos(request.files.getlist("photos"), ship_to)
+        cur.execute("""
+            INSERT INTO claim_message
+                (claim_id, author_type, author_name, author_email, text, photo_paths)
+            VALUES (%s, 'customer', %s, %s, %s, %s)
+        """, (cid, name, email, text, ",".join(photos) if photos else None))
+        cur.close(); conn.close()
+        _claim_notify_reply(cid, "customer", name, text)
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# ── Internal routes ──────────────────────────────────────────────────
+@app.get("/claims")
+def claims_page():
+    return send_from_directory("static", "claims.html")
+
+@app.get("/api/claims")
+def claims_list():
+    """Internal: list claims with optional filters (status, state, BDE)."""
+    status = (request.args.get("status") or "").strip()
+    state  = (request.args.get("state")  or "").strip().upper()
+    q      = (request.args.get("q")      or "").strip()
+    wh = []
+    params = []
+    if status:
+        wh.append("c.status = %s"); params.append(status)
+    if q:
+        wh.append("(c.ship_to LIKE %s OR c.ship_to_name LIKE %s "
+                  " OR c.sold_to_name LIKE %s OR c.contact_name LIKE %s)")
+        like = f"%{q}%"
+        params += [like, like, like, like]
+    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT c.id, c.ship_to, c.ship_to_name, c.sold_to_name,
+                   c.contact_name, c.contact_phone, c.contact_email,
+                   c.claim_type, c.status, c.assigned_to,
+                   c.created_at, c.resolved_at,
+                   c.description, c.product_size, c.photo_paths,
+                   (SELECT COUNT(*) FROM claim_message m WHERE m.claim_id = c.id) AS msg_count
+            FROM claim_submission c
+            {where_sql}
+            ORDER BY c.created_at DESC
+            LIMIT 500
+        """, tuple(params))
+        rows = cur.fetchall()
+        # Optional state filter via customer master
+        if state and state in ("NSW","QLD","VIC","WA","SA","TAS"):
+            ships = [r["ship_to"] for r in rows]
+            keep = set()
+            if ships:
+                ph = ",".join(["%s"] * len(ships))
+                cur.execute(f"""
+                    SELECT DISTINCT ship_to, bde_state FROM customer
+                    WHERE ship_to IN ({ph})
+                """, tuple(ships))
+                for s in cur.fetchall():
+                    st = STATE_REMAP.get(s.get("bde_state"), s.get("bde_state"))
+                    if st == state:
+                        keep.add(s["ship_to"])
+            rows = [r for r in rows if r["ship_to"] in keep]
+        for r in rows:
+            if r.get("created_at"):
+                r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M")
+            if r.get("resolved_at"):
+                r["resolved_at"] = r["resolved_at"].strftime("%Y-%m-%d %H:%M")
+            r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
+        cur.close(); conn.close()
+        return jsonify({"claims": rows, "statuses": list(CLAIM_STATUSES)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/api/claim/<int:cid>")
+def claim_detail(cid):
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM claim_submission WHERE id=%s", (cid,))
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return jsonify({"error": "Claim not found"}), 404
+        cur.execute("""
+            SELECT id, claim_id, author_type, author_name, author_email,
+                   text, photo_paths, created_at
+            FROM claim_message
+            WHERE claim_id = %s
+            ORDER BY created_at ASC, id ASC
+        """, (cid,))
+        thread = cur.fetchall()
+        for m in thread:
+            if m.get("created_at"):
+                m["created_at"] = m["created_at"].strftime("%Y-%m-%d %H:%M")
+            m["photo_paths"] = m["photo_paths"].split(",") if m["photo_paths"] else []
+        if row.get("created_at"):
+            row["created_at"] = row["created_at"].strftime("%Y-%m-%d %H:%M")
+        if row.get("resolved_at"):
+            row["resolved_at"] = row["resolved_at"].strftime("%Y-%m-%d %H:%M")
+        row["photo_paths"] = row["photo_paths"].split(",") if row["photo_paths"] else []
+        cur.close(); conn.close()
+        return jsonify({"claim": row, "thread": thread})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.patch("/api/claim/<int:cid>")
+def claim_update(cid):
+    body = request.get_json(silent=True) or {}
+    fields = {}
+    if "status" in body:
+        s = (body["status"] or "").strip()
+        if s and s not in CLAIM_STATUSES:
+            return jsonify({"error": "invalid status"}), 400
+        fields["status"] = s
+        if s == "Resolved":
+            fields["resolved_at"] = datetime.now()
+        elif s != "Resolved":
+            fields["resolved_at"] = None
+    if "assigned_to" in body:
+        fields["assigned_to"] = (body["assigned_to"] or "").strip()[:120]
+    if not fields:
+        return jsonify({"error": "Nothing to update"}), 400
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        sets = ", ".join([f"{k} = %s" for k in fields])
+        params = list(fields.values()) + [cid]
+        cur.execute(f"UPDATE claim_submission SET {sets} WHERE id = %s", params)
+        cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/claim/<int:cid>/internal_reply")
+def claim_internal_reply(cid):
+    email = _bde_from_request()
+    me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
+    name  = (me[0] if me else "") or "Hankook team"
+    text  = ""
+    is_json = request.is_json
+    if is_json:
+        body = request.get_json(silent=True) or {}
+        text = (body.get("text") or "").strip()
+    else:
+        text = (request.form.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "text is required"}), 400
+    photos = _claim_save_photos(request.files.getlist("photos"), f"int{cid}") if not is_json else []
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claim_message
+                (claim_id, author_type, author_name, author_email, text, photo_paths)
+            VALUES (%s, 'internal', %s, %s, %s, %s)
+        """, (cid, name, email or "", text, ",".join(photos) if photos else None))
+        cur.close(); conn.close()
+        _claim_notify_reply(cid, "internal", name, text)
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+# === CLAIM FEATURE END ===
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
     from price_compare import price_dashboard, load_all_months, build_data
