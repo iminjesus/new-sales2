@@ -7757,6 +7757,224 @@ def meeting_list():
         return jsonify({"error": str(e)}), 500
 
 
+# ─────────────────────────────────────────────────────────────────────
+# AI feature — Summary / Strategy generator for one meeting_log row.
+# Self-contained block; remove everything between the START / END
+# markers (and the matching frontend section in static/meeting.html) to
+# fully revert.  When ANTHROPIC_API_KEY is unset, the feature stays
+# dormant: GET /api/ai_status returns enabled=false and the frontend
+# hides the button.
+# ─────────────────────────────────────────────────────────────────────
+# === AI FEATURE START ===
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+AI_MODEL          = os.getenv("AI_MODEL", "claude-haiku-4-5")
+AI_HISTORY_LIMIT  = int(os.getenv("AI_HISTORY_LIMIT", "5"))
+
+def _ensure_meeting_ai_table():
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS meeting_ai_summary (
+                id           INT AUTO_INCREMENT PRIMARY KEY,
+                meeting_id   INT NOT NULL UNIQUE,
+                model        VARCHAR(64) NOT NULL DEFAULT '',
+                summary      TEXT,
+                strategy     TEXT,
+                created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                             ON UPDATE CURRENT_TIMESTAMP
+            )
+        """)
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[ai] schema init failed: {e}")
+_ensure_meeting_ai_table()
+
+def _ai_fetch_context(cur, mid):
+    cur.execute("""
+        SELECT id, visit_date, bde_name, sold_to, sold_to_name,
+               ship_to, ship_to_name, visit_purpose, met_person,
+               notes, next_action, prep_notes
+        FROM meeting_log WHERE id = %s
+    """, (mid,))
+    row = cur.fetchone()
+    if not row: return None
+    cur.execute("""
+        SELECT visit_date, bde_name, visit_purpose, met_person,
+               notes, next_action, prep_notes
+        FROM meeting_log
+        WHERE ship_to = %s AND id <> %s
+        ORDER BY visit_date DESC, created_at DESC
+        LIMIT %s
+    """, (row["ship_to"], mid, AI_HISTORY_LIMIT))
+    shop_hist = cur.fetchall()
+    cur.execute("""
+        SELECT visit_date, bde_name, ship_to, ship_to_name, visit_purpose,
+               notes, next_action
+        FROM meeting_log
+        WHERE sold_to = %s AND ship_to <> %s
+        ORDER BY visit_date DESC, created_at DESC
+        LIMIT %s
+    """, (row["sold_to"] or "", row["ship_to"], AI_HISTORY_LIMIT))
+    group_hist = cur.fetchall()
+    return row, shop_hist, group_hist
+
+def _ai_fmt_row(r):
+    bits = []
+    if r.get("visit_date"):    bits.append(f"[{r['visit_date']}]")
+    if r.get("bde_name"):      bits.append(f"BDE: {r['bde_name']}")
+    if r.get("visit_purpose"): bits.append(f"Purpose: {r['visit_purpose']}")
+    if r.get("met_person"):    bits.append(f"Met: {r['met_person']}")
+    if r.get("ship_to_name"):  bits.append(f"Shop: {r['ship_to_name']}")
+    lines = [" | ".join(bits)] if bits else []
+    if r.get("prep_notes"):  lines.append(f"  Prep:  {r['prep_notes']}")
+    if r.get("notes"):       lines.append(f"  Notes: {r['notes']}")
+    if r.get("next_action"): lines.append(f"  Next:  {r['next_action']}")
+    return "\n".join(lines)
+
+def _ai_build_prompt(row, shop_hist, group_hist):
+    parts = [
+        "# Current visit log",
+        f"Shop: {row.get('ship_to_name') or ''} ({row.get('ship_to') or ''})",
+        f"Customer (sold-to): {row.get('sold_to_name') or ''} ({row.get('sold_to') or ''})",
+        _ai_fmt_row(row),
+    ]
+    if shop_hist:
+        parts.append("\n# This shop's previous visits (most recent first)")
+        for h in shop_hist:
+            parts.append(_ai_fmt_row(h))
+    if group_hist:
+        parts.append("\n# Other shops under the same customer (recent visits)")
+        for h in group_hist:
+            parts.append(_ai_fmt_row(h))
+    instructions = (
+        "You are a sales-operations analyst for a tyre distributor in Australia.\n"
+        "Read the visit log above (and the history when present) and reply in English with EXACTLY this format:\n\n"
+        "SUMMARY:\n"
+        "- 3 to 4 short bullets covering what happened, key concerns raised, products discussed.\n\n"
+        "STRATEGY:\n"
+        "- 3 to 4 concrete next-step recommendations for the BDE, tailored to this customer and grounded in the history shown. Avoid generic advice.\n\n"
+        "Keep each bullet under 25 words. Do not invent facts that are not in the data."
+    )
+    return instructions + "\n\n" + "\n".join(parts)
+
+def _ai_call_claude(prompt):
+    if not ANTHROPIC_API_KEY:
+        return None, "AI disabled — ANTHROPIC_API_KEY not configured on the server"
+    import requests as _rq
+    try:
+        r = _rq.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": AI_MODEL,
+                "max_tokens": 800,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=45,
+        )
+        if r.status_code != 200:
+            return None, f"Anthropic API {r.status_code}: {r.text[:300]}"
+        data = r.json()
+        text = "".join(b.get("text", "") for b in (data.get("content") or []))
+        return text.strip(), None
+    except Exception as e:
+        return None, f"AI call error: {e}"
+
+def _ai_parse(text):
+    if not text: return "", ""
+    import re as _re
+    parts = _re.split(r"(?im)^\s*STRATEGY\s*:?\s*", text, maxsplit=1)
+    if len(parts) == 2:
+        summary = _re.sub(r"(?im)^\s*SUMMARY\s*:?\s*", "", parts[0]).strip()
+        strategy = parts[1].strip()
+    else:
+        summary = _re.sub(r"(?im)^\s*SUMMARY\s*:?\s*", "", text).strip()
+        strategy = ""
+    return summary, strategy
+
+@app.get("/api/ai_status")
+def ai_status():
+    return jsonify({"enabled": bool(ANTHROPIC_API_KEY), "model": AI_MODEL})
+
+@app.get("/api/meeting/<int:mid>/ai_summary")
+def meeting_ai_summary_get(mid):
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT model, summary, strategy, created_at "
+            "FROM meeting_ai_summary WHERE meeting_id = %s",
+            (mid,),
+        )
+        c = cur.fetchone()
+        cur.close(); conn.close()
+        if not c:
+            return jsonify({"cached": False})
+        return jsonify({
+            "cached":     True,
+            "model":      c["model"],
+            "summary":    c["summary"],
+            "strategy":   c["strategy"],
+            "created_at": c["created_at"].strftime("%Y-%m-%d %H:%M") if c["created_at"] else "",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/meeting/<int:mid>/ai_summary")
+def meeting_ai_summary_generate(mid):
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"error": "AI feature disabled — ANTHROPIC_API_KEY is not set on the server"}), 503
+    regen = (request.args.get("regen") or "").lower() in ("1", "true", "yes")
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        if not regen:
+            cur.execute(
+                "SELECT model, summary, strategy, created_at "
+                "FROM meeting_ai_summary WHERE meeting_id = %s", (mid,))
+            c = cur.fetchone()
+            if c:
+                cur.close(); conn.close()
+                return jsonify({
+                    "cached":     True,
+                    "model":      c["model"],
+                    "summary":    c["summary"],
+                    "strategy":   c["strategy"],
+                    "created_at": c["created_at"].strftime("%Y-%m-%d %H:%M") if c["created_at"] else "",
+                })
+        ctx = _ai_fetch_context(cur, mid)
+        if not ctx:
+            cur.close(); conn.close()
+            return jsonify({"error": "Meeting log not found"}), 404
+        row, shop_hist, group_hist = ctx
+        prompt = _ai_build_prompt(row, shop_hist, group_hist)
+        text, err = _ai_call_claude(prompt)
+        if err:
+            cur.close(); conn.close()
+            return jsonify({"error": err}), 502
+        summary, strategy = _ai_parse(text)
+        cur.execute(
+            "INSERT INTO meeting_ai_summary (meeting_id, model, summary, strategy) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE model=VALUES(model), summary=VALUES(summary), "
+            "strategy=VALUES(strategy), created_at=CURRENT_TIMESTAMP",
+            (mid, AI_MODEL, summary, strategy),
+        )
+        cur.close(); conn.close()
+        return jsonify({
+            "cached":   False,
+            "model":    AI_MODEL,
+            "summary":  summary,
+            "strategy": strategy,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+# === AI FEATURE END ===
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
     from price_compare import price_dashboard, load_all_months, build_data

@@ -928,6 +928,11 @@ async function loadBdes(){
 let _recentRows = [];
 let _filtState  = "";    // "" = All, else "NSW"/"QLD"/"VIC"/"WA"
 let _filtPurp   = "";    // "" = All, else exact visit_purpose value
+// === AI FEATURE START === (probed once from /api/ai_status; hides the
+// per-row "Ask AI" button when the server has no API key configured)
+let _aiEnabled  = false;
+let _aiModel    = "";
+// === AI FEATURE END ===
 
 async function loadRecent(){
   const wrap = document.getElementById("recentWrap");
@@ -995,6 +1000,15 @@ function renderRecentRows(){
     // the user can tell who wrote what and when.
     const author = `<div style="color:#6b7280;font-size:10px;margin-bottom:4px;">by ${escapeHtml(r.bde_name || "—")}${r.created_at ? ` · ${escapeHtml(r.created_at)}` : ""}</div>`;
     const fbBlock = renderFeedbackBlock(r.id, r.thread || []);
+    // === AI FEATURE START === (per-row Ask AI button + result panel)
+    const aiBtn = _aiEnabled ? `<a href="javascript:void(0)" class="ai-btn"
+        data-id="${r.id}"
+        style="color:#7c3aed;margin-right:8px;font-weight:600;">✨ Ask AI</a>` : "";
+    const aiPanel = _aiEnabled ? `<div class="ai-panel" id="ai-panel-${r.id}"
+        style="display:none;margin-top:6px;padding:8px 10px;background:#faf5ff;
+               border:1px solid #e9d5ff;border-radius:6px;font-size:11px;
+               color:#581c87;"></div>` : "";
+    // === AI FEATURE END ===
 
     const bdeKey  = r.bde_name || "";
     const shipKey = r.ship_to  || "";
@@ -1041,12 +1055,18 @@ function renderRecentRows(){
     // Purpose are conveyed by the group headers above.
     h += `<tr>
       <td class="ts" style="padding-left:36px;">${r.visit_date || r.created_at}</td>
-      <td class="notes">${author}${prep}${notesBody}${next}${met}${actions}${fbBlock}</td>
+      <td class="notes">${author}${prep}${notesBody}${next}${met}${actions}${aiBtn ? `<div style="margin-top:4px;font-size:10px;">${aiBtn}</div>` : ""}${aiPanel}${fbBlock}</td>
       <td class="photos">${photos}</td>
     </tr>`;
   }
   h += `</tbody></table>`;
   wrap.innerHTML = h;
+
+  // === AI FEATURE START === (per-row Ask AI click handler)
+  wrap.querySelectorAll(".ai-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => _aiHandleClick(btn));
+  });
+  // === AI FEATURE END ===
 
   // Wire the shop-row banners as drag sources — drop on calendar
   // date = schedule, drop on Selected-shop = log a new visit.
@@ -1924,7 +1944,65 @@ document.getElementById("shipSearch").addEventListener("input", renderShipList);
 // differs on mobile vs desktop.
 window.matchMedia("(max-width:1100px)").addEventListener("change", renderShipList);
 
+// === AI FEATURE START === (status probe + click handler + renderer)
+async function _aiProbeStatus(){
+  try {
+    const j = await fetchJSON("/api/ai_status");
+    _aiEnabled = !!(j && j.enabled);
+    _aiModel   = (j && j.model) || "";
+  } catch { _aiEnabled = false; }
+}
+function _aiRender(j){
+  const fmt = (txt) =>
+    `<div style="white-space:pre-wrap;line-height:1.4;">${escapeHtml(txt || "—")}</div>`;
+  const stamp = j.created_at
+    ? `<span style="color:#9ca3af;font-weight:400;"> · ${escapeHtml(j.created_at)}${j.cached ? " (cached)" : ""}</span>`
+    : "";
+  const model = j.model ? `<span style="color:#9ca3af;font-weight:400;"> · ${escapeHtml(j.model)}</span>` : "";
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+      <b style="text-transform:uppercase;letter-spacing:.3px;font-size:10px;">✨ AI summary${model}${stamp}</b>
+      <a href="javascript:void(0)" class="ai-regen" style="font-size:10px;color:#7c3aed;">Regenerate</a>
+    </div>
+    <div style="margin-bottom:6px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:2px;">Summary</div>
+      ${fmt(j.summary)}
+    </div>
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:2px;">Strategy</div>
+      ${fmt(j.strategy)}
+    </div>
+  `;
+}
+async function _aiHandleClick(btn, opts){
+  opts = opts || {};
+  const id = btn.dataset.id;
+  const panel = document.getElementById("ai-panel-" + id);
+  if (!panel) return;
+  if (!opts.regen && panel.style.display === "block"){
+    panel.style.display = "none"; return;
+  }
+  panel.style.display = "block";
+  panel.innerHTML = `<em style="color:#7c3aed;">Asking AI…</em>`;
+  try {
+    const url = `/api/meeting/${id}/ai_summary${opts.regen ? "?regen=1" : ""}`;
+    const r = await fetch(url, { method: "POST", credentials: "include" });
+    const j = await r.json();
+    if (!r.ok){
+      panel.innerHTML = `<span style="color:#dc2626;">${escapeHtml(j.error || ("AI error " + r.status))}</span>`;
+      return;
+    }
+    panel.innerHTML = _aiRender(j);
+    const regen = panel.querySelector(".ai-regen");
+    if (regen) regen.addEventListener("click", () => _aiHandleClick(btn, { regen: true }));
+  } catch (err){
+    panel.innerHTML = `<span style="color:#dc2626;">${escapeHtml(err.message)}</span>`;
+  }
+}
+// === AI FEATURE END ===
+
 (async () => {
+  await _aiProbeStatus();   // === AI FEATURE === (cheap; reads one env var)
   await loadBdes();
   await loadRecent();
   await loadShipOptions();
