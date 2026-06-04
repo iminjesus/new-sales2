@@ -6388,6 +6388,7 @@ _BDE_DIRECTORY = [
     ("Marsh Aaron",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
     ("Spires Steven",    "steven.spires@hankooktyre.com.au",    "QLD", "BDE"),
     ("Maclure Adam",     "adam.maclure@hankooktyre.com.au",     "QLD", "BDE"),
+    ("Bovey Craig",      "craig.bovey@hankooktyre.com.au",      "QLD", "BDE"),
     # VIC / SA / TAS (one SM covers all three; the region filter
     # groups SA/TAS shops under VIC)
     ("Hobkirk Calvin",   "calvin.hobkirk@hankooktyre.com.au",   "VIC", "SM"),
