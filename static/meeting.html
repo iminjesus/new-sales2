@@ -89,6 +89,8 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .cal-cell .cell-stats .cs-logged{color:#16a34a}
 .cal-cell .bde-group{display:flex;flex-direction:column;gap:1px;margin-bottom:2px}
 .cal-cell .bde-group-label{font-size:8px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.3px;padding:0 2px;line-height:1.2}
+.more-chip{font-size:9px;font-weight:700;color:#2563eb;background:#eff6ff;border:1px dashed #93c5fd;border-radius:8px;padding:1px 6px;cursor:pointer;text-align:center;line-height:1.4;margin-top:1px}
+.more-chip:hover{background:#dbeafe;border-style:solid}
 .plan-chip{background:#dcfce7;border:1px solid #86efac;color:#14532d;font-size:10px;padding:1px 5px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:space-between;gap:3px;line-height:1.4}
 .plan-chip:hover{filter:brightness(.92)}
 .plan-chip .pc-rm{color:currentColor;font-weight:700;opacity:.65;margin-left:2px}
@@ -1478,6 +1480,10 @@ const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const _calState = { year: (new Date()).getFullYear(), month: (new Date()).getMonth() + 1 };
 let _planRowsByDate = {};   // "YYYY-MM-DD" → [ {id, ship_to, ship_to_name, bde_name}, … ]
 let _shipOptions    = [];   // [{ship_to, ship_to_name, sold_to, sold_to_name}, …]
+// Cells with more chips than this get a "+N more" pill until the user
+// clicks to expand that specific date.
+const MAX_CHIPS_PER_CELL = 3;
+const _expandedCells = new Set();   // ISO dates the user clicked to expand
 
 // Stable per-BDE colour: hash the name → full 360° hue, fixed
 // saturation/lightness.  Sweeping the entire hue circle (instead of
@@ -1598,7 +1604,9 @@ function renderCalendar(){
   }
   // Group rows by BDE within a cell so the reader can tell at a glance
   // who that BDE met that day; BDEs are ordered alphabetically and each
-  // group gets a small uppercase label above its chips.
+  // group gets a small uppercase label above its chips.  When the cell
+  // has more chips than MAX_CHIPS_PER_CELL we truncate and append a
+  // "+N more" pill that the click handler expands in-place.
   function _chipsHtml(iso){
     const rows = _filteredRowsFor(iso);
     if (!rows.length) return "";
@@ -1609,11 +1617,26 @@ function renderCalendar(){
       byBde.get(key).push(r);
     }
     const groups = [...byBde.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-    return groups.map(([bde, items]) => `
-      <div class="bde-group">
+    const expanded = _expandedCells.has(iso);
+    const cap = expanded ? Infinity : MAX_CHIPS_PER_CELL;
+    let shown = 0;
+    const html = [];
+    for (const [bde, items] of groups){
+      if (shown >= cap) break;
+      const slice = items.slice(0, cap - shown);
+      shown += slice.length;
+      html.push(`<div class="bde-group">
         <div class="bde-group-label">${escapeHtml(bde)}</div>
-        ${items.map(_chipHtml).join("")}
-      </div>`).join("");
+        ${slice.map(_chipHtml).join("")}
+      </div>`);
+    }
+    const hidden = rows.length - shown;
+    if (hidden > 0){
+      html.push(`<div class="more-chip" data-more="${iso}">+${hidden} more</div>`);
+    } else if (expanded && rows.length > MAX_CHIPS_PER_CELL){
+      html.push(`<div class="more-chip" data-more="${iso}">Collapse</div>`);
+    }
+    return html.join("");
   }
   function _cellStatsHtml(iso){
     const rows = _filteredRowsFor(iso);
@@ -1686,6 +1709,20 @@ function renderCalendar(){
       } catch (err) { alert("Error: " + err.message); }
     });
   });
+  // "+N more" / Collapse pill — toggles a per-date expand flag and
+  // re-renders so the cell either reveals the rest of its chips or
+  // shrinks back to MAX_CHIPS_PER_CELL.
+  root.querySelectorAll(".more-chip").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const iso = el.dataset.more;
+      if (!iso) return;
+      if (_expandedCells.has(iso)) _expandedCells.delete(iso);
+      else _expandedCells.add(iso);
+      renderCalendar();
+    });
+  });
+
   // Plan chip wiring:
   //   × button click  → delete the plan
   //   chip drag       → drop on Selected-shop banner = log the visit
