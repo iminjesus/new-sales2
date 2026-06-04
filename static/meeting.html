@@ -1401,7 +1401,7 @@ fForm.addEventListener("submit", async (e) => {
 });
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
-filtBde.addEventListener("change", loadRecent);
+filtBde.addEventListener("change", () => { loadRecent(); renderCalendar(); });
 
 // State segmented buttons — filter BOTH the visible rows AND the BDE
 // dropdown so the dropdown only contains BDEs from the chosen state.
@@ -1421,6 +1421,8 @@ document.getElementById("filtStateSeg").addEventListener("click", (e) => {
   } else {
     renderRecentRows();
   }
+  // The State filter also narrows the calendar chip set.
+  renderCalendar();
 });
 
 // Purpose segmented buttons — pure client-side filter.
@@ -1533,8 +1535,22 @@ function renderCalendar(){
   // Renders one calendar cell.  Used for in-month days and for the dim
   // overflow cells (previous / next month) so chips drop and render the
   // same way on adjacent-month dates.
+  // Resolve a BDE's state (with SA/TAS rolled into VIC) so the State
+  // segment / BDE dropdown can filter calendar chips client-side.
+  function _calStateOf(name){
+    const p = (_peopleCache || []).find(
+      x => (x.name || "").toUpperCase() === (name || "").toUpperCase()
+    );
+    if (!p) return "";
+    return (p.state === "SA" || p.state === "TAS") ? "VIC" : (p.state || "");
+  }
   function _chipsHtml(iso){
-    return (_planRowsByDate[iso] || []).map(r => {
+    const rows = (_planRowsByDate[iso] || []).filter(r => {
+      if (filtBde.value && (r.bde_name || "") !== filtBde.value) return false;
+      if (_filtState && _calStateOf(r.bde_name) !== _filtState) return false;
+      return true;
+    });
+    return rows.map(r => {
       let style = "";
       let badge = "";
       const logged = !!r.logged;
