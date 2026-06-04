@@ -7522,7 +7522,16 @@ def meeting_plan_list():
                        AND YEAR(m.visit_date)  = YEAR(p.plan_date)
                        AND MONTH(m.visit_date) = MONTH(p.plan_date)
                        AND m.notes IS NOT NULL AND TRIM(m.notes) <> ''
-                   ) AS logged
+                   ) AS logged,
+                   (SELECT GROUP_CONCAT(DISTINCT m.visit_purpose
+                                        ORDER BY m.visit_purpose SEPARATOR ',')
+                    FROM meeting_log m
+                    WHERE m.ship_to = p.ship_to
+                      AND YEAR(m.visit_date)  = YEAR(p.plan_date)
+                      AND MONTH(m.visit_date) = MONTH(p.plan_date)
+                      AND m.visit_purpose IS NOT NULL
+                      AND TRIM(m.visit_purpose) <> ''
+                   ) AS purposes
             FROM meeting_plan p
             WHERE {' AND '.join(wh)}
             ORDER BY p.plan_date, p.id
@@ -7532,6 +7541,7 @@ def meeting_plan_list():
             if r.get("plan_date"):
                 r["plan_date"] = r["plan_date"].strftime("%Y-%m-%d")
             r["logged"] = bool(r.get("logged"))
+            r["purposes"] = (r.get("purposes") or "")
         cur.close(); conn.close()
         return jsonify(rows)
     except Exception as e:

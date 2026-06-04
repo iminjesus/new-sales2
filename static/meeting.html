@@ -85,6 +85,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .cal-cell.today .d-num{color:#ea580c}
 .cal-cell.drag-over{background:#dbeafe;outline:2px dashed #2563eb;outline-offset:-2px}
 .cal-cell .chips{display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.cal-cell .cell-stats{display:flex;justify-content:space-between;align-items:center;font-size:8px;font-weight:600;color:#6b7280;padding:0 1px;margin-bottom:2px;text-transform:uppercase;letter-spacing:.3px}
+.cal-cell .cell-stats .cs-logged{color:#16a34a}
+.cal-cell .bde-group{display:flex;flex-direction:column;gap:1px;margin-bottom:2px}
+.cal-cell .bde-group-label{font-size:8px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.3px;padding:0 2px;line-height:1.2}
 .plan-chip{background:#dcfce7;border:1px solid #86efac;color:#14532d;font-size:10px;padding:1px 5px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:space-between;gap:3px;line-height:1.4}
 .plan-chip:hover{filter:brightness(.92)}
 .plan-chip .pc-rm{color:currentColor;font-weight:700;opacity:.65;margin-left:2px}
@@ -1433,6 +1437,9 @@ document.getElementById("filtPurposeSeg").addEventListener("click", (e) => {
   document.querySelectorAll("#filtPurposeSeg .seg-btn")
     .forEach(b => b.classList.toggle("active", b === btn));
   renderRecentRows();
+  // The Purpose filter also narrows the calendar chip set (matched
+  // against the comma-joined visit_purpose list the backend attaches).
+  renderCalendar();
 });
 
 // Rebuild the BDE dropdown so it only lists BDEs whose state matches
@@ -1544,43 +1551,78 @@ function renderCalendar(){
     if (!p) return "";
     return (p.state === "SA" || p.state === "TAS") ? "VIC" : (p.state || "");
   }
-  function _chipsHtml(iso){
-    const rows = (_planRowsByDate[iso] || []).filter(r => {
+  // Filter plan rows for one date by the right-panel State / BDE /
+  // Purpose selection.  Purpose match uses the comma-joined list of
+  // logged purposes the backend attaches to each plan.
+  function _filteredRowsFor(iso){
+    return (_planRowsByDate[iso] || []).filter(r => {
       if (filtBde.value && (r.bde_name || "") !== filtBde.value) return false;
       if (_filtState && _calStateOf(r.bde_name) !== _filtState) return false;
+      if (_filtPurp){
+        const purposes = (r.purposes || "").split(",").filter(Boolean);
+        if (!purposes.includes(_filtPurp)) return false;
+      }
       return true;
     });
-    return rows.map(r => {
-      let style = "";
-      let badge = "";
-      const logged = !!r.logged;
-      if (colorByBde && r.bde_name) {
-        const c = _planColorFor(r.bde_name);
-        // Logged plan = full colour (the visit actually happened);
-        // unlogged plan = faded so the user can see at a glance which
-        // dates still need a log entry.
-        const op = logged ? 1 : 0.40;
-        style = `style="background:${c};border-color:${c};color:#fff;opacity:${op};"`;
-        badge = `<span style="background:rgba(255,255,255,.28);color:#fff;
-                  font-weight:700;font-size:9px;padding:0 4px;border-radius:6px;
-                  margin-right:3px;">${_initials(r.bde_name)}</span>`;
-      } else {
-        // Default-green fallback uses the same opacity rule.
-        const op = logged ? 1 : 0.40;
-        style = `style="opacity:${op};"`;
-      }
-      return `<div class="plan-chip" data-id="${r.id}"
-                   data-ship="${_attr(r.ship_to || '')}"
-                   data-ship-name="${_attr(r.ship_to_name || '')}"
-                   data-sold="${_attr(r.sold_to || '')}"
-                   data-sold-name="${_attr(r.sold_to_name || '')}"
-                   data-bde="${_attr(r.bde_name || '')}"
-                   draggable="true" ${style}
-                   title="Click × to remove · Drag onto the form on the right to log this visit\n${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
-        <span style="display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;">${badge}${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 16))}</span>
-        <span class="pc-rm">×</span>
-      </div>`;
-    }).join("");
+  }
+  function _chipHtml(r){
+    let style = "";
+    let badge = "";
+    const logged = !!r.logged;
+    if (colorByBde && r.bde_name) {
+      const c = _planColorFor(r.bde_name);
+      // Logged plan = full colour (the visit actually happened);
+      // unlogged plan = faded so the user can see at a glance which
+      // dates still need a log entry.
+      const op = logged ? 1 : 0.40;
+      style = `style="background:${c};border-color:${c};color:#fff;opacity:${op};"`;
+      badge = `<span style="background:rgba(255,255,255,.28);color:#fff;
+                font-weight:700;font-size:9px;padding:0 4px;border-radius:6px;
+                margin-right:3px;">${_initials(r.bde_name)}</span>`;
+    } else {
+      // Default-green fallback uses the same opacity rule.
+      const op = logged ? 1 : 0.40;
+      style = `style="opacity:${op};"`;
+    }
+    return `<div class="plan-chip" data-id="${r.id}"
+                 data-ship="${_attr(r.ship_to || '')}"
+                 data-ship-name="${_attr(r.ship_to_name || '')}"
+                 data-sold="${_attr(r.sold_to || '')}"
+                 data-sold-name="${_attr(r.sold_to_name || '')}"
+                 data-bde="${_attr(r.bde_name || '')}"
+                 draggable="true" ${style}
+                 title="Click × to remove · Drag onto the form on the right to log this visit\n${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
+      <span style="display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;">${badge}${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 16))}</span>
+      <span class="pc-rm">×</span>
+    </div>`;
+  }
+  // Group rows by BDE within a cell so the reader can tell at a glance
+  // who that BDE met that day; BDEs are ordered alphabetically and each
+  // group gets a small uppercase label above its chips.
+  function _chipsHtml(iso){
+    const rows = _filteredRowsFor(iso);
+    if (!rows.length) return "";
+    const byBde = new Map();
+    for (const r of rows) {
+      const key = r.bde_name || "—";
+      if (!byBde.has(key)) byBde.set(key, []);
+      byBde.get(key).push(r);
+    }
+    const groups = [...byBde.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    return groups.map(([bde, items]) => `
+      <div class="bde-group">
+        <div class="bde-group-label">${escapeHtml(bde)}</div>
+        ${items.map(_chipHtml).join("")}
+      </div>`).join("");
+  }
+  function _cellStatsHtml(iso){
+    const rows = _filteredRowsFor(iso);
+    if (!rows.length) return "";
+    const logged = rows.filter(r => r.logged).length;
+    return `<div class="cell-stats">
+      <span>${rows.length} plan${rows.length === 1 ? "" : "s"}</span>
+      <span class="cs-logged">${logged} logged</span>
+    </div>`;
   }
   function _cellHtml(y, m, d, dim){
     const iso = _isoDate(y, m, d);
@@ -1588,6 +1630,7 @@ function renderCalendar(){
     const dimCls  = dim ? " dim" : "";
     return `<div class="cal-cell${dimCls}${isToday}" data-date="${iso}">
       <span class="d-num">${d}</span>
+      ${_cellStatsHtml(iso)}
       <div class="chips">${_chipsHtml(iso)}</div>
     </div>`;
   }
