@@ -6384,6 +6384,7 @@ _BDE_DIRECTORY = [
     ("Robinson Peter",   "peter.robinson@hankooktyre.com.au",   "NSW", "BDE"),
     ("Buckley Paul",     "paul.buckley@hankooktyre.com.au",     "NSW", "SM"),
     ("Borghese Alessio", "alessio.borghese@hankooktyre.com.au", "NSW", "BDE"),
+    ("Makris George",    "george.markis@hankooktyre.com.au",    "NSW", "BDE"),
     # QLD
     ("Marsh Aaron",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
     ("Spires Steven",    "steven.spires@hankooktyre.com.au",    "QLD", "BDE"),
