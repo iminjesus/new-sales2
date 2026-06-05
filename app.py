@@ -5499,6 +5499,17 @@ def api_rebate_data():
         hq_box = {}   # sold_to -> {sold_to, sold_to_name, sold_to_group, rebate, parts:[...]}
         hq_by_region = {}   # region -> HQ/VR rebate (each store's amount x rate, by its region)
 
+        # Pre-load the set of "Promo" ship_tos so the rebate calc can
+        # skip them in every aggregation downstream — the customer
+        # master flags promotional stores by including "Promo" in the
+        # ship_to_name (case-insensitive substring), and those don't
+        # count toward rebate qualification or earning.
+        cur.execute(
+            "SELECT ship_to FROM customer "
+            "WHERE UPPER(ship_to_name) LIKE '%PROMO%'"
+        )
+        promo_ship_tos = {str(r["ship_to"]) for r in cur.fetchall()}
+
         # ?? 2. Sales from sales_thismonth by (sold_to, ship_to, brand, line) ??
         # Brand comes from sales_thismonth.brand directly (SAP loader fills it).
         # Line is derived from material prefix: 1xxx/2xxx → PCLT, 3xxx → TBR.
@@ -5529,6 +5540,8 @@ def api_rebate_data():
         sold_brand_line_tot = {}   # (sold_to, brand, line) -> {qty, amt}
         for r in cur.fetchall():
             st, sh, br, ln = str(r["sold_to"]), str(r["ship_to"]), r["brand"], r["line"]
+            if sh in promo_ship_tos:
+                continue   # Promo ship_tos are excluded from rebate calc.
             qty, amt = float(r["qty"] or 0), float(r["amt"] or 0)
             # aggregate all lines ??brand-level totals
             agg = ship_sales.setdefault((st, sh, br), {"qty": 0.0, "amt": 0.0})
@@ -5558,6 +5571,8 @@ def api_rebate_data():
                 "state": _rebate_region(r["bde_state"]) or "-",
                 "bde":   (r["salesman_name"] or "").strip() or "-",
             }
+            if sh in promo_ship_tos:
+                continue   # Don't surface Promo ships as zero-sales BDE rows.
             stk = str(r["sold_to"] or "")
             if stk:
                 sold_to_ships.setdefault(stk, set()).add(sh)
