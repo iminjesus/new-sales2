@@ -482,10 +482,20 @@ function renderPage(data){
     const bKey = rKey + "|" + (g.bde || "-");
     if (!rNode.bdes.has(bKey)) rNode.bdes.set(bKey, {bde:g.bde||"-", rKey, groups:[], qty:0, amt:0, rebate:0});
     const bNode = rNode.bdes.get(bKey);
-    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR
+    // Sum per-brand to avoid inflating region/BDE totals when a sold_to has both PCLT+TBR.
+    // If this sold_to has both a primary (SR/BASE) and a secondary (HQ/VR/IT/WTY) rebate,
+    // the secondary already covers the same underlying sales — skip it when totalling
+    // so qty/amt aren't double-counted.
+    const SECONDARY = new Set(["HQ","VR","IT","WTY"]);
+    const hasPrimary = g.brands.some(b => !SECONDARY.has(b.scope || "BASE"));
     g.brands.forEach(b => {
-      rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt; rNode.rebate += b.grp_curr_rebate;
-      bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt; bNode.rebate += b.grp_curr_rebate;
+      const skipForQA = hasPrimary && SECONDARY.has(b.scope || "BASE");
+      if (!skipForQA){
+        rNode.qty += b.grp_actual_qty; rNode.amt += b.grp_actual_amt;
+        bNode.qty += b.grp_actual_qty; bNode.amt += b.grp_actual_amt;
+      }
+      rNode.rebate += b.grp_curr_rebate;
+      bNode.rebate += b.grp_curr_rebate;
     });
     bNode.groups.push(g);
   });

@@ -6139,6 +6139,20 @@ def api_rebate_data():
                 g["brands"].values(),
                 key=lambda b: (brand_order.get(b["brand"], 99),
                                scope_order.get(b.get("scope", "BASE"), 9)))
+            # When a sold_to has both a Store/BASE rebate AND a covering
+            # HQ/VR/IT/WTY rebate, the secondary structure's qty/amt is
+            # the same underlying sales already counted in the base.
+            # Subtract the secondary contributions so the sold_to summary
+            # row shows the actual sales once (not doubled).
+            secondary_scopes = {"HQ", "VR", "IT", "WTY"}
+            has_primary = any(b.get("scope", "BASE") not in secondary_scopes
+                              for b in g["brands"])
+            if has_primary:
+                for b in g["brands"]:
+                    if b.get("scope", "BASE") in secondary_scopes:
+                        g["grp_actual_qty"] -= b["grp_actual_qty"]
+                        g["grp_actual_amt"] -= b["grp_actual_amt"]
+                        g["grp_actual"]     -= b["grp_actual"]
 
         groups = list(grp_map.values())
         summary["total_groups"] = len(groups)
