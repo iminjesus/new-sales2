@@ -17,6 +17,10 @@ import traceback
 USE_SQLITE = os.environ.get("USE_SQLITE") == "1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# SA/TAS roll up to VIC, NT to WA, ACT to NSW.  Used both inside
+# api_stock and by the claim portal's notification routing.
+STATE_REMAP = {"SA": "VIC", "NT": "WA", "TAS": "VIC", "ACT": "NSW"}
+
 # Pick up SMTP / DB creds from .env (gitignored).  Silent no-op if
 # python-dotenv isn't installed — the platform env vars still apply.
 try:
