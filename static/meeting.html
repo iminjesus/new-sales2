@@ -558,12 +558,13 @@ header .nav{margin-left:auto;display:flex;gap:6px}
   <div class="card" id="recentSection">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
       <h2 style="margin:0;">Recent entries</h2>
-      <!-- Tabs: Visit logs (default) ↔ Potential customers.
-           Both tabs share the State/BDE filters; Purpose only matters
-           for logs, so we hide that row in the Potentials tab. -->
+      <!-- Tabs: Existing customers (visit logs, default) ↔ Potential
+           customers (pipeline). Both tabs share the State/BDE filters;
+           Purpose only matters for visit logs, so we hide that row in
+           the Potential tab. -->
       <div class="seg" id="rightTabs" style="font-size:11px;">
-        <button type="button" class="seg-btn active" data-tab="logs">📋 Logs</button>
-        <button type="button" class="seg-btn" data-tab="potentials">🌱 Potentials</button>
+        <button type="button" class="seg-btn active" data-tab="logs">🏪 Existing</button>
+        <button type="button" class="seg-btn" data-tab="potentials">🌱 Potential</button>
       </div>
     </div>
     <div class="filt-row">
