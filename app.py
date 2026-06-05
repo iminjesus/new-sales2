@@ -8369,6 +8369,75 @@ def claim_internal_reply(cid):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+# ── QR code generation (sticker per shop + bulk grid) ──────────────
+@app.get("/api/claim/qr/<ship_to>")
+def claim_qr_png(ship_to):
+    """Render a PNG QR code that encodes /claim/<ship_to>.  The image
+    is what the printable card/grid pages embed via <img src>."""
+    try:
+        import qrcode  # type: ignore
+    except ImportError:
+        return ("qrcode package not installed — pip install qrcode[pil]", 500)
+    from io import BytesIO
+    from flask import send_file
+    url = f"{DASHBOARD_URL.rstrip('/')}/claim/{ship_to}"
+    qr  = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10, border=2,
+    )
+    qr.add_data(url); qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
+    resp = send_file(buf, mimetype="image/png",
+                     download_name=f"claim_qr_{ship_to}.png")
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
+@app.get("/claims/qr/<ship_to>")
+def claim_qr_card(ship_to):
+    """Single-shop printable A6 card."""
+    return send_from_directory("static", "claim_qr_card.html")
+
+@app.get("/claims/qr_bulk")
+def claim_qr_bulk_page():
+    """Bulk A4 grid of QR cards.  Frontend reads ?ships=A,B,C&state=NSW
+    and renders one card per shop on the page."""
+    return send_from_directory("static", "claim_qr_bulk.html")
+
+@app.get("/api/claim/qr_shops")
+def claim_qr_shops():
+    """Helper for the bulk page — returns ship_tos matching the filters.
+    Defaults to active shops (any in customer master)."""
+    state = (request.args.get("state") or "").strip().upper()
+    limit = min(int(request.args.get("limit") or "300"), 1000)
+    wh = ["ship_to IS NOT NULL", "TRIM(ship_to) <> ''"]
+    params = []
+    if state:
+        # Map our region buttons back to the underlying bde_state values
+        # so SA/TAS/ACT shops still print under the manager who serves them.
+        wh.append("bde_state = %s")
+        params.append(state)
+    where_sql = "WHERE " + " AND ".join(wh)
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT ship_to,
+                   MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
+                   MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name,
+                   MIN(NULLIF(TRIM(bde_state),''))   AS bde_state
+            FROM customer
+            {where_sql}
+            GROUP BY ship_to
+            ORDER BY ship_to_name, ship_to
+            LIMIT {limit}
+        """, tuple(params))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        return jsonify({"shops": rows, "base_url": DASHBOARD_URL.rstrip("/")})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 # === CLAIM FEATURE END ===
 
 

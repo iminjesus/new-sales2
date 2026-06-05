@@ -90,6 +90,7 @@ h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
     <a href="/">Sales Dashboard</a>
     <a href="/meeting">Visit Log</a>
     <a href="/claims">Claims</a>
+    <a href="/claims/qr_bulk">🖨️ Bulk QR</a>
   </div>
 </header>
 
@@ -226,6 +227,12 @@ function renderDetail(c, thread){
       <div class="controls">
         ${statusPill(c.status || "New")}
         <select id="statusSel">${statusOptions}</select>
+        <a href="/claims/qr/${esc(c.ship_to)}" target="_blank"
+           title="Open the printable QR card for this shop"
+           style="font-size:11px;color:#7c3aed;text-decoration:none;font-weight:700;
+                  border:1px solid #c4b5fd;border-radius:4px;padding:4px 8px;">
+          🔲 QR
+        </a>
       </div>
     </div>
 

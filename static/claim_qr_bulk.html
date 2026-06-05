@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Claim QR — Bulk print</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#e5e7eb;color:#111827;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px}
+.toolbar{position:sticky;top:0;z-index:10;padding:10px 14px;background:#1e3a5f;color:#fff;
+  display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.toolbar h1{font-size:13px;font-weight:700;margin:0;flex:1}
+.toolbar a{color:#cbd5e1;font-size:12px;text-decoration:none}
+.toolbar a:hover{color:#fff}
+.toolbar select,.toolbar input{background:#fff;color:#111827;border:none;
+  border-radius:5px;padding:5px 8px;font-size:12px}
+.toolbar button{background:#2563eb;color:#fff;border:none;border-radius:5px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.toolbar button:hover{background:#1d4ed8}
+.toolbar button:disabled{background:#9ca3af;cursor:not-allowed}
+.status{padding:14px;color:#6b7280;font-size:12px}
+/* A4 page: 210×297mm.  3×4 grid → 12 cards/page.  Each card ~63×70mm with gutters. */
+.pages{padding:20px;display:flex;flex-direction:column;gap:20px;align-items:center}
+.page{width:210mm;background:#fff;padding:8mm;display:grid;
+  grid-template-columns:repeat(3, 1fr);grid-template-rows:repeat(4, 1fr);
+  gap:4mm;page-break-after:always;min-height:297mm;
+  box-shadow:0 2px 10px rgba(0,0,0,.1)}
+.card{border:1px dashed #d1d5db;border-radius:2mm;padding:3mm;display:flex;
+  flex-direction:column;align-items:center;text-align:center;font-size:8pt;
+  background:#fff}
+.card .brand{font-size:7pt;font-weight:700;color:#1e3a5f;letter-spacing:.3px}
+.card .title{font-size:9pt;font-weight:800;color:#111827;margin:1mm 0 2mm}
+.card .qr{width:36mm;height:36mm;display:flex;align-items:center;justify-content:center;
+  padding:1mm;border:1px solid #e5e7eb;border-radius:1mm}
+.card .qr img{width:100%;height:100%;object-fit:contain}
+.card .shop-name{font-size:8pt;font-weight:700;color:#1e3a5f;margin-top:2mm;
+  line-height:1.15;word-break:break-word;padding:0 1mm}
+.card .shop-code{font-size:7pt;color:#6b7280;font-family:ui-monospace,Menlo,monospace;
+  margin-top:0.5mm}
+.card .url{font-size:6pt;color:#1e3a5f;font-family:ui-monospace,Menlo,monospace;
+  word-break:break-all;margin-top:1mm;padding:0 1mm;line-height:1.1}
+@media print {
+  body{background:#fff}
+  .toolbar,.status{display:none}
+  .pages{padding:0;gap:0}
+  .page{box-shadow:none;page-break-after:always}
+  @page { size: A4; margin: 0 }
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>Hankook claim QR — bulk print</h1>
+  <label>State
+    <select id="stateSel">
+      <option value="">All</option>
+      <option value="NSW">NSW</option>
+      <option value="QLD">QLD</option>
+      <option value="VIC">VIC</option>
+      <option value="WA">WA</option>
+      <option value="SA">SA</option>
+      <option value="TAS">TAS</option>
+    </select>
+  </label>
+  <label>Limit
+    <input id="limitInput" type="number" value="60" min="12" max="300" style="width:64px;">
+  </label>
+  <button id="loadBtn">Load</button>
+  <button id="printBtn" disabled>Print all pages</button>
+  <a href="/claims" style="margin-left:auto;">← Back to claims</a>
+</div>
+
+<div class="status" id="status">Pick a state and click Load.</div>
+<div class="pages" id="pages"></div>
+
+<script>
+const PER_PAGE = 12;   // 3×4 grid
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function cardHtml(s, baseUrl){
+  const url = `${baseUrl}/claim/${s.ship_to}`;
+  return `
+    <div class="card">
+      <div class="brand">HANKOOK AUSTRALIA</div>
+      <div class="title">Tyre Claim Form</div>
+      <div class="qr"><img src="/api/claim/qr/${encodeURIComponent(s.ship_to)}" alt=""></div>
+      <div class="shop-name">${esc(s.ship_to_name || s.ship_to)}</div>
+      <div class="shop-code">#${esc(s.ship_to)}</div>
+      <div class="url">${esc(url)}</div>
+    </div>`;
+}
+async function loadShops(){
+  const status = document.getElementById("status");
+  const pages  = document.getElementById("pages");
+  const state  = document.getElementById("stateSel").value;
+  const limit  = document.getElementById("limitInput").value || "60";
+  status.textContent = "Loading…";
+  pages.innerHTML = "";
+  document.getElementById("printBtn").disabled = true;
+  try {
+    const qs = new URLSearchParams({ limit });
+    if (state) qs.set("state", state);
+    const r = await fetch("/api/claim/qr_shops?" + qs.toString());
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    const shops = j.shops || [];
+    if (!shops.length){
+      status.textContent = "No shops match.";
+      return;
+    }
+    let html = "";
+    for (let i = 0; i < shops.length; i += PER_PAGE){
+      const slice = shops.slice(i, i + PER_PAGE);
+      while (slice.length < PER_PAGE) slice.push(null);   // pad so the grid stays consistent
+      html += `<div class="page">` +
+              slice.map(s => s ? cardHtml(s, j.base_url) : `<div class="card" style="visibility:hidden;"></div>`).join("") +
+              `</div>`;
+    }
+    pages.innerHTML = html;
+    status.textContent = `${shops.length} shops · ${Math.ceil(shops.length / PER_PAGE)} A4 pages`;
+    document.getElementById("printBtn").disabled = false;
+  } catch (e){
+    status.textContent = "Error: " + e.message;
+  }
+}
+document.getElementById("loadBtn").addEventListener("click", loadShops);
+document.getElementById("printBtn").addEventListener("click", () => window.print());
+</script>
+</body>
+</html>

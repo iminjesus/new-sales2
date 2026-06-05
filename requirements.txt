@@ -7,3 +7,4 @@ pandas
 selenium
 beautifulsoup4
 openpyxl
+qrcode[pil]
