@@ -8669,10 +8669,6 @@ def potential_customer_delete(pid):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.get("/potentials")
-def potentials_page():
-    return send_from_directory("static", "potentials.html")
-
 @app.get("/api/potential_customers/stats")
 def potential_customers_stats():
     """Counts grouped by State and by Status for the management page header."""

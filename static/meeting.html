@@ -368,7 +368,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
                   letter-spacing:.4px;margin-bottom:5px;gap:8px;">
         <span>🌱 Potential customers</span>
         <span style="display:flex;gap:10px;">
-          <a href="/potentials" target="_blank"
+          <a href="javascript:void(0)" id="potViewAllBtn"
              style="font-size:11px;color:#9a3412;text-decoration:underline;font-weight:700;">View all →</a>
           <a href="javascript:void(0)" id="potAddBtn"
              style="font-size:11px;color:#ea580c;text-decoration:underline;font-weight:700;">+ Add new</a>
@@ -556,7 +556,16 @@ header .nav{margin-left:auto;display:flex;gap:6px}
      Purpose → Visit-date grouping handled inside loadRecent(). ── -->
 <div class="planner-right">
   <div class="card" id="recentSection">
-    <h2>Recent entries</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h2 style="margin:0;">Recent entries</h2>
+      <!-- Tabs: Visit logs (default) ↔ Potential customers.
+           Both tabs share the State/BDE filters; Purpose only matters
+           for logs, so we hide that row in the Potentials tab. -->
+      <div class="seg" id="rightTabs" style="font-size:11px;">
+        <button type="button" class="seg-btn active" data-tab="logs">📋 Logs</button>
+        <button type="button" class="seg-btn" data-tab="potentials">🌱 Potentials</button>
+      </div>
+    </div>
     <div class="filt-row">
       <span class="filt-tag">State</span>
       <div class="seg" id="filtStateSeg">
@@ -592,6 +601,7 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       </span>
     </div>
     <div id="recentWrap"><div class="empty">Loading…</div></div>
+    <div id="potTabWrap" style="display:none;"></div>
   </div>
 </div><!-- /planner-right -->
 
@@ -1516,6 +1526,9 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
 filtBde.addEventListener("change", () => {
   loadRecent(); renderCalendar();
   if (typeof renderPotentialList === "function") renderPotentialList();
+  if (typeof _activeRightTab === "function" && _activeRightTab() === "potentials"){
+    renderPotentialHierarchy();
+  }
 });
 
 // State segmented buttons — filter BOTH the visible rows AND the BDE
@@ -1536,9 +1549,13 @@ document.getElementById("filtStateSeg").addEventListener("click", (e) => {
   } else {
     renderRecentRows();
   }
-  // The State filter also narrows the calendar chip set + potential list.
+  // The State filter also narrows the calendar chip set + potential list +
+  // (when the Potentials tab is visible) the hierarchy view.
   renderCalendar();
   if (typeof renderPotentialList === "function") renderPotentialList();
+  if (typeof _activeRightTab === "function" && _activeRightTab() === "potentials"){
+    renderPotentialHierarchy();
+  }
 });
 
 // Purpose segmented buttons — pure client-side filter.
@@ -2220,6 +2237,9 @@ function wirePotentialForm(){
         msg.style.color = "#16a34a";
         fields.forEach(id => document.getElementById(id).value = "");
         await loadPotentials();
+        if (typeof _activeRightTab === "function" && _activeRightTab() === "potentials"){
+          renderPotentialHierarchy();
+        }
         setTimeout(() => { form.style.display = "none"; msg.textContent = ""; }, 800);
       }
     } catch (err){
@@ -2227,6 +2247,136 @@ function wirePotentialForm(){
     }
     save.disabled = false; save.textContent = "Save";
   });
+}
+
+// Render the State → BDE → Prospect hierarchy inside the Recent
+// entries panel.  Reuses _potentials (loaded by loadPotentials) and
+// honours the panel's State / BDE filters so the same selectors that
+// scope visit logs also scope prospects.
+function _stateRemapPot(s){
+  return (s === "SA" || s === "TAS") ? "VIC" : (s || "—");
+}
+function renderPotentialHierarchy(){
+  const wrap = document.getElementById("potTabWrap");
+  if (!wrap) return;
+  const bdeSel = (filtBde && filtBde.value || "").trim().toUpperCase();
+  const items = _potentials.filter(p => {
+    if (_filtState && _stateRemapPot(p.state) !== _filtState) return false;
+    if (bdeSel   && (p.bde_name || "").trim().toUpperCase() !== bdeSel) return false;
+    return true;
+  });
+  if (!items.length){
+    wrap.innerHTML = `<div class="empty">
+      No potential customers ${_filtState || bdeSel ? "match the current filter" : "yet"}.<br>
+      Use “+ Add new” in the palette to start tracking.
+    </div>`;
+    return;
+  }
+  // Group: state → bde
+  const tree = new Map();
+  for (const p of items){
+    const st = _stateRemapPot(p.state);
+    if (!tree.has(st)) tree.set(st, new Map());
+    const byBde = tree.get(st);
+    const bk = p.bde_name || "—";
+    if (!byBde.has(bk)) byBde.set(bk, []);
+    byBde.get(bk).push(p);
+  }
+  const stOrder = ["NSW","QLD","VIC","WA"];
+  const sortedStates = [...tree.entries()].sort((a, b) => {
+    const ai = stOrder.indexOf(a[0]), bi = stOrder.indexOf(b[0]);
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    if (ai >= 0) return -1;
+    if (bi >= 0) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+  let html = "";
+  for (const [st, byBde] of sortedStates){
+    const totalSt = [...byBde.values()].reduce((s, arr) => s + arr.length, 0);
+    html += `<div style="margin-top:10px;padding:7px 11px;background:#1e3a5f;
+                          color:#fff;border-radius:6px;font-weight:700;font-size:12px;
+                          display:flex;justify-content:space-between;">
+      <span>${escapeHtml(st)}</span>
+      <span style="font-weight:400;font-size:11px;opacity:.85;">${totalSt} prospect${totalSt === 1 ? "" : "s"}</span>
+    </div>`;
+    const sortedBdes = [...byBde.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [bde, arr] of sortedBdes){
+      html += `<div style="margin-top:5px;padding:5px 11px;background:#fff7ed;
+                            border-left:3px solid #ea580c;color:#9a3412;
+                            font-weight:600;font-size:12px;display:flex;
+                            justify-content:space-between;align-items:center;">
+        <span>${escapeHtml(bde)}</span>
+        <span style="font-weight:400;color:#6b7280;font-size:11px;">${arr.length}</span>
+      </div>`;
+      const sortedProspects = arr.slice().sort((a, b) => a.name.localeCompare(b.name));
+      for (const p of sortedProspects){
+        const meta = [];
+        if (p.sold_to_name && p.sold_to_name !== p.name)
+          meta.push(`<span style="color:#6b7280;">Sold-to</span> <b>${escapeHtml(p.sold_to_name)}</b>`);
+        if (p.phone)          meta.push(`📞 <b>${escapeHtml(p.phone)}</b>`);
+        if (p.contact_person) meta.push(`👤 <b>${escapeHtml(p.contact_person)}</b>`);
+        if (p.address)        meta.push(`📍 <b>${escapeHtml(p.address)}</b>`);
+        const stCls = (p.status || "Lead");
+        const stColor = {
+          Lead:"#fef3c7;color:#92400e",
+          Visited:"#dbeafe;color:#1e40af",
+          Negotiating:"#fde68a;color:#92400e",
+          Converted:"#dcfce7;color:#166534",
+          Lost:"#fee2e2;color:#991b1b",
+        }[stCls] || "#f3f4f6;color:#374151";
+        html += `<div style="margin:3px 0 3px 8px;padding:8px 11px;background:#fff;
+                              border:1px solid #e5e7eb;border-radius:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:700;color:#1e3a5f;font-size:12px;">${escapeHtml(p.name)}</div>
+              <div style="font-size:10px;color:#6b7280;margin-top:1px;">${escapeHtml(p.pseudo_ship_to)} · added ${escapeHtml(p.created_at || "")}</div>
+              ${meta.length ? `<div style="font-size:11px;color:#374151;margin-top:4px;display:flex;gap:9px;flex-wrap:wrap;">${meta.join("")}</div>` : ""}
+              ${p.notes ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;white-space:pre-wrap;">${escapeHtml(p.notes)}</div>` : ""}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+              <span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;
+                           text-transform:uppercase;letter-spacing:.3px;background:${stColor};">${escapeHtml(stCls)}</span>
+              <a href="javascript:void(0)" data-pot-del="${p.id}"
+                 style="font-size:11px;color:#dc2626;text-decoration:underline;">Delete</a>
+            </div>
+          </div>
+        </div>`;
+      }
+    }
+  }
+  wrap.innerHTML = html;
+  wrap.querySelectorAll("[data-pot-del]").forEach(el => {
+    el.addEventListener("click", async (e) => {
+      const id = el.dataset.potDel;
+      const p = _potentials.find(x => String(x.id) === String(id));
+      if (!p || !confirm(`Remove "${p.name}"?`)) return;
+      try {
+        await fetch("/api/potential_customer/" + id, { method: "DELETE" });
+        await loadPotentials();
+        renderPotentialHierarchy();
+      } catch (err) { alert("Delete failed: " + err.message); }
+    });
+  });
+}
+
+// Tab switcher between Visit logs and Potentials.
+function _setRightTab(tab){
+  const recent = document.getElementById("recentWrap");
+  const pot    = document.getElementById("potTabWrap");
+  const purp   = document.getElementById("filtPurposeSeg");
+  const purpRow = purp ? purp.closest(".filt-row") : null;
+  const isPot = tab === "potentials";
+  if (recent) recent.style.display = isPot ? "none" : "";
+  if (pot)    pot.style.display    = isPot ? "block" : "none";
+  if (purpRow) purpRow.style.display = isPot ? "none" : "";
+  document.querySelectorAll("#rightTabs .seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+  if (isPot) renderPotentialHierarchy();
+}
+function _activeRightTab(){
+  const a = document.querySelector("#rightTabs .seg-btn.active");
+  return a ? a.dataset.tab : "logs";
 }
 // === POTENTIAL CUSTOMER END ===
 
@@ -2239,6 +2389,15 @@ function wirePotentialForm(){
   renderCalendar();
   wirePotentialForm();      // === POTENTIAL CUSTOMER ===
   await loadPotentials();
+  // Wire the Recent-entries tab switcher (Logs ↔ Potentials).
+  document.getElementById("rightTabs").addEventListener("click", (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (!b) return;
+    _setRightTab(b.dataset.tab);
+  });
+  // "View all →" in the palette opens the Potentials tab inline.
+  const va = document.getElementById("potViewAllBtn");
+  if (va) va.addEventListener("click", () => _setRightTab("potentials"));
 })();
 </script>
 </body>
