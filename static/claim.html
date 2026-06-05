@@ -13,6 +13,14 @@ header{background:#1e3a5f;color:#fff;padding:14px 18px;display:flex;
 header .brand{font-size:15px;font-weight:700;letter-spacing:.3px}
 header .sub{font-size:11px;opacity:.8}
 .wrap{max-width:560px;margin:0 auto;padding:14px}
+/* On wider screens lay New claim (main) and Your claims (side) out
+   in two columns; the New claim form is always the primary action so
+   it stays in the leading column. */
+.grid{display:grid;gap:14px;grid-template-columns:1fr}
+@media (min-width:880px){
+  .wrap{max-width:1080px}
+  .grid{grid-template-columns:minmax(0, 1.6fr) minmax(0, 1fr);align-items:start}
+}
 .card{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);
       padding:16px;margin-bottom:14px}
 .shop{display:flex;align-items:center;gap:10px;padding:12px 14px;background:#eff6ff;
@@ -58,8 +66,16 @@ h2{font-size:15px;font-weight:700;color:#1e3a5f;margin:0 0 12px}
 .bubble .when{font-size:10px;opacity:.7;margin-top:3px}
 .bubble .ph{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
 .bubble .ph img{width:50px;height:50px;object-fit:cover;border-radius:4px}
-.claim-card{padding:12px;border:1px solid #e5e7eb;border-radius:8px;
-            margin-bottom:10px;background:#fafafa}
+.claim-card{padding:0;border:1px solid #e5e7eb;border-radius:8px;
+            margin-bottom:10px;background:#fafafa;overflow:hidden}
+.claim-summary{padding:10px 12px;cursor:pointer;list-style:none;
+               display:flex;justify-content:space-between;align-items:center;gap:8px}
+.claim-summary::-webkit-details-marker{display:none}
+.claim-summary:hover{background:#f3f4f6}
+.claim-summary .left{flex:1;min-width:0}
+.claim-summary .caret{font-size:11px;color:#6b7280;transition:transform .15s}
+details[open] .claim-summary .caret{transform:rotate(90deg)}
+.claim-body{padding:0 12px 12px}
 .claim-head{display:flex;justify-content:space-between;align-items:center;
             font-size:11px;color:#6b7280;margin-bottom:6px}
 .claim-title{font-weight:700;color:#1e3a5f;margin-bottom:2px}
@@ -147,27 +163,24 @@ async function renderHome(){
   let prior = { claims: [] };
   try { prior = await fetchJSON(`/api/claim/by_ship/${encodeURIComponent(SHIP_TO)}`); }
   catch {}
-  root.innerHTML = `
-    <div class="shop">
-      <div class="pin">📍</div>
-      <div style="flex:1;">
-        <div class="name">${esc(shop.ship_to_name || shop.ship_to)}</div>
-        <div class="code">${esc(shop.ship_to)}</div>
-        ${shop.sold_to_name ? `<div class="cust">${esc(shop.sold_to_name)}</div>` : ""}
-      </div>
-    </div>
-
-    ${ prior.claims && prior.claims.length ? `
-      <div class="card">
-        <h2>Your claims (${prior.claims.length})</h2>
-        ${prior.claims.map(c => `
-          <div class="claim-card">
-            <div class="claim-head">
-              <span>${esc(c.created_at || "")}</span>
-              ${statusPill(c.status || "New")}
+  // Claims are collapsed by default — only the most recent one auto-
+  // opens so the customer can spot any reply quickly without scrolling.
+  const claimsHtml = (prior.claims && prior.claims.length) ? `
+    <div class="card">
+      <h2>Your claims (${prior.claims.length})</h2>
+      ${prior.claims.map((c, idx) => `
+        <details class="claim-card" ${idx === 0 ? "open" : ""}>
+          <summary class="claim-summary">
+            <div class="left">
+              <div class="claim-title">#${c.id} · ${esc(c.claim_type || "Other")}</div>
+              <div style="font-size:11px;color:#6b7280;">${esc(c.created_at || "")}</div>
             </div>
-            <div class="claim-title">#${c.id} · ${esc(c.claim_type || "Other")}</div>
-            <div style="font-size:12px;color:#374151;margin-bottom:6px;white-space:pre-wrap;">${esc((c.description||"").slice(0,200))}${(c.description||"").length>200?"…":""}</div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              ${statusPill(c.status || "New")}
+              <span class="caret">▶</span>
+            </div>
+          </summary>
+          <div class="claim-body">
             <div class="thread">${(c.thread || []).map(bubble).join("")}</div>
             <div class="reply-box">
               <textarea id="reply-${c.id}" placeholder="Reply to Hankook…"></textarea>
@@ -176,10 +189,11 @@ async function renderHome(){
               <div id="reply-msg-${c.id}" class="msg"></div>
             </div>
           </div>
-        `).join("")}
-      </div>` : ""
-    }
+        </details>
+      `).join("")}
+    </div>` : "";
 
+  const newClaimHtml = `
     <div class="card">
       <h2>New claim</h2>
       <form id="cForm" autocomplete="on">
@@ -231,6 +245,21 @@ async function renderHome(){
         <button type="submit" class="btn" id="submitBtn">Submit claim</button>
         <div id="submitMsg" class="msg"></div>
       </form>
+    </div>`;
+
+  root.innerHTML = `
+    <div class="shop">
+      <div class="pin">📍</div>
+      <div style="flex:1;">
+        <div class="name">${esc(shop.ship_to_name || shop.ship_to)}</div>
+        <div class="code">${esc(shop.ship_to)}</div>
+        ${shop.sold_to_name ? `<div class="cust">${esc(shop.sold_to_name)}</div>` : ""}
+      </div>
+    </div>
+
+    <div class="grid">
+      <div>${newClaimHtml}</div>
+      <div>${claimsHtml}</div>
     </div>
   `;
 
