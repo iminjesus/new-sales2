@@ -7723,6 +7723,13 @@ def meeting_list():
                        MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
                        MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
                 FROM customer GROUP BY ship_to
+                UNION ALL
+                -- Potential customers come through as POT-<id> in ship_to;
+                -- expose their name here so Recent entries can label them.
+                SELECT CONCAT('POT-', id) AS ship_to,
+                       name             AS ship_to_name,
+                       ''               AS sold_to_name
+                FROM potential_customer
             ) c ON c.ship_to = m.ship_to
             {where_sql}
             ORDER BY m.bde_name ASC, m.ship_to ASC,
@@ -8439,6 +8446,178 @@ def claim_qr_shops():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 # === CLAIM FEATURE END ===
+
+
+# ─────────────────────────────────────────────────────────────────────
+# POTENTIAL CUSTOMER feature — BDEs add prospect shops they're chasing
+# so the planner / map can track excavation work alongside the real
+# customer master.  Wrapped in START/END markers for easy revert.
+# ─────────────────────────────────────────────────────────────────────
+# === POTENTIAL CUSTOMER FEATURE START ===
+POTENTIAL_STATUSES = ("Lead", "Visited", "Negotiating", "Converted", "Lost")
+
+def _ensure_potential_table():
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS potential_customer (
+                id             INT AUTO_INCREMENT PRIMARY KEY,
+                name           VARCHAR(160) NOT NULL,
+                address        VARCHAR(255) NOT NULL DEFAULT '',
+                phone          VARCHAR(40)  NOT NULL DEFAULT '',
+                contact_person VARCHAR(120) NOT NULL DEFAULT '',
+                state          VARCHAR(8)   NOT NULL DEFAULT '',
+                bde_name       VARCHAR(120) NOT NULL DEFAULT '',
+                bde_email      VARCHAR(160) NOT NULL DEFAULT '',
+                lat            DECIMAL(10,6) NULL,
+                lon            DECIMAL(11,6) NULL,
+                status         VARCHAR(40)  NOT NULL DEFAULT 'Lead',
+                notes          TEXT,
+                created_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+                               ON UPDATE CURRENT_TIMESTAMP,
+                INDEX idx_state (state),
+                INDEX idx_bde   (bde_name)
+            )
+        """)
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[potential] schema init failed: {e}")
+_ensure_potential_table()
+
+def _potential_to_pseudo_ship(pid):
+    """Pseudo ship_to code used in meeting_plan / meeting_log so the
+    rest of the system can carry potential customers without a real
+    customer-master row.  Format chosen to be obviously non-numeric."""
+    return f"POT-{int(pid)}"
+
+def _parse_potential_id(ship_to):
+    """Reverse of the above.  Returns int id or None for real shops."""
+    s = (ship_to or "").strip().upper()
+    if not s.startswith("POT-"): return None
+    try: return int(s[4:])
+    except ValueError: return None
+
+@app.get("/api/potential_customers")
+def potential_customers_list():
+    """List potential customers, optionally filtered by state / bde."""
+    state = (request.args.get("state") or "").strip().upper()
+    bde   = (request.args.get("bde")   or "").strip()
+    wh, params = [], []
+    if state and state in ("NSW","QLD","VIC","WA","SA","TAS"):
+        wh.append("state = %s"); params.append(state)
+    if bde:
+        wh.append("UPPER(TRIM(bde_name)) = %s")
+        params.append(bde.upper())
+    where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT id, name, address, phone, contact_person,
+                   state, bde_name, bde_email, lat, lon, status, notes,
+                   created_at, updated_at
+            FROM potential_customer
+            {where_sql}
+            ORDER BY name ASC, id ASC
+        """, tuple(params))
+        rows = cur.fetchall()
+        for r in rows:
+            for k in ("created_at", "updated_at"):
+                if r.get(k):
+                    r[k] = r[k].strftime("%Y-%m-%d %H:%M")
+            r["lat"] = float(r["lat"]) if r["lat"] is not None else None
+            r["lon"] = float(r["lon"]) if r["lon"] is not None else None
+            r["pseudo_ship_to"] = _potential_to_pseudo_ship(r["id"])
+        cur.close(); conn.close()
+        return jsonify({"potentials": rows, "statuses": list(POTENTIAL_STATUSES)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/potential_customer")
+def potential_customer_create():
+    body = request.get_json(silent=True) or request.form
+    name = (body.get("name") or "").strip()[:160]
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    email = _bde_from_request()
+    me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
+    bde_name  = (body.get("bde_name") or (me[0] if me else "")).strip()[:120]
+    state     = (body.get("state")    or (me[1] if me else "")).strip().upper()[:8]
+    address   = (body.get("address")  or "").strip()[:255]
+    phone     = (body.get("phone")    or "").strip()[:40]
+    contact   = (body.get("contact_person") or "").strip()[:120]
+    notes     = (body.get("notes")    or "").strip()
+    status    = (body.get("status")   or "Lead").strip()
+    if status not in POTENTIAL_STATUSES: status = "Lead"
+    def _flt(v):
+        try: return float(v)
+        except (TypeError, ValueError): return None
+    lat = _flt(body.get("lat"))
+    lon = _flt(body.get("lon"))
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO potential_customer
+                (name, address, phone, contact_person,
+                 state, bde_name, bde_email, lat, lon, status, notes)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (name, address, phone, contact, state, bde_name, email or "",
+              lat, lon, status, notes))
+        pid = cur.lastrowid
+        cur.close(); conn.close()
+        return jsonify({"id": pid, "pseudo_ship_to": _potential_to_pseudo_ship(pid)})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.patch("/api/potential_customer/<int:pid>")
+def potential_customer_update(pid):
+    body = request.get_json(silent=True) or {}
+    allowed = ("name", "address", "phone", "contact_person",
+               "state", "bde_name", "status", "notes", "lat", "lon")
+    sets, params = [], []
+    for k in allowed:
+        if k in body:
+            v = body[k]
+            if k in ("lat", "lon"):
+                try: v = float(v) if v not in (None, "") else None
+                except (TypeError, ValueError): v = None
+            elif k == "status":
+                v = (v or "").strip()
+                if v not in POTENTIAL_STATUSES:
+                    return jsonify({"error": "invalid status"}), 400
+            elif k == "state":
+                v = (v or "").strip().upper()[:8]
+            else:
+                v = (v or "").strip()
+                if k == "name" and not v:
+                    return jsonify({"error": "name cannot be empty"}), 400
+            sets.append(f"{k} = %s"); params.append(v)
+    if not sets:
+        return jsonify({"error": "nothing to update"}), 400
+    params.append(pid)
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute(f"UPDATE potential_customer SET {', '.join(sets)} "
+                    f"WHERE id = %s", params)
+        cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.delete("/api/potential_customer/<int:pid>")
+def potential_customer_delete(pid):
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("DELETE FROM potential_customer WHERE id = %s", (pid,))
+        cur.close(); conn.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+# === POTENTIAL CUSTOMER FEATURE END ===
 
 
 if __name__ == "__main__":

@@ -112,6 +112,14 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .ship-chip:hover{background:#eff6ff;border-color:#93c5fd}
 .ship-chip .sc-code{color:#6b7280;font-family:monospace;font-size:10px}
 .ship-chip.dragging{opacity:.5}
+.pot-chip{padding:5px 8px;border:1px solid #fdba74;border-radius:5px;background:#fff7ed;font-size:11px;color:#9a3412;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px;align-items:center}
+.pot-chip:hover{background:#ffedd5;border-color:#fb923c}
+.pot-chip.dragging{opacity:.5}
+.pot-chip .pc-st{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;background:#fed7aa;color:#9a3412;padding:1px 5px;border-radius:6px;flex-shrink:0}
+.pot-chip .pc-x{color:#dc2626;font-weight:700;opacity:.5;font-size:13px;line-height:1;cursor:pointer;margin-left:4px}
+.pot-chip .pc-x:hover{opacity:1}
+.selected-shop.selected-shop-potential{background:#fff7ed;border-color:#fb923c}
+.selected-shop.selected-shop-potential .ss-text{color:#9a3412}
 .palette-empty{color:#9ca3af;font-size:11px;padding:8px;text-align:center}
 .palette-count{font-size:10px;color:#9ca3af;margin-bottom:4px;text-align:right}
 .card{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:12px}
@@ -351,6 +359,43 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 <div class="planner-palette">
   <div class="card">
     <div class="palette-row-tag">Pick a shop · click to log, drag to schedule</div>
+
+    <!-- === POTENTIAL CUSTOMER START === -->
+    <div id="potBlock" style="margin-bottom:10px;padding:8px 10px;background:#fff7ed;
+         border:1px solid #fed7aa;border-radius:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;
+                  letter-spacing:.4px;margin-bottom:5px;">
+        <span>🌱 Potential customers</span>
+        <a href="javascript:void(0)" id="potAddBtn"
+           style="font-size:11px;color:#ea580c;text-decoration:underline;font-weight:700;">+ Add new</a>
+      </div>
+      <div id="potList" style="display:flex;flex-direction:column;gap:3px;
+                                max-height:140px;overflow-y:auto;"></div>
+      <div id="potForm" style="display:none;margin-top:6px;padding:8px;
+           background:#fff;border:1px dashed #fdba74;border-radius:5px;">
+        <input id="potName" type="text" placeholder="Shop name (required)"
+               style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;
+                      font-size:12px;margin-bottom:5px;">
+        <input id="potAddress" type="text" placeholder="Address (optional)"
+               style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;
+                      font-size:12px;margin-bottom:5px;">
+        <div style="display:flex;gap:5px;margin-bottom:5px;">
+          <input id="potPhone" type="tel" placeholder="Phone"
+                 style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">
+          <input id="potContact" type="text" placeholder="Contact name"
+                 style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">
+        </div>
+        <div style="display:flex;gap:5px;justify-content:flex-end;">
+          <button type="button" id="potCancelBtn" style="font-size:11px;padding:4px 10px;
+                  background:#fff;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+          <button type="button" id="potSaveBtn" style="font-size:11px;padding:4px 10px;
+                  background:#ea580c;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">Save</button>
+        </div>
+        <div id="potMsg" style="font-size:11px;margin-top:5px;"></div>
+      </div>
+    </div>
+    <!-- === POTENTIAL CUSTOMER END === -->
 
     <div style="margin-bottom:6px;">
       <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
@@ -772,15 +817,52 @@ function _setSelectedShop(row){
   if (row){
     box.classList.remove("selected-shop-empty");
     box.classList.add("selected-shop-set");
-    box.querySelector(".ss-text").innerHTML =
-      `${escapeHtml(row.ship_to_name || row.ship_to)} ` +
-      `<span class="ss-sub">${escapeHtml(row.ship_to)} · ${escapeHtml(row.sold_to_name || "")}</span>`;
+    // Potential customers show a 🌱 badge and let the BDE edit the name
+    // inline (the displayed shop is the one we just dragged from the
+    // palette — they may want to refine it before logging).
+    const isPot = !!row.potential || (row.ship_to || "").startsWith("POT-");
+    box.classList.toggle("selected-shop-potential", isPot);
+    if (isPot){
+      const potId = row.potential_id || ((row.ship_to || "").startsWith("POT-")
+        ? parseInt(row.ship_to.slice(4), 10) : null);
+      box.querySelector(".ss-text").innerHTML =
+        `<span style="background:#fed7aa;color:#9a3412;font-size:9px;font-weight:700;
+                      text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;
+                      border-radius:6px;margin-right:6px;">🌱 Potential</span>` +
+        `<input id="potNameEdit" data-pot-id="${potId || ''}" type="text"
+                value="${escapeHtml(row.ship_to_name || '')}"
+                style="border:none;background:transparent;font-weight:600;
+                       font-size:13px;color:#9a3412;outline:none;width:60%;
+                       border-bottom:1px dashed #fdba74;padding:0 2px;">` +
+        `<span class="ss-sub">${escapeHtml(row.ship_to)}</span>`;
+      const edit = box.querySelector("#potNameEdit");
+      if (edit){
+        edit.addEventListener("change", async () => {
+          const newName = (edit.value || "").trim();
+          if (!newName || !potId) return;
+          try {
+            await fetch("/api/potential_customer/" + potId, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ name: newName }),
+            });
+            if (_selectedShop){ _selectedShop.ship_to_name = newName; }
+            await loadPotentials();
+          } catch (err){ /* leave the edited name as-is */ }
+        });
+      }
+    } else {
+      box.querySelector(".ss-text").innerHTML =
+        `${escapeHtml(row.ship_to_name || row.ship_to)} ` +
+        `<span class="ss-sub">${escapeHtml(row.ship_to)} · ${escapeHtml(row.sold_to_name || "")}</span>`;
+    }
     if (clr) clr.style.display = "inline-block";
     document.getElementById("fSoldHidden").value = row.sold_to_name || row.sold_to || "";
     document.getElementById("fShipHidden").value = row.ship_to || "";
   } else {
     box.classList.add("selected-shop-empty");
     box.classList.remove("selected-shop-set");
+    box.classList.remove("selected-shop-potential");
     box.querySelector(".ss-text").textContent =
       "No ship-to selected — pick one from the palette ←";
     if (clr) clr.style.display = "none";
@@ -1445,7 +1527,10 @@ fForm.addEventListener("submit", async (e) => {
 });
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
-filtBde.addEventListener("change", () => { loadRecent(); renderCalendar(); });
+filtBde.addEventListener("change", () => {
+  loadRecent(); renderCalendar();
+  if (typeof renderPotentialList === "function") renderPotentialList();
+});
 
 // State segmented buttons — filter BOTH the visible rows AND the BDE
 // dropdown so the dropdown only contains BDEs from the chosen state.
@@ -1465,8 +1550,9 @@ document.getElementById("filtStateSeg").addEventListener("click", (e) => {
   } else {
     renderRecentRows();
   }
-  // The State filter also narrows the calendar chip set.
+  // The State filter also narrows the calendar chip set + potential list.
   renderCalendar();
+  if (typeof renderPotentialList === "function") renderPotentialList();
 });
 
 // Purpose segmented buttons — pure client-side filter.
@@ -2025,6 +2111,142 @@ async function _aiDigestClick(wrap, opts){
 }
 // === AI FEATURE END ===
 
+// === POTENTIAL CUSTOMER START === (palette section + drag source)
+let _potentials = [];
+
+async function loadPotentials(){
+  try {
+    const r = await fetchJSON("/api/potential_customers");
+    _potentials = (r && r.potentials) || [];
+  } catch { _potentials = []; }
+  renderPotentialList();
+}
+
+function renderPotentialList(){
+  const box = document.getElementById("potList");
+  if (!box) return;
+  // Apply the same State / BDE narrowing the rest of the panel uses.
+  const stateSel = (_filtState || "").toUpperCase();
+  const bdeSel   = (filtBde && filtBde.value || "").trim().toUpperCase();
+  const stateOf  = (s) => (s === "SA" || s === "TAS") ? "VIC" : (s || "");
+  const items = _potentials.filter(p => {
+    if (stateSel && stateOf(p.state) !== stateSel) return false;
+    if (bdeSel   && (p.bde_name || "").trim().toUpperCase() !== bdeSel) return false;
+    return true;
+  });
+  if (!items.length){
+    box.innerHTML = `<div style="font-size:11px;color:#9ca3af;font-style:italic;padding:4px 2px;">
+      No potential customers ${stateSel || bdeSel ? "match the current filter" : "yet — add one to start tracking"}.
+    </div>`;
+    return;
+  }
+  box.innerHTML = items.map(p => `
+    <div class="pot-chip" draggable="true"
+         data-ship="${escapeHtml(p.pseudo_ship_to)}"
+         data-name="${escapeHtml(p.name)}"
+         data-pot-id="${p.id}"
+         title="${escapeHtml(p.address || '')}${p.contact_person ? ' · ' + escapeHtml(p.contact_person) : ''}${p.phone ? ' · ' + escapeHtml(p.phone) : ''}">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">
+        ${escapeHtml(p.name)}
+      </span>
+      <span class="pc-st">${escapeHtml((p.state || "—").toUpperCase())}</span>
+      <span class="pc-x" title="Delete" data-del="${p.id}">×</span>
+    </div>
+  `).join("");
+  box.querySelectorAll(".pot-chip").forEach(el => {
+    el.addEventListener("dragstart", (e) => {
+      const ship = el.dataset.ship || "";
+      const name = el.dataset.name || "";
+      if (!ship) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", ship);
+      e.dataTransfer.setData("text/ship_to_name", name);
+      e.dataTransfer.setData("text/potential", "1");
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("click", (e) => {
+      if (e.target.classList.contains("pc-x")) return;
+      const id   = el.dataset.potId;
+      const p    = _potentials.find(x => String(x.id) === String(id));
+      if (!p) return;
+      _setSelectedShop({
+        ship_to:      p.pseudo_ship_to,
+        ship_to_name: p.name,
+        sold_to:      "",
+        sold_to_name: "",
+        potential:    true,
+        potential_id: p.id,
+      });
+    });
+    const del = el.querySelector(".pc-x");
+    if (del) del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = del.dataset.del;
+      if (!confirm("Remove this potential customer?")) return;
+      try {
+        const r = await fetch("/api/potential_customer/" + id, {
+          method: "DELETE", credentials: "include",
+        });
+        if (!r.ok){ alert("Delete failed"); return; }
+        await loadPotentials();
+      } catch (err){ alert("Error: " + err.message); }
+    });
+  });
+}
+
+function wirePotentialForm(){
+  const addBtn = document.getElementById("potAddBtn");
+  const form   = document.getElementById("potForm");
+  const cancel = document.getElementById("potCancelBtn");
+  const save   = document.getElementById("potSaveBtn");
+  const msg    = document.getElementById("potMsg");
+  if (!addBtn) return;
+  addBtn.addEventListener("click", () => {
+    form.style.display = form.style.display === "none" ? "block" : "none";
+    if (form.style.display === "block"){
+      msg.textContent = "";
+      document.getElementById("potName").focus();
+    }
+  });
+  cancel.addEventListener("click", () => {
+    form.style.display = "none";
+    ["potName","potAddress","potPhone","potContact"].forEach(id => document.getElementById(id).value = "");
+    msg.textContent = "";
+  });
+  save.addEventListener("click", async () => {
+    const name = (document.getElementById("potName").value || "").trim();
+    if (!name){ msg.textContent = "Name is required."; msg.style.color = "#dc2626"; return; }
+    save.disabled = true; save.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/potential_customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name,
+          address:        document.getElementById("potAddress").value || "",
+          phone:          document.getElementById("potPhone").value   || "",
+          contact_person: document.getElementById("potContact").value || "",
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok){ msg.textContent = j.error || ("HTTP " + r.status); msg.style.color = "#dc2626"; }
+      else {
+        msg.textContent = "Saved.";
+        msg.style.color = "#16a34a";
+        ["potName","potAddress","potPhone","potContact"].forEach(id => document.getElementById(id).value = "");
+        await loadPotentials();
+        setTimeout(() => { form.style.display = "none"; msg.textContent = ""; }, 800);
+      }
+    } catch (err){
+      msg.textContent = err.message; msg.style.color = "#dc2626";
+    }
+    save.disabled = false; save.textContent = "Save";
+  });
+}
+// === POTENTIAL CUSTOMER END ===
+
 (async () => {
   await _aiProbeStatus();   // === AI FEATURE === (cheap; reads one env var)
   await loadBdes();
@@ -2032,6 +2254,8 @@ async function _aiDigestClick(wrap, opts){
   await loadShipOptions();
   await loadPlansForMonth();
   renderCalendar();
+  wirePotentialForm();      // === POTENTIAL CUSTOMER ===
+  await loadPotentials();
 })();
 </script>
 </body>
