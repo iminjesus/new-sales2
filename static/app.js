@@ -2487,7 +2487,15 @@ function ddRender(menuEl, items, onPick){
 function ddFilter(options, q){
   const s = (q || "").trim().toLowerCase();
   if (!s) return options.slice(0, 500);
-  return options.filter(x => String(x).toLowerCase().includes(s)).slice(0, 500);
+  // Also try a separator-free match so that, for the Size field, a
+  // query like "22535" finds "225/35R19" — and similarly for any
+  // dropdown whose values contain slashes/dashes/spaces.
+  const sCompact = s.replace(/[^a-z0-9]+/g, "");
+  return options.filter(x => {
+    const t = String(x).toLowerCase();
+    if (t.includes(s)) return true;
+    return sCompact && t.replace(/[^a-z0-9]+/g, "").includes(sCompact);
+  }).slice(0, 500);
 }
 
 function ddUpdateActive(inp) {
