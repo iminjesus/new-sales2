@@ -8668,6 +8668,51 @@ def potential_customer_delete(pid):
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@app.get("/potentials")
+def potentials_page():
+    return send_from_directory("static", "potentials.html")
+
+@app.get("/api/potential_customers/stats")
+def potential_customers_stats():
+    """Counts grouped by State and by Status for the management page header."""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT COUNT(*) AS n FROM potential_customer")
+        total = (cur.fetchone() or {}).get("n", 0)
+        cur.execute("""
+            SELECT state, COUNT(*) AS n
+            FROM potential_customer
+            GROUP BY state
+            ORDER BY state
+        """)
+        by_state = {r["state"] or "—": r["n"] for r in cur.fetchall()}
+        cur.execute("""
+            SELECT status, COUNT(*) AS n
+            FROM potential_customer
+            GROUP BY status
+            ORDER BY status
+        """)
+        by_status = {r["status"] or "Lead": r["n"] for r in cur.fetchall()}
+        cur.execute("""
+            SELECT bde_name, COUNT(*) AS n
+            FROM potential_customer
+            GROUP BY bde_name
+            ORDER BY n DESC, bde_name ASC
+            LIMIT 50
+        """)
+        by_bde = [{"bde_name": r["bde_name"] or "—", "n": r["n"]} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return jsonify({
+            "total":    total,
+            "by_state": by_state,
+            "by_status": by_status,
+            "by_bde":   by_bde,
+            "statuses": list(POTENTIAL_STATUSES),
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 # === POTENTIAL CUSTOMER FEATURE END ===
 
 

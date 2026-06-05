@@ -365,10 +365,14 @@ header .nav{margin-left:auto;display:flex;gap:6px}
          border:1px solid #fed7aa;border-radius:6px;">
       <div style="display:flex;justify-content:space-between;align-items:center;
                   font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;
-                  letter-spacing:.4px;margin-bottom:5px;">
+                  letter-spacing:.4px;margin-bottom:5px;gap:8px;">
         <span>🌱 Potential customers</span>
-        <a href="javascript:void(0)" id="potAddBtn"
-           style="font-size:11px;color:#ea580c;text-decoration:underline;font-weight:700;">+ Add new</a>
+        <span style="display:flex;gap:10px;">
+          <a href="/potentials" target="_blank"
+             style="font-size:11px;color:#9a3412;text-decoration:underline;font-weight:700;">View all →</a>
+          <a href="javascript:void(0)" id="potAddBtn"
+             style="font-size:11px;color:#ea580c;text-decoration:underline;font-weight:700;">+ Add new</a>
+        </span>
       </div>
       <div id="potList" style="display:flex;flex-direction:column;gap:3px;
                                 max-height:140px;overflow-y:auto;"></div>
