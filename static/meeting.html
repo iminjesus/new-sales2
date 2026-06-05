@@ -1599,8 +1599,12 @@ function renderCalendar(){
   // Purpose selection.  Purpose match uses the comma-joined list of
   // logged purposes the backend attaches to each plan.
   function _filteredRowsFor(iso){
+    const bdeSel = (filtBde.value || "").trim().toUpperCase();
     return (_planRowsByDate[iso] || []).filter(r => {
-      if (filtBde.value && (r.bde_name || "") !== filtBde.value) return false;
+      // Compare BDE names case-insensitively — the dropdown comes from
+      // /api/bdes_active but meeting_plan rows can have a slightly
+      // different casing (e.g. "BUCKLEY Paul" vs "Buckley Paul").
+      if (bdeSel && (r.bde_name || "").trim().toUpperCase() !== bdeSel) return false;
       if (_filtState && _calStateOf(r.bde_name) !== _filtState) return false;
       if (_filtPurp){
         const purposes = (r.purposes || "").split(",").filter(Boolean);
