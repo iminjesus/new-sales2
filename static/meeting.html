@@ -374,18 +374,16 @@ header .nav{margin-left:auto;display:flex;gap:6px}
                                 max-height:140px;overflow-y:auto;"></div>
       <div id="potForm" style="display:none;margin-top:6px;padding:8px;
            background:#fff;border:1px dashed #fdba74;border-radius:5px;">
-        <input id="potName" type="text" placeholder="Shop name (required)"
+        <label style="font-size:10px;color:#9a3412;font-weight:700;text-transform:uppercase;
+                      letter-spacing:.3px;display:block;margin-bottom:3px;">Ship-to name *</label>
+        <input id="potName" type="text" placeholder="e.g. ABC Tyres Brisbane"
                style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;
-                      font-size:12px;margin-bottom:5px;">
-        <input id="potAddress" type="text" placeholder="Address (optional)"
+                      font-size:12px;margin-bottom:6px;">
+        <label style="font-size:10px;color:#9a3412;font-weight:700;text-transform:uppercase;
+                      letter-spacing:.3px;display:block;margin-bottom:3px;">Sold-to name (parent customer)</label>
+        <input id="potSold" type="text" placeholder="Leave blank if same as ship-to"
                style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;
-                      font-size:12px;margin-bottom:5px;">
-        <div style="display:flex;gap:5px;margin-bottom:5px;">
-          <input id="potPhone" type="tel" placeholder="Phone"
-                 style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">
-          <input id="potContact" type="text" placeholder="Contact name"
-                 style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;font-size:12px;">
-        </div>
+                      font-size:12px;margin-bottom:6px;">
         <div style="display:flex;gap:5px;justify-content:flex-end;">
           <button type="button" id="potCancelBtn" style="font-size:11px;padding:4px 10px;
                   background:#fff;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
@@ -817,45 +815,29 @@ function _setSelectedShop(row){
   if (row){
     box.classList.remove("selected-shop-empty");
     box.classList.add("selected-shop-set");
-    // Potential customers show a 🌱 badge and let the BDE edit the name
-    // inline (the displayed shop is the one we just dragged from the
-    // palette — they may want to refine it before logging).
+    // Selected shop banner is read-only — both real and potential
+    // customer names are locked at the source (customer master or the
+    // potential's add form), so the meeting log can't drift from them.
     const isPot = !!row.potential || (row.ship_to || "").startsWith("POT-");
     box.classList.toggle("selected-shop-potential", isPot);
-    if (isPot){
-      const potId = row.potential_id || ((row.ship_to || "").startsWith("POT-")
-        ? parseInt(row.ship_to.slice(4), 10) : null);
-      box.querySelector(".ss-text").innerHTML =
-        `<span style="background:#fed7aa;color:#9a3412;font-size:9px;font-weight:700;
+    const badge = isPot
+      ? `<span style="background:#fed7aa;color:#9a3412;font-size:9px;font-weight:700;
                       text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;
-                      border-radius:6px;margin-right:6px;">🌱 Potential</span>` +
-        `<input id="potNameEdit" data-pot-id="${potId || ''}" type="text"
-                value="${escapeHtml(row.ship_to_name || '')}"
-                style="border:none;background:transparent;font-weight:600;
-                       font-size:13px;color:#9a3412;outline:none;width:60%;
-                       border-bottom:1px dashed #fdba74;padding:0 2px;">` +
-        `<span class="ss-sub">${escapeHtml(row.ship_to)}</span>`;
-      const edit = box.querySelector("#potNameEdit");
-      if (edit){
-        edit.addEventListener("change", async () => {
-          const newName = (edit.value || "").trim();
-          if (!newName || !potId) return;
-          try {
-            await fetch("/api/potential_customer/" + potId, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: newName }),
-            });
-            if (_selectedShop){ _selectedShop.ship_to_name = newName; }
-            await loadPotentials();
-          } catch (err){ /* leave the edited name as-is */ }
-        });
-      }
-    } else {
-      box.querySelector(".ss-text").innerHTML =
-        `${escapeHtml(row.ship_to_name || row.ship_to)} ` +
-        `<span class="ss-sub">${escapeHtml(row.ship_to)} · ${escapeHtml(row.sold_to_name || "")}</span>`;
-    }
+                      border-radius:6px;margin-right:6px;">🌱 Potential</span>`
+      : "";
+    const shipName = escapeHtml(row.ship_to_name || row.ship_to);
+    const soldName = escapeHtml(row.sold_to_name || "");
+    const shipCode = isPot ? "" : escapeHtml(row.ship_to || "");
+    box.querySelector(".ss-text").innerHTML =
+      `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+         ${badge}
+         <b style="font-size:13px;">${shipName}</b>
+         ${shipCode ? `<span class="ss-sub" style="font-family:ui-monospace,monospace;">${shipCode}</span>` : ""}
+       </div>
+       ${soldName ? `<div class="ss-sub" style="margin-top:2px;">
+         <span style="text-transform:uppercase;font-size:9px;font-weight:700;letter-spacing:.3px;color:#6b7280;">Sold-to</span>
+         · ${soldName}
+       </div>` : ""}`;
     if (clr) clr.style.display = "inline-block";
     document.getElementById("fSoldHidden").value = row.sold_to_name || row.sold_to || "";
     document.getElementById("fShipHidden").value = row.ship_to || "";
@@ -2174,7 +2156,7 @@ function renderPotentialList(){
         ship_to:      p.pseudo_ship_to,
         ship_to_name: p.name,
         sold_to:      "",
-        sold_to_name: "",
+        sold_to_name: p.sold_to_name || p.name,
         potential:    true,
         potential_id: p.id,
       });
@@ -2209,33 +2191,30 @@ function wirePotentialForm(){
       document.getElementById("potName").focus();
     }
   });
+  const fields = ["potName", "potSold"];
   cancel.addEventListener("click", () => {
     form.style.display = "none";
-    ["potName","potAddress","potPhone","potContact"].forEach(id => document.getElementById(id).value = "");
+    fields.forEach(id => document.getElementById(id).value = "");
     msg.textContent = "";
   });
   save.addEventListener("click", async () => {
     const name = (document.getElementById("potName").value || "").trim();
-    if (!name){ msg.textContent = "Name is required."; msg.style.color = "#dc2626"; return; }
+    const sold = (document.getElementById("potSold").value || "").trim();
+    if (!name){ msg.textContent = "Ship-to name is required."; msg.style.color = "#dc2626"; return; }
     save.disabled = true; save.textContent = "Saving…";
     try {
       const r = await fetch("/api/potential_customer", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({
-          name,
-          address:        document.getElementById("potAddress").value || "",
-          phone:          document.getElementById("potPhone").value   || "",
-          contact_person: document.getElementById("potContact").value || "",
-        }),
+        body: JSON.stringify({ name, sold_to_name: sold || name }),
       });
       const j = await r.json();
       if (!r.ok){ msg.textContent = j.error || ("HTTP " + r.status); msg.style.color = "#dc2626"; }
       else {
         msg.textContent = "Saved.";
         msg.style.color = "#16a34a";
-        ["potName","potAddress","potPhone","potContact"].forEach(id => document.getElementById(id).value = "");
+        fields.forEach(id => document.getElementById(id).value = "");
         await loadPotentials();
         setTimeout(() => { form.style.display = "none"; msg.textContent = ""; }, 800);
       }

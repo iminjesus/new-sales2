@@ -7280,7 +7280,22 @@ def meeting_post():
         # database.  If lookup fails, fall back to storing the raw input
         # truncated to fit the column.
         sold_to, sold_to_name = "", sold_in
-        if sold_in:
+        # Potential customers (POT-<id>) own their own sold_to_name in
+        # the potential_customer row — use that directly so the log
+        # carries the same labels the BDE originally typed.
+        pot_id = _parse_potential_id(ship_to)
+        if pot_id is not None:
+            try:
+                _conn = get_connection(); _cur = _conn.cursor(dictionary=True)
+                _cur.execute("SELECT sold_to_name FROM potential_customer "
+                             "WHERE id = %s", (pot_id,))
+                r = _cur.fetchone()
+                _cur.close(); _conn.close()
+                if r and r.get("sold_to_name"):
+                    sold_to_name = r["sold_to_name"]
+            except Exception as e:
+                print(f"[meeting] potential sold_to resolve failed: {e}")
+        elif sold_in:
             try:
                 _conn = get_connection()
                 _cur  = _conn.cursor(dictionary=True)
@@ -7582,21 +7597,31 @@ def meeting_plan_create():
 
         # Resolve sold_to + names from customer master so the calendar
         # chip can show a friendly label without a separate lookup.
+        # Potential customers (POT-<id>) come from a different table.
         sold_to, sold_to_name, ship_to_name = "", "", ""
         try:
             conn = get_connection(); cur = conn.cursor(dictionary=True)
-            cur.execute("""
-                SELECT MIN(sold_to)      AS sold_to,
-                       MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name,
-                       MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name
-                FROM customer
-                WHERE ship_to = %s
-            """, (ship,))
-            r = cur.fetchone()
-            if r:
-                sold_to      = str(r.get("sold_to") or "")
-                sold_to_name = r.get("sold_to_name") or ""
-                ship_to_name = r.get("ship_to_name") or ""
+            pid = _parse_potential_id(ship)
+            if pid is not None:
+                cur.execute("SELECT name, sold_to_name FROM potential_customer "
+                            "WHERE id = %s", (pid,))
+                r = cur.fetchone()
+                if r:
+                    ship_to_name = r.get("name") or ""
+                    sold_to_name = r.get("sold_to_name") or ""
+            else:
+                cur.execute("""
+                    SELECT MIN(sold_to)      AS sold_to,
+                           MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name,
+                           MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name
+                    FROM customer
+                    WHERE ship_to = %s
+                """, (ship,))
+                r = cur.fetchone()
+                if r:
+                    sold_to      = str(r.get("sold_to") or "")
+                    sold_to_name = r.get("sold_to_name") or ""
+                    ship_to_name = r.get("ship_to_name") or ""
             cur.close(); conn.close()
         except Exception:
             pass
@@ -7725,10 +7750,11 @@ def meeting_list():
                 FROM customer GROUP BY ship_to
                 UNION ALL
                 -- Potential customers come through as POT-<id> in ship_to;
-                -- expose their name here so Recent entries can label them.
+                -- expose both names here so Recent entries shows the
+                -- prospect's shop + sold-to label instead of the raw code.
                 SELECT CONCAT('POT-', id) AS ship_to,
-                       name             AS ship_to_name,
-                       ''               AS sold_to_name
+                       name              AS ship_to_name,
+                       sold_to_name      AS sold_to_name
                 FROM potential_customer
             ) c ON c.ship_to = m.ship_to
             {where_sql}
@@ -8463,6 +8489,7 @@ def _ensure_potential_table():
             CREATE TABLE IF NOT EXISTS potential_customer (
                 id             INT AUTO_INCREMENT PRIMARY KEY,
                 name           VARCHAR(160) NOT NULL,
+                sold_to_name   VARCHAR(160) NOT NULL DEFAULT '',
                 address        VARCHAR(255) NOT NULL DEFAULT '',
                 phone          VARCHAR(40)  NOT NULL DEFAULT '',
                 contact_person VARCHAR(120) NOT NULL DEFAULT '',
@@ -8480,6 +8507,13 @@ def _ensure_potential_table():
                 INDEX idx_bde   (bde_name)
             )
         """)
+        # Idempotent migration for rows created before sold_to_name existed.
+        try:
+            cur.execute("ALTER TABLE potential_customer "
+                        "ADD COLUMN sold_to_name VARCHAR(160) NOT NULL DEFAULT '' "
+                        "AFTER name")
+        except Exception:
+            pass
         cur.close(); conn.close()
     except Exception as e:
         print(f"[potential] schema init failed: {e}")
@@ -8513,7 +8547,8 @@ def potential_customers_list():
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
         cur.execute(f"""
-            SELECT id, name, address, phone, contact_person,
+            SELECT id, name, sold_to_name,
+                   address, phone, contact_person,
                    state, bde_name, bde_email, lat, lon, status, notes,
                    created_at, updated_at
             FROM potential_customer
@@ -8539,9 +8574,10 @@ def potential_customer_create():
     body = request.get_json(silent=True) or request.form
     name = (body.get("name") or "").strip()[:160]
     if not name:
-        return jsonify({"error": "name is required"}), 400
+        return jsonify({"error": "ship-to name is required"}), 400
     email = _bde_from_request()
     me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
+    sold_to_name = (body.get("sold_to_name") or "").strip()[:160]
     bde_name  = (body.get("bde_name") or (me[0] if me else "")).strip()[:120]
     state     = (body.get("state")    or (me[1] if me else "")).strip().upper()[:8]
     address   = (body.get("address")  or "").strip()[:255]
@@ -8559,10 +8595,11 @@ def potential_customer_create():
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
             INSERT INTO potential_customer
-                (name, address, phone, contact_person,
+                (name, sold_to_name, address, phone, contact_person,
                  state, bde_name, bde_email, lat, lon, status, notes)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        """, (name, address, phone, contact, state, bde_name, email or "",
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """, (name, sold_to_name, address, phone, contact,
+              state, bde_name, email or "",
               lat, lon, status, notes))
         pid = cur.lastrowid
         cur.close(); conn.close()
@@ -8574,7 +8611,7 @@ def potential_customer_create():
 @app.patch("/api/potential_customer/<int:pid>")
 def potential_customer_update(pid):
     body = request.get_json(silent=True) or {}
-    allowed = ("name", "address", "phone", "contact_person",
+    allowed = ("name", "sold_to_name", "address", "phone", "contact_person",
                "state", "bde_name", "status", "notes", "lat", "lon")
     sets, params = [], []
     for k in allowed:
