@@ -1968,10 +1968,21 @@ function renderShipList(){
   const cnt  = document.getElementById("shipCount");
   const q    = (document.getElementById("shipSearch").value || "").trim().toLowerCase();
   // Apply the Sold-to filter first (narrow domain), then the text
-  // search on top.
-  const base = _palSoldFilter
-    ? _shipOptions.filter(r => (r.sold_to_name || "") === _palSoldFilter)
-    : _shipOptions;
+  // search on top.  Backend now returns one row per (ship_to, sold_to)
+  // pair so a multi-parent ship_to appears under every parent — but
+  // when no Sold-to is selected we dedupe by ship_to so the palette
+  // doesn't repeat the same shop.
+  let base;
+  if (_palSoldFilter){
+    base = _shipOptions.filter(r => (r.sold_to_name || "") === _palSoldFilter);
+  } else {
+    const seenShip = new Set();
+    base = _shipOptions.filter(r => {
+      const k = r.ship_to;
+      if (seenShip.has(k)) return false;
+      seenShip.add(k); return true;
+    });
+  }
   // On mobile keep the default chip list short (5) so the palette
   // doesn't dominate the screen — the user types into the search box
   // when they need a specific shop.  On desktop show up to 200.

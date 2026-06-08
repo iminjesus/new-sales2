@@ -7701,22 +7701,23 @@ def meeting_plan_delete(plan_id):
 
 @app.get("/api/meeting_plan/shop_to_options")
 def meeting_plan_shop_options():
-    """Slim ship_to list for the drag-and-drop palette.  Returns the
-    full customer master (capped at 3000) so a BDE can plan visits
-    outside their assigned territory too — matches the form-side
-    behaviour."""
+    """Slim ship_to list for the drag-and-drop palette.  Returns one
+    row per (ship_to, sold_to_name) combination so a ship_to that
+    sits under multiple parents in the customer master shows up under
+    each parent's Sold-to filter.  The frontend dedupes by ship_to
+    for the unfiltered view."""
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
         cur.execute("""
-            SELECT DISTINCT ship_to,
+            SELECT ship_to,
                    MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
-                   MIN(sold_to)                       AS sold_to,
-                   MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
+                   sold_to,
+                   NULLIF(TRIM(sold_to_name),'')      AS sold_to_name
             FROM customer
             WHERE ship_to IS NOT NULL AND TRIM(ship_to_name) <> ''
-            GROUP BY ship_to
-            ORDER BY MIN(TRIM(ship_to_name))
-            LIMIT 3000
+            GROUP BY ship_to, sold_to, sold_to_name
+            ORDER BY ship_to_name, sold_to_name
+            LIMIT 8000
         """)
         rows = cur.fetchall()
         cur.close(); conn.close()
