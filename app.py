@@ -8040,6 +8040,7 @@ def _ensure_claim_tables():
                 author_type  VARCHAR(20)  NOT NULL DEFAULT 'customer',
                 author_name  VARCHAR(120) NOT NULL DEFAULT '',
                 author_email VARCHAR(160) NOT NULL DEFAULT '',
+                category     VARCHAR(40)  NOT NULL DEFAULT '',
                 text         TEXT,
                 photo_paths  TEXT,
                 created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -8047,6 +8048,13 @@ def _ensure_claim_tables():
                 INDEX idx_created (created_at)
             )
         """)
+        # Idempotent migration for tables that pre-date the category column.
+        try:
+            cur.execute("ALTER TABLE claim_message "
+                        "ADD COLUMN category VARCHAR(40) NOT NULL DEFAULT '' "
+                        "AFTER author_email")
+        except Exception:
+            pass
         cur.close(); conn.close()
     except Exception as e:
         print(f"[claim] schema init failed: {e}")
@@ -8204,8 +8212,8 @@ def claim_list_for_shop(ship_to):
         if ids:
             ph = ",".join(["%s"] * len(ids))
             cur.execute(f"""
-                SELECT id, claim_id, author_type, author_name, text,
-                       photo_paths, created_at
+                SELECT id, claim_id, author_type, author_name, category,
+                       text, photo_paths, created_at
                 FROM claim_message
                 WHERE claim_id IN ({ph})
                 ORDER BY created_at ASC, id ASC
@@ -8396,7 +8404,7 @@ def claim_detail(cid):
             return jsonify({"error": "Claim not found"}), 404
         cur.execute("""
             SELECT id, claim_id, author_type, author_name, author_email,
-                   text, photo_paths, created_at
+                   category, text, photo_paths, created_at
             FROM claim_message
             WHERE claim_id = %s
             ORDER BY created_at ASC, id ASC
@@ -8451,12 +8459,15 @@ def claim_internal_reply(cid):
     me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
     name  = (me[0] if me else "") or "Hankook team"
     text  = ""
+    category = ""
     is_json = request.is_json
     if is_json:
         body = request.get_json(silent=True) or {}
         text = (body.get("text") or "").strip()
+        category = (body.get("category") or "").strip()[:40]
     else:
         text = (request.form.get("text") or "").strip()
+        category = (request.form.get("category") or "").strip()[:40]
     if not text:
         return jsonify({"error": "text is required"}), 400
     photos = _claim_save_photos(request.files.getlist("photos"), f"int{cid}") if not is_json else []
@@ -8464,9 +8475,11 @@ def claim_internal_reply(cid):
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
             INSERT INTO claim_message
-                (claim_id, author_type, author_name, author_email, text, photo_paths)
-            VALUES (%s, 'internal', %s, %s, %s, %s)
-        """, (cid, name, email or "", text, ",".join(photos) if photos else None))
+                (claim_id, author_type, author_name, author_email,
+                 category, text, photo_paths)
+            VALUES (%s, 'internal', %s, %s, %s, %s, %s)
+        """, (cid, name, email or "", category, text,
+              ",".join(photos) if photos else None))
         cur.close(); conn.close()
         _claim_notify_reply(cid, "internal", name, text)
         return jsonify({"ok": True})
