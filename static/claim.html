@@ -240,8 +240,13 @@ async function renderHome(){
         </div>
 
         <div class="field">
-          <label>Tyre size / product code <span class="hint">(if applicable)</span></label>
-          <input type="text" name="product_size" maxlength="80" placeholder="e.g. 225/45R17 Ventus V12">
+          <label>Product details <span class="hint">(if applicable — pick what you can)</span></label>
+          <div style="display:grid;gap:6px;">
+            <select id="claimPG"><option value="">— Product Group —</option></select>
+            <select id="claimPattern" disabled><option value="">— Pattern (pick group first) —</option></select>
+            <select id="claimSize" disabled><option value="">— Size (pick pattern first) —</option></select>
+          </div>
+          <input type="hidden" name="product_size" id="claimProductSize">
         </div>
 
         <div class="field">
@@ -305,6 +310,11 @@ async function renderHome(){
   `;
 
   document.getElementById("cForm").addEventListener("submit", submitClaim);
+  // Cascading Product Group → Pattern → Size dropdowns, sourced from
+  // carrying_26 via the same endpoints the Sales Dashboard uses. The
+  // selections are combined into the hidden product_size field so the
+  // backend storage stays a single string.
+  wireProductDropdowns();
   // Live-update each photo slot's status as soon as a file is chosen
   // so the user can see at a glance which slots still need a photo.
   document.querySelectorAll(".photo-slot input[type='file']").forEach(inp => {
@@ -320,6 +330,70 @@ async function renderHome(){
       }
     });
   });
+}
+
+function wireProductDropdowns(){
+  const pgSel    = document.getElementById("claimPG");
+  const patSel   = document.getElementById("claimPattern");
+  const sizeSel  = document.getElementById("claimSize");
+  const hidden   = document.getElementById("claimProductSize");
+  if (!pgSel || !patSel || !sizeSel || !hidden) return;
+
+  // Build the combined "PG / pattern / size" string the backend keeps
+  // in product_size — skip empty levels so a partial pick still helps.
+  function updateHidden(){
+    const parts = [pgSel.value, patSel.value, sizeSel.value]
+                    .map(v => (v || "").trim()).filter(Boolean);
+    hidden.value = parts.join(" / ");
+  }
+  function fill(sel, items, placeholder){
+    const opts = [`<option value="">${esc(placeholder)}</option>`]
+      .concat((items || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`));
+    sel.innerHTML = opts.join("");
+    sel.disabled  = !(items && items.length);
+  }
+
+  // 1) Product Group
+  fetchJSON("/api/product_group").then(rows => {
+    fill(pgSel, rows || [], "— Product Group —");
+  }).catch(() => {});
+
+  // 2) Pattern depends on Product Group
+  pgSel.addEventListener("change", async () => {
+    const pg = pgSel.value;
+    patSel.innerHTML = `<option value="">— loading… —</option>`;
+    patSel.disabled = true;
+    sizeSel.innerHTML = `<option value="">— Size (pick pattern first) —</option>`;
+    sizeSel.disabled = true;
+    updateHidden();
+    if (!pg){
+      patSel.innerHTML = `<option value="">— Pattern (pick group first) —</option>`;
+      return;
+    }
+    try {
+      const rows = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
+      fill(patSel, rows || [], "— Pattern —");
+    } catch { fill(patSel, [], "— Pattern (load failed) —"); }
+  });
+
+  // 3) Size depends on Pattern (+ Product Group)
+  patSel.addEventListener("change", async () => {
+    const pg = pgSel.value, pat = patSel.value;
+    sizeSel.innerHTML = `<option value="">— loading… —</option>`;
+    sizeSel.disabled = true;
+    updateHidden();
+    if (!pat){
+      sizeSel.innerHTML = `<option value="">— Size (pick pattern first) —</option>`;
+      return;
+    }
+    try {
+      const qs = new URLSearchParams({ product_group: pg, pattern: pat });
+      const rows = await fetchJSON(`/api/materials?${qs.toString()}`);
+      fill(sizeSel, rows || [], "— Size —");
+    } catch { fill(sizeSel, [], "— Size (load failed) —"); }
+  });
+
+  sizeSel.addEventListener("change", updateHidden);
 }
 
 async function submitClaim(e){
