@@ -844,9 +844,9 @@ def _claim_portal_host():
 @app.route("/")
 def index():
     portal_host = _claim_portal_host()
-    # If we're being served on the dedicated claim portal subdomain,
-    # show the claim form instead of the internal Sales Dashboard.
-    # The form's JS handles the empty ship_to case with a landing UI.
+    # When the request hits the customer-facing subdomain (claim.*),
+    # serve the claim form's landing UI instead of the internal Sales
+    # Dashboard.  Falls through to index.html for the admin domain.
     if portal_host and request.host.split(":")[0].lower() == portal_host:
         return send_from_directory("static", "claim.html")
     return app.send_static_file("index.html")
