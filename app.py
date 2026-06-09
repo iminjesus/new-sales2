@@ -3762,6 +3762,30 @@ def patterns():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.get("/api/carrying_matrix")
+def carrying_matrix():
+    """Distinct (product_group, pattern, size) tuples from carrying_26.
+    Used by the claim form so three independent dropdowns can cascade
+    in any direction client-side without a round-trip per change."""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT
+                   TRIM(product_group) AS pg,
+                   TRIM(pattern)       AS pat,
+                   TRIM(size)          AS sz
+            FROM carrying_26
+            WHERE product_group IS NOT NULL AND TRIM(product_group) <> ''
+              AND pattern       IS NOT NULL AND TRIM(pattern)       <> ''
+              AND size          IS NOT NULL AND TRIM(size)          <> ''
+            ORDER BY pg, pat, sz
+        """)
+        rows = [{"pg": r[0], "pattern": r[1], "size": r[2]} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return jsonify(rows)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.get("/api/materials")
 def materials():
     """
