@@ -8045,9 +8045,12 @@ def _claim_lookup_shop(ship_to):
         print(f"[claim] _claim_lookup_shop failed: {e}")
         return None
 
-def _claim_save_photos(files, prefix):
+def _claim_save_photos(files, prefix, categories=None):
     """Save uploaded photo files under static/claim_photos/YYYY/MM/.
-    Returns a list of public /static URLs."""
+    Returns a list of public /static URLs.  When categories is given
+    (parallel list of strings the size of files), the category is
+    embedded in the filename so the viewer can label each photo
+    without an extra DB column."""
     saved = []
     if not files: return saved
     now = datetime.now()
@@ -8055,13 +8058,17 @@ def _claim_save_photos(files, prefix):
     os.makedirs(subdir, exist_ok=True)
     ts = now.strftime("%Y%m%d_%H%M%S")
     safe = "".join(c for c in (prefix or "X") if c.isalnum()) or "X"
-    for i, f in enumerate(files[:5]):
+    cats = list(categories or [])
+    for i, f in enumerate(files[:10]):
         if not f or not f.filename:
             continue
         ext = os.path.splitext(f.filename)[1].lower()
         if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
             continue
-        fname = f"{ts}_{safe}_{i}{ext}"
+        cat = (cats[i] if i < len(cats) else "") or ""
+        safe_cat = "".join(c for c in cat if c.isalnum() or c in "-_")[:24]
+        suffix   = f"_{safe_cat}" if safe_cat else ""
+        fname = f"{ts}_{safe}_{i}{suffix}{ext}"
         path  = os.path.join(subdir, fname)
         f.save(path)
         saved.append(f"/static/claim_photos/{now.year:04d}/{now.month:02d}/{fname}")
@@ -8216,7 +8223,17 @@ def claim_create(ship_to):
         return jsonify({"error": "Please describe the issue"}), 400
     if claim_type and claim_type not in CLAIM_TYPES:
         claim_type = "Other"
-    photos = _claim_save_photos(request.files.getlist("photos"), ship_to)
+    # Categories come as a comma-joined string in parallel to the
+    # ordered photos files (sidewall, tread, damage, dot, vehicle …).
+    cats = [c.strip() for c in (request.form.get("photo_categories") or "").split(",")]
+    raw_files = request.files.getlist("photos") or []
+    # Require at least 5 valid photo uploads.
+    valid_files = [f for f in raw_files if f and f.filename]
+    if len(valid_files) < 5:
+        return jsonify({"error": "Please attach all 5 required photos"}), 400
+    photos = _claim_save_photos(raw_files, ship_to, categories=cats)
+    if len(photos) < 5:
+        return jsonify({"error": "Could not save 5 photos — please check file types (JPG/PNG/HEIC) and try again"}), 400
     try:
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""

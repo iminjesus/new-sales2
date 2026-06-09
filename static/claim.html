@@ -45,6 +45,18 @@ h2{font-size:15px;font-weight:700;color:#1e3a5f;margin:0 0 12px}
 .row2{display:flex;gap:8px}
 .row2 .field{flex:1}
 .honey{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+/* Photo slots: 5 labelled buttons that open the rear camera on phones. */
+.photo-grid{display:grid;gap:8px}
+.photo-slot{display:flex;align-items:center;justify-content:space-between;gap:8px;
+            padding:10px 12px;border:1.5px dashed #d1d5db;border-radius:8px;
+            background:#fafafa;cursor:pointer;transition:border-color .15s,background .15s}
+.photo-slot:hover{border-color:#93c5fd;background:#eff6ff}
+.photo-slot.filled{border-style:solid;border-color:#22c55e;background:#f0fdf4}
+.photo-slot.filled .ps-status{color:#15803d;font-weight:700}
+.photo-slot input[type="file"]{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.photo-slot .ps-label{font-size:12px;font-weight:600;color:#1e3a5f;line-height:1.2}
+.photo-slot .ps-label small{display:block;font-size:10px;font-weight:400;color:#6b7280;margin-top:2px}
+.photo-slot .ps-status{font-size:11px;color:#9ca3af;flex-shrink:0;white-space:nowrap}
 .btn{display:block;width:100%;background:#2563eb;color:#fff;border:none;
      border-radius:8px;padding:13px;font-size:15px;font-weight:700;cursor:pointer;
      box-shadow:0 1px 2px rgba(0,0,0,.08)}
@@ -237,9 +249,38 @@ async function renderHome(){
           <textarea name="description" required placeholder="What happened, when, how many tyres affected…"></textarea>
         </div>
 
+        <!-- Required photos.  Each input has capture="environment" so
+             tapping it on a phone opens the rear camera directly.
+             Categories are sent in parallel as photo_categories. -->
         <div class="field">
-          <label>Photos <span class="hint">(up to 5 — tyre damage, receipts, vehicle, etc.)</span></label>
-          <input type="file" name="photos" multiple accept="image/*">
+          <label>Photos <span class="req">*</span> <span class="hint">(all 5 required — tap to take a photo)</span></label>
+          <div class="photo-grid">
+            <label class="photo-slot">
+              <span class="ps-label">📸 Sidewall <small>(whole tyre + DOT visible)</small></span>
+              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="sidewall" required>
+              <span class="ps-status">No photo</span>
+            </label>
+            <label class="photo-slot">
+              <span class="ps-label">📸 Tread <small>(wear pattern)</small></span>
+              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="tread" required>
+              <span class="ps-status">No photo</span>
+            </label>
+            <label class="photo-slot">
+              <span class="ps-label">📸 Damage close-up <small>(the actual issue)</small></span>
+              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="damage" required>
+              <span class="ps-status">No photo</span>
+            </label>
+            <label class="photo-slot">
+              <span class="ps-label">📸 DOT code <small>(production date on sidewall)</small></span>
+              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="dot" required>
+              <span class="ps-status">No photo</span>
+            </label>
+            <label class="photo-slot">
+              <span class="ps-label">📸 Vehicle / position <small>(front-left, rear-right, etc.)</small></span>
+              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="vehicle" required>
+              <span class="ps-status">No photo</span>
+            </label>
+          </div>
         </div>
 
         <button type="submit" class="btn" id="submitBtn">Submit claim</button>
@@ -264,6 +305,21 @@ async function renderHome(){
   `;
 
   document.getElementById("cForm").addEventListener("submit", submitClaim);
+  // Live-update each photo slot's status as soon as a file is chosen
+  // so the user can see at a glance which slots still need a photo.
+  document.querySelectorAll(".photo-slot input[type='file']").forEach(inp => {
+    inp.addEventListener("change", () => {
+      const slot = inp.closest(".photo-slot");
+      const stat = slot.querySelector(".ps-status");
+      if (inp.files && inp.files.length){
+        slot.classList.add("filled");
+        stat.textContent = "✓ " + (inp.files[0].name || "Captured");
+      } else {
+        slot.classList.remove("filled");
+        stat.textContent = "No photo";
+      }
+    });
+  });
 }
 
 async function submitClaim(e){
@@ -274,8 +330,24 @@ async function submitClaim(e){
   msg.className = "msg";
   msg.textContent = "";
   btn.disabled = true; btn.textContent = "Submitting…";
+  // Belt-and-braces validation: make sure every photo slot has a file
+  // before we POST so the user gets a clearer error than the server's.
+  const slots = form.querySelectorAll(".photo-slot input[type='file']");
+  const cats  = [];
+  let missing = 0;
+  slots.forEach(inp => {
+    if (inp.files && inp.files.length) cats.push(inp.dataset.cat || "");
+    else missing++;
+  });
+  if (missing > 0){
+    msg.className = "msg err";
+    msg.textContent = `Please attach the remaining ${missing} photo${missing === 1 ? "" : "s"} before submitting.`;
+    btn.disabled = false; btn.textContent = "Submit claim";
+    return;
+  }
   try {
     const fd = new FormData(form);
+    fd.append("photo_categories", cats.join(","));
     const r = await fetch(`/api/claim/by_ship/${encodeURIComponent(SHIP_TO)}`, {
       method: "POST", body: fd,
     });
