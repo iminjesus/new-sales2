@@ -8150,7 +8150,7 @@ def _claim_notify_reply(claim_id, author_type, author_name, text):
         cur.close(); conn.close()
         if not row: return
         link = f"{DASHBOARD_URL.rstrip('/')}/claims#{claim_id}"
-        cust_link = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{row['ship_to']}"
+        cust_link = f"{CLAIM_PORTAL_URL.rstrip('/')}/{row['ship_to']}"
         safe_text = _esc_html((text or "")[:600])
         if author_type == "customer":
             shop = _claim_lookup_shop(row["ship_to"])
@@ -8182,6 +8182,26 @@ def _claim_notify_reply(claim_id, author_type, author_name, text):
 # ── Customer-facing routes ───────────────────────────────────────────
 @app.get("/claim/<ship_to>")
 def claim_page(ship_to):
+    return send_from_directory("static", "claim.html")
+
+# Short-URL alias so QR codes (and the printable cards) can show
+# claim.hankooktyre.com.au/735486 instead of …/claim/735486.  Restricted
+# to ship-to-shaped paths so unrelated future routes (/meeting, /map,
+# etc.) keep priority and random typos return 404 instead of leaking
+# the claim page.
+import re as _re
+_SHIP_TO_SHORT_RE = _re.compile(r'^[A-Za-z0-9_-]{4,32}$')
+_SHIP_TO_RESERVED = {
+    "api", "static", "claim", "claims", "meeting", "map", "stock",
+    "rebate", "price", "potentials", "favicon.ico", "robots.txt",
+    "sitemap.xml", "health", "ping", "index.html",
+}
+@app.get("/<ship_to>")
+def claim_short_url(ship_to):
+    s = (ship_to or "").strip()
+    if s.lower() in _SHIP_TO_RESERVED or not _SHIP_TO_SHORT_RE.match(s):
+        from flask import abort
+        abort(404)
     return send_from_directory("static", "claim.html")
 
 @app.get("/api/claim/shop/<ship_to>")
@@ -8505,7 +8525,7 @@ def claim_qr_png(ship_to):
         return ("qrcode package not installed — pip install qrcode[pil]", 500)
     from io import BytesIO
     from flask import send_file
-    url = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{ship_to}"
+    url = f"{CLAIM_PORTAL_URL.rstrip('/')}/{ship_to}"
     qr  = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,

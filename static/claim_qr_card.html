@@ -66,7 +66,7 @@ function esc(s){
     const r = await fetch(`/api/claim/shop/${encodeURIComponent(SHIP_TO)}`);
     if (!r.ok) throw new Error("Shop code not recognised");
     const s = await r.json();
-    const url = `${s.portal_url || location.origin}/claim/${s.ship_to}`;
+    const url = `${s.portal_url || location.origin}/${s.ship_to}`;
     stage.innerHTML = `
       <div class="card">
         <div class="brand">HANKOOK AUSTRALIA</div>

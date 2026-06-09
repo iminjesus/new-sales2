@@ -80,7 +80,7 @@ function esc(s){
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 function cardHtml(s, baseUrl){
-  const url = `${baseUrl}/claim/${s.ship_to}`;
+  const url = `${baseUrl}/${s.ship_to}`;
   return `
     <div class="card">
       <div class="brand">HANKOOK AUSTRALIA</div>
