@@ -254,11 +254,11 @@ async function renderHome(){
           <textarea name="description" required placeholder="What happened, when, how many tyres affected…"></textarea>
         </div>
 
-        <!-- Required photos.  Each input has capture="environment" so
-             tapping it on a phone opens the rear camera directly.
-             Categories are sent in parallel as photo_categories. -->
+        <!-- Product photos — the five tyre angles we need to triage the
+             claim.  Each input accepts camera capture or gallery upload
+             (image or PDF).  Categories ride along as photo_categories. -->
         <div class="field">
-          <label>Photos <span class="req">*</span> <span class="hint">(all 5 required — tap to take a photo)</span></label>
+          <label>Product photos <span class="req">*</span> <span class="hint">(all 5 required — tap to take a photo or upload)</span></label>
           <div class="photo-grid">
             <label class="photo-slot">
               <span class="ps-label">📸 Sidewall <small>(whole tyre + DOT visible)</small></span>
@@ -285,8 +285,17 @@ async function renderHome(){
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="vehicle" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
+          </div>
+        </div>
+
+        <!-- Proof of purchase — kept as its own section so it's not
+             confused with the product photos and so a customer who only
+             has the invoice can still see it as a separate thing. -->
+        <div class="field">
+          <label>Invoice / receipt <span class="hint">(optional — PDF or photo)</span></label>
+          <div class="photo-grid">
             <label class="photo-slot invoice-slot">
-              <span class="ps-label">🧾 Invoice / receipt <small>(optional — PDF or photo)</small></span>
+              <span class="ps-label">🧾 Invoice or receipt <small>(proof of purchase)</small></span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="invoice">
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
