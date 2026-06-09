@@ -262,28 +262,33 @@ async function renderHome(){
           <div class="photo-grid">
             <label class="photo-slot">
               <span class="ps-label">📸 Sidewall <small>(whole tyre + DOT visible)</small></span>
-              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="sidewall" required>
-              <span class="ps-status">No photo</span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="sidewall" required>
+              <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 Tread <small>(wear pattern)</small></span>
-              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="tread" required>
-              <span class="ps-status">No photo</span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread" required>
+              <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 Damage close-up <small>(the actual issue)</small></span>
-              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="damage" required>
-              <span class="ps-status">No photo</span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="damage" required>
+              <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 DOT code <small>(production date on sidewall)</small></span>
-              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="dot" required>
-              <span class="ps-status">No photo</span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot" required>
+              <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 Vehicle / position <small>(front-left, rear-right, etc.)</small></span>
-              <input type="file" name="photos" accept="image/*" capture="environment" data-cat="vehicle" required>
-              <span class="ps-status">No photo</span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="vehicle" required>
+              <span class="ps-status">No file — tap to capture or upload</span>
+            </label>
+            <label class="photo-slot invoice-slot">
+              <span class="ps-label">🧾 Invoice / receipt <small>(optional — PDF or photo)</small></span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="invoice">
+              <span class="ps-status">No file — tap to capture or upload</span>
             </label>
           </div>
         </div>
@@ -326,7 +331,7 @@ async function renderHome(){
         stat.textContent = "✓ " + (inp.files[0].name || "Captured");
       } else {
         slot.classList.remove("filled");
-        stat.textContent = "No photo";
+        stat.textContent = "No file — tap to capture or upload";
       }
     });
   });
@@ -396,16 +401,21 @@ async function submitClaim(e){
   btn.disabled = true; btn.textContent = "Submitting…";
   // Belt-and-braces validation: make sure every photo slot has a file
   // before we POST so the user gets a clearer error than the server's.
+  // Required slots (the 5 tyre photos) MUST be filled.  Optional slots
+  // (invoice) are appended only when the user did pick a file.
   const slots = form.querySelectorAll(".photo-slot input[type='file']");
   const cats  = [];
   let missing = 0;
   slots.forEach(inp => {
-    if (inp.files && inp.files.length) cats.push(inp.dataset.cat || "");
-    else missing++;
+    if (inp.files && inp.files.length){
+      cats.push(inp.dataset.cat || "");
+    } else if (inp.hasAttribute("required")){
+      missing++;
+    }
   });
   if (missing > 0){
     msg.className = "msg err";
-    msg.textContent = `Please attach the remaining ${missing} photo${missing === 1 ? "" : "s"} before submitting.`;
+    msg.textContent = `Please attach the remaining ${missing} required file${missing === 1 ? "" : "s"} before submitting.`;
     btn.disabled = false; btn.textContent = "Submit claim";
     return;
   }

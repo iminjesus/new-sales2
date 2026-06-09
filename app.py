@@ -8087,7 +8087,7 @@ def _claim_save_photos(files, prefix, categories=None):
         if not f or not f.filename:
             continue
         ext = os.path.splitext(f.filename)[1].lower()
-        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic"):
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf"):
             continue
         cat = (cats[i] if i < len(cats) else "") or ""
         safe_cat = "".join(c for c in cat if c.isalnum() or c in "-_")[:24]
