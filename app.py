@@ -6423,6 +6423,10 @@ GRAPH_TENANT_ID     = os.getenv("GRAPH_TENANT_ID",     "")
 GRAPH_CLIENT_ID     = os.getenv("GRAPH_CLIENT_ID",     "")
 GRAPH_CLIENT_SECRET = os.getenv("GRAPH_CLIENT_SECRET", "")
 DASHBOARD_URL  = os.getenv("DASHBOARD_URL",  "https://sales.hkaudashboard.com")
+# Customer-facing portal (claim form + QR codes). Falls back to
+# DASHBOARD_URL so existing setups keep working until a dedicated
+# subdomain (e.g. https://claim.hkaudashboard.com.au) is provisioned.
+CLAIM_PORTAL_URL = os.getenv("CLAIM_PORTAL_URL", DASHBOARD_URL)
 MAIL_DEBUG     = (os.getenv("MAIL_DEBUG",    "0") == "1")
 
 # ── BDE / state-manager directory ──────────────────────────────────
@@ -8146,7 +8150,7 @@ def _claim_notify_reply(claim_id, author_type, author_name, text):
         cur.close(); conn.close()
         if not row: return
         link = f"{DASHBOARD_URL.rstrip('/')}/claims#{claim_id}"
-        cust_link = f"{DASHBOARD_URL.rstrip('/')}/claim/{row['ship_to']}"
+        cust_link = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{row['ship_to']}"
         safe_text = _esc_html((text or "")[:600])
         if author_type == "customer":
             shop = _claim_lookup_shop(row["ship_to"])
@@ -8190,6 +8194,10 @@ def claim_shop_info(ship_to):
         "ship_to_name": shop.get("ship_to_name") or "",
         "sold_to":      shop.get("sold_to") or "",
         "sold_to_name": shop.get("sold_to_name") or "",
+        # Customer-facing base URL so the printable QR card embeds the
+        # configured portal domain instead of whatever host happened to
+        # serve the admin /claims page.
+        "portal_url":   CLAIM_PORTAL_URL.rstrip("/"),
     })
 
 @app.get("/api/claim/by_ship/<ship_to>")
@@ -8497,7 +8505,7 @@ def claim_qr_png(ship_to):
         return ("qrcode package not installed — pip install qrcode[pil]", 500)
     from io import BytesIO
     from flask import send_file
-    url = f"{DASHBOARD_URL.rstrip('/')}/claim/{ship_to}"
+    url = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{ship_to}"
     qr  = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
@@ -8551,7 +8559,7 @@ def claim_qr_shops():
         """, tuple(params))
         rows = cur.fetchall()
         cur.close(); conn.close()
-        return jsonify({"shops": rows, "base_url": DASHBOARD_URL.rstrip("/")})
+        return jsonify({"shops": rows, "base_url": CLAIM_PORTAL_URL.rstrip("/")})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
