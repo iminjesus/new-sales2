@@ -66,6 +66,22 @@ h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
 .reply{margin-top:14px;padding-top:12px;border-top:1px solid #e5e7eb}
 .reply textarea{width:100%;min-height:70px;padding:9px;border:1px solid #d1d5db;
                 border-radius:6px;font-size:12px;font-family:inherit;resize:vertical}
+.reply .templates{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.reply .templates button{font-size:11px;padding:5px 10px;border:1px solid #d1d5db;
+                          background:#fff;color:#374151;border-radius:14px;cursor:pointer;
+                          font-weight:600;transition:background .12s,border-color .12s}
+.reply .templates button:hover{background:#eff6ff;border-color:#93c5fd;color:#1e40af}
+.reply .templates button.active{background:#dbeafe;border-color:#2563eb;color:#1e40af}
+.reply .attach-row{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+.reply .attach-btn{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:5px 10px;
+                    border:1px dashed #93c5fd;background:#eff6ff;color:#1e40af;border-radius:6px;
+                    cursor:pointer;font-weight:600}
+.reply .attach-btn:hover{background:#dbeafe;border-style:solid}
+.reply .attach-btn input{display:none}
+.reply .attach-list{display:flex;gap:5px;flex-wrap:wrap;font-size:11px;color:#6b7280}
+.reply .attach-chip{padding:2px 8px;background:#f3f4f6;border-radius:10px;
+                     display:inline-flex;align-items:center;gap:4px}
+.reply .attach-chip .x{color:#dc2626;cursor:pointer;font-weight:700}
 .reply .actions{margin-top:8px;display:flex;justify-content:space-between;align-items:center;gap:8px}
 .btn{padding:7px 14px;border-radius:6px;border:none;background:#2563eb;color:#fff;
      font-size:12px;font-weight:600;cursor:pointer}
@@ -250,7 +266,25 @@ function renderDetail(c, thread){
     <div class="thread">${thread.map(bubble).join("")}</div>
 
     <div class="reply">
+      <!-- Quick reply templates — click to drop the boilerplate into
+           the textarea so the team can fine-tune wording without
+           retyping the structure every time. -->
+      <div class="templates" id="replyTemplates">
+        <button type="button" data-tpl="ack">📨 Acknowledge</button>
+        <button type="button" data-tpl="info">ℹ Request info</button>
+        <button type="button" data-tpl="visit">🚗 Will visit shop</button>
+        <button type="button" data-tpl="approve">✓ Approve warranty</button>
+        <button type="button" data-tpl="reject">✕ Reject (normal wear)</button>
+        <button type="button" data-tpl="pickup">📦 Pickup arranged</button>
+      </div>
       <textarea id="replyText" placeholder="Reply to the customer…"></textarea>
+      <div class="attach-row">
+        <label class="attach-btn">
+          📎 Attach files
+          <input type="file" id="replyFiles" multiple accept="image/*,application/pdf">
+        </label>
+        <span class="attach-list" id="replyAttachList"></span>
+      </div>
       <div class="actions">
         <span style="font-size:11px;color:#9ca3af;">Customer will receive an email if they provided one.</span>
         <button class="btn" id="sendReplyBtn">Send reply</button>
@@ -268,6 +302,51 @@ function renderDetail(c, thread){
       loadList();
     } catch (err){ alert("Update failed: " + err.message); }
   });
+  // Quick reply templates — populate the textarea with structured
+  // boilerplate that the team can fine-tune before sending.
+  const REPLY_TPL = {
+    ack:     "Hi {name},\n\nThanks for letting us know — we've received your claim and our warranty team is reviewing it now. We'll be back to you within 2 business days.\n\nHankook team",
+    info:    "Hi {name},\n\nTo move your claim forward we need a couple more details:\n\n• \n• \n\nCould you reply with these (and any extra photo if helpful)? Thank you.\n\nHankook team",
+    visit:   "Hi {name},\n\nThanks for the claim. We'd like to inspect the tyres in person — a BDE will visit {shop} on .\n\nIf the time doesn't suit, just reply with one that does.\n\nHankook team",
+    approve: "Hi {name},\n\nGood news — your warranty claim has been approved. Please bring the tyres back to {shop} and they will be replaced/credited at no cost.\n\nReference: HKA-CLM-#{cid}\n\nHankook team",
+    reject:  "Hi {name},\n\nWe've completed the review of your claim and unfortunately it does not meet the warranty conditions in this instance. The wear pattern is consistent with normal use rather than a manufacturing fault.\n\nIf you'd like a more detailed explanation, just reply and we'll be happy to walk through it.\n\nHankook team",
+    pickup:  "Hi {name},\n\nWe've arranged a pickup of the tyres for inspection. The carrier will collect from {shop} on . You don't need to do anything else — we'll update you once the inspection is complete.\n\nHankook team",
+  };
+  document.getElementById("replyTemplates").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-tpl]");
+    if (!btn) return;
+    const tpl = REPLY_TPL[btn.dataset.tpl] || "";
+    const shop = c.ship_to_name || c.ship_to || "your shop";
+    const filled = tpl
+      .replaceAll("{name}", c.contact_name || "there")
+      .replaceAll("{shop}", shop)
+      .replaceAll("{cid}", String(c.id).padStart(4, "0"));
+    const ta = document.getElementById("replyText");
+    ta.value = filled;
+    ta.focus();
+    document.querySelectorAll("#replyTemplates button").forEach(b => b.classList.toggle("active", b === btn));
+  });
+
+  // Attached files: keep the list in JS so users can drop individual
+  // files before sending without clearing the whole input.
+  let _replyFiles = [];
+  function renderAttachList(){
+    const wrap = document.getElementById("replyAttachList");
+    if (!_replyFiles.length){ wrap.innerHTML = ""; return; }
+    wrap.innerHTML = _replyFiles.map((f, i) =>
+      `<span class="attach-chip">${esc(f.name)} <span class="x" data-i="${i}">×</span></span>`
+    ).join("");
+    wrap.querySelectorAll(".x").forEach(el => el.addEventListener("click", () => {
+      _replyFiles.splice(parseInt(el.dataset.i, 10), 1);
+      renderAttachList();
+    }));
+  }
+  document.getElementById("replyFiles").addEventListener("change", (e) => {
+    for (const f of (e.target.files || [])) _replyFiles.push(f);
+    e.target.value = "";   // allow re-picking the same file
+    renderAttachList();
+  });
+
   document.getElementById("sendReplyBtn").addEventListener("click", async () => {
     const ta = document.getElementById("replyText");
     const msg = document.getElementById("replyMsg");
@@ -275,12 +354,17 @@ function renderDetail(c, thread){
     const text = (ta.value || "").trim();
     if (!text){ msg.className = "msg err"; msg.textContent = "Type a reply first."; return; }
     try {
-      await fetchJSON(`/api/claim/${c.id}/internal_reply`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+      // Send multipart so attachments ride along (backend already
+      // accepts files when the request is not JSON).
+      const fd = new FormData();
+      fd.append("text", text);
+      for (const f of _replyFiles) fd.append("photos", f);
+      const r = await fetch(`/api/claim/${c.id}/internal_reply`, {
+        method: "POST", body: fd, credentials: "include",
       });
-      ta.value = "";
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      ta.value = ""; _replyFiles = []; renderAttachList();
       msg.className = "msg ok"; msg.textContent = "Reply sent.";
       loadDetail(c.id); loadList();
     } catch (err){
