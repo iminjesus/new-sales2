@@ -203,7 +203,48 @@ function wireBubbleToggles(root){
   });
 }
 
+function renderLanding(){
+  root.innerHTML = `
+    <div class="card" style="margin-top:24px;text-align:center;max-width:480px;margin-left:auto;margin-right:auto;">
+      <div style="font-size:32px;margin-bottom:8px;">🛞</div>
+      <h2 style="margin:0 0 6px;">Hankook tyre claim</h2>
+      <p style="color:#6b7280;margin:0 0 18px;font-size:13px;line-height:1.5;">
+        Enter your shop code to start a claim, or scan the QR sticker
+        provided by your Hankook BDE.
+      </p>
+      <form id="landingForm" autocomplete="off">
+        <input id="landingCode" type="text" inputmode="numeric"
+               placeholder="e.g. 735486" required maxlength="32"
+               style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;
+                      font-size:15px;text-align:center;font-family:ui-monospace,Menlo,monospace;
+                      letter-spacing:.5px;">
+        <button type="submit" class="btn" style="margin-top:10px;width:100%;">Continue →</button>
+        <div id="landingMsg" class="msg"></div>
+      </form>
+      <p style="margin-top:18px;font-size:11px;color:#9ca3af;">
+        Don't have a code? Ask your local Hankook BDE for the QR sticker
+        for your shop.
+      </p>
+    </div>
+  `;
+  document.getElementById("landingForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const code = (document.getElementById("landingCode").value || "").trim();
+    const msg  = document.getElementById("landingMsg");
+    msg.className = "msg"; msg.textContent = "";
+    if (!/^[A-Za-z0-9_-]{4,32}$/.test(code)){
+      msg.className = "msg err"; msg.textContent = "That doesn't look like a valid shop code.";
+      return;
+    }
+    location.href = "/" + encodeURIComponent(code);
+  });
+}
+
 async function renderHome(){
+  // Bare-root visit (e.g. claim.hankooktyre.com.au/) — no shop code in
+  // the URL.  Show a landing form so the customer can type their shop
+  // code or scan the QR sticker.
+  if (!SHIP_TO) return renderLanding();
   let shop = null;
   try {
     shop = await fetchJSON(`/api/claim/shop/${encodeURIComponent(SHIP_TO)}`);

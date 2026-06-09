@@ -832,8 +832,23 @@ def debug_salesman():
 
 
 
+def _claim_portal_host():
+    """Hostname of the customer-facing portal so the root route can
+    decide whether to serve the Sales Dashboard or the claim form."""
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(CLAIM_PORTAL_URL or "").hostname or "").lower()
+    except Exception:
+        return ""
+
 @app.route("/")
 def index():
+    portal_host = _claim_portal_host()
+    # If we're being served on the dedicated claim portal subdomain,
+    # show the claim form instead of the internal Sales Dashboard.
+    # The form's JS handles the empty ship_to case with a landing UI.
+    if portal_host and request.host.split(":")[0].lower() == portal_host:
+        return send_from_directory("static", "claim.html")
     return app.send_static_file("index.html")
 
 @app.route("/map")
