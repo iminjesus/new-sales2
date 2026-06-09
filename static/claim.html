@@ -68,26 +68,27 @@ h2{font-size:15px;font-weight:700;color:#1e3a5f;margin:0 0 12px}
 .photo-list{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
 .photo-list img{width:54px;height:54px;object-fit:cover;border-radius:5px;
                 border:1px solid #e5e7eb}
-.thread{margin-top:8px;display:flex;flex-direction:column;gap:6px}
-.bubble{padding:9px 12px;border-radius:10px;font-size:13px;line-height:1.45;
-        white-space:pre-wrap;word-break:break-word;max-width:88%}
+.thread{margin-top:6px;display:flex;flex-direction:column;gap:3px}
+.bubble{padding:5px 9px;border-radius:8px;font-size:12px;line-height:1.3;
+        word-break:break-word;max-width:92%}
 .bubble.them{align-self:flex-start;background:#eff6ff;border:1px solid #dbeafe;color:#1e3a5f}
 .bubble.us{align-self:flex-end;background:#dcfce7;border:1px solid #bbf7d0;color:#14532d}
 .bubble.collapsed{cursor:pointer}
+.bubble .head{display:flex;justify-content:space-between;align-items:center;gap:6px;
+              font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;
+              opacity:.75;margin-bottom:2px}
+.bubble .head .when{font-weight:400;opacity:.7}
 .bubble .cat{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;
-              letter-spacing:.3px;padding:1px 7px;border-radius:8px;margin-right:5px;
-              background:rgba(255,255,255,.7);color:inherit}
+              letter-spacing:.3px;padding:0 6px;border-radius:6px;margin-right:4px;
+              background:rgba(255,255,255,.65);color:inherit}
 .bubble .preview{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
                   overflow:hidden}
-.bubble .toggle{display:inline-flex;align-items:center;gap:3px;margin-top:4px;font-size:10px;
-                 font-weight:700;color:#2563eb;cursor:pointer;text-transform:uppercase;
-                 letter-spacing:.3px}
-.bubble .toggle:hover{text-decoration:underline}
-.bubble .attach-hint{font-size:10px;opacity:.75;margin-top:3px}
-.bubble .who{font-size:10px;font-weight:700;text-transform:uppercase;
-             letter-spacing:.3px;opacity:.7;margin-bottom:3px}
-.bubble .when{font-size:10px;opacity:.7;margin-top:3px}
-.bubble .ph{display:flex;gap:4px;margin-top:5px;flex-wrap:wrap}
+.bubble .full{white-space:pre-wrap;word-break:break-word}
+.bubble .toggle{display:inline-flex;align-items:center;gap:2px;margin-top:2px;font-size:10px;
+                 color:#2563eb;cursor:pointer;opacity:.85}
+.bubble .toggle:hover{opacity:1;text-decoration:underline}
+.bubble .attach-hint{display:inline-block;font-size:10px;opacity:.7;margin-top:2px;margin-right:6px}
+.bubble .ph{display:flex;gap:4px;margin-top:4px;flex-wrap:wrap}
 .bubble .ph img{width:50px;height:50px;object-fit:cover;border-radius:4px}
 .claim-card{padding:0;border:1px solid #e5e7eb;border-radius:8px;
             margin-bottom:10px;background:#fafafa;overflow:hidden}
@@ -173,15 +174,17 @@ function bubble(m){
   const cat = (m.category || "").trim();
   const catBadge = cat ? `<span class="cat">${esc(CAT_LABEL[cat] || cat)}</span>` : "";
   const txt = m.text || "";
+  const attachHint = photoArr.length ? `<span class="attach-hint">📎 ${photoArr.length}</span>` : "";
   return `
     <div class="bubble ${isUs ? "us" : "them"} collapsed" data-mid="${m.id}">
-      <div class="who">${catBadge}${esc(m.author_name || (isUs ? "You" : "Hankook"))}</div>
+      <div class="head">
+        <span>${catBadge}${esc(m.author_name || (isUs ? "You" : "Hankook"))}</span>
+        <span class="when">${esc(m.created_at || "")}</span>
+      </div>
       <div class="preview">${esc(txt)}</div>
-      <div class="full" style="display:none;white-space:pre-wrap;word-break:break-word;">${esc(txt)}</div>
-      ${photoArr.length ? `<div class="attach-hint">📎 ${photoArr.length} attachment${photoArr.length === 1 ? "" : "s"}</div>` : ""}
+      <div class="full" style="display:none;">${esc(txt)}</div>
       ${photos ? `<div class="ph" style="display:none;">${photos}</div>` : ""}
-      <div class="toggle">▼ Show full message${photoArr.length ? " + attachments" : ""}</div>
-      <div class="when">${esc(m.created_at || "")}</div>
+      <div class="toggle">${attachHint}<span class="tog-lbl">▼ more</span></div>
     </div>`;
 }
 function wireBubbleToggles(root){
@@ -194,8 +197,8 @@ function wireBubbleToggles(root){
       b.querySelector(".preview").style.display = expanded ? "none" : "";
       const full = b.querySelector(".full"); if (full) full.style.display = expanded ? "" : "none";
       const ph   = b.querySelector(".ph");   if (ph)   ph.style.display   = expanded ? "flex" : "none";
-      const tog  = b.querySelector(".toggle");
-      if (tog) tog.innerHTML = expanded ? "▲ Hide" : `▼ Show full message${b.querySelector(".attach-hint") ? " + attachments" : ""}`;
+      const lbl  = b.querySelector(".tog-lbl");
+      if (lbl) lbl.textContent = expanded ? "▲ less" : "▼ more";
     });
   });
 }
