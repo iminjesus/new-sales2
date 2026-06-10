@@ -7666,6 +7666,16 @@ def meeting_plan_create():
             bde_email = email
         else:
             bde_email = email or ""
+        # Without a BDE name the chip would be impossible to attribute
+        # and the BDE-role calendar filter would hide it.  Return a
+        # clear error instead of silently inserting an orphan row —
+        # makes mis-configured directory entries obvious instead of
+        # producing 'drag-drop does nothing' bug reports.
+        if not bdenm.strip():
+            return jsonify({"error":
+                "Cannot find your BDE name.  "
+                "Pick a BDE in the form first, or ask the admin to add "
+                "your email to the directory."}), 400
 
         # Resolve sold_to + names from customer master so the calendar
         # chip can show a friendly label without a separate lookup.
