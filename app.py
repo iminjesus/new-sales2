@@ -7067,7 +7067,11 @@ def whoami():
     out["state"] = state
     out["role"]  = role
     if role == "BDE":
+        # BDEs see only their own data: lock the salesman dropdown to
+        # their name AND the region buttons to their state, so they
+        # can't accidentally widen the view by clicking another State.
         out["lock_salesman"] = name
+        out["lock_region"]   = state
     elif role == "SM":
         out["lock_region"]   = state
     return jsonify(out)
