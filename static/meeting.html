@@ -1146,27 +1146,30 @@ function renderRecentRows(){
     // so the eye lands on the schedule, then the actual visit and a
     // colour-coded badge that says at a glance whether the visit
     // happened as planned.
-    const _dayDiff = (a, b) => {
-      if (!a || !b) return null;
-      const ms = new Date(b) - new Date(a);
-      return Math.round(ms / 86400000);
+    // Same-week comparison: a visit that lands in the same Mon-Sun week
+    // as the plan counts as 'visited as planned' — one or two days off
+    // either side is fine.  Only when the visit slipped to a different
+    // week do we flag it as shifted.
+    const _mondayOf = (d) => {
+      if (!d) return null;
+      const x = new Date(d);
+      const day = x.getDay() || 7;   // Sun -> 7
+      x.setDate(x.getDate() - day + 1);
+      x.setHours(0, 0, 0, 0);
+      return x.getTime();
     };
-    const diff = (r.plan_date && r.visit_date) ? _dayDiff(r.plan_date, r.visit_date) : null;
     let stripeColor, statusBadge, plannedTxt;
     if (r.plan_date == null){
       stripeColor = "#94a3b8";   // gray — unplanned
       statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#475569;letter-spacing:.3px;">🆕 WALK-IN</span>`;
       plannedTxt  = `<span style="color:#9ca3af;font-style:italic;">— no plan —</span>`;
-    } else if (diff === 0){
-      stripeColor = "#16a34a";   // green — on time
-      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#dcfce7;color:#166534;letter-spacing:.3px;">✅ AS PLANNED</span>`;
+    } else if (_mondayOf(r.plan_date) === _mondayOf(r.visit_date)){
+      stripeColor = "#16a34a";   // green — visited within the planned week
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#dcfce7;color:#166534;letter-spacing:.3px;">✅ VISITED</span>`;
       plannedTxt  = `<span style="font-weight:700;color:#1e3a5f;">📅 ${escapeHtml(r.plan_date)}</span>`;
     } else {
-      stripeColor = "#d97706";   // amber — shifted
-      const tag = diff > 0
-        ? `⏱ ${diff} DAY${diff === 1 ? "" : "S"} LATE`
-        : `⏱ ${-diff} DAY${diff === -1 ? "" : "S"} EARLY`;
-      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;letter-spacing:.3px;">${tag}</span>`;
+      stripeColor = "#d97706";   // amber — landed in a different week
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;letter-spacing:.3px;">📅 SHIFTED</span>`;
       plannedTxt  = `<span style="font-weight:700;color:#1e3a5f;">📅 ${escapeHtml(r.plan_date)}</span>`;
     }
     const purpBadge = r.visit_purpose
