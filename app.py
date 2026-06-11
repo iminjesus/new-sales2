@@ -8179,7 +8179,7 @@ def _claim_notify_reply(claim_id, author_type, author_name, text):
         cur.close(); conn.close()
         if not row: return
         link = f"{DASHBOARD_URL.rstrip('/')}/claims#{claim_id}"
-        cust_link = f"{CLAIM_PORTAL_URL.rstrip('/')}/{row['ship_to']}"
+        cust_link = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{row['ship_to']}"
         safe_text = _esc_html((text or "")[:600])
         if author_type == "customer":
             shop = _claim_lookup_shop(row["ship_to"])
@@ -8554,7 +8554,7 @@ def claim_qr_png(ship_to):
         return ("qrcode package not installed — pip install qrcode[pil]", 500)
     from io import BytesIO
     from flask import send_file
-    url = f"{CLAIM_PORTAL_URL.rstrip('/')}/{ship_to}"
+    url = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{ship_to}"
     qr  = qrcode.QRCode(
         version=None,
         error_correction=qrcode.constants.ERROR_CORRECT_M,
