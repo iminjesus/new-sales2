@@ -8402,32 +8402,37 @@ def claim_create(ship_to):
     if claim_type not in CLAIM_TYPES:
         claim_type = CLAIM_TYPES[0]
     # Categories come as a comma-joined string in parallel to the
-    # ordered photos files (whole_tyre, tread, damaged, dot_code, …).
-    # Frontend pushes a category for every slot, even empty ones, so
-    # this list stays index-aligned with raw_files even when a customer
-    # skipped optional slots.
+    # ordered photos files.  Frontend pushes one category per file
+    # (multi-file slot like tread_measurement contributes N entries),
+    # plus an empty-entry placeholder for empty slots, so the list
+    # stays index-aligned with raw_files.
     cats = [c.strip() for c in (request.form.get("photo_categories") or "").split(",")]
     raw_files = request.files.getlist("photos") or []
-    # The 5 product photos that must be present.  Validate by category
-    # rather than raw file count so a customer can't satisfy '5 files'
-    # by attaching only optional slots.
-    required_cats = {"whole_tyre", "tread", "damaged", "dot_code", "dot_cut"}
-    got_required = set()
+    # Per-category minimums.  All 7 product slots are required, with
+    # Tread measurement needing 3 photos (one per groove).
+    REQUIRED_MIN = {
+        "whole_tyre": 1, "tread": 1, "damaged": 1,
+        "dot_code":   1, "dot_cut": 1, "serial_barcode": 1,
+        "tread_measurement": 3,
+    }
+    got_by_cat = {}
     for i, f in enumerate(raw_files):
         if not (f and f.filename):
             continue
         cat = cats[i] if i < len(cats) else ""
-        if cat in required_cats:
-            got_required.add(cat)
-    if required_cats - got_required:
+        if cat in REQUIRED_MIN:
+            got_by_cat[cat] = got_by_cat.get(cat, 0) + 1
+    short = [c for c, need in REQUIRED_MIN.items() if got_by_cat.get(c, 0) < need]
+    if short:
         return jsonify({"error":
-            "Please attach all 5 required product photos "
-            "(whole tyre, tread, damaged close-up, DOT code, DOT cut)."}), 400
+            "Please attach all required product photos — missing: "
+            + ", ".join(c.replace("_", " ") for c in short)}), 400
     photos = _claim_save_photos(raw_files, ship_to, categories=cats)
-    if len(photos) < 5:
+    total_required = sum(REQUIRED_MIN.values())
+    if len(photos) < total_required:
         return jsonify({"error":
-            "Could not save 5 photos — please check file types "
-            "(JPG / PNG / HEIC / PDF) and try again."}), 400
+            f"Could not save all {total_required} required photos — "
+            "please check file types (JPG / PNG / HEIC / PDF) and try again."}), 400
     try:
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""

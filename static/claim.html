@@ -334,42 +334,42 @@ async function renderHome(){
              claim.  Each input accepts camera capture or gallery upload
              (image or PDF).  Categories ride along as photo_categories. -->
         <div class="field">
-          <label>Product photos <span class="req">*</span> <span class="hint">(first 5 required — tap to take a photo or upload)</span></label>
+          <label>Product photos <span class="req">*</span> <span class="hint">(all 7 required — tap to take a photo or upload)</span></label>
           <div class="photo-grid">
             <label class="photo-slot">
-              <span class="ps-label">📸 Whole tyre (sidewall) <small>(entire tyre — sidewall facing camera)</small></span>
+              <span class="ps-label">📸 Whole tyre (sidewall)</span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="whole_tyre" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 Tread <small>(overall tread / wear pattern)</small></span>
+              <span class="ps-label">📸 Tread</span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 Damaged close-up <small>(the actual issue, in focus)</small></span>
+              <span class="ps-label">📸 Damaged close-up</span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="damaged" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 DOT code <small>(production-date code on sidewall)</small></span>
+              <span class="ps-label">📸 DOT code</span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot_code" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 DOT cut <small>(close-up of the cut-out DOT section)</small></span>
+              <span class="ps-label">📸 DOT cut</span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot_cut" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 Serial barcode <small>(optional — barcode / serial label)</small></span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="serial_barcode">
+              <span class="ps-label">📸 Serial barcode</span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="serial_barcode" required>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 Tread measurement <small>(optional — all grooves needed)</small></span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread_measurement">
-              <span class="ps-status">No file — tap to capture or upload</span>
+              <span class="ps-label">📸 Tread measurement <small>3 photos</small></span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread_measurement" data-min="3" required multiple>
+              <span class="ps-status">0 / 3 files — tap to capture or upload</span>
             </label>
           </div>
         </div>
@@ -424,12 +424,18 @@ async function renderHome(){
     inp.addEventListener("change", () => {
       const slot = inp.closest(".photo-slot");
       const stat = slot.querySelector(".ps-status");
-      if (inp.files && inp.files.length){
-        slot.classList.add("filled");
-        stat.textContent = "✓ " + (inp.files[0].name || "Captured");
+      const got  = (inp.files && inp.files.length) || 0;
+      const min  = parseInt(inp.dataset.min || "1", 10);
+      const enough = got >= min;
+      slot.classList.toggle("filled", enough);
+      if (got === 0){
+        stat.textContent = min > 1
+          ? `0 / ${min} files — tap to capture or upload`
+          : "No file — tap to capture or upload";
+      } else if (min > 1){
+        stat.textContent = `${got} / ${min} files${enough ? " ✓" : ""}`;
       } else {
-        slot.classList.remove("filled");
-        stat.textContent = "No file — tap to capture or upload";
+        stat.textContent = "✓ " + (inp.files[0].name || "Captured");
       }
     });
   });
@@ -499,17 +505,22 @@ async function submitClaim(e){
   btn.disabled = true; btn.textContent = "Submitting…";
   // Belt-and-braces validation: make sure every photo slot has a file
   // before we POST so the user gets a clearer error than the server's.
-  // Required slots (the 5 product photos) MUST be filled.  Optional
-  // slots (serial barcode, tread measurement, invoice) are submitted
-  // only when the user picked a file but they don't block submit.
-  // We push the category for every slot — even empty ones — so the
-  // backend can match each saved photo to its category by index.
+  // Required slots: all seven product photos.  Tread measurement is a
+  // multi-file slot (3 grooves required); the others take one file.
+  // Build the categories list ALIGNED PER FILE — empty inputs still
+  // send one entry, multi-file inputs send N entries — so the backend
+  // can match each saved photo to its category by index.
   const slots = form.querySelectorAll(".photo-slot input[type='file']");
   const cats  = [];
   let missing = 0;
   slots.forEach(inp => {
-    cats.push(inp.dataset.cat || "");
-    if (!(inp.files && inp.files.length) && inp.hasAttribute("required")) missing++;
+    const got = (inp.files && inp.files.length) || 0;
+    const min = parseInt(inp.dataset.min || "1", 10);
+    // Push the category once per file actually present; otherwise once
+    // to align with the empty entry the browser still submits.
+    const n = Math.max(got, 1);
+    for (let i = 0; i < n; i++) cats.push(inp.dataset.cat || "");
+    if (inp.hasAttribute("required") && got < min) missing += (min - got);
   });
   if (missing > 0){
     msg.className = "msg err";
