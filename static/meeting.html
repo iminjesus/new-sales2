@@ -1072,10 +1072,10 @@ function renderRecentRows(){
   // Backend already sorts in this order; we just inject header rows
   // whenever (bde, shop, purpose) changes so the visual hierarchy is
   // obvious and a shop's history reads top-to-bottom.
-  let h = `${aiHeader}<table class="recent-tbl">
-    <thead><tr>
-      <th>Visit date</th><th>Notes / Next / Feedback</th><th>Photos</th>
-    </tr></thead><tbody>`;
+  // Card-style layout replaces the three plain columns — drop the
+  // thead since each entry now carries its own column row inside the
+  // card (Visited / Planned / Purpose / Met).
+  let h = `${aiHeader}<table class="recent-tbl"><tbody>`;
   let lastBde = null, lastShip = null, lastPurp = null;
   for (const r of rows){
     const photos = (r.photo_paths || [])
@@ -1142,12 +1142,55 @@ function renderRecentRows(){
       </td></tr>`;
       lastPurp = purpKey;
     }
-    // Visit row — only date + notes + photos now that BDE / Shop /
-    // Purpose are conveyed by the group headers above.
+    // Visit row — Salesforce-style structured card.  Top row carries
+    // the at-a-glance columns (visit / planned / purpose / met &
+    // contact); body below holds notes, prep, attachments, feedback.
+    const planTxt = r.plan_date
+      ? (r.plan_date === r.visit_date
+          ? `<span style="color:#16a34a;">📅 ${escapeHtml(r.plan_date)} <span style="font-size:9px;font-weight:700;">ON-TIME</span></span>`
+          : `<span style="color:#d97706;">📅 ${escapeHtml(r.plan_date)} <span style="font-size:9px;font-weight:700;">SHIFTED</span></span>`)
+      : `<span style="color:#9ca3af;font-style:italic;">Walk-in / unplanned</span>`;
+    const purpBadge = r.visit_purpose
+      ? `<span style="display:inline-block;font-size:10px;font-weight:700;color:#1e3a5f;background:#e0e7ff;padding:2px 8px;border-radius:8px;letter-spacing:.2px;">${escapeHtml(r.visit_purpose)}</span>`
+      : `<span style="color:#9ca3af;font-style:italic;font-size:11px;">Prep only</span>`;
+    // Met person + contact (phone) — surface so the BDE can reach out
+    // again without digging through the customer master.  Phone falls
+    // back to the prospect record for POT-<id> ship_tos.
+    const metBits = [];
+    if (r.met_person)      metBits.push(`<b>${escapeHtml(r.met_person)}</b>`);
+    if (r.contact_person && r.contact_person !== r.met_person)
+                            metBits.push(`<span style="color:#6b7280;">primary: ${escapeHtml(r.contact_person)}</span>`);
+    if (r.contact_phone)   metBits.push(`<a href="tel:${escapeHtml(r.contact_phone)}" style="color:#2563eb;text-decoration:none;">📞 ${escapeHtml(r.contact_phone)}</a>`);
+    const metCol = metBits.length
+      ? metBits.join(" · ")
+      : `<span style="color:#9ca3af;font-style:italic;">(not recorded)</span>`;
     h += `<tr>
-      <td class="ts" style="padding-left:36px;">${r.visit_date || r.created_at}</td>
-      <td class="notes">${author}${prep}${notesBody}${next}${met}${actions}${fbBlock}</td>
-      <td class="photos">${photos}</td>
+      <td colspan="3" style="padding:0;">
+        <div style="border:1px solid #e5e7eb;border-radius:8px;margin:6px 12px 8px 36px;background:#fff;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1.4fr;gap:0;
+                      border-bottom:1px solid #f1f5f9;font-size:11px;">
+            <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Visited</div>
+              <div style="font-weight:700;color:#1e3a5f;">📍 ${escapeHtml(r.visit_date || r.created_at || "—")}</div>
+            </div>
+            <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Planned</div>
+              <div style="font-weight:600;">${planTxt}</div>
+            </div>
+            <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Purpose</div>
+              <div>${purpBadge}</div>
+            </div>
+            <div style="padding:7px 10px;">
+              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Met / Contact</div>
+              <div>${metCol}</div>
+            </div>
+          </div>
+          <div style="padding:8px 12px;">
+            ${author}${prep}${notesBody}${next}${actions}${photos ? `<div class="photos" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">${photos}</div>` : ""}${fbBlock}
+          </div>
+        </div>
+      </td>
     </tr>`;
   }
   h += `</tbody></table>`;

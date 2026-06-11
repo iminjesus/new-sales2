@@ -7891,20 +7891,36 @@ def meeting_list():
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
                    COALESCE(NULLIF(TRIM(c.sold_to_name),''),
                             NULLIF(TRIM(m.sold_to_name),''),
-                            m.sold_to) AS sold_to_name
+                            m.sold_to) AS sold_to_name,
+                   c.contact_person AS contact_person,
+                   c.phone          AS contact_phone,
+                   -- Closest plan_date within the same month, for the same
+                   -- ship_to, so the panel can show 'Planned vs Visited'.
+                   (SELECT p.plan_date
+                    FROM meeting_plan p
+                    WHERE p.ship_to = m.ship_to
+                      AND YEAR(p.plan_date)  = YEAR(m.visit_date)
+                      AND MONTH(p.plan_date) = MONTH(m.visit_date)
+                    ORDER BY ABS(DATEDIFF(p.plan_date, m.visit_date)), p.plan_date
+                    LIMIT 1) AS plan_date
             FROM meeting_log m
             LEFT JOIN (
                 SELECT ship_to,
                        MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
-                       MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
+                       MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name,
+                       CAST(NULL AS CHAR) AS contact_person,
+                       CAST(NULL AS CHAR) AS phone
                 FROM customer GROUP BY ship_to
                 UNION ALL
                 -- Potential customers come through as POT-<id> in ship_to;
-                -- expose both names here so Recent entries shows the
-                -- prospect's shop + sold-to label instead of the raw code.
+                -- expose both names AND the contact info BDEs typed when
+                -- creating the prospect so the panel can show how to
+                -- re-contact them without a separate lookup.
                 SELECT CONCAT('POT-', id) AS ship_to,
                        name              AS ship_to_name,
-                       sold_to_name      AS sold_to_name
+                       sold_to_name      AS sold_to_name,
+                       contact_person    AS contact_person,
+                       phone             AS phone
                 FROM potential_customer
             ) c ON c.ship_to = m.ship_to
             {where_sql}
@@ -7930,6 +7946,8 @@ def meeting_list():
         for r in rows:
             r["created_at"] = r["created_at"].strftime("%Y-%m-%d %H:%M") if r["created_at"] else ""
             r["visit_date"] = r["visit_date"].strftime("%Y-%m-%d") if r["visit_date"] else ""
+            if r.get("plan_date"):
+                r["plan_date"] = r["plan_date"].strftime("%Y-%m-%d")
             r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
             r["thread"]      = thread_by_meeting.get(r["id"], [])
             # Frontend State filter uses this — group SA/TAS under VIC
