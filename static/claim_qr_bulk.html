@@ -62,6 +62,11 @@ html,body{margin:0;background:#e5e7eb;color:#111827;
       <option value="TAS">TAS</option>
     </select>
   </label>
+  <label>BDE
+    <select id="bdeSel">
+      <option value="">All</option>
+    </select>
+  </label>
   <label>Limit
     <input id="limitInput" type="number" value="60" min="12" max="300" style="width:64px;">
   </label>
@@ -95,6 +100,7 @@ async function loadShops(){
   const status = document.getElementById("status");
   const pages  = document.getElementById("pages");
   const state  = document.getElementById("stateSel").value;
+  const bde    = document.getElementById("bdeSel").value;
   const limit  = document.getElementById("limitInput").value || "60";
   status.textContent = "Loading…";
   pages.innerHTML = "";
@@ -102,9 +108,11 @@ async function loadShops(){
   try {
     const qs = new URLSearchParams({ limit });
     if (state) qs.set("state", state);
+    if (bde)   qs.set("bde",   bde);
     const r = await fetch("/api/claim/qr_shops?" + qs.toString());
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    refreshBdeOptions(j.bdes || [], bde);
     const shops = j.shops || [];
     if (!shops.length){
       status.textContent = "No shops match.";
@@ -119,14 +127,34 @@ async function loadShops(){
               `</div>`;
     }
     pages.innerHTML = html;
-    status.textContent = `${shops.length} shops · ${Math.ceil(shops.length / PER_PAGE)} A4 pages`;
+    const stateLabel = state ? state + " · " : "";
+    const bdeLabel   = bde ? `${bde} · ` : "";
+    status.textContent = `${bdeLabel}${stateLabel}${shops.length} shops · ${Math.ceil(shops.length / PER_PAGE)} A4 pages`;
     document.getElementById("printBtn").disabled = false;
   } catch (e){
     status.textContent = "Error: " + e.message;
   }
 }
+// Keep the BDE picker's options narrowed to the BDEs that actually
+// exist within the current State filter (re-derived from the
+// /qr_shops response so we don't pay a second round trip).
+function refreshBdeOptions(bdes, currentVal){
+  const sel = document.getElementById("bdeSel");
+  if (!sel) return;
+  const keep = currentVal && bdes.includes(currentVal) ? currentVal : "";
+  sel.innerHTML = '<option value="">All</option>' +
+    bdes.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  sel.value = keep;
+}
+// Reset BDE pick whenever the State changes (the next Load fetches the
+// matching set), so the picker can't keep a BDE that's no longer in scope.
+document.getElementById("stateSel").addEventListener("change", () => {
+  document.getElementById("bdeSel").value = "";
+});
 document.getElementById("loadBtn").addEventListener("click", loadShops);
 document.getElementById("printBtn").addEventListener("click", () => window.print());
+// Boot: populate the BDE list so the user can pick before the first Load.
+loadShops();
 </script>
 </body>
 </html>

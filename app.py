@@ -8584,6 +8584,7 @@ def claim_qr_shops():
     """Helper for the bulk page — returns ship_tos matching the filters.
     Defaults to active shops (any in customer master)."""
     state = (request.args.get("state") or "").strip().upper()
+    bde   = (request.args.get("bde")   or "").strip()
     limit = min(int(request.args.get("limit") or "300"), 1000)
     wh = ["ship_to IS NOT NULL", "TRIM(ship_to) <> ''"]
     params = []
@@ -8592,6 +8593,9 @@ def claim_qr_shops():
         # so SA/TAS/ACT shops still print under the manager who serves them.
         wh.append("bde_state = %s")
         params.append(state)
+    if bde:
+        wh.append("UPPER(TRIM(salesman_name)) = UPPER(TRIM(%s))")
+        params.append(bde)
     where_sql = "WHERE " + " AND ".join(wh)
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
@@ -8599,7 +8603,8 @@ def claim_qr_shops():
             SELECT ship_to,
                    MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
                    MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name,
-                   MIN(NULLIF(TRIM(bde_state),''))   AS bde_state
+                   MIN(NULLIF(TRIM(bde_state),''))   AS bde_state,
+                   MIN(NULLIF(TRIM(salesman_name),'')) AS salesman_name
             FROM customer
             {where_sql}
             GROUP BY ship_to
@@ -8607,8 +8612,25 @@ def claim_qr_shops():
             LIMIT {limit}
         """, tuple(params))
         rows = cur.fetchall()
+        # Also surface the available BDE list (for the bulk page dropdown)
+        # narrowed by state if one is selected — keeps the picker scoped.
+        bde_wh = ["salesman_name IS NOT NULL", "TRIM(salesman_name) <> ''"]
+        bde_params = []
+        if state:
+            bde_wh.append("bde_state = %s"); bde_params.append(state)
+        cur.execute(f"""
+            SELECT DISTINCT TRIM(salesman_name) AS name
+            FROM customer
+            WHERE {' AND '.join(bde_wh)}
+            ORDER BY name
+        """, tuple(bde_params))
+        bdes = [r["name"] for r in cur.fetchall() if r.get("name")]
         cur.close(); conn.close()
-        return jsonify({"shops": rows, "base_url": CLAIM_PORTAL_URL.rstrip("/")})
+        return jsonify({
+            "shops":    rows,
+            "bdes":     bdes,
+            "base_url": CLAIM_PORTAL_URL.rstrip("/"),
+        })
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
