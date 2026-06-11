@@ -64,8 +64,13 @@ def normalize_name(name):
 
 
 def parse_tokens(name):
-    """Return (brand, line, code, unit, suffix, calc_basis)."""
-    tk = name.split("_")
+    """Return (brand, line, code, unit, suffix, calc_basis).
+
+    The positional layout is brand_line_code_unit_suffix; NOLFT is a
+    sentinel marker that flags 'exclude LF/TBR from the basis' and
+    doesn't occupy a positional slot, so strip it before pulling the
+    positional fields out."""
+    tk = [t for t in name.split("_") if t.upper() != "NOLFT"]
     brand  = tk[0] if len(tk) > 0 else ""
     line   = tk[1] if len(tk) > 1 else ""
     code   = tk[2] if len(tk) > 2 else ""
