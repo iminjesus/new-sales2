@@ -11,8 +11,13 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif
 header{background:#1e3a5f;color:#fff;padding:10px 20px;display:flex;
        align-items:center;gap:12px;justify-content:space-between}
 header .brand{font-size:14px;font-weight:700}
-header .nav a{color:#cbd5e1;text-decoration:none;font-size:12px;margin-left:14px}
+header .nav{display:flex;gap:6px;align-items:center;margin-left:auto}
+header .nav a{color:#cbd5e1;text-decoration:none;font-size:12px}
 header .nav a:hover{color:#fff}
+header .nav .btn{font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid #d1d5db;
+                  background:#fff;color:#374151;font-weight:600;cursor:pointer}
+header .nav .btn:hover{background:#eff6ff;border-color:#93c5fd}
+header .nav .btn.active{background:#374151;color:#fff;border-color:#374151}
 .layout{display:grid;grid-template-columns:380px 1fr;gap:14px;padding:14px;
         max-width:1500px;margin:0 auto}
 .panel{background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.05);
@@ -116,10 +121,14 @@ h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
 <header>
   <div class="brand">Claims management</div>
   <div class="nav">
-    <a href="/">Sales Dashboard</a>
-    <a href="/meeting">Visit Log</a>
-    <a href="/claims">Claims</a>
-    <a href="/claims/qr_bulk">🖨️ Bulk QR</a>
+    <button class="btn" onclick="location.href='/'">Graph View</button>
+    <button class="btn" onclick="location.href='/map'">Map View</button>
+    <button class="btn" onclick="location.href='/stock'">Stock</button>
+    <button class="btn" onclick="location.href='/rebate'">Rebate</button>
+    <button class="btn" onclick="location.href='/price'">Price</button>
+    <button class="btn" onclick="location.href='/meeting'">Meeting</button>
+    <button class="btn active">Claims</button>
+    <a href="/claims/qr_bulk" style="margin-left:6px;">🖨️ Bulk QR</a>
   </div>
 </header>
 
