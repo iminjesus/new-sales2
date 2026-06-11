@@ -6151,14 +6151,24 @@ def api_rebate_data():
                 tot_reb += r["curr_rebate"]
             tot_qty = round(tot_qty, 2)
             tot_amt = round(tot_amt, 2)
-            tot_reb = round(tot_reb, 2)
+            store_reb = round(tot_reb, 2)
+            hq_reb    = round(hq_box_out["total"], 2)
+            grand_reb = round(store_reb + hq_reb, 2)
             ws.append([])
-            total_row = ["TOTAL", "", "", "", "", "", "", "", "",
-                         tot_qty, tot_amt, "", "", "", "", tot_reb]
-            ws.append(total_row)
+            # Grand Total row: matches the screen's top-right GRAND TOTAL box
+            # exactly (Store rebate + HQ/VR rebate).  Qty and Amount sum the
+            # underlying sales the rebates were earned on.
+            ws.append(["TOTAL", "", "", "", "", "", "", "", "",
+                       tot_qty, tot_amt, "", "", "", "", grand_reb])
             for cell in ws[ws.max_row]:
                 cell.font = Font(bold=True)
                 cell.fill = PatternFill("solid", fgColor="DBEAFE")
+            for label, val in (("  · Store rebate (per-store program)", store_reb),
+                               ("  · HQ / VR rebate (account-level program)", hq_reb)):
+                ws.append([label, "", "", "", "", "", "", "", "",
+                           "", "", "", "", "", "", val])
+                for cell in ws[ws.max_row]:
+                    cell.font = Font(italic=True, color="64748B")
 
             # HQ / VR rebate (the top box) on its own sheet
             ws2 = wb.create_sheet("HQ_VR Rebate")
