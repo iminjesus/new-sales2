@@ -1142,14 +1142,33 @@ function renderRecentRows(){
       </td></tr>`;
       lastPurp = purpKey;
     }
-    // Visit row — Salesforce-style structured card.  Top row carries
-    // the at-a-glance columns (visit / planned / purpose / met &
-    // contact); body below holds notes, prep, attachments, feedback.
-    const planTxt = r.plan_date
-      ? (r.plan_date === r.visit_date
-          ? `<span style="color:#16a34a;">📅 ${escapeHtml(r.plan_date)} <span style="font-size:9px;font-weight:700;">ON-TIME</span></span>`
-          : `<span style="color:#d97706;">📅 ${escapeHtml(r.plan_date)} <span style="font-size:9px;font-weight:700;">SHIFTED</span></span>`)
-      : `<span style="color:#9ca3af;font-style:italic;">Walk-in / unplanned</span>`;
+    // Visit row — Salesforce-style structured card with Planned first
+    // so the eye lands on the schedule, then the actual visit and a
+    // colour-coded badge that says at a glance whether the visit
+    // happened as planned.
+    const _dayDiff = (a, b) => {
+      if (!a || !b) return null;
+      const ms = new Date(b) - new Date(a);
+      return Math.round(ms / 86400000);
+    };
+    const diff = (r.plan_date && r.visit_date) ? _dayDiff(r.plan_date, r.visit_date) : null;
+    let stripeColor, statusBadge, plannedTxt;
+    if (r.plan_date == null){
+      stripeColor = "#94a3b8";   // gray — unplanned
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#475569;letter-spacing:.3px;">🆕 WALK-IN</span>`;
+      plannedTxt  = `<span style="color:#9ca3af;font-style:italic;">— no plan —</span>`;
+    } else if (diff === 0){
+      stripeColor = "#16a34a";   // green — on time
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#dcfce7;color:#166534;letter-spacing:.3px;">✅ AS PLANNED</span>`;
+      plannedTxt  = `<span style="font-weight:700;color:#1e3a5f;">📅 ${escapeHtml(r.plan_date)}</span>`;
+    } else {
+      stripeColor = "#d97706";   // amber — shifted
+      const tag = diff > 0
+        ? `⏱ ${diff} DAY${diff === 1 ? "" : "S"} LATE`
+        : `⏱ ${-diff} DAY${diff === -1 ? "" : "S"} EARLY`;
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;letter-spacing:.3px;">${tag}</span>`;
+      plannedTxt  = `<span style="font-weight:700;color:#1e3a5f;">📅 ${escapeHtml(r.plan_date)}</span>`;
+    }
     const purpBadge = r.visit_purpose
       ? `<span style="display:inline-block;font-size:10px;font-weight:700;color:#1e3a5f;background:#e0e7ff;padding:2px 8px;border-radius:8px;letter-spacing:.2px;">${escapeHtml(r.visit_purpose)}</span>`
       : `<span style="color:#9ca3af;font-style:italic;font-size:11px;">Prep only</span>`;
@@ -1166,28 +1185,35 @@ function renderRecentRows(){
       : `<span style="color:#9ca3af;font-style:italic;">(not recorded)</span>`;
     h += `<tr>
       <td colspan="3" style="padding:0;">
-        <div style="border:1px solid #e5e7eb;border-radius:8px;margin:6px 12px 8px 36px;background:#fff;">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1.4fr;gap:0;
-                      border-bottom:1px solid #f1f5f9;font-size:11px;">
-            <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
-              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Visited</div>
-              <div style="font-weight:700;color:#1e3a5f;">📍 ${escapeHtml(r.visit_date || r.created_at || "—")}</div>
+        <div style="display:flex;border:1px solid #e5e7eb;border-radius:8px;
+                    margin:6px 12px 8px 36px;background:#fff;overflow:hidden;">
+          <div style="width:4px;background:${stripeColor};flex-shrink:0;"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:grid;grid-template-columns:1fr 1.3fr 1fr 1.4fr;gap:0;
+                        border-bottom:1px solid #f1f5f9;font-size:11px;">
+              <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Planned</div>
+                <div>${plannedTxt}</div>
+              </div>
+              <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Visited</div>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  <span style="font-weight:700;color:#1e3a5f;">📍 ${escapeHtml(r.visit_date || r.created_at || "—")}</span>
+                  ${statusBadge}
+                </div>
+              </div>
+              <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Purpose</div>
+                <div>${purpBadge}</div>
+              </div>
+              <div style="padding:7px 10px;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Met / Contact</div>
+                <div>${metCol}</div>
+              </div>
             </div>
-            <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
-              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Planned</div>
-              <div style="font-weight:600;">${planTxt}</div>
+            <div style="padding:8px 12px;">
+              ${author}${prep}${notesBody}${next}${actions}${photos ? `<div class="photos" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">${photos}</div>` : ""}${fbBlock}
             </div>
-            <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
-              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Purpose</div>
-              <div>${purpBadge}</div>
-            </div>
-            <div style="padding:7px 10px;">
-              <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Met / Contact</div>
-              <div>${metCol}</div>
-            </div>
-          </div>
-          <div style="padding:8px 12px;">
-            ${author}${prep}${notesBody}${next}${actions}${photos ? `<div class="photos" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">${photos}</div>` : ""}${fbBlock}
           </div>
         </div>
       </td>
