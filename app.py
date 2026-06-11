@@ -8036,7 +8036,7 @@ def meeting_ai_digest():
 # ─────────────────────────────────────────────────────────────────────
 # === CLAIM FEATURE START ===
 CLAIM_PHOTO_DIR = os.path.join(BASE_DIR, "static", "claim_photos")
-CLAIM_TYPES = ("Warranty", "Workmanship", "Delivery", "Pricing", "Other")
+CLAIM_TYPES = ("Road Hazard Warranty",)
 CLAIM_STATUSES = ("New", "Reviewing", "Awaiting customer", "Resolved", "Rejected")
 
 def _ensure_claim_tables():
@@ -8310,19 +8310,37 @@ def claim_create(ship_to):
         return jsonify({"error": "Name and phone are required"}), 400
     if not description:
         return jsonify({"error": "Please describe the issue"}), 400
-    if claim_type and claim_type not in CLAIM_TYPES:
-        claim_type = "Other"
+    # Only one claim type is currently exposed, so coerce any other
+    # value to the default (frontend already restricts the dropdown).
+    if claim_type not in CLAIM_TYPES:
+        claim_type = CLAIM_TYPES[0]
     # Categories come as a comma-joined string in parallel to the
-    # ordered photos files (sidewall, tread, damage, dot, vehicle …).
+    # ordered photos files (whole_tyre, tread, damaged, dot_code, …).
+    # Frontend pushes a category for every slot, even empty ones, so
+    # this list stays index-aligned with raw_files even when a customer
+    # skipped optional slots.
     cats = [c.strip() for c in (request.form.get("photo_categories") or "").split(",")]
     raw_files = request.files.getlist("photos") or []
-    # Require at least 5 valid photo uploads.
-    valid_files = [f for f in raw_files if f and f.filename]
-    if len(valid_files) < 5:
-        return jsonify({"error": "Please attach all 5 required photos"}), 400
+    # The 5 product photos that must be present.  Validate by category
+    # rather than raw file count so a customer can't satisfy '5 files'
+    # by attaching only optional slots.
+    required_cats = {"whole_tyre", "tread", "damaged", "dot_code", "dot_cut"}
+    got_required = set()
+    for i, f in enumerate(raw_files):
+        if not (f and f.filename):
+            continue
+        cat = cats[i] if i < len(cats) else ""
+        if cat in required_cats:
+            got_required.add(cat)
+    if required_cats - got_required:
+        return jsonify({"error":
+            "Please attach all 5 required product photos "
+            "(whole tyre, tread, damaged close-up, DOT code, DOT cut)."}), 400
     photos = _claim_save_photos(raw_files, ship_to, categories=cats)
     if len(photos) < 5:
-        return jsonify({"error": "Could not save 5 photos — please check file types (JPG/PNG/HEIC) and try again"}), 400
+        return jsonify({"error":
+            "Could not save 5 photos — please check file types "
+            "(JPG / PNG / HEIC / PDF) and try again."}), 400
     try:
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
