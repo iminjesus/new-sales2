@@ -6125,12 +6125,32 @@ def api_rebate_data():
                     r["needed_amt"]  if r["needed_amt"]  is not None else "",
                     r["curr_rebate"], "Y" if r.get("rollup", True) else "N",
                 ])
-            # Sum-safe TOTAL: counts each _SR group once (rollup rows only) so
-            # cross-State/BDE group duplicates ("In Total"=N) aren't added twice.
-            counted = [r for r in rows if r.get("rollup", True)]
-            tot_qty = round(sum(r["actual_qty"]  for r in counted), 2)
-            tot_amt = round(sum(r["actual_amt"]  for r in counted), 2)
-            tot_reb = round(sum(r["curr_rebate"] for r in counted), 2)
+            # Sum-safe TOTAL: counts each _SR group once (rollup rows only)
+            # AND skips a row's qty/amt when its (region, bde, sold_to) also
+            # has a primary (BASE/SR) row.  The secondary HQ/VR/IT/WTY rows
+            # cover the same underlying sales as the primary, so summing
+            # them too inflates the total — same rule the screen and the
+            # region/BDE roll-ups already apply.  Rebate stays a straight
+            # sum because each rebate is earned independently.
+            SECONDARY_SCOPES = {"HQ", "VR", "IT", "WTY"}
+            scopes_by_group = {}
+            for r in rows:
+                if not r.get("rollup", True): continue
+                k = (r.get("region") or "", r.get("bde") or "", r.get("sold_to") or "")
+                scopes_by_group.setdefault(k, set()).add(r.get("scope") or "BASE")
+            tot_qty = tot_amt = tot_reb = 0.0
+            for r in rows:
+                if not r.get("rollup", True): continue
+                k = (r.get("region") or "", r.get("bde") or "", r.get("sold_to") or "")
+                has_primary = any(s not in SECONDARY_SCOPES for s in scopes_by_group.get(k, ()))
+                is_secondary = (r.get("scope") or "BASE") in SECONDARY_SCOPES
+                if not (has_primary and is_secondary):
+                    tot_qty += r["actual_qty"]
+                    tot_amt += r["actual_amt"]
+                tot_reb += r["curr_rebate"]
+            tot_qty = round(tot_qty, 2)
+            tot_amt = round(tot_amt, 2)
+            tot_reb = round(tot_reb, 2)
             ws.append([])
             total_row = ["TOTAL (group dups excluded)", "", "", "", "", "", "", "", "",
                          tot_qty, tot_amt, "", "", "", "", tot_reb, ""]
