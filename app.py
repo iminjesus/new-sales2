@@ -8682,10 +8682,7 @@ def claim_internal_reply(cid):
 @app.get("/api/claim/qr/<ship_to>")
 def claim_qr_png(ship_to):
     """Render a PNG QR code that encodes /claim/<ship_to>.  The image
-    is what the printable card/grid pages embed via <img src>.  When a
-    static/img/hankook_logo.png file exists it gets composed onto the
-    centre — error correction is raised to H so the QR stays scannable
-    with a logo covering ~20% of the area."""
+    is what the printable card/grid pages embed via <img src>."""
     try:
         import qrcode  # type: ignore
     except ImportError:
@@ -8693,44 +8690,13 @@ def claim_qr_png(ship_to):
     from io import BytesIO
     from flask import send_file
     url = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{ship_to}"
-    logo_path = os.path.join(BASE_DIR, "static", "img", "hankook_logo.png")
-    has_logo  = os.path.isfile(logo_path)
     qr  = qrcode.QRCode(
         version=None,
-        # H = 30% redundancy, recommended when a logo overlay is drawn
-        # on the centre of the QR.  M (15%) is plenty for plain QRs.
-        error_correction=(qrcode.constants.ERROR_CORRECT_H if has_logo
-                          else qrcode.constants.ERROR_CORRECT_M),
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
         box_size=10, border=2,
     )
     qr.add_data(url); qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white").convert("RGBA")
-    if has_logo:
-        try:
-            from PIL import Image
-            logo = Image.open(logo_path).convert("RGBA")
-            qw, qh = img.size
-            # Logo covers ~20% of the QR's width — well inside what the
-            # H error-correction can tolerate.  Aspect ratio preserved.
-            target_w = int(qw * 0.22)
-            ratio    = target_w / logo.width
-            target_h = int(logo.height * ratio)
-            logo = logo.resize((target_w, target_h), Image.LANCZOS)
-            # White rounded pad behind the logo so it reads on top of the
-            # QR's high-contrast pattern.
-            pad   = 10
-            pad_box = Image.new("RGBA",
-                                (target_w + pad * 2, target_h + pad * 2),
-                                (255, 255, 255, 255))
-            pad_x = (qw - pad_box.width)  // 2
-            pad_y = (qh - pad_box.height) // 2
-            img.alpha_composite(pad_box, (pad_x, pad_y))
-            img.alpha_composite(logo, ((qw - target_w) // 2,
-                                      (qh - target_h) // 2))
-        except Exception as e:
-            # Logo overlay is decorative — if anything goes wrong fall
-            # back silently to the plain QR.
-            print(f"[claim_qr_png] logo overlay skipped: {e}")
+    img = qr.make_image(fill_color="black", back_color="white")
     buf = BytesIO(); img.save(buf, format="PNG"); buf.seek(0)
     resp = send_file(buf, mimetype="image/png",
                      download_name=f"claim_qr_{ship_to}.png")

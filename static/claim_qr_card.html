@@ -69,6 +69,9 @@ function esc(s){
     const url = `${s.portal_url || location.origin}/claim/${s.ship_to}`;
     stage.innerHTML = `
       <div class="card">
+        <img src="/static/img/hankook_logo.png" alt=""
+             style="max-height:14mm;max-width:50mm;object-fit:contain;margin-bottom:3mm;"
+             onerror="this.style.display='none'">
         <div class="brand">HANKOOK AUSTRALIA</div>
         <div class="title">Tyre Claim Form</div>
         <div class="qr-wrap">
