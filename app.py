@@ -6107,7 +6107,7 @@ def api_rebate_data():
             hdr = ["Region", "BDE", "Sold-To", "Sold-To Name", "Ship-To",
                    "Ship-To Name", "Brand", "Type", "Structure", "Qty",
                    "Amount", "Rate %", "Next %", "Need Qty", "Need Amt",
-                   "Rebate", "In Total"]
+                   "Rebate"]
             ws.append(hdr)
             for cell in ws[1]:
                 cell.font = Font(bold=True, color="FFFFFF")
@@ -6123,15 +6123,16 @@ def api_rebate_data():
                     r["next_rate"]   if r["next_rate"]   is not None else "",
                     r["needed_qty"]  if r["needed_qty"]  is not None else "",
                     r["needed_amt"]  if r["needed_amt"]  is not None else "",
-                    r["curr_rebate"], "Y" if r.get("rollup", True) else "N",
+                    r["curr_rebate"],
                 ])
-            # Sum-safe TOTAL: counts each _SR group once (rollup rows only)
-            # AND skips a row's qty/amt when its (region, bde, sold_to) also
-            # has a primary (BASE/SR) row.  The secondary HQ/VR/IT/WTY rows
-            # cover the same underlying sales as the primary, so summing
-            # them too inflates the total — same rule the screen and the
-            # region/BDE roll-ups already apply.  Rebate stays a straight
-            # sum because each rebate is earned independently.
+            # Sum-safe TOTAL: matches the screen's Grand Total exactly by
+            # applying the same two rules used there:
+            #   1. rollup=False rows are display-only duplicates of an _SR
+            #      group, so they're excluded entirely.
+            #   2. Secondary HQ/VR/IT/WTY rows cover the same underlying
+            #      sales as the primary (BASE/SR) rows on the same group,
+            #      so their qty/amt is excluded when a primary row exists.
+            # Rebate stays a straight sum — each rebate is earned independently.
             SECONDARY_SCOPES = {"HQ", "VR", "IT", "WTY"}
             scopes_by_group = {}
             for r in rows:
@@ -6152,8 +6153,8 @@ def api_rebate_data():
             tot_amt = round(tot_amt, 2)
             tot_reb = round(tot_reb, 2)
             ws.append([])
-            total_row = ["TOTAL (group dups excluded)", "", "", "", "", "", "", "", "",
-                         tot_qty, tot_amt, "", "", "", "", tot_reb, ""]
+            total_row = ["TOTAL", "", "", "", "", "", "", "", "",
+                         tot_qty, tot_amt, "", "", "", "", tot_reb]
             ws.append(total_row)
             for cell in ws[ws.max_row]:
                 cell.font = Font(bold=True)
