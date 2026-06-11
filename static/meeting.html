@@ -1028,6 +1028,30 @@ async function loadRecent(){
   _recentRows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
   if (!Array.isArray(_recentRows)) _recentRows = [];
   renderRecentRows();
+  // Pre-fill the form's Met person from the shop's most recent log
+  // (so the BDE doesn't have to retype "Nick Manager" every time they
+  // visit the same store).  Only writes when the field is empty so we
+  // never clobber what the user is currently typing.
+  _autofillMetPerson();
+}
+
+function _autofillMetPerson(){
+  const fMet = document.getElementById("fMet");
+  if (!fMet || (fMet.value || "").trim() !== "") return;
+  if (!_selectedShop || !_selectedShop.ship_to) return;
+  // _recentRows is sorted by visit_date / created_at DESC inside each
+  // (bde, shop, purpose) group — scan in DOM order and grab the first
+  // matching shop with a non-empty met_person.  Falls back to scanning
+  // by created_at if rows for the same ship_to are interleaved.
+  const ship = String(_selectedShop.ship_to);
+  let best = null;
+  for (const r of _recentRows){
+    if (String(r.ship_to || "") !== ship) continue;
+    const m = (r.met_person || "").trim();
+    if (!m) continue;
+    if (!best || (r.created_at || "") > (best.created_at || "")) best = r;
+  }
+  if (best) fMet.value = best.met_person;
 }
 
 function renderRecentRows(){
@@ -1576,10 +1600,11 @@ fForm.addEventListener("submit", async (e) => {
     }
     fMsg.textContent = `Saved (#${j.id})`;
     fMsg.className = "ok";
-    // Reset writable fields, keep BDE selection.
+    // Reset writable fields, keep BDE selection.  Met person is left
+    // alone — it carries to the next visit so the BDE doesn't have to
+    // retype the same contact at the same shop.
     document.getElementById("fNotes").value    = "";
     document.getElementById("fNext").value     = "";
-    document.getElementById("fMet").value      = "";
     document.getElementById("fFeedback").value = "";
     document.getElementById("fPrep").value     = "";
     document.getElementById("fPhotos").value   = "";
