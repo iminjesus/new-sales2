@@ -91,7 +91,6 @@ function cardHtml(s, baseUrl){
       <img src="/static/img/hankook_logo.png" alt=""
            style="max-height:6mm;max-width:25mm;object-fit:contain;margin-bottom:1mm;"
            onerror="this.style.display='none'">
-      <div class="brand">HANKOOK AUSTRALIA</div>
       <div class="title">Tyre Claim Form</div>
       <div class="qr"><img src="/api/claim/qr/${encodeURIComponent(s.ship_to)}" alt=""></div>
       <div class="shop-name">${esc(s.ship_to_name || s.ship_to)}</div>
