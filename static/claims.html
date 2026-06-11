@@ -141,6 +141,9 @@ h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
         <button data-st="VIC">VIC</button>
         <button data-st="WA">WA</button>
       </div>
+      <select id="bdeSel" title="Filter by BDE — narrows to claims for shops they manage">
+        <option value="">All BDEs</option>
+      </select>
       <input id="q" type="text" placeholder="Search shop / customer / contact…">
     </div>
     <div class="list" id="list"></div>
@@ -155,7 +158,7 @@ h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
 <script>
 const list   = document.getElementById("list");
 const detail = document.getElementById("detail");
-const filters = { status: "", state: "", q: "" };
+const filters = { status: "", state: "", bde: "", q: "" };
 let _claims = [], _selectedId = null, _statuses = [];
 
 function esc(s){
@@ -178,12 +181,14 @@ async function loadList(){
   const qs = new URLSearchParams();
   if (filters.status) qs.set("status", filters.status);
   if (filters.state)  qs.set("state", filters.state);
+  if (filters.bde)    qs.set("bde",   filters.bde);
   if (filters.q)      qs.set("q", filters.q);
   list.innerHTML = `<div style="color:#9ca3af;padding:10px;font-size:11px;">Loading…</div>`;
   try {
     const j = await fetchJSON("/api/claims?" + qs.toString());
     _claims = j.claims || [];
     _statuses = j.statuses || [];
+    refreshBdeOptions(j.bdes || [], filters.bde);
     renderList();
     if (_selectedId && _claims.some(c => c.id === _selectedId)){
       loadDetail(_selectedId);
@@ -191,6 +196,18 @@ async function loadList(){
   } catch (e){
     list.innerHTML = `<div style="color:#dc2626;padding:10px;font-size:11px;">${esc(e.message)}</div>`;
   }
+}
+// Keep the BDE dropdown narrowed to whoever actually serves the
+// current State — picking a State first refreshes this list on the
+// next loadList() and any out-of-scope previous pick is dropped.
+function refreshBdeOptions(bdes, currentVal){
+  const sel = document.getElementById("bdeSel");
+  if (!sel) return;
+  const keep = currentVal && bdes.includes(currentVal) ? currentVal : "";
+  sel.innerHTML = '<option value="">All BDEs</option>' +
+    bdes.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+  sel.value = keep;
+  if (filters.bde && !keep) filters.bde = "";
 }
 function renderList(){
   if (!_claims.length){
@@ -441,7 +458,15 @@ document.getElementById("statusSeg").addEventListener("click", (e) => {
 document.getElementById("stateSeg").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   filters.state = b.dataset.st;
+  // BDE list depends on the selected State, so drop any current pick;
+  // refreshBdeOptions() will repopulate it from the next response.
+  filters.bde = "";
+  document.getElementById("bdeSel").value = "";
   [...e.currentTarget.children].forEach(x => x.classList.toggle("active", x === b));
+  loadList();
+});
+document.getElementById("bdeSel").addEventListener("change", (e) => {
+  filters.bde = e.target.value;
   loadList();
 });
 let _qTimer = null;

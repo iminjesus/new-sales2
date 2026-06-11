@@ -8412,9 +8412,10 @@ def claims_page():
 
 @app.get("/api/claims")
 def claims_list():
-    """Internal: list claims with optional filters (status, state, BDE)."""
+    """Internal: list claims with optional filters (status, state, BDE, search)."""
     status = (request.args.get("status") or "").strip()
     state  = (request.args.get("state")  or "").strip().upper()
+    bde    = (request.args.get("bde")    or "").strip()
     q      = (request.args.get("q")      or "").strip()
     wh = []
     params = []
@@ -8441,20 +8442,27 @@ def claims_list():
             LIMIT 500
         """, tuple(params))
         rows = cur.fetchall()
-        # Optional state filter via customer master
-        if state and state in ("NSW","QLD","VIC","WA","SA","TAS"):
+        # State + BDE filters apply via the customer master so a single
+        # join covers both — narrows the visible claims to those whose
+        # shop matches the chosen scope.
+        if (state and state in ("NSW","QLD","VIC","WA","SA","TAS")) or bde:
             ships = [r["ship_to"] for r in rows]
             keep = set()
             if ships:
                 ph = ",".join(["%s"] * len(ships))
                 cur.execute(f"""
-                    SELECT DISTINCT ship_to, bde_state FROM customer
+                    SELECT DISTINCT ship_to, bde_state, salesman_name
+                    FROM customer
                     WHERE ship_to IN ({ph})
                 """, tuple(ships))
-                for s in cur.fetchall():
-                    st = STATE_REMAP.get(s.get("bde_state"), s.get("bde_state"))
-                    if st == state:
-                        keep.add(s["ship_to"])
+                cust_rows = cur.fetchall()
+                for s in cust_rows:
+                    if state:
+                        st = STATE_REMAP.get(s.get("bde_state"), s.get("bde_state"))
+                        if st != state: continue
+                    if bde and (s.get("salesman_name") or "").strip().upper() != bde.upper():
+                        continue
+                    keep.add(s["ship_to"])
             rows = [r for r in rows if r["ship_to"] in keep]
         for r in rows:
             if r.get("created_at"):
@@ -8462,8 +8470,25 @@ def claims_list():
             if r.get("resolved_at"):
                 r["resolved_at"] = r["resolved_at"].strftime("%Y-%m-%d %H:%M")
             r["photo_paths"] = r["photo_paths"].split(",") if r["photo_paths"] else []
+        # BDE list for the filter dropdown — narrowed by state when set,
+        # so the picker can't include BDEs outside the current scope.
+        bde_wh = ["salesman_name IS NOT NULL", "TRIM(salesman_name) <> ''"]
+        bde_params = []
+        if state and state in ("NSW","QLD","VIC","WA","SA","TAS"):
+            bde_wh.append("bde_state = %s"); bde_params.append(state)
+        cur.execute(f"""
+            SELECT DISTINCT TRIM(salesman_name) AS name
+            FROM customer
+            WHERE {' AND '.join(bde_wh)}
+            ORDER BY name
+        """, tuple(bde_params))
+        bdes = [r["name"] for r in cur.fetchall() if r.get("name")]
         cur.close(); conn.close()
-        return jsonify({"claims": rows, "statuses": list(CLAIM_STATUSES)})
+        return jsonify({
+            "claims":   rows,
+            "statuses": list(CLAIM_STATUSES),
+            "bdes":     bdes,
+        })
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
