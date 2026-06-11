@@ -5679,7 +5679,11 @@ def api_rebate_data():
             """From the structure name tokens decide which sales to count:
               token0 brand : HK | LF | ALL(=HK+LF)
               token1 line  : PCLT | TBR | ALL(=all lines)
-            Returns (brands_list, line_filter_or_None, brand_key_for_display).
+            A 'NOLFT' token anywhere in the rest of the name flags an
+            exclusion ('all selected sales MINUS LF/TBR') for the rare
+            case where the basis should ignore that one (brand, line)
+            cell.  Other tokens stay free-form (used by scope suffixes).
+            Returns (brands_list, line_filter_or_None, brand_key_for_display, excludes).
             """
             tk = struct_name.split("_")
             bt = (tk[0] if len(tk) > 0 else "ALL").upper()
@@ -5687,10 +5691,14 @@ def api_rebate_data():
             brands    = ["HK", "LF"] if bt == "ALL" else [bt]
             line_filt = lt if lt in ("PCLT", "TBR") else None
             brand_key = "TTL" if bt == "ALL" else bt
-            return brands, line_filt, brand_key
+            excludes  = set()
+            if "NOLFT" in [t.upper() for t in tk[2:]]:
+                excludes.add(("LF", "TBR"))
+            return brands, line_filt, brand_key, excludes
 
-        def _sold_to_qa(st_id, brand_list, line):
-            """(qty, amt) for one sold_to summed over the given brands/line."""
+        def _sold_to_qa(st_id, brand_list, line, excludes=()):
+            """(qty, amt) for one sold_to summed over the given brands/line,
+            subtracting any (brand, line) cells flagged as excluded."""
             q = a = 0.0
             for br in brand_list:
                 if line:
@@ -5698,6 +5706,14 @@ def api_rebate_data():
                 else:
                     d = sold_brand_tot.get((st_id, br), {"qty": 0.0, "amt": 0.0})
                 q += d["qty"]; a += d["amt"]
+                for (eb, el) in excludes:
+                    if eb != br: continue
+                    if line == el:
+                        # Whole bucket already matches the excluded cell.
+                        q -= d["qty"]; a -= d["amt"]
+                    elif line is None:
+                        de = sold_brand_line_tot.get((st_id, eb, el), {"qty": 0.0, "amt": 0.0})
+                        q -= de["qty"]; a -= de["amt"]
             return q, a
 
 
@@ -5717,7 +5733,7 @@ def api_rebate_data():
             is_ship_to_struct = (scope == "SR")
             is_secondary      = scope in ("HQ", "VR", "IT", "WTY")
 
-            for brands, line_filt, brand_key in [_rebate_brand_line(struct)]:
+            for brands, line_filt, brand_key, excludes in [_rebate_brand_line(struct)]:
 
                 # ship_tos with sales for this structure's brand(s) and line.
                 # line_filt PCLT/TBR -> only that line (material prefix 1,2=PCLT
@@ -5769,8 +5785,9 @@ def api_rebate_data():
                 if is_secondary:
                     badges = badges + [scope]
 
-                def _get_sales(sh, _brands=brands, _line=line_filt):
-                    """(qty, amt) summed over this structure's brand(s)/line."""
+                def _get_sales(sh, _brands=brands, _line=line_filt, _excl=excludes):
+                    """(qty, amt) summed over this structure's brand(s)/line,
+                    minus any (brand, line) cells flagged as excluded."""
                     q = a = 0.0
                     for _br in _brands:
                         if _line:
@@ -5778,6 +5795,13 @@ def api_rebate_data():
                         else:
                             d = ship_sales.get((sold_to, sh, _br), {"qty": 0.0, "amt": 0.0})
                         q += d["qty"]; a += d["amt"]
+                        for (eb, el) in _excl:
+                            if eb != _br: continue
+                            if _line == el:
+                                q -= d["qty"]; a -= d["amt"]
+                            elif _line is None:
+                                de = ship_sales_line.get((sold_to, sh, eb, el), {"qty": 0.0, "amt": 0.0})
+                                q -= de["qty"]; a -= de["amt"]
                     return q, a
 
                 if is_ship_to_struct:
@@ -5844,7 +5868,7 @@ def api_rebate_data():
                     if grp_label:
                         bq = ba = 0.0
                         for _gs in grp_to_solds.get((struct, grp_label), {sold_to}):
-                            _q, _a = _sold_to_qa(_gs, brands, line_filt)
+                            _q, _a = _sold_to_qa(_gs, brands, line_filt, excludes)
                             bq += _q; ba += _a
                     else:
                         bq, ba = tot_q, tot_a
@@ -5898,7 +5922,7 @@ def api_rebate_data():
                     if grp_label:
                         bq = ba = 0.0
                         for _gs in grp_to_solds.get((struct, grp_label), {sold_to}):
-                            _q, _a = _sold_to_qa(_gs, brands, line_filt)
+                            _q, _a = _sold_to_qa(_gs, brands, line_filt, excludes)
                             bq += _q; ba += _a
                     else:
                         bq, ba = full_q, full_a
