@@ -832,22 +832,30 @@ def debug_salesman():
 
 
 
+def _hostname(url):
+    from urllib.parse import urlparse
+    try:
+        return (urlparse(url or "").hostname or "").lower()
+    except Exception:
+        return ""
+
 def _claim_portal_host():
     """Hostname of the customer-facing portal so the root route can
     decide whether to serve the Sales Dashboard or the claim form."""
-    from urllib.parse import urlparse
-    try:
-        return (urlparse(CLAIM_PORTAL_URL or "").hostname or "").lower()
-    except Exception:
-        return ""
+    return _hostname(CLAIM_PORTAL_URL)
 
 @app.route("/")
 def index():
     portal_host = _claim_portal_host()
-    # When the request hits the customer-facing subdomain (claim.*),
-    # serve the claim form's landing UI instead of the internal Sales
-    # Dashboard.  Falls through to index.html for the admin domain.
-    if portal_host and request.host.split(":")[0].lower() == portal_host:
+    dash_host   = _hostname(DASHBOARD_URL)
+    # Only swap to the claim form when the portal subdomain is genuinely
+    # distinct from the admin dashboard's hostname.  When both env vars
+    # point at the same domain (e.g. customers reach the same
+    # sales.hkaudashboard.com via a Cloudflare Access bypass on /claim/*),
+    # the host check can't tell them apart and would otherwise shadow
+    # the Sales Dashboard at /.
+    if portal_host and portal_host != dash_host \
+       and request.host.split(":")[0].lower() == portal_host:
         return send_from_directory("static", "claim.html")
     return app.send_static_file("index.html")
 
