@@ -92,6 +92,7 @@ async function loadSalesMap() {
   const purposeMode = (window._purposeFilter == null ? "" : window._purposeFilter);
   const passesPurpose = (shipTo) => {
     if (!purposeMode) return true;                 // no filter
+    if (purposeMode === "ALL") return loggedSet.has(shipTo);   // any log
     const set = purposeSets[purposeMode];
     return set ? set.has(shipTo) : false;
   };
