@@ -522,6 +522,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         </div>
 
         <div class="field col-full">
+          <label>Met person contact <span style="color:#9ca3af;font-weight:400;">(optional — phone or email, remembered for next time)</span></label>
+          <input id="fMetContact" type="text" maxlength="80" placeholder="e.g. 0412 345 678 or nick@store.com">
+        </div>
+
+        <div class="field col-full">
           <label>Meeting notes
             <span style="color:#9ca3af;font-weight:400;">(required for an actual visit log · skip if you're only saving Meeting Preparation)</span>
           </label>
@@ -1036,22 +1041,25 @@ async function loadRecent(){
 }
 
 function _autofillMetPerson(){
-  const fMet = document.getElementById("fMet");
-  if (!fMet || (fMet.value || "").trim() !== "") return;
   if (!_selectedShop || !_selectedShop.ship_to) return;
-  // _recentRows is sorted by visit_date / created_at DESC inside each
-  // (bde, shop, purpose) group — scan in DOM order and grab the first
-  // matching shop with a non-empty met_person.  Falls back to scanning
-  // by created_at if rows for the same ship_to are interleaved.
   const ship = String(_selectedShop.ship_to);
-  let best = null;
-  for (const r of _recentRows){
-    if (String(r.ship_to || "") !== ship) continue;
-    const m = (r.met_person || "").trim();
-    if (!m) continue;
-    if (!best || (r.created_at || "") > (best.created_at || "")) best = r;
-  }
-  if (best) fMet.value = best.met_person;
+  // Find the latest log for this shop that filled the field we're
+  // trying to autofill (met_person and met_person_contact each pick
+  // their own most-recent contributor independently).
+  const latest = (key) => {
+    let best = null;
+    for (const r of _recentRows){
+      if (String(r.ship_to || "") !== ship) continue;
+      const v = (r[key] || "").trim();
+      if (!v) continue;
+      if (!best || (r.created_at || "") > (best.created_at || "")) best = r;
+    }
+    return best ? best[key] : "";
+  };
+  const fMet     = document.getElementById("fMet");
+  const fContact = document.getElementById("fMetContact");
+  if (fMet     && (fMet.value     || "").trim() === "") fMet.value     = latest("met_person")        || fMet.value;
+  if (fContact && (fContact.value || "").trim() === "") fContact.value = latest("met_person_contact") || fContact.value;
 }
 
 function renderRecentRows(){
@@ -1202,8 +1210,19 @@ function renderRecentRows(){
     // Met person + contact (phone) — surface so the BDE can reach out
     // again without digging through the customer master.  Phone falls
     // back to the prospect record for POT-<id> ship_tos.
+    // tel: link only when the contact looks like a phone number (digits
+    // + the usual separators); otherwise treat as email-or-text.
+    const _telHref = (s) => /^[\s+()\-.0-9]{6,}$/.test(s) ? `tel:${s.replace(/\s+/g, "")}` :
+                            /^[^@]+@[^@]+$/.test(s) ? `mailto:${s}` : "";
     const metBits = [];
     if (r.met_person)      metBits.push(`<b>${escapeHtml(r.met_person)}</b>`);
+    if (r.met_person_contact){
+      const href = _telHref(r.met_person_contact.trim());
+      const icon = href.startsWith("tel:") ? "📞" : (href.startsWith("mailto:") ? "✉" : "👤");
+      metBits.push(href
+        ? `<a href="${href}" style="color:#2563eb;text-decoration:none;">${icon} ${escapeHtml(r.met_person_contact)}</a>`
+        : `${icon} ${escapeHtml(r.met_person_contact)}`);
+    }
     if (r.contact_person && r.contact_person !== r.met_person)
                             metBits.push(`<span style="color:#6b7280;">primary: ${escapeHtml(r.contact_person)}</span>`);
     if (r.contact_phone)   metBits.push(`<a href="tel:${escapeHtml(r.contact_phone)}" style="color:#2563eb;text-decoration:none;">📞 ${escapeHtml(r.contact_phone)}</a>`);
@@ -1580,7 +1599,8 @@ fForm.addEventListener("submit", async (e) => {
   fd.append("sold_to",       _selectedShop.sold_to_name || _selectedShop.sold_to || "");
   fd.append("ship_to",       _selectedShop.ship_to);
   fd.append("visit_purpose", purposeEl ? purposeEl.value : "");
-  fd.append("met_person",    document.getElementById("fMet").value);
+  fd.append("met_person",         document.getElementById("fMet").value);
+  fd.append("met_person_contact", document.getElementById("fMetContact").value);
   fd.append("notes",         document.getElementById("fNotes").value);
   fd.append("next_action",   document.getElementById("fNext").value);
   fd.append("feedback",    document.getElementById("fFeedback").value);

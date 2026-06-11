@@ -7008,9 +7008,10 @@ def _ensure_meeting_log_table():
             ("visit_purpose",  "VARCHAR(40) NOT NULL DEFAULT ''",   "ship_to"),
             # Meeting Preparation note + the BDE who originally scheduled
             # the visit on the calendar (so feedback emails CC them).
-            ("prep_notes",     "TEXT",                              "feedback"),
-            ("plan_bde_email", "VARCHAR(120) NOT NULL DEFAULT ''",  "bde_email"),
-            ("plan_bde_name",  "VARCHAR(120) NOT NULL DEFAULT ''",  "plan_bde_email"),
+            ("prep_notes",         "TEXT",                              "feedback"),
+            ("plan_bde_email",     "VARCHAR(120) NOT NULL DEFAULT ''",  "bde_email"),
+            ("plan_bde_name",      "VARCHAR(120) NOT NULL DEFAULT ''",  "plan_bde_email"),
+            ("met_person_contact", "VARCHAR(80) NOT NULL DEFAULT ''",   "met_person"),
         ):
             try:
                 cur.execute(f"ALTER TABLE meeting_log "
@@ -7245,7 +7246,8 @@ def meeting_patch(mid):
     visit_purpose / visit_date."""
     body = request.get_json(silent=True) or {}
     allowed = ("notes", "next_action", "prep_notes",
-               "met_person", "visit_purpose", "visit_date")
+               "met_person", "met_person_contact",
+               "visit_purpose", "visit_date")
     updates = {k: (body[k] or "").strip() if isinstance(body[k], str) else body[k]
                for k in allowed if k in body}
     if "visit_purpose" in updates and updates["visit_purpose"] and \
@@ -7374,6 +7376,7 @@ def meeting_post():
         sold_in   = (request.form.get("sold_to")  or "").strip()
         ship_to   = (request.form.get("ship_to")  or "").strip()
         met       = (request.form.get("met_person") or "").strip()
+        met_contact = (request.form.get("met_person_contact") or "").strip()[:80]
         notes     = (request.form.get("notes") or "").strip()
         next_act  = (request.form.get("next_action") or "").strip()
         feedback  = (request.form.get("feedback") or "").strip()
@@ -7496,13 +7499,15 @@ def meeting_post():
                 (visit_date, bde_email, bde_name,
                  plan_bde_email, plan_bde_name,
                  sold_to, sold_to_name,
-                 ship_to, visit_purpose, met_person, notes, next_action,
+                 ship_to, visit_purpose, met_person, met_person_contact,
+                 notes, next_action,
                  feedback, prep_notes, photo_paths)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (visit_date_obj, bde_email, bde_name,
               plan_bde_email, plan_bde_name,
               sold_to, sold_to_name,
-              ship_to, purpose, met, notes, next_act,
+              ship_to, purpose, met, met_contact,
+              notes, next_act,
               feedback if feedback else None,
               prep if prep else None,
               ",".join(saved) if saved else None))
@@ -7886,7 +7891,8 @@ def meeting_list():
             SELECT m.id, m.created_at, m.visit_date,
                    m.bde_email, m.bde_name,
                    m.plan_bde_name, m.plan_bde_email,
-                   m.sold_to, m.ship_to, m.visit_purpose, m.met_person,
+                   m.sold_to, m.ship_to, m.visit_purpose,
+                   m.met_person, m.met_person_contact,
                    m.notes, m.next_action, m.feedback, m.prep_notes, m.photo_paths,
                    COALESCE(NULLIF(TRIM(c.ship_to_name),''), m.ship_to) AS ship_to_name,
                    COALESCE(NULLIF(TRIM(c.sold_to_name),''),
