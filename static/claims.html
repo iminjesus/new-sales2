@@ -301,9 +301,6 @@ function wireBubbleToggles(root){
 function renderDetail(c, thread){
   const photos = (c.photo_paths || []).filter(Boolean)
     .map(p => `<a href="${esc(p)}" target="_blank"><img src="${esc(p)}" alt=""></a>`).join("");
-  const statusOptions = _statuses.map(s =>
-    `<option value="${esc(s)}" ${s === c.status ? "selected" : ""}>${esc(s)}</option>`
-  ).join("");
   detail.innerHTML = `
     <div class="detail-head">
       <div>
@@ -312,10 +309,9 @@ function renderDetail(c, thread){
       </div>
       <div class="controls">
         ${statusPill(c.status || "New")}
-        <select id="statusSel">${statusOptions}</select>
         ${c.status === "Completed" ? "" : `
           <button type="button" id="markResolvedBtn"
-                  title="Mark this claim as fully resolved (sets status to Completed)"
+                  title="Close this claim — sets status to Completed"
                   style="font-size:11px;background:#16a34a;color:#fff;border:none;
                          border-radius:4px;padding:5px 10px;font-weight:700;cursor:pointer;">
             ✓ Mark as resolved
@@ -380,16 +376,6 @@ function renderDetail(c, thread){
       } catch (err){ alert("Update failed: " + err.message); }
     });
   }
-  document.getElementById("statusSel").addEventListener("change", async (e) => {
-    try {
-      await fetchJSON(`/api/claim/${c.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: e.target.value }),
-      });
-      loadList();
-    } catch (err){ alert("Update failed: " + err.message); }
-  });
   // Quick reply templates — populate the textarea with structured
   // boilerplate that the team can fine-tune before sending.
   const REPLY_TPL = {
