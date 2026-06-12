@@ -8124,7 +8124,8 @@ def meeting_ai_digest():
 # === CLAIM FEATURE START ===
 CLAIM_PHOTO_DIR = os.path.join(BASE_DIR, "static", "claim_photos")
 CLAIM_TYPES = ("Road Hazard Warranty",)
-CLAIM_STATUSES = ("New", "Reviewing", "Awaiting customer", "Resolved", "Rejected")
+CLAIM_STATUSES = ("New", "Reviewing", "Awaiting customer",
+                  "Completed", "Resolved", "Rejected")
 
 def _ensure_claim_tables():
     try:
@@ -8629,9 +8630,9 @@ def claim_update(cid):
         if s and s not in CLAIM_STATUSES:
             return jsonify({"error": "invalid status"}), 400
         fields["status"] = s
-        if s == "Resolved":
+        if s in ("Completed", "Resolved"):
             fields["resolved_at"] = datetime.now()
-        elif s != "Resolved":
+        else:
             fields["resolved_at"] = None
     if "assigned_to" in body:
         fields["assigned_to"] = (body["assigned_to"] or "").strip()[:120]
@@ -8675,6 +8676,13 @@ def claim_internal_reply(cid):
             VALUES (%s, 'internal', %s, %s, %s, %s, %s)
         """, (cid, name, email or "", category, text,
               ",".join(photos) if photos else None))
+        # Auto-transition: a claim sitting in 'New' jumps to 'Reviewing'
+        # the moment someone on our side replies, so the workflow
+        # statuses match what's actually happening without the manager
+        # having to flip the dropdown manually.
+        cur.execute(
+            "UPDATE claim_submission SET status = 'Reviewing' "
+            "WHERE id = %s AND status = 'New'", (cid,))
         cur.close(); conn.close()
         _claim_notify_reply(cid, "internal", name, text)
         return jsonify({"ok": True})
