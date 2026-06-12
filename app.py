@@ -8408,12 +8408,15 @@ def claim_create(ship_to):
     # stays index-aligned with raw_files.
     cats = [c.strip() for c in (request.form.get("photo_categories") or "").split(",")]
     raw_files = request.files.getlist("photos") or []
-    # Per-category minimums.  All 7 product slots are required, with
-    # Tread measurement needing 3 photos (one per groove).
+    # Per-category minimums.  Six single-photo slots, tread measurement
+    # requires at least 3 photos (one per groove), and proof of purchase
+    # (invoice) is also required.  'others' is intentionally absent —
+    # the slot exists for extras but doesn't block submission.
     REQUIRED_MIN = {
         "whole_tyre": 1, "tread": 1, "damaged": 1,
         "dot_code":   1, "dot_cut": 1, "serial_barcode": 1,
         "tread_measurement": 3,
+        "invoice": 1,
     }
     got_by_cat = {}
     for i, f in enumerate(raw_files):

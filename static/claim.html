@@ -334,55 +334,59 @@ async function renderHome(){
              claim.  Each input accepts camera capture or gallery upload
              (image or PDF).  Categories ride along as photo_categories. -->
         <div class="field">
-          <label>Product photos <span class="req">*</span> <span class="hint">(all 7 required — tap to take a photo or upload)</span></label>
+          <label>Product photos <span class="req">*</span> <span class="hint">(every slot accepts one or more files; tread measurement needs at least 3)</span></label>
           <div class="photo-grid">
             <label class="photo-slot">
               <span class="ps-label">📸 Whole tyre (sidewall)</span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="whole_tyre" required>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="whole_tyre" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 Tread</span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread" required>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 Damaged close-up</span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="damaged" required>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="damaged" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 DOT code</span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot_code" required>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot_code" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 DOT cut</span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot_cut" required>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="dot_cut" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
               <span class="ps-label">📸 Serial barcode</span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="serial_barcode" required>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="serial_barcode" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
             <label class="photo-slot">
-              <span class="ps-label">📸 Tread measurement <small>3 photos</small></span>
+              <span class="ps-label">📸 Tread measurement <small>at least 3</small></span>
               <input type="file" name="photos" accept="image/*,application/pdf" data-cat="tread_measurement" data-min="3" required multiple>
               <span class="ps-status">0 / 3 files — tap to capture or upload</span>
+            </label>
+            <label class="photo-slot">
+              <span class="ps-label">📸 Others <small>optional</small></span>
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="others" multiple>
+              <span class="ps-status">No file — tap to capture or upload</span>
             </label>
           </div>
         </div>
 
-        <!-- Proof of purchase — kept as its own section so it's not
-             confused with the product photos and so a customer who only
-             has the invoice can still see it as a separate thing. -->
+        <!-- Proof of purchase — its own section so it's not confused
+             with the product photos and easy to spot for the customer. -->
         <div class="field">
-          <label>Invoice / receipt <span class="hint">(optional — PDF or photo)</span></label>
+          <label>Invoice / receipt <span class="req">*</span> <span class="hint">(PDF or photo — one or more)</span></label>
           <div class="photo-grid">
             <label class="photo-slot invoice-slot">
               <span class="ps-label">🧾 Invoice or receipt <small>(proof of purchase)</small></span>
-              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="invoice">
+              <input type="file" name="photos" accept="image/*,application/pdf" data-cat="invoice" required multiple>
               <span class="ps-status">No file — tap to capture or upload</span>
             </label>
           </div>
@@ -425,17 +429,19 @@ async function renderHome(){
       const slot = inp.closest(".photo-slot");
       const stat = slot.querySelector(".ps-status");
       const got  = (inp.files && inp.files.length) || 0;
-      const min  = parseInt(inp.dataset.min || "1", 10);
+      const min  = parseInt(inp.dataset.min || (inp.hasAttribute("required") ? "1" : "0"), 10);
       const enough = got >= min;
-      slot.classList.toggle("filled", enough);
+      slot.classList.toggle("filled", got > 0 && enough);
       if (got === 0){
         stat.textContent = min > 1
           ? `0 / ${min} files — tap to capture or upload`
           : "No file — tap to capture or upload";
       } else if (min > 1){
         stat.textContent = `${got} / ${min} files${enough ? " ✓" : ""}`;
-      } else {
+      } else if (got === 1){
         stat.textContent = "✓ " + (inp.files[0].name || "Captured");
+      } else {
+        stat.textContent = `✓ ${got} files`;
       }
     });
   });
