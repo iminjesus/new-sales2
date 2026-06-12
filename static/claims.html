@@ -129,16 +129,20 @@ h2{font-size:13px;font-weight:700;color:#1e3a5f;margin:0 0 10px}
     <button class="btn" onclick="location.href='/price'">Price</button>
     <button class="btn" onclick="location.href='/meeting'">Meeting</button>
     <button class="btn active">Claims</button>
-    <a href="/claims/qr_bulk" style="margin-left:6px;font-size:11px;color:#cbd5e1;
-       text-decoration:none;border:1px solid #4b5563;border-radius:4px;
-       padding:4px 10px;font-weight:600;">🖨️ Bulk QR</a>
   </div>
 </header>
 
 <div class="layout">
   <!-- LEFT: filters + list -->
   <div class="panel">
-    <h2>Claims</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 10px;">
+      <h2 style="margin:0;">Claims</h2>
+      <a href="/claims/qr_bulk"
+         title="Open the printable bulk QR sheet — independent of any single claim"
+         style="font-size:11px;font-weight:700;color:#7c3aed;text-decoration:none;
+                background:#f5f3ff;border:1px solid #c4b5fd;border-radius:5px;
+                padding:5px 10px;">🖨️ Bulk QR</a>
+    </div>
     <div class="filters">
       <div class="seg" id="statusSeg">
         <button data-st="" class="active">All</button>
