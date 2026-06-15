@@ -546,6 +546,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
           <div id="selectedShop" class="selected-shop selected-shop-empty">
             <span class="ss-icon">📍</span>
             <span class="ss-text">No ship-to selected — pick one from the palette ←</span>
+            <button type="button" id="selectedShopBrief" title="Open Shop Briefing Card"
+              style="display:none;background:#2563eb;color:#fff;border:none;border-radius:5px;
+                     padding:3px 10px;font-size:11px;font-weight:700;cursor:pointer;
+                     margin-right:6px;">📋 Briefing</button>
             <button type="button" id="selectedShopClear" class="ss-clear" title="Clear" style="display:none;">×</button>
           </div>
           <input type="hidden" id="fSoldHidden">
@@ -941,6 +945,14 @@ function _setSelectedShop(row){
     if (clr) clr.style.display = "inline-block";
     document.getElementById("fSoldHidden").value = row.sold_to_name || row.sold_to || "";
     document.getElementById("fShipHidden").value = row.ship_to || "";
+    // Briefing pill — only show for real ship_tos (Potentials have no
+    // sales / rebate data behind them yet, so the briefing card would
+    // just be a placeholder).
+    const briefBtn = document.getElementById("selectedShopBrief");
+    if (briefBtn) {
+      const isPotShop = !!row.potential || (row.ship_to || "").startsWith("POT-");
+      briefBtn.style.display = isPotShop ? "none" : "inline-block";
+    }
   } else {
     box.classList.add("selected-shop-empty");
     box.classList.remove("selected-shop-set");
@@ -948,6 +960,8 @@ function _setSelectedShop(row){
     box.querySelector(".ss-text").textContent =
       "No ship-to selected — pick one from the palette ←";
     if (clr) clr.style.display = "none";
+    const briefBtn = document.getElementById("selectedShopBrief");
+    if (briefBtn) briefBtn.style.display = "none";
     document.getElementById("fSoldHidden").value = "";
     document.getElementById("fShipHidden").value = "";
   }
@@ -959,6 +973,15 @@ function _setSelectedShop(row){
 document.addEventListener("DOMContentLoaded", () => {
   const clr = document.getElementById("selectedShopClear");
   if (clr) clr.addEventListener("click", () => _setSelectedShop(null));
+  const briefBtn = document.getElementById("selectedShopBrief");
+  if (briefBtn) {
+    briefBtn.addEventListener("click", () => {
+      if (_selectedShop && _selectedShop.ship_to) {
+        openShopBriefing(_selectedShop.ship_to,
+                         _selectedShop.ship_to_name || "");
+      }
+    });
+  }
 
   // Make the "Selected shop" banner a drop target too so drag-and-drop
   // works for the form just like it does for the calendar.
