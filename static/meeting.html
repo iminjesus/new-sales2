@@ -257,6 +257,19 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .voice-status.err{color:#dc2626;font-weight:600}
 .voice-panel.unsupported .voice-btn{display:none}
 .voice-panel.unsupported .voice-hint{color:#9ca3af}
+.voice-preview{margin-top:8px;padding:8px 10px;background:#fff;
+  border:1px solid #bae6fd;border-radius:6px;font-size:11px}
+.voice-preview .vp-title{font-size:10px;font-weight:700;color:#0369a1;
+  text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+.voice-preview .vp-row{display:flex;gap:8px;padding:3px 0;border-bottom:1px solid #f1f5f9}
+.voice-preview .vp-row:last-child{border-bottom:none}
+.voice-preview .vp-key{flex:0 0 100px;font-weight:600;color:#475569;font-size:10px;
+  text-transform:uppercase;letter-spacing:.3px;padding-top:1px}
+.voice-preview .vp-val{flex:1;color:#111827;min-width:0;word-break:break-word}
+.voice-preview .vp-val.empty{color:#9ca3af;font-style:italic}
+.voice-preview .vp-val.skipped{color:#9ca3af}
+.voice-preview .vp-val.skipped::before{content:"⊘ kept your edit: ";font-style:italic}
+.voice-preview .vp-val.filled::before{content:"✓ ";color:#16a34a;font-weight:700}
 
 /* ── Purpose of visit — radio-button card group ─────────── */
 .purpose-cards{display:flex;gap:6px;flex-wrap:wrap}
@@ -481,26 +494,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       Signed in as <b id="bdeIdEmail">…</b>
     </div>
 
-    <!-- ── Voice → AI auto-fill (Web Speech transcription, Claude extraction) ── -->
-    <div id="voicePanel" class="voice-panel">
-      <div class="voice-row">
-        <button type="button" id="voiceBtn" class="voice-btn" title="Tap and speak — AI fills the form">
-          <span class="voice-ico">🎙</span>
-          <span class="voice-label">Quick log by voice</span>
-        </button>
-        <span id="voiceHint" class="voice-hint">Tap, speak 20-30 sec, AI fills the form below</span>
-        <span id="voiceTimer" class="voice-timer" style="display:none;">0:00</span>
-      </div>
-      <div id="voiceBody" class="voice-body" style="display:none;">
-        <textarea id="voiceTranscript"
-          placeholder="Transcript appears here — edit if needed, then Auto-fill"></textarea>
-        <div class="voice-actions">
-          <button type="button" id="voiceFillBtn" class="voice-fill">✨ Auto-fill form</button>
-          <button type="button" id="voiceClearBtn" class="voice-clear">Discard</button>
-          <span id="voiceStatus" class="voice-status"></span>
-        </div>
-      </div>
-    </div>
+    <!-- ── Voice → AI auto-fill panel (moved into the form, just above
+         Meeting notes so the visual flow is obvious: speak → notes appear
+         here, with Met person / Contact / Purpose / Next action filled
+         in alongside).  Lives inside the form's .grid so it spans the
+         full width like the other col-full fields. -->
 
     <form id="meetingForm">
       <div class="grid">
@@ -579,6 +577,37 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         <div class="field col-full">
           <label>Met person contact <span style="color:#9ca3af;font-weight:400;">(optional — phone or email, remembered for next time)</span></label>
           <input id="fMetContact" type="text" maxlength="80" placeholder="e.g. 0412 345 678 or nick@store.com">
+        </div>
+
+        <!-- Voice → AI auto-fill panel.  Lives directly above Meeting
+             notes (the biggest field it populates) so the visual flow
+             from "speak" to "notes appear" is obvious.  It also fills
+             Met person / Met person contact / Purpose / Next action,
+             listed in the Extracted-fields preview below. -->
+        <div class="field col-full">
+          <div id="voicePanel" class="voice-panel">
+            <div class="voice-row">
+              <button type="button" id="voiceBtn" class="voice-btn" title="Tap and speak — AI fills the form">
+                <span class="voice-ico">🎙</span>
+                <span class="voice-label">Quick log by voice</span>
+              </button>
+              <span id="voiceHint" class="voice-hint">Tap, speak 20-30 sec, AI fills Notes + Met person + Contact + Purpose + Next action</span>
+              <span id="voiceTimer" class="voice-timer" style="display:none;">0:00</span>
+            </div>
+            <div id="voiceBody" class="voice-body" style="display:none;">
+              <textarea id="voiceTranscript"
+                placeholder="Transcript appears here — edit if needed, then Auto-fill"></textarea>
+              <div class="voice-actions">
+                <button type="button" id="voiceFillBtn" class="voice-fill">✨ Auto-fill form</button>
+                <button type="button" id="voiceClearBtn" class="voice-clear">Discard</button>
+                <span id="voiceStatus" class="voice-status"></span>
+              </div>
+              <!-- Per-field preview of what Claude extracted, so the BDE
+                   can see at a glance what landed in each field without
+                   having to scroll the form or hit Submit. -->
+              <div id="voicePreview" class="voice-preview" style="display:none;"></div>
+            </div>
+          </div>
         </div>
 
         <div class="field col-full">
@@ -2729,6 +2758,8 @@ function _activeRightTab(){
     body.style.display = "none";
     btn.querySelector(".voice-label").textContent = "Quick log by voice";
     _setStatus("");
+    const pv = document.getElementById("voicePreview");
+    if (pv) { pv.style.display = "none"; pv.innerHTML = ""; }
   });
 
   // Only fill a field if the user hasn't already typed something into
@@ -2738,6 +2769,40 @@ function _activeRightTab(){
     if ((el.value || "").trim()) return false;
     el.value = v;
     return true;
+  }
+
+  // Render a per-field preview so the BDE can see exactly what landed
+  // in each form field without scrolling or having to hit Submit to
+  // verify.  outcomes:
+  //   filled  → AI extracted a value and we wrote it
+  //   skipped → AI had a value but the form field was already filled,
+  //             so we kept the BDE's edit
+  //   empty   → AI returned nothing for this field
+  function _renderPreview(entries){
+    const box = document.getElementById("voicePreview");
+    if (!box) return;
+    const html = entries.map(({label, value, status}) => {
+      const cls = status === "filled" ? "filled" : (status === "skipped" ? "skipped" : "empty");
+      const shown = value || "(none)";
+      return `<div class="vp-row">
+        <div class="vp-key">${label}</div>
+        <div class="vp-val ${cls}">${shown.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</div>
+      </div>`;
+    }).join("");
+    box.innerHTML = `<div class="vp-title">Extracted — already written into the form below ↓</div>${html}`;
+    box.style.display = "";
+  }
+
+  // Try writing a value into a form field.  Returns one of:
+  //   "filled"  — we wrote it (field was previously blank)
+  //   "skipped" — field already had user content, we left it alone
+  //   "empty"   — AI gave us nothing to write
+  function _tryFill(el, v){
+    if (!el)            return "empty";
+    if (!v)             return "empty";
+    if ((el.value || "").trim()) return "skipped";
+    el.value = v;
+    return "filled";
   }
 
   fillBtn.addEventListener("click", async () => {
@@ -2757,24 +2822,45 @@ function _activeRightTab(){
         _setStatus("Failed: " + (j.error || ("HTTP " + r.status)), "err");
         return;
       }
-      const filled = [];
-      if (_fillIfBlank(document.getElementById("fNotes"),       j.notes))              filled.push("notes");
-      if (_fillIfBlank(document.getElementById("fMet"),         j.met_person))         filled.push("met person");
-      if (_fillIfBlank(document.getElementById("fMetContact"),  j.met_person_contact)) filled.push("contact");
-      if (_fillIfBlank(document.getElementById("fNext"),        j.next_action))        filled.push("next action");
+      // Fallback: if Claude couldn't extract a clean notes summary
+      // (e.g. the speaker only said "hello can you hear me" or the
+      // transcript is too short to summarise), drop the raw transcript
+      // into notes so something always lands there for the BDE to edit.
+      const notesValue = (j.notes && j.notes.trim()) ? j.notes : text;
+
+      const notesOutcome = _tryFill(document.getElementById("fNotes"),       notesValue);
+      const metOutcome   = _tryFill(document.getElementById("fMet"),         j.met_person);
+      const cOutcome     = _tryFill(document.getElementById("fMetContact"),  j.met_person_contact);
+      const nextOutcome  = _tryFill(document.getElementById("fNext"),        j.next_action);
+
       // Purpose is a radio group — set only if nothing is currently checked.
+      let purposeOutcome = "empty";
       if (j.visit_purpose) {
         const current = document.querySelector('input[name="visit_purpose"]:checked');
-        if (!current) {
+        if (current) {
+          purposeOutcome = "skipped";
+        } else {
           const radios = document.querySelectorAll('input[name="visit_purpose"]');
           for (const r of radios) {
-            if (r.value === j.visit_purpose) { r.checked = true; filled.push("purpose"); break; }
+            if (r.value === j.visit_purpose) { r.checked = true; purposeOutcome = "filled"; break; }
           }
         }
       }
-      _setStatus(filled.length
-        ? `Filled: ${filled.join(", ")}. Review and Save.`
-        : "Already filled — nothing to overwrite.", "ok");
+
+      _renderPreview([
+        {label: "Notes",       value: notesValue,            status: notesOutcome},
+        {label: "Met person",  value: j.met_person,          status: metOutcome},
+        {label: "Contact",     value: j.met_person_contact,  status: cOutcome},
+        {label: "Purpose",     value: j.visit_purpose,       status: purposeOutcome},
+        {label: "Next action", value: j.next_action,         status: nextOutcome},
+      ]);
+
+      const filledCount = [notesOutcome, metOutcome, cOutcome, nextOutcome, purposeOutcome]
+        .filter(s => s === "filled").length;
+      _setStatus(filledCount
+        ? `Filled ${filledCount} field${filledCount === 1 ? "" : "s"}. Review below ↓, then Submit.`
+        : "Nothing new to fill (every relevant field already had a value).",
+        filledCount ? "ok" : "");
     } catch (e) {
       _setStatus("Error: " + e.message, "err");
     } finally {
