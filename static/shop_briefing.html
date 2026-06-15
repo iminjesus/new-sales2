@@ -319,6 +319,12 @@ function drawTrend(trend, mode){
 
 // Rebate next-tier — uses the existing /api/rebate_data endpoint
 // filtered to just this ship_to (server already supports this filter).
+// The response is nested:
+//   { groups: [ { brands: [ { items: [ {ship_to, ...}, ... ] } ] } ] }
+// so we flatten across groups → brands → items, plus items that carry
+// ship_details (per-Sold-To-grouped rebates show one tier basis with
+// multiple ship_tos under it) — and keep only the entries that match
+// THIS ship_to.
 async function loadRebate(){
   const status = document.getElementById("rebateStatus");
   const body   = document.getElementById("rebateBody");
@@ -335,25 +341,58 @@ async function loadRebate(){
     const r = await fetch("/api/rebate_data?" + qs.toString());
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-    const rows = (j.rows || []).filter(x => String(x.ship_to) === String(SHIP_TO));
+
+    const rows = [];
+    for (const g of (j.groups || [])) {
+      for (const b of (g.brands || [])) {
+        for (const item of (b.items || [])) {
+          if (String(item.ship_to) === String(SHIP_TO)) {
+            rows.push(item);
+          }
+          // Per-Sold-To-tier rows expose individual ship_to actuals
+          // under ship_details — merge those into the parent item so
+          // the displayed actual is this ship's own contribution.
+          for (const sd of (item.ship_details || [])) {
+            if (String(sd.ship_to) === String(SHIP_TO)) {
+              rows.push(Object.assign({}, item, {
+                ship_to:     sd.ship_to,
+                actual_qty:  sd.actual_qty,
+                actual_amt:  sd.actual_amt,
+                ship_detail: true,
+              }));
+            }
+          }
+        }
+      }
+    }
+
     if (!rows.length) {
       status.textContent = "No rebate structure mapped for this shop.";
       return;
     }
     body.innerHTML = rows.map(r => {
-      const unit = r.unit === "Q" ? "units" : "$";
+      const fmt = (n) => r.unit === "Q" ? fmtNum(n) + " units" : fmtMoney(n);
       const needed = r.unit === "Q" ? r.needed_qty : r.needed_amt;
-      const actual = r.unit === "Q" ? r.tier_actual : r.tier_actual;
+      // Per-sold-to rebates: this row's own actual is its contribution
+      // but the tier comparison uses the sold-to / group basis
+      // (tier_actual on the parent).  Use tier_actual when present so
+      // the progress bar reflects what actually qualifies for the tier.
+      const basisActual = (r.tier_actual != null) ? r.tier_actual
+        : (r.unit === "Q" ? r.actual_qty : r.actual_amt);
       const nextThr = r.next_threshold;
       const atMax = !nextThr;
-      const pct = (nextThr && nextThr > 0) ? Math.min(100, Math.round((actual / nextThr) * 100)) : 100;
-      const fmt = (n) => r.unit === "Q" ? fmtNum(n) + " units" : fmtMoney(n);
+      const pct = (nextThr && nextThr > 0)
+        ? Math.min(100, Math.round((basisActual / nextThr) * 100))
+        : 100;
+      const detailNote = r.ship_detail
+        ? `<span style="font-size:9px;color:#9ca3af;font-style:italic;margin-left:4px;">(per Sold-To)</span>`
+        : "";
       return `
         <div class="reb-row ${atMax ? 'reb-max' : ''}">
-          <div class="reb-struct">${esc(r.structure_name)}</div>
+          <div class="reb-struct">${esc(r.structure_name)}${detailNote}</div>
           <div class="reb-prog">
             <div style="display:flex;justify-content:space-between;font-size:10px;color:#6b7280;margin-bottom:2px;">
-              <span>${fmt(actual)} / ${atMax ? "(top tier reached)" : fmt(nextThr)}</span>
+              <span>${fmt(basisActual)} / ${atMax ? "(top tier reached)" : fmt(nextThr)}</span>
               <span style="font-weight:700;color:#16a34a;">${r.curr_rate}%</span>
             </div>
             <div class="reb-bar-outer">
