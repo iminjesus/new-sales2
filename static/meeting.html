@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="/static/shop_briefing_popup.js"></script>
 <title>BDE Visit Log</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -1238,11 +1239,12 @@ function renderRecentRows(){
         <span style="display:inline-block;color:#94a3b8;font-size:10px;margin-right:6px;">⋮⋮</span>
         ${escapeHtml(shipKey)} · <span style="font-weight:400;">${escapeHtml(r.ship_to_name || "")}</span>
         ${r.sold_to_name ? `<span style="color:#6b7280;font-weight:400;font-size:11px;"> — ${escapeHtml(r.sold_to_name)}</span>` : ""}
-        <a href="/shop/${_attr(shipKey)}" target="_blank" draggable="false"
-           onclick="event.stopPropagation();"
+        <button type="button" draggable="false"
+           onclick="event.stopPropagation(); openShopBriefing('${_attr(shipKey)}', '${_attr(r.ship_to_name || '')}');"
            title="Open Shop Briefing Card"
-           style="float:right;font-weight:600;color:#2563eb;text-decoration:none;
-                  font-size:11px;padding:0 4px;cursor:pointer;">📋 Briefing →</a>
+           style="float:right;background:#2563eb;color:#fff;border:none;
+                  border-radius:5px;padding:3px 9px;font-size:11px;font-weight:700;
+                  cursor:pointer;letter-spacing:.2px;">📋 Briefing</button>
       </td></tr>`;
       lastShip = shipKey; lastPurp = null;
     }

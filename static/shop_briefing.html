@@ -15,6 +15,10 @@ html,body{margin:0;background:#f3f4f6;color:#111827;
 .toolbar a{color:#cbd5e1;font-size:12px;text-decoration:none}
 .toolbar a:hover{color:#fff}
 .wrap{padding:16px;max-width:780px;margin:0 auto}
+/* When loaded inside the slide-in side panel (?embed=1) we hide the
+   toolbar and trim the side padding so it sits flush in the popup. */
+body.embed .toolbar{display:none}
+body.embed .wrap{padding:12px}
 .card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;
   padding:14px 16px;margin-bottom:14px;
   box-shadow:0 1px 3px rgba(0,0,0,.04)}
@@ -116,6 +120,11 @@ html,body{margin:0;background:#f3f4f6;color:#111827;
 </div>
 
 <script>
+// ?embed=1 → page was opened inside the right-side popup iframe;
+// hide the toolbar so it sits flush in the panel.
+if (new URLSearchParams(location.search).get("embed") === "1") {
+  document.body.classList.add("embed");
+}
 const SHIP_TO = location.pathname.split("/").filter(Boolean).pop() || "";
 
 function esc(s){

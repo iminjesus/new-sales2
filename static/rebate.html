@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="/static/shop_briefing_popup.js"></script>
 <title>Rebate Calculator</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -538,9 +539,9 @@ function renderPage(data){
           html += `<tr class="ship-row">
             <td></td>
             <td colspan="2" style="padding-left:76px">
-              <a href="/shop/${esc(sd.ship_to)}" target="_blank"
+              <a href="#" onclick="openShopBriefing('${esc(sd.ship_to)}','${esc(sd.ship_to_name||'')}'); return false;"
                  title="Open Shop Briefing Card"
-                 style="font-weight:500;color:inherit;text-decoration:none;border-bottom:1px dotted #cbd5e1;">${esc(sd.ship_to_name)}</a>
+                 style="font-weight:500;color:inherit;text-decoration:none;border-bottom:1px dotted #2563eb;">${esc(sd.ship_to_name)}</a>
               <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${sd.ship_to}</span>
               <span style="font-size:9px;color:#c4b5fd;margin-left:5px;font-style:italic">per Sold-To</span>
             </td>
@@ -577,9 +578,9 @@ function renderPage(data){
         html += `<tr class="ship-row">
           <td></td>
           <td colspan="2" style="padding-left:76px">
-            <a href="/shop/${esc(r.ship_to)}" target="_blank"
+            <a href="#" onclick="openShopBriefing('${esc(r.ship_to)}','${esc(r.ship_to_name||'')}'); return false;"
                title="Open Shop Briefing Card"
-               style="font-weight:500;color:inherit;text-decoration:none;border-bottom:1px dotted #cbd5e1;">${esc(r.ship_to_name)}</a>
+               style="font-weight:500;color:inherit;text-decoration:none;border-bottom:1px dotted #2563eb;">${esc(r.ship_to_name)}</a>
             <span style="font-family:monospace;font-size:10px;color:#9ca3af;margin-left:6px">${r.ship_to}</span>
           </td>
           <td>${badgesHtml(r.badges)}</td>
