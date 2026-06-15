@@ -8126,6 +8126,124 @@ def _ai_parse(text):
 def ai_status():
     return jsonify({"enabled": bool(ANTHROPIC_API_KEY), "model": AI_MODEL})
 
+# ─── Visit Impact ────────────────────────────────────────────────────
+# "Did this BDE visit actually move the needle on sales?" — answered
+# by comparing the shop's sales in the month BEFORE a visit vs the
+# month AFTER.  Strict pre/post, no in-month overlap, so causality is
+# at least defensible (the model: "BDE visited mid-April; did May
+# sales tick up vs March?").  We don't claim causation in the UI —
+# this is correlation surfaced to the BDE/manager to spot patterns.
+def _sales_table_for_ym(year, month):
+    """Return the sales-table name that holds a given (year, month),
+    or None if we don't have that month on disk."""
+    try:
+        now = datetime.now()
+        if int(year) == now.year and int(month) == now.month:
+            return "sales_thismonth"
+        yymm = f"{int(year) % 100:02d}{int(month):02d}"
+        table = f"sales_{yymm}"
+        if table in REBATE_SALES_TABLES.values():
+            return table
+    except Exception:
+        pass
+    return None
+
+def _sales_for_month(cur, ship_to, year, month):
+    """SUM(qty), SUM(amt) for ship_to in (year, month).  Returns None
+    when the table for that month doesn't exist on this server."""
+    table = _sales_table_for_ym(year, month)
+    if not table:
+        return None
+    try:
+        cur.execute(
+            "SELECT COALESCE(SUM(qty),0) AS qty, COALESCE(SUM(amt),0) AS amt "
+            "FROM " + table + " "
+            "WHERE ship_to = %s AND brand IN ('HK','LF')",
+            (ship_to,)
+        )
+        r = cur.fetchone() or {}
+        return {"qty": float(r.get("qty") or 0), "amt": float(r.get("amt") or 0)}
+    except Exception:
+        return None
+
+@app.post("/api/meeting/impact")
+def meeting_impact():
+    """Batch pre/post sales delta for a list of meeting_log IDs.
+    Body: { "ids": [int, ...] }
+    Returns: { "impacts": { "<id>": {pre_year_month, post_year_month,
+                                     pre, post, delta_qty, delta_amt,
+                                     delta_qty_pct, delta_amt_pct,
+                                     status}, ... } }
+    status ∈ {ok, post_pending, pre_unavailable}.
+    """
+    body = request.get_json(silent=True) or {}
+    raw_ids = body.get("ids") or []
+    ids = []
+    for x in raw_ids:
+        try:
+            ids.append(int(x))
+        except Exception:
+            pass
+    if not ids:
+        return jsonify({"impacts": {}})
+    ids = ids[:200]   # cap so a chatty client can't tie up the DB
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        placeholders = ",".join(["%s"] * len(ids))
+        cur.execute(
+            f"SELECT id, ship_to, visit_date FROM meeting_log "
+            f"WHERE id IN ({placeholders}) AND visit_date IS NOT NULL "
+            f"  AND ship_to IS NOT NULL AND ship_to <> ''",
+            tuple(ids)
+        )
+        visits = cur.fetchall()
+
+        impacts = {}
+        for v in visits:
+            vd = v.get("visit_date")
+            ship_to = v.get("ship_to")
+            if not vd or not ship_to:
+                continue
+            year, month = vd.year, vd.month
+            # Previous calendar month.
+            py = year - 1 if month == 1 else year
+            pm = 12 if month == 1 else month - 1
+            # Next calendar month.
+            ny = year + 1 if month == 12 else year
+            nm = 1 if month == 12 else month + 1
+
+            pre  = _sales_for_month(cur, ship_to, py, pm)
+            post = _sales_for_month(cur, ship_to, ny, nm)
+
+            entry = {
+                "pre_year_month":  f"{py}-{pm:02d}",
+                "post_year_month": f"{ny}-{nm:02d}",
+            }
+            if pre is None:
+                entry["status"] = "pre_unavailable"
+                impacts[str(v["id"])] = entry
+                continue
+            entry["pre"] = pre
+            if post is None:
+                entry["status"] = "post_pending"
+                impacts[str(v["id"])] = entry
+                continue
+            entry["post"] = post
+            entry["delta_qty"] = round(post["qty"] - pre["qty"], 2)
+            entry["delta_amt"] = round(post["amt"] - pre["amt"], 2)
+            entry["delta_qty_pct"] = round(((post["qty"] - pre["qty"]) / pre["qty"] * 100), 1) if pre["qty"] > 0 else None
+            entry["delta_amt_pct"] = round(((post["amt"] - pre["amt"]) / pre["amt"] * 100), 1) if pre["amt"] > 0 else None
+            entry["status"] = "ok"
+            impacts[str(v["id"])] = entry
+
+        cur.close(); conn.close()
+        return jsonify({"impacts": impacts})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # ─── Shop Briefing Card ───────────────────────────────────────────────
 # Per-shop summary view a BDE pulls up on the phone right before walking
 # into a shop (or before calling its owner): last visit recap, recent

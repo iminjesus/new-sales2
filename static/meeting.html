@@ -1364,6 +1364,8 @@ function renderRecentRows(){
                 <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                   <span style="font-weight:700;color:#1e3a5f;">📍 ${escapeHtml(r.visit_date || r.created_at || "—")}</span>
                   ${statusBadge}
+                  <span class="impact-badge" data-mid="${r.id}"
+                        style="font-size:9px;color:#9ca3af;font-style:italic;">…</span>
                 </div>
               </div>
               <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
@@ -1385,6 +1387,11 @@ function renderRecentRows(){
   }
   h += `</tbody></table>`;
   wrap.innerHTML = h;
+
+  // Visit Impact — async batch fetch.  Pulled out so the recent
+  // entries render instantly while sales-delta math happens in the
+  // background; badges fade in once impact data arrives.
+  _loadVisitImpact(rows.map(r => r.id));
 
   // === AI FEATURE START === (top digest button)
   // Stash the filtered-row IDs on the panel so _aiDigestClick can read
@@ -1446,6 +1453,79 @@ function _renderPrevPrepNotes(){
                   text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;">
        ↓ Previous prep notes for this shop (reference)
      </div>${items}`;
+}
+
+// ── Visit Impact loader ──────────────────────────────────────────
+// Hits /api/meeting/impact in batch for every visit currently visible
+// in Recent entries, then quietly fills in the per-row impact badge.
+// Renders three colour-coded outcomes:
+//   ↗ green  — qty up at least 1 %
+//   ↘ red    — qty down
+//   ↔ gray   — flat
+// plus "post pending" for visits whose post-month hasn't closed yet
+// (no false signal until there's real data).
+async function _loadVisitImpact(ids){
+  ids = (ids || []).filter(x => x != null);
+  if (!ids.length) return;
+  let j;
+  try {
+    const r = await fetch("/api/meeting/impact", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      credentials: "include",
+      body: JSON.stringify({ ids }),
+    });
+    j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+  } catch (e) {
+    // Silent fail — impact is a nice-to-have, never block Recent entries.
+    document.querySelectorAll('.impact-badge[data-mid]').forEach(el => {
+      el.textContent = "";
+    });
+    return;
+  }
+  const impacts = j.impacts || {};
+  document.querySelectorAll('.impact-badge[data-mid]').forEach(el => {
+    const mid = el.dataset.mid;
+    const im  = impacts[mid];
+    if (!im) { el.textContent = ""; return; }
+    if (im.status === "pre_unavailable") {
+      el.textContent = "";
+      return;
+    }
+    if (im.status === "post_pending") {
+      // Pre is known but post month hasn't arrived yet — show pre
+      // baseline so the BDE knows what the bar is to beat.
+      const pq = im.pre ? im.pre.qty : 0;
+      el.style.color = "#9ca3af";
+      el.style.fontStyle = "italic";
+      el.title = `Pre-visit baseline: ${pq.toLocaleString()} units (${im.pre_year_month}).\n`
+               + `Post-visit window (${im.post_year_month}) not yet complete — impact pending.`;
+      el.textContent = `· baseline ${pq.toLocaleString()}u, post pending`;
+      return;
+    }
+    // status === "ok"
+    const dq = im.delta_qty || 0;
+    const dpct = im.delta_qty_pct;
+    let arrow, color;
+    if (dq > 0 && (dpct === null || dpct >= 1)) {
+      arrow = "↗"; color = "#16a34a";
+    } else if (dq < 0) {
+      arrow = "↘"; color = "#dc2626";
+    } else {
+      arrow = "↔"; color = "#9ca3af";
+    }
+    const pctTxt = (dpct == null)
+      ? `${dq > 0 ? "+" : ""}${dq.toLocaleString()} units`
+      : `${dpct > 0 ? "+" : ""}${dpct}% qty`;
+    el.style.color = color;
+    el.style.fontStyle = "normal";
+    el.style.fontWeight = "700";
+    el.title = `Sales impact (correlation, not causation):\n`
+             + `Pre  ${im.pre_year_month}: ${im.pre.qty.toLocaleString()} units · $${Math.round(im.pre.amt).toLocaleString()}\n`
+             + `Post ${im.post_year_month}: ${im.post.qty.toLocaleString()} units · $${Math.round(im.post.amt).toLocaleString()}`;
+    el.textContent = `${arrow} ${pctTxt}`;
+  });
 }
 
 // Deep-link handler — invoked after every renderRecentList() pass.
