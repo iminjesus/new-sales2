@@ -69,12 +69,12 @@ body.embed .wrap{padding:12px}
   font-size:9px;color:#9ca3af;font-family:ui-monospace,Menlo,monospace;
   padding:2px 4px 0;height:14px}
 .trend-yaxis .y-top{color:#374151;font-weight:700}
-.trend-chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding:6px 0;
+.trend-chart{display:flex;align-items:stretch;gap:6px;height:120px;padding:6px 0;
   border-bottom:1px solid #e5e7eb;margin-bottom:6px}
 .trend-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;
-  justify-content:flex-end;gap:4px;min-width:30px}
+  justify-content:flex-end;min-width:30px;height:100%}
 .trend-bar{width:100%;max-width:50px;background:#2563eb;border-radius:3px 3px 0 0;
-  min-height:2px;position:relative}
+  min-height:3px;position:relative}
 .trend-bar:hover{background:#1d4ed8}
 .trend-bar span{display:none;position:absolute;bottom:100%;left:50%;
   transform:translateX(-50%);background:#1e3a5f;color:#fff;padding:3px 7px;
@@ -330,13 +330,15 @@ function drawTrend(trend, mode){
   }
   chart.innerHTML = trend.map(t => {
     const v = mode === "qty" ? (t.qty || 0) : (t.amt || 0);
-    const h = v <= floor ? 2 : Math.max(4, Math.round(((v - floor) / span) * 100));
+    // Floor stub = 3 px so a zero-month is visible without misleading;
+    // everything else scales between 4 % and 100 % of the wrap height.
+    const h = v <= floor ? 0 : Math.max(4, Math.round(((v - floor) / span) * 100));
+    const isStub = (h === 0);
     return `
       <div class="trend-bar-wrap">
-        <div class="trend-bar" style="height:${h}%;">
+        <div class="trend-bar" style="height:${isStub ? '3px' : h + '%'};">
           <span>${esc(t.month)} · ${esc(fmtLabel(v))}</span>
         </div>
-        <div class="trend-label">${esc(t.month)}</div>
       </div>
     `;
   }).join("");
