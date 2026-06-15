@@ -8041,6 +8041,73 @@ def _ai_parse(text):
 def ai_status():
     return jsonify({"enabled": bool(ANTHROPIC_API_KEY), "model": AI_MODEL})
 
+@app.post("/api/meeting/voice_extract")
+def meeting_voice_extract():
+    """Convert a free-form voice transcript into structured meeting_log fields.
+    Body: { "transcript": "<user's spoken recap>" }
+    Returns: {
+        notes, met_person, met_person_contact, next_action,
+        visit_purpose ("" | "Promotion" | "Product introduction"
+                       | "Claim support" | "Rebate follow-up" | "Stock" | "Other"),
+        model
+    }
+    Each field is a string — empty when the model couldn't infer it.  The
+    frontend only writes into empty form fields so user-typed values are
+    never overwritten.
+    """
+    if not ANTHROPIC_API_KEY:
+        return jsonify({"error": "AI feature disabled — ANTHROPIC_API_KEY is not set on the server"}), 503
+    body = request.get_json(silent=True) or {}
+    transcript = (body.get("transcript") or "").strip()
+    if not transcript:
+        return jsonify({"error": "transcript is empty"}), 400
+    if len(transcript) > 4000:
+        transcript = transcript[:4000]
+
+    prompt = (
+        "You extract structured fields from a BDE's spoken recap of a tyre-shop visit.\n"
+        "Return ONLY a JSON object with these keys (all strings, empty when unknown):\n"
+        '  - "notes": a clean written summary of what happened (1-3 sentences, in English).\n'
+        '  - "met_person": the name or role of the person met (e.g. "John", "owner", "store manager"). Empty if not mentioned.\n'
+        '  - "met_person_contact": phone or email if mentioned. Empty if not.\n'
+        '  - "next_action": follow-up needed, if mentioned. Empty if not.\n'
+        '  - "visit_purpose": MUST be exactly one of "Promotion", "Product introduction", '
+        '"Claim support", "Rebate follow-up", "Stock", "Other", or empty string.\n'
+        "    Pick the closest match based on what was discussed. Empty only if truly unclear.\n"
+        "\n"
+        "Transcript:\n"
+        f"\"\"\"\n{transcript}\n\"\"\"\n"
+        "\n"
+        "Respond with ONLY the JSON object, no markdown, no commentary."
+    )
+    text, err = _ai_call_claude(prompt)
+    if err:
+        return jsonify({"error": err}), 502
+
+    import json as _json, re as _re
+    raw = (text or "").strip()
+    m = _re.search(r"\{.*\}", raw, _re.DOTALL)
+    if not m:
+        return jsonify({"error": "AI returned no JSON", "raw": raw[:300]}), 502
+    try:
+        parsed = _json.loads(m.group(0))
+    except Exception as e:
+        return jsonify({"error": f"AI JSON parse failed: {e}", "raw": raw[:300]}), 502
+
+    allowed_purposes = {"Promotion", "Product introduction", "Claim support",
+                        "Rebate follow-up", "Stock", "Other", ""}
+    out = {
+        "notes":              str(parsed.get("notes") or "").strip(),
+        "met_person":         str(parsed.get("met_person") or "").strip()[:120],
+        "met_person_contact": str(parsed.get("met_person_contact") or "").strip()[:80],
+        "next_action":        str(parsed.get("next_action") or "").strip(),
+        "visit_purpose":      str(parsed.get("visit_purpose") or "").strip(),
+        "model":              AI_MODEL,
+    }
+    if out["visit_purpose"] not in allowed_purposes:
+        out["visit_purpose"] = ""
+    return jsonify(out)
+
 @app.post("/api/meeting/ai_digest")
 def meeting_ai_digest():
     """Summarise an arbitrary set of meeting_log rows (the rows currently

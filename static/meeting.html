@@ -224,6 +224,40 @@ header .nav{margin-left:auto;display:flex;gap:6px}
   background:#dbeafe !important;border-color:#2563eb !important;color:#1d4ed8 !important;font-weight:600
 }
 
+/* ── Voice → AI auto-fill panel (sits above the form) ────── */
+.voice-panel{margin:0 0 12px;padding:10px 12px;background:#f0f9ff;
+  border:1px solid #bae6fd;border-radius:8px}
+.voice-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.voice-btn{display:inline-flex;align-items:center;gap:6px;background:#0284c7;
+  color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:13px;
+  font-weight:600;cursor:pointer;transition:background .15s}
+.voice-btn:hover{background:#0369a1}
+.voice-btn.recording{background:#dc2626;animation:voicepulse 1.2s infinite}
+.voice-btn.recording:hover{background:#b91c1c}
+@keyframes voicepulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.5)}
+  50%{box-shadow:0 0 0 8px rgba(220,38,38,0)}}
+.voice-ico{font-size:15px}
+.voice-hint{font-size:11px;color:#0369a1;flex:1;min-width:160px}
+.voice-timer{font-family:ui-monospace,Menlo,monospace;font-size:13px;
+  font-weight:700;color:#dc2626}
+.voice-body{margin-top:8px}
+.voice-body textarea{width:100%;min-height:70px;padding:8px;border:1px solid #bae6fd;
+  border-radius:6px;font-size:12px;font-family:inherit;background:#fff;
+  box-sizing:border-box;resize:vertical}
+.voice-actions{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+.voice-fill{background:#16a34a;color:#fff;border:none;border-radius:6px;
+  padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.voice-fill:hover{background:#15803d}
+.voice-fill:disabled{background:#9ca3af;cursor:not-allowed}
+.voice-clear{background:#fff;color:#6b7280;border:1px solid #d1d5db;
+  border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.voice-clear:hover{background:#f3f4f6;color:#111827}
+.voice-status{font-size:11px;color:#6b7280}
+.voice-status.ok{color:#16a34a;font-weight:600}
+.voice-status.err{color:#dc2626;font-weight:600}
+.voice-panel.unsupported .voice-btn{display:none}
+.voice-panel.unsupported .voice-hint{color:#9ca3af}
+
 /* ── Purpose of visit — radio-button card group ─────────── */
 .purpose-cards{display:flex;gap:6px;flex-wrap:wrap}
 .purpose-cards input[type="radio"]{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
@@ -445,6 +479,27 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     <h2>New visit</h2>
     <div id="bdeIdLine" class="bde-id-line" style="display:none;">
       Signed in as <b id="bdeIdEmail">…</b>
+    </div>
+
+    <!-- ── Voice → AI auto-fill (Web Speech transcription, Claude extraction) ── -->
+    <div id="voicePanel" class="voice-panel">
+      <div class="voice-row">
+        <button type="button" id="voiceBtn" class="voice-btn" title="Tap and speak — AI fills the form">
+          <span class="voice-ico">🎙</span>
+          <span class="voice-label">Quick log by voice</span>
+        </button>
+        <span id="voiceHint" class="voice-hint">Tap, speak 20-30 sec, AI fills the form below</span>
+        <span id="voiceTimer" class="voice-timer" style="display:none;">0:00</span>
+      </div>
+      <div id="voiceBody" class="voice-body" style="display:none;">
+        <textarea id="voiceTranscript"
+          placeholder="Transcript appears here — edit if needed, then Auto-fill"></textarea>
+        <div class="voice-actions">
+          <button type="button" id="voiceFillBtn" class="voice-fill">✨ Auto-fill form</button>
+          <button type="button" id="voiceClearBtn" class="voice-clear">Discard</button>
+          <span id="voiceStatus" class="voice-status"></span>
+        </div>
+      </div>
     </div>
 
     <form id="meetingForm">
@@ -2546,6 +2601,186 @@ function _activeRightTab(){
   // "View all →" in the palette opens the Potentials tab inline.
   const va = document.getElementById("potViewAllBtn");
   if (va) va.addEventListener("click", () => _setRightTab("potentials"));
+})();
+
+// ── Voice → AI auto-fill ─────────────────────────────────────────
+// Uses the browser's Web Speech API for free, in-browser transcription
+// (Chrome desktop + Android, Safari iOS 14.5+ all support it). The
+// resulting transcript is POSTed to /api/meeting/voice_extract, which
+// asks Claude Haiku to pull out notes / met person / contact / purpose /
+// next action — then we write those into the form, but only into fields
+// the user hasn't already filled in, so a manual edit is never clobbered.
+(function initVoiceCapture(){
+  const panel       = document.getElementById("voicePanel");
+  const btn         = document.getElementById("voiceBtn");
+  const hint        = document.getElementById("voiceHint");
+  const timerEl     = document.getElementById("voiceTimer");
+  const body        = document.getElementById("voiceBody");
+  const transcript  = document.getElementById("voiceTranscript");
+  const fillBtn     = document.getElementById("voiceFillBtn");
+  const clearBtn    = document.getElementById("voiceClearBtn");
+  const statusEl    = document.getElementById("voiceStatus");
+  if (!panel || !btn) return;
+
+  // SpeechRecognition is webkit-prefixed on Safari/Chrome and unprefixed
+  // on Firefox (where it doesn't actually work yet).  Bail with a hint
+  // rather than showing a button that does nothing.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    panel.classList.add("unsupported");
+    hint.textContent = "Voice input not supported in this browser — use Chrome or Safari.";
+    return;
+  }
+
+  let recognition = null;
+  let timerHandle = null;
+  let elapsed     = 0;
+  let finalText   = "";
+  let interimText = "";
+
+  function _setStatus(msg, cls){
+    statusEl.textContent = msg || "";
+    statusEl.className = "voice-status" + (cls ? " " + cls : "");
+  }
+  function _fmtTime(s){
+    const m = Math.floor(s / 60), r = s % 60;
+    return `${m}:${String(r).padStart(2, "0")}`;
+  }
+  function _startTimer(){
+    elapsed = 0;
+    timerEl.textContent = "0:00";
+    timerEl.style.display = "";
+    timerHandle = setInterval(() => {
+      elapsed += 1;
+      timerEl.textContent = _fmtTime(elapsed);
+    }, 1000);
+  }
+  function _stopTimer(){
+    if (timerHandle) clearInterval(timerHandle);
+    timerHandle = null;
+    timerEl.style.display = "none";
+  }
+
+  function _startRecording(){
+    finalText = "";
+    interimText = "";
+    transcript.value = "";
+    _setStatus("");
+    body.style.display = "";
+    recognition = new SR();
+    recognition.continuous     = true;
+    recognition.interimResults = true;
+    recognition.lang           = navigator.language || "en-AU";
+    recognition.onresult = (e) => {
+      // Web Speech delivers a growing result list; entries past
+      // resultIndex are new this fire.  We keep "final" pieces in
+      // finalText and overwrite interimText as it's revised in place.
+      interimText = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const chunk = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += chunk + " ";
+        else                       interimText += chunk;
+      }
+      transcript.value = (finalText + interimText).trim();
+    };
+    recognition.onerror = (e) => {
+      _setStatus("Voice error: " + (e.error || "unknown"), "err");
+      _stopRecording();
+    };
+    recognition.onend = () => {
+      // Browser auto-stops after a long pause; reflect that in the UI.
+      btn.classList.remove("recording");
+      btn.querySelector(".voice-label").textContent = "Record again";
+      _stopTimer();
+      if ((transcript.value || "").trim()) {
+        _setStatus("Tap Auto-fill when ready.", "");
+      }
+    };
+    try {
+      recognition.start();
+      btn.classList.add("recording");
+      btn.querySelector(".voice-label").textContent = "Stop";
+      _startTimer();
+      _setStatus("Listening…", "");
+    } catch (err) {
+      _setStatus("Mic permission denied or unavailable.", "err");
+    }
+  }
+
+  function _stopRecording(){
+    if (recognition) {
+      try { recognition.stop(); } catch(e){}
+    }
+    btn.classList.remove("recording");
+    btn.querySelector(".voice-label").textContent = "Record again";
+    _stopTimer();
+  }
+
+  btn.addEventListener("click", () => {
+    if (btn.classList.contains("recording")) _stopRecording();
+    else                                      _startRecording();
+  });
+
+  clearBtn.addEventListener("click", () => {
+    _stopRecording();
+    transcript.value = "";
+    finalText = "";
+    interimText = "";
+    body.style.display = "none";
+    btn.querySelector(".voice-label").textContent = "Quick log by voice";
+    _setStatus("");
+  });
+
+  // Only fill a field if the user hasn't already typed something into
+  // it — manual edits always win over the AI's guess.
+  function _fillIfBlank(el, v){
+    if (!el || !v) return false;
+    if ((el.value || "").trim()) return false;
+    el.value = v;
+    return true;
+  }
+
+  fillBtn.addEventListener("click", async () => {
+    const text = (transcript.value || "").trim();
+    if (!text) { _setStatus("Nothing to extract.", "err"); return; }
+    fillBtn.disabled = true;
+    _setStatus("Asking Claude…", "");
+    try {
+      const r = await fetch("/api/meeting/voice_extract", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        credentials: "include",
+        body: JSON.stringify({ transcript: text }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        _setStatus("Failed: " + (j.error || ("HTTP " + r.status)), "err");
+        return;
+      }
+      const filled = [];
+      if (_fillIfBlank(document.getElementById("fNotes"),       j.notes))              filled.push("notes");
+      if (_fillIfBlank(document.getElementById("fMet"),         j.met_person))         filled.push("met person");
+      if (_fillIfBlank(document.getElementById("fMetContact"),  j.met_person_contact)) filled.push("contact");
+      if (_fillIfBlank(document.getElementById("fNext"),        j.next_action))        filled.push("next action");
+      // Purpose is a radio group — set only if nothing is currently checked.
+      if (j.visit_purpose) {
+        const current = document.querySelector('input[name="visit_purpose"]:checked');
+        if (!current) {
+          const radios = document.querySelectorAll('input[name="visit_purpose"]');
+          for (const r of radios) {
+            if (r.value === j.visit_purpose) { r.checked = true; filled.push("purpose"); break; }
+          }
+        }
+      }
+      _setStatus(filled.length
+        ? `Filled: ${filled.join(", ")}. Review and Save.`
+        : "Already filled — nothing to overwrite.", "ok");
+    } catch (e) {
+      _setStatus("Error: " + e.message, "err");
+    } finally {
+      fillBtn.disabled = false;
+    }
+  });
 })();
 </script>
 </body>
