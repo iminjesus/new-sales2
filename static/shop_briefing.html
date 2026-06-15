@@ -62,6 +62,13 @@ body.embed .wrap{padding:12px}
   background:#e0e7ff;padding:2px 8px;border-radius:8px;letter-spacing:.2px}
 
 /* 6-month sales trend */
+/* Y-axis labels sit just above the chart so you can read the actual
+   value range the bars are scaled against (otherwise a zoomed-in
+   chart can look like big swings when it's really a 5 % wobble). */
+.trend-yaxis{display:flex;justify-content:space-between;
+  font-size:9px;color:#9ca3af;font-family:ui-monospace,Menlo,monospace;
+  padding:2px 4px 0;height:14px}
+.trend-yaxis .y-top{color:#374151;font-weight:700}
 .trend-chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding:6px 0;
   border-bottom:1px solid #e5e7eb;margin-bottom:6px}
 .trend-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;
@@ -255,21 +262,21 @@ function renderShop(j){
     `;
   }
 
-  // 6-month trend.  Toggle qty vs amount (amount by default).
-  const maxAmt = Math.max(1, ...trend.map(t => t.amt || 0));
-  const maxQty = Math.max(1, ...trend.map(t => t.qty || 0));
+  // 6-month trend.  Qty by default — that's the unit BDEs and rebate
+  // tiers actually care about.  Toggle flips to $ amount.
   const totalAmt = trend.reduce((a,b) => a + (b.amt || 0), 0);
   const totalQty = trend.reduce((a,b) => a + (b.qty || 0), 0);
   let trendHtml = `
     <div class="card">
       <h2>📈 6-month sales trend
         <span style="float:right;font-weight:500;text-transform:none;letter-spacing:0;color:#6b7280;font-size:10px;">
-          Total: ${fmtMoney(totalAmt)} · ${fmtNum(totalQty)} units
+          Total: ${fmtNum(totalQty)} units · ${fmtMoney(totalAmt)}
         </span>
       </h2>
       <div style="text-align:right;">
-        <span id="trendToggle" class="trend-toggle">switch to Qty →</span>
+        <span id="trendToggle" class="trend-toggle" data-mode="qty">switch to $ amount →</span>
       </div>
+      <div class="trend-yaxis" id="trendYAxis"></div>
       <div class="trend-chart" id="trendChart"></div>
       <div class="trend-axis">
         ${trend.map(t => `<span class="ax">${esc(t.month)}</span>`).join("")}
@@ -287,29 +294,47 @@ function renderShop(j){
   `;
 
   wrap.innerHTML = headHtml + meetingHtml + contactsHtml + trendHtml + rebateHtml;
-  drawTrend(trend, "amt");
+  drawTrend(trend, "qty");
 
   document.getElementById("trendToggle").addEventListener("click", (e) => {
-    const cur = e.target.dataset.mode || "amt";
-    const next = cur === "amt" ? "qty" : "amt";
+    const cur = e.target.dataset.mode || "qty";
+    const next = cur === "qty" ? "amt" : "qty";
     e.target.dataset.mode = next;
-    e.target.textContent = next === "amt" ? "switch to Qty →" : "switch to $ amount →";
+    e.target.textContent = next === "qty" ? "switch to $ amount →" : "switch to Qty →";
     drawTrend(trend, next);
   });
 }
 
 function drawTrend(trend, mode){
-  const chart = document.getElementById("trendChart");
+  const chart  = document.getElementById("trendChart");
+  const yaxis  = document.getElementById("trendYAxis");
   if (!chart) return;
-  const vmax = Math.max(1, ...trend.map(t => mode === "qty" ? (t.qty || 0) : (t.amt || 0)));
+  // Pick out the values for this mode (qty or amt).
+  const vals = trend.map(t => mode === "qty" ? (t.qty || 0) : (t.amt || 0));
+  const vmax = Math.max(...vals, 1);
+  const vmin = Math.min(...vals);
+  // Compress the Y axis around the actual data range so a 95–105 unit
+  // month-over-month wobble doesn't render as six identical bars.
+  // Floor sits at max(0, vmin - 30 % of the range) so trends stay
+  // honest (bars never go below zero) and the variation is visible.
+  const range = vmax - vmin;
+  const floor = Math.max(0, vmin - range * 0.30);
+  const ceil  = vmax + range * 0.05;
+  const span  = Math.max(1, ceil - floor);
+  const fmtLabel = (v) => mode === "qty" ? fmtNum(v) + " units" : fmtMoney(v);
+  if (yaxis) {
+    yaxis.innerHTML = `
+      <span class="y-top">${esc(fmtLabel(ceil))}</span>
+      <span class="y-bot">${floor > 0 ? esc(fmtLabel(floor)) : (mode === "qty" ? "0 units" : "$0")}</span>
+    `;
+  }
   chart.innerHTML = trend.map(t => {
     const v = mode === "qty" ? (t.qty || 0) : (t.amt || 0);
-    const h = Math.max(2, Math.round((v / vmax) * 100));
-    const label = mode === "qty" ? `${fmtNum(v)} units` : fmtMoney(v);
+    const h = v <= floor ? 2 : Math.max(4, Math.round(((v - floor) / span) * 100));
     return `
       <div class="trend-bar-wrap">
         <div class="trend-bar" style="height:${h}%;">
-          <span>${esc(t.month)} · ${esc(label)}</span>
+          <span>${esc(t.month)} · ${esc(fmtLabel(v))}</span>
         </div>
         <div class="trend-label">${esc(t.month)}</div>
       </div>
