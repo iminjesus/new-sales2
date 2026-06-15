@@ -500,6 +500,79 @@ def add_cache_headers(response):
         response.headers['Pragma'] = 'no-cache'
     return response
 
+# ─── Per-request usage logging ───────────────────────────────────────
+# Lightweight middleware that writes one row per HTTP request into
+# request_log so we can answer questions Cloudflare Access logs can't:
+# "which BDE opened /sales/rebate yesterday", "how many times did Asim
+# open the meeting view this week", "which paths get the most traffic".
+# Skips static + favicon to keep the table from filling with noise.
+import time as _time
+
+def _ensure_request_log_table():
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS request_log (
+                id          BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                user_email  VARCHAR(255) NOT NULL DEFAULT '',
+                path        VARCHAR(255) NOT NULL,
+                method      VARCHAR(10)  NOT NULL DEFAULT 'GET',
+                status      INT          NOT NULL DEFAULT 0,
+                duration_ms INT          NOT NULL DEFAULT 0,
+                ip          VARCHAR(64)  NOT NULL DEFAULT '',
+                ua          VARCHAR(255) NOT NULL DEFAULT '',
+                created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_rl_user_date (user_email, created_at),
+                INDEX idx_rl_path_date (path, created_at),
+                INDEX idx_rl_date      (created_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[request_log] schema init failed: {e}")
+
+# Initial table creation is deferred to after get_connection() is defined
+# (further down in the file).  The schema-init call happens alongside
+# _ensure_meeting_plan_table() down there.
+
+# Paths we never log — static assets, favicons, and the health-check-ish
+# polls that would otherwise dominate the table and crowd out the
+# user-meaningful navigation we actually care about.
+_LOG_SKIP_PREFIXES = ("/static/", "/favicon")
+_LOG_SKIP_EXACT    = {"/api/ai_status", "/api/whoami"}
+
+@app.before_request
+def _request_log_start():
+    request._rl_t0 = _time.monotonic()
+
+@app.after_request
+def _request_log_save(response):
+    try:
+        path = request.path or ""
+        if request.method == "OPTIONS":
+            return response
+        if any(path.startswith(p) for p in _LOG_SKIP_PREFIXES):
+            return response
+        if path in _LOG_SKIP_EXACT:
+            return response
+        email = (_bde_from_request() or "").strip().lower()
+        dur = int((_time.monotonic() - getattr(request, "_rl_t0", _time.monotonic())) * 1000)
+        ip = request.headers.get("CF-Connecting-IP") or request.remote_addr or ""
+        ua = (request.user_agent.string or "")[:255]
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO request_log "
+            "(user_email, path, method, status, duration_ms, ip, ua) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (email[:255], path[:255], request.method[:10],
+             int(response.status_code or 0), dur, ip[:64], ua)
+        )
+        conn.commit(); cur.close(); conn.close()
+    except Exception:
+        # Logging failure must never break the response — swallow quietly.
+        pass
+    return response
+
 def category_filters_stock(alias: str, category: str):
     joins, wh = [], []
     cat = (category or "ALL").upper()
@@ -7082,6 +7155,7 @@ def _ensure_meeting_plan_table():
         print(f"[meeting_plan] schema init failed: {e}")
 
 _ensure_meeting_plan_table()
+_ensure_request_log_table()
 
 def _bde_from_request():
     """Best-effort 'who is logged in'.  Cloudflare Access (if it's in
@@ -8040,6 +8114,109 @@ def _ai_parse(text):
 @app.get("/api/ai_status")
 def ai_status():
     return jsonify({"enabled": bool(ANTHROPIC_API_KEY), "model": AI_MODEL})
+
+# ─── Admin: dashboard usage analytics ────────────────────────────────
+# Read-only view onto request_log so we can quantify who's using the
+# dashboard and which views matter.  Restricted to ALL-role users (the
+# small admin set in _BDE_DIRECTORY — Hayden / JJ / Jayden).
+def _is_admin_request():
+    email = (_bde_from_request() or "").strip().lower()
+    if not email:
+        return False
+    me = _EMAIL_TO_DIR.get(email)
+    # role is the third tuple element; "ALL" = unscoped admin
+    return bool(me and me[2] == "ALL")
+
+@app.get("/admin/usage")
+def admin_usage_page():
+    if not _is_admin_request():
+        return ("Forbidden — admin only.", 403)
+    return send_from_directory("static", "admin_usage.html")
+
+@app.get("/api/admin/usage")
+def admin_usage_data():
+    """Aggregate request_log over the requested window (default 30 days).
+    Returns top paths, top users, daily totals, and per-user activity
+    counts so the admin_usage.html page can render without further
+    server round-trips."""
+    if not _is_admin_request():
+        return jsonify({"error": "admin only"}), 403
+    try:
+        days = int(request.args.get("days") or 30)
+    except Exception:
+        days = 30
+    days = max(1, min(days, 365))
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        cur.execute(
+            "SELECT COUNT(*) AS total, "
+            "COUNT(DISTINCT user_email) AS uniq_users "
+            "FROM request_log "
+            "WHERE created_at >= NOW() - INTERVAL %s DAY",
+            (days,)
+        )
+        summary = cur.fetchone() or {"total": 0, "uniq_users": 0}
+
+        # Top paths — strip the cache-busting query string by indexing on
+        # `path` only (already query-less since request.path).  Group / and
+        # trailing-slash variants together by trimming a trailing slash.
+        cur.execute(
+            "SELECT path, COUNT(*) AS hits, "
+            "COUNT(DISTINCT user_email) AS uniq_users "
+            "FROM request_log "
+            "WHERE created_at >= NOW() - INTERVAL %s DAY "
+            "GROUP BY path "
+            "ORDER BY hits DESC "
+            "LIMIT 30",
+            (days,)
+        )
+        top_paths = cur.fetchall()
+
+        cur.execute(
+            "SELECT user_email, COUNT(*) AS hits, "
+            "COUNT(DISTINCT DATE(created_at)) AS active_days, "
+            "MAX(created_at) AS last_seen "
+            "FROM request_log "
+            "WHERE created_at >= NOW() - INTERVAL %s DAY "
+            "  AND user_email <> '' "
+            "GROUP BY user_email "
+            "ORDER BY hits DESC "
+            "LIMIT 50",
+            (days,)
+        )
+        top_users = cur.fetchall()
+        for r in top_users:
+            if r.get("last_seen"):
+                r["last_seen"] = r["last_seen"].strftime("%Y-%m-%d %H:%M")
+
+        cur.execute(
+            "SELECT DATE(created_at) AS d, COUNT(*) AS hits, "
+            "COUNT(DISTINCT user_email) AS uniq_users "
+            "FROM request_log "
+            "WHERE created_at >= NOW() - INTERVAL %s DAY "
+            "GROUP BY DATE(created_at) "
+            "ORDER BY d",
+            (days,)
+        )
+        daily = cur.fetchall()
+        for r in daily:
+            if r.get("d"):
+                r["d"] = r["d"].strftime("%Y-%m-%d")
+
+        cur.close(); conn.close()
+        return jsonify({
+            "days": days,
+            "total": int(summary.get("total") or 0),
+            "uniq_users": int(summary.get("uniq_users") or 0),
+            "top_paths": top_paths,
+            "top_users": top_users,
+            "daily": daily,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.post("/api/meeting/voice_extract")
 def meeting_voice_extract():

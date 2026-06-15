@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard usage analytics</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#f3f4f6;color:#111827;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px}
+.toolbar{padding:12px 18px;background:#1e3a5f;color:#fff;display:flex;
+  align-items:center;gap:16px;flex-wrap:wrap}
+.toolbar h1{font-size:14px;font-weight:700;margin:0;flex:1}
+.toolbar a{color:#cbd5e1;font-size:12px;text-decoration:none}
+.toolbar a:hover{color:#fff}
+.toolbar select{background:#fff;color:#111827;border:none;border-radius:5px;
+  padding:5px 8px;font-size:12px}
+.wrap{padding:20px;max-width:1200px;margin:0 auto}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+  gap:12px;margin-bottom:20px}
+.kpi{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.kpi .label{font-size:10px;font-weight:700;color:#6b7280;
+  text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.kpi .value{font-size:26px;font-weight:700;color:#1e3a5f}
+.kpi .sub{font-size:11px;color:#6b7280;margin-top:2px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card h2{font-size:12px;font-weight:700;color:#1e3a5f;margin:0 0 10px;
+  text-transform:uppercase;letter-spacing:.5px;
+  padding-bottom:6px;border-bottom:1px solid #e5e7eb}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #f1f5f9}
+th{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;
+  letter-spacing:.4px;background:#fafafa}
+td.num,th.num{text-align:right;font-family:ui-monospace,Menlo,monospace}
+td.path{font-family:ui-monospace,Menlo,monospace;color:#1e3a5f;font-size:11px;
+  max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.email{font-size:11px;color:#374151}
+.bar{display:inline-block;height:5px;background:#2563eb;border-radius:2px;
+  vertical-align:middle;margin-left:6px}
+.daily-chart{display:flex;align-items:flex-end;gap:2px;height:80px;padding:4px 0;
+  border-bottom:1px solid #e5e7eb;margin-bottom:6px}
+.daily-bar{flex:1;min-width:6px;background:#2563eb;border-radius:2px 2px 0 0;
+  position:relative}
+.daily-bar:hover{background:#1d4ed8}
+.daily-bar span{display:none;position:absolute;bottom:100%;left:50%;
+  transform:translateX(-50%);background:#1e3a5f;color:#fff;padding:3px 6px;
+  border-radius:3px;font-size:10px;white-space:nowrap;margin-bottom:3px}
+.daily-bar:hover span{display:block}
+.daily-axis{display:flex;justify-content:space-between;font-size:9px;color:#9ca3af;
+  font-family:ui-monospace,Menlo,monospace}
+.status{padding:30px;text-align:center;color:#6b7280}
+.error{padding:30px;text-align:center;color:#dc2626;font-weight:600}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>📈 Dashboard usage analytics</h1>
+  <label>Window
+    <select id="daysSel">
+      <option value="7">Past 7 days</option>
+      <option value="14">Past 14 days</option>
+      <option value="30" selected>Past 30 days</option>
+      <option value="60">Past 60 days</option>
+      <option value="90">Past 90 days</option>
+    </select>
+  </label>
+  <a href="/" style="margin-left:auto;">← Back to Dashboard</a>
+</div>
+
+<div class="wrap">
+  <div id="status" class="status">Loading…</div>
+  <div id="body" style="display:none;">
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <h2>Daily traffic</h2>
+      <div id="dailyChart" class="daily-chart"></div>
+      <div id="dailyAxis" class="daily-axis"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Top paths</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th class="num">Hits</th>
+              <th class="num">Users</th>
+            </tr>
+          </thead>
+          <tbody id="topPaths"></tbody>
+        </table>
+      </div>
+      <div class="card">
+        <h2>Top users</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>User</th>
+              <th class="num">Hits</th>
+              <th class="num">Active days</th>
+              <th>Last seen</th>
+            </tr>
+          </thead>
+          <tbody id="topUsers"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function fmtNum(n){
+  return Number(n || 0).toLocaleString();
+}
+
+async function load(){
+  const status = document.getElementById("status");
+  const body   = document.getElementById("body");
+  const days   = document.getElementById("daysSel").value;
+  status.textContent = "Loading…";
+  status.className = "status";
+  body.style.display = "none";
+  try {
+    const r = await fetch("/api/admin/usage?days=" + encodeURIComponent(days));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    render(j);
+    status.style.display = "none";
+    body.style.display = "";
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.className = "error";
+  }
+}
+
+function render(j){
+  // KPIs
+  const avgPerUser = j.uniq_users ? Math.round(j.total / j.uniq_users) : 0;
+  const days = j.days || 30;
+  const avgPerDay  = Math.round(j.total / days);
+  document.getElementById("kpis").innerHTML = `
+    <div class="kpi">
+      <div class="label">Total requests</div>
+      <div class="value">${fmtNum(j.total)}</div>
+      <div class="sub">Past ${days} days</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Unique users</div>
+      <div class="value">${fmtNum(j.uniq_users)}</div>
+      <div class="sub">Distinct emails</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Avg per user</div>
+      <div class="value">${fmtNum(avgPerUser)}</div>
+      <div class="sub">Across the window</div>
+    </div>
+    <div class="kpi">
+      <div class="label">Avg per day</div>
+      <div class="value">${fmtNum(avgPerDay)}</div>
+      <div class="sub">All users combined</div>
+    </div>
+  `;
+
+  // Daily chart
+  const daily = j.daily || [];
+  const maxHits = Math.max(1, ...daily.map(d => d.hits || 0));
+  document.getElementById("dailyChart").innerHTML = daily.map(d => {
+    const h = Math.max(2, Math.round((d.hits / maxHits) * 100));
+    return `<div class="daily-bar" style="height:${h}%;">
+      <span>${esc(d.d)} · ${fmtNum(d.hits)} hits · ${fmtNum(d.uniq_users)} users</span>
+    </div>`;
+  }).join("");
+  if (daily.length) {
+    document.getElementById("dailyAxis").innerHTML =
+      `<span>${esc(daily[0].d)}</span><span>${esc(daily[daily.length-1].d)}</span>`;
+  }
+
+  // Top paths
+  const paths = j.top_paths || [];
+  const maxPathHits = Math.max(1, ...paths.map(p => p.hits || 0));
+  document.getElementById("topPaths").innerHTML = paths.map(p => {
+    const w = Math.round((p.hits / maxPathHits) * 100);
+    return `<tr>
+      <td class="path" title="${esc(p.path)}">${esc(p.path)}</td>
+      <td class="num">${fmtNum(p.hits)}<span class="bar" style="width:${w}px;"></span></td>
+      <td class="num">${fmtNum(p.uniq_users)}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="3" style="color:#9ca3af;padding:14px;">No data yet.</td></tr>`;
+
+  // Top users
+  const users = j.top_users || [];
+  document.getElementById("topUsers").innerHTML = users.map(u => `
+    <tr>
+      <td class="email">${esc(u.user_email || "(anonymous)")}</td>
+      <td class="num">${fmtNum(u.hits)}</td>
+      <td class="num">${fmtNum(u.active_days)}</td>
+      <td style="font-size:11px;color:#6b7280;">${esc(u.last_seen || "")}</td>
+    </tr>
+  `).join("") || `<tr><td colspan="4" style="color:#9ca3af;padding:14px;">No data yet.</td></tr>`;
+}
+
+document.getElementById("daysSel").addEventListener("change", load);
+load();
+</script>
+</body>
+</html>
