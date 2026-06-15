@@ -670,8 +670,12 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       <span id="filtShopBadge" style="font-size:11px;color:#1e3a5f;display:none;">
         <span style="color:#6b7280;">Shop:</span>
         <b id="filtShopBadgeText"></b>
+        <button type="button" id="filtShopBriefBtn" title="Open Shop Briefing Card"
+          style="background:#2563eb;color:#fff;border:none;border-radius:4px;
+                 padding:2px 8px;font-size:10px;font-weight:700;cursor:pointer;
+                 margin-left:6px;letter-spacing:.2px;">📋 Briefing</button>
         <a href="javascript:void(0)" id="filtShopBadgeClear"
-           style="color:#dc2626;margin-left:4px;font-weight:700;">×</a>
+           style="color:#dc2626;margin-left:6px;font-weight:700;">×</a>
       </span>
       <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
     </div>
@@ -911,6 +915,12 @@ function _setSelectedShop(row){
       badge.style.display = "inline";
       badgeTxt.textContent = (row.ship_to || "") +
         (row.ship_to_name ? " · " + row.ship_to_name : "");
+      // Briefing pill on the badge is for real ship_tos only.
+      const briefPill = document.getElementById("filtShopBriefBtn");
+      if (briefPill) {
+        const isPotShop = !!row.potential || (row.ship_to || "").startsWith("POT-");
+        briefPill.style.display = isPotShop ? "none" : "inline-block";
+      }
     } else {
       badge.style.display = "none";
     }
@@ -1822,6 +1832,15 @@ let _allBdeNames = [];
 // Recent entries via _setSelectedShop's loadRecent call).
 const _shopBadgeClear = document.getElementById("filtShopBadgeClear");
 if (_shopBadgeClear) _shopBadgeClear.addEventListener("click", () => _setSelectedShop(null));
+const _shopBadgeBrief = document.getElementById("filtShopBriefBtn");
+if (_shopBadgeBrief) {
+  _shopBadgeBrief.addEventListener("click", () => {
+    if (_selectedShop && _selectedShop.ship_to) {
+      openShopBriefing(_selectedShop.ship_to,
+                       _selectedShop.ship_to_name || "");
+    }
+  });
+}
 
 // ──────────────────────────────────────────────────────────────────
 // Calendar planner + ship-to palette with drag-and-drop
