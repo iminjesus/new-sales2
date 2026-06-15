@@ -1751,13 +1751,31 @@ function _isoDate(y, m, d) {
 }
 
 async function loadPlansForMonth(){
-  const qs = new URLSearchParams({year: _calState.year, month: _calState.month}).toString();
-  const rows = await fetchJSON("/api/meeting_plan?" + qs).catch(() => []);
+  // Fetch prev + current + next month in parallel so the overflow
+  // (dim) cells from adjacent months show their chips too — and so a
+  // drop on a dim cell visibly lands a chip there instead of looking
+  // like it silently failed.
+  const {year, month} = _calState;
+  const prevY = month === 1  ? year - 1 : year;
+  const prevM = month === 1  ? 12       : month - 1;
+  const nextY = month === 12 ? year + 1 : year;
+  const nextM = month === 12 ? 1        : month + 1;
+  const months = [
+    {y: prevY, m: prevM},
+    {y: year,  m: month},
+    {y: nextY, m: nextM},
+  ];
+  const results = await Promise.all(months.map(({y, m}) => {
+    const qs = new URLSearchParams({year: y, month: m}).toString();
+    return fetchJSON("/api/meeting_plan?" + qs).catch(() => []);
+  }));
   _planRowsByDate = {};
-  for (const r of (rows || [])) {
-    const d = r.plan_date;
-    if (!d) continue;
-    (_planRowsByDate[d] = _planRowsByDate[d] || []).push(r);
+  for (const rows of results) {
+    for (const r of (rows || [])) {
+      const d = r.plan_date;
+      if (!d) continue;
+      (_planRowsByDate[d] = _planRowsByDate[d] || []).push(r);
+    }
   }
 }
 
