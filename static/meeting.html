@@ -32,8 +32,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
      the palette BETWEEN them on mobile, which makes the drag from
      palette → calendar a single short swipe. */
   .planner-left{display:contents}
-  .plan-board       {order:1}   /* calendar */
-  .planner-palette  {order:2}   /* ship-to palette */
+  /* On mobile the customer palette comes FIRST so the BDE picks a
+     shop before scrolling down to schedule it on the calendar — order
+     intentionally inverted from the desktop visual layout. */
+  .planner-palette  {order:1}   /* ship-to palette */
+  .plan-board       {order:2}   /* calendar */
   .form-card        {order:3}   /* new visit form */
   .planner-right    {order:4}   /* recent entries */
   /* Highlight the palette as the obvious "selection area" on mobile.
