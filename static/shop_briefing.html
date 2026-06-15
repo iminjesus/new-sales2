@@ -1,0 +1,385 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop briefing</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#f3f4f6;color:#111827;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px}
+.toolbar{padding:12px 16px;background:#1e3a5f;color:#fff;display:flex;
+  align-items:center;gap:14px;flex-wrap:wrap;position:sticky;top:0;z-index:10}
+.toolbar h1{font-size:14px;font-weight:700;margin:0;flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.toolbar a{color:#cbd5e1;font-size:12px;text-decoration:none}
+.toolbar a:hover{color:#fff}
+.wrap{padding:16px;max-width:780px;margin:0 auto}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:10px;
+  padding:14px 16px;margin-bottom:14px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.card h2{font-size:11px;font-weight:700;color:#1e3a5f;margin:0 0 10px;
+  text-transform:uppercase;letter-spacing:.5px;
+  padding-bottom:6px;border-bottom:1px solid #e5e7eb}
+.shop-head{display:flex;flex-direction:column;gap:2px}
+.shop-name{font-size:18px;font-weight:700;color:#1e3a5f;line-height:1.2}
+.shop-meta{font-size:11px;color:#6b7280;
+  font-family:ui-monospace,Menlo,monospace}
+
+/* One-tap communication row */
+.comm-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.comm-btn{flex:1 1 calc(33% - 6px);min-width:90px;
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:10px 8px;border:1px solid #d1d5db;border-radius:8px;
+  background:#fff;color:#1e3a5f;font-size:11px;font-weight:600;
+  text-decoration:none;cursor:pointer}
+.comm-btn:hover{background:#f0f9ff;border-color:#2563eb;color:#2563eb}
+.comm-btn:active{background:#dbeafe}
+.comm-btn .ico{font-size:18px;line-height:1}
+.comm-btn.disabled{opacity:.4;pointer-events:none;background:#fafafa}
+
+/* Contacts table */
+.contacts{font-size:12px}
+.contacts .person{font-weight:600;color:#111827}
+.contacts .ctc{font-family:ui-monospace,Menlo,monospace;color:#2563eb;font-size:11px}
+.contacts .ago{font-size:10px;color:#9ca3af}
+.contacts table{width:100%;border-collapse:collapse}
+.contacts td{padding:5px 6px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+
+/* Last meeting block */
+.lm-row{display:flex;gap:8px;font-size:12px;margin-bottom:5px}
+.lm-row .lm-key{flex:0 0 90px;font-size:10px;font-weight:700;color:#6b7280;
+  text-transform:uppercase;letter-spacing:.3px;padding-top:1px}
+.lm-row .lm-val{flex:1;color:#111827;word-break:break-word}
+.lm-notes{background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;
+  padding:8px 10px;font-size:12px;color:#374151;white-space:pre-wrap;
+  line-height:1.45;margin-top:6px}
+.lm-purpose{display:inline-block;font-size:10px;font-weight:700;color:#1e3a5f;
+  background:#e0e7ff;padding:2px 8px;border-radius:8px;letter-spacing:.2px}
+
+/* 6-month sales trend */
+.trend-chart{display:flex;align-items:flex-end;gap:6px;height:120px;padding:6px 0;
+  border-bottom:1px solid #e5e7eb;margin-bottom:6px}
+.trend-bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;
+  justify-content:flex-end;gap:4px;min-width:30px}
+.trend-bar{width:100%;max-width:50px;background:#2563eb;border-radius:3px 3px 0 0;
+  min-height:2px;position:relative}
+.trend-bar:hover{background:#1d4ed8}
+.trend-bar span{display:none;position:absolute;bottom:100%;left:50%;
+  transform:translateX(-50%);background:#1e3a5f;color:#fff;padding:3px 7px;
+  border-radius:3px;font-size:10px;white-space:nowrap;margin-bottom:4px}
+.trend-bar:hover span{display:block}
+.trend-label{font-size:10px;font-weight:700;color:#6b7280;
+  text-transform:uppercase;letter-spacing:.4px}
+.trend-axis{display:flex;gap:6px;font-size:10px;color:#6b7280;
+  font-family:ui-monospace,Menlo,monospace;margin-top:2px}
+.trend-axis .ax{flex:1;text-align:center}
+.trend-toggle{font-size:10px;color:#2563eb;cursor:pointer;
+  text-decoration:underline;float:right;margin-top:-22px;margin-bottom:8px}
+
+/* Rebate progress (fetched separately) */
+.reb-row{display:flex;gap:8px;font-size:12px;align-items:center;padding:6px 0;
+  border-bottom:1px solid #f1f5f9}
+.reb-row:last-child{border:none}
+.reb-row .reb-struct{flex:0 0 130px;font-family:ui-monospace,Menlo,monospace;
+  font-size:11px;color:#374151}
+.reb-row .reb-prog{flex:1;min-width:120px}
+.reb-bar-outer{height:10px;background:#f3f4f6;border-radius:5px;overflow:hidden;
+  border:1px solid #e5e7eb}
+.reb-bar-inner{height:100%;background:#16a34a;transition:width .3s}
+.reb-row .reb-need{flex:0 0 160px;font-size:11px;color:#374151;text-align:right}
+.reb-need .need-num{font-weight:700;color:#dc2626;font-family:ui-monospace,Menlo,monospace}
+.reb-need .need-rate{font-size:10px;color:#16a34a;font-weight:700}
+.reb-row.reb-max .reb-need{color:#16a34a;font-weight:700}
+
+.status-msg{padding:14px;color:#6b7280;font-size:12px;text-align:center}
+.error-msg{padding:14px;color:#dc2626;font-size:12px;text-align:center;font-weight:600}
+
+@media (max-width:540px){
+  .comm-btn{flex:1 1 calc(50% - 4px);min-width:auto}
+  .lm-row .lm-key{flex:0 0 70px}
+  .reb-row{flex-wrap:wrap}
+  .reb-row .reb-struct{flex:1 0 100%}
+  .reb-row .reb-need{flex:0 0 auto;text-align:left}
+}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1 id="topTitle">Shop briefing</h1>
+  <a href="/meeting" style="margin-left:auto;">← Meeting</a>
+  <a href="/">Home</a>
+</div>
+
+<div class="wrap" id="wrap">
+  <div class="status-msg" id="bootStatus">Loading shop briefing…</div>
+</div>
+
+<script>
+const SHIP_TO = location.pathname.split("/").filter(Boolean).pop() || "";
+
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function fmtMoney(n){
+  return "$" + Math.round(n || 0).toLocaleString();
+}
+function fmtNum(n){
+  return Number(n || 0).toLocaleString();
+}
+function daysAgo(iso){
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  const ms = Date.now() - d.getTime();
+  const days = Math.round(ms / 86400000);
+  if (days < 1)  return "today";
+  if (days < 2)  return "yesterday";
+  if (days < 14) return days + " days ago";
+  if (days < 60) return Math.round(days/7) + " weeks ago";
+  return Math.round(days/30) + " months ago";
+}
+
+// One-tap communication.  A contact string is either a phone number or
+// an email — pick the URL scheme by the @ sniff test, and disable
+// any button we have no value for.
+function makeCommBlock(contacts){
+  // First valid phone + first valid email picked off the contact list.
+  let phone = "", email = "";
+  for (const c of contacts) {
+    const v = (c.contact || "").trim();
+    if (!v) continue;
+    if (v.includes("@") && !email) email = v;
+    else if (!phone) phone = v.replace(/[\s\-()]/g, "");
+  }
+  const phoneEl = phone
+    ? `<a class="comm-btn" href="tel:${esc(phone)}">
+         <span class="ico">📞</span><span>Call</span>
+         <span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#6b7280;">${esc(phone)}</span>
+       </a>
+       <a class="comm-btn" href="sms:${esc(phone)}">
+         <span class="ico">💬</span><span>SMS</span>
+         <span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#6b7280;">${esc(phone)}</span>
+       </a>`
+    : `<span class="comm-btn disabled"><span class="ico">📞</span><span>No phone</span></span>
+       <span class="comm-btn disabled"><span class="ico">💬</span><span>No phone</span></span>`;
+  const emailEl = email
+    ? `<a class="comm-btn" href="mailto:${esc(email)}">
+         <span class="ico">📧</span><span>Email</span>
+         <span style="font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#6b7280;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:block;">${esc(email)}</span>
+       </a>`
+    : `<span class="comm-btn disabled"><span class="ico">📧</span><span>No email</span></span>`;
+  return `<div class="comm-row">${phoneEl}${emailEl}</div>`;
+}
+
+function renderShop(j){
+  const wrap = document.getElementById("wrap");
+  const shop = j.shop || {};
+  const lm   = j.last_meeting;
+  const trend = j.sales_trend || [];
+  document.getElementById("topTitle").textContent =
+    `${shop.ship_to_name || shop.ship_to || "Shop"}`;
+
+  // Shop header card
+  const headHtml = `
+    <div class="card">
+      <div class="shop-head">
+        <div class="shop-name">${esc(shop.ship_to_name || shop.ship_to || "(unknown)")}</div>
+        <div class="shop-meta">
+          #${esc(shop.ship_to || "")}
+          ${shop.sold_to ? " · sold-to " + esc(shop.sold_to) : ""}
+          ${shop.sold_to_name ? " (" + esc(shop.sold_to_name) + ")" : ""}
+        </div>
+        <div class="shop-meta">
+          ${shop.bde_state ? esc(shop.bde_state) + " · " : ""}
+          ${shop.salesman_name ? "BDE " + esc(shop.salesman_name) + " · " : ""}
+          ${fmtNum(j.meeting_count_12m || 0)} visits past 12 months
+        </div>
+      </div>
+      ${makeCommBlock(j.contacts || [])}
+    </div>
+  `;
+
+  // Last meeting
+  let meetingHtml = "";
+  if (lm) {
+    meetingHtml = `
+      <div class="card">
+        <h2>📅 Last visit — ${esc(lm.visit_date)} <span style="color:#9ca3af;font-weight:500;text-transform:none;letter-spacing:0;font-size:10px;">(${esc(daysAgo(lm.visit_date))})</span></h2>
+        ${lm.visit_purpose ? `<div style="margin-bottom:8px;"><span class="lm-purpose">${esc(lm.visit_purpose)}</span></div>` : ""}
+        <div class="lm-row"><div class="lm-key">BDE</div>          <div class="lm-val">${esc(lm.bde_name || "")}</div></div>
+        ${lm.met_person ? `<div class="lm-row"><div class="lm-key">Met</div><div class="lm-val">${esc(lm.met_person)}${lm.met_person_contact ? ` <span style="color:#6b7280;font-family:ui-monospace,Menlo,monospace;font-size:11px;">· ${esc(lm.met_person_contact)}</span>` : ""}</div></div>` : ""}
+        ${lm.next_action ? `<div class="lm-row"><div class="lm-key">Next action</div><div class="lm-val" style="color:#dc2626;">${esc(lm.next_action)}</div></div>` : ""}
+        ${lm.notes ? `<div class="lm-notes">${esc(lm.notes)}</div>` : ""}
+      </div>
+    `;
+  } else {
+    meetingHtml = `
+      <div class="card">
+        <h2>📅 Last visit</h2>
+        <div class="status-msg">No meeting log yet for this shop.</div>
+      </div>
+    `;
+  }
+
+  // Contacts (extra — beyond the 1 highlighted in one-tap row)
+  const contacts = j.contacts || [];
+  let contactsHtml = "";
+  if (contacts.length > 1) {
+    contactsHtml = `
+      <div class="card">
+        <h2>👥 All contacts on file</h2>
+        <table class="contacts">
+          ${contacts.map(c => `
+            <tr>
+              <td class="person">${esc(c.name || "—")}</td>
+              <td>${c.contact
+                ? (c.is_email
+                    ? `<a href="mailto:${esc(c.contact)}" class="ctc">${esc(c.contact)}</a>`
+                    : `<a href="tel:${esc(c.contact.replace(/[\s\-()]/g, ''))}" class="ctc">${esc(c.contact)}</a>`)
+                : ""}</td>
+              <td class="ago">${esc(daysAgo(c.last_seen))}</td>
+            </tr>
+          `).join("")}
+        </table>
+      </div>
+    `;
+  }
+
+  // 6-month trend.  Toggle qty vs amount (amount by default).
+  const maxAmt = Math.max(1, ...trend.map(t => t.amt || 0));
+  const maxQty = Math.max(1, ...trend.map(t => t.qty || 0));
+  const totalAmt = trend.reduce((a,b) => a + (b.amt || 0), 0);
+  const totalQty = trend.reduce((a,b) => a + (b.qty || 0), 0);
+  let trendHtml = `
+    <div class="card">
+      <h2>📈 6-month sales trend
+        <span style="float:right;font-weight:500;text-transform:none;letter-spacing:0;color:#6b7280;font-size:10px;">
+          Total: ${fmtMoney(totalAmt)} · ${fmtNum(totalQty)} units
+        </span>
+      </h2>
+      <div style="text-align:right;">
+        <span id="trendToggle" class="trend-toggle">switch to Qty →</span>
+      </div>
+      <div class="trend-chart" id="trendChart"></div>
+      <div class="trend-axis">
+        ${trend.map(t => `<span class="ax">${esc(t.month)}</span>`).join("")}
+      </div>
+    </div>
+  `;
+
+  // Rebate placeholder (fetched separately below).
+  const rebateHtml = `
+    <div class="card" id="rebateCard">
+      <h2>💰 Rebate progress (this month)</h2>
+      <div class="status-msg" id="rebateStatus">Loading rebate progress…</div>
+      <div id="rebateBody" style="display:none;"></div>
+    </div>
+  `;
+
+  wrap.innerHTML = headHtml + meetingHtml + contactsHtml + trendHtml + rebateHtml;
+  drawTrend(trend, "amt");
+
+  document.getElementById("trendToggle").addEventListener("click", (e) => {
+    const cur = e.target.dataset.mode || "amt";
+    const next = cur === "amt" ? "qty" : "amt";
+    e.target.dataset.mode = next;
+    e.target.textContent = next === "amt" ? "switch to Qty →" : "switch to $ amount →";
+    drawTrend(trend, next);
+  });
+}
+
+function drawTrend(trend, mode){
+  const chart = document.getElementById("trendChart");
+  if (!chart) return;
+  const vmax = Math.max(1, ...trend.map(t => mode === "qty" ? (t.qty || 0) : (t.amt || 0)));
+  chart.innerHTML = trend.map(t => {
+    const v = mode === "qty" ? (t.qty || 0) : (t.amt || 0);
+    const h = Math.max(2, Math.round((v / vmax) * 100));
+    const label = mode === "qty" ? `${fmtNum(v)} units` : fmtMoney(v);
+    return `
+      <div class="trend-bar-wrap">
+        <div class="trend-bar" style="height:${h}%;">
+          <span>${esc(t.month)} · ${esc(label)}</span>
+        </div>
+        <div class="trend-label">${esc(t.month)}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+// Rebate next-tier — uses the existing /api/rebate_data endpoint
+// filtered to just this ship_to (server already supports this filter).
+async function loadRebate(){
+  const status = document.getElementById("rebateStatus");
+  const body   = document.getElementById("rebateBody");
+  if (!status || !body) return;
+  try {
+    const qs = new URLSearchParams({
+      ship_to: SHIP_TO,
+      show:    "ALL",
+      sort:    "actual",
+      dir:     "desc",
+      page:    "0",
+      page_size: "200",
+    });
+    const r = await fetch("/api/rebate_data?" + qs.toString());
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    const rows = (j.rows || []).filter(x => String(x.ship_to) === String(SHIP_TO));
+    if (!rows.length) {
+      status.textContent = "No rebate structure mapped for this shop.";
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const unit = r.unit === "Q" ? "units" : "$";
+      const needed = r.unit === "Q" ? r.needed_qty : r.needed_amt;
+      const actual = r.unit === "Q" ? r.tier_actual : r.tier_actual;
+      const nextThr = r.next_threshold;
+      const atMax = !nextThr;
+      const pct = (nextThr && nextThr > 0) ? Math.min(100, Math.round((actual / nextThr) * 100)) : 100;
+      const fmt = (n) => r.unit === "Q" ? fmtNum(n) + " units" : fmtMoney(n);
+      return `
+        <div class="reb-row ${atMax ? 'reb-max' : ''}">
+          <div class="reb-struct">${esc(r.structure_name)}</div>
+          <div class="reb-prog">
+            <div style="display:flex;justify-content:space-between;font-size:10px;color:#6b7280;margin-bottom:2px;">
+              <span>${fmt(actual)} / ${atMax ? "(top tier reached)" : fmt(nextThr)}</span>
+              <span style="font-weight:700;color:#16a34a;">${r.curr_rate}%</span>
+            </div>
+            <div class="reb-bar-outer">
+              <div class="reb-bar-inner" style="width:${pct}%"></div>
+            </div>
+          </div>
+          <div class="reb-need">
+            ${atMax
+              ? "🏆 Top tier"
+              : `<span class="need-num">+${fmt(needed)}</span><br>
+                 to <span class="need-rate">${r.next_rate}%</span> tier`}
+          </div>
+        </div>
+      `;
+    }).join("");
+    status.style.display = "none";
+    body.style.display = "";
+  } catch (e) {
+    status.textContent = "Rebate load failed: " + e.message;
+  }
+}
+
+(async () => {
+  const status = document.getElementById("bootStatus");
+  try {
+    const r = await fetch("/api/shop_briefing/" + encodeURIComponent(SHIP_TO));
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    renderShop(j);
+    loadRebate();
+  } catch (e) {
+    status.className = "error-msg";
+    status.textContent = "Error: " + e.message;
+  }
+})();
+</script>
+</body>
+</html>

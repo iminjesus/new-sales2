@@ -8126,6 +8126,136 @@ def _ai_parse(text):
 def ai_status():
     return jsonify({"enabled": bool(ANTHROPIC_API_KEY), "model": AI_MODEL})
 
+# ─── Shop Briefing Card ───────────────────────────────────────────────
+# Per-shop summary view a BDE pulls up on the phone right before walking
+# into a shop (or before calling its owner): last visit recap, recent
+# contacts, 6-month sales trend, and a one-tap call/SMS/email row.  The
+# rebate next-tier figures live on /api/rebate_data already and are
+# fetched separately from the frontend so we don't duplicate that calc
+# (and so the briefing renders even if rebate calc is slow).
+@app.get("/shop/<ship_to>")
+def shop_briefing_page(ship_to):
+    return send_from_directory("static", "shop_briefing.html")
+
+@app.get("/api/shop_briefing/<ship_to>")
+def shop_briefing_data(ship_to):
+    if not ship_to:
+        return jsonify({"error": "ship_to required"}), 400
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        # 1. Shop master ----------------------------------------------------
+        cur.execute(
+            "SELECT ship_to, ship_to_name, sold_to, sold_to_name, "
+            "       bde_state, salesman_name "
+            "FROM customer WHERE ship_to = %s LIMIT 1",
+            (ship_to,),
+        )
+        shop = cur.fetchone() or {"ship_to": ship_to}
+
+        # 2. Last meeting log -----------------------------------------------
+        cur.execute(
+            "SELECT id, visit_date, bde_name, bde_email, visit_purpose, "
+            "       met_person, met_person_contact, prep_notes, notes, "
+            "       next_action, created_at "
+            "FROM meeting_log "
+            "WHERE ship_to = %s "
+            "  AND notes IS NOT NULL AND TRIM(notes) <> '' "
+            "ORDER BY visit_date DESC, id DESC "
+            "LIMIT 1",
+            (ship_to,),
+        )
+        last_meeting = cur.fetchone()
+        if last_meeting:
+            for k in ("visit_date", "created_at"):
+                if last_meeting.get(k):
+                    last_meeting[k] = last_meeting[k].strftime("%Y-%m-%d")
+
+        # 3. Distinct met person + contact pairs (history, newest first) -----
+        # Many BDEs talk to multiple people at the same shop over time —
+        # the briefing surfaces all of them so a one-tap dial picks any.
+        cur.execute(
+            "SELECT met_person, met_person_contact, MAX(visit_date) AS last_seen "
+            "FROM meeting_log "
+            "WHERE ship_to = %s "
+            "  AND ((met_person IS NOT NULL AND TRIM(met_person) <> '') "
+            "    OR (met_person_contact IS NOT NULL AND TRIM(met_person_contact) <> '')) "
+            "GROUP BY met_person, met_person_contact "
+            "ORDER BY last_seen DESC "
+            "LIMIT 10",
+            (ship_to,),
+        )
+        contacts = []
+        for r in cur.fetchall():
+            person  = (r.get("met_person") or "").strip()
+            contact = (r.get("met_person_contact") or "").strip()
+            if not person and not contact:
+                continue
+            contacts.append({
+                "name":      person,
+                "contact":   contact,
+                "is_email":  "@" in contact,
+                "last_seen": r["last_seen"].strftime("%Y-%m-%d") if r.get("last_seen") else "",
+            })
+
+        # 4. 6-month sales trend --------------------------------------------
+        # Loop through the per-month REBATE_SALES_TABLES + sales_thismonth
+        # so the trend always reflects whatever ETL has produced so far —
+        # don't hand-code month names.  Tables that don't exist yet (e.g.
+        # before this fiscal-year refresh) silently contribute zero.
+        trend_specs = [
+            ("Jan", "sales_2601"),
+            ("Feb", "sales_2602"),
+            ("Mar", "sales_2603"),
+            ("Apr", "sales_2604"),
+            ("May", "sales_2605"),
+            ("Jun", "sales_thismonth"),
+        ]
+        sales_trend = []
+        for label, tbl in trend_specs:
+            try:
+                cur.execute(
+                    "SELECT COALESCE(SUM(qty),0) AS qty, "
+                    "       COALESCE(SUM(amt),0) AS amt "
+                    "FROM " + tbl + " "
+                    "WHERE ship_to = %s "
+                    "  AND brand IN ('HK','LF')",
+                    (ship_to,)
+                )
+                r = cur.fetchone() or {"qty": 0, "amt": 0}
+                sales_trend.append({
+                    "month": label,
+                    "table": tbl,
+                    "qty":   float(r.get("qty") or 0),
+                    "amt":   float(r.get("amt") or 0),
+                })
+            except Exception:
+                # Table missing for that month — show zero rather than 500.
+                sales_trend.append({"month": label, "table": tbl, "qty": 0, "amt": 0})
+
+        # 5. Meeting count (past 12 months) ----------------------------------
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM meeting_log "
+            "WHERE ship_to = %s AND visit_date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)",
+            (ship_to,)
+        )
+        rcnt = cur.fetchone() or {"n": 0}
+        meeting_count_12m = int(rcnt.get("n") or 0)
+
+        cur.close(); conn.close()
+
+        return jsonify({
+            "shop":              shop,
+            "last_meeting":      last_meeting,
+            "contacts":          contacts,
+            "sales_trend":       sales_trend,
+            "meeting_count_12m": meeting_count_12m,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # ─── Admin: dashboard usage analytics ────────────────────────────────
 # Read-only view onto request_log so we can quantify who's using the
 # dashboard and which views matter.  Restricted to ALL-role users (the
