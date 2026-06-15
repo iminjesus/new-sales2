@@ -99,10 +99,14 @@ td.email{font-size:11px;color:#374151}
       </div>
       <div class="card">
         <h2>Top users</h2>
+        <p style="font-size:10px;color:#9ca3af;margin:-6px 0 8px;">
+          Tap a row to see what they did, when, and from where ↓
+        </p>
         <table>
           <thead>
             <tr>
               <th>User</th>
+              <th>Country</th>
               <th class="num">Hits</th>
               <th class="num">Active days</th>
               <th>Last seen</th>
@@ -111,6 +115,12 @@ td.email{font-size:11px;color:#374151}
           <tbody id="topUsers"></tbody>
         </table>
       </div>
+    </div>
+
+    <!-- Per-user drill-down: paths, daily activity, locations. -->
+    <div id="userDetail" class="card" style="margin-top:18px;display:none;">
+      <h2 id="userDetailTitle">User activity detail</h2>
+      <div id="userDetailBody" style="font-size:12px;color:#6b7280;">Loading…</div>
     </div>
   </div>
 </div>
@@ -198,16 +208,105 @@ function render(j){
     </tr>`;
   }).join("") || `<tr><td colspan="3" style="color:#9ca3af;padding:14px;">No data yet.</td></tr>`;
 
-  // Top users
+  // Top users — clickable rows.  The Country / IP columns come from
+  // the most-common (country, ip) pair we observed for this user in
+  // the window, so admins can spot off-network access at a glance.
   const users = j.top_users || [];
-  document.getElementById("topUsers").innerHTML = users.map(u => `
-    <tr>
-      <td class="email">${esc(u.user_email || "(anonymous)")}</td>
+  document.getElementById("topUsers").innerHTML = users.map(u => {
+    const flag = u.country ? `<span style="font-family:ui-monospace,Menlo,monospace;">${esc(u.country)}</span>` : "—";
+    const ipLine = u.ip ? `<div style="font-size:9px;color:#9ca3af;font-family:ui-monospace,Menlo,monospace;">${esc(u.ip)}</div>` : "";
+    return `<tr data-email="${esc(u.user_email)}" style="cursor:pointer;">
+      <td class="email">${esc(u.user_email || "(no auth)")}</td>
+      <td>${flag}${ipLine}</td>
       <td class="num">${fmtNum(u.hits)}</td>
       <td class="num">${fmtNum(u.active_days)}</td>
       <td style="font-size:11px;color:#6b7280;">${esc(u.last_seen || "")}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="5" style="color:#9ca3af;padding:14px;">No data yet.</td></tr>`;
+
+  document.querySelectorAll("#topUsers tr[data-email]").forEach(tr => {
+    tr.addEventListener("click", () => loadUserDetail(tr.dataset.email));
+  });
+}
+
+async function loadUserDetail(email){
+  const card  = document.getElementById("userDetail");
+  const title = document.getElementById("userDetailTitle");
+  const body  = document.getElementById("userDetailBody");
+  const days  = document.getElementById("daysSel").value;
+  const labelEmail = email || "(no auth)";
+  card.style.display = "";
+  title.textContent = `User activity — ${labelEmail}`;
+  body.innerHTML = "Loading…";
+  card.scrollIntoView({behavior: "smooth", block: "start"});
+  try {
+    const qs = new URLSearchParams({ email, days });
+    const r = await fetch("/api/admin/usage/user?" + qs.toString());
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    renderUserDetail(j);
+  } catch (e) {
+    body.innerHTML = `<div style="color:#dc2626;">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderUserDetail(j){
+  const paths = j.paths || [];
+  const daily = j.daily || [];
+  const locs  = j.locations || [];
+  const maxPathHits = Math.max(1, ...paths.map(p => p.hits || 0));
+  const maxDayHits  = Math.max(1, ...daily.map(d => d.hits || 0));
+
+  const pathRows = paths.map(p => {
+    const w = Math.round((p.hits / maxPathHits) * 100);
+    return `<tr>
+      <td class="path" title="${esc(p.path)}">${esc(p.path)}</td>
+      <td class="num">${fmtNum(p.hits)}<span class="bar" style="width:${w}px;"></span></td>
+      <td style="font-size:11px;color:#6b7280;">${esc(p.last_seen || "")}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="3" style="color:#9ca3af;padding:10px;">No paths in window.</td></tr>`;
+
+  const locRows = locs.map(l => `
+    <tr>
+      <td style="font-family:ui-monospace,Menlo,monospace;">${esc(l.country || "—")}</td>
+      <td style="font-family:ui-monospace,Menlo,monospace;font-size:11px;">${esc(l.ip || "")}</td>
+      <td class="num">${fmtNum(l.hits)}</td>
+      <td style="font-size:11px;color:#6b7280;">${esc(l.last_seen || "")}</td>
     </tr>
-  `).join("") || `<tr><td colspan="4" style="color:#9ca3af;padding:14px;">No data yet.</td></tr>`;
+  `).join("") || `<tr><td colspan="4" style="color:#9ca3af;padding:10px;">No location data.</td></tr>`;
+
+  const dayBars = daily.map(d => {
+    const h = Math.max(2, Math.round((d.hits / maxDayHits) * 100));
+    return `<div class="daily-bar" style="height:${h}%;">
+      <span>${esc(d.d)} · ${fmtNum(d.hits)} hits</span>
+    </div>`;
+  }).join("");
+  const axis = daily.length
+    ? `<div class="daily-axis"><span>${esc(daily[0].d)}</span><span>${esc(daily[daily.length-1].d)}</span></div>`
+    : "";
+
+  document.getElementById("userDetailBody").innerHTML = `
+    <div style="margin-bottom:10px;color:#111827;font-weight:600;">Daily activity</div>
+    <div class="daily-chart">${dayBars}</div>
+    ${axis}
+
+    <div class="grid2" style="margin-top:14px;">
+      <div>
+        <div style="margin-bottom:8px;color:#111827;font-weight:600;">Paths visited (${fmtNum(paths.length)})</div>
+        <table>
+          <thead><tr><th>Path</th><th class="num">Hits</th><th>Last seen</th></tr></thead>
+          <tbody>${pathRows}</tbody>
+        </table>
+      </div>
+      <div>
+        <div style="margin-bottom:8px;color:#111827;font-weight:600;">Locations / IPs</div>
+        <table>
+          <thead><tr><th>Country</th><th>IP</th><th class="num">Hits</th><th>Last seen</th></tr></thead>
+          <tbody>${locRows}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 document.getElementById("daysSel").addEventListener("change", load);

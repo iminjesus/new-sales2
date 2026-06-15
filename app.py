@@ -527,6 +527,14 @@ def _ensure_request_log_table():
                 INDEX idx_rl_date      (created_at)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # Add country column if missing (Cloudflare CF-IPCountry, 2-letter
+        # ISO code).  Older deployments created the table before this
+        # column existed — keep adding it idempotently here so we don't
+        # need a separate migration step.
+        cur.execute("SHOW COLUMNS FROM request_log LIKE 'country'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE request_log "
+                        "ADD COLUMN country VARCHAR(8) NOT NULL DEFAULT ''")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         print(f"[request_log] schema init failed: {e}")
@@ -559,13 +567,16 @@ def _request_log_save(response):
         dur = int((_time.monotonic() - getattr(request, "_rl_t0", _time.monotonic())) * 1000)
         ip = request.headers.get("CF-Connecting-IP") or request.remote_addr or ""
         ua = (request.user_agent.string or "")[:255]
+        # Cloudflare injects CF-IPCountry on every request (2-letter ISO);
+        # behind Tailscale / local dev it's absent so we just store "".
+        country = (request.headers.get("CF-IPCountry") or "")[:8]
         conn = get_connection(); cur = conn.cursor()
         cur.execute(
             "INSERT INTO request_log "
-            "(user_email, path, method, status, duration_ms, ip, ua) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            "(user_email, path, method, status, duration_ms, ip, ua, country) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
             (email[:255], path[:255], request.method[:10],
-             int(response.status_code or 0), dur, ip[:64], ua)
+             int(response.status_code or 0), dur, ip[:64], ua, country)
         )
         conn.commit(); cur.close(); conn.close()
     except Exception:
@@ -8174,22 +8185,41 @@ def admin_usage_data():
         )
         top_paths = cur.fetchall()
 
+        # Top users — include anonymous rows (empty email) too so the
+        # unique-users KPI and this list always reconcile.  Subquery
+        # picks the most common (country, IP) per user so the admin can
+        # see "where they came from" without scanning every row.
         cur.execute(
-            "SELECT user_email, COUNT(*) AS hits, "
-            "COUNT(DISTINCT DATE(created_at)) AS active_days, "
-            "MAX(created_at) AS last_seen "
-            "FROM request_log "
-            "WHERE created_at >= NOW() - INTERVAL %s DAY "
-            "  AND user_email <> '' "
-            "GROUP BY user_email "
+            "SELECT r.user_email, COUNT(*) AS hits, "
+            "       COUNT(DISTINCT DATE(r.created_at)) AS active_days, "
+            "       MAX(r.created_at) AS last_seen, "
+            "       (SELECT country FROM request_log r2 "
+            "         WHERE r2.user_email = r.user_email "
+            "           AND r2.created_at >= NOW() - INTERVAL %s DAY "
+            "         GROUP BY country ORDER BY COUNT(*) DESC LIMIT 1) AS country, "
+            "       (SELECT ip FROM request_log r3 "
+            "         WHERE r3.user_email = r.user_email "
+            "           AND r3.created_at >= NOW() - INTERVAL %s DAY "
+            "         GROUP BY ip ORDER BY COUNT(*) DESC LIMIT 1) AS ip "
+            "FROM request_log r "
+            "WHERE r.created_at >= NOW() - INTERVAL %s DAY "
+            "GROUP BY r.user_email "
             "ORDER BY hits DESC "
             "LIMIT 50",
-            (days,)
+            (days, days, days)
         )
         top_users = cur.fetchall()
         for r in top_users:
             if r.get("last_seen"):
                 r["last_seen"] = r["last_seen"].strftime("%Y-%m-%d %H:%M")
+            if not r.get("user_email"):
+                # Empty-email rows = requests that didn't carry a
+                # Cf-Access-Authenticated-User-Email header.  Most
+                # commonly: the public /claim/* customer portal, or
+                # health-check hits from Cloudflare itself.
+                r["user_email"] = "(no auth — public /claim or health check)"
+            r["country"] = r.get("country") or ""
+            r["ip"] = r.get("ip") or ""
 
         cur.execute(
             "SELECT DATE(created_at) AS d, COUNT(*) AS hits, "
@@ -8213,6 +8243,82 @@ def admin_usage_data():
             "top_paths": top_paths,
             "top_users": top_users,
             "daily": daily,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.get("/api/admin/usage/user")
+def admin_usage_user_detail():
+    """Per-user drill-down: which paths did this user hit, when, and
+    from where.  Drives the per-user activity panel on /admin/usage."""
+    if not _is_admin_request():
+        return jsonify({"error": "admin only"}), 403
+    email = (request.args.get("email") or "").strip().lower()
+    try:
+        days = int(request.args.get("days") or 30)
+    except Exception:
+        days = 30
+    days = max(1, min(days, 365))
+    # The Top Users list shows "(no auth …)" for empty-email rows;
+    # the frontend sends that label back verbatim — translate it into
+    # the SQL-friendly empty string.
+    if email.startswith("(no auth"):
+        email = ""
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        cur.execute(
+            "SELECT path, COUNT(*) AS hits, MAX(created_at) AS last_seen "
+            "FROM request_log "
+            "WHERE user_email = %s "
+            "  AND created_at >= NOW() - INTERVAL %s DAY "
+            "GROUP BY path "
+            "ORDER BY hits DESC "
+            "LIMIT 30",
+            (email, days)
+        )
+        paths = cur.fetchall()
+        for r in paths:
+            if r.get("last_seen"):
+                r["last_seen"] = r["last_seen"].strftime("%Y-%m-%d %H:%M")
+
+        cur.execute(
+            "SELECT DATE(created_at) AS d, COUNT(*) AS hits "
+            "FROM request_log "
+            "WHERE user_email = %s "
+            "  AND created_at >= NOW() - INTERVAL %s DAY "
+            "GROUP BY DATE(created_at) ORDER BY d",
+            (email, days)
+        )
+        daily = cur.fetchall()
+        for r in daily:
+            if r.get("d"):
+                r["d"] = r["d"].strftime("%Y-%m-%d")
+
+        cur.execute(
+            "SELECT country, ip, COUNT(*) AS hits, MAX(created_at) AS last_seen "
+            "FROM request_log "
+            "WHERE user_email = %s "
+            "  AND created_at >= NOW() - INTERVAL %s DAY "
+            "GROUP BY country, ip "
+            "ORDER BY hits DESC "
+            "LIMIT 10",
+            (email, days)
+        )
+        locations = cur.fetchall()
+        for r in locations:
+            if r.get("last_seen"):
+                r["last_seen"] = r["last_seen"].strftime("%Y-%m-%d %H:%M")
+
+        cur.close(); conn.close()
+        return jsonify({
+            "email": email or "(no auth)",
+            "days": days,
+            "paths": paths,
+            "daily": daily,
+            "locations": locations,
         })
     except Exception as e:
         traceback.print_exc()
