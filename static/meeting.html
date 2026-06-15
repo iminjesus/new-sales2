@@ -494,11 +494,33 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       Signed in as <b id="bdeIdEmail">…</b>
     </div>
 
-    <!-- ── Voice → AI auto-fill panel (moved into the form, just above
-         Meeting notes so the visual flow is obvious: speak → notes appear
-         here, with Met person / Contact / Purpose / Next action filled
-         in alongside).  Lives inside the form's .grid so it spans the
-         full width like the other col-full fields. -->
+    <!-- ── Voice → AI auto-fill panel (top of the form, above every
+         other field — it can populate Notes, Met person, Met person
+         contact, Purpose, and Next action in one shot, so giving it
+         the prime spot makes the entry point obvious). -->
+    <div id="voicePanel" class="voice-panel">
+      <div class="voice-row">
+        <button type="button" id="voiceBtn" class="voice-btn" title="Tap and speak — AI fills the form">
+          <span class="voice-ico">🎙</span>
+          <span class="voice-label">Quick log by voice</span>
+        </button>
+        <span id="voiceHint" class="voice-hint">Tap, speak 20-30 sec, AI fills Notes + Met person + Contact + Purpose + Next action</span>
+        <span id="voiceTimer" class="voice-timer" style="display:none;">0:00</span>
+      </div>
+      <div id="voiceBody" class="voice-body" style="display:none;">
+        <textarea id="voiceTranscript"
+          placeholder="Transcript appears here — edit if needed, then Auto-fill"></textarea>
+        <div class="voice-actions">
+          <button type="button" id="voiceFillBtn" class="voice-fill">✨ Auto-fill form</button>
+          <button type="button" id="voiceClearBtn" class="voice-clear">Discard</button>
+          <span id="voiceStatus" class="voice-status"></span>
+        </div>
+        <!-- Per-field preview of what Claude extracted, so the BDE can
+             see at a glance what landed in each field without having
+             to scroll the form or hit Submit. -->
+        <div id="voicePreview" class="voice-preview" style="display:none;"></div>
+      </div>
+    </div>
 
     <form id="meetingForm">
       <div class="grid">
@@ -577,37 +599,6 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         <div class="field col-full">
           <label>Met person contact <span style="color:#9ca3af;font-weight:400;">(optional — phone or email, remembered for next time)</span></label>
           <input id="fMetContact" type="text" maxlength="80" placeholder="e.g. 0412 345 678 or nick@store.com">
-        </div>
-
-        <!-- Voice → AI auto-fill panel.  Lives directly above Meeting
-             notes (the biggest field it populates) so the visual flow
-             from "speak" to "notes appear" is obvious.  It also fills
-             Met person / Met person contact / Purpose / Next action,
-             listed in the Extracted-fields preview below. -->
-        <div class="field col-full">
-          <div id="voicePanel" class="voice-panel">
-            <div class="voice-row">
-              <button type="button" id="voiceBtn" class="voice-btn" title="Tap and speak — AI fills the form">
-                <span class="voice-ico">🎙</span>
-                <span class="voice-label">Quick log by voice</span>
-              </button>
-              <span id="voiceHint" class="voice-hint">Tap, speak 20-30 sec, AI fills Notes + Met person + Contact + Purpose + Next action</span>
-              <span id="voiceTimer" class="voice-timer" style="display:none;">0:00</span>
-            </div>
-            <div id="voiceBody" class="voice-body" style="display:none;">
-              <textarea id="voiceTranscript"
-                placeholder="Transcript appears here — edit if needed, then Auto-fill"></textarea>
-              <div class="voice-actions">
-                <button type="button" id="voiceFillBtn" class="voice-fill">✨ Auto-fill form</button>
-                <button type="button" id="voiceClearBtn" class="voice-clear">Discard</button>
-                <span id="voiceStatus" class="voice-status"></span>
-              </div>
-              <!-- Per-field preview of what Claude extracted, so the BDE
-                   can see at a glance what landed in each field without
-                   having to scroll the form or hit Submit. -->
-              <div id="voicePreview" class="voice-preview" style="display:none;"></div>
-            </div>
-          </div>
         </div>
 
         <div class="field col-full">
