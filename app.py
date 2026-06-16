@@ -1373,7 +1373,15 @@ def api_sales_stats_by_state():
             q3  = d.get("3m",  0)
             q6  = d.get("6m",  0)
             q12 = d.get("12m", 0)
-            if q3 == 0 and q6 == 0 and q12 == 0:
+            stk = stock_by_state.get(st, 0)
+            wtr = water_by_state.get(st, 0)
+            fac = factory_by_state.get(st, 0)
+            # Skip only when EVERY column would be zero — a state with
+            # no sales for the current filter but plant inventory still
+            # in transit (or sitting in stock) should stay visible so
+            # the map dot matches a table row.
+            if (q3 == 0 and q6 == 0 and q12 == 0
+                and stk == 0 and wtr == 0 and fac == 0):
                 continue
             base = round((q3 + q6 + q12) / 3)
             rows_out.append({
@@ -1382,9 +1390,9 @@ def api_sales_stats_by_state():
                 "qty_6m":      q6,
                 "qty_12m":     q12,
                 "base_sales":  base,
-                "stock_qty":   round(stock_by_state.get(st, 0)),
-                "water_qty":   round(water_by_state.get(st, 0)),
-                "factory_qty": round(factory_by_state.get(st, 0)),
+                "stock_qty":   round(stk),
+                "water_qty":   round(wtr),
+                "factory_qty": round(fac),
             })
 
         return jsonify({"rows": rows_out, "latest_year": latest_y, "latest_month": latest_m})
