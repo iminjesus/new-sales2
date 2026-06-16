@@ -1290,15 +1290,14 @@ def api_sales_stats_by_state():
             return {row["plant"]: float(row["val"] or 0) for row in (cur.fetchall() or [])}
 
         # Exclude orders whose po_no already appears in the incoming table
-        # (those shipments are already counted as incoming, not open orders),
-        # AND keep only PO numbers that start with '42' — those are the
-        # genuine factory ready-to-ship orders for the Australian region.
-        # Other PO prefixes are non-RTS records (samples, internal moves)
-        # that would otherwise inflate the Factory Qty column.
+        # (those shipments are already counted as incoming, not open orders).
+        # NOTE: this powers the "+ Factory Qty" column (Orders PO total)
+        # and is intentionally NOT filtered to '42'-prefixed POs — that
+        # filter only belongs on the Ready-to-Ship metric (confirm_qty),
+        # applied in /api/orders below.
         _orders_extra = [
             "t.po_no NOT IN (SELECT DISTINCT po_no FROM incoming"
-            " WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')",
-            "t.po_no LIKE '42%'",
+            " WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')"
         ]
 
         # ?? stock / water (incoming) / factory (orders) per plant ???
@@ -1472,14 +1471,18 @@ def api_orders():
 
         # Exclude orders whose po_no is already in the incoming table
         # (applies to both po_qty and confirmed_qty — the row is already
-        # received), AND keep only PO numbers starting with '42' so the
-        # map / origin breakdown counts the same ready-to-ship pool as
-        # the per-state Factory Qty column.
+        # received).
         wh.append(
             "o.po_no NOT IN (SELECT DISTINCT po_no FROM incoming"
             " WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')"
         )
-        wh.append("o.po_no LIKE '42%'")
+        # Ready-to-Ship (confirm metric) only: real factory RTS POs all
+        # start with '42'.  Other PO prefixes on the confirm side are
+        # samples / internal moves that inflate the number.  Orders PO
+        # (po metric) does NOT apply this filter — it still shows every
+        # PO regardless of prefix.
+        if metric == "confirm":
+            wh.append("o.po_no LIKE '42%'")
 
         sql += "\n" + "\n".join(joins)
         if wh:
