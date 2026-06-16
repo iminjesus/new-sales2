@@ -1497,30 +1497,39 @@ async function _loadVisitImpact(ids){
       // Pre is known but post month hasn't arrived yet — show pre
       // baseline so the BDE knows what the bar is to beat.
       const pq = im.pre ? im.pre.qty : 0;
-      el.style.color = "#9ca3af";
-      el.style.fontStyle = "italic";
+      el.style.color = "#7c3aed";
+      el.style.fontStyle = "normal";
+      el.style.fontWeight = "700";
+      el.style.background = "#f3e8ff";
+      el.style.padding = "1px 6px";
+      el.style.borderRadius = "8px";
+      el.style.fontSize = "10px";
       el.title = `Pre-visit baseline: ${pq.toLocaleString()} units (${im.pre_year_month}).\n`
                + `Post-visit window (${im.post_year_month}) not yet complete — impact pending.`;
-      el.textContent = `· baseline ${pq.toLocaleString()}u, post pending`;
+      el.textContent = `⏳ baseline ${pq.toLocaleString()}u`;
       return;
     }
     // status === "ok"
     const dq = im.delta_qty || 0;
     const dpct = im.delta_qty_pct;
-    let arrow, color;
+    let arrow, color, bg;
     if (dq > 0 && (dpct === null || dpct >= 1)) {
-      arrow = "↗"; color = "#16a34a";
+      arrow = "↗"; color = "#15803d"; bg = "#dcfce7";
     } else if (dq < 0) {
-      arrow = "↘"; color = "#dc2626";
+      arrow = "↘"; color = "#b91c1c"; bg = "#fee2e2";
     } else {
-      arrow = "↔"; color = "#9ca3af";
+      arrow = "↔"; color = "#6b7280"; bg = "#f1f5f9";
     }
     const pctTxt = (dpct == null)
-      ? `${dq > 0 ? "+" : ""}${dq.toLocaleString()} units`
-      : `${dpct > 0 ? "+" : ""}${dpct}% qty`;
+      ? `${dq > 0 ? "+" : ""}${dq.toLocaleString()}u`
+      : `${dpct > 0 ? "+" : ""}${dpct}%`;
     el.style.color = color;
+    el.style.background = bg;
     el.style.fontStyle = "normal";
     el.style.fontWeight = "700";
+    el.style.padding = "1px 6px";
+    el.style.borderRadius = "8px";
+    el.style.fontSize = "10px";
     el.title = `Sales impact (correlation, not causation):\n`
              + `Pre  ${im.pre_year_month}: ${im.pre.qty.toLocaleString()} units · $${Math.round(im.pre.amt).toLocaleString()}\n`
              + `Post ${im.post_year_month}: ${im.post.qty.toLocaleString()} units · $${Math.round(im.post.amt).toLocaleString()}`;
