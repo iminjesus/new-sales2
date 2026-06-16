@@ -521,17 +521,36 @@ function wireProductDropdowns(){
     hidden.value = parts.join(" / ");
   }
 
+  // Loose match: lowercase the query, split on anything that isn't a
+  // letter or digit, and require each resulting token to appear in
+  // EITHER the raw option text OR the option with separators removed.
+  // That way a user can type:
+  //   "225 17"   → matches "225/65R17"  (both tokens present)
+  //   "22517"    → matches "225/65R17"  (substring of "22565r17")
+  //   "k135"     → matches "K135"       (case-insensitive)
+  //   "265 r16"  → matches "LT265/75R16"
+  // Skipping the "/" between tyre-size numbers is the most common
+  // case but the same logic handles spaces, dashes, and x's too.
+  function _matchesQuery(opt, q){
+    if (!q) return true;
+    const tokens = q.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    if (!tokens.length) return true;
+    const optLower = String(opt || "").toLowerCase();
+    const optStrip = optLower.replace(/[^a-z0-9]+/g, "");
+    return tokens.every(t => optLower.includes(t) || optStrip.includes(t));
+  }
+
   // Render the panel from the combo's filtered options list.  Called
   // when the panel opens or when the user types into the input.
   function renderPanel(c){
-    const q = (c.input.value || "").trim().toLowerCase();
+    const q = (c.input.value || "").trim();
     // When the user has a *committed* value and hasn't started typing
     // again, show the full options list (q === current value).  Once
     // they type anything different, filter as substring match.
-    const showAll = !q || q === (c.value || "").toLowerCase();
+    const showAll = !q || q === c.value;
     const filtered = showAll
       ? c.options
-      : c.options.filter(v => v.toLowerCase().includes(q));
+      : c.options.filter(v => _matchesQuery(v, q));
     if (!filtered.length) {
       c.panel.innerHTML = `<div class="combo-empty">No match — try a different word.</div>`;
       return;
