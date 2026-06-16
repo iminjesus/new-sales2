@@ -42,6 +42,39 @@ h2{font-size:15px;font-weight:700;color:#1e3a5f;margin:0 0 12px}
 }
 .field textarea{min-height:110px;resize:vertical}
 .field .hint{font-size:11px;color:#6b7280;margin-top:3px}
+
+/* Searchable combobox — tap to focus + filter as user types.  Works
+   the same on desktop (click → panel) and mobile (tap → keyboard
+   pops up so they can type to filter instead of scrolling a long
+   native <select> list). */
+.combo{position:relative}
+.combo .combo-input{
+  width:100%;padding:10px 36px 10px 11px;border:1px solid #d1d5db;
+  border-radius:6px;font-size:14px;background:#fff;color:#111827;
+  -webkit-appearance:none;appearance:none;outline:none}
+.combo .combo-input:focus{
+  border-color:#2563eb;box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+.combo .combo-input.has-value{font-weight:600;color:#1d4ed8}
+.combo .combo-clear{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  background:transparent;border:none;color:#9ca3af;font-size:18px;
+  line-height:1;cursor:pointer;padding:4px 6px;display:none;
+  border-radius:4px}
+.combo .combo-clear:hover{background:#fee2e2;color:#dc2626}
+.combo.has-value .combo-clear{display:block}
+.combo .combo-panel{
+  position:absolute;left:0;right:0;top:calc(100% + 2px);background:#fff;
+  border:1px solid #d1d5db;border-radius:6px;
+  box-shadow:0 8px 22px rgba(15,23,42,.12);
+  max-height:240px;overflow-y:auto;z-index:50;display:none;
+  overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.combo.open .combo-panel{display:block}
+.combo .combo-opt{
+  padding:9px 12px;font-size:13px;color:#374151;cursor:pointer;
+  border-bottom:1px solid #f1f5f9}
+.combo .combo-opt:last-child{border-bottom:none}
+.combo .combo-opt:hover,.combo .combo-opt.active{background:#eff6ff;color:#1d4ed8}
+.combo .combo-empty{padding:10px 12px;font-size:12px;color:#9ca3af;font-style:italic;text-align:center}
 .row2{display:flex;gap:8px}
 .row2 .field{flex:1}
 .honey{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
@@ -318,9 +351,24 @@ async function renderHome(){
         <div class="field">
           <label>Product details <span class="hint">(if applicable — pick what you can, in any order)</span></label>
           <div style="display:grid;gap:6px;">
-            <select id="claimPG"><option value="">— Product Group —</option></select>
-            <select id="claimPattern"><option value="">— Pattern —</option></select>
-            <select id="claimSize"><option value="">— Size —</option></select>
+            <div class="combo" data-combo="pg">
+              <input type="text" class="combo-input" autocomplete="off"
+                     placeholder="— Product Group —" inputmode="text">
+              <button type="button" class="combo-clear" tabindex="-1" aria-label="Clear">×</button>
+              <div class="combo-panel"></div>
+            </div>
+            <div class="combo" data-combo="pattern">
+              <input type="text" class="combo-input" autocomplete="off"
+                     placeholder="— Pattern —" inputmode="text">
+              <button type="button" class="combo-clear" tabindex="-1" aria-label="Clear">×</button>
+              <div class="combo-panel"></div>
+            </div>
+            <div class="combo" data-combo="size">
+              <input type="text" class="combo-input" autocomplete="off"
+                     placeholder="— Size —" inputmode="text">
+              <button type="button" class="combo-clear" tabindex="-1" aria-label="Clear">×</button>
+              <div class="combo-panel"></div>
+            </div>
           </div>
           <input type="hidden" name="product_size" id="claimProductSize">
         </div>
@@ -448,61 +496,159 @@ async function renderHome(){
 }
 
 function wireProductDropdowns(){
-  const pgSel   = document.getElementById("claimPG");
-  const patSel  = document.getElementById("claimPattern");
-  const sizeSel = document.getElementById("claimSize");
   const hidden  = document.getElementById("claimProductSize");
-  if (!pgSel || !patSel || !sizeSel || !hidden) return;
+  // Each combo: { root, input, panel, clear, placeholder, value, options }
+  const combos = {};
+  document.querySelectorAll(".combo[data-combo]").forEach(root => {
+    const key = root.dataset.combo;
+    combos[key] = {
+      root,
+      input:       root.querySelector(".combo-input"),
+      panel:       root.querySelector(".combo-panel"),
+      clear:       root.querySelector(".combo-clear"),
+      placeholder: root.querySelector(".combo-input").placeholder,
+      value:       "",
+      options:     [],
+    };
+  });
+  if (!combos.pg || !combos.pattern || !combos.size || !hidden) return;
 
   let MATRIX = [];   // [{pg, pattern, size}, …] — fetched once, filtered locally
 
   function updateHidden(){
-    const parts = [pgSel.value, patSel.value, sizeSel.value]
+    const parts = [combos.pg.value, combos.pattern.value, combos.size.value]
                     .map(v => (v || "").trim()).filter(Boolean);
     hidden.value = parts.join(" / ");
   }
 
-  function fill(sel, items, placeholder){
-    const keep = sel.value;
-    const opts = [`<option value="">${esc(placeholder)}</option>`]
-      .concat((items || []).map(v => `<option value="${esc(v)}">${esc(v)}</option>`));
-    sel.innerHTML = opts.join("");
-    // Keep the user's previous pick when it's still a valid option;
-    // otherwise drop back to "—" so they can't keep a stale selection.
-    sel.value = items.includes(keep) ? keep : "";
+  // Render the panel from the combo's filtered options list.  Called
+  // when the panel opens or when the user types into the input.
+  function renderPanel(c){
+    const q = (c.input.value || "").trim().toLowerCase();
+    // When the user has a *committed* value and hasn't started typing
+    // again, show the full options list (q === current value).  Once
+    // they type anything different, filter as substring match.
+    const showAll = !q || q === (c.value || "").toLowerCase();
+    const filtered = showAll
+      ? c.options
+      : c.options.filter(v => v.toLowerCase().includes(q));
+    if (!filtered.length) {
+      c.panel.innerHTML = `<div class="combo-empty">No match — try a different word.</div>`;
+      return;
+    }
+    c.panel.innerHTML = filtered.slice(0, 200).map(v => {
+      const isActive = v === c.value;
+      return `<div class="combo-opt${isActive ? " active" : ""}" data-v="${esc(v)}">${esc(v)}</div>`;
+    }).join("");
   }
 
-  // Derive each dropdown's option set from the matrix filtered by the
-  // OTHER two selections.  That way picking any single dropdown narrows
-  // the remaining two, in any direction — pick Size first to filter
-  // Pattern + Group, or Pattern first to filter Group + Size, etc.
+  function openPanel(c){
+    renderPanel(c);
+    c.root.classList.add("open");
+  }
+  function closePanel(c){
+    c.root.classList.remove("open");
+  }
+  function closeAll(){
+    Object.values(combos).forEach(closePanel);
+  }
+  function commit(c, v){
+    c.value = v || "";
+    c.input.value = c.value;
+    c.input.classList.toggle("has-value", !!c.value);
+    c.root.classList.toggle("has-value", !!c.value);
+    updateHidden();
+    refresh();
+  }
+
+  Object.values(combos).forEach(c => {
+    c.input.addEventListener("focus", () => { closeAll(); openPanel(c); });
+    c.input.addEventListener("click", () => { closeAll(); openPanel(c); });
+    c.input.addEventListener("input", () => {
+      // Typing into the field means "still picking" — don't commit
+      // anything until the user taps an option.  Just re-filter.
+      c.root.classList.add("open");
+      renderPanel(c);
+    });
+    c.input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        // Pick the first visible option (most-relevant match).
+        const first = c.panel.querySelector(".combo-opt");
+        if (first) {
+          e.preventDefault();
+          commit(c, first.dataset.v);
+          closePanel(c);
+        }
+      } else if (e.key === "Escape") {
+        c.input.value = c.value;
+        closePanel(c);
+      }
+    });
+    c.input.addEventListener("blur", () => {
+      // If the user typed a value that exactly matches an option but
+      // didn't click, treat that as a commit.  Otherwise revert input
+      // to last committed value so we don't leave a stale string.
+      setTimeout(() => {
+        const typed = (c.input.value || "").trim();
+        if (typed && c.options.includes(typed) && typed !== c.value) {
+          commit(c, typed);
+        } else if (typed !== c.value) {
+          c.input.value = c.value;
+        }
+      }, 150);
+    });
+    c.panel.addEventListener("mousedown", (e) => {
+      // mousedown (not click) so blur doesn't fire and clobber the
+      // selection on mobile / touch.
+      const opt = e.target.closest(".combo-opt");
+      if (!opt) return;
+      e.preventDefault();
+      commit(c, opt.dataset.v);
+      closePanel(c);
+    });
+    c.clear.addEventListener("click", (e) => {
+      e.stopPropagation();
+      commit(c, "");
+      c.input.focus();
+    });
+  });
+
+  // Close any open panel when the user taps outside a combo.
+  document.addEventListener("mousedown", (e) => {
+    if (!e.target.closest(".combo")) closeAll();
+  });
+
+  // Derive each combo's option set from the matrix filtered by the
+  // OTHER two selections so picking any single field narrows the
+  // remaining two, in any order.
   function refresh(){
-    const pg  = pgSel.value;
-    const pat = patSel.value;
-    const sz  = sizeSel.value;
+    const pg  = combos.pg.value;
+    const pat = combos.pattern.value;
+    const sz  = combos.size.value;
     const uniq = (rows, key) => [...new Set(rows.map(r => r[key]).filter(Boolean))].sort();
-    fill(pgSel,   uniq(MATRIX.filter(r => (!pat || r.pattern === pat) && (!sz || r.size === sz)), "pg"),       "— Product Group —");
-    fill(patSel,  uniq(MATRIX.filter(r => (!pg  || r.pg      === pg ) && (!sz || r.size === sz)), "pattern"),  "— Pattern —");
-    fill(sizeSel, uniq(MATRIX.filter(r => (!pg  || r.pg      === pg ) && (!pat || r.pattern === pat)), "size"), "— Size —");
+    combos.pg.options      = uniq(MATRIX.filter(r => (!pat || r.pattern === pat) && (!sz || r.size === sz)), "pg");
+    combos.pattern.options = uniq(MATRIX.filter(r => (!pg  || r.pg      === pg ) && (!sz || r.size === sz)), "pattern");
+    combos.size.options    = uniq(MATRIX.filter(r => (!pg  || r.pg      === pg ) && (!pat || r.pattern === pat)), "size");
+    // If a committed value is no longer valid under the new filter,
+    // drop it so the form can't carry a stale selection.
+    Object.values(combos).forEach(c => {
+      if (c.value && !c.options.includes(c.value)) {
+        commit(c, "");
+      }
+    });
     updateHidden();
   }
 
-  pgSel  .addEventListener("change", refresh);
-  patSel .addEventListener("change", refresh);
-  sizeSel.addEventListener("change", refresh);
-
   // Use the /api/claim/* mirror so this call falls inside the
   // Cloudflare Access bypass for the customer-facing claim form.
-  // The internal /api/carrying_matrix would otherwise redirect
-  // unauthenticated visitors to the Access login and fail with
-  // (load failed) on every dropdown.
   fetchJSON("/api/claim/product_matrix").then(rows => {
     MATRIX = Array.isArray(rows) ? rows : [];
     refresh();
   }).catch(() => {
-    fill(pgSel,   [], "— Product Group (load failed) —");
-    fill(patSel,  [], "— Pattern (load failed) —");
-    fill(sizeSel, [], "— Size (load failed) —");
+    Object.values(combos).forEach(c => {
+      c.input.placeholder = c.placeholder.replace("—", "— ") + " (load failed)";
+      c.input.disabled = true;
+    });
   });
 }
 
