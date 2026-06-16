@@ -491,7 +491,12 @@ function wireProductDropdowns(){
   patSel .addEventListener("change", refresh);
   sizeSel.addEventListener("change", refresh);
 
-  fetchJSON("/api/carrying_matrix").then(rows => {
+  // Use the /api/claim/* mirror so this call falls inside the
+  // Cloudflare Access bypass for the customer-facing claim form.
+  // The internal /api/carrying_matrix would otherwise redirect
+  // unauthenticated visitors to the Access login and fail with
+  // (load failed) on every dropdown.
+  fetchJSON("/api/claim/product_matrix").then(rows => {
     MATRIX = Array.isArray(rows) ? rows : [];
     refresh();
   }).catch(() => {

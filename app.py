@@ -3894,6 +3894,16 @@ def carrying_matrix():
     """Distinct (product_group, pattern, size) tuples from carrying_26.
     Used by the claim form so three independent dropdowns can cascade
     in any direction client-side without a round-trip per change."""
+    return _carrying_matrix_response()
+
+@app.get("/api/claim/product_matrix")
+def claim_product_matrix():
+    """Public mirror of /api/carrying_matrix that lives under /api/claim/*
+    so it falls inside the Cloudflare Access bypass for the customer
+    claim form (which has no Cf-Access-Authenticated-User-Email header)."""
+    return _carrying_matrix_response()
+
+def _carrying_matrix_response():
     try:
         conn = get_connection(); cur = conn.cursor()
         cur.execute("""
