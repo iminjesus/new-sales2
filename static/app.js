@@ -609,8 +609,10 @@ async function fetchDailySales(){
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
-  }).toString();
-  return fetchJSON_DIRECT(`/api/daily_sales?${qs}`);
+  });
+  // sales_thismonth is current month (2026) — promos apply unconditionally.
+  window.appendPromos && window.appendPromos(qs);
+  return fetchJSON_DIRECT(`/api/daily_sales?${qs.toString()}`);
 }
 
 async function fetchDailyKPIActual(region,BDE){
@@ -636,8 +638,10 @@ async function fetchDailyBreakdownWithGroup(groupBy){
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: groupBy, top_limit:filters.top_limit ||0
-  }).toString();
-  return fetchJSON(`/api/daily_breakdown?${qs}`);
+  });
+  // sales_thismonth is current month (2026) — promos apply unconditionally.
+  window.appendPromos && window.appendPromos(qs);
+  return fetchJSON(`/api/daily_breakdown?${qs.toString()}`);
 }
 
 

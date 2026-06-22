@@ -2366,6 +2366,11 @@ def daily_sales():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
+    # Promo filter — sales_thismonth is already 2026 (current month),
+    # so no FROM switch needed.  We just enforce PCLT + the promo
+    # EXISTS when promos are passed.
+    promos = request.args.getlist("promo")
+
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     # category ??use normalised version for sales tables
@@ -2386,6 +2391,14 @@ def daily_sales():
     if f["material"] != "ALL":
         wh.append("mat.size = %s")
         params.append(f["material"])
+
+    if promos:
+        _ensure_carrying_join("s", joins)
+        _ensure_customer_join("s", joins)
+        promo_wh, promo_p = _promo_filter_clauses(promos)
+        wh.extend(promo_wh)
+        params.extend(promo_p)
+
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
     conn = get_connection()
@@ -2444,6 +2457,10 @@ def daily_breakdown():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
+    # Promo filter — same as daily_sales, no FROM switch since
+    # sales_thismonth is always current month (2026).
+    promos = request.args.getlist("promo")
+
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
@@ -2480,6 +2497,14 @@ def daily_breakdown():
     if f["material"] != "ALL":
         wh.append("mat.size = %s")
         params.append(f["material"])
+
+    if promos:
+        _ensure_carrying_join("s", joins)
+        _ensure_customer_join("s", joins)
+        promo_wh, promo_p = _promo_filter_clauses(promos)
+        wh.extend(promo_wh)
+        params.extend(promo_p)
+
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
     conn = get_connection()
