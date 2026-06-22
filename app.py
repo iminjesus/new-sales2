@@ -5524,41 +5524,56 @@ def _ensure_promo_customer_category():
 
 _ensure_promo_customer_category()
 
+def _promo_category_of(promo_name):
+    """Auto-derive the top-level button name from a sub-promo string by
+    splitting on the first underscore.  No mapping table required.
+        '443'          → '443'
+        '443_30%'      → '443'
+        'iON_70%'      → 'iON'
+        'TrueBlue_12%' → 'TrueBlue'
+    A bare promo with no underscore acts as both category and its sole
+    sub-button (e.g. '443' renders as a category with a single sub '443')."""
+    s = (promo_name or "").strip()
+    if not s:
+        return ""
+    return s.split("_", 1)[0]
+
 @app.get("/api/promo/buttons")
 def api_promo_buttons():
     """Return the top-level promo categories + the sub-promos under each,
-    derived live from the `promo_category` table so adding a new
-    category / sub-promo is purely a data change.
+    derived live from DISTINCT promo_customer.promo.  No mapping table
+    needed: category = part before the first underscore.
 
     Shape:
       { "categories": [
-          { "name": "443",      "subs": ["443","443_30%","iON_70%"] },
+          { "name": "443",      "subs": ["443","443_30%"] },
+          { "name": "iON",      "subs": ["iON_70%"] },
           { "name": "TrueBlue", "subs": ["TrueBlue_12%","TrueBlue_18%"] },
         ] }
     """
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
-        # Try the most natural shape first: (category, promo) columns.
-        # If the table is structured differently the operator can tell
-        # us and we'll adapt — but every schema we expect should expose
-        # *some* column named `promo` and *some* column named `category`.
         cur.execute("""
-            SELECT DISTINCT category, promo
-            FROM promo_category
-            WHERE category IS NOT NULL AND TRIM(category) <> ''
-              AND promo    IS NOT NULL AND TRIM(promo)    <> ''
-            ORDER BY category, promo
+            SELECT DISTINCT promo
+            FROM promo_customer
+            WHERE promo IS NOT NULL AND TRIM(promo) <> ''
+            ORDER BY promo
         """)
         rows = cur.fetchall()
         cur.close(); conn.close()
         out = {}
         for r in rows:
-            cat = r["category"]; pr = r["promo"]
+            pr  = r["promo"]
+            cat = _promo_category_of(pr)
             out.setdefault(cat, [])
             if pr not in out[cat]:
                 out[cat].append(pr)
+        # Stable ordering — numeric categories first ('443'), then
+        # alphabetic.  Keeps the button row predictable across deploys.
+        cats = sorted(out.keys(),
+                      key=lambda k: (0 if k and k[:1].isdigit() else 1, k))
         return jsonify({
-            "categories": [{"name": k, "subs": v} for k, v in out.items()]
+            "categories": [{"name": k, "subs": out[k]} for k in cats]
         })
     except Exception as e:
         traceback.print_exc()
