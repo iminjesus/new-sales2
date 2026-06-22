@@ -5511,13 +5511,36 @@ def _sales_2026_tables(cur):
         return ["sales_2601", "sales_2602", "sales_2603",
                 "sales_2604", "sales_2605", "sales_thismonth"]
 
-def _sales_2026_union(cur, alias="s", cols="*"):
+def _sales_2026_union(cur, alias="s", cols=None):
     """Build a `(SELECT … UNION ALL SELECT … …) AS <alias>` SQL fragment
     that exposes every 2026 monthly sales table as a single virtual
-    source.  Use in place of `FROM sales_2526` for any 2026-only query."""
+    source.  Use in place of `FROM sales_2526` for any 2026-only query.
+
+    `SELECT *` would work if every monthly table had identical columns,
+    but in practice sales_thismonth has been seen to differ from
+    sales_26?? by a column or two — and any mismatch makes MySQL fail
+    the entire UNION silently, returning zero rows.  So we discover
+    the columns present in *every* table via INFORMATION_SCHEMA and
+    UNION only that intersection."""
     tables = _sales_2026_tables(cur)
     if not tables:
         return "(SELECT * FROM sales_thismonth WHERE 1=0) AS " + alias
+    if cols is None:
+        common = None
+        for t in tables:
+            cur.execute(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+                (t,)
+            )
+            got = set()
+            for r in cur.fetchall():
+                # cursor type varies (tuple vs dict) depending on caller.
+                got.add(r[0] if not isinstance(r, dict) else r["COLUMN_NAME"])
+            common = got if common is None else (common & got)
+        if not common:
+            return "(SELECT * FROM sales_thismonth WHERE 1=0) AS " + alias
+        cols = ", ".join(sorted(common))
     parts = [f"SELECT {cols} FROM {t}" for t in tables]
     return "(\n  " + "\n  UNION ALL ".join(parts) + f"\n) AS {alias}"
 

@@ -1385,12 +1385,18 @@ async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
 }
 
 async function drawMonthlyTotals(){
+  // Promo filters only exist in 2026 — when one is selected, the 2025
+  // bars become uninformative noise (there's no like-for-like to
+  // compare against), so skip that fetch and render flat zeros.
+  const _hasPromo = (typeof window.getActivePromos === "function"
+                     && window.getActivePromos().length > 0);
+  const _zeroMonths = Array.from({length: 12}, (_, i) => ({month: i+1, value: 0}));
   const [
     sales25Rows,
     sales26Rows,
     target26Rows
   ] = await Promise.all([
-    fetchMonthlySales(2025),
+    _hasPromo ? Promise.resolve(_zeroMonths) : fetchMonthlySales(2025),
     fetchMonthlySales(2026),
     fetchJSON(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
