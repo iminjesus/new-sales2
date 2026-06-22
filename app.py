@@ -5496,10 +5496,11 @@ def _sales_2026_union(cur, alias="s", cols="*"):
     return "(\n  " + "\n  UNION ALL ".join(parts) + f"\n) AS {alias}"
 
 def _ensure_promo_customer_category():
-    """Idempotent ALTER for the `category` column on promo_customer, used to
-    group sub-promos under the top-level buttons (e.g. '443', 'TrueBlue').
-    Existing rows stay '' until the operator populates them — promo
-    buttons are derived from DISTINCT non-empty category values."""
+    """Earlier iterations added a `category` column to promo_customer;
+    the actual setup has a separate `promo_category` table with the
+    mapping, so drop the now-unused column if it lingers from a prior
+    deploy.  Safe to leave the column too — keeping the migration
+    idempotent in both directions."""
     try:
         conn = get_connection(); cur = conn.cursor()
         cur.execute("SHOW TABLES LIKE 'promo_customer'")
@@ -5507,22 +5508,27 @@ def _ensure_promo_customer_category():
             cur.close(); conn.close()
             return
         cur.execute("SHOW COLUMNS FROM promo_customer LIKE 'category'")
-        if not cur.fetchone():
-            cur.execute("ALTER TABLE promo_customer "
-                        "ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT '' "
-                        "AFTER promo")
-            cur.execute("CREATE INDEX idx_promo_customer_cat ON promo_customer (category)")
+        if cur.fetchone():
+            try:
+                cur.execute("DROP INDEX idx_promo_customer_cat ON promo_customer")
+            except Exception:
+                pass
+            try:
+                cur.execute("ALTER TABLE promo_customer DROP COLUMN category")
+            except Exception as e:
+                # Non-fatal — column stays in place, queries below ignore it.
+                print(f"[promo_customer] could not drop legacy category col: {e}")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
-        print(f"[promo_customer] category migration skipped: {e}")
+        print(f"[promo_customer] category cleanup skipped: {e}")
 
 _ensure_promo_customer_category()
 
 @app.get("/api/promo/buttons")
 def api_promo_buttons():
     """Return the top-level promo categories + the sub-promos under each,
-    derived live from `promo_customer` so adding a new category / sub-promo
-    just means inserting rows — no code change.
+    derived live from the `promo_category` table so adding a new
+    category / sub-promo is purely a data change.
 
     Shape:
       { "categories": [
@@ -5532,9 +5538,13 @@ def api_promo_buttons():
     """
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
+        # Try the most natural shape first: (category, promo) columns.
+        # If the table is structured differently the operator can tell
+        # us and we'll adapt — but every schema we expect should expose
+        # *some* column named `promo` and *some* column named `category`.
         cur.execute("""
             SELECT DISTINCT category, promo
-            FROM promo_customer
+            FROM promo_category
             WHERE category IS NOT NULL AND TRIM(category) <> ''
               AND promo    IS NOT NULL AND TRIM(promo)    <> ''
             ORDER BY category, promo
@@ -5544,8 +5554,7 @@ def api_promo_buttons():
         out = {}
         for r in rows:
             cat = r["category"]; pr = r["promo"]
-            if cat not in out:
-                out[cat] = []
+            out.setdefault(cat, [])
             if pr not in out[cat]:
                 out[cat].append(pr)
         return jsonify({
