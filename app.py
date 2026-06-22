@@ -5440,6 +5440,121 @@ def _rebate_scope(struct):
 REBATE_SO_TYPES = ("ZWH1", "ZCR1", "ZDR1", "ZDF1", "ZRE1", "ZREN")
 _REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
 
+# ─── 2026 monthly sales tables — auto-detected at request time ─────────
+# Promo features pull only from 2026 calendar-year sales (sales_2526
+# carries no promo metadata) and the set of monthly tables grows by one
+# every month — sales_2607, sales_2608, …  Discover them via
+# INFORMATION_SCHEMA so a fresh month doesn't require a code change.
+_SALES_2026_TABLES_CACHE = {"ts": 0, "names": []}
+
+def _sales_2026_tables(cur):
+    """Return the ordered list of sales tables that hold 2026 data:
+    every sales_26?? plus sales_thismonth.  Cached for 60s so the schema
+    introspection doesn't repeat per request."""
+    import time as _t
+    now = _t.monotonic()
+    if (now - _SALES_2026_TABLES_CACHE["ts"]) < 60 and _SALES_2026_TABLES_CACHE["names"]:
+        return list(_SALES_2026_TABLES_CACHE["names"])
+    try:
+        cur.execute("""
+            SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND (TABLE_NAME REGEXP '^sales_26[0-9]{2}$'
+                   OR TABLE_NAME = 'sales_thismonth')
+            ORDER BY TABLE_NAME
+        """)
+        names = [r[0] if not isinstance(r, dict) else r["TABLE_NAME"]
+                 for r in cur.fetchall()]
+        # Sort by (year, month) so sales_thismonth lands at the end.
+        def _key(n):
+            if n == "sales_thismonth":
+                return (9999, 99)
+            try:
+                yy = int(n[6:8]); mm = int(n[8:10])
+                return (2000 + yy, mm)
+            except Exception:
+                return (9999, 99)
+        names.sort(key=_key)
+        _SALES_2026_TABLES_CACHE["ts"]    = now
+        _SALES_2026_TABLES_CACHE["names"] = names
+        return list(names)
+    except Exception as e:
+        print(f"[2026 sales] table discovery failed: {e}")
+        # Fall back to the known set so the feature still works in an
+        # environment that lacks INFORMATION_SCHEMA permissions.
+        return ["sales_2601", "sales_2602", "sales_2603",
+                "sales_2604", "sales_2605", "sales_thismonth"]
+
+def _sales_2026_union(cur, alias="s", cols="*"):
+    """Build a `(SELECT … UNION ALL SELECT … …) AS <alias>` SQL fragment
+    that exposes every 2026 monthly sales table as a single virtual
+    source.  Use in place of `FROM sales_2526` for any 2026-only query."""
+    tables = _sales_2026_tables(cur)
+    if not tables:
+        return "(SELECT * FROM sales_thismonth WHERE 1=0) AS " + alias
+    parts = [f"SELECT {cols} FROM {t}" for t in tables]
+    return "(\n  " + "\n  UNION ALL ".join(parts) + f"\n) AS {alias}"
+
+def _ensure_promo_rate_category():
+    """Idempotent ALTER for the `category` column on promo_rate, used to
+    group sub-promos under the top-level buttons (e.g. '443', 'TrueBlue').
+    Existing rows stay '' until the operator populates them — promo
+    buttons are derived from DISTINCT non-empty category values."""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("SHOW TABLES LIKE 'promo_rate'")
+        if not cur.fetchone():
+            cur.close(); conn.close()
+            return
+        cur.execute("SHOW COLUMNS FROM promo_rate LIKE 'category'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE promo_rate "
+                        "ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT '' "
+                        "AFTER promo")
+            cur.execute("CREATE INDEX idx_promo_rate_cat ON promo_rate (category)")
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[promo_rate] category migration skipped: {e}")
+
+_ensure_promo_rate_category()
+
+@app.get("/api/promo/buttons")
+def api_promo_buttons():
+    """Return the top-level promo categories + the sub-promos under each,
+    derived live from `promo_rate` so adding a new category / sub-promo
+    just means inserting rows — no code change.
+
+    Shape:
+      { "categories": [
+          { "name": "443",      "subs": ["443","443_30%","iON_70%"] },
+          { "name": "TrueBlue", "subs": ["TrueBlue_12%","TrueBlue_18%"] },
+        ] }
+    """
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT DISTINCT category, promo
+            FROM promo_rate
+            WHERE category IS NOT NULL AND TRIM(category) <> ''
+              AND promo    IS NOT NULL AND TRIM(promo)    <> ''
+            ORDER BY category, promo
+        """)
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        out = {}
+        for r in rows:
+            cat = r["category"]; pr = r["promo"]
+            if cat not in out:
+                out[cat] = []
+            if pr not in out[cat]:
+                out[cat].append(pr)
+        return jsonify({
+            "categories": [{"name": k, "subs": v} for k, v in out.items()]
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 # Sales source table per ?month=... button on the rebate page.  A whitelist —
 # the resolved value is the only thing interpolated into the FROM clause, so an
 # unknown month can never inject a table name.
