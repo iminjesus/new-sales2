@@ -647,9 +647,17 @@ async function fetchDailyBreakdownWithGroup(groupBy){
 
 // totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
+  // Promo selected? Then the Target series + monthly Target line are
+  // both noise — they were set against full unfiltered sales, so the
+  // achievement % math against a promo subset comes out wildly off.
+  // Substitute zero arrays so Target bars / lines don't render.
+  const _hasPromo = (typeof window.getActivePromos === "function"
+                     && window.getActivePromos().length > 0);
+  const _zeroDay31 = Array.from({length: 31}, (_, i) => ({day: i+1, value: 0}));
+  const _zeroMonth12 = Array.from({length: 12}, (_, i) => ({month: i+1, value: 0}));
   const [salesRows, targetRows, cutRows, wdRows, monthlyTargetRows] = await Promise.all([
     fetchDailySales(),
-    fetchJSON(`/api/daily_target?${new URLSearchParams({
+    _hasPromo ? Promise.resolve(_zeroDay31) : fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
@@ -662,7 +670,7 @@ async function drawDailyTotals(){
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
       group_by:"region", top_limit:filters.top_limit||0
     }).toString()}`),
-    fetchJSON_DIRECT(`/api/monthly_target?${new URLSearchParams({
+    _hasPromo ? Promise.resolve(_zeroMonth12) : fetchJSON_DIRECT(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,

@@ -391,6 +391,26 @@
   // can serialise them into URLSearchParams.
   window.getActivePromos = _activeSubPromos;
 
+  // Expose a reset hook so other UI (e.g. the "All" category button)
+  // can wipe promo state when the user is signalling "show me
+  // everything again".
+  window.clearPromoSelection = function(){
+    if (!_promoState.active.size && !_promoState.subs.size) return false;
+    _promoState.active.clear();
+    _promoState.subs.clear();
+    _renderPromoButtons();
+    return true;
+  };
+
+  // Hook the "All" category button (#catBtns [data-val="ALL"]) so a
+  // click also clears the promo selection.  app.js owns the category-
+  // filter logic + refresh trigger, so we just clear before its
+  // handler runs.
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("#catBtns .btn[data-val='ALL']");
+    if (btn) window.clearPromoSelection();
+  }, true);
+
   function collectFilters() {
     // metric
     const metricBtn = document.querySelector("#metricBtns .btn.active");
