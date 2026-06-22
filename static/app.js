@@ -1362,14 +1362,17 @@ async function drawMonthlyKPI(){
   </tbody>`;
 }
 async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
-  const params = {
+  const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: groupBy, top_limit:filters.top_limit ||0,
     year: year
-  };
-  const qs=new URLSearchParams(params).toString();
-  return fetchJSON(`/api/monthly_breakdown?${qs}`);
+  });
+  // Promo is only meaningful for 2026; the backend silently ignores
+  // the param for any other year, but skip the append to keep the URL
+  // clean and the cache key tight.
+  if (year === 2026) window.appendPromos && window.appendPromos(qs);
+  return fetchJSON(`/api/monthly_breakdown?${qs.toString()}`);
 }
 
 async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
@@ -1554,15 +1557,22 @@ function toPercentStacks(byKey){
 async function drawMonthlyStacked(){
   const effectiveGroup = filters.group_by;
 
+  // Promo selected? Then 2025 actual + 2026 target are noise — the
+  // promo only exists for 2026, and the target wasn't set against
+  // the promo subset.  Skip both fetches and substitute empty rows
+  // so only the 2026 Actual stack remains.
+  const _hasPromo = (typeof window.getActivePromos === "function"
+                     && window.getActivePromos().length > 0);
+
   // Fetch:
   // - 2025 actual breakdown (for comparison stack)
   // - 2026 actual breakdown
   // - 2026 target breakdown (NEW endpoint)
   // - 2026 actual totals (used for cutoff + consistency)
   const [rows25, rows26, rowsT26, sales26TotalRows] = await Promise.all([
-    fetchMonthlyBreakdownWithGroup(effectiveGroup, 2025),
+    _hasPromo ? Promise.resolve([]) : fetchMonthlyBreakdownWithGroup(effectiveGroup, 2025),
     fetchMonthlyBreakdownWithGroup(effectiveGroup, 2026),
-    fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
+    _hasPromo ? Promise.resolve([]) : fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
     fetchMonthlySales(2026)
   ]);
   // Legend: show only the stack key (group label), not year/actual/target suffixes
