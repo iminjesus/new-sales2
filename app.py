@@ -5511,59 +5511,85 @@ def _sales_2026_tables(cur):
         return ["sales_2601", "sales_2602", "sales_2603",
                 "sales_2604", "sales_2605", "sales_thismonth"]
 
+def _sales_table_year_month(table_name):
+    """Derive (year, month) from a 2026 sales table name.  The per-month
+    tables are named `sales_YYMM` (e.g. sales_2603 = March 2026), and
+    `sales_thismonth` is the current calendar month — so we don't need
+    the underlying table to expose year/month columns of its own."""
+    if table_name == "sales_thismonth":
+        from datetime import date as _d
+        d = _d.today()
+        return d.year, d.month
+    if table_name.startswith("sales_") and len(table_name) == len("sales_") + 4:
+        yymm = table_name[len("sales_"):]
+        try:
+            yy = int(yymm[:2]); mm = int(yymm[2:])
+            if 1 <= mm <= 12:
+                return 2000 + yy, mm
+        except Exception:
+            pass
+    return None, None
+
 def _sales_2026_union(cur, alias="s", cols=None):
     """Build a `(SELECT … UNION ALL SELECT … …) AS <alias>` SQL fragment
     that exposes every 2026 monthly sales table as a single virtual
     source.  Use in place of `FROM sales_2526` for any 2026-only query.
 
-    `SELECT *` would work if every monthly table had identical columns,
-    but in practice sales_thismonth has been seen to differ from
-    sales_26?? by a column or two — and any mismatch makes MySQL fail
-    the entire UNION silently (or surface as 'unknown column'
-    downstream).  So we ask each table for its columns via SHOW COLUMNS
-    (more universally supported than INFORMATION_SCHEMA), compare in
-    lowercase, and UNION the intersection.  If for some reason the
-    intersection misses a column we know is required, fall back to a
-    hand-curated list — that way the SQL we emit still has the
-    minimum columns every analytics query depends on."""
+    The per-month tables (sales_2601 … sales_2605) don't carry their
+    own year/month columns — each table IS a single month, so it would
+    be redundant.  We synthesise them as constants in each SELECT so
+    the outer query can `GROUP BY s.month` exactly as it does on
+    sales_2526.  All other columns come from SHOW COLUMNS (lowercase-
+    compared so 'Month' vs 'month' don't break the intersection)."""
     tables = _sales_2026_tables(cur)
     if not tables:
         return "(SELECT * FROM sales_thismonth WHERE 1=0) AS " + alias
 
     if cols is None:
-        # Tracked separately so we can pick canonical column names from
-        # the first table where each name first appears (preserving
-        # original case in SQL).
+        # Discover non-year/month columns across all tables; everyone
+        # gets the intersection so a UNION ALL can succeed.
         seen_in_all = None
-        canonical   = {}     # lowercase name → original-case name
+        canonical   = {}
         for t in tables:
-            cur.execute(f"SHOW COLUMNS FROM {t}")
-            got_lc = set()
-            for r in cur.fetchall():
-                name = r[0] if not isinstance(r, dict) else r.get("Field") or r.get("field")
-                if not name:
-                    continue
-                lc = name.lower()
-                got_lc.add(lc)
-                canonical.setdefault(lc, name)
-            seen_in_all = got_lc if seen_in_all is None else (seen_in_all & got_lc)
+            try:
+                cur.execute(f"SHOW COLUMNS FROM {t}")
+                got_lc = set()
+                for r in cur.fetchall():
+                    name = r[0] if not isinstance(r, dict) else (r.get("Field") or r.get("field"))
+                    if not name:
+                        continue
+                    lc = name.lower()
+                    if lc in ("year", "month"):
+                        # Synthesised below, ignore whatever the table
+                        # happens to provide for these.
+                        continue
+                    got_lc.add(lc)
+                    canonical.setdefault(lc, name)
+                seen_in_all = got_lc if seen_in_all is None else (seen_in_all & got_lc)
+            except Exception:
+                pass
 
-        # Minimum set every sales-analytics query needs.  If
-        # introspection somehow drops one of these (case mismatch,
-        # connector returning empty rows for SHOW COLUMNS, etc.),
-        # include it anyway so the outer query at least produces a
-        # clear "unknown column" error pointing at the missing table.
-        required = ["year", "month", "qty", "amt",
-                    "sold_to", "ship_to", "brand", "material"]
+        required = ["qty", "amt", "sold_to", "ship_to", "brand", "material"]
         for lc in required:
-            seen_in_all.add(lc) if seen_in_all is not None else None
             canonical.setdefault(lc, lc)
-        if not seen_in_all:
-            seen_in_all = set(required)
+        if seen_in_all:
+            cols_lc = sorted(seen_in_all | set(required))
+        else:
+            cols_lc = sorted(set(required))
+        non_ym_cols = ", ".join(canonical[lc] for lc in cols_lc)
+    else:
+        non_ym_cols = cols
 
-        cols = ", ".join(canonical[lc] for lc in sorted(seen_in_all))
-
-    parts = [f"SELECT {cols} FROM {t}" for t in tables]
+    parts = []
+    for t in tables:
+        y, m = _sales_table_year_month(t)
+        if y is None or m is None:
+            # Unknown naming scheme — fall back to NULL year/month so
+            # the SELECT still parses; the outer query will just see
+            # zero rows for that month bucket.
+            parts.append(f"SELECT NULL AS year, NULL AS month, {non_ym_cols} FROM {t}")
+        else:
+            parts.append(f"SELECT {y} AS year, {m} AS month, {non_ym_cols} FROM {t}")
     return "(\n  " + "\n  UNION ALL ".join(parts) + f"\n) AS {alias}"
 
 def _ensure_promo_customer_category():
