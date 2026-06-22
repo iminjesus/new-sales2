@@ -3241,6 +3241,15 @@ def monthly_breakdown():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
+    # Promo filter — only meaningful for 2026 (promo_customer / promo_plan
+    # don't cover 2025).  When promos are selected, the FROM clause
+    # switches to the 2026 monthly-tables union and the PCLT + promo
+    # match conditions get added via _promo_filter_clauses.
+    promos = request.args.getlist("promo")
+    if year != 2026:
+        promos = []
+    use_2026_union = (year == 2026)
+
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
     # For sold_to: GROUP BY the code (s.sold_to) so sales and target rows
@@ -3294,14 +3303,32 @@ def monthly_breakdown():
     if f["material"] != "ALL":
         wh.append("mat.size = %s");          params.append(f["material"])
 
-    # Year condition
-    wh.append("s.year = %s"); params.append(year)
+    if promos:
+        # Promo filter needs carrying_26 (mat) for line/product_group +
+        # customer (cus) for the sold_to_group fallback in the EXISTS.
+        _ensure_carrying_join("s", joins)
+        _ensure_customer_join("s", joins)
+        promo_wh, promo_p = _promo_filter_clauses(promos)
+        wh.extend(promo_wh)
+        params.extend(promo_p)
 
-    base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    # Year condition — only when staying on sales_2526.  When the
+    # FROM source switches to the 2026 union below, the table set
+    # itself bounds the year.
+    if not use_2026_union:
+        wh.append("s.year = %s"); params.append(year)
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
+        # Pick the FROM source: 2026 union for the current calendar
+        # year (so stacks go through the current month), sales_2526
+        # for any other year.
+        if use_2026_union:
+            from_sql = "FROM " + _sales_2026_union(cur, alias="s")
+        else:
+            from_sql = "FROM sales_2526 s"
+
         top_sold_to = None
 
         # 1) Get Top N sold_to from baseline table (sales_2526)
@@ -3329,7 +3356,7 @@ def monthly_breakdown():
         SELECT s.month AS month,
                 {label_col} AS group_label,
                 SUM(s.{value}) AS value
-            FROM sales_2526 s
+            {from_sql}
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.month, {group_col}
