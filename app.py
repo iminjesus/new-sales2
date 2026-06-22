@@ -5519,28 +5519,50 @@ def _sales_2026_union(cur, alias="s", cols=None):
     `SELECT *` would work if every monthly table had identical columns,
     but in practice sales_thismonth has been seen to differ from
     sales_26?? by a column or two — and any mismatch makes MySQL fail
-    the entire UNION silently, returning zero rows.  So we discover
-    the columns present in *every* table via INFORMATION_SCHEMA and
-    UNION only that intersection."""
+    the entire UNION silently (or surface as 'unknown column'
+    downstream).  So we ask each table for its columns via SHOW COLUMNS
+    (more universally supported than INFORMATION_SCHEMA), compare in
+    lowercase, and UNION the intersection.  If for some reason the
+    intersection misses a column we know is required, fall back to a
+    hand-curated list — that way the SQL we emit still has the
+    minimum columns every analytics query depends on."""
     tables = _sales_2026_tables(cur)
     if not tables:
         return "(SELECT * FROM sales_thismonth WHERE 1=0) AS " + alias
+
     if cols is None:
-        common = None
+        # Tracked separately so we can pick canonical column names from
+        # the first table where each name first appears (preserving
+        # original case in SQL).
+        seen_in_all = None
+        canonical   = {}     # lowercase name → original-case name
         for t in tables:
-            cur.execute(
-                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
-                (t,)
-            )
-            got = set()
+            cur.execute(f"SHOW COLUMNS FROM {t}")
+            got_lc = set()
             for r in cur.fetchall():
-                # cursor type varies (tuple vs dict) depending on caller.
-                got.add(r[0] if not isinstance(r, dict) else r["COLUMN_NAME"])
-            common = got if common is None else (common & got)
-        if not common:
-            return "(SELECT * FROM sales_thismonth WHERE 1=0) AS " + alias
-        cols = ", ".join(sorted(common))
+                name = r[0] if not isinstance(r, dict) else r.get("Field") or r.get("field")
+                if not name:
+                    continue
+                lc = name.lower()
+                got_lc.add(lc)
+                canonical.setdefault(lc, name)
+            seen_in_all = got_lc if seen_in_all is None else (seen_in_all & got_lc)
+
+        # Minimum set every sales-analytics query needs.  If
+        # introspection somehow drops one of these (case mismatch,
+        # connector returning empty rows for SHOW COLUMNS, etc.),
+        # include it anyway so the outer query at least produces a
+        # clear "unknown column" error pointing at the missing table.
+        required = ["year", "month", "qty", "amt",
+                    "sold_to", "ship_to", "brand", "material"]
+        for lc in required:
+            seen_in_all.add(lc) if seen_in_all is not None else None
+            canonical.setdefault(lc, lc)
+        if not seen_in_all:
+            seen_in_all = set(required)
+
+        cols = ", ".join(canonical[lc] for lc in sorted(seen_in_all))
+
     parts = [f"SELECT {cols} FROM {t}" for t in tables]
     return "(\n  " + "\n  UNION ALL ".join(parts) + f"\n) AS {alias}"
 
