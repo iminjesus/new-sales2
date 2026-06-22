@@ -5495,33 +5495,33 @@ def _sales_2026_union(cur, alias="s", cols="*"):
     parts = [f"SELECT {cols} FROM {t}" for t in tables]
     return "(\n  " + "\n  UNION ALL ".join(parts) + f"\n) AS {alias}"
 
-def _ensure_promo_rate_category():
-    """Idempotent ALTER for the `category` column on promo_rate, used to
+def _ensure_promo_customer_category():
+    """Idempotent ALTER for the `category` column on promo_customer, used to
     group sub-promos under the top-level buttons (e.g. '443', 'TrueBlue').
     Existing rows stay '' until the operator populates them — promo
     buttons are derived from DISTINCT non-empty category values."""
     try:
         conn = get_connection(); cur = conn.cursor()
-        cur.execute("SHOW TABLES LIKE 'promo_rate'")
+        cur.execute("SHOW TABLES LIKE 'promo_customer'")
         if not cur.fetchone():
             cur.close(); conn.close()
             return
-        cur.execute("SHOW COLUMNS FROM promo_rate LIKE 'category'")
+        cur.execute("SHOW COLUMNS FROM promo_customer LIKE 'category'")
         if not cur.fetchone():
-            cur.execute("ALTER TABLE promo_rate "
+            cur.execute("ALTER TABLE promo_customer "
                         "ADD COLUMN category VARCHAR(32) NOT NULL DEFAULT '' "
                         "AFTER promo")
-            cur.execute("CREATE INDEX idx_promo_rate_cat ON promo_rate (category)")
+            cur.execute("CREATE INDEX idx_promo_customer_cat ON promo_customer (category)")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
-        print(f"[promo_rate] category migration skipped: {e}")
+        print(f"[promo_customer] category migration skipped: {e}")
 
-_ensure_promo_rate_category()
+_ensure_promo_customer_category()
 
 @app.get("/api/promo/buttons")
 def api_promo_buttons():
     """Return the top-level promo categories + the sub-promos under each,
-    derived live from `promo_rate` so adding a new category / sub-promo
+    derived live from `promo_customer` so adding a new category / sub-promo
     just means inserting rows — no code change.
 
     Shape:
@@ -5534,7 +5534,7 @@ def api_promo_buttons():
         conn = get_connection(); cur = conn.cursor(dictionary=True)
         cur.execute("""
             SELECT DISTINCT category, promo
-            FROM promo_rate
+            FROM promo_customer
             WHERE category IS NOT NULL AND TRIM(category) <> ''
               AND promo    IS NOT NULL AND TRIM(promo)    <> ''
             ORDER BY category, promo
