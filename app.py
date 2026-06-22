@@ -3131,6 +3131,15 @@ def monthly_sales():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
+    # Selected sub-promos from the new 443 / iON / TrueBlue buttons.
+    # Promo filtering is only meaningful within the 2026 calendar year
+    # (the promo_customer / promo_plan tables don't cover 2025 data),
+    # so we silently ignore the param when year != 2026.
+    promos = request.args.getlist("promo")
+    if year != 2026:
+        promos = []
+    use_2026_union = (year == 2026)
+
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
     # category ??normalised version
@@ -3150,15 +3159,32 @@ def monthly_sales():
         wh.append("mat.size = %s")
         params.append(f["material"])
 
-    # year condition
-    wh.append("s.year = %s")
-    params.append(year)
+    if promos:
+        # Promo filter needs carrying_26 (mat) for line/product_group +
+        # customer (cus) for the sold_to_group fallback in the EXISTS.
+        _ensure_carrying_join("s", joins)
+        _ensure_customer_join("s", joins)
+        promo_wh, promo_p = _promo_filter_clauses(promos)
+        wh.extend(promo_wh)
+        params.extend(promo_p)
 
-    base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+    # year condition — only when staying on sales_2526.  When we switch
+    # to the 2026 union below, the table set itself bounds the year.
+    if not use_2026_union:
+        wh.append("s.year = %s")
+        params.append(year)
 
     conn = get_connection()
     cur = conn.cursor(dictionary=True)
     try:
+        # Pick the FROM source: 2026 union for the current calendar
+        # year (so the monthly chart goes through the current month),
+        # sales_2526 for any other year.
+        if use_2026_union:
+            from_sql = "FROM " + _sales_2026_union(cur, alias="s")
+        else:
+            from_sql = "FROM sales_2526 s"
+
         top_sold_to = None
 
         # 1) Get Top N sold_to from baseline table (sales_2526)
@@ -3183,7 +3209,7 @@ def monthly_sales():
 
         monthly_sql = f"""
         SELECT s.month AS month_num, SUM(s.{value}) AS monthly_total
-            FROM sales_2526 s
+            {from_sql}
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.month
@@ -5537,6 +5563,55 @@ def _promo_category_of(promo_name):
     if not s:
         return ""
     return s.split("_", 1)[0]
+
+def _promo_filter_clauses(promos, sales_alias="s",
+                          carrying_alias="mat", customer_alias="cus"):
+    """Build the WHERE clauses + params needed to constrain a sales query
+    to rows that qualify for any of the selected sub-promos.
+
+    Caller responsibility:
+      • Ensure the `mat` (carrying_26) join is present — promos require
+        product_group + line columns.
+      • Ensure the `cus` (customer) join is present — sold_to_group is
+        used for customer_group fallback when promo_customer.sold_to is
+        empty.
+      • Sales table aliased as `s` (or pass sales_alias).
+
+    Returns: (wh_list, params_list).  Empty when promos is empty.
+    """
+    if not promos:
+        return [], []
+    placeholders = ",".join(["%s"] * len(promos))
+    s = sales_alias; c = carrying_alias; cu = customer_alias
+    wh = [
+        # PCLT is always the umbrella for promos.
+        f"{c}.line = 'PCLT'",
+        # Sale qualifies for at least one selected sub-promo.
+        f"""EXISTS (
+            SELECT 1
+            FROM promo_customer pc
+            LEFT JOIN promo_plan pp ON pp.promo = pc.promo
+            WHERE pc.promo IN ({placeholders})
+              AND {s}.qty     >= pc.min_qty
+              AND {s}.dc_rate  = pc.dc_rate
+              AND {s}.brand    = pc.brand
+              AND (
+                   (pc.sold_to <> '' AND pc.sold_to = {s}.sold_to)
+                OR (pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)
+              )
+              AND (
+                pp.promo IS NULL
+                OR (
+                  {c}.product_group = pp.product_group
+                  AND ({s}.year * 100 + {s}.month) BETWEEN
+                       (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND
+                       (YEAR(pp.end_date)   * 100 + MONTH(pp.end_date))
+                  AND (pp.material = '' OR pp.material = {s}.material)
+                )
+              )
+        )"""
+    ]
+    return wh, list(promos)
 
 @app.get("/api/promo/buttons")
 def api_promo_buttons():

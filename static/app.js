@@ -1072,8 +1072,9 @@ async function fetchMonthlySales(year=2025){
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0,
     year: year
-  }).toString();
-  return fetchJSON_DIRECT(`/api/monthly_sales?${qs}`);
+  });
+  window.appendPromos && window.appendPromos(qs);
+  return fetchJSON_DIRECT(`/api/monthly_sales?${qs.toString()}`);
 }
 
 // helpers
@@ -2325,6 +2326,17 @@ function refreshAllDebounced(){
   clearTimeout(refreshTimer);
   refreshTimer = setTimeout(() => refreshAllWithKpi(), 250);
 }
+// Exposed so the promo-button handlers in index.html can trigger the
+// same debounced re-render the category buttons do.
+window.refreshAllDebounced = refreshAllDebounced;
+// Helper for fetch callsites: read the currently-selected sub-promos
+// (set by index.html) and append them as repeated ?promo= entries.
+window.appendPromos = function(qs){
+  const promos = (typeof window.getActivePromos === "function")
+                 ? window.getActivePromos() : [];
+  for (const p of promos) qs.append("promo", p);
+  return qs;
+};
 
 (async function start(){
   await initControls();
