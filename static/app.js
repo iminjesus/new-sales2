@@ -1386,8 +1386,10 @@ async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
 
 async function drawMonthlyTotals(){
   // Promo filters only exist in 2026 — when one is selected, the 2025
-  // bars become uninformative noise (there's no like-for-like to
-  // compare against), so skip that fetch and render flat zeros.
+  // bars and the 2026 Target both become uninformative noise (the
+  // target was set against full unfiltered sales, not the promo
+  // subset).  Skip both fetches and render flat zeros so only the
+  // 2026 actual stays visible.
   const _hasPromo = (typeof window.getActivePromos === "function"
                      && window.getActivePromos().length > 0);
   const _zeroMonths = Array.from({length: 12}, (_, i) => ({month: i+1, value: 0}));
@@ -1398,7 +1400,7 @@ async function drawMonthlyTotals(){
   ] = await Promise.all([
     _hasPromo ? Promise.resolve(_zeroMonths) : fetchMonthlySales(2025),
     fetchMonthlySales(2026),
-    fetchJSON(`/api/monthly_target?${new URLSearchParams({
+    _hasPromo ? Promise.resolve(_zeroMonths) : fetchJSON(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
