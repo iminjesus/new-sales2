@@ -10196,8 +10196,13 @@ def claim_qr_shops():
         bdes = [r["name"] for r in cur.fetchall() if r.get("name")]
         # Distinct sold-tos for the search box — narrowed by State + BDE
         # if either is set, so the suggestion list always matches the
-        # currently-applied scope.
-        st_wh = ["sold_to IS NOT NULL", "TRIM(sold_to) <> ''"]
+        # currently-applied scope.  Restricted to sold_tos that actually
+        # transact (sales_2526) so the list matches /api/sold_to_names
+        # used by the graph view — keeps inactive / per-location master
+        # rows out of the suggestion box.
+        st_wh = ["sold_to IS NOT NULL", "TRIM(sold_to) <> ''",
+                 "sold_to IN (SELECT DISTINCT sold_to FROM sales_2526 "
+                 "WHERE sold_to IS NOT NULL)"]
         st_params = []
         if state:
             st_wh.append("bde_state = %s"); st_params.append(state)
