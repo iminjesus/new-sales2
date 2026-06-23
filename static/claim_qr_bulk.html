@@ -100,10 +100,6 @@ html,body{margin:0;background:#e5e7eb;color:#111827;
       <option value="1">1 (full page)</option>
     </select>
   </label>
-  <label>Limit
-    <input id="limitInput" type="number" value="60" min="1" max="300" style="width:64px;">
-  </label>
-  <button id="loadBtn">Load</button>
   <button id="printBtn" disabled>Print all pages</button>
   <a href="/claims" style="margin-left:auto;">← Back to claims</a>
 </div>
@@ -129,7 +125,7 @@ function cardHtml(s, baseUrl){
            style="max-height:6mm;max-width:25mm;object-fit:contain;margin-bottom:1mm;"
            onerror="this.style.display='none'">
       <div class="title">Tyre Claim Form</div>
-      <div class="qr"><img src="/api/claim/qr/${encodeURIComponent(s.ship_to)}" alt=""></div>
+      <div class="qr"><img src="/api/claim/qr/${encodeURIComponent(s.ship_to)}" alt="" loading="lazy"></div>
       <div class="shop-name">${esc(s.ship_to_name || s.ship_to)}</div>
       <div class="shop-code">#${esc(s.ship_to)}</div>
       <div class="url">${esc(url)}</div>
@@ -141,12 +137,14 @@ async function loadShops(){
   const state    = document.getElementById("stateSel").value;
   const bde      = document.getElementById("bdeSel").value;
   const soldTo   = (document.getElementById("soldToInput").value || "").trim();
-  const limit    = document.getElementById("limitInput").value || "60";
   status.textContent = "Loading…";
   pages.innerHTML = "";
   document.getElementById("printBtn").disabled = true;
   try {
-    const qs = new URLSearchParams({ limit });
+    // No client-side cap — backend serves every match in scope.
+    // (QR <img> tags use loading="lazy" so the browser only fetches
+    // the QR images that scroll into view.)
+    const qs = new URLSearchParams({ limit: "10000" });
     if (state)  qs.set("state",   state);
     if (bde)    qs.set("bde",     bde);
     if (soldTo) qs.set("sold_to", soldTo);
@@ -210,22 +208,27 @@ function refreshSoldToOptions(sold_tos){
 // Reset BDE pick + clear Sold-to whenever the State changes (the
 // next Load fetches the matching set), so the picker can't keep a
 // BDE or sold-to that's no longer in scope.
+// State / BDE / Sold-to changes auto-trigger a reload now — the
+// Load button is gone.  State reset cascades to BDE + Sold-to so a
+// stale narrower filter can't survive a broader change.
 document.getElementById("stateSel").addEventListener("change", () => {
   document.getElementById("bdeSel").value = "";
   document.getElementById("soldToInput").value = "";
+  loadShops();
 });
-// Changing BDE also narrows the implied scope, so drop any stale
-// sold-to selection so the picker doesn't show a sold-to outside the
-// new BDE's customers.
 document.getElementById("bdeSel").addEventListener("change", () => {
   document.getElementById("soldToInput").value = "";
+  loadShops();
 });
-// Pressing Enter in the sold-to box reloads (so a power user doesn't
-// have to take their hands off the keyboard to click Load).
+// `change` fires once the user picks a datalist suggestion or blurs;
+// good for our case so we don't fetch on every keystroke.  Enter
+// still works for users who type the full code.
+document.getElementById("soldToInput").addEventListener("change", () => {
+  loadShops();
+});
 document.getElementById("soldToInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); loadShops(); }
 });
-document.getElementById("loadBtn").addEventListener("click", loadShops);
 // Re-render with the new layout when the per-page picker changes —
 // no need to re-hit the server; the shop set is the same.
 document.getElementById("perPageSel").addEventListener("change", () => {

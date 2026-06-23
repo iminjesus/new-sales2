@@ -10134,7 +10134,10 @@ def claim_qr_shops():
     state   = (request.args.get("state") or "").strip().upper()
     bde     = (request.args.get("bde")   or "").strip()
     sold_to = (request.args.get("sold_to") or "").strip()
-    limit = min(int(request.args.get("limit") or "300"), 1000)
+    # Frontend dropped its own cap so the page renders every match in
+    # scope.  Server-side cap stays as a safety net (10 000 is well
+    # above the largest customer master we've ever loaded).
+    limit = min(int(request.args.get("limit") or "10000"), 10000)
     wh = ["ship_to IS NOT NULL", "TRIM(ship_to) <> ''"]
     params = []
     if state:
