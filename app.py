@@ -5804,6 +5804,416 @@ def api_promo_buttons():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+# ─── Monthly Highlights ───────────────────────────────────────────────
+# Per-month executive snapshot with five objective views: overall
+# summary, by region, by product group, by promotion, and sold-to
+# movement (gainers / losers / newly active / newly silent).
+@app.get("/highlights")
+def highlights_page():
+    return send_from_directory("static", "highlights.html")
+
+def _highlights_src_for(cur, year, month):
+    """Resolve (year, month) → (table_name, where_clause, params_tuple).
+    Picks the 2026 monthly table when available, sales_thismonth for
+    the current month, sales_2526 for other years (with year+month
+    filter applied)."""
+    if year == 2026:
+        from datetime import date as _d
+        today = _d.today()
+        if year == today.year and month == today.month:
+            return ("sales_thismonth", "", ())
+        candidate = f"sales_{year % 100:02d}{month:02d}"
+        try:
+            cur.execute("SHOW TABLES LIKE %s", (candidate,))
+            if cur.fetchone():
+                return (candidate, "", ())
+        except Exception:
+            pass
+        return (None, "", ())
+    # 2025 (and parts of 2026 FY) live in sales_2526.
+    return ("sales_2526", "WHERE s.year = %s AND s.month = %s", (year, month))
+
+def _highlights_pct(this_v, prev_v):
+    """% change from prev → this, or None when prev is zero/missing
+    (objective: no fake denominators)."""
+    if not prev_v or prev_v == 0:
+        return None
+    return round((this_v - prev_v) / prev_v * 100, 1)
+
+@app.get("/api/monthly_highlights")
+def api_monthly_highlights():
+    """Per-month KPI snapshot.  Body: ?month=YYYY-MM&metric=qty|amt.
+    Returns a single JSON shape with five sections so the page renders
+    in one round trip."""
+    month_str = (request.args.get("month") or "").strip()
+    metric    = (request.args.get("metric") or "qty").strip().lower()
+    metric    = "qty" if metric == "qty" else "amt"
+
+    try:
+        y_s, m_s = month_str.split("-")
+        year, month = int(y_s), int(m_s)
+        assert 1 <= month <= 12
+    except Exception:
+        return jsonify({"error": "month must be YYYY-MM"}), 400
+
+    # Comparison months.
+    if month == 1:
+        prev_year, prev_month = year - 1, 12
+    else:
+        prev_year, prev_month = year, month - 1
+    py_year, py_month = year - 1, month
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        # ── helpers that re-use the cursor ──────────────────────────
+        def totals(y, m):
+            tbl, where, ps = _highlights_src_for(cur, y, m)
+            if not tbl:
+                return {"qty": 0.0, "amt": 0.0, "days": 0}
+            day_col = ", COUNT(DISTINCT s.day) AS days" if tbl == "sales_thismonth" else ", 0 AS days"
+            cur.execute(
+                f"SELECT COALESCE(SUM(s.qty),0) AS qty, "
+                f"       COALESCE(SUM(s.amt),0) AS amt {day_col} "
+                f"FROM {tbl} s {where}",
+                ps,
+            )
+            r = cur.fetchone() or {}
+            return {"qty": float(r.get("qty") or 0),
+                    "amt": float(r.get("amt") or 0),
+                    "days": int(r.get("days") or 0)}
+
+        def per_region(y, m):
+            tbl, where, ps = _highlights_src_for(cur, y, m)
+            if not tbl:
+                return {}
+            cur.execute(
+                f"SELECT cus.bde_state AS state, "
+                f"       COALESCE(SUM(s.qty),0) AS qty, "
+                f"       COALESCE(SUM(s.amt),0) AS amt "
+                f"FROM {tbl} s "
+                f"LEFT JOIN customer cus ON cus.ship_to = s.ship_to "
+                f"{where} "
+                f"GROUP BY cus.bde_state",
+                ps,
+            )
+            # Roll SA/TAS into VIC, NT into WA, ACT into NSW so the
+            # numbers reconcile with the 4-region buckets used
+            # everywhere else on the dashboard.
+            remap = {"SA": "VIC", "TAS": "VIC", "NT": "WA", "ACT": "NSW"}
+            out = {}
+            for r in cur.fetchall():
+                st = (r["state"] or "").strip().upper()
+                if not st or st == "COMMON":
+                    st = "COMMON"
+                else:
+                    st = remap.get(st, st)
+                d = out.setdefault(st, {"qty": 0.0, "amt": 0.0})
+                d["qty"] += float(r["qty"] or 0)
+                d["amt"] += float(r["amt"] or 0)
+            return out
+
+        def per_product_group(y, m):
+            tbl, where, ps = _highlights_src_for(cur, y, m)
+            if not tbl:
+                return {}
+            cur.execute(
+                f"SELECT mat.product_group AS pg, "
+                f"       COALESCE(SUM(s.qty),0) AS qty, "
+                f"       COALESCE(SUM(s.amt),0) AS amt "
+                f"FROM {tbl} s "
+                f"LEFT JOIN carrying_26 mat ON mat.m_code = s.material "
+                f"{where} "
+                f"GROUP BY mat.product_group",
+                ps,
+            )
+            out = {}
+            for r in cur.fetchall():
+                pg = (r["pg"] or "—").strip() or "—"
+                out[pg] = {"qty": float(r["qty"] or 0),
+                           "amt": float(r["amt"] or 0)}
+            return out
+
+        def per_sold_to(y, m):
+            tbl, where, ps = _highlights_src_for(cur, y, m)
+            if not tbl:
+                return {}
+            cur.execute(
+                f"SELECT s.sold_to AS sold_to, "
+                f"       COALESCE(SUM(s.qty),0) AS qty, "
+                f"       COALESCE(SUM(s.amt),0) AS amt "
+                f"FROM {tbl} s "
+                f"{where} "
+                f"GROUP BY s.sold_to",
+                ps,
+            )
+            return {(r["sold_to"] or ""): {"qty": float(r["qty"] or 0),
+                                            "amt": float(r["amt"] or 0)}
+                    for r in cur.fetchall()}
+
+        # ── ① Summary ──────────────────────────────────────────────
+        this_t = totals(year, month)
+        prev_t = totals(prev_year, prev_month)
+        py_t   = totals(py_year, py_month)
+        this_v = this_t[metric]; prev_v = prev_t[metric]; py_v = py_t[metric]
+        summary = {
+            "this":         this_t,
+            "prev":         prev_t,
+            "py":           py_t,
+            "mom_pct":      _highlights_pct(this_v, prev_v),
+            "yoy_pct":      _highlights_pct(this_v, py_v),
+            "working_days": this_t["days"],
+            "daily_avg":    (this_v / this_t["days"]) if this_t["days"] > 0 else None,
+        }
+
+        # ── ② Regions ──────────────────────────────────────────────
+        this_reg = per_region(year, month)
+        prev_reg = per_region(prev_year, prev_month)
+        py_reg   = per_region(py_year, py_month)
+        all_regions = set(this_reg) | set(prev_reg) | set(py_reg)
+        # Stable order: standard 4 first, COMMON last.
+        order = ["NSW", "QLD", "VIC", "WA", "COMMON"]
+        ordered = [r for r in order if r in all_regions] + [r for r in all_regions if r not in order]
+        regions = []
+        total_metric = sum(this_reg.get(r, {}).get(metric, 0) for r in ordered) or 1
+        for r in ordered:
+            tv = this_reg.get(r, {}).get(metric, 0)
+            pv = prev_reg.get(r, {}).get(metric, 0)
+            yv = py_reg.get(r, {}).get(metric, 0)
+            regions.append({
+                "region":  r,
+                "this":    round(tv, 2),
+                "prev":    round(pv, 2),
+                "py":      round(yv, 2),
+                "mom_pct": _highlights_pct(tv, pv),
+                "yoy_pct": _highlights_pct(tv, yv),
+                "share":   round(tv / total_metric * 100, 1),
+            })
+
+        # ── ③ Product Groups (Top 10 by this-month metric) ─────────
+        this_pg = per_product_group(year, month)
+        prev_pg = per_product_group(prev_year, prev_month)
+        py_pg   = per_product_group(py_year, py_month)
+        pg_total = sum(d.get(metric, 0) for d in this_pg.values()) or 1
+        pg_rows = []
+        for pg, d in this_pg.items():
+            tv = d.get(metric, 0)
+            pv = prev_pg.get(pg, {}).get(metric, 0)
+            yv = py_pg.get(pg, {}).get(metric, 0)
+            pg_rows.append({
+                "product_group": pg,
+                "this":   round(tv, 2),
+                "prev":   round(pv, 2),
+                "py":     round(yv, 2),
+                "mom_pct": _highlights_pct(tv, pv),
+                "yoy_pct": _highlights_pct(tv, yv),
+                "share":   round(tv / pg_total * 100, 1),
+            })
+        pg_rows.sort(key=lambda r: -(r["this"] or 0))
+        product_groups = pg_rows[:10]
+
+        # ── ④ Promotion — counts + lift ppt vs non-participating ───
+        promotions = []
+        this_tbl, this_where, this_ps = _highlights_src_for(cur, year, month)
+        if this_tbl:
+            # We compute lift as (participating MoM%) - (non-participating MoM%).
+            # Need: for each promo, the set of sold_to that qualified this
+            # month, then sum their this/prev month metric vs everyone else's.
+            ym_int = year * 100 + month
+            # Distinct promos in promo_customer with a non-zero match.
+            try:
+                cur.execute("""
+                    SELECT DISTINCT promo FROM promo_customer
+                    WHERE promo IS NOT NULL AND TRIM(promo) <> ''
+                    ORDER BY promo
+                """)
+                promo_list = [r["promo"] for r in cur.fetchall()]
+            except Exception:
+                promo_list = []
+
+            # Build a single "this-month sales row matches promo X" subquery
+            # and fan out per promo.  Keeps the query budget bounded.
+            for promo_name in promo_list:
+                # Sold_tos qualifying this month for this promo.
+                day_join = "" if this_tbl == "sales_thismonth" else ""
+                ym_year_lit  = year
+                ym_month_lit = month
+                try:
+                    cur.execute(
+                        f"""SELECT DISTINCT s.sold_to AS sold_to
+                            FROM {this_tbl} s
+                            LEFT JOIN carrying_26 mat ON mat.m_code = s.material
+                            LEFT JOIN customer    cus ON cus.ship_to = s.ship_to
+                            {this_where + (' AND ' if this_where else 'WHERE ')}
+                              mat.line = 'PCLT'
+                              AND EXISTS (
+                                SELECT 1 FROM promo_customer pc
+                                LEFT JOIN promo_plan pp ON pp.promo = pc.promo
+                                WHERE pc.promo = %s
+                                  AND s.qty     >= pc.min_qty
+                                  AND s.dc_rate  = pc.dc_rate
+                                  AND s.brand    = pc.brand
+                                  AND (
+                                    (pc.sold_to <> '' AND pc.sold_to = s.sold_to)
+                                    OR (pc.sold_to = '' AND pc.customer_group = cus.sold_to_group)
+                                  )
+                                  AND (
+                                    pp.promo IS NULL
+                                    OR (
+                                      mat.product_group = pp.product_group
+                                      AND ({ym_year_lit} * 100 + {ym_month_lit}) BETWEEN
+                                           (YEAR(pp.start_date)*100 + MONTH(pp.start_date)) AND
+                                           (YEAR(pp.end_date)*100   + MONTH(pp.end_date))
+                                      AND (pp.material = '' OR pp.material = s.material)
+                                    )
+                                  )
+                              )
+                        """,
+                        tuple(this_ps) + (promo_name,)
+                    )
+                    participants = {r["sold_to"] for r in cur.fetchall() if r["sold_to"]}
+                except Exception:
+                    participants = set()
+
+                # Per-sold_to totals for this + prev month — already
+                # collected above for the sold-to movement section.
+                # Reuse if already computed below; otherwise compute now.
+                # (Keep call independent for clarity.)
+                pass
+
+                # Aggregate metric for participating vs non-participating.
+                tm = per_sold_to(year, month)
+                pm = per_sold_to(prev_year, prev_month)
+                part_this = sum((tm.get(st, {}).get(metric, 0) for st in participants))
+                part_prev = sum((pm.get(st, {}).get(metric, 0) for st in participants))
+                all_this  = sum((d.get(metric, 0) for d in tm.values()))
+                all_prev  = sum((d.get(metric, 0) for d in pm.values()))
+                non_this  = all_this - part_this
+                non_prev  = all_prev - part_prev
+
+                promotions.append({
+                    "promo":           promo_name,
+                    "participants":    len(participants),
+                    "total_shops":     len({k for k in tm.keys() if k}),
+                    "this":            round(part_this, 2),
+                    "prev":            round(part_prev, 2),
+                    "part_mom_pct":    _highlights_pct(part_this, part_prev),
+                    "non_part_mom_pct":_highlights_pct(non_this, non_prev),
+                })
+            # Lift ppt is part − non-part once both exist.
+            for p in promotions:
+                a = p.get("part_mom_pct")
+                b = p.get("non_part_mom_pct")
+                p["lift_ppt"] = round(a - b, 1) if (a is not None and b is not None) else None
+
+        # ── ⑤ Sold-to movement ────────────────────────────────────
+        tm = per_sold_to(year, month)
+        pm = per_sold_to(prev_year, prev_month)
+
+        # Map sold_to → name via customer master (one query, all sold_tos).
+        name_map = {}
+        candidates = set(tm.keys()) | set(pm.keys())
+        if candidates:
+            ph = ",".join(["%s"] * len(candidates))
+            try:
+                cur.execute(
+                    f"SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS name "
+                    f"FROM customer WHERE sold_to IN ({ph}) "
+                    f"GROUP BY sold_to",
+                    tuple(candidates),
+                )
+                name_map = {r["sold_to"]: (r["name"] or r["sold_to"]) for r in cur.fetchall()}
+            except Exception:
+                pass
+
+        # Compute deltas across the full set, then take the top 30 each side.
+        rows = []
+        for st in candidates:
+            if not st:
+                continue
+            tv = tm.get(st, {}).get(metric, 0)
+            pv = pm.get(st, {}).get(metric, 0)
+            rows.append({
+                "sold_to":  st,
+                "name":     name_map.get(st, st),
+                "this":     round(tv, 2),
+                "prev":     round(pv, 2),
+                "delta":    round(tv - pv, 2),
+                "delta_pct": _highlights_pct(tv, pv),
+            })
+        gainers = sorted([r for r in rows if (r["delta"] or 0) > 0],
+                         key=lambda r: -r["delta"])[:30]
+        losers  = sorted([r for r in rows if (r["delta"] or 0) < 0],
+                         key=lambda r: r["delta"])[:30]
+
+        # Newly Active = no sales in last 3 months, positive this month.
+        # Newly Silent = positive prev month, zero this month.
+        newly_active = []
+        newly_silent = []
+        try:
+            # Get all sold_to with positive sales in the previous 3
+            # months (excluding this one).  Three queries — keep simple.
+            three_back_sold = set()
+            for back in range(1, 4):
+                bm_year, bm_month = year, month - back
+                while bm_month < 1:
+                    bm_month += 12; bm_year -= 1
+                t, w, p = _highlights_src_for(cur, bm_year, bm_month)
+                if not t:
+                    continue
+                cur.execute(
+                    f"SELECT DISTINCT s.sold_to FROM {t} s {w}",
+                    p,
+                )
+                for r in cur.fetchall():
+                    if r.get("sold_to"):
+                        three_back_sold.add(r["sold_to"])
+            this_sold = {st for st, d in tm.items()
+                         if st and (d.get(metric, 0) or 0) > 0}
+            prev_sold = {st for st, d in pm.items()
+                         if st and (d.get(metric, 0) or 0) > 0}
+            for st in (this_sold - three_back_sold):
+                newly_active.append({
+                    "sold_to": st,
+                    "name":    name_map.get(st, st),
+                    "this":    round(tm.get(st, {}).get(metric, 0), 2),
+                })
+            for st in (prev_sold - this_sold):
+                newly_silent.append({
+                    "sold_to": st,
+                    "name":    name_map.get(st, st),
+                    "prev":    round(pm.get(st, {}).get(metric, 0), 2),
+                })
+            newly_active.sort(key=lambda r: -(r["this"] or 0))
+            newly_silent.sort(key=lambda r: -(r["prev"] or 0))
+        except Exception:
+            pass
+
+        cur.close(); conn.close()
+        return jsonify({
+            "month":          f"{year}-{month:02d}",
+            "metric":         metric,
+            "summary":        summary,
+            "regions":        regions,
+            "product_groups": product_groups,
+            "promotions":     promotions,
+            "sold_to": {
+                "gainers":       gainers,
+                "losers":        losers,
+                "newly_active":  newly_active,
+                "newly_silent":  newly_silent,
+                "notes": {
+                    "gainers_limit": 30,
+                    "losers_limit":  30,
+                    "newly_active":  "Sold-to with zero sales in the previous 3 months AND positive sales this month.",
+                    "newly_silent":  "Sold-to with positive sales in the previous month AND zero sales this month.",
+                }
+            },
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 # Sales source table per ?month=... button on the rebate page.  A whitelist —
 # the resolved value is the only thing interpolated into the FROM clause, so an
 # unknown month can never inject a table name.

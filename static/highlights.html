@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monthly Highlights</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;background:#f3f4f6;color:#111827;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px}
+.toolbar{padding:10px 18px;background:#1e3a5f;color:#fff;display:flex;
+  align-items:center;gap:14px;flex-wrap:wrap}
+.toolbar h1{font-size:14px;font-weight:700;margin:0;margin-right:14px}
+.toolbar select,.toolbar button{background:#fff;color:#111827;border:none;
+  border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer}
+.toolbar button.active{background:#2563eb;color:#fff;font-weight:700}
+.toolbar .nav{margin-left:auto;display:flex;gap:5px;flex-wrap:wrap}
+.toolbar .nav a{color:#cbd5e1;font-size:12px;text-decoration:none;
+  padding:5px 10px;border-radius:5px}
+.toolbar .nav a:hover{background:rgba(255,255,255,.1);color:#fff}
+.toolbar .nav a.here{background:#fff;color:#1e3a5f;font-weight:700}
+
+.wrap{padding:20px;max-width:1400px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card h2{font-size:12px;font-weight:700;color:#1e3a5f;margin:0 0 12px;
+  text-transform:uppercase;letter-spacing:.5px;
+  padding-bottom:8px;border-bottom:1px solid #e5e7eb}
+
+/* Summary KPIs */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.kpi{padding:10px 12px;border:1px solid #f1f5f9;border-radius:6px;background:#fafafa}
+.kpi .label{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px}
+.kpi .value{font-size:22px;font-weight:700;color:#1e3a5f;margin-top:2px;
+  font-family:ui-monospace,Menlo,monospace}
+.kpi .sub{font-size:11px;color:#6b7280;margin-top:2px}
+.delta-up{color:#16a34a;font-weight:700}
+.delta-dn{color:#dc2626;font-weight:700}
+.delta-fl{color:#9ca3af}
+
+/* Tables */
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid #f1f5f9}
+th{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px;
+  background:#fafafa;position:sticky;top:0;z-index:1}
+td.num,th.num{text-align:right;font-family:ui-monospace,Menlo,monospace}
+td.name{font-weight:500;color:#1e3a5f}
+
+.section-grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:1000px){.section-grid2{grid-template-columns:1fr}}
+
+.notes{font-size:11px;color:#6b7280;font-style:italic;margin-top:8px;line-height:1.5}
+.notes b{color:#374151;font-style:normal}
+.status-msg{padding:30px;text-align:center;color:#6b7280;font-size:13px}
+.status-msg.err{color:#dc2626;font-weight:600}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <h1>📊 Monthly Highlights</h1>
+  <label>Month
+    <select id="monthSel">
+      <option value="2026-01">2026 January</option>
+      <option value="2026-02">2026 February</option>
+      <option value="2026-03">2026 March</option>
+      <option value="2026-04">2026 April</option>
+      <option value="2026-05">2026 May</option>
+      <option value="2026-06" selected>2026 June</option>
+    </select>
+  </label>
+  <div style="display:flex;gap:4px;">
+    <button id="mQty"    class="active">Qty</button>
+    <button id="mAmt">Amount</button>
+  </div>
+  <div class="nav">
+    <a href="/">Graph</a>
+    <a href="/map">Map</a>
+    <a href="/stock">Stock</a>
+    <a href="/rebate">Rebate</a>
+    <a href="/price">Price</a>
+    <a href="/meeting">Meeting</a>
+    <a href="/claims">Claims</a>
+    <a href="/highlights" class="here">📊 Highlights</a>
+  </div>
+</div>
+
+<div class="wrap" id="wrap">
+  <div class="status-msg" id="status">Loading…</div>
+</div>
+
+<script>
+function esc(s){
+  return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function fmtNum(n){
+  if (n == null) return "—";
+  return Math.round(n).toLocaleString();
+}
+function fmtPct(p){
+  if (p == null) return "—";
+  const cls = p > 0 ? "delta-up" : (p < 0 ? "delta-dn" : "delta-fl");
+  const sign = p > 0 ? "+" : "";
+  return `<span class="${cls}">${sign}${p.toFixed(1)}%</span>`;
+}
+function fmtPpt(p){
+  if (p == null) return "—";
+  const cls = p > 0 ? "delta-up" : (p < 0 ? "delta-dn" : "delta-fl");
+  const sign = p > 0 ? "+" : "";
+  return `<span class="${cls}">${sign}${p.toFixed(1)} ppt</span>`;
+}
+
+let metric = "qty";
+
+document.getElementById("mQty").addEventListener("click", () => {
+  metric = "qty"; setMetricButtons(); load();
+});
+document.getElementById("mAmt").addEventListener("click", () => {
+  metric = "amt"; setMetricButtons(); load();
+});
+function setMetricButtons(){
+  document.getElementById("mQty").classList.toggle("active", metric === "qty");
+  document.getElementById("mAmt").classList.toggle("active", metric === "amt");
+}
+document.getElementById("monthSel").addEventListener("change", load);
+
+async function load(){
+  const wrap = document.getElementById("wrap");
+  const status = document.getElementById("status");
+  if (status) { status.className = "status-msg"; status.textContent = "Loading…"; status.style.display = ""; }
+  const month = document.getElementById("monthSel").value;
+  try {
+    const r = await fetch(`/api/monthly_highlights?month=${encodeURIComponent(month)}&metric=${metric}`);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    render(j);
+  } catch (e) {
+    if (status) { status.className = "status-msg err"; status.textContent = "Error: " + e.message; }
+  }
+}
+
+function unitLabel(){ return metric === "qty" ? "units" : "$"; }
+function unitVal(v){
+  if (v == null) return "—";
+  return metric === "qty" ? fmtNum(v) : "$" + fmtNum(v);
+}
+
+function render(j){
+  const wrap = document.getElementById("wrap");
+  const status = document.getElementById("status");
+  if (status) status.style.display = "none";
+
+  const sum = j.summary || {};
+  const this_v = (sum.this || {})[metric] || 0;
+  const prev_v = (sum.prev || {})[metric] || 0;
+  const py_v   = (sum.py   || {})[metric] || 0;
+
+  const html = [];
+
+  // ① Summary
+  html.push(`
+    <div class="card">
+      <h2>① Summary — ${esc(j.month)}</h2>
+      <div class="kpis">
+        <div class="kpi">
+          <div class="label">This month total</div>
+          <div class="value">${unitVal(this_v)}</div>
+          <div class="sub">${metric === "qty" ? "units" : "AUD"}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">vs Previous month</div>
+          <div class="value">${fmtPct(sum.mom_pct)}</div>
+          <div class="sub">Prev: ${unitVal(prev_v)}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">vs Same month last year</div>
+          <div class="value">${fmtPct(sum.yoy_pct)}</div>
+          <div class="sub">Last year: ${unitVal(py_v)}</div>
+        </div>
+        <div class="kpi">
+          <div class="label">Working days · Daily avg</div>
+          <div class="value">${sum.working_days || "—"}</div>
+          <div class="sub">${sum.daily_avg != null ? unitVal(sum.daily_avg) + " / day" : "—"}</div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  // ② Regions
+  const regions = j.regions || [];
+  html.push(`
+    <div class="card">
+      <h2>② Region</h2>
+      <table>
+        <thead><tr>
+          <th>Region</th>
+          <th class="num">This month</th>
+          <th class="num">vs Prev M</th>
+          <th class="num">vs Prev Y</th>
+          <th class="num">Share</th>
+        </tr></thead>
+        <tbody>
+          ${regions.map(r => `
+            <tr>
+              <td class="name">${esc(r.region)}</td>
+              <td class="num">${unitVal(r.this)}</td>
+              <td class="num">${fmtPct(r.mom_pct)}</td>
+              <td class="num">${fmtPct(r.yoy_pct)}</td>
+              <td class="num">${r.share != null ? r.share.toFixed(1) + "%" : "—"}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `);
+
+  // ③ Product Groups (Top 10)
+  const pgs = j.product_groups || [];
+  html.push(`
+    <div class="card">
+      <h2>③ Product Group (Top 10 by this-month ${metric === "qty" ? "qty" : "amount"})</h2>
+      <table>
+        <thead><tr>
+          <th>Product Group</th>
+          <th class="num">This month</th>
+          <th class="num">vs Prev M</th>
+          <th class="num">vs Prev Y</th>
+          <th class="num">Share</th>
+        </tr></thead>
+        <tbody>
+          ${pgs.map(r => `
+            <tr>
+              <td class="name">${esc(r.product_group)}</td>
+              <td class="num">${unitVal(r.this)}</td>
+              <td class="num">${fmtPct(r.mom_pct)}</td>
+              <td class="num">${fmtPct(r.yoy_pct)}</td>
+              <td class="num">${r.share != null ? r.share.toFixed(1) + "%" : "—"}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="5" style="color:#9ca3af;text-align:center;padding:14px;">No data for this month.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `);
+
+  // ④ Promotion
+  const promos = j.promotions || [];
+  html.push(`
+    <div class="card">
+      <h2>④ Promotion</h2>
+      <table>
+        <thead><tr>
+          <th>Promo</th>
+          <th class="num">Participants</th>
+          <th class="num">This month</th>
+          <th class="num">Part. MoM%</th>
+          <th class="num">Non-part. MoM%</th>
+          <th class="num">Lift</th>
+        </tr></thead>
+        <tbody>
+          ${promos.map(p => `
+            <tr>
+              <td class="name">${esc(p.promo)}</td>
+              <td class="num">${p.participants} / ${p.total_shops}</td>
+              <td class="num">${unitVal(p.this)}</td>
+              <td class="num">${fmtPct(p.part_mom_pct)}</td>
+              <td class="num">${fmtPct(p.non_part_mom_pct)}</td>
+              <td class="num">${fmtPpt(p.lift_ppt)}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="6" style="color:#9ca3af;text-align:center;padding:14px;">No promos active in this month.</td></tr>`}
+        </tbody>
+      </table>
+      <div class="notes">
+        <b>Lift</b> = participating shops' Month-over-Month % minus non-participating shops' MoM %, expressed in percentage points (ppt).
+        Participating = shops whose sales rows this month qualify for the promo (PCLT + dc_rate + min_qty + customer + period match).
+      </div>
+    </div>
+  `);
+
+  // ⑤ Sold-to movement
+  const sold = j.sold_to || {};
+  const gainers = sold.gainers || [];
+  const losers  = sold.losers || [];
+  const newlyA  = sold.newly_active || [];
+  const newlyS  = sold.newly_silent || [];
+  html.push(`
+    <div class="card">
+      <h2>⑤ Sold-to Movement</h2>
+      <div class="section-grid2">
+        <div>
+          <h3 style="font-size:11px;color:#16a34a;margin:6px 0 6px;">🟢 Biggest Gainers (Top 30 by Δ)</h3>
+          <table>
+            <thead><tr>
+              <th>Sold-to</th>
+              <th class="num">Prev</th>
+              <th class="num">This</th>
+              <th class="num">Δ</th>
+              <th class="num">Δ%</th>
+            </tr></thead>
+            <tbody>
+              ${gainers.map(r => `
+                <tr>
+                  <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
+                  <td class="num">${unitVal(r.prev)}</td>
+                  <td class="num">${unitVal(r.this)}</td>
+                  <td class="num delta-up">+${unitVal(r.delta)}</td>
+                  <td class="num">${fmtPct(r.delta_pct)}</td>
+                </tr>
+              `).join("") || `<tr><td colspan="5" style="color:#9ca3af;text-align:center;padding:14px;">No gainers this month.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3 style="font-size:11px;color:#dc2626;margin:6px 0 6px;">🔴 Biggest Losers (Top 30 by Δ)</h3>
+          <table>
+            <thead><tr>
+              <th>Sold-to</th>
+              <th class="num">Prev</th>
+              <th class="num">This</th>
+              <th class="num">Δ</th>
+              <th class="num">Δ%</th>
+            </tr></thead>
+            <tbody>
+              ${losers.map(r => `
+                <tr>
+                  <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
+                  <td class="num">${unitVal(r.prev)}</td>
+                  <td class="num">${unitVal(r.this)}</td>
+                  <td class="num delta-dn">${unitVal(r.delta)}</td>
+                  <td class="num">${fmtPct(r.delta_pct)}</td>
+                </tr>
+              `).join("") || `<tr><td colspan="5" style="color:#9ca3af;text-align:center;padding:14px;">No losers this month.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="section-grid2" style="margin-top:12px;">
+        <div>
+          <h3 style="font-size:11px;color:#1d4ed8;margin:6px 0 6px;">🆕 Newly Active <span style="color:#9ca3af;font-weight:500;">(${newlyA.length})</span></h3>
+          <table>
+            <thead><tr>
+              <th>Sold-to</th>
+              <th class="num">This month</th>
+            </tr></thead>
+            <tbody>
+              ${newlyA.map(r => `
+                <tr>
+                  <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
+                  <td class="num">${unitVal(r.this)}</td>
+                </tr>
+              `).join("") || `<tr><td colspan="2" style="color:#9ca3af;text-align:center;padding:14px;">No newly active sold-to.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3 style="font-size:11px;color:#7c3aed;margin:6px 0 6px;">💤 Newly Silent <span style="color:#9ca3af;font-weight:500;">(${newlyS.length})</span></h3>
+          <table>
+            <thead><tr>
+              <th>Sold-to</th>
+              <th class="num">Prev month</th>
+            </tr></thead>
+            <tbody>
+              ${newlyS.map(r => `
+                <tr>
+                  <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
+                  <td class="num">${unitVal(r.prev)}</td>
+                </tr>
+              `).join("") || `<tr><td colspan="2" style="color:#9ca3af;text-align:center;padding:14px;">No newly silent sold-to.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="notes">
+        <b>Gainers / Losers</b>: computed over the <b>full sold-to set</b> with Δ = this-month − previous-month, then the top 30 by absolute Δ on each side are shown.<br>
+        <b>Newly Active</b>: ${esc(sold.notes && sold.notes.newly_active || "Sold-to with zero sales in the previous 3 months AND positive sales this month.")} Full list shown.<br>
+        <b>Newly Silent</b>: ${esc(sold.notes && sold.notes.newly_silent || "Sold-to with positive sales in the previous month AND zero sales this month.")} Full list shown.
+      </div>
+    </div>
+  `);
+
+  wrap.innerHTML = html.join("");
+  // Keep status div hidden but available for next load
+  const refreshed = document.getElementById("status");
+  if (refreshed) refreshed.style.display = "none";
+}
+
+// Boot — default month to the current calendar month if it's in 2026.
+(function(){
+  const today = new Date();
+  const sel = document.getElementById("monthSel");
+  if (today.getFullYear() === 2026) {
+    const want = `2026-${String(today.getMonth() + 1).padStart(2, "0")}`;
+    for (const o of sel.options) { if (o.value === want) { sel.value = want; break; } }
+  }
+  load();
+})();
+</script>
+</body>
+</html>
