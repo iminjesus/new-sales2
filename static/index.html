@@ -356,13 +356,26 @@
     _renderPromoButtons();
   }).catch(() => {});
 
-  // Top-level "Promotion ▾" toggles the panel open / closed.  Selections
-  // persist across toggles so collapsing doesn't clear the filter.
+  // Top-level "Promotion ▾" is now an on/off toggle for the whole
+  // promo filter.  Activating it selects EVERY sub-promo by default
+  // (so the filter shows "everything in promo") and reveals the row
+  // below, where the user can deselect individual subs to narrow.
+  // Deactivating clears every selection.
   const _promoToggle = document.getElementById("promoToggleBtn");
   if (_promoToggle) {
     _promoToggle.addEventListener("click", () => {
-      _promoState.expanded = !_promoState.expanded;
+      if (_promoState.selected.size > 0 || _promoState.expanded) {
+        // Currently active — turn the whole filter off.
+        _promoState.selected.clear();
+        _promoState.expanded = false;
+      } else {
+        // Activating — default to "everything in promo" selected,
+        // and expand the panel so the user can see what's on.
+        _promoState.selected = new Set(_promoState.allSubs);
+        _promoState.expanded = true;
+      }
       _renderPromoButtons();
+      if (typeof window.refreshAllDebounced === "function") window.refreshAllDebounced();
     });
   }
 
