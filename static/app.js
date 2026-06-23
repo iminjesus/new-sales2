@@ -430,8 +430,38 @@ document.getElementById('dailyViewBtns')?.addEventListener("click", e => {
 });
 document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
+  // The Detail button only makes sense while we're grouped by Promotion —
+  // show or hide it accordingly and clear the detail toggle whenever we
+  // leave Promotion mode so the next visit starts on the 2-stack view.
+  _syncPromoDetailBtn();
   refreshAllDebounced();
 });
+
+// Per-session detail flag for Promotion group_by.  When true, the
+// /api/*_breakdown calls send group_by=promotion_detail (sub-promo
+// names) instead of group_by=promotion (the binary split).  Lives on
+// window so the fetch helpers below can read it without threading.
+window._promoDetail = false;
+function _syncPromoDetailBtn(){
+  const btn = document.getElementById("promoDetailBtn");
+  if (!btn) return;
+  const onPromoGroup = filters.group_by === "promotion";
+  btn.style.display = onPromoGroup ? "" : "none";
+  if (!onPromoGroup) window._promoDetail = false;
+  btn.classList.toggle("active", !!window._promoDetail);
+  btn.textContent = window._promoDetail ? "Detail ✓" : "Detail";
+}
+document.getElementById("promoDetailBtn")?.addEventListener("click", () => {
+  window._promoDetail = !window._promoDetail;
+  _syncPromoDetailBtn();
+  refreshAllDebounced();
+});
+// Map the logical group_by we send to the API: 'promotion' stays as-is
+// for the binary view, becomes 'promotion_detail' once Detail is on.
+window._effectiveGroupBy = function (g) {
+  if (g === "promotion" && window._promoDetail) return "promotion_detail";
+  return g;
+};
 document.getElementById('regionBtns').addEventListener("click", async (e) => {
   if(!e.target.classList.contains("btn"))return;
   filters.region=e.target.dataset.val; setActive(document.getElementById('regionBtns'),"val",filters.region);
@@ -639,10 +669,11 @@ async function fetchDailyKPITarget(region,BDE){
 }
 
 async function fetchDailyBreakdownWithGroup(groupBy){
+  const effective = (window._effectiveGroupBy || (g => g))(groupBy);
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: groupBy, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: effective, top_limit:filters.top_limit ||0
   });
   // sales_thismonth is current month (2026) — promos apply unconditionally.
   window.appendPromos && window.appendPromos(qs);
@@ -1379,10 +1410,11 @@ async function drawMonthlyKPI(){
   </tbody>`;
 }
 async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
+  const effective = (window._effectiveGroupBy || (g => g))(groupBy);
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: groupBy, top_limit:filters.top_limit ||0,
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: effective, top_limit:filters.top_limit ||0,
     year: year
   });
   // Promo is only meaningful for 2026; the backend silently ignores
@@ -1580,6 +1612,11 @@ async function drawMonthlyStacked(){
   // so only the 2026 Actual stack remains.
   const _hasPromo = (typeof window.getActivePromos === "function"
                      && window.getActivePromos().length > 0);
+  // Grouping by Promotion implies the same skip: 2025 has no promo
+  // tagging (promo_customer / promo_plan only cover 2026) and the
+  // target wasn't set per-promo, so both side stacks would just read
+  // as 100% Non-Promotion — drop them to keep the picture clean.
+  const _skipSide = _hasPromo || effectiveGroup === "promotion";
 
   // Fetch:
   // - 2025 actual breakdown (for comparison stack)
@@ -1587,9 +1624,9 @@ async function drawMonthlyStacked(){
   // - 2026 target breakdown (NEW endpoint)
   // - 2026 actual totals (used for cutoff + consistency)
   const [rows25, rows26, rowsT26, sales26TotalRows] = await Promise.all([
-    _hasPromo ? Promise.resolve([]) : fetchMonthlyBreakdownWithGroup(effectiveGroup, 2025),
+    _skipSide ? Promise.resolve([]) : fetchMonthlyBreakdownWithGroup(effectiveGroup, 2025),
     fetchMonthlyBreakdownWithGroup(effectiveGroup, 2026),
-    _hasPromo ? Promise.resolve([]) : fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
+    _skipSide ? Promise.resolve([]) : fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
     fetchMonthlySales(2026)
   ]);
   // Legend: show only the stack key (group label), not year/actual/target suffixes

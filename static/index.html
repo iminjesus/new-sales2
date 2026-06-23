@@ -91,7 +91,17 @@
         <option value="sold_to_group">Sold-to Group</option>
         <option value="sold_to">Sold-to</option>
         <option value="product_group">Product Group</option>
+        <option value="promotion">Promotion</option>
       </select>
+      <!-- Detail toggle for the Promotion grouping: flips every
+           stacked chart from Promotion / Non-Promotion (2 stacks)
+           to the per-sub-promo split (443, 443_30%, iON_70%, …).
+           Hidden whenever Group By isn't Promotion. -->
+      <button id="promoDetailBtn" type="button" class="btn"
+              style="display:none;font-size:11px;padding:2px 8px;margin-left:4px"
+              title="Show per-sub-promo split on every stacked chart">
+        Detail
+      </button>
     </div>
 
     <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">

@@ -2480,9 +2480,13 @@ def daily_breakdown():
         "sold_to":       "cus.sold_to_name",
         "pattern":       "mat.pattern",
     }
-    if group_by not in group_cols:
+    # Promotion buckets are computed from a CASE EXISTS against
+    # promo_customer + promo_plan rather than a plain column reference.
+    # Built below once we know the table's year/month context (sales_-
+    # thismonth has neither so we synthesise today's date as literals).
+    is_promo_group = group_by in ("promotion", "promotion_detail")
+    if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
-    group_col = group_cols[group_by]
 
     # ---- Build base JOINs / WHEREs (same as daily_sales) ----
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
@@ -2494,11 +2498,25 @@ def daily_breakdown():
 
     # Carrying/customer join needed for group_by or filter
     if (group_by in ("product_group", "pattern") or
+        is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+    if group_by in ("region", "salesman", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
+
+    if is_promo_group:
+        # sales_thismonth has no year/month columns — same literal
+        # injection as the promo filter above.
+        from datetime import date as _d
+        _today = _d.today()
+        group_col = _promotion_group_col_sql(
+            detail=(group_by == "promotion_detail"),
+            year_expr=str(_today.year),
+            month_expr=str(_today.month),
+        )
+    else:
+        group_col = group_cols[group_by]
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":
@@ -3305,14 +3323,23 @@ def monthly_breakdown():
         "sold_to":       "s.sold_to",
         "pattern":       "mat.pattern",
     }
-    if group_by not in group_cols:
+    is_promo_group = group_by in ("promotion", "promotion_detail")
+    if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
-    group_col = group_cols[group_by]
-    if group_by == "sold_to":
+    if is_promo_group:
+        # Promotion buckets: sales_2526 and the 2026 union both expose
+        # s.year + s.month, so no literal injection needed here.
+        group_col = _promotion_group_col_sql(
+            detail=(group_by == "promotion_detail"),
+        )
+        label_col = group_col
+    elif group_by == "sold_to":
         # scus alias = customer aggregated per-sold_to. Lets us resolve a
         # consistent name regardless of which ship_to a row points at.
+        group_col = group_cols[group_by]
         label_col = "MIN(COALESCE(scus.sold_to_name, s.sold_to))"
     else:
+        group_col = group_cols[group_by]
         label_col = f"COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')"
 
     # ---- Build base JOINs / WHEREs (same pattern as monthly_sales) ----
@@ -3322,10 +3349,11 @@ def monthly_breakdown():
     wh    += cat_where
 
     if (group_by in ("product_group", "pattern") or
+        is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+    if group_by in ("region", "salesman", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
     # scus = per-sold_to name resolver (one row per sold_to). Used as
     # the label source when group_by == 'sold_to' so the resulting
@@ -3706,12 +3734,22 @@ def yearly_breakdown():
         "sold_to":       "s.sold_to",
         "pattern":       "mat.pattern",
     }
-    if group_by not in group_cols:
+    is_promo_group = group_by in ("promotion", "promotion_detail")
+    if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
-    group_col = group_cols[group_by]
-    if group_by == "sold_to":
+    if is_promo_group:
+        # sales_21_25 carries year + month, so the promo helper works as-is.
+        # promo_plan only covers 2026 dates, so historical years harmlessly
+        # bucket entirely under 'Non-Promotion'.
+        group_col = _promotion_group_col_sql(
+            detail=(group_by == "promotion_detail"),
+        )
+        label_col = group_col
+    elif group_by == "sold_to":
+        group_col = group_cols[group_by]
         label_col = "MIN(COALESCE(scus.sold_to_name, s.sold_to))"
     else:
+        group_col = group_cols[group_by]
         label_col = f"COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')"
 
     # ---- Build base JOINs / WHEREs (same pattern as yearly_sales) ----
@@ -3729,10 +3767,11 @@ def yearly_breakdown():
         )
 
     if (group_by in ("product_group", "pattern") or
+        is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
+    if group_by in ("region", "salesman", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
@@ -5762,6 +5801,78 @@ def _promo_filter_clauses(promos, sales_alias="s",
         )"""
     ]
     return wh, list(promos)
+
+def _promotion_group_col_sql(detail=False, sales_alias="s",
+                             carrying_alias="mat", customer_alias="cus",
+                             year_expr=None, month_expr=None):
+    """SQL expression that buckets each sales row by promotion membership.
+
+    detail=False → returns 'Promotion' / 'Non-Promotion' (binary stack).
+    detail=True  → returns the matching sub-promo name (e.g. '443',
+                   '443_30%', 'iON_70%') or 'Non-Promotion' when no
+                   promo qualifies.
+
+    Mirrors the same EXISTS predicate used by `_promo_filter_clauses`
+    so the bucket aligns exactly with the promo-button filter:
+      • carrying line must be PCLT (the only line promos live on),
+      • qty / dc_rate / brand match the promo_customer row,
+      • either sold_to matches or customer_group matches (group fallback),
+      • promo_plan period covers the sale (year × month BETWEEN),
+      • product_group + optional material align with the plan.
+
+    Caller must ensure the `mat` (carrying_26) and `cus` (customer)
+    joins are added — both are referenced inside the predicate.  For
+    single-month tables like sales_thismonth that lack year / month
+    columns, pass integer-literal `year_expr` / `month_expr` strings.
+    """
+    s = sales_alias; c = carrying_alias; cu = customer_alias
+    y_e = year_expr  if year_expr  is not None else f"{s}.year"
+    m_e = month_expr if month_expr is not None else f"{s}.month"
+    match_sql = f"""
+        SELECT pc.promo
+        FROM promo_customer pc
+        LEFT JOIN promo_plan pp ON pp.promo = pc.promo
+        WHERE {s}.qty     >= pc.min_qty
+          AND {s}.dc_rate  = pc.dc_rate
+          AND {s}.brand    = pc.brand
+          AND (
+               (pc.sold_to <> '' AND pc.sold_to = {s}.sold_to)
+            OR (pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)
+          )
+          AND (
+            pp.promo IS NULL
+            OR (
+              {c}.product_group = pp.product_group
+              AND ({y_e} * 100 + {m_e}) BETWEEN
+                   (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND
+                   (YEAR(pp.end_date)   * 100 + MONTH(pp.end_date))
+              AND (pp.material = '' OR pp.material = {s}.material)
+            )
+          )"""
+    if not detail:
+        return (
+            f"CASE WHEN {c}.line = 'PCLT' AND EXISTS ({match_sql}) "
+            f"THEN 'Promotion' ELSE 'Non-Promotion' END"
+        )
+    # detail = one row per matching promo name; MIN() collapses the rare
+    # case where a sale qualifies for multiple sub-promos (the user
+    # confirmed the categories don't overlap, so MIN is safe).
+    return (
+        f"CASE WHEN {c}.line = 'PCLT' THEN "
+        f"COALESCE((SELECT MIN(pc.promo) FROM promo_customer pc "
+        f"LEFT JOIN promo_plan pp ON pp.promo = pc.promo "
+        f"WHERE {s}.qty >= pc.min_qty AND {s}.dc_rate = pc.dc_rate "
+        f"AND {s}.brand = pc.brand AND ("
+        f"(pc.sold_to <> '' AND pc.sold_to = {s}.sold_to) OR "
+        f"(pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)"
+        f") AND (pp.promo IS NULL OR ("
+        f"{c}.product_group = pp.product_group AND "
+        f"({y_e} * 100 + {m_e}) BETWEEN "
+        f"(YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND "
+        f"(YEAR(pp.end_date) * 100 + MONTH(pp.end_date)) AND "
+        f"(pp.material = '' OR pp.material = {s}.material)"
+        f"))), 'Non-Promotion') ELSE 'Non-Promotion' END"
+    )
 
 @app.get("/api/promo/buttons")
 def api_promo_buttons():
