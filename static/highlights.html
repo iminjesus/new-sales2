@@ -177,9 +177,9 @@ function render(j){
           <div class="sub">Last year: ${unitVal(py_v)}</div>
         </div>
         <div class="kpi">
-          <div class="label">Working days · Daily avg</div>
-          <div class="value">${sum.working_days || "—"}</div>
-          <div class="sub">${sum.daily_avg != null ? unitVal(sum.daily_avg) + " / day" : "—"}</div>
+          <div class="label">Daily avg · Working days</div>
+          <div class="value">${sum.daily_avg != null ? unitVal(sum.daily_avg) : "—"}</div>
+          <div class="sub">${sum.working_days ? sum.working_days + " working days" : "—"}</div>
         </div>
       </div>
     </div>
