@@ -2395,7 +2395,16 @@ def daily_sales():
     if promos:
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
-        promo_wh, promo_p = _promo_filter_clauses(promos)
+        # sales_thismonth has no year/month columns of its own — it IS
+        # the current calendar month — so feed those as integer literals
+        # so the promo_plan period match still works.
+        from datetime import date as _d
+        _today = _d.today()
+        promo_wh, promo_p = _promo_filter_clauses(
+            promos,
+            year_expr=str(_today.year),
+            month_expr=str(_today.month),
+        )
         wh.extend(promo_wh)
         params.extend(promo_p)
 
@@ -2501,7 +2510,15 @@ def daily_breakdown():
     if promos:
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
-        promo_wh, promo_p = _promo_filter_clauses(promos)
+        # sales_thismonth has no year/month columns — feed today's as
+        # literals (same reasoning as daily_sales).
+        from datetime import date as _d
+        _today = _d.today()
+        promo_wh, promo_p = _promo_filter_clauses(
+            promos,
+            year_expr=str(_today.year),
+            month_expr=str(_today.month),
+        )
         wh.extend(promo_wh)
         params.extend(promo_p)
 
@@ -5688,7 +5705,8 @@ def _promo_category_of(promo_name):
     return s.split("_", 1)[0]
 
 def _promo_filter_clauses(promos, sales_alias="s",
-                          carrying_alias="mat", customer_alias="cus"):
+                          carrying_alias="mat", customer_alias="cus",
+                          year_expr=None, month_expr=None):
     """Build the WHERE clauses + params needed to constrain a sales query
     to rows that qualify for any of the selected sub-promos.
 
@@ -5700,12 +5718,21 @@ def _promo_filter_clauses(promos, sales_alias="s",
         empty.
       • Sales table aliased as `s` (or pass sales_alias).
 
+    `year_expr` / `month_expr` default to `<sales_alias>.year` and
+    `<sales_alias>.month` — fine for sales_2526 and for the 2026
+    monthly-tables union (which synthesises those columns).  For a
+    single-month table like sales_thismonth that has neither, pass in
+    integer literals (e.g. year_expr="2026", month_expr="6") so the
+    period match against promo_plan still works.
+
     Returns: (wh_list, params_list).  Empty when promos is empty.
     """
     if not promos:
         return [], []
     placeholders = ",".join(["%s"] * len(promos))
     s = sales_alias; c = carrying_alias; cu = customer_alias
+    y_e = year_expr  if year_expr  is not None else f"{s}.year"
+    m_e = month_expr if month_expr is not None else f"{s}.month"
     wh = [
         # PCLT is always the umbrella for promos.
         f"{c}.line = 'PCLT'",
@@ -5726,7 +5753,7 @@ def _promo_filter_clauses(promos, sales_alias="s",
                 pp.promo IS NULL
                 OR (
                   {c}.product_group = pp.product_group
-                  AND ({s}.year * 100 + {s}.month) BETWEEN
+                  AND ({y_e} * 100 + {m_e}) BETWEEN
                        (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND
                        (YEAR(pp.end_date)   * 100 + MONTH(pp.end_date))
                   AND (pp.material = '' OR pp.material = {s}.material)
