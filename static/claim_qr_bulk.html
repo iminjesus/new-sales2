@@ -87,6 +87,12 @@ html,body{margin:0;background:#e5e7eb;color:#111827;
       <option value="">All</option>
     </select>
   </label>
+  <label>Sold-to
+    <input id="soldToInput" list="soldToList" autocomplete="off"
+           placeholder="All — type to search"
+           style="width:200px;">
+    <datalist id="soldToList"></datalist>
+  </label>
   <label>Per page
     <select id="perPageSel">
       <option value="12" selected>12 (3×4)</option>
@@ -130,22 +136,25 @@ function cardHtml(s, baseUrl){
     </div>`;
 }
 async function loadShops(){
-  const status = document.getElementById("status");
-  const pages  = document.getElementById("pages");
-  const state  = document.getElementById("stateSel").value;
-  const bde    = document.getElementById("bdeSel").value;
-  const limit  = document.getElementById("limitInput").value || "60";
+  const status   = document.getElementById("status");
+  const pages    = document.getElementById("pages");
+  const state    = document.getElementById("stateSel").value;
+  const bde      = document.getElementById("bdeSel").value;
+  const soldTo   = (document.getElementById("soldToInput").value || "").trim();
+  const limit    = document.getElementById("limitInput").value || "60";
   status.textContent = "Loading…";
   pages.innerHTML = "";
   document.getElementById("printBtn").disabled = true;
   try {
     const qs = new URLSearchParams({ limit });
-    if (state) qs.set("state", state);
-    if (bde)   qs.set("bde",   bde);
+    if (state)  qs.set("state",   state);
+    if (bde)    qs.set("bde",     bde);
+    if (soldTo) qs.set("sold_to", soldTo);
     const r = await fetch("/api/claim/qr_shops?" + qs.toString());
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     refreshBdeOptions(j.bdes || [], bde);
+    refreshSoldToOptions(j.sold_tos || []);
     const shops = j.shops || [];
     if (!shops.length){
       status.textContent = "No shops match.";
@@ -164,9 +173,10 @@ async function loadShops(){
               `</div>`;
     }
     pages.innerHTML = html;
-    const stateLabel = state ? state + " · " : "";
-    const bdeLabel   = bde ? `${bde} · ` : "";
-    status.textContent = `${bdeLabel}${stateLabel}${shops.length} shops · ${Math.ceil(shops.length / perPage)} A4 page${shops.length > perPage ? "s" : ""} · ${perPage}/page`;
+    const stateLabel  = state  ? state + " · " : "";
+    const bdeLabel    = bde    ? `${bde} · ` : "";
+    const soldLabel   = soldTo ? `sold-to ${soldTo} · ` : "";
+    status.textContent = `${bdeLabel}${stateLabel}${soldLabel}${shops.length} shops · ${Math.ceil(shops.length / perPage)} A4 page${shops.length > perPage ? "s" : ""} · ${perPage}/page`;
     document.getElementById("printBtn").disabled = false;
   } catch (e){
     status.textContent = "Error: " + e.message;
@@ -183,10 +193,37 @@ function refreshBdeOptions(bdes, currentVal){
     bdes.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
   sel.value = keep;
 }
-// Reset BDE pick whenever the State changes (the next Load fetches the
-// matching set), so the picker can't keep a BDE that's no longer in scope.
+// Repopulate the Sold-to <datalist> from the most recent response so
+// the search box only suggests sold-tos that exist within the current
+// State + BDE scope.  Each <option> uses the resolved sold-to name as
+// the visible value and stashes the code in the label.
+function refreshSoldToOptions(sold_tos){
+  const list = document.getElementById("soldToList");
+  if (!list) return;
+  list.innerHTML = (sold_tos || []).map(r => {
+    const code = (r.sold_to || "").trim();
+    const name = (r.name    || "").trim() || code;
+    // Datalist shows the value (name) and the label as muted text.
+    return `<option value="${esc(name)}" label="#${esc(code)}"></option>`;
+  }).join("");
+}
+// Reset BDE pick + clear Sold-to whenever the State changes (the
+// next Load fetches the matching set), so the picker can't keep a
+// BDE or sold-to that's no longer in scope.
 document.getElementById("stateSel").addEventListener("change", () => {
   document.getElementById("bdeSel").value = "";
+  document.getElementById("soldToInput").value = "";
+});
+// Changing BDE also narrows the implied scope, so drop any stale
+// sold-to selection so the picker doesn't show a sold-to outside the
+// new BDE's customers.
+document.getElementById("bdeSel").addEventListener("change", () => {
+  document.getElementById("soldToInput").value = "";
+});
+// Pressing Enter in the sold-to box reloads (so a power user doesn't
+// have to take their hands off the keyboard to click Load).
+document.getElementById("soldToInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); loadShops(); }
 });
 document.getElementById("loadBtn").addEventListener("click", loadShops);
 // Re-render with the new layout when the per-page picker changes —

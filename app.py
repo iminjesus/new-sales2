@@ -10131,8 +10131,9 @@ def claim_qr_bulk_page():
 def claim_qr_shops():
     """Helper for the bulk page — returns ship_tos matching the filters.
     Defaults to active shops (any in customer master)."""
-    state = (request.args.get("state") or "").strip().upper()
-    bde   = (request.args.get("bde")   or "").strip()
+    state   = (request.args.get("state") or "").strip().upper()
+    bde     = (request.args.get("bde")   or "").strip()
+    sold_to = (request.args.get("sold_to") or "").strip()
     limit = min(int(request.args.get("limit") or "300"), 1000)
     wh = ["ship_to IS NOT NULL", "TRIM(ship_to) <> ''"]
     params = []
@@ -10144,6 +10145,14 @@ def claim_qr_shops():
     if bde:
         wh.append("UPPER(TRIM(salesman_name)) = UPPER(TRIM(%s))")
         params.append(bde)
+    if sold_to:
+        # Match either the sold-to code or its resolved name so the user
+        # can type whichever they remember in the bulk-print search box.
+        wh.append("("
+                  "UPPER(TRIM(sold_to)) = UPPER(TRIM(%s)) "
+                  "OR UPPER(TRIM(sold_to_name)) = UPPER(TRIM(%s))"
+                  ")")
+        params.extend([sold_to, sold_to])
     where_sql = "WHERE " + " AND ".join(wh)
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
@@ -10173,11 +10182,32 @@ def claim_qr_shops():
             ORDER BY name
         """, tuple(bde_params))
         bdes = [r["name"] for r in cur.fetchall() if r.get("name")]
+        # Distinct sold-tos for the search box — narrowed by State + BDE
+        # if either is set, so the suggestion list always matches the
+        # currently-applied scope.
+        st_wh = ["sold_to IS NOT NULL", "TRIM(sold_to) <> ''"]
+        st_params = []
+        if state:
+            st_wh.append("bde_state = %s"); st_params.append(state)
+        if bde:
+            st_wh.append("UPPER(TRIM(salesman_name)) = UPPER(TRIM(%s))")
+            st_params.append(bde)
+        cur.execute(f"""
+            SELECT sold_to,
+                   MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name
+            FROM customer
+            WHERE {' AND '.join(st_wh)}
+            GROUP BY sold_to
+            ORDER BY sold_to_name, sold_to
+        """, tuple(st_params))
+        sold_tos = [{"sold_to": r["sold_to"], "name": r.get("sold_to_name") or r["sold_to"]}
+                    for r in cur.fetchall() if r.get("sold_to")]
         cur.close(); conn.close()
         return jsonify({
-            "shops":    rows,
-            "bdes":     bdes,
-            "base_url": CLAIM_PORTAL_URL.rstrip("/"),
+            "shops":     rows,
+            "bdes":      bdes,
+            "sold_tos":  sold_tos,
+            "base_url":  CLAIM_PORTAL_URL.rstrip("/"),
         })
     except Exception as e:
         traceback.print_exc()
