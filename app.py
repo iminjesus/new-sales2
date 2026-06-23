@@ -2569,6 +2569,15 @@ def daily_breakdown():
 
         where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
 
+        # GROUP BY uses the SELECT alias when the bucket expression is
+        # the giant CASE+EXISTS of the promotion grouping — duplicating
+        # that correlated subquery in GROUP BY trips some MySQL builds.
+        # Other group_by values keep the existing expression so the
+        # COALESCE 'COMMON' fallback still applies.
+        if is_promo_group:
+            group_by_sql = "GROUP BY s.day, group_label"
+        else:
+            group_by_sql = f"GROUP BY s.day, COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')"
         sql = f"""
         SELECT s.day AS day,
                 COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON') AS group_label,
@@ -2576,10 +2585,16 @@ def daily_breakdown():
             FROM sales_thismonth s
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.day, COALESCE(NULLIF(TRIM({group_col}),''), 'COMMON')
+        {group_by_sql}
         ORDER BY s.day
         """
-        cur.execute(sql, tuple(params2))
+        try:
+            cur.execute(sql, tuple(params2))
+        except Exception as _e:
+            # Surface the real DB error so promotion-grouping regressions
+            # show up in the logs instead of a bare 500.
+            print(f"[daily_breakdown] group_by={group_by} SQL failed: {_e}\nSQL:\n{sql}")
+            raise
         rows = cur.fetchall()
 
     finally:
@@ -3422,6 +3437,12 @@ def monthly_breakdown():
         where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
 
         # NOTE: use s.month consistently (same as monthly_sales)
+        # Same alias trick as daily_breakdown: avoid duplicating the
+        # promo CASE/EXISTS in GROUP BY.
+        if is_promo_group:
+            group_by_sql = "GROUP BY s.month, group_label"
+        else:
+            group_by_sql = f"GROUP BY s.month, {group_col}"
         sql = f"""
         SELECT s.month AS month,
                 {label_col} AS group_label,
@@ -3429,10 +3450,14 @@ def monthly_breakdown():
             {from_sql}
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.month, {group_col}
+        {group_by_sql}
         ORDER BY s.month
         """
-        cur.execute(sql, tuple(params2))
+        try:
+            cur.execute(sql, tuple(params2))
+        except Exception as _e:
+            print(f"[monthly_breakdown] group_by={group_by} year={year} SQL failed: {_e}\nSQL:\n{sql}")
+            raise
         rows = cur.fetchall()
 
     finally:
@@ -3809,6 +3834,12 @@ def yearly_breakdown():
 
         where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
 
+        # Same alias trick as the other breakdown endpoints — avoid
+        # restating the promo CASE/EXISTS in GROUP BY.
+        if is_promo_group:
+            group_by_sql = "GROUP BY s.year, group_label"
+        else:
+            group_by_sql = f"GROUP BY s.year, {group_col}"
         sql = f"""
         SELECT s.year AS year,
                 {label_col} AS group_label,
@@ -3816,10 +3847,14 @@ def yearly_breakdown():
             FROM sales_21_25 s
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.year, {group_col}
+        {group_by_sql}
         ORDER BY s.year
         """
-        cur.execute(sql, tuple(params2))
+        try:
+            cur.execute(sql, tuple(params2))
+        except Exception as _e:
+            print(f"[yearly_breakdown] group_by={group_by} SQL failed: {_e}\nSQL:\n{sql}")
+            raise
         rows = cur.fetchall()
 
     finally:
