@@ -61,15 +61,18 @@
       <button class="btn" data-val="HM">HM</button>
       <button class="btn" data-val="HK">HK</button>
       <button class="btn" data-val="LF">LF</button>
-      <!-- Promo category buttons populated at load time from
-           /api/promo/buttons.  Each top-level button is an on/off
-           toggle that reveals its sub-promo row below; clicking the
-           top-level alone with no sub-selection implies "all subs". -->
-      <span id="promoCats" style="display:flex; gap:5px; flex-wrap:wrap; margin-left:2px;"></span>
+      <!-- Single "Promotion ▾" dropdown that reveals all sub-promos
+           below as a flat toggle row.  443 / iON / TrueBlue promos
+           don't overlap on the data side, so we don't bother grouping
+           them visually — every sub-promo is its own multi-select
+           toggle and clicking it again deselects. -->
+      <button id="promoToggleBtn" class="btn" type="button" style="margin-left:2px;">
+        Promotion <span style="opacity:.55;font-size:10px;">▾</span>
+      </button>
     </div>
-    <!-- Sub-promo row — one block per active top-level category, only
-         rendered when that category's top-level button is on. -->
-    <div id="promoSubs" style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px;"></div>
+    <!-- Sub-promo row — flat list, only rendered when the Promotion
+         button is expanded. -->
+    <div id="promoSubs" style="display:none; gap:6px; flex-wrap:wrap; margin-top:4px;"></div>
 
     <div class="filter-sep"></div>
 
@@ -291,100 +294,77 @@
 (function () {
 
   // ── Promo state ──────────────────────────────────────────────────
-  // Top-level categories the user has switched ON (443 / iON / TrueBlue).
-  // For each, a Set of sub-promos they've manually checked.  An empty
-  // Set means "all subs of this category" (i.e. the top-level toggle
-  // alone is enough — sub selection is fine-tuning).
+  // Flat design: one Promotion dropdown that reveals every sub-promo
+  // as a multi-select toggle row.  443 / iON / TrueBlue promos don't
+  // overlap on the data side, so there's no reason to group them at
+  // the UI level — just track the set of selected sub-promos.
   const _promoState = {
-    active:    new Set(),           // top-level category names that are ON
-    subs:      new Map(),           // category → Set(sub-promo)
-    catalog:   { categories: [] },  // last /api/promo/buttons response
+    selected: new Set(),           // sub-promo names currently selected
+    expanded: false,               // is the sub-button row visible?
+    allSubs:  [],                  // flat list of sub-promos from API
   };
 
   function _activeSubPromos(){
-    // Flatten current selection into the actual list of sub-promo
-    // strings to send to the server.  An ON top-level with no manually
-    // picked sub means "all subs of this category".
-    const out = [];
-    for (const cat of _promoState.active) {
-      const subs = _promoState.subs.get(cat);
-      const meta = _promoState.catalog.categories.find(c => c.name === cat);
-      const allSubs = meta ? meta.subs : [];
-      if (!subs || subs.size === 0) out.push(...allSubs);
-      else                          for (const s of subs) out.push(s);
-    }
-    return out;
+    return Array.from(_promoState.selected);
   }
 
   function _renderPromoButtons(){
-    const cats = _promoState.catalog.categories || [];
-    const top = document.getElementById("promoCats");
-    if (top) {
-      top.innerHTML = cats.map(c => {
-        const on = _promoState.active.has(c.name) ? " active" : "";
-        return `<button type="button" class="btn${on}" data-promo-cat="${c.name}">
-                  ${c.name} <span style="opacity:.55;font-size:10px;">▾</span>
-                </button>`;
-      }).join("");
-      top.querySelectorAll("[data-promo-cat]").forEach(b => {
-        b.addEventListener("click", () => {
-          const cat = b.dataset.promoCat;
-          if (_promoState.active.has(cat)) {
-            _promoState.active.delete(cat);
-            _promoState.subs.delete(cat);
-          } else {
-            _promoState.active.add(cat);
-          }
-          _renderPromoButtons();
-          if (typeof window.refreshAllDebounced === "function") window.refreshAllDebounced();
-        });
-      });
+    const btn = document.getElementById("promoToggleBtn");
+    if (btn) {
+      // Top-level button shows the current selection count when any
+      // sub is on, so the user can see at a glance that a filter is
+      // active even with the panel collapsed.
+      const n = _promoState.selected.size;
+      btn.classList.toggle("active", n > 0 || _promoState.expanded);
+      btn.innerHTML = (n > 0
+        ? `Promotion (${n}) <span style="opacity:.55;font-size:10px;">${_promoState.expanded ? "▴" : "▾"}</span>`
+        : `Promotion <span style="opacity:.55;font-size:10px;">${_promoState.expanded ? "▴" : "▾"}</span>`);
     }
     const subRow = document.getElementById("promoSubs");
-    if (subRow) {
-      const activeCats = cats.filter(c => _promoState.active.has(c.name));
-      if (!activeCats.length) {
-        subRow.innerHTML = "";
-      } else {
-        subRow.innerHTML = activeCats.map(c => {
-          const selected = _promoState.subs.get(c.name) || new Set();
-          const tag = `<span style="font-size:10px;font-weight:700;color:#6b7280;
-                                    text-transform:uppercase;letter-spacing:.4px;
-                                    align-self:center;margin-right:4px;">${c.name}:</span>`;
-          const sub = c.subs.map(s => {
-            const isOn = selected.has(s);
-            return `<button type="button" class="btn${isOn ? " active" : ""}"
-                            data-promo-sub data-promo-cat="${c.name}" data-promo="${s}"
-                            style="padding:3px 9px;font-size:11px;">${s}</button>`;
-          }).join("");
-          return `<div style="display:flex;align-items:center;gap:4px;">${tag}${sub}</div>`;
-        }).join("");
-        subRow.querySelectorAll("[data-promo-sub]").forEach(b => {
-          b.addEventListener("click", () => {
-            const cat = b.dataset.promoCat;
-            const sub = b.dataset.promo;
-            const set = _promoState.subs.get(cat) || new Set();
-            if (set.has(sub)) set.delete(sub);
-            else              set.add(sub);
-            if (set.size) _promoState.subs.set(cat, set);
-            else          _promoState.subs.delete(cat);
-            _renderPromoButtons();
-            if (typeof window.refreshAllDebounced === "function") window.refreshAllDebounced();
-          });
-        });
-      }
+    if (!subRow) return;
+    if (!_promoState.expanded) {
+      subRow.style.display = "none";
+      return;
     }
+    subRow.style.display = "flex";
+    subRow.innerHTML = _promoState.allSubs.map(s => {
+      const on = _promoState.selected.has(s) ? " active" : "";
+      return `<button type="button" class="btn${on}" data-promo-sub data-promo="${s}"
+                       style="padding:3px 9px;font-size:11px;">${s}</button>`;
+    }).join("");
+    subRow.querySelectorAll("[data-promo-sub]").forEach(b => {
+      b.addEventListener("click", () => {
+        const sub = b.dataset.promo;
+        if (_promoState.selected.has(sub)) _promoState.selected.delete(sub);
+        else                                _promoState.selected.add(sub);
+        _renderPromoButtons();
+        if (typeof window.refreshAllDebounced === "function") window.refreshAllDebounced();
+      });
+    });
   }
 
-  // Boot — load categories from the backend so adding a new promo
-  // doesn't need a frontend redeploy.  Silent fail keeps the page
-  // working with the original brand buttons even if the API is down.
+  // Boot — load promos from the backend so adding a new one doesn't
+  // need a frontend redeploy.  Silent fail keeps the page working
+  // with the original brand buttons even if the API is down.
   fetch("/api/promo/buttons").then(r => r.json()).then(j => {
-    if (j && j.categories) {
-      _promoState.catalog = j;
-      _renderPromoButtons();
-    }
+    const cats = (j && j.categories) || [];
+    // Flatten across categories — the user said the three groups
+    // don't overlap, so we just dump every sub-promo into one row.
+    const flat = [];
+    for (const c of cats) for (const s of (c.subs || [])) flat.push(s);
+    _promoState.allSubs = flat;
+    _renderPromoButtons();
   }).catch(() => {});
+
+  // Top-level "Promotion ▾" toggles the panel open / closed.  Selections
+  // persist across toggles so collapsing doesn't clear the filter.
+  const _promoToggle = document.getElementById("promoToggleBtn");
+  if (_promoToggle) {
+    _promoToggle.addEventListener("click", () => {
+      _promoState.expanded = !_promoState.expanded;
+      _renderPromoButtons();
+    });
+  }
 
   // Expose the current promo selection so collectFilters() (below)
   // and any other reader (e.g. map.html via its own filter builder)
@@ -395,9 +375,8 @@
   // can wipe promo state when the user is signalling "show me
   // everything again".
   window.clearPromoSelection = function(){
-    if (!_promoState.active.size && !_promoState.subs.size) return false;
-    _promoState.active.clear();
-    _promoState.subs.clear();
+    if (!_promoState.selected.size) return false;
+    _promoState.selected.clear();
     _renderPromoButtons();
     return true;
   };
