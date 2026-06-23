@@ -10134,6 +10134,7 @@ def claim_qr_shops():
     state   = (request.args.get("state") or "").strip().upper()
     bde     = (request.args.get("bde")   or "").strip()
     sold_to = (request.args.get("sold_to") or "").strip()
+    ship_to_arg = (request.args.get("ship_to") or "").strip()
     # Frontend dropped its own cap so the page renders every match in
     # scope.  Server-side cap stays as a safety net (10 000 is well
     # above the largest customer master we've ever loaded).
@@ -10156,6 +10157,14 @@ def claim_qr_shops():
                   "OR UPPER(TRIM(sold_to_name)) = UPPER(TRIM(%s))"
                   ")")
         params.extend([sold_to, sold_to])
+    if ship_to_arg:
+        # Same loose match as sold_to: accept either the ship_to code or
+        # its name so the search box can take whatever the user typed.
+        wh.append("("
+                  "UPPER(TRIM(ship_to)) = UPPER(TRIM(%s)) "
+                  "OR UPPER(TRIM(ship_to_name)) = UPPER(TRIM(%s))"
+                  ")")
+        params.extend([ship_to_arg, ship_to_arg])
     where_sql = "WHERE " + " AND ".join(wh)
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)

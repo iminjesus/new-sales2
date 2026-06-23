@@ -93,6 +93,12 @@ html,body{margin:0;background:#e5e7eb;color:#111827;
            style="width:200px;">
     <datalist id="soldToList"></datalist>
   </label>
+  <label>Ship-to
+    <input id="shipToInput" list="shipToList" autocomplete="off"
+           placeholder="All — type to search"
+           style="width:200px;">
+    <datalist id="shipToList"></datalist>
+  </label>
   <label>Per page
     <select id="perPageSel">
       <option value="12" selected>12 (3×4)</option>
@@ -137,6 +143,7 @@ async function loadShops(){
   const state    = document.getElementById("stateSel").value;
   const bde      = document.getElementById("bdeSel").value;
   const soldTo   = (document.getElementById("soldToInput").value || "").trim();
+  const shipTo   = (document.getElementById("shipToInput").value || "").trim();
   status.textContent = "Loading…";
   pages.innerHTML = "";
   document.getElementById("printBtn").disabled = true;
@@ -148,11 +155,13 @@ async function loadShops(){
     if (state)  qs.set("state",   state);
     if (bde)    qs.set("bde",     bde);
     if (soldTo) qs.set("sold_to", soldTo);
+    if (shipTo) qs.set("ship_to", shipTo);
     const r = await fetch("/api/claim/qr_shops?" + qs.toString());
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     refreshBdeOptions(j.bdes || [], bde);
     refreshSoldToOptions(j.sold_tos || []);
+    refreshShipToOptions(j.shops || []);
     const shops = j.shops || [];
     if (!shops.length){
       status.textContent = "No shops match.";
@@ -174,7 +183,8 @@ async function loadShops(){
     const stateLabel  = state  ? state + " · " : "";
     const bdeLabel    = bde    ? `${bde} · ` : "";
     const soldLabel   = soldTo ? `sold-to ${soldTo} · ` : "";
-    status.textContent = `${bdeLabel}${stateLabel}${soldLabel}${shops.length} shops · ${Math.ceil(shops.length / perPage)} A4 page${shops.length > perPage ? "s" : ""} · ${perPage}/page`;
+    const shipLabel   = shipTo ? `ship-to ${shipTo} · ` : "";
+    status.textContent = `${bdeLabel}${stateLabel}${soldLabel}${shipLabel}${shops.length} shops · ${Math.ceil(shops.length / perPage)} A4 page${shops.length > perPage ? "s" : ""} · ${perPage}/page`;
     document.getElementById("printBtn").disabled = false;
   } catch (e){
     status.textContent = "Error: " + e.message;
@@ -205,28 +215,53 @@ function refreshSoldToOptions(sold_tos){
     return `<option value="${esc(name)}" label="#${esc(code)}"></option>`;
   }).join("");
 }
+// The Ship-to picker auto-populates from the shop set we just
+// fetched.  Because that set is already narrowed by State + BDE +
+// Sold-to on the server side, this list never offers a ship-to that
+// would yield zero results — same scoping behaviour as the graph
+// view's Ship-to dropdown.
+function refreshShipToOptions(shops){
+  const list = document.getElementById("shipToList");
+  if (!list) return;
+  list.innerHTML = (shops || []).map(r => {
+    const code = (r.ship_to || "").trim();
+    const name = (r.ship_to_name || "").trim() || code;
+    return `<option value="${esc(name)}" label="#${esc(code)}"></option>`;
+  }).join("");
+}
 // Reset BDE pick + clear Sold-to whenever the State changes (the
 // next Load fetches the matching set), so the picker can't keep a
 // BDE or sold-to that's no longer in scope.
-// State / BDE / Sold-to changes auto-trigger a reload now — the
-// Load button is gone.  State reset cascades to BDE + Sold-to so a
-// stale narrower filter can't survive a broader change.
+// State / BDE / Sold-to / Ship-to changes all auto-trigger a reload
+// (Load button is gone).  Each broader filter cascades-clear the
+// narrower ones so a stale narrower filter can't survive a broader
+// change — matches the Graph view's cascade.
 document.getElementById("stateSel").addEventListener("change", () => {
   document.getElementById("bdeSel").value = "";
   document.getElementById("soldToInput").value = "";
+  document.getElementById("shipToInput").value = "";
   loadShops();
 });
 document.getElementById("bdeSel").addEventListener("change", () => {
   document.getElementById("soldToInput").value = "";
+  document.getElementById("shipToInput").value = "";
   loadShops();
 });
 // `change` fires once the user picks a datalist suggestion or blurs;
 // good for our case so we don't fetch on every keystroke.  Enter
 // still works for users who type the full code.
 document.getElementById("soldToInput").addEventListener("change", () => {
+  // Sold-to is broader than Ship-to → clear Ship-to.
+  document.getElementById("shipToInput").value = "";
   loadShops();
 });
 document.getElementById("soldToInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); loadShops(); }
+});
+document.getElementById("shipToInput").addEventListener("change", () => {
+  loadShops();
+});
+document.getElementById("shipToInput").addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); loadShops(); }
 });
 // Re-render with the new layout when the per-page picker changes —
