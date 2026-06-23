@@ -5871,7 +5871,18 @@ def api_monthly_highlights():
             tbl, where, ps = _highlights_src_for(cur, y, m)
             if not tbl:
                 return {"qty": 0.0, "amt": 0.0, "days": 0}
-            day_col = ", COUNT(DISTINCT s.day) AS days" if tbl == "sales_thismonth" else ", 0 AS days"
+            # Probe for a `day` column — per-month tables (sales_2601…)
+            # carry one, so we count distinct days the same way we
+            # already do for sales_thismonth.  Tables without a day
+            # column (e.g. some legacy sales_2526 layouts) still get a
+            # plain 0 so the SELECT stays valid.
+            has_day = False
+            try:
+                cur.execute(f"SHOW COLUMNS FROM {tbl} LIKE 'day'")
+                has_day = cur.fetchone() is not None
+            except Exception:
+                pass
+            day_col = ", COUNT(DISTINCT s.day) AS days" if has_day else ", 0 AS days"
             cur.execute(
                 f"SELECT COALESCE(SUM(s.qty),0) AS qty, "
                 f"       COALESCE(SUM(s.amt),0) AS amt {day_col} "
