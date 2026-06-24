@@ -47,35 +47,8 @@
   <div id="filterPanel">
 
   <!-- ── Top filter bar ── -->
+  <!-- ── Top bar: dashboard controls (metric / group-by / view switch) ── -->
   <div id="topRow" class="filter-bar">
-
-    <!-- Category buttons -->
-    <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
-      <button class="btn active" data-val="ALL">All</button>
-      <button class="btn" data-val="PCLT">PCLT</button>
-      <button class="btn" data-val="TBR">TBR</button>
-      <button class="btn" data-val="18PLUS">18+ Inch</button>
-      <button class="btn" data-val="ISEG">EV/iSeg</button>
-      <button class="btn" data-val="SUV">SUV</button>
-      <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
-      <button class="btn" data-val="HM">HM</button>
-      <button class="btn" data-val="HK">HK</button>
-      <button class="btn" data-val="LF">LF</button>
-      <!-- Single "Promotion ▾" dropdown that reveals all sub-promos
-           below as a flat toggle row.  443 / iON / TrueBlue promos
-           don't overlap on the data side, so we don't bother grouping
-           them visually — every sub-promo is its own multi-select
-           toggle and clicking it again deselects. -->
-      <button id="promoToggleBtn" class="btn" type="button" style="margin-left:2px;">
-        Promotion <span style="opacity:.55;font-size:10px;">▾</span>
-      </button>
-    </div>
-    <!-- Sub-promo row — flat list, only rendered when the Promotion
-         button is expanded. -->
-    <div id="promoSubs" style="display:none; gap:6px; flex-wrap:wrap; margin-top:4px;"></div>
-
-    <div class="filter-sep"></div>
-
     <div id="metricBtns" style="display:flex; gap:5px;">
       <button class="btn" data-metric="qty">Qty</button>
       <button class="btn" data-metric="amount">Amount</button>
@@ -98,9 +71,7 @@
              Product Group → Pattern
              Promotion     → Promo Type (sub-promo)
            Label shows the *next* level we'd jump to so the user always
-           sees what Detail means in the current context.  Clicking
-           cycles forward; one more click past the deepest level wraps
-           back to the top so it doubles as an exit shortcut. -->
+           sees what Detail means in the current context. -->
       <button id="groupDetailBtn" type="button" class="btn"
               style="font-size:11px;padding:2px 8px;margin-left:4px"
               title="Drill the stacked charts down one level">
@@ -120,98 +91,151 @@
     </div>
   </div>
 
-  <!-- ── Second filter bar ── -->
-  <div class="filter-bar">
-
-    <!-- Region buttons -->
-    <div id="regionBtns" style="display:flex; gap:5px;">
-      <button class="btn active" data-val="ALL">ALL</button>
-      <button class="btn" data-val="NSW">NSW</button>
-      <button class="btn" data-val="QLD">QLD</button>
-      <button class="btn" data-val="VIC">VIC</button>
-      <button class="btn" data-val="WA">WA</button>
-    </div>
-
-    <div class="filter-sep"></div>
-
-    <div style="display:flex; align-items:center; gap:5px;">
-      <label>Salesman:</label>
-      <select id="salesman_name"><option value="ALL">ALL</option></select>
-    </div>
-
-    <div style="display:flex; align-items:center; gap:5px;">
-      <label>Sold-to Group:</label>
-      <select id="sold_to_group"><option value="ALL">ALL</option></select>
-    </div>
-
-    <div class="filter-sep"></div>
-
-    <div id="topCustomerControls" style="display:flex; gap:5px;">
-      <button class="btn active" data-limit="0">All</button>
-      <button class="btn" data-limit="10">Top 10</button>
-      <button class="btn" data-limit="20">Top 20</button>
-      <button class="btn" data-limit="30">Top 30</button>
-    </div>
-
-    <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
-    <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
-    <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
-
-    <div class="filter-sep"></div>
-
-    <!-- Sold-to (custom dropdown) -->
-    <div class="dd" id="ddSoldTo">
-      <label for="sold_to">Sold-to</label>
-      <div class="dd-wrap">
-        <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
-        <button type="button" class="dd-btn" id="soldToBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="soldToClear">✕</button>
+  <!-- ── PRODUCT section ── -->
+  <!-- Top-level lines + their sub-categories on indented sub-rows so
+       the user can see at a glance which PCLT/TBR variants exist
+       without overwhelming the main row.  All category buttons stay
+       in #catBtns so the existing click handler keeps working. -->
+  <div class="filter-section">
+    <div class="filter-section-label">Product</div>
+    <div class="filter-section-content">
+      <div id="catBtns" class="filter-row">
+        <button class="btn active" data-val="ALL">All</button>
+        <button class="btn" data-val="PCLT">PCLT</button>
+        <button class="btn" data-val="TBR">TBR</button>
+        <button class="btn" data-val="HM">HM</button>
+        <button class="btn" data-val="18PLUS">18+ Inch</button>
+        <button class="btn" data-val="ISEG">EV/iSeg</button>
+        <button class="btn" data-val="SUV">SUV</button>
+        <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
+        <button class="btn" data-val="HK">HK</button>
+        <button class="btn" data-val="LF">LF</button>
+        <button id="promoToggleBtn" class="btn" type="button" style="margin-left:2px;">
+          Promotion <span style="opacity:.55;font-size:10px;">▾</span>
+        </button>
       </div>
-      <div class="dd-menu" id="soldToMenu"></div>
-    </div>
+      <!-- Sub-promo row — flat list, only rendered when the Promotion
+           button is expanded. -->
+      <div id="promoSubs" style="display:none; gap:6px; flex-wrap:wrap; margin-top:2px; padding-left:18px;"></div>
 
-    <!-- Ship-to (custom dropdown) -->
-    <div class="dd" id="ddShipTo">
-      <label for="ship_to">Ship-to</label>
-      <div class="dd-wrap">
-        <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
-        <button type="button" class="dd-btn" id="shipToBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="shipToClear">✕</button>
-      </div>
-      <div class="dd-menu" id="shipToMenu"></div>
-    </div>
+      <div class="filter-row" style="margin-top:2px;">
+        <!-- Product Group (custom dropdown) -->
+        <div class="dd" id="ddProductGroup">
+          <label for="product_group">Product Group</label>
+          <div class="dd-wrap">
+            <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
+            <button type="button" class="dd-btn" id="pgBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="pgClear">✕</button>
+          </div>
+          <div class="dd-menu" id="pgMenu"></div>
+        </div>
 
-    <!-- Product Group (custom dropdown) -->
-    <div class="dd" id="ddProductGroup">
-      <label for="product_group">Product Group</label>
-      <div class="dd-wrap">
-        <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
-        <button type="button" class="dd-btn" id="pgBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="pgClear">✕</button>
-      </div>
-      <div class="dd-menu" id="pgMenu"></div>
-    </div>
+        <!-- Pattern (custom dropdown) -->
+        <div class="dd" id="ddPattern">
+          <label for="pattern">Pattern</label>
+          <div class="dd-wrap">
+            <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+            <button type="button" class="dd-btn" id="patternBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+          </div>
+          <div class="dd-menu" id="patternMenu"></div>
+        </div>
 
-    <!-- Pattern (custom dropdown) -->
-    <div class="dd" id="ddPattern">
-      <label for="pattern">Pattern</label>
-      <div class="dd-wrap">
-        <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
-        <button type="button" class="dd-btn" id="patternBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+        <!-- Size (custom dropdown) -->
+        <div class="dd" id="ddMaterial">
+          <label for="material">Size</label>
+          <div class="dd-wrap">
+            <input id="material" type="text" placeholder="Search Size" autocomplete="off">
+            <button type="button" class="dd-btn" id="materialBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+          </div>
+          <div class="dd-menu" id="materialMenu"></div>
+        </div>
       </div>
-      <div class="dd-menu" id="patternMenu"></div>
     </div>
+  </div>
 
-    <!-- Size (custom dropdown) -->
-    <div class="dd" id="ddMaterial">
-      <label for="material">Size</label>
-      <div class="dd-wrap">
-        <input id="material" type="text" placeholder="Search Size" autocomplete="off">
-        <button type="button" class="dd-btn" id="materialBtn">▼</button>
-        <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+  <!-- ── REGION + BDE section ── -->
+  <div class="filter-section">
+    <div class="filter-section-label">Region / BDE</div>
+    <div class="filter-section-content">
+      <div class="filter-row">
+        <div id="regionBtns" style="display:flex; gap:5px;">
+          <button class="btn active" data-val="ALL">ALL</button>
+          <button class="btn" data-val="NSW">NSW</button>
+          <button class="btn" data-val="QLD">QLD</button>
+          <button class="btn" data-val="VIC">VIC</button>
+          <button class="btn" data-val="WA">WA</button>
+        </div>
+        <div class="filter-sep"></div>
+        <div style="display:flex; align-items:center; gap:5px;">
+          <label>Salesman:</label>
+          <select id="salesman_name"><option value="ALL">ALL</option></select>
+        </div>
       </div>
-      <div class="dd-menu" id="materialMenu"></div>
+    </div>
+  </div>
+
+  <!-- ── CUSTOMER section ── -->
+  <!-- Channel + Sold-to Group + Top-N share a row (broader → narrower);
+       Sold-to + Ship-to search boxes get a sub-row so the wide inputs
+       don't push everything else off-screen. -->
+  <div class="filter-section">
+    <div class="filter-section-label">Customer</div>
+    <div class="filter-section-content">
+      <div class="filter-row">
+        <div style="display:flex; align-items:center; gap:5px;">
+          <label>Channel:</label>
+          <select id="channel"><option value="ALL">ALL</option></select>
+        </div>
+        <div style="display:flex; align-items:center; gap:5px;">
+          <label>Sold-to Group:</label>
+          <select id="sold_to_group"><option value="ALL">ALL</option></select>
+        </div>
+        <div class="filter-sep"></div>
+        <div id="topCustomerControls" style="display:flex; gap:5px;">
+          <button class="btn active" data-limit="0">All</button>
+          <button class="btn" data-limit="10">Top 10</button>
+          <button class="btn" data-limit="20">Top 20</button>
+          <button class="btn" data-limit="30">Top 30</button>
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <!-- Sold-to (custom dropdown) -->
+        <div class="dd" id="ddSoldTo">
+          <label for="sold_to">Sold-to</label>
+          <div class="dd-wrap">
+            <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
+            <button type="button" class="dd-btn" id="soldToBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="soldToClear">✕</button>
+          </div>
+          <div class="dd-menu" id="soldToMenu"></div>
+        </div>
+
+        <!-- Ship-to (custom dropdown) -->
+        <div class="dd" id="ddShipTo">
+          <label for="ship_to">Ship-to</label>
+          <div class="dd-wrap">
+            <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
+            <button type="button" class="dd-btn" id="shipToBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="shipToClear">✕</button>
+          </div>
+          <div class="dd-menu" id="shipToMenu"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── EXPORTS — bottom strip ── -->
+  <div class="filter-section">
+    <div class="filter-section-label">Export</div>
+    <div class="filter-section-content">
+      <div class="filter-row">
+        <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
+        <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
+        <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
+      </div>
     </div>
   </div>
 

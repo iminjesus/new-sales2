@@ -75,15 +75,16 @@ const filters={
   group_by:"region",
   region:"ALL",
   salesman:"ALL",
+  channel:"ALL",
   sold_to_group:"ALL",
   sold_to:"ALL",
-  ship_to:"ALL",          
+  ship_to:"ALL",
   product_group:"ALL",
-  pattern:"ALL",    
-  material:"ALL",      
+  pattern:"ALL",
+  material:"ALL",
   category:"ALL",
   category_target:"ALL",
-  top_limit: 0   
+  top_limit: 0
 };
 
 const mapFilters = {
@@ -543,6 +544,16 @@ document.getElementById('salesman_name').addEventListener('change', (e)=>{
   refreshAllDebounced();
 });
 
+// Channel dropdown — narrows fact rows by customer.channels via EXISTS.
+// Lighter cascade than sold_to_group: Channel is a parallel broader
+// bucket, so picking Channel doesn't clear sold_to_group / sold_to /
+// ship_to (the user often wants to intersect them).
+document.getElementById('channel')?.addEventListener('change', (e)=>{
+  filters.channel = e.target.value || 'ALL';
+  e.target.classList.toggle('sel-active', e.target.value !== 'ALL');
+  refreshAllDebounced();
+});
+
 document.getElementById('sold_to_group').addEventListener('change', async ()=>{
   const el = document.getElementById('sold_to_group');
   filters.sold_to_group = el.value || 'ALL';
@@ -690,7 +701,7 @@ function computeWorkingDaysInfo(cutRows) {
 async function fetchDailySales(){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
   });
   // sales_thismonth is current month (2026) — promos apply unconditionally.
@@ -701,7 +712,7 @@ async function fetchDailySales(){
 async function fetchDailyKPIActual(region,BDE){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON_DIRECT(`/api/daily_sales?${qs}`);
@@ -710,7 +721,7 @@ async function fetchDailyKPIActual(region,BDE){
 async function fetchDailyKPITarget(region,BDE){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON_DIRECT(`/api/daily_target?${qs}`);
@@ -720,7 +731,7 @@ async function fetchDailyBreakdownWithGroup(groupBy){
   const effective = (window._effectiveGroupBy || (g => g))(groupBy);
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: effective, top_limit:filters.top_limit ||0
   });
   // sales_thismonth is current month (2026) — promos apply unconditionally.
@@ -743,20 +754,20 @@ async function drawDailyTotals(){
     fetchDailySales(),
     _hasPromo ? Promise.resolve(_zeroDay31) : fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
       top_limit:filters.top_limit||0, month: effectiveMonth()
     }).toString()}`),
     fetchDailyBreakdownWithGroup("region"),
     fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:"ALL", salesman:"ALL",
-      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
       group_by:"region", top_limit:filters.top_limit||0
     }).toString()}`),
     _hasPromo ? Promise.resolve(_zeroMonth12) : fetchJSON_DIRECT(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
       top_limit:filters.top_limit||0, year:2026
     }).toString()}`)
@@ -1198,7 +1209,7 @@ async function drawDailyStacked(){
 async function fetchMonthlySales(year=2025){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0,
     year: year
   });
@@ -1311,7 +1322,7 @@ function dailyKPIFromSeries(sales, targets, cutoffIdx){
 async function fetchMonthlyKPIActual(region,BDE, year=2026){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year: year
   }).toString();
   return fetchJSON_DIRECT(`/api/monthly_sales?${qs}`);
@@ -1319,7 +1330,7 @@ async function fetchMonthlyKPIActual(region,BDE, year=2026){
 async function fetchMonthlyKPITarget(region,BDE, year=2026){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year: year 
   }).toString();
   return fetchJSON_DIRECT(`/api/monthly_target?${qs}`);
@@ -1337,6 +1348,7 @@ async function drawMonthlyKPI(){
   const bulkParams = (extra={}) => new URLSearchParams({
     metric: filters.metric, category: filters.category,
     region: "ALL", salesman: "ALL",
+    channel: filters.channel,
     sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
     product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
     top_limit: filters.top_limit || 0,
@@ -1494,7 +1506,7 @@ async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
   const effective = (window._effectiveGroupBy || (g => g))(groupBy);
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: effective, top_limit:filters.top_limit ||0,
     year: year
   });
@@ -1508,7 +1520,7 @@ async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
 async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-    sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+    channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
     group_by: groupBy, top_limit:filters.top_limit || 0,
     year: year
@@ -1535,7 +1547,7 @@ async function drawMonthlyTotals(){
     fetchMonthlySales(2026),
     _hasPromo ? Promise.resolve(_zeroMonths) : fetchJSON(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
-      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
       product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
       top_limit:filters.top_limit ||0,
       year: 2026
@@ -2355,6 +2367,15 @@ async function initControls(){
   const stg3 = await fetchJSON("/api/sold_to_groups");
   populateSelect(document.getElementById('sold_to_group'), stg3, true);
   document.getElementById('sold_to_group').value = "ALL";
+
+  // Channel dropdown — distinct customer.channels values.  Failing to
+  // load (e.g. missing column on a stale DB) leaves the picker as the
+  // single "ALL" option rather than breaking the rest of init.
+  try {
+    const channels = await fetchJSON("/api/channels");
+    populateSelect(document.getElementById('channel'), channels, true);
+    document.getElementById('channel').value = "ALL";
+  } catch (_) { /* leave default ALL-only option */ }
 
   await refreshSoldToList();
   await refreshShipTo();

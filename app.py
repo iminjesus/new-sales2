@@ -120,6 +120,7 @@ def parse_filters(req):
         "month":         (req.args.get("month") or "").strip(),
         "region":        (req.args.get("region") or "ALL").strip(),
         "salesman":      (req.args.get("salesman") or "ALL").strip(),
+        "channel":       (req.args.get("channel") or "ALL").strip(),
         "sold_to_group": (req.args.get("sold_to_group") or "ALL").strip(),
         "sold_to":       (req.args.get("sold_to") or "ALL").strip(),
         "ship_to":       (req.args.get("ship_to") or "ALL").strip(),
@@ -179,6 +180,17 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
             f" AND _cr.sold_to_group = %s)"
         )
         p.append(f["sold_to_group"])
+
+    # Channel filter: EXISTS on customer (ship_to only), same shape as
+    # sold_to_group above so a Channel pick narrows the fact table to
+    # ship_tos whose customer-master row carries that channels value.
+    if f.get("channel", "ALL") != "ALL":
+        wh.append(
+            f"EXISTS (SELECT 1 FROM customer _ch"
+            f" WHERE _ch.ship_to = {alias_fact}.ship_to"
+            f" AND TRIM(_ch.channels) = %s)"
+        )
+        p.append(f["channel"])
 
     # ?? sold_to: id ??direct filter on fact table; name ??subquery ??
     if f["sold_to"] != "ALL":
@@ -3907,6 +3919,27 @@ def sold_to_groups():
         return jsonify(groups)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/channels")
+@cached_endpoint(300)
+def api_channels():
+    """Distinct customer.channels values for the Channel filter dropdown."""
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT DISTINCT TRIM(channels) AS v
+            FROM customer
+            WHERE channels IS NOT NULL AND TRIM(channels) <> ''
+            ORDER BY TRIM(channels)
+        """)
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        return jsonify([r["v"] for r in rows])
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 
 @app.get("/api/sold_to_names")
 def sold_to_names():
