@@ -332,9 +332,13 @@ def _customer_join(alias: str) -> str:
     inflating aggregates when a ship_to appears in multiple customer rows."""
     return (
         f"LEFT JOIN ("
-        f"SELECT ship_to, MIN(bde_state) AS bde_state, MIN(salesman_name) AS salesman_name,"
-        f" MIN(sold_to_group) AS sold_to_group, MIN(sold_to_name) AS sold_to_name,"
-        f" MIN(ship_to_name) AS ship_to_name, MIN(sold_to) AS sold_to"
+        f"SELECT ship_to,"
+        f" MIN(NULLIF(TRIM(bde_state),''))      AS bde_state,"
+        f" MIN(NULLIF(TRIM(salesman_name),'' )) AS salesman_name,"
+        f" MIN(NULLIF(TRIM(sold_to_group),'' )) AS sold_to_group,"
+        f" MIN(NULLIF(TRIM(sold_to_name),'' ))  AS sold_to_name,"
+        f" MIN(NULLIF(TRIM(ship_to_name),'' ))  AS ship_to_name,"
+        f" MIN(NULLIF(TRIM(sold_to),''))        AS sold_to"
         f" FROM customer GROUP BY ship_to"
         f") cus ON cus.ship_to = {alias}.ship_to"
     )
