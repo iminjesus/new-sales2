@@ -87,19 +87,23 @@
       <label>Group By:</label>
       <select id="group_by">
         <option value="region" selected>Region</option>
-        <option value="salesman">Salesman</option>
-        <option value="sold_to_group">Sold-to Group</option>
-        <option value="sold_to">Sold-to</option>
+        <option value="channel">Channel</option>
         <option value="product_group">Product Group</option>
         <option value="promotion">Promotion</option>
       </select>
-      <!-- Detail toggle for the Promotion grouping: flips every
-           stacked chart from Promotion / Non-Promotion (2 stacks)
-           to the per-sub-promo split (443, 443_30%, iON_70%, …).
-           Hidden whenever Group By isn't Promotion. -->
-      <button id="promoDetailBtn" type="button" class="btn"
-              style="display:none;font-size:11px;padding:2px 8px;margin-left:4px"
-              title="Show per-sub-promo split on every stacked chart">
+      <!-- Generic drill-down button.  Each top-level group_by has a
+           chain of detail levels (defined in app.js GROUP_CHAIN):
+             Region        → Salesman
+             Channel       → Sold-to Group → Sold-to
+             Product Group → Pattern
+             Promotion     → Promo Type (sub-promo)
+           Label shows the *next* level we'd jump to so the user always
+           sees what Detail means in the current context.  Clicking
+           cycles forward; one more click past the deepest level wraps
+           back to the top so it doubles as an exit shortcut. -->
+      <button id="groupDetailBtn" type="button" class="btn"
+              style="font-size:11px;padding:2px 8px;margin-left:4px"
+              title="Drill the stacked charts down one level">
         Detail
       </button>
     </div>

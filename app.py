@@ -338,6 +338,7 @@ def _customer_join(alias: str) -> str:
         f" MIN(NULLIF(TRIM(sold_to_group),'' )) AS sold_to_group,"
         f" MIN(NULLIF(TRIM(sold_to_name),'' ))  AS sold_to_name,"
         f" MIN(NULLIF(TRIM(ship_to_name),'' ))  AS ship_to_name,"
+        f" MIN(NULLIF(TRIM(channels),''))       AS channels,"
         f" MIN(NULLIF(TRIM(sold_to),''))        AS sold_to"
         f" FROM customer GROUP BY ship_to"
         f") cus ON cus.ship_to = {alias}.ship_to"
@@ -2480,6 +2481,7 @@ def daily_breakdown():
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
+        "channel":       "cus.channels",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "cus.sold_to_name",
         "pattern":       "mat.pattern",
@@ -2506,7 +2508,7 @@ def daily_breakdown():
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if group_by in ("region", "salesman", "sold_to_group", "sold_to") or is_promo_group:
+    if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
 
     if is_promo_group:
@@ -3338,6 +3340,7 @@ def monthly_breakdown():
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
+        "channel":       "cus.channels",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "s.sold_to",
         "pattern":       "mat.pattern",
@@ -3372,7 +3375,7 @@ def monthly_breakdown():
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if group_by in ("region", "salesman", "sold_to_group", "sold_to") or is_promo_group:
+    if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
     # scus = per-sold_to name resolver (one row per sold_to). Used as
     # the label source when group_by == 'sold_to' so the resulting
@@ -3759,6 +3762,7 @@ def yearly_breakdown():
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
+        "channel":       "cus.channels",
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "s.sold_to",
         "pattern":       "mat.pattern",
@@ -3800,7 +3804,7 @@ def yearly_breakdown():
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if group_by in ("region", "salesman", "sold_to_group", "sold_to") or is_promo_group:
+    if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])

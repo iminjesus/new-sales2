@@ -430,37 +430,77 @@ document.getElementById('dailyViewBtns')?.addEventListener("click", e => {
 });
 document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
-  // The Detail button only makes sense while we're grouped by Promotion —
-  // show or hide it accordingly and clear the detail toggle whenever we
-  // leave Promotion mode so the next visit starts on the 2-stack view.
-  _syncPromoDetailBtn();
+  // Reset detail depth whenever the top-level grouping changes so the
+  // next view always opens on the top stack.
+  window._detailDepth = 0;
+  _syncGroupDetailBtn();
   refreshAllDebounced();
 });
 
-// Per-session detail flag for Promotion group_by.  When true, the
-// /api/*_breakdown calls send group_by=promotion_detail (sub-promo
-// names) instead of group_by=promotion (the binary split).  Lives on
-// window so the fetch helpers below can read it without threading.
-window._promoDetail = false;
-function _syncPromoDetailBtn(){
-  const btn = document.getElementById("promoDetailBtn");
+// ── Generic drill-down for Group By ──────────────────────────────────
+// Each top-level group_by has a chain of detail levels; clicking the
+// Detail button advances one level along the chain and wraps back to
+// the top after the deepest stop.  The button label always shows the
+// *next* level we'd jump to so the user can tell what Detail will do
+// in the current context.
+const GROUP_CHAIN = {
+  region:        ["region", "salesman"],
+  channel:       ["channel", "sold_to_group", "sold_to"],
+  product_group: ["product_group", "pattern"],
+  promotion:     ["promotion", "promotion_detail"],
+};
+const GROUP_LABEL = {
+  region:            "Region",
+  salesman:          "Salesman",
+  channel:           "Channel",
+  sold_to_group:     "Sold-to Group",
+  sold_to:           "Sold-to",
+  product_group:     "Product Group",
+  pattern:           "Pattern",
+  promotion:         "Promotion",
+  promotion_detail:  "Promo Type",
+};
+window._detailDepth = 0;
+function _syncGroupDetailBtn(){
+  const btn = document.getElementById("groupDetailBtn");
   if (!btn) return;
-  const onPromoGroup = filters.group_by === "promotion";
-  btn.style.display = onPromoGroup ? "" : "none";
-  if (!onPromoGroup) window._promoDetail = false;
-  btn.classList.toggle("active", !!window._promoDetail);
-  btn.textContent = window._promoDetail ? "Detail ✓" : "Detail";
+  const chain = GROUP_CHAIN[filters.group_by] || [filters.group_by];
+  // Clamp depth in case the chain shrunk after a top-level change.
+  if (window._detailDepth >= chain.length) window._detailDepth = 0;
+  if (chain.length <= 1) {
+    // No deeper level for this top-level → hide button.
+    btn.style.display = "none";
+    btn.textContent   = "Detail";
+    btn.classList.remove("active");
+    return;
+  }
+  btn.style.display = "";
+  btn.classList.toggle("active", window._detailDepth > 0);
+  const nextIdx = window._detailDepth + 1;
+  if (nextIdx >= chain.length) {
+    // At the deepest level → next click wraps back to the top.
+    btn.textContent = "↺ " + GROUP_LABEL[chain[0]];
+  } else {
+    btn.textContent = "Detail: " + GROUP_LABEL[chain[nextIdx]];
+  }
 }
-document.getElementById("promoDetailBtn")?.addEventListener("click", () => {
-  window._promoDetail = !window._promoDetail;
-  _syncPromoDetailBtn();
+document.getElementById("groupDetailBtn")?.addEventListener("click", () => {
+  const chain = GROUP_CHAIN[filters.group_by] || [filters.group_by];
+  if (chain.length <= 1) return;
+  window._detailDepth = (window._detailDepth + 1) % chain.length;
+  _syncGroupDetailBtn();
   refreshAllDebounced();
 });
-// Map the logical group_by we send to the API: 'promotion' stays as-is
-// for the binary view, becomes 'promotion_detail' once Detail is on.
+// Initial render so the button shows the first detail target ("Detail:
+// Salesman" while Region is the default) before any user interaction.
+_syncGroupDetailBtn();
+// Map the logical group_by we send to the API: the dropdown value is
+// the top-level grouping, the actual SQL grouping is whichever node of
+// the chain matches the current detail depth.
 window._effectiveGroupBy = function (g) {
-  if (g === "promotion" && window._promoDetail) return "promotion_detail";
-  return g;
+  const chain = GROUP_CHAIN[g] || [g];
+  const depth = Math.min(window._detailDepth || 0, chain.length - 1);
+  return chain[depth];
 };
 document.getElementById('regionBtns').addEventListener("click", async (e) => {
   if(!e.target.classList.contains("btn"))return;
