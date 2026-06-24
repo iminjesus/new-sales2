@@ -3563,14 +3563,22 @@ def monthly_target_breakdown():
     group_by = (request.args.get("group_by") or "region").strip()
     # For sold_to: GROUP BY the code (stable, matches sales) but SELECT
     # the name (readable in the legend).  Other dimensions group + label
-    # on the same column.
+    # on the same column.  Channel + sold_to_group live on customer
+    # master rather than target_26, so we route them through the
+    # per-sold_to tcus subquery joined below.
     group_cols = {
         "product_group": "mat.product_group",
         "region":        "t.state",
         "salesman":      "t.bde",
+        "channel":       "tcus.channels",
+        "sold_to_group": "tcus.sold_to_group",
         "sold_to":       "t.sold_to",
         "pattern":       "mat.pattern",
     }
+    # Promotion grouping doesn't apply to target — target_26 doesn't
+    # carry promo membership, so the breakdown can't bucket by it.  The
+    # frontend already skips the target fetch when grouped by Promotion
+    # (via _skipSide), so we never expect "promotion" here.
     if group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
     group_col = group_cols[group_by]
@@ -3585,10 +3593,18 @@ def monthly_target_breakdown():
     joins += cat_joins
     wh    += cat_where
 
-    if group_by == "sold_to":
+    # tcus = per-sold_to customer-master roll-up.  Exposes sold_to_name
+    # (for the sold_to-by-name legend), sold_to_group, and channels so
+    # the three customer-master groupings stay consistent with what the
+    # sales endpoints produce.  NULLIF/TRIM mirrors _customer_join so
+    # blank-string rows don't outrank a real value via MIN.
+    if group_by in ("sold_to", "channel", "sold_to_group"):
         joins.append(
             "LEFT JOIN ("
-            "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
+            "  SELECT sold_to,"
+            "         MIN(NULLIF(TRIM(sold_to_name),'' ))   AS sold_to_name,"
+            "         MIN(NULLIF(TRIM(sold_to_group),'' ))  AS sold_to_group,"
+            "         MIN(NULLIF(TRIM(channels),''))        AS channels"
             "  FROM customer GROUP BY sold_to"
             ") tcus ON tcus.sold_to = t.sold_to"
         )
