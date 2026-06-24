@@ -99,10 +99,10 @@
   <div class="filter-section">
     <div class="filter-section-label">Product</div>
     <div class="filter-section-content">
-      <!-- Category buttons in a single non-wrapping row.  PCLT and
-           TBR sit next to their sub-categories (smaller .cat-sub
-           chips) so the visual order matches the data hierarchy
-           without breaking out to a second row. -->
+      <!-- Single row: category buttons (with sub-cat chips beside their
+           parent) followed by Product Group / Pattern / Size custom
+           dropdowns.  Wraps to a 2nd visual line only when the viewport
+           is too narrow to hold the whole thing. -->
       <div id="catBtns" class="filter-row cat-row">
         <button class="btn cat-btn active" data-val="ALL">All</button>
         <button class="btn cat-btn" data-val="PCLT">PCLT</button>
@@ -116,12 +116,7 @@
         <button id="promoToggleBtn" class="btn" type="button" style="margin-left:2px;">
           Promotion <span style="opacity:.55;font-size:10px;">▾</span>
         </button>
-      </div>
-      <!-- Sub-promo row — flat list, only rendered when the Promotion
-           button is expanded. -->
-      <div id="promoSubs" style="display:none; gap:6px; flex-wrap:wrap; margin-top:2px; padding-left:18px;"></div>
-
-      <div class="filter-row" style="margin-top:2px;">
+        <div class="filter-sep"></div>
         <!-- Product Group (custom dropdown) -->
         <div class="dd" id="ddProductGroup">
           <label for="product_group">Product Group</label>
@@ -132,7 +127,6 @@
           </div>
           <div class="dd-menu" id="pgMenu"></div>
         </div>
-
         <!-- Pattern (custom dropdown) -->
         <div class="dd" id="ddPattern">
           <label for="pattern">Pattern</label>
@@ -143,7 +137,6 @@
           </div>
           <div class="dd-menu" id="patternMenu"></div>
         </div>
-
         <!-- Size (custom dropdown) -->
         <div class="dd" id="ddMaterial">
           <label for="material">Size</label>
@@ -155,6 +148,9 @@
           <div class="dd-menu" id="materialMenu"></div>
         </div>
       </div>
+      <!-- Sub-promo row — flat list, only rendered when the Promotion
+           button is expanded. -->
+      <div id="promoSubs" style="display:none; gap:6px; flex-wrap:wrap; margin-top:2px; padding-left:18px;"></div>
     </div>
   </div>
 
@@ -180,18 +176,17 @@
   </div>
 
   <!-- ── CUSTOMER section ── -->
-  <!-- Channel + Sold-to Group + Top-N share a row (broader → narrower);
-       Sold-to + Ship-to search boxes get a sub-row so the wide inputs
-       don't push everything else off-screen. -->
+  <!-- Channel + Sold-to Group + Top-N + HM + Sold-to + Ship-to all in
+       one row so the section stays at a single visual line on standard
+       desktop widths. -->
   <div class="filter-section">
     <div class="filter-section-label">Customer</div>
     <div class="filter-section-content">
+      <!-- Single row: Channel, Sold-to Group, Top-N buttons, HM (OEM
+           customer chip, sits right of Top 30), then Sold-to / Ship-to
+           search boxes.  Wraps to a 2nd visual line only on narrow
+           viewports. -->
       <div class="filter-row">
-        <!-- HM customer category — lives here because it's an OEM
-             customer bucket rather than a product line.  Still drives
-             filters.category via the .cat-btn delegation. -->
-        <button class="btn cat-btn" data-val="HM" style="font-weight:600;">HM</button>
-        <div class="filter-sep"></div>
         <div style="display:flex; align-items:center; gap:5px;">
           <label>Channel:</label>
           <select id="channel"><option value="ALL">ALL</option></select>
@@ -207,9 +202,11 @@
           <button class="btn" data-limit="20">Top 20</button>
           <button class="btn" data-limit="30">Top 30</button>
         </div>
-      </div>
-
-      <div class="filter-row">
+        <!-- HM OEM customer chip — sits next to the Top-N row because
+             it's a peer customer-bucket pivot.  Still drives
+             filters.category via the .cat-btn delegation. -->
+        <button class="btn cat-btn" data-val="HM" style="font-weight:600;">HM</button>
+        <div class="filter-sep"></div>
         <!-- Sold-to (custom dropdown) -->
         <div class="dd" id="ddSoldTo">
           <label for="sold_to">Sold-to</label>
@@ -220,7 +217,6 @@
           </div>
           <div class="dd-menu" id="soldToMenu"></div>
         </div>
-
         <!-- Ship-to (custom dropdown) -->
         <div class="dd" id="ddShipTo">
           <label for="ship_to">Ship-to</label>

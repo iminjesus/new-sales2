@@ -69,6 +69,14 @@ h1, h2 { margin: 6px 0; color:#333; }
    border so the hierarchy reads visually without indenting onto a
    second row.  Promotion stays in this row too. */
 .cat-row { flex-wrap: wrap; row-gap: 4px; }
+
+/* Inside a filter-section, custom-dropdowns (.dd) lay out horizontally
+   so the section keeps to a single row — Product Group / Pattern /
+   Size / Sold-to / Ship-to sit beside their label instead of stacking
+   it on top.  Search inputs trimmed too so the row doesn't overflow. */
+.filter-section .dd { flex-direction: row; align-items: center; gap: 5px; }
+.filter-section .dd > label { margin-bottom: 0; font-size: 11.5px; color: #6b7280; font-weight: 600; white-space: nowrap; }
+.filter-section .dd-wrap input { width: 120px; padding: 4px 7px; font-size: 11.5px; }
 .btn.cat-sub {
   padding: 3px 8px;
   font-size: 11px;
