@@ -918,12 +918,19 @@ async function drawDailyTotals(){
     dailyInst = new Chart(document.getElementById("dailyChart"), {
       type: "bar",
       data: { labels: fL, datasets: [
+        // Actual sales — primary saturated blue, matches the Monthly
+        // chart's 2026 actual treatment so the same colour cue means
+        // "real number" across the page.
         { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
-          type: "bar", data: fS, backgroundColor: "#ABDEE6",
+          type: "bar", data: fS, backgroundColor: "#2563eb",
           categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
         },
+        // Target — pale fill + dashed border so it reads as a goal next
+        // to the actual instead of competing for visual weight.
         { label: "Target", type: "bar", data: fT,
-          borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+          backgroundColor: "#dbeafe",
+          borderWidth: 2, borderColor: "#1d4ed8", borderDash: [4,3],
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
         }
       ]},
       options: getCommonOptions(false)
@@ -947,11 +954,13 @@ async function drawDailyTotals(){
           pointRadius: 0, fill: false, datalabels: { display: false }
         },
         { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
-          type: "bar", data: fSC, backgroundColor: "#ABDEE6",
+          type: "bar", data: fSC, backgroundColor: "#2563eb",
           categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
         },
         { label: "Cumulative Target", type: "bar", data: fTC,
-          borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+          backgroundColor: "#dbeafe",
+          borderWidth: 2, borderColor: "#1d4ed8", borderDash: [4,3],
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
         }
       ]},
       options: {
