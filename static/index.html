@@ -79,7 +79,18 @@
       </button>
     </div>
 
-    <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px; align-items:center;">
+    <!-- Export buttons live on the top bar (left of the view switch)
+         so the Filter cards below stay focused on filtering only.
+         Pale-green styling marks them as data exports, visually
+         distinct from the filter / view-switch chips. -->
+    <div style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+      <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
+      <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
+      <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
+    </div>
+
+    <div id="viewSwitch" style="display:flex; gap:6px; align-items:center;">
+      <span style="width:1px;height:22px;background:#e5e7eb;margin:0 4px;"></span>
       <button class="btn active">Graph View</button>
       <button class="btn" onclick="window.location.href='/map'+ window.location.search">Map View</button>
       <button class="btn" onclick="window.location.href='/stock'+ window.location.search">Stock</button>
@@ -88,14 +99,7 @@
       <button class="btn" onclick="window.location.href='/meeting'">Meeting</button>
       <button class="btn" onclick="window.location.href='/claims'">Claims</button>
       <button class="btn" onclick="window.location.href='/highlights'">📊 Highlights</button>
-      <!-- Export buttons live on the top bar (right side) so the
-           Filter cards below stay focused on filtering only.  Same
-           pale-green styling as before so they're visually distinct
-           from view-switch chips. -->
-      <span style="width:1px;height:22px;background:#e5e7eb;margin:0 4px;"></span>
-      <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
-      <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
-      <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
+    </div>
     </div>
   </div>
 
