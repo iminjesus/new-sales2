@@ -99,17 +99,20 @@
   <div class="filter-section">
     <div class="filter-section-label">Product</div>
     <div class="filter-section-content">
-      <div id="catBtns" class="filter-row">
-        <button class="btn active" data-val="ALL">All</button>
-        <button class="btn" data-val="PCLT">PCLT</button>
-        <button class="btn" data-val="TBR">TBR</button>
-        <button class="btn" data-val="HM">HM</button>
-        <button class="btn" data-val="18PLUS">18+ Inch</button>
-        <button class="btn" data-val="ISEG">EV/iSeg</button>
-        <button class="btn" data-val="SUV">SUV</button>
-        <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
-        <button class="btn" data-val="HK">HK</button>
-        <button class="btn" data-val="LF">LF</button>
+      <!-- Category buttons in a single non-wrapping row.  PCLT and
+           TBR sit next to their sub-categories (smaller .cat-sub
+           chips) so the visual order matches the data hierarchy
+           without breaking out to a second row. -->
+      <div id="catBtns" class="filter-row cat-row">
+        <button class="btn cat-btn active" data-val="ALL">All</button>
+        <button class="btn cat-btn" data-val="PCLT">PCLT</button>
+        <button class="btn cat-btn cat-sub" data-val="18PLUS">18+ Inch</button>
+        <button class="btn cat-btn cat-sub" data-val="ISEG">EV/iSeg</button>
+        <button class="btn cat-btn cat-sub" data-val="SUV">SUV</button>
+        <button class="btn cat-btn" data-val="TBR">TBR</button>
+        <button class="btn cat-btn cat-sub" data-val="LOWPROFILE">Low profile</button>
+        <button class="btn cat-btn" data-val="HK">HK</button>
+        <button class="btn cat-btn" data-val="LF">LF</button>
         <button id="promoToggleBtn" class="btn" type="button" style="margin-left:2px;">
           Promotion <span style="opacity:.55;font-size:10px;">▾</span>
         </button>
@@ -184,6 +187,11 @@
     <div class="filter-section-label">Customer</div>
     <div class="filter-section-content">
       <div class="filter-row">
+        <!-- HM customer category — lives here because it's an OEM
+             customer bucket rather than a product line.  Still drives
+             filters.category via the .cat-btn delegation. -->
+        <button class="btn cat-btn" data-val="HM" style="font-weight:600;">HM</button>
+        <div class="filter-sep"></div>
         <div style="display:flex; align-items:center; gap:5px;">
           <label>Channel:</label>
           <select id="channel"><option value="ALL">ALL</option></select>

@@ -408,15 +408,15 @@ function getFilterParams() {
 
 /* -------------------------- UI wiring -------------------------- */
 
-document.getElementById('catBtns').addEventListener("click",e=>{
-  if(!e.target.classList.contains("btn"))return;
-  // Skip buttons that share the #catBtns container but aren't category
-  // buttons (e.g. the Promotion dropdown toggle) — they manage their
-  // own state and we don't want a click on them to nuke the current
-  // category selection or strip "active" off every neighbour.
+document.addEventListener("click",e=>{
+  // Class-based delegation so category buttons can live in any section
+  // (e.g. HM sitting in the Customer card) and still drive the shared
+  // filters.category state.  Promotion toggle isn't a .cat-btn so it
+  // can't accidentally clear the active category.
+  if(!e.target.classList.contains("cat-btn"))return;
   if(!e.target.dataset.val)return;
   filters.category=e.target.dataset.val;
-  [...document.querySelectorAll("#catBtns .btn[data-val]")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
+  [...document.querySelectorAll(".cat-btn[data-val]")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
   refreshAllDebounced();
 });
 document.getElementById('metricBtns').addEventListener("click",e=>{
@@ -2607,7 +2607,7 @@ window.appendPromos = function(qs){
   // locked to own salesman, SM locked to own state).
   await applyRoleScope();
 
-  [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
+  [...document.querySelectorAll(".cat-btn[data-val]")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
   await refreshAllWithKpi();
   
   await refreshPatterns();                 // make pattern list available on load
