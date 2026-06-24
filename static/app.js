@@ -1693,6 +1693,25 @@ async function drawMonthlyStacked(){
     _skipSide ? Promise.resolve([]) : fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
     fetchMonthlySales(2026)
   ]);
+  // TEMP diag: dump the raw breakdown rows + the per-month totals so we
+  // can see whether the Feb 2026 cumulative anomaly comes from the
+  // backend (missing rows for month=2) or the chart pipeline.  Remove
+  // once the Channel-Group-By Feb issue is understood.
+  try {
+    const feb25 = (rows25 || []).filter(r => +r.month === 2);
+    const feb26 = (rows26 || []).filter(r => +r.month === 2);
+    const febT  = (rowsT26 || []).filter(r => +r.month === 2);
+    console.log("[diag.monthlyStacked]", {
+      group_by: effectiveGroup,
+      months_in_25: [...new Set((rows25||[]).map(r => +r.month))].sort((a,b)=>a-b),
+      months_in_26: [...new Set((rows26||[]).map(r => +r.month))].sort((a,b)=>a-b),
+      months_in_T26:[...new Set((rowsT26||[]).map(r => +r.month))].sort((a,b)=>a-b),
+      feb25_rows: feb25,
+      feb26_rows: feb26,
+      febT_rows : febT,
+      sales26TotalRows: sales26TotalRows,
+    });
+  } catch (_) {}
   // Legend: show only the stack key (group label), not year/actual/target suffixes
   function withStackKeyLegend(baseOpts){
     return {
