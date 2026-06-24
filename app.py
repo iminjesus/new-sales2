@@ -5946,12 +5946,15 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
             f"CASE WHEN {c}.line = 'PCLT' AND EXISTS ({match_sql}) "
             f"THEN 'Promotion' ELSE 'Non-Promotion' END"
         )
-    # detail = one row per matching promo name; MIN() collapses the rare
-    # case where a sale qualifies for multiple sub-promos (the user
-    # confirmed the categories don't overlap, so MIN is safe).
+    # detail = one row per matching promo *category* (the part before
+    # the first underscore: '443'/'iON'/'TrueBlue'), matching the
+    # promo-button row's category grouping.  Without this, the chart
+    # shows '443' and '443_30%' as separate stacks and the headline
+    # 443 bucket reads far smaller than the sales team expects, because
+    # the higher-DC '443_30%' tier hoovers up the larger-volume sales.
     return (
         f"CASE WHEN {c}.line = 'PCLT' THEN "
-        f"COALESCE((SELECT MIN(pc.promo) FROM promo_customer pc "
+        f"COALESCE((SELECT MIN(SUBSTRING_INDEX(pc.promo, '_', 1)) FROM promo_customer pc "
         f"LEFT JOIN promo_plan pp ON pp.promo = pc.promo "
         f"WHERE {s}.qty >= pc.min_qty AND {s}.dc_rate = pc.dc_rate "
         f"AND {s}.brand = pc.brand AND ("

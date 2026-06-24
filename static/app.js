@@ -467,7 +467,7 @@ const GROUP_LABEL = {
   product_group:     "Product Group",
   pattern:           "Pattern",
   promotion:         "Promotion",
-  promotion_detail:  "Promo Type",
+  promotion_detail:  "Promo Category",
 };
 window._detailDepth = 0;
 function _syncGroupDetailBtn(){
