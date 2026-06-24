@@ -970,8 +970,31 @@ async function drawDailyTotals(){
 function buildDailyStacks(rows){
   const labels = daysLabels();
 
+  // Drill levels like Sold-to / Salesman can return hundreds of distinct
+  // labels — rendering that many stacked datasets makes the chart hang
+  // (and one more click on Detail to wrap back has to fight that paint
+  // before the next refresh starts).  Sum each label's total once, keep
+  // the top STACK_TOP_N by total, and merge the rest into a single
+  // "Other" stack so the chart stays interactive.
+  const STACK_TOP_N = 25;
+  const rawTotals = {};
+  rows.forEach(r => {
+    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+    rawTotals[g] = (rawTotals[g] || 0) + (+r.value || 0);
+  });
+  const distinct = Object.keys(rawTotals);
+  let labelMap = null;
+  if (distinct.length > STACK_TOP_N) {
+    const sorted = distinct.slice().sort((a,b) => (rawTotals[b]||0) - (rawTotals[a]||0));
+    const keep = new Set(sorted.slice(0, STACK_TOP_N - 1));
+    labelMap = g => keep.has(g) ? g : "Other";
+  }
+
   let groups = [...new Set(
-    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
+    rows.map(r => {
+      const g0 = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+      return labelMap ? labelMap(g0) : g0;
+    })
   )];
 
   // force region stack order NSW, QLD, VIC, SA, WA, COMMON
@@ -1002,7 +1025,8 @@ function buildDailyStacks(rows){
 
   // Fill values
   rows.forEach(r => {
-    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+    let g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+    if (labelMap) g = labelMap(g);
     const d = parseInt(r.day, 10);
     if (d >= 1 && d <= N && (d - 1) <= lastActualIdx) {
       byGroup[g][d - 1] += (+r.value || 0);
@@ -1749,11 +1773,51 @@ async function drawMonthlyStacked(){
   const { groups: groupsT26, byGroup: byT26raw } = buildMonthlyStacksForRows(rowsT26);
 
   // Union groups across 2025 actual, 2026 actual, 2026 target
-  const groups = [
+  let groups = [
     ...groups25,
     ...groups26.filter(g => !groups25.includes(g)),
     ...groupsT26.filter(g => !groups25.includes(g) && !groups26.includes(g))
   ];
+
+  // Same top-N cap as buildDailyStacks — sold-to / salesman / sub-promo
+  // grouping can blow this list out to hundreds of entries which makes
+  // the monthly chart hang and also strands the Detail button under a
+  // slow paint when the user tries to wrap back to the top level.
+  const MONTHLY_STACK_TOP_N = 25;
+  if (groups.length > MONTHLY_STACK_TOP_N) {
+    const totals = {};
+    groups.forEach(g => {
+      let t = 0;
+      const a = by25raw[g]  || []; for (let i=0;i<a.length;i++) t += +a[i] || 0;
+      const b = by26raw[g]  || []; for (let i=0;i<b.length;i++) t += +b[i] || 0;
+      const c = byT26raw[g] || []; for (let i=0;i<c.length;i++) t += +c[i] || 0;
+      totals[g] = t;
+    });
+    const sorted = groups.slice().sort((x,y) => (totals[y]||0) - (totals[x]||0));
+    const keep   = new Set(sorted.slice(0, MONTHLY_STACK_TOP_N - 1));
+    const reBucket = (raw) => {
+      const out = {};
+      sorted.slice(0, MONTHLY_STACK_TOP_N - 1).forEach(g => {
+        out[g] = (raw[g] || Array(12).fill(0)).slice();
+      });
+      out["Other"] = Array(12).fill(0);
+      Object.keys(raw).forEach(g => {
+        if (keep.has(g)) return;
+        const arr = raw[g] || [];
+        for (let i=0;i<12;i++) out["Other"][i] += +arr[i] || 0;
+      });
+      return out;
+    };
+    const by25new  = reBucket(by25raw);
+    const by26new  = reBucket(by26raw);
+    const byT26new = reBucket(byT26raw);
+    // Mutate the *raw maps so the downstream Object.fromEntries below
+    // picks the merged buckets up instead of the pre-cap data.
+    Object.keys(by25raw ).forEach(k => delete by25raw[k]);  Object.assign(by25raw,  by25new);
+    Object.keys(by26raw ).forEach(k => delete by26raw[k]);  Object.assign(by26raw,  by26new);
+    Object.keys(byT26raw).forEach(k => delete byT26raw[k]); Object.assign(byT26raw, byT26new);
+    groups = sorted.slice(0, MONTHLY_STACK_TOP_N - 1).concat(["Other"]);
+  }
 
   // Normalize maps to the union groups
   const by25  = Object.fromEntries(groups.map(g => [g, (by25raw[g]  || Array(12).fill(0))]));
@@ -2080,8 +2144,29 @@ async function drawYearlyTotals() {
 // build stacks for yearly
 function buildYearlyStacks(rows) {
   const labels = yearsLabels();
+
+  // Same top-N cap as the daily / monthly builders — deep detail
+  // levels (Sold-to, Salesman, ...) can balloon the stack count and
+  // freeze the chart.
+  const STACK_TOP_N = 25;
+  const rawTotals = {};
+  rows.forEach(r => {
+    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+    rawTotals[g] = (rawTotals[g] || 0) + (+r.value || 0);
+  });
+  const distinct = Object.keys(rawTotals);
+  let labelMap = null;
+  if (distinct.length > STACK_TOP_N) {
+    const sorted = distinct.slice().sort((a,b) => (rawTotals[b]||0) - (rawTotals[a]||0));
+    const keep = new Set(sorted.slice(0, STACK_TOP_N - 1));
+    labelMap = g => keep.has(g) ? g : "Other";
+  }
+
   let groups = [...new Set(
-    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
+    rows.map(r => {
+      const g0 = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+      return labelMap ? labelMap(g0) : g0;
+    })
   )];
 
   const ordered = [];
@@ -2096,7 +2181,8 @@ function buildYearlyStacks(rows) {
   const byGroup = {};
   groups.forEach(g => (byGroup[g] = Array(labels.length).fill(0)));
   rows.forEach(r => {
-  const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+  let g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+  if (labelMap) g = labelMap(g);
 
   const y = parseInt(r.year, 10);
   const idx = labels.indexOf(y);
