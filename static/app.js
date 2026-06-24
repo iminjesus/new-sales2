@@ -46,6 +46,14 @@ const REGION_STACK_ORDER = ["NSW", "QLD", "VIC", "SA", "WA", "COMMON"];
   
 /* -------------------------- state & helpers -------------------------- */
 const COLORS=["#374388ff","#90359cff","#3e9150ff","#93b14dff","#d6c635ff","#95E4E5","#275ccfff","#175d96ff","#366592ff","#667c91ff","#FF968A","#FFAEA6"];
+// Robust alpha override — works for both #rrggbb and #rrggbbaa colors,
+// so changes to COLORS won't silently break the year-distinguishing
+// transparency below.  alphaHex is the trailing 2-char hex (e.g. "55").
+function withAlpha(hex, alphaHex){
+  if (typeof hex !== "string" || !hex.startsWith("#")) return hex;
+  const base = hex.length >= 7 ? hex.slice(0, 7) : hex;
+  return base + alphaHex;
+}
 const REGION_SALESMEN={
   NSW:["Makris George","Borghese Alessio","Buckley Paul"],
   QLD:["Maclure Adam","Spires Steven","Bovey Craig","Marsh Aaron"],
@@ -1563,33 +1571,39 @@ async function drawMonthlyTotals(){
   monthlyInst = new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
     data:{ labels, datasets:[
-      // 2025 Actual only
+      // 2025 Actual — neutral slate so it reads as a reference baseline
+      // rather than competing visually with the 2026 actual bar.
       {
         label: (filters.metric==="amount" ? "Sales Amount (2025)" : "SalesQty (2025)"),
         type:"bar",
         data:sales25,
-        backgroundColor:"#ABDEE6",
+        backgroundColor:"#cbd5e1",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
       },
-      // 2026 Actual
+      // 2026 Actual — primary saturated blue, the bar the user is here for.
       {
         label: (filters.metric==="amount" ? "Sales Amount (2026)" : "SalesQty (2026)"),
         type:"bar",
         data:sales26,
-        backgroundColor:"#93c5fd",
+        backgroundColor:"#2563eb",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
       },
-      // 2026 Target
+      // 2026 Target — pale blue fill + dashed border so it reads as a
+      // projection rather than another actual bar.
       {
         label:"Target (2026)",
         type:"bar",
         data:target26,
+        backgroundColor:"#dbeafe",
         borderWidth:2,
-        borderColor:"#93c5fd",
+        borderColor:"#1d4ed8",
+        borderDash:[4,3],
+        categoryPercentage:0.8,
+        barPercentage:0.9,
         datalabels:{ display:false }
       }
     ]},
@@ -1603,7 +1617,7 @@ async function drawMonthlyTotals(){
         label: (filters.metric==="amount" ? "Cumulative Amount (2025)" : "Cumulative Qty (2025)"),
         type:"bar",
         data:salesCum25,
-        backgroundColor:"#ABDEE6",
+        backgroundColor:"#cbd5e1",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
@@ -1612,7 +1626,7 @@ async function drawMonthlyTotals(){
         label: (filters.metric==="amount" ? "Cumulative Amount (2026)" : "Cumulative Qty (2026)"),
         type:"bar",
         data:salesCum26,
-        backgroundColor:"#93c5fd",
+        backgroundColor:"#2563eb",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
@@ -1621,8 +1635,12 @@ async function drawMonthlyTotals(){
         label:"Cumulative Target (2026)",
         type:"bar",
         data:targetCum26,
+        backgroundColor:"#dbeafe",
         borderWidth:2,
-        borderColor:"#93c5fd",
+        borderColor:"#1d4ed8",
+        borderDash:[4,3],
+        categoryPercentage:0.8,
+        barPercentage:0.9,
         datalabels:{ display:false }
       }
     ]},
@@ -1921,13 +1939,24 @@ async function drawMonthlyStacked(){
   );
 
   // Datasets:
+  // Year-distinguishing visual scheme — group hue stays the same (so the
+  // legend stays a clean group list), but each year stack uses a
+  // different fill density + border treatment:
+  //   2025 actual  : 35% alpha fill — fades into background, comparison
+  //   2026 actual  : full opacity   — the bar the user actually scans
+  //   2026 target  : 45% alpha fill + dashed border in the group hue —
+  //                  reads as a projection / goal, never confusable for
+  //                  the 2026 actual.
+  // The dashed border on target also means the *cumulative* target
+  // stack stays distinguishable from the 2026 actual cum even when they
+  // share x-position.
   // - 2025 actual stack: Y2025
   // - 2026 actual stack: Y2026
   // - 2026 target stack: T2026 (stacked by group like actual)
   const ds25 = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: by25[g] || Array(12).fill(0),
-    backgroundColor: COLORS[i%COLORS.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "55"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -1944,12 +1973,16 @@ async function drawMonthlyStacked(){
     datalabels: { display:false }
   }));
 
-  // Target stack uses the same group colors; it will appear as another stacked bar group
+  // Target stack uses the same group hue (so it shares a legend entry
+  // with the actual) but a dashed border + lighter fill so it never
+  // visually competes with the actual bar at the same group.
   const dsT26 = groups.map((g,i)=>({
     label: `${g} (2026 Target)`,
     data: byT26[g] || Array(12).fill(null),
-    // same color as actual but lighter (alpha)
-    backgroundColor: COLORS[i%COLORS.length].replace('ff', '80'),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "60"),
+    borderColor:    COLORS[i%COLORS.length],
+    borderWidth:    1.5,
+    borderDash:     [4, 3],
     stack: "T2026",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -1959,7 +1992,7 @@ async function drawMonthlyStacked(){
   const ds25Cum = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: by25Cum[g] || Array(12).fill(0),
-    backgroundColor: COLORS[i%COLORS.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "55"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -1979,9 +2012,10 @@ async function drawMonthlyStacked(){
   const dsT26Cum = groups.map((g,i)=>({
     label: `${g} (2026 Target)`,
     data: byT26Cum[g] || Array(12).fill(null),
-    backgroundColor: COLORS[i%COLORS.length],
-    // same color as actual but lighter (alpha)
-    backgroundColor: COLORS[i%COLORS.length].replace('ff', '80'),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "60"),
+    borderColor:    COLORS[i%COLORS.length],
+    borderWidth:    1.5,
+    borderDash:     [4, 3],
     stack: "T2026",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -1991,7 +2025,7 @@ async function drawMonthlyStacked(){
   const ds25Pct = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: pct25[g] || Array(12).fill(0),
-    backgroundColor: COLORS[i%COLORS.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "55"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -2011,7 +2045,7 @@ async function drawMonthlyStacked(){
   const ds25PctCum = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: pct25Cum[g] || Array(12).fill(0),
-    backgroundColor: COLORS[i%COLORS.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "55"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
