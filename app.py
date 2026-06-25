@@ -5874,7 +5874,7 @@ def _promo_filter_clauses(promos, sales_alias="s",
             LEFT JOIN promo_plan pp ON pp.promo = pc.promo
             WHERE pc.promo IN ({placeholders})
               AND {s}.qty     >= pc.min_qty
-              AND {s}.dc_rate  = pc.dc_rate
+              AND {s}.dc_rate  BETWEEN pc.dc_rate_start AND pc.dc_rate_end
               AND {s}.brand    = pc.brand
               AND (
                    (pc.sold_to <> '' AND pc.sold_to = {s}.sold_to)
@@ -5925,7 +5925,7 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
         FROM promo_customer pc
         LEFT JOIN promo_plan pp ON pp.promo = pc.promo
         WHERE {s}.qty     >= pc.min_qty
-          AND {s}.dc_rate  = pc.dc_rate
+          AND {s}.dc_rate  BETWEEN pc.dc_rate_start AND pc.dc_rate_end
           AND {s}.brand    = pc.brand
           AND (
                (pc.sold_to <> '' AND pc.sold_to = {s}.sold_to)
@@ -5956,7 +5956,7 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
         f"CASE WHEN {c}.line = 'PCLT' THEN "
         f"COALESCE((SELECT MIN(SUBSTRING_INDEX(pc.promo, '_', 1)) FROM promo_customer pc "
         f"LEFT JOIN promo_plan pp ON pp.promo = pc.promo "
-        f"WHERE {s}.qty >= pc.min_qty AND {s}.dc_rate = pc.dc_rate "
+        f"WHERE {s}.qty >= pc.min_qty AND {s}.dc_rate BETWEEN pc.dc_rate_start AND pc.dc_rate_end "
         f"AND {s}.brand = pc.brand AND ("
         f"(pc.sold_to <> '' AND pc.sold_to = {s}.sold_to) OR "
         f"(pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)"
@@ -6268,7 +6268,7 @@ def api_monthly_highlights():
                                 LEFT JOIN promo_plan pp ON pp.promo = pc.promo
                                 WHERE pc.promo = %s
                                   AND s.qty     >= pc.min_qty
-                                  AND s.dc_rate  = pc.dc_rate
+                                  AND s.dc_rate  BETWEEN pc.dc_rate_start AND pc.dc_rate_end
                                   AND s.brand    = pc.brand
                                   AND (
                                     (pc.sold_to <> '' AND pc.sold_to = s.sold_to)
