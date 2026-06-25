@@ -2421,6 +2421,7 @@ def daily_sales():
             promos,
             year_expr=str(_today.year),
             month_expr=str(_today.month),
+            qty_sum_table_from="sales_thismonth s2",
         )
         wh.extend(promo_wh)
         params.extend(promo_p)
@@ -2525,13 +2526,17 @@ def daily_breakdown():
 
     if is_promo_group:
         # sales_thismonth has no year/month columns — same literal
-        # injection as the promo filter above.
+        # injection as the promo filter above.  qty_sum_table_from
+        # points back at sales_thismonth so the TrueBlue rule can
+        # aggregate qty across the same (ship_to, day, brand) tuple
+        # — single-month table, so no temporal extra needed.
         from datetime import date as _d
         _today = _d.today()
         group_col = _promotion_group_col_sql(
             detail=(group_by == "promotion_detail"),
             year_expr=str(_today.year),
             month_expr=str(_today.month),
+            qty_sum_table_from="sales_thismonth s2",
         )
     else:
         group_col = group_cols[group_by]
@@ -2547,13 +2552,16 @@ def daily_breakdown():
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
         # sales_thismonth has no year/month columns — feed today's as
-        # literals (same reasoning as daily_sales).
+        # literals (same reasoning as daily_sales).  qty_sum_table_from
+        # routes TrueBlue's min_qty back through SUM(qty) per
+        # (ship_to, day, brand) on the same table.
         from datetime import date as _d
         _today = _d.today()
         promo_wh, promo_p = _promo_filter_clauses(
             promos,
             year_expr=str(_today.year),
             month_expr=str(_today.month),
+            qty_sum_table_from="sales_thismonth s2",
         )
         wh.extend(promo_wh)
         params.extend(promo_p)
@@ -3255,6 +3263,10 @@ def monthly_sales():
     if promos:
         # Promo filter needs carrying_26 (mat) for line/product_group +
         # customer (cus) for the sold_to_group fallback in the EXISTS.
+        # NOTE: monthly_sales stays on per-row qty for TrueBlue (the
+        # ship_to+day SUM variant lives on daily endpoints only —
+        # adding a self-referencing UNION subquery inside EXISTS at
+        # this aggregation layer is too expensive).
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
         promo_wh, promo_p = _promo_filter_clauses(promos)
@@ -3363,6 +3375,10 @@ def monthly_breakdown():
     if is_promo_group:
         # Promotion buckets: sales_2526 and the 2026 union both expose
         # s.year + s.month, so no literal injection needed here.
+        # NOTE: monthly_breakdown stays on per-row qty for TrueBlue (the
+        # ship_to+day SUM variant lives on daily_breakdown only — adding
+        # a self-referencing UNION subquery inside EXISTS at this layer
+        # is too expensive on the monthly aggregation roll-up).
         group_col = _promotion_group_col_sql(
             detail=(group_by == "promotion_detail"),
         )
@@ -5835,9 +5851,47 @@ def _promo_category_of(promo_name):
         return ""
     return s.split("_", 1)[0]
 
+def _promo_qty_match_sql(sales_alias="s",
+                         qty_sum_table_from=None,
+                         qty_sum_temporal_match=""):
+    """SQL fragment that gates a sale against a promo_customer row's
+    min_qty threshold.
+
+    Default (qty_sum_table_from=None) is the per-row gate:
+        s.qty >= pc.min_qty
+
+    When the caller passes its sales table as a self-reference (e.g.
+    "sales_thismonth s2" or the 2026 union aliased s2), TrueBlue rules
+    instead compare min_qty to the SUM of qty across every line on the
+    same (ship_to, day, brand) tuple — the threshold the sales team
+    actually quotes for TrueBlue ("X tires that day at that shop",
+    not "X of a single SKU").  Other promos (443 / iON) keep the
+    per-row gate.
+
+    `qty_sum_temporal_match` lets multi-month tables (sales_2526, the
+    2026 union) constrain the sum to the matching year+month — pass
+    "AND s2.year = s.year AND s2.month = s.month".  For single-month
+    tables (sales_thismonth) leave it empty.
+    """
+    s = sales_alias
+    if not qty_sum_table_from:
+        return f"{s}.qty >= pc.min_qty"
+    return (
+        "((pc.promo = 'TrueBlue' AND ("
+        f"  SELECT COALESCE(SUM(s2.qty), 0) FROM {qty_sum_table_from}"
+        f"  WHERE s2.ship_to = {s}.ship_to"
+        f"    AND s2.day = {s}.day"
+        f"    AND s2.brand = pc.brand"
+        f"    {qty_sum_temporal_match}"
+        f") >= pc.min_qty)"
+        f" OR (pc.promo <> 'TrueBlue' AND {s}.qty >= pc.min_qty))"
+    )
+
 def _promo_filter_clauses(promos, sales_alias="s",
                           carrying_alias="mat", customer_alias="cus",
-                          year_expr=None, month_expr=None):
+                          year_expr=None, month_expr=None,
+                          qty_sum_table_from=None,
+                          qty_sum_temporal_match=""):
     """Build the WHERE clauses + params needed to constrain a sales query
     to rows that qualify for any of the selected sub-promos.
 
@@ -5864,6 +5918,11 @@ def _promo_filter_clauses(promos, sales_alias="s",
     s = sales_alias; c = carrying_alias; cu = customer_alias
     y_e = year_expr  if year_expr  is not None else f"{s}.year"
     m_e = month_expr if month_expr is not None else f"{s}.month"
+    qty_check = _promo_qty_match_sql(
+        sales_alias=s,
+        qty_sum_table_from=qty_sum_table_from,
+        qty_sum_temporal_match=qty_sum_temporal_match,
+    )
     wh = [
         # PCLT is always the umbrella for promos.
         f"{c}.line = 'PCLT'",
@@ -5873,7 +5932,7 @@ def _promo_filter_clauses(promos, sales_alias="s",
             FROM promo_customer pc
             LEFT JOIN promo_plan pp ON pp.promo = pc.promo
             WHERE pc.promo IN ({placeholders})
-              AND {s}.qty     >= pc.min_qty
+              AND ({qty_check})
               AND {s}.dc_rate  BETWEEN pc.dc_rate_start AND pc.dc_rate_end
               AND {s}.brand    = pc.brand
               AND (
@@ -5896,7 +5955,9 @@ def _promo_filter_clauses(promos, sales_alias="s",
 
 def _promotion_group_col_sql(detail=False, sales_alias="s",
                              carrying_alias="mat", customer_alias="cus",
-                             year_expr=None, month_expr=None):
+                             year_expr=None, month_expr=None,
+                             qty_sum_table_from=None,
+                             qty_sum_temporal_match=""):
     """SQL expression that buckets each sales row by promotion membership.
 
     detail=False → returns 'Promotion' / 'Non-Promotion' (binary stack).
@@ -5920,11 +5981,16 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
     s = sales_alias; c = carrying_alias; cu = customer_alias
     y_e = year_expr  if year_expr  is not None else f"{s}.year"
     m_e = month_expr if month_expr is not None else f"{s}.month"
+    qty_check = _promo_qty_match_sql(
+        sales_alias=s,
+        qty_sum_table_from=qty_sum_table_from,
+        qty_sum_temporal_match=qty_sum_temporal_match,
+    )
     match_sql = f"""
         SELECT pc.promo
         FROM promo_customer pc
         LEFT JOIN promo_plan pp ON pp.promo = pc.promo
-        WHERE {s}.qty     >= pc.min_qty
+        WHERE ({qty_check})
           AND {s}.dc_rate  BETWEEN pc.dc_rate_start AND pc.dc_rate_end
           AND {s}.brand    = pc.brand
           AND (
@@ -5958,7 +6024,7 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
         f"CASE WHEN {c}.line = 'PCLT' THEN "
         f"COALESCE((SELECT MIN(pc.promo) FROM promo_customer pc "
         f"LEFT JOIN promo_plan pp ON pp.promo = pc.promo "
-        f"WHERE {s}.qty >= pc.min_qty AND {s}.dc_rate BETWEEN pc.dc_rate_start AND pc.dc_rate_end "
+        f"WHERE ({qty_check}) AND {s}.dc_rate BETWEEN pc.dc_rate_start AND pc.dc_rate_end "
         f"AND {s}.brand = pc.brand AND ("
         f"(pc.sold_to <> '' AND pc.sold_to = {s}.sold_to) OR "
         f"(pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)"
