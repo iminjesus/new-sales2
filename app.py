@@ -318,6 +318,29 @@ def category_filters_orders(category: str):
 
     return joins, wh, needs_carrying
 # ------------------------------- v2 helpers -------------------------------
+def _sales_2526_from(alias: str = "s") -> str:
+    """Wrapping subquery over the new sales_2526 layout.  The fresh
+    table stores time as a single `billing_date` column instead of the
+    legacy (year, month, day) trio the previous layout carried, so
+    every existing query that reads `s.year` / `s.month` / `s.day`
+    needs those values synthesised on the fly.  Returning a derived table
+    keeps the rest of each query (joins, where, group-by, select)
+    unchanged — only the `FROM` source is swapped.
+
+    `alias` matches whatever the outer query already uses (`s`, `sTop`,
+    etc.) so we don't have to rewrite column references downstream.
+    """
+    return (
+        "(SELECT YEAR(billing_date)  AS year, "
+        "        MONTH(billing_date) AS month, "
+        "        DAY(billing_date)   AS day, "
+        "        billing_date, "
+        "        so_type, sold_to, ship_to, brand, material, "
+        "        qty, amt, cogs, dc_rate, p_rate "
+        f" FROM sales_2526) AS {alias}"
+    )
+
+
 def _region_order_key(x: str) -> int:
     order = ["NSW", "QLD", "VIC", "WA", "SA", "NT", "TAS", "ACT", "COMMON"]
     try:
@@ -888,7 +911,7 @@ def build_global_top_once():
             for limit in (10, 20, 30):
                 sql = f"""
                     SELECT sold_to
-                    FROM sales_25_2602
+                    FROM sales_2526
                     GROUP BY sold_to
                     ORDER BY SUM({val}) DESC
                     LIMIT {limit}
@@ -907,7 +930,7 @@ def build_global_top_once():
             pass
 
 def get_top_sold_to_from_baseline(cur, f, top_limit, value):
-    """Get Top N sold_to based on sales_25_2602 (baseline).
+    """Get Top N sold_to based on sales_2526 (baseline).
     This is a hot path when the UI uses top_limit; cache it briefly.
     """
     # Fast path: fixed Top 10/20/30 computed once at startup (no filters).
@@ -948,7 +971,7 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
 
     sql = f"""
       SELECT sTop.sold_to
-        FROM sales_25_2602 sTop
+        FROM {_sales_2526_from("sTop")}
         {' '.join(joins)}
         {where_sql}
        GROUP BY sTop.sold_to
@@ -1274,7 +1297,7 @@ def v2_dashboard():
         daily_ach = [None if daily_target[i] <= 0 else round((daily_total[i]/daily_target[i])*100.0, 2) for i in range(days_in_month)]
         daily_cum_ach = [None if daily_target_cum[i] <= 0 else round((daily_cum[i]/daily_target_cum[i])*100.0, 2) for i in range(days_in_month)]
 
-        # ---------------- monthly (sales_25_2602 years 2025/2026 + target_26) ----------------
+        # ---------------- monthly (sales_2526 years 2025/2026 + target_26) ----------------
         joins_m, wh_m, params_m = build_customer_filters("s", f, use_sold_to_name=False)
         mj, mw = category_filters("s", f["category"])
         joins_m += mj; wh_m += mw
@@ -1293,7 +1316,7 @@ def v2_dashboard():
 
         cur.execute(f"""
             SELECT s.year AS year, s.month AS month, SUM(s.{value}) AS value
-            FROM sales_25_2602 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins_m)}
             {where_m}
             GROUP BY s.year, s.month
@@ -1311,7 +1334,7 @@ def v2_dashboard():
         group_col_m = group_cols_sales[group_by]
         cur.execute(f"""
             SELECT s.year AS year, s.month AS month, {group_col_m} AS group_label, SUM(s.{value}) AS value
-            FROM sales_25_2602 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins_m)}
             {where_m}
             GROUP BY s.year, s.month, {group_col_m}
@@ -1558,7 +1581,7 @@ def daily_sales():
     try:
         top_sold_to = None
 
-        # 1) Get Top N sold_to from baseline table (sales_25_2602)
+        # 1) Get Top N sold_to from baseline table (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -1650,7 +1673,7 @@ def daily_breakdown():
     try:
         top_sold_to = None
 
-        # 1) Get Top N sold_to from baseline table (sales_25_2602)
+        # 1) Get Top N sold_to from baseline table (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -1731,7 +1754,7 @@ def daily_target():
     try:
         top_sold_to = None
 
-        # 1) Get Top N sold_to from baseline table (sales_25_2602)
+        # 1) Get Top N sold_to from baseline table (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -2006,7 +2029,7 @@ def monthly_sales():
     try:
         top_sold_to = None
 
-        # 1) Get Top N sold_to from baseline table (sales_25_2602)
+        # 1) Get Top N sold_to from baseline table (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -2028,7 +2051,7 @@ def monthly_sales():
 
         monthly_sql = f"""
         SELECT s.month AS month_num, SUM(s.{value}) AS monthly_total
-            FROM sales_25_2602 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.month
@@ -2101,7 +2124,7 @@ def monthly_breakdown():
     try:
         top_sold_to = None
 
-        # 1) Get Top N sold_to from baseline table (sales_25_2602)
+        # 1) Get Top N sold_to from baseline table (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -2126,7 +2149,7 @@ def monthly_breakdown():
         SELECT s.month AS month,
                 {group_col} AS group_label,
                 SUM(s.{value}) AS value
-            FROM sales_25_2602 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql2}
         GROUP BY s.month, {group_col}
@@ -2173,7 +2196,7 @@ def monthly_target():
     try:
         top_sold_to = None
 
-        # 1) Get Top N sold_to from baseline table (sales_25_2602)
+        # 1) Get Top N sold_to from baseline table (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -2350,7 +2373,7 @@ def yearly_sales():
     try:
         top_sold_to = None
 
-        # 1) If top_limit > 0, get top N sold_to from baseline (sales_25_2602)
+        # 1) If top_limit > 0, get top N sold_to from baseline (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -2441,7 +2464,7 @@ def yearly_breakdown():
     try:
         top_sold_to = None
 
-        # 1) If top_limit > 0, get top N sold_to from baseline (sales_25_2602)
+        # 1) If top_limit > 0, get top N sold_to from baseline (sales_2526)
         if top_limit > 0:
             top_sold_to = get_top_sold_to_from_baseline(
                 cur, f, top_limit, value
@@ -2539,7 +2562,7 @@ def sold_to_names():
             return jsonify([r["name"] for r in rows])
 
         # ----------------- 2) top_limit -> baseline top sold_to -> names -----------------
-        # Get top sold_to list from baseline table (sales_25_2602)
+        # Get top sold_to list from baseline table (sales_2526)
         top_sold_to = get_top_sold_to_from_baseline(cur, f, top_limit, value)
 
         if not top_sold_to:
@@ -2712,7 +2735,7 @@ def profit_monthly():
         try:
             top_sold_to = None
 
-            # 1) Top-N sold_to should ALWAYS come from baseline sales table: sales_25_2602
+            # 1) Top-N sold_to should ALWAYS come from baseline sales table: sales_2526
             if top_limit > 0:
                 # NOTE: assumes you already created this helper elsewhere:
                 # def get_top_sold_to_from_baseline(cur, f, top_limit, value): ...
@@ -2861,7 +2884,7 @@ def sales_map():
                 MAX(c.bde_state)      AS region,
                 MAX(c.salesman_name)  AS bde,
                 SUM(s.{value})        AS total_value
-            FROM sales_25_2602 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql2}
             GROUP BY
