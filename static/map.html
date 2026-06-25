@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Sales Map</title>
 
   <!-- Main CSS -->
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260605a">
 
   <!-- Leaflet CSS -->
   <link
@@ -23,38 +24,22 @@
   </script>
 
   <style>
-    #salesMap{ height: 720px; min-height: 720px; }
-
-    /* custom dropdown (searchable) — same as index.html */
-    .dd { position: relative; display: inline-block; margin-left: 8px; }
-    .dd-wrap { display:flex; align-items:center; gap:4px; }
-    .dd-wrap input { width: 140px; }
-    .dd-btn { padding: 2px 6px; cursor: pointer; }
-    .dd-menu {
-      position: absolute;
-      top: calc(100% + 2px);
-      left: 0;
-      width: 240px;
-      max-height: 260px;
-      overflow: auto;
-      background: #fff;
-      border: 1px solid #bbb;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.12);
-      z-index: 9999;
-      display: none;
-    }
-    .dd-item { padding: 6px 8px; cursor: pointer; white-space: nowrap; }
-    .dd-item:hover { background: #f0f0f0; }
-    .dd-empty { padding: 8px; color: #777; }
+    #salesMap{ height: 580px; min-height: 580px; }
   </style>
 </head>
 <body>
-  <h2>Sales Map</h2>
+  <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Map</h2>
 
-  <div id="topRow" class="controls"
-       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+  <!-- Mobile: toggle button for filter panel -->
+  <button id="filterToggleBtn" class="filter-toggle-btn">
+    <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
+  </button>
 
-    <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
+  <div id="filterPanel">
+
+  <!-- ── Top filter bar ── -->
+  <div id="topRow" class="filter-bar">
+    <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
       <button class="btn active" data-val="ALL">All</button>
       <button class="btn" data-val="PCLT">PCLT</button>
       <button class="btn" data-val="TBR">TBR</button>
@@ -63,102 +48,257 @@
       <button class="btn" data-val="SUV">SUV</button>
       <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
       <button class="btn" data-val="HM">HM</button>
-      <button class="btn" data-val="443">443</button>
+      <button class="btn" data-val="HK">HK</button>
+      <button class="btn" data-val="LF">LF</button>
     </div>
 
-    <div id="metricBtns" class="controls" style="gap:6px; margin-left:50px;">
+    <div class="filter-sep"></div>
+
+    <div id="metricBtns" style="display:flex; gap:5px;">
       <button class="btn" data-metric="qty">Qty</button>
       <button class="btn" data-metric="amount">Amount</button>
     </div>
 
-    <label style="gap:6px; margin-left:50px;">Group By:</label>
-    <select id="group_by">
-      <option value="region" selected>Region</option>
-      <option value="salesman">Salesman</option>
-      <option value="sold_to_group">Sold-to Group</option>
-      <option value="sold_to">Sold-to</option>
-      <option value="product_group">Product Group</option>
-    </select>
+    <div class="filter-sep"></div>
+
+    <div style="display:flex; align-items:center; gap:6px;">
+      <label>Group By:</label>
+      <select id="group_by">
+        <option value="region" selected>Region</option>
+        <option value="salesman">Salesman</option>
+        <option value="sold_to_group">Sold-to Group</option>
+        <option value="sold_to">Sold-to</option>
+        <option value="product_group">Product Group</option>
+      </select>
+    </div>
 
     <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
       <button class="btn" onclick="window.location.href='/'+ window.location.search">Graph View</button>
       <button class="btn active">Map View</button>
-      <button class="btn" onclick="window.location.href='/stock'+ window.location.search">stock</button>
+      <button class="btn" onclick="window.location.href='/stock'+ window.location.search">Stock</button>
+      <button class="btn" onclick="window.location.href='/rebate'">Rebate</button>
+      <button class="btn" onclick="window.location.href='/price'">Price</button>
+      <button class="btn" onclick="window.location.href='/meeting'">Meeting</button>
+      <button class="btn" onclick="window.location.href='/claims'">Claims</button>
     </div>
   </div>
 
-  <div class="controls">
-    <div id="regionBtns" class="controls" style="gap:6px;">
-      <button class="btn" data-val="ALL">ALL</button>
+  <!-- ── Second filter bar ── -->
+  <div class="filter-bar">
+    <div id="regionBtns" style="display:flex; gap:5px;">
+      <button class="btn active" data-val="ALL">ALL</button>
       <button class="btn" data-val="NSW">NSW</button>
       <button class="btn" data-val="QLD">QLD</button>
       <button class="btn" data-val="VIC">VIC</button>
       <button class="btn" data-val="WA">WA</button>
     </div>
 
-    <label>Salesman:</label>
-    <select id="salesman_name"><option value="ALL">ALL</option></select>
+    <div class="filter-sep"></div>
 
-    <label>Sold-to Group:</label>
-    <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Salesman:</label>
+      <select id="salesman_name"><option value="ALL">ALL</option></select>
+    </div>
 
-    <div id="topCustomerControls" class="controls">
+    <div style="display:flex; align-items:center; gap:5px;">
+      <label>Sold-to Group:</label>
+      <select id="sold_to_group"><option value="ALL">ALL</option></select>
+    </div>
+
+    <div class="filter-sep"></div>
+
+    <div id="topCustomerControls" style="display:flex; gap:5px;">
       <button class="btn active" data-limit="0">All</button>
       <button class="btn" data-limit="10">Top 10</button>
       <button class="btn" data-limit="20">Top 20</button>
       <button class="btn" data-limit="30">Top 30</button>
     </div>
 
-    <!-- Sold-to (custom dropdown) -->
-    <div class="dd">
-      <label for="sold_to">Sold-to:</label>
+    <div class="filter-sep"></div>
+
+    <!-- Sold-to -->
+    <div class="dd" id="ddSoldTo">
+      <label for="sold_to">Sold-to</label>
       <div class="dd-wrap">
         <input id="sold_to" type="text" placeholder="Search Sold-to..." autocomplete="off">
         <button type="button" class="dd-btn" id="soldToBtn">▼</button>
-        <button type="button" class="dd-btn" id="soldToClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="soldToClear">✕</button>
       </div>
       <div class="dd-menu" id="soldToMenu"></div>
     </div>
 
-    <!-- Ship-to (custom dropdown) -->
-    <div class="dd">
-      <label for="ship_to">Ship-to:</label>
+    <!-- Ship-to -->
+    <div class="dd" id="ddShipTo">
+      <label for="ship_to">Ship-to</label>
       <div class="dd-wrap">
         <input id="ship_to" type="text" placeholder="Search Ship-to..." autocomplete="off">
         <button type="button" class="dd-btn" id="shipToBtn">▼</button>
-        <button type="button" class="dd-btn" id="shipToClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="shipToClear">✕</button>
       </div>
       <div class="dd-menu" id="shipToMenu"></div>
     </div>
 
-    <label>Product Group:</label>
-    <select id="product_group"><option value="ALL">ALL</option></select>
+    <!-- Product Group (no clear) -->
+    <div class="dd" id="ddProductGroup">
+      <label for="product_group">Product Group</label>
+      <div class="dd-wrap">
+        <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
+        <button type="button" class="dd-btn" id="pgBtn">▼</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="pgClear">✕</button>
+      </div>
+      <div class="dd-menu" id="pgMenu"></div>
+    </div>
 
-    <!-- Pattern (custom dropdown) -->
-    <div class="dd">
-      <label for="pattern">Pattern:</label>
+    <!-- Pattern -->
+    <div class="dd" id="ddPattern">
+      <label for="pattern">Pattern</label>
       <div class="dd-wrap">
         <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
         <button type="button" class="dd-btn" id="patternBtn">▼</button>
-        <button type="button" class="dd-btn" id="patternClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
       </div>
       <div class="dd-menu" id="patternMenu"></div>
     </div>
 
-    <!-- Material (custom dropdown) -->
-    <div class="dd">
-      <label for="material">Material:</label>
+    <!-- Size -->
+    <div class="dd" id="ddMaterial">
+      <label for="material">Size</label>
       <div class="dd-wrap">
-        <input id="material" type="text" placeholder="Search Material" autocomplete="off">
+        <input id="material" type="text" placeholder="Search Size" autocomplete="off">
         <button type="button" class="dd-btn" id="materialBtn">▼</button>
-        <button type="button" class="dd-btn" id="materialClear">✕</button>
+        <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
       </div>
       <div class="dd-menu" id="materialMenu"></div>
     </div>
   </div>
 
+  </div><!-- end #filterPanel -->
+
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
     <div id="mapWrapper" class="box" style="flex:2;">
+      <!-- Shop-status filter directly above the map for quick toggling -->
+      <div id="shopStatusBtns"
+           style="display:flex;gap:6px;align-items:center;margin-bottom:6px;
+                  padding:6px 8px;background:#f8fafc;border:1px solid #e5e7eb;
+                  border-radius:6px;">
+        <label style="font-size:11px;color:#6b7280;font-weight:600;
+                      text-transform:uppercase;letter-spacing:.4px;
+                      margin-right:4px;">Shop status</label>
+        <button class="ss-btn ss-all active" data-status="ALL"
+                title="Show every shop">All <span class="ss-count" data-c="ALL">–</span></button>
+        <button class="ss-btn ss-logs" data-status="LOGS"
+                title="Only shops with at least one meeting log entry">📝 Logs <span class="ss-count" data-c="LOGS">–</span></button>
+        <button class="ss-btn ss-visit" data-status="VISIT"
+                title="Only shops with at least one GPS visit">📍 Visit <span class="ss-count" data-c="VISIT">–</span></button>
+        <button class="ss-btn ss-novisit" data-status="NOVISIT"
+                title="Only shops with no GPS visit yet — click again to clear">🚫 No-visit <span class="ss-count" data-c="NOVISIT">–</span></button>
+        <button type="button" id="ssShowAllBtn"
+                title="Show every shop — clears this filter"
+                style="margin-left:8px;border:1.5px solid #1e3a5f;
+                       background:#1e3a5f;color:#fff;border-radius:5px;
+                       padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;">
+          ✕ Show all shops
+        </button>
+      </div>
+
+      <div id="purposeFilterBtns"
+           style="display:flex;gap:6px;align-items:center;margin-bottom:6px;
+                  padding:6px 8px;background:#f8fafc;border:1px solid #e5e7eb;
+                  border-radius:6px;flex-wrap:wrap;">
+        <label style="font-size:11px;color:#6b7280;font-weight:600;
+                      text-transform:uppercase;letter-spacing:.4px;
+                      margin-right:4px;">Purpose</label>
+        <span style="font-size:10px;color:#9ca3af;margin-right:6px;">
+          (click again to clear)
+        </span>
+        <button class="pf-btn pf-all"        data-purpose="ALL"
+                title="Shops with at least one log (any purpose)">All logged <span class="pf-count" data-p="ALL">–</span></button>
+        <button class="pf-btn pf-promo"      data-purpose="Promotion"
+                title="Shops with a Promotion log">📣 Promotion <span class="pf-count" data-p="Promotion">–</span></button>
+        <button class="pf-btn pf-intro"      data-purpose="Product introduction"
+                title="Shops with a Product introduction log">🆕 Product intro <span class="pf-count" data-p="Product introduction">–</span></button>
+        <button class="pf-btn pf-claim"      data-purpose="Claim support"
+                title="Shops with a Claim support log">🛠 Claim <span class="pf-count" data-p="Claim support">–</span></button>
+        <button class="pf-btn pf-rebate"     data-purpose="Rebate follow-up"
+                title="Shops with a Rebate follow-up log">💸 Rebate <span class="pf-count" data-p="Rebate follow-up">–</span></button>
+        <button class="pf-btn pf-stock"      data-purpose="Stock"
+                title="Shops with a Stock log">📦 Stock <span class="pf-count" data-p="Stock">–</span></button>
+        <button class="pf-btn pf-other"      data-purpose="Other"
+                title="Shops with an Other-purpose log (or purpose missing) — click again to clear">… Other <span class="pf-count" data-p="Other">–</span></button>
+        <button type="button" id="pfShowAllBtn"
+                title="Clear the purpose filter — show every shop"
+                style="margin-left:8px;border:1.5px solid #1e3a5f;
+                       background:#1e3a5f;color:#fff;border-radius:5px;
+                       padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;">
+          ✕ Show all shops
+        </button>
+      </div>
+      <style>
+        .pf-btn{
+          font-size:12px;font-weight:600;padding:5px 12px;
+          border-radius:5px;cursor:pointer;border:1.5px solid transparent;
+          background:#fff;color:#374151;transition:all .12s;
+          display:inline-flex;align-items:center;gap:6px;
+        }
+        .pf-btn:hover{filter:brightness(.97)}
+        .pf-count{
+          font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+          background:rgba(0,0,0,.06);color:inherit;
+          padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;
+        }
+        .pf-btn.active .pf-count{background:rgba(255,255,255,.25)}
+        .pf-all          { border-color:#9ca3af; color:#374151; }
+        .pf-all.active   { background:#374151; color:#fff; border-color:#374151; }
+        .pf-promo        { border-color:#fdba74; color:#c2410c; }
+        .pf-promo.active { background:#ea580c; color:#fff; border-color:#ea580c; }
+        .pf-intro        { border-color:#86efac; color:#15803d; }
+        .pf-intro.active { background:#16a34a; color:#fff; border-color:#16a34a; }
+        .pf-claim        { border-color:#fca5a5; color:#b91c1c; }
+        .pf-claim.active { background:#dc2626; color:#fff; border-color:#dc2626; }
+        .pf-rebate       { border-color:#c4b5fd; color:#6d28d9; }
+        .pf-rebate.active{ background:#7c3aed; color:#fff; border-color:#7c3aed; }
+        .pf-stock        { border-color:#7dd3fc; color:#0369a1; }
+        .pf-stock.active { background:#0284c7; color:#fff; border-color:#0284c7; }
+        .pf-other        { border-color:#cbd5e1; color:#475569; }
+        .pf-other.active { background:#64748b; color:#fff; border-color:#64748b; }
+      </style>
+      <style>
+        .ss-btn{
+          font-size:12px;font-weight:600;padding:5px 12px;
+          border-radius:5px;cursor:pointer;border:1.5px solid transparent;
+          background:#fff;color:#374151;transition:all .12s;
+          display:inline-flex;align-items:center;gap:6px;
+        }
+        .ss-btn:hover{filter:brightness(.97)}
+        .ss-count{
+          font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+          background:rgba(0,0,0,.06);color:inherit;
+          padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;
+        }
+        .ss-btn.active .ss-count{
+          background:rgba(255,255,255,.25);
+        }
+        .ss-all          { border-color:#9ca3af; color:#374151; }
+        .ss-all.active   { background:#374151; color:#fff; border-color:#374151; }
+        .ss-logs         { border-color:#a78bfa; color:#6d28d9; }
+        .ss-logs.active  { background:#7c3aed; color:#fff; border-color:#7c3aed; }
+        .ss-visit        { border-color:#86efac; color:#15803d; }
+        .ss-visit.active { background:#16a34a; color:#fff; border-color:#16a34a; }
+        .ss-novisit      { border-color:#fca5a5; color:#b91c1c; }
+        .ss-novisit.active{background:#dc2626;color:#fff;border-color:#dc2626;}
+      </style>
+      <div id="mapLegend" style="display:none;font-size:12px;padding:4px 6px 6px;color:#444;">
+        <span style="margin-right:10px;font-weight:600;">BDE view:</span>
+        <span style="display:inline-flex;align-items:center;margin-right:10px;">
+          <span style="width:10px;height:10px;border-radius:50%;background:#16a34a;display:inline-block;margin-right:4px;"></span>own + visited
+        </span>
+        <span style="display:inline-flex;align-items:center;margin-right:10px;">
+          <span style="width:10px;height:10px;border-radius:50%;background:#dc2626;display:inline-block;margin-right:4px;opacity:.6;"></span>own + not visited
+        </span>
+        <span style="display:inline-flex;align-items:center;">
+          <span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block;margin-right:4px;"></span>visited outside territory
+        </span>
+      </div>
       <div id="salesMap"></div>
     </div>
 
@@ -169,6 +309,27 @@
       </div>
       <div class="chartPane">
         <canvas id="yearlyChart"></canvas>
+      </div>
+      <div id="bdeVisitTablePane" style="margin-top:8px;">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+          <strong style="font-size:13px;">Number of Visits by BDE (2026, business days only)</strong>
+          <div id="bdeMetricBtns" style="display:flex;gap:4px;margin-left:auto;">
+            <button class="bde-mb btn active" data-m="shops"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">Visited Shop</button>
+            <button class="bde-mb btn" data-m="visits"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">Visits</button>
+            <button class="bde-mb btn" data-m="novisit"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">No-Visit Days</button>
+            <button class="bde-mb btn" data-m="logs"
+                    style="font-size:11px;padding:2px 8px;cursor:pointer;">Logs</button>
+          </div>
+          <span id="bdeVisitTotals" style="font-size:11px;color:#666;"></span>
+        </div>
+        <table id="bdeVisitTable"
+               style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead id="bdeVisitHead"></thead>
+          <tbody><tr><td colspan="16" style="padding:6px;color:#999;">Loading…</td></tr></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -181,9 +342,265 @@
     crossorigin=""
   ></script>
 
+  <script>
+  (function () {
+    var btn = document.getElementById("filterToggleBtn");
+    var panel = document.getElementById("filterPanel");
+    if (btn && panel) {
+      btn.addEventListener("click", function () {
+        var open = panel.classList.toggle("open");
+        btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+      });
+    }
+  })();
+  </script>
+
+  <!-- ── Visit-log modal (populated on demand from /api/meeting/list) ── -->
+  <div id="visitLogBackdrop"
+       style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);
+              z-index:10000;align-items:center;justify-content:center;padding:20px;">
+    <div id="visitLogDialog"
+         style="background:#fff;border-radius:10px;max-width:680px;width:100%;
+                max-height:80vh;display:flex;flex-direction:column;overflow:hidden;
+                box-shadow:0 10px 40px rgba(0,0,0,.25);">
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;
+                  background:#1e3a5f;color:#fff;">
+        <strong id="visitLogTitle" style="flex:1;font-size:14px;">Visit logs</strong>
+        <button type="button" onclick="closeVisitLogModal()"
+                style="background:transparent;border:none;color:#fff;font-size:18px;
+                       cursor:pointer;line-height:1;padding:2px 6px;">×</button>
+      </div>
+      <div id="visitLogBody" style="overflow:auto;padding:12px 16px;background:#f8fafc;">
+        <div style="color:#9ca3af;font-size:12px;text-align:center;padding:18px;">Loading…</div>
+      </div>
+    </div>
+  </div>
+  <style>
+    /* Visit-log card layout (used by the modal) */
+    .vl-card{
+      background:#fff;border:1px solid #e5e7eb;border-radius:8px;
+      box-shadow:0 1px 2px rgba(0,0,0,.03);
+      padding:0;margin:0 0 10px;overflow:hidden;
+    }
+    .vl-head{
+      display:flex;justify-content:space-between;align-items:baseline;
+      gap:8px;padding:8px 12px;background:#eff6ff;border-bottom:1px solid #dbeafe;
+    }
+    .vl-bde{font-weight:700;color:#1e3a5f;font-size:13px}
+    .vl-date{color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums}
+    .vl-row{
+      display:flex;align-items:flex-start;gap:10px;
+      padding:7px 12px;border-bottom:1px solid #f1f5f9;
+    }
+    .vl-row:last-of-type{border-bottom:none}
+    .vl-lbl{
+      flex:0 0 86px;font-size:10px;font-weight:600;
+      text-transform:uppercase;letter-spacing:.4px;color:#6b7280;
+      padding-top:2px;
+    }
+    .vl-val{flex:1;font-size:13px;color:#111827;min-width:0}
+    .vl-notes-body{white-space:pre-wrap;line-height:1.45}
+    .vl-next .vl-val{color:#1d4ed8}
+    .vl-met .vl-val{color:#374151;font-style:italic}
+    .vl-photos .vl-val{display:flex;flex-wrap:wrap}
+    .vl-fb-wrap{padding:0 12px 10px}
+    .vl-fb-box{
+      margin-top:2px;padding:8px 10px;border-radius:6px;
+      background:#fef3c7;border-left:3px solid #f59e0b;
+      font-size:12px;color:#78350f;white-space:pre-wrap;
+    }
+    .vl-fb-box .vl-fb-head{
+      display:flex;justify-content:space-between;align-items:center;
+      font-size:10px;font-weight:700;text-transform:uppercase;
+      letter-spacing:.4px;color:#92400e;margin-bottom:3px;
+    }
+    .vl-fb-box .vl-fb-edit{color:#9a3412;text-decoration:none;font-weight:400;text-transform:none;letter-spacing:0;}
+    .vl-fb-add{
+      display:inline-block;margin-top:2px;
+      font-size:11px;color:#2563eb;text-decoration:none;
+    }
+  </style>
+  <script>
+    function _vlEsc(s){
+      return String(s == null ? "" : s)
+        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    }
+    // People directory (BDE / SM / Hayden / JJ) — preloaded once per
+    // session for the FROM picker in the feedback composer.
+    let _vlPeople = null;
+    async function _vlEnsurePeople(){
+      if (_vlPeople) return _vlPeople;
+      try {
+        const r = await fetch("/api/people", { credentials:"include" });
+        _vlPeople = await r.json();
+      } catch { _vlPeople = []; }
+      return _vlPeople;
+    }
+    function _vlPeopleOptions(){
+      return (_vlPeople || []).map(p =>
+        `<option value="${_vlEsc(p.name)}">${_vlEsc(p.name)}</option>`
+      ).join("");
+    }
+
+    function _vlRenderFeedback(rid, thread){
+      const items = (thread || []).map(t => `
+        <div style="margin-bottom:8px;">
+          <div style="font-size:10px;color:#92400e;text-transform:uppercase;
+                      letter-spacing:.4px;margin-bottom:2px;">
+            <b>${_vlEsc(t.author_name || t.author_email || "—")}</b>
+            · ${_vlEsc(t.created_at || "")}
+          </div>
+          <div class="vl-fb-box" style="margin-top:0;">
+            <div>${_vlEsc(t.text || "")}</div>
+          </div>
+        </div>`).join("");
+      return items + `
+        <a href="javascript:void(0)" class="vl-fb-add"
+           onclick="_vlOpenComposer(${rid})">+ Add feedback</a>`;
+    }
+    async function _vlOpenComposer(rid){
+      await _vlEnsurePeople();
+      const el = document.getElementById("mapFb-" + rid);
+      if (!el) return;
+      // Strip the existing "+ Add feedback" link and append the composer.
+      const above = el.innerHTML.replace(/<a [^>]*onclick="_vlOpenComposer[\s\S]*?<\/a>/, "");
+      el.innerHTML = above + `
+        <div style="margin-top:6px;padding:8px;background:#f9fafb;
+                    border:1px solid #e5e7eb;border-radius:5px;">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;">
+            <span style="font-size:10px;color:#6b7280;font-weight:600;">FROM</span>
+            <select id="vlFbWho-${rid}" style="font-size:12px;padding:3px 6px;
+                    border:1px solid #d1d5db;border-radius:4px;">
+              <option value="">— select —</option>${_vlPeopleOptions()}
+            </select>
+          </div>
+          <textarea id="vlFbInp-${rid}"
+            placeholder="Your reply…"
+            style="width:100%;min-height:54px;font-size:12px;padding:6px;
+                   border:1px solid #d1d5db;border-radius:4px;font-family:inherit;"
+          ></textarea>
+          <div style="margin-top:5px;display:flex;gap:6px;">
+            <button type="button" onclick="_vlSaveFb(${rid})"
+              style="font-size:11px;padding:3px 12px;background:#2563eb;color:#fff;
+                     border:none;border-radius:4px;cursor:pointer;">Post</button>
+            <button type="button" onclick="_vlCancelComposer(${rid})"
+              style="font-size:11px;padding:3px 10px;background:#fff;color:#374151;
+                     border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+          </div>
+        </div>`;
+    }
+    function _vlCancelComposer(rid){
+      const el = document.getElementById("mapFb-" + rid);
+      const row = (window._vlLastRows || []).find(x => x.id === rid);
+      if (el) el.innerHTML = _vlRenderFeedback(rid, row ? row.thread : []);
+    }
+    async function _vlSaveFb(rid){
+      const who = document.getElementById("vlFbWho-" + rid);
+      const inp = document.getElementById("vlFbInp-" + rid);
+      if (!who || !inp) return;
+      if (!who.value){ alert("Please pick who you are."); return; }
+      if (!inp.value.trim()){ alert("Type a comment first."); return; }
+      try {
+        const r = await fetch("/api/meeting/feedback", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          credentials:"include",
+          body: JSON.stringify({ id: rid, text: inp.value, author_name: who.value }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.error){ alert("Save failed: " + (j.error || r.status)); return; }
+        // Update cached row's thread + re-render in place.
+        const row = (window._vlLastRows || []).find(x => x.id === rid);
+        if (row) row.thread = j.thread || [];
+        const el = document.getElementById("mapFb-" + rid);
+        if (el) el.innerHTML = _vlRenderFeedback(rid, row ? row.thread : []);
+      } catch (err){ alert("Error: " + err.message); }
+    }
+    function closeVisitLogModal(){
+      const el = document.getElementById("visitLogBackdrop");
+      if (el) el.style.display = "none";
+    }
+    async function openVisitLogModal(shipTo, shipNm){
+      const back = document.getElementById("visitLogBackdrop");
+      const body = document.getElementById("visitLogBody");
+      const title = document.getElementById("visitLogTitle");
+      if (!back || !body) return;
+      title.textContent = `Visit logs — ${shipTo}${shipNm ? " · " + shipNm : ""}`;
+      body.innerHTML = '<div style="color:#9ca3af;font-size:12px;text-align:center;padding:18px;">Loading…</div>';
+      back.style.display = "flex";
+      try {
+        const qs = new URLSearchParams({ ship_to: shipTo, limit: "50" }).toString();
+        const r  = await fetch("/api/meeting/list?" + qs, {credentials:"include"});
+        const rows = await r.json();
+        if (!Array.isArray(rows) || !rows.length){
+          body.innerHTML = '<div style="color:#9ca3af;font-size:12px;text-align:center;padding:18px;">No visit logs yet for this shop.</div>';
+          return;
+        }
+        const html = rows.map(e => {
+          const photos = (e.photo_paths || [])
+            .map(p => `<a href="${_vlEsc(p)}" target="_blank">`
+                    + `<img src="${_vlEsc(p)}" style="width:60px;height:60px;`
+                    + `object-fit:cover;border-radius:4px;border:1px solid #e5e7eb;margin:0 4px 4px 0;">`
+                    + `</a>`).join("");
+          const purpRow = e.visit_purpose ? `
+            <div class="vl-row vl-purpose">
+              <span class="vl-lbl">Purpose</span>
+              <span class="vl-val"><span style="display:inline-block;font-size:11px;font-weight:600;color:#1e3a5f;background:#e0e7ff;padding:2px 8px;border-radius:10px;">${_vlEsc(e.visit_purpose)}</span></span>
+            </div>` : "";
+          const metRow  = e.met_person ? `
+            <div class="vl-row vl-met">
+              <span class="vl-lbl">Met</span>
+              <span class="vl-val">${_vlEsc(e.met_person)}</span>
+            </div>` : "";
+          const notesRow = e.notes ? `
+            <div class="vl-row vl-notes">
+              <span class="vl-lbl">Meeting notes</span>
+              <div class="vl-val vl-notes-body">${_vlEsc(e.notes)}</div>
+            </div>` : "";
+          const nextRow = e.next_action ? `
+            <div class="vl-row vl-next">
+              <span class="vl-lbl">Next step</span>
+              <span class="vl-val">→ ${_vlEsc(e.next_action)}</span>
+            </div>` : "";
+          const photosRow = photos ? `
+            <div class="vl-row vl-photos">
+              <span class="vl-lbl">Photos</span>
+              <div class="vl-val">${photos}</div>
+            </div>` : "";
+          return `<div class="vl-card">
+            <div class="vl-head">
+              <span class="vl-bde">${_vlEsc(e.bde_name || "—")}</span>
+              <span class="vl-date">${_vlEsc(e.visit_date || e.created_at)}</span>
+            </div>
+            ${purpRow}
+            ${metRow}
+            ${notesRow}
+            ${nextRow}
+            ${photosRow}
+            <div id="mapFb-${e.id}" class="vl-fb-wrap">${_vlRenderFeedback(e.id, e.thread || [])}</div>
+          </div>`;
+        }).join("");
+        body.innerHTML = html;
+        // Stash payload so a Cancel inside the editor can restore the
+        // original value without a full refetch.
+        window._vlLastRows = rows;
+      } catch (err){
+        body.innerHTML = `<div style="color:#dc2626;font-size:12px;padding:18px;">Error: ${_vlEsc(err.message)}</div>`;
+      }
+    }
+    // Click backdrop (outside dialog) to close
+    document.getElementById("visitLogBackdrop").addEventListener("click", (e) => {
+      if (e.target.id === "visitLogBackdrop") closeVisitLogModal();
+    });
+    // Esc key to close
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closeVisitLogModal();
+    });
+  </script>
+
   <!-- shared dashboard logic -->
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=20260605a" defer></script>
   <!-- small map-specific layer that reuses app.js -->
-  <script src="/static/map.js" defer></script>
+  <script src="/static/map.js?v=20260520" defer></script>
 </body>
 </html>

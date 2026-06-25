@@ -47,10 +47,10 @@ const REGION_STACK_ORDER = ["NSW", "QLD", "VIC", "SA", "WA", "COMMON"];
 /* -------------------------- state & helpers -------------------------- */
 const COLORS=["#374388ff","#90359cff","#3e9150ff","#93b14dff","#d6c635ff","#95E4E5","#275ccfff","#175d96ff","#366592ff","#667c91ff","#FF968A","#FFAEA6"];
 const REGION_SALESMEN={
-  NSW:["LUTTRELL STEVE","Borghese Alessio","NSW SM"],
-  QLD:["Maclure Adam","Spires Steven","Sampson Kieren","Marsh Aaron"],
+  NSW:["Makris George","Borghese Alessio","Buckley Paul"],
+  QLD:["Maclure Adam","Spires Steven","Bovey Craig","Marsh Aaron"],
   VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
-  WA:["DAIS Jim","WA SM"]
+  WA:["DAIS Jim","Asim Qureshi"]
 };
 const fmt = (n) => (+n || 0).toLocaleString();
 
@@ -94,6 +94,7 @@ const mapFilters = {
   top_limit: 0   
 };
 
+let dailyViewMode = "abs";   // "abs" | "pct"
 let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetInst,
     stackedDailyInst,stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst, stackedYearlyInst, stackedYearlyPctInst,
     stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst,
@@ -101,34 +102,70 @@ let dailyInst,dailyCumInst,monthlyInst,monthlyCumInst,yearlyInst,monthlyTargetIn
     stackedMonthlyTargetInst, stackedMonthlyTargetCumInst, stackedMonthlyTargetPctInst, stackedMonthlyTargetCumPctInst;
 
 const $=s=>document.querySelector(s);
-function showError(msg){
-  const el = document.getElementById('errbar');
-  if (!el) return;
-  el.textContent = msg;
-  el.hidden = false;
-}
-const fetchJSON = async (u) => {
-  try {
-    const r = await fetch(u, {credentials:'same-origin'});
-    if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return await r.json();
-  } catch (e) {
-    console.error('Fetch fail:', u, e);
-    showError(`Failed: ${u} — ${e.message}`);
-    return [];
+function showError(msg){ /* silenced — errors logged to console only */ }
+
+async function _doFetch(u) {
+  const r = await fetch(u, {credentials:'same-origin'});
+  if (r.ok) return r.json();
+  // Retry once on 5xx (transient server/proxy errors)
+  if (r.status >= 500) {
+    await new Promise(res => setTimeout(res, 800));
+    const r2 = await fetch(u, {credentials:'same-origin'});
+    if (r2.ok) return r2.json();
   }
+  throw new Error(`${r.status} ${r.statusText}`);
+}
+// ── Client-side cache + in-flight dedup ─────────────────────────────────
+// Two layers on top of _doFetch:
+//   (1) Response cache: keyed by URL, 5 min TTL. Toggling between filters
+//       you've used recently is instant — no network round-trip at all.
+//   (2) In-flight map: while a URL is in flight, additional callers for
+//       the same URL await the same promise so the server runs one SQL.
+// Cache busted automatically when entries expire; not invalidated by
+// filter changes (filter is encoded in URL, so each filter combination
+// has its own key).
+const _FETCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const _FETCH_CACHE_MAX    = 500;          // bounded so memory doesn't grow forever
+const _fetchCache    = new Map();         // url → { ts, value }
+const _fetchInFlight = new Map();         // url → Promise
+
+function _fetchCachePut(url, value) {
+  // simple LRU-ish: drop oldest insertion when over cap
+  if (_fetchCache.size >= _FETCH_CACHE_MAX) {
+    const firstKey = _fetchCache.keys().next().value;
+    if (firstKey !== undefined) _fetchCache.delete(firstKey);
+  }
+  _fetchCache.set(url, { ts: Date.now(), value });
+}
+function _fetchCacheGet(url) {
+  const hit = _fetchCache.get(url);
+  if (!hit) return undefined;
+  if (Date.now() - hit.ts > _FETCH_CACHE_TTL_MS) {
+    _fetchCache.delete(url);
+    return undefined;
+  }
+  return hit.value;
+}
+
+async function _cachedFetch(u) {
+  const cached = _fetchCacheGet(u);
+  if (cached !== undefined) return cached;
+  const pending = _fetchInFlight.get(u);
+  if (pending) return pending;          // dedup concurrent identical fetches
+  const p = _doFetch(u)
+    .then(v => { _fetchCachePut(u, v); return v; })
+    .finally(() => { _fetchInFlight.delete(u); });
+  _fetchInFlight.set(u, p);
+  return p;
+}
+
+const fetchJSON = async (u) => {
+  try { return await _cachedFetch(u); }
+  catch (e) { console.error('Fetch fail:', u, e.message); return []; }
 };
 const fetchJSON_DIRECT = async (u) => {
-  // Bypass any v2 shim/caching (used for KPI table accuracy)
-  try {
-    const r = await fetch(u, {credentials:'same-origin'});
-    if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-    return await r.json();
-  } catch (e) {
-    console.error('Fetch fail (DIRECT):', u, e);
-    showError(`Failed: ${u} — ${e.message}`);
-    return [];
-  }
+  try { return await _cachedFetch(u); }
+  catch (e) { console.error('Fetch fail (DIRECT):', u, e.message); return []; }
 };
 
 const setActive = (wrap, attr, val) => {
@@ -142,6 +179,17 @@ function makeStacked(id,labels,datasets,title,max){ return new Chart(document.ge
 const monthsLabels=()=>["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const daysLabels=()=>[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
 const yearsLabels=()=>[2021,2022,2023,2024,2025];
+// 이달 첫 번째 비즈니스 데이(월~금) 당일 또는 그 이전이면 전달을 반환 (1-based)
+function effectiveMonth(){
+  const now=new Date();
+  const yr=now.getFullYear(), mo=now.getMonth(); // mo: 0-based
+  const today=new Date(yr,mo,now.getDate()); // 시간 제거, 날짜만
+  let firstBD=new Date(yr,mo,1);
+  while(firstBD.getDay()===0||firstBD.getDay()===6) firstBD.setDate(firstBD.getDate()+1);
+  if(today<=firstBD) return mo===0?12:mo; // mo===0 → prev=December(12), else mo (0-based prev = 1-based current-1)
+  return mo+1; // current month 1-based
+}
+function effectiveMonthIdx(){ return effectiveMonth()-1; } // 0-based
 function toCumulative(arr){const out=[];let run=0;for(const v of arr){run+=(+v||0);out.push(run);}return out;}
 function cumPerGroup(map){ const out={}; for(const k in map){out[k]=toCumulative(map[k]);} return out;}
 
@@ -298,7 +346,20 @@ function getCommonOptions(stacked=false, yMax, yTitle){
   return {
     responsive:true,
     plugins:{
-      legend:{position:"right"},
+      legend:{
+        position:"right",
+        align:"start",
+        labels:{
+          boxWidth: 12,
+          boxHeight: 12,
+          padding: 6,
+          font: { size: 11 },
+        },
+        // Reserve enough width for the longest label ("Cumulative Target",
+        // "Sales Amount (2025)", etc.) so right-positioned legends don't
+        // truncate at narrow widths.
+        maxWidth: 140,
+      },
       tooltip:{
         callbacks:{
           title: function(items){
@@ -308,6 +369,7 @@ function getCommonOptions(stacked=false, yMax, yTitle){
         }
       }
     },
+    layout: { padding: { right: 4 } },
     scales:{
       x: xAxisDdMm(stacked),
       y:{ beginAtZero:true, max: yMax ?? undefined, title:{ display: !!yTitle, text: yTitle } }
@@ -353,34 +415,61 @@ document.getElementById('metricBtns').addEventListener("click",e=>{
   if (ct) ct.textContent = filters.metric==="amount"?"Cumulative Amount":"Cumulative Sales";
   refreshAllDebounced();
 });
+document.getElementById('dailyViewBtns')?.addEventListener("click", e => {
+  if (!e.target.classList.contains("btn")) return;
+  dailyViewMode = e.target.dataset.dview;
+  [...document.querySelectorAll("#dailyViewBtns .btn")].forEach(b =>
+    b.classList.toggle("active", b.dataset.dview === dailyViewMode)
+  );
+  drawDailyTotals();
+});
 document.getElementById('group_by').addEventListener("change",()=>{
   filters.group_by=document.getElementById('group_by').value;
   refreshAllDebounced();
 });
-document.getElementById('regionBtns').addEventListener("click",e=>{
+document.getElementById('regionBtns').addEventListener("click", async (e) => {
   if(!e.target.classList.contains("btn"))return;
   filters.region=e.target.dataset.val; setActive(document.getElementById('regionBtns'),"val",filters.region);
   const all=Object.values(REGION_SALESMEN).flat();
   const list=filters.region==="ALL"?all:(REGION_SALESMEN[filters.region]||[]);
   populateSelect(document.getElementById('salesman_name'),[...new Set(list)].sort());
-  filters.salesman = 'ALL';
-  document.getElementById('salesman_name').value = 'ALL';
+  // Honour a locked salesman (BDE role) — don't let a region click
+  // reset the dropdown to "ALL" and leak data outside their scope.
+  const lockedSalesman = window._me && window._me.lock_salesman;
+  if (lockedSalesman) {
+    const sel = document.getElementById('salesman_name');
+    if (sel && ![...sel.options].some(o => o.value === lockedSalesman)) {
+      sel.add(new Option(lockedSalesman, lockedSalesman));
+    }
+    filters.salesman = lockedSalesman;
+    if (sel) { sel.value = lockedSalesman; sel.disabled = true; }
+  } else {
+    filters.salesman = 'ALL';
+    document.getElementById('salesman_name').value = 'ALL';
+  }
+  // Region change must also refetch the Sold-to / Ship-to option lists so
+  // that Top-N (and the dropdown contents) reflect the new region slice.
+  await refreshSoldToCustom();
+  await refreshShipToCustom();
   refreshAllDebounced();
 });
 
 document.getElementById('salesman_name').addEventListener('change', (e)=>{
   filters.salesman = e.target.value || 'ALL';
+  e.target.classList.toggle('sel-active', e.target.value !== 'ALL');
   refreshAllDebounced();
 });
 
 document.getElementById('sold_to_group').addEventListener('change', async ()=>{
-  filters.sold_to_group = document.getElementById('sold_to_group').value || 'ALL';
+  const el = document.getElementById('sold_to_group');
+  filters.sold_to_group = el.value || 'ALL';
+  el.classList.toggle('sel-active', el.value !== 'ALL');
 
   // reset dependent filters
   const soldEl = document.getElementById('sold_to');
   const shipEl = document.getElementById('ship_to');
-  if (soldEl) soldEl.value = "";
-  if (shipEl) shipEl.value = "";
+  if (soldEl) { soldEl.value = ""; ddUpdateActive(soldEl); }
+  if (shipEl) { shipEl.value = ""; ddUpdateActive(shipEl); }
   filters.sold_to = "ALL";
   filters.ship_to = "ALL";
 
@@ -408,24 +497,7 @@ document.getElementById('sold_to_group').addEventListener('change', async ()=>{
 
 // PRODUCT GROUP -> existing code… plus refresh patterns
 
-document.getElementById('product_group').addEventListener('change', async ()=>{
-  filters.product_group = document.getElementById('product_group').value || 'ALL';
-
-  // reset dependent filters
-  const patEl = document.getElementById('pattern');
-  const matEl = document.getElementById('material');
-  if (patEl) patEl.value = "";
-  if (matEl) matEl.value = "";
-  filters.pattern = "ALL";
-  filters.material = "ALL";
-
-  await refreshPatternsCustom();
-  await refreshMaterialsCustom();
-  await refreshSoldToCustom();
-  await refreshShipToCustom();
-
-  refreshAllDebounced();
-});
+// product_group handled via bindDropdown (see window load listener below)
 
 
 
@@ -477,6 +549,56 @@ function cutoffIdxFromBreakdown(rows, N){
   return cutoffIdx;
 }
 
+// Compute working-days info from total company daily breakdown rows.
+// A "working day" is any calendar day where total company sales >= 10.
+// Future days (beyond the last data day) are estimated at 5/7 ratio.
+function computeWorkingDaysInfo(cutRows) {
+  const today = new Date();
+  const year  = today.getFullYear();
+  const effMo = effectiveMonthIdx(); // 0-based, 전달 보정 적용
+  const calendarDays = new Date(year, effMo + 1, 0).getDate();
+
+  // Sum values per day across all group labels
+  const totalPerDay = {};
+  for (const r of (cutRows || [])) {
+    const d = parseInt(r.day, 10);
+    if (d >= 1 && d <= 31) totalPerDay[d] = (totalPerDay[d] || 0) + (+r.value || 0);
+  }
+
+  const maxDay = Object.keys(totalPerDay).length > 0
+    ? Math.max(...Object.keys(totalPerDay).map(Number)) : 0;
+
+  // Build per-day (0-based index) working day flag
+  const isWorkingDay = new Array(31).fill(false);
+  let workingDaysElapsed = 0;
+  let lastWorkingDay = 0; // 1-based
+
+  // Past days: working if total company sales >= 10
+  for (let d = 1; d <= maxDay; d++) {
+    if ((totalPerDay[d] || 0) >= 10) {
+      isWorkingDay[d - 1] = true;
+      workingDaysElapsed++;
+      lastWorkingDay = d;
+    }
+  }
+
+  // Future days (beyond last data day): working if Mon–Fri
+  // JS getDay(): 0=Sun, 1=Mon, …, 5=Fri, 6=Sat
+  let futureWorkingDays = 0;
+  for (let d = maxDay + 1; d <= calendarDays; d++) {
+    const dow = new Date(year, effMo, d).getDay();
+    if (dow >= 1 && dow <= 5) {
+      isWorkingDay[d - 1] = true;
+      futureWorkingDays++;
+    }
+  }
+
+  const lastWorkingDayIdx = lastWorkingDay > 0 ? lastWorkingDay - 1 : -1; // 0-based index
+  const totalWorkingDays = workingDaysElapsed + futureWorkingDays;
+
+  return { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays, calendarDays, isWorkingDay };
+}
+
 
 
 
@@ -521,24 +643,33 @@ async function fetchDailyBreakdownWithGroup(groupBy){
 
 // totals (bar + cumulative), same shape as drawDailyTotals (no target for daily)
 async function drawDailyTotals(){
-  const [salesRows, targetRows, cutRows] = await Promise.all([
+  const [salesRows, targetRows, cutRows, wdRows, monthlyTargetRows] = await Promise.all([
     fetchDailySales(),
     fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      top_limit:filters.top_limit||0, month: effectiveMonth()
     }).toString()}`),
-    // Use breakdown as the cutoff source (same reason stacked stops correctly)
-    fetchDailyBreakdownWithGroup("region")
+    fetchDailyBreakdownWithGroup("region"),
+    fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
+      metric:filters.metric, category:filters.category, region:"ALL", salesman:"ALL",
+      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      group_by:"region", top_limit:filters.top_limit||0
+    }).toString()}`),
+    fetchJSON_DIRECT(`/api/monthly_target?${new URLSearchParams({
+      metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
+      sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      top_limit:filters.top_limit||0, year:2026
+    }).toString()}`)
   ]);
 
   const labels = daysLabels();
   const N = labels.length;
 
-  // cutoffIdx from breakdown: max day present (1-based) -> 0-based index
   let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-  // If breakdown is empty for some reason, fallback to last non-zero in salesRows
-  // (still simple; avoids "31 rows with future zeros" problem)
   if (cutoffIdx < 0){
     const tmp = salesRows.map(r => (+r.value || 0));
     for (let i = 0; i < Math.min(tmp.length, N); i++){
@@ -547,104 +678,212 @@ async function drawDailyTotals(){
     if (cutoffIdx < 0) cutoffIdx = Math.min(salesRows.length, N) - 1;
   }
 
-  // Sales: fill up to cutoffIdx, then null
   const sales = new Array(N).fill(null);
-  for (let i = 0; i <= cutoffIdx; i++){
-    sales[i] = (+salesRows[i]?.value || 0);
-  }
+  for (let i = 0; i <= cutoffIdx; i++) sales[i] = (+salesRows[i]?.value || 0);
 
-  // Targets: if you want the chart to visually stop, also null after cutoff
   const targets = new Array(N).fill(null);
-  for (let i = 0; i <= cutoffIdx; i++){
-    targets[i] = (+targetRows[i]?.value || 0);
-  }
+  for (let i = 0; i <= cutoffIdx; i++) targets[i] = (+targetRows[i]?.value || 0);
 
-  // Cumulative: stop at cutoffIdx
-  const salesCum  = new Array(N).fill(null);
+  // Working day info from company-wide data (same basis as the table's "This Month")
+  const workingInfo = computeWorkingDaysInfo(wdRows);
+  const { isWorkingDay, totalWorkingDays } = workingInfo;
+
+  const salesCum = new Array(N).fill(null);
   const targetCum = new Array(N).fill(null);
-
   let sRun = 0, tRun = 0;
   for (let i = 0; i <= cutoffIdx; i++){
-    sRun += (+sales[i] || 0);
-    tRun += (+targets[i] || 0);
-    salesCum[i]  = sRun;
-    targetCum[i] = tRun;
+    sRun += (+sales[i] || 0); tRun += (+targets[i] || 0);
+    salesCum[i] = sRun; targetCum[i] = tRun;
   }
 
-  // Achievement: stop at cutoffIdx
+  // fullMonthTarget = monthly target for current month (same source as table's "This Month")
+  const currentMonthIdx = effectiveMonthIdx();
+  const fullMonthTarget = +((monthlyTargetRows || [])[currentMonthIdx]?.value) || 0;
+
+  // Cumulative working days elapsed up to each day index (0-based)
+  const workingDaysCum = new Array(N).fill(0);
+  let wdCum = 0;
+  for (let i = 0; i < N; i++) {
+    if (isWorkingDay[i]) wdCum++;
+    workingDaysCum[i] = wdCum;
+  }
+
   const achievement    = new Array(N).fill(null);
   const cumAchievement = new Array(N).fill(null);
-
   for (let i = 0; i <= cutoffIdx; i++){
-    const s  = (+sales[i] || 0);
-    const t  = (+targets[i] || 0);
-    const sc = (+salesCum[i] || 0);
-    const tc = (+targetCum[i] || 0);
-
-    if (t  > 0) achievement[i]    = +((s  / t ) * 100).toFixed(1);
-    if (tc > 0) cumAchievement[i] = +((sc / tc) * 100).toFixed(1);
+    const s = +sales[i]||0, t = +targets[i]||0;
+    const sc = +salesCum[i]||0;
+    if (t > 0) achievement[i] = +((s / t) * 100).toFixed(1);
+    // Prorated cumulative Ach% — same logic as table's "This Month"
+    const proratedTarget = totalWorkingDays > 0
+      ? fullMonthTarget * workingDaysCum[i] / totalWorkingDays
+      : (+targetCum[i] || 0);
+    if (proratedTarget > 0) cumAchievement[i] = +((sc / proratedTarget) * 100).toFixed(1);
   }
+
+  // Non-working days: keep date label but null out bars
+  for (let i = 0; i < N; i++) {
+    if (!isWorkingDay[i]) {
+      sales[i]    = null;
+      targets[i]  = null;
+      salesCum[i] = null;
+      targetCum[i]= null;
+    }
+  }
+
+  // Use all N day labels (non-working day dates remain on x-axis, bars are null)
+  const fL  = labels.slice(0, N);
+  const fS  = sales.slice(0, N);
+  const fT  = targets.slice(0, N);
+  const fSC = salesCum.slice(0, N);
+  const fTC = targetCum.slice(0, N);
+  const fA  = achievement.slice(0, N);
+  const fCA = cumAchievement.slice(0, N);
 
   [dailyInst, dailyCumInst].forEach(c => c && c.destroy());
 
-  dailyInst = new Chart(document.getElementById("dailyChart"), {
-    type: "bar",
-    data: { labels, datasets: [
-      { label: "Ach(%)", type: "line", data: achievement, yAxisID: "y1",
-        borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
-        datalabels: {
-          display: (ctx) => {
-            const i = ctx.dataIndex;
-            return (i % 2 === 0) && (sales[i] !== null) && (sales[i] > 0);
-          },
-          align: "top", anchor: "end",
-          formatter: v => v == null ? "" : v.toFixed(1) + "%"
-        }
-      },
-      { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
-        type: "bar", data: sales, backgroundColor: "#ABDEE6",
-        categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
-      },
-      { label: "Target", type: "bar", data: targets,
-        borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
-      }
-    ]},
-    options: getCommonOptions(false)
-  });
+  if (dailyViewMode === "pct") {
+    // ── Ach% mode: bars = daily achievement%, line = cumulative ach% ──────────
+    const achClr = fA.map(v => v == null ? "rgba(0,0,0,0)" : (v >= 100 ? "#86efac" : "#fca5a5"));
+    const ref100 = fL.map(() => 100);
 
-  dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
-    type: "bar",
-    data: { labels, datasets: [
-      { label: "Ach(%)", type: "line", data: cumAchievement, yAxisID: "y1",
-        borderWidth: 2, pointRadius: 0, borderColor: "#ef4444",
-        datalabels: {
-          display: (ctx) => {
-            const i = ctx.dataIndex;
-            return (i % 2 === 0) && (sales[i] !== null) && (sales[i] > 0);
-          },
-          align: "top", anchor: "end",
-          formatter: v => v == null ? "" : v.toFixed(1) + "%"
+    dailyInst = new Chart(document.getElementById("dailyChart"), {
+      type: "bar",
+      data: { labels: fL, datasets: [
+        { label: "Daily Ach(%)", data: fA, backgroundColor: achClr,
+          categoryPercentage: 0.8, barPercentage: 0.9,
+          datalabels: {
+            display: ctx => fA[ctx.dataIndex] != null && (fS[ctx.dataIndex]||0) > 0,
+            formatter: v => v == null ? "" : v.toFixed(1)+"%",
+            align: "center", anchor: "center", font: { size: 9, weight: "bold" }, color: "#1f2937"
+          }
+        },
+        { label: "100%", type: "line", data: ref100,
+          borderColor: "#6b7280", borderWidth: 1.5, borderDash: [5,3],
+          pointRadius: 0, fill: false, datalabels: { display: false }
         }
-      },
-      { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
-        type: "bar", data: salesCum, backgroundColor: "#ABDEE6",
-        categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
-      },
-      { label: "Cumulative Target", type: "bar", data: targetCum,
-        borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+      ]},
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "right", align: "start",
+                    labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                    maxWidth: 140 },
+          tooltip: { callbacks: { label: c => (c.parsed.y?.toFixed(1) ?? "—") + "%" } }
+        },
+        scales: {
+          x: xAxisDdMm(false),
+          y: { beginAtZero: true,
+               title: { display: true, text: "Achievement %" },
+               ticks: { callback: v => v + "%" } }
+        }
       }
-    ]},
-    options: getCommonOptions(false)
-  });
+    });
+
+    dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
+      type: "line",
+      data: { labels: fL, datasets: [
+        { label: "Cum Ach(%)", data: fCA,
+          borderColor: "#3b82f6", borderWidth: 2.5,
+          backgroundColor: "rgba(59,130,246,0.08)", fill: true,
+          pointRadius: 3, pointBackgroundColor: fCA.map(v => v==null?"transparent":(v>=100?"#22c55e":"#ef4444")),
+          tension: 0.3,
+          datalabels: {
+            display: ctx => ctx.dataIndex % 2 === 0 && fCA[ctx.dataIndex] != null,
+            formatter: v => v?.toFixed(1)+"%",
+            align: "top", anchor: "end", font: { size: 9 }, color: "#1e40af"
+          }
+        },
+        { label: "100%", data: ref100,
+          borderColor: "#6b7280", borderWidth: 1.5, borderDash: [5,3],
+          pointRadius: 0, fill: false, datalabels: { display: false }
+        }
+      ]},
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "right", align: "start",
+                    labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                    maxWidth: 140 },
+          tooltip: { callbacks: { label: c => (c.parsed.y?.toFixed(1) ?? "—") + "%" } }
+        },
+        scales: {
+          x: xAxisDdMm(false),
+          y: { beginAtZero: true,
+               title: { display: true, text: "Cumulative Ach%" },
+               ticks: { callback: v => v + "%" } }
+        }
+      }
+    });
+
+  } else {
+    // ── Abs mode ──────────────────────────────────────────────────────────────
+    // Daily: bars only (no Ach% line)
+    dailyInst = new Chart(document.getElementById("dailyChart"), {
+      type: "bar",
+      data: { labels: fL, datasets: [
+        { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
+          type: "bar", data: fS, backgroundColor: "#ABDEE6",
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+        },
+        { label: "Target", type: "bar", data: fT,
+          borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+        }
+      ]},
+      options: getCommonOptions(false)
+    });
+
+    // Cumulative: bars on left (y), Ach% line on right (y1) with 60-130 range + 100% ref
+    const ref100 = fL.map(() => 100);
+    dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
+      type: "bar",
+      data: { labels: fL, datasets: [
+        { label: "Ach(%)", type: "line", data: fCA, yAxisID: "y1",
+          borderWidth: 2.5, pointRadius: 0, borderColor: "#ef4444", tension: 0.3,
+          datalabels: {
+            display: ctx => { const i=ctx.dataIndex; return (i%2===0) && fCA[i]!=null; },
+            align: "top", anchor: "end",
+            formatter: v => v == null ? "" : v.toFixed(1)+"%"
+          }
+        },
+        { label: "100%", type: "line", data: ref100, yAxisID: "y1",
+          borderColor: "#9ca3af", borderWidth: 1.5, borderDash: [5,3],
+          pointRadius: 0, fill: false, datalabels: { display: false }
+        },
+        { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
+          type: "bar", data: fSC, backgroundColor: "#ABDEE6",
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+        },
+        { label: "Cumulative Target", type: "bar", data: fTC,
+          borderWidth: 2, borderColor: "#ABDEE6", datalabels: { display: false }
+        }
+      ]},
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { position: "right", align: "start",
+                    labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
+                    maxWidth: 140 },
+          tooltip: { callbacks: { title: items => items[0]?.label } }
+        },
+        scales: {
+          x: xAxisDdMm(false),
+          y:  { beginAtZero: true },
+          y1: { position: "right", min: 60, max: 130,
+                ticks: { callback: v => v + "%" },
+                grid: { drawOnChartArea: false } }
+        }
+      }
+    });
+  }
 }
 
 
 function buildDailyStacks(rows){
   const labels = daysLabels();
 
-  // ignore null / empty groups
   let groups = [...new Set(
-    rows.map(r => r.group_label).filter(g => g != null && g !== "")
+    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
   )];
 
   // force region stack order NSW, QLD, VIC, SA, WA, COMMON
@@ -675,8 +914,7 @@ function buildDailyStacks(rows){
 
   // Fill values
   rows.forEach(r => {
-    const g = r.group_label;
-    if (g == null || g === "") return;
+    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
     const d = parseInt(r.day, 10);
     if (d >= 1 && d <= N && (d - 1) <= lastActualIdx) {
       byGroup[g][d - 1] += (+r.value || 0);
@@ -727,38 +965,39 @@ async function drawDailyStacked(){
     if (!rows || !rows.length){
 
     const totals = await fetchDailySales();
-    const labels = daysLabels();
+    let allLabels = daysLabels();
 
     // Build sales aligned to labels; future days = null, 0 is valid
-    const data = new Array(labels.length).fill(null);
-    for (let i = 0; i < Math.min(totals.length, labels.length); i++){
-      data[i] = (+totals[i].value || 0);
+    const allData = new Array(allLabels.length).fill(null);
+    for (let i = 0; i < Math.min(totals.length, allLabels.length); i++){
+      allData[i] = (+totals[i].value || 0);
     }
 
     // Find last actual index (0 is valid; only null means future)
     let lastActualIdx = -1;
-    for (let i = 0; i < data.length; i++){
-      if (data[i] !== null) lastActualIdx = i;
+    for (let i = 0; i < allData.length; i++){
+      if (allData[i] !== null) lastActualIdx = i;
     }
 
-    // Cumulative data: stop drawing after lastActualIdx
-    const cum = new Array(labels.length).fill(null);
+    // Truncate to last actual day only
+    const cutLen = lastActualIdx + 1;
+    const labels = allLabels.slice(0, cutLen);
+    const data   = allData.slice(0, cutLen);
+
+    // Cumulative
+    const cum = [];
     let run = 0;
-    for (let i = 0; i < labels.length; i++){
-      if (i <= lastActualIdx){
-        run += (+data[i] || 0);
-        cum[i] = run;
-      } else {
-        cum[i] = null;
-      }
+    for (let i = 0; i < cutLen; i++){
+      run += (+data[i] || 0);
+      cum.push(run);
     }
+
+    const pct100 = labels.map(() => 100);
 
     stackedDailyInst = makeStacked("stackedDailyChart", labels, [
       { label:"Total", data, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Daily");
 
-    // Percent: only up to lastActualIdx, then null
-    const pct100 = labels.map((_,i)=> (i <= lastActualIdx ? 100 : null));
     stackedDailyPctInst = makeStacked("stackedDailyPercentChart", labels, [
       { label:"Total %", data: pct100, backgroundColor:"#a78bfa", stack:"S", categoryPercentage:0.9, barPercentage:0.9 }
     ], "Daily %", 100);
@@ -778,14 +1017,13 @@ async function drawDailyStacked(){
   // Build stacks
    let { labels, groups, byGroup, datasets, lastActualIdx } = buildDailyStacks(rows);
 
-  const byGroupCum   = cumPerGroup(byGroup);
+  // Truncate to last actual day — don't show future empty bars on x-axis
+  const cutLen = lastActualIdx + 1;
+  labels   = labels.slice(0, cutLen);
+  datasets = datasets.map(ds => ({ ...ds, data: ds.data.slice(0, cutLen) }));
+  groups.forEach(g => { byGroup[g] = byGroup[g].slice(0, cutLen); });
 
-  // After lastActualIdx, force cumulative stacks to null so they don't draw
-  groups.forEach(g => {
-    for (let i = lastActualIdx + 1; i < labels.length; i++){
-      byGroupCum[g][i] = null;
-    }
-  });
+  const byGroupCum   = cumPerGroup(byGroup);
 
   const datasetsCum  = groups.map((g,i)=>({
     label:g, data:byGroupCum[g],
@@ -870,6 +1108,53 @@ function kpiByQuarter(sales, targets){
 }
 
 
+// Q1 KPI with working-days proration for the current (partial) month.
+// Completed months use monthly actual/target directly.
+// Current month: actual = sum of daily sales up to lastWorkingDayIdx;
+//                target = fullMonthTarget * workingDaysElapsed / totalWorkingDays.
+function kpiByQuarterProrated(monthlySales, monthlyTargets, dailySales, workingInfo) {
+  const { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays } = workingInfo;
+  const currentMonthIdx = new Date().getMonth(); // 0-based
+  const currentQ = Math.floor(currentMonthIdx / 3);
+
+  const qActual = [0, 0, 0, 0];
+  const qTarget = [0, 0, 0, 0];
+
+  for (let m = 0; m <= currentMonthIdx && m < 12; m++) {
+    const q = Math.floor(m / 3);
+    if (m < currentMonthIdx) {
+      qActual[q] += (+monthlySales[m] || 0);
+      qTarget[q] += (+monthlyTargets[m] || 0);
+    } else {
+      // Current month: use daily actuals up to last working day
+      let curActual = 0;
+      for (let i = 0; i <= lastWorkingDayIdx && i < dailySales.length; i++)
+        curActual += (+dailySales[i] || 0);
+      qActual[q] += curActual;
+      const fullTarget = +monthlyTargets[m] || 0;
+      qTarget[q] += totalWorkingDays > 0 ? fullTarget * workingDaysElapsed / totalWorkingDays : 0;
+    }
+  }
+
+  return qTarget.map((tv, i) => i > currentQ ? null : tv > 0 ? +(qActual[i] / tv * 100).toFixed(1) : null);
+}
+
+// "This Month" KPI on a working-days basis.
+// actual = sum of daily sales up to lastWorkingDayIdx
+// target = fullMonthTarget * workingDaysElapsed / totalWorkingDays
+function dailyKPIWorkingDays(dailySales, fullMonthTarget, workingInfo) {
+  const { lastWorkingDayIdx, workingDaysElapsed, totalWorkingDays } = workingInfo;
+  if (lastWorkingDayIdx < 0 || workingDaysElapsed <= 0 || totalWorkingDays <= 0) return null;
+
+  let actual = 0;
+  for (let i = 0; i <= lastWorkingDayIdx && i < dailySales.length; i++)
+    actual += (+dailySales[i] || 0);
+
+  const proratedTarget = fullMonthTarget * workingDaysElapsed / totalWorkingDays;
+  if (proratedTarget <= 0) return null;
+  return +(actual / proratedTarget * 100).toFixed(1);
+}
+
 // Daily KPI = cumulative achievement (%) up to the last date where Actual exists
 // - 0 is considered a valid actual (e.g., weekends)
 // - null / undefined / "" means "no data yet" (future date) and should be excluded
@@ -912,124 +1197,114 @@ async function fetchMonthlyKPITarget(region,BDE, year=2026){
 
 // build & render table
 async function drawMonthlyKPI(){
+  const currentMonthIdx = effectiveMonthIdx(); // 0-based, 전달 보정 적용
+  const REGIONS = ["NSW","QLD","VIC","WA"];
+
+  // Three bulk-breakdown calls (group_by=salesman) replace the 60+
+  // per-(region, BDE) calls the old loop made.  Region totals are
+  // computed client-side by summing the salesmen that belong to that
+  // region (REGION_SALESMEN), and All/All by summing every salesman.
+  const bulkParams = (extra={}) => new URLSearchParams({
+    metric: filters.metric, category: filters.category,
+    region: "ALL", salesman: "ALL",
+    sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
+    product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
+    top_limit: filters.top_limit || 0,
+    ...extra,
+  }).toString();
+
+  const [
+    dailyBreakdownRows,
+    monthlySalesRows,
+    monthlyTargetRows,
+  ] = await Promise.all([
+    fetchJSON(`/api/daily_breakdown?${bulkParams({group_by: "salesman"})}`),
+    fetchJSON(`/api/monthly_breakdown?${bulkParams({group_by: "salesman", year: 2026})}`),
+    fetchJSON(`/api/monthly_target_breakdown?${bulkParams({group_by: "salesman", year: 2026})}`),
+  ]);
+
+  // Build {group_label → fixed-length numeric array} lookups.
+  // Keys are normalised (UPPER + trim) so DB casing variations
+  // (e.g. "BUCKLEY Paul" vs "Buckley Paul") don't break lookups.
+  const norm = (s) => (s == null ? "" : String(s)).trim().toUpperCase();
+
+  function buildMonthlyByGroup(rows) {
+    const out = {};
+    for (const r of (rows || [])) {
+      const g = norm(r.group_label) || "COMMON";
+      const m = (+r.month) - 1;
+      if (m < 0 || m > 11) continue;
+      if (!out[g]) out[g] = new Array(12).fill(0);
+      out[g][m] = +r.value || 0;
+    }
+    return out;
+  }
+  function buildDailyByGroup(rows) {
+    const out = {};
+    for (const r of (rows || [])) {
+      const g = norm(r.group_label) || "COMMON";
+      const d = (+r.day) - 1;
+      if (d < 0 || d > 30) continue;
+      if (!out[g]) out[g] = new Array(31).fill(0);
+      out[g][d] = +r.value || 0;
+    }
+    return out;
+  }
+  function sumArrays(arrs, len) {
+    const out = new Array(len).fill(0);
+    for (const a of arrs) {
+      if (!a) continue;
+      for (let i = 0; i < len; i++) out[i] += a[i] || 0;
+    }
+    return out;
+  }
+
+  const salesBy  = buildMonthlyByGroup(monthlySalesRows);
+  const targetBy = buildMonthlyByGroup(monthlyTargetRows);
+  const dailyBy  = buildDailyByGroup(dailyBreakdownRows);
+
+  // computeWorkingDaysInfo just sums every group's daily value into one
+  // total per calendar day, so the salesman-grouped daily breakdown is
+  // a drop-in replacement for the region-grouped one it used to take.
+  const workingInfo = computeWorkingDaysInfo(dailyBreakdownRows);
+
   const rows = [];
+  const allBdes = Object.values(REGION_SALESMEN).flat();
 
-  // All row (no region/salesman filter)
-  {
-    const qsSales = new URLSearchParams({
-      metric: filters.metric, category: filters.category, region: "ALL", salesman:"ALL",
-      sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year:2026
-    }).toString();
-    const qsTarget = new URLSearchParams({
-      metric: filters.metric,
-      category: filters.category, region: "ALL", salesman:"ALL",
-      sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-      product_group: filters.product_group, pattern: filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year:2026
-    }).toString();
-
-     // monthly + daily in parallel
-    const [
-      salesRows,
-      targetRows,
-      dailySalesRows,
-      dailyTargetRows,
-      cutRows
-    ] = await Promise.all([
-      fetchJSON(`/api/monthly_sales?${qsSales}`),
-      fetchJSON(`/api/monthly_target?${qsTarget}`),
-      fetchJSON(`/api/daily_sales?${qsSales}`),
-      fetchJSON(`/api/daily_target?${qsTarget}`),
-      fetchDailyBreakdownWithGroup("region")
-    ]);
-
-    const sales    = salesRows.map(r => +r.value || 0);
-    const targets  = targetRows.map(r => +r.value || 0);
-    const q        = kpiByQuarter(sales, targets);
-    const N = daysLabels().length;
-    let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-    const dailySales   = dailySalesRows.map(r => +r.value || 0);
-    const dailyTargets = dailyTargetRows.map(r => +r.value || 0);
-    const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets, cutoffIdx);
-
-    rows.push({
-      region: "All",
-      bde: "All",
-      Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
-      dailyKPI: dailyKPI
-    });
+  function rowFor(bdes) {
+    const sales      = sumArrays(bdes.map(b => salesBy[norm(b)]),  12);
+    const targets    = sumArrays(bdes.map(b => targetBy[norm(b)]), 12);
+    const dailySales = sumArrays(bdes.map(b => dailyBy[norm(b)]),  31);
+    const q          = kpiByQuarterProrated(sales, targets, dailySales, workingInfo);
+    const dailyKPI   = dailyKPIWorkingDays(dailySales, +targets[currentMonthIdx] || 0, workingInfo);
+    return { Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3], dailyKPI };
   }
 
-  // Region / BDE rows
-  for (const region of ["NSW","QLD","VIC","WA"]) {
-    {
-    const yearKpi = 2026;
+  // Role-based scope filter on the rendered breakdown:
+  //   BDE  → only their own row.
+  //   SM   → only their state's region block.
+  //   ALL  → everything (default).
+  const me = window._me || {};
+  const lockBde    = (me.lock_salesman || "").trim().toUpperCase();
+  const lockRegion = (me.lock_region   || "").trim().toUpperCase();
 
-    const [
-      salesRows,
-      targetRows,
-      dailySalesRows,
-      dailyTargetRows,
-      cutRows
-    ] = await Promise.all([
-      fetchMonthlyKPIActual(region, "ALL", yearKpi),
-      fetchMonthlyKPITarget(region, "ALL", yearKpi),
-      fetchDailyKPIActual(region, "ALL"),
-      fetchDailyKPITarget(region, "ALL"),
-      fetchDailyBreakdownWithGroup("region") // used only for cutoffIdx
-    ]);
-
-    const sales   = salesRows.map(r => +r.value || 0);
-    const targets = targetRows.map(r => +r.value || 0);
-    const q       = kpiByQuarter(sales, targets);
-
-    const N = daysLabels().length;
-    const cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-
-    const dSales   = dailySalesRows.map(r => +r.value || 0);
-    const dTargets = dailyTargetRows.map(r => +r.value || 0);
-    const dailyKPI = dailyKPIFromSeries(dSales, dTargets, cutoffIdx);
-
-    rows.push({
-      region: region,
-      bde: "All",          // Region total row label
-      Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
-      dailyKPI: dailyKPI
-    });
-  }
-    const bdes = REGION_SALESMEN[region] || []; // e.g. ["BDE2","BDE3"] or ids
-    // fetch each BDE pair in parallel, then append in order
-    const yearKpi=2026;
-    const perBDE = await Promise.all(bdes.map(async (bde) => {
-      const [
-        salesRows,
-        targetRows,
-        dailySalesRows,
-        dailyTargetRows
-      ] = await Promise.all([
-        fetchMonthlyKPIActual(region, bde, yearKpi),
-        fetchMonthlyKPITarget(region, bde, yearKpi),
-        fetchDailyKPIActual(region, bde),
-        fetchDailyKPITarget(region, bde)
-      ]);
-
-      const sales    = salesRows.map(r => +r.value || 0);
-      const targets  = targetRows.map(r => +r.value || 0);
-      const q        = kpiByQuarter(sales, targets);
-      const cutRows = await fetchDailyBreakdownWithGroup("region");
-      const N = daysLabels().length;
-      let cutoffIdx = cutoffIdxFromBreakdown(cutRows, N);
-      const dailySales   = dailySalesRows.map(r => +r.value || 0);
-      const dailyTargets = dailyTargetRows.map(r => +r.value || 0);
-      const dailyKPI     = dailyKPIFromSeries(dailySales, dailyTargets, cutoffIdx);
-      return {
-        region: `${region}`,
-        bde: `${bde}`,
-        Q1: q[0], Q2: q[1], Q3: q[2], Q4: q[3],
-        dailyKPI: dailyKPI
-      };
-    }));
-    rows.push(...perBDE);
+  if (lockBde) {
+    rows.push({ region: me.state || "—", bde: me.name, ...rowFor([me.name]) });
+  } else if (lockRegion) {
+    const bdes = REGION_SALESMEN[lockRegion] || [];
+    rows.push({ region: lockRegion, bde: "All", ...rowFor(bdes) });
+    for (const bde of bdes) {
+      rows.push({ region: lockRegion, bde, ...rowFor([bde]) });
+    }
+  } else {
+    rows.push({ region: "All", bde: "All", ...rowFor(allBdes) });
+    for (const region of REGIONS) {
+      const bdes = REGION_SALESMEN[region] || [];
+      rows.push({ region, bde: "All", ...rowFor(bdes) });
+      for (const bde of bdes) {
+        rows.push({ region, bde, ...rowFor([bde]) });
+      }
+    }
   }
 
   // render table
@@ -1051,32 +1326,32 @@ async function drawMonthlyKPI(){
   // font colour based on achievement %
   const cellHtml = (v) => {
     if (v == null) {
-      return `<td style="text-align:right;color:#9ca3af">-</td>`;
+      return `<td style="text-align:right;color:#9ca3af;padding:1px 2px;">-</td>`;
     }
     const val = Number(v);
     let color;
     if (val >= 100)      color = "#16a34a"; // green
     else if (val >= 90)  color = "#f97316"; // orange
     else                 color = "#dc2626"; // red
-    return `<td style="text-align:right;color:${color}">${fmt(val)}</td>`;
+    return `<td style="text-align:right;color:${color};padding:1px 2px;">${fmt(val)}</td>`;
   };
 
   el.innerHTML = `
   <thead>
-  <tr>
-    <th style="text-align:center; font-weight:bold;">Region</th>
-    <th style="text-align:center; font-weight:bold;">BDE</th>
-    <th style="text-align:right; font-weight:bold;">This Month</th>
-    <th style="text-align:right; font-weight:bold;">Q1</th>
-    <th style="text-align:right; font-weight:bold;">Q2</th>
-    <th style="text-align:right; font-weight:bold;">Q3</th>
-    <th style="text-align:right; font-weight:bold;">Q4</th>
+  <tr style="font-size:8px; line-height:1.2;">
+    <th style="text-align:center; font-weight:bold; padding:1px 2px;">Region</th>
+    <th style="text-align:center; font-weight:bold; padding:1px 2px;">BDE</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">This Month</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q1</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q2</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q3</th>
+    <th style="text-align:right; font-weight:bold; padding:1px 2px;">Q4</th>
   </tr></thead>
   <tbody>
     ${rows.map(r => `
-      <tr style="background-color:${rowBg(r.region)}">
-        <td style="text-align:center">${r.region}</td>
-        <td style="text-align:center">${r.bde}</td>
+      <tr style="background-color:${rowBg(r.region)}; font-size:8px; line-height:1.2;">
+        <td style="text-align:center; padding:1px 2px;">${r.region}</td>
+        <td style="text-align:center; padding:1px 2px;">${r.bde}</td>
         ${cellHtml(r.dailyKPI)}
         ${cellHtml(r.Q1)}
         ${cellHtml(r.Q2)}
@@ -1233,7 +1508,7 @@ async function drawMonthlyTotals(){
 function buildMonthlyStacks(rows){
   const labels=monthsLabels();
   let groups = [...new Set(
-    rows.map(r => r.group_label).filter(g => g != null && g !== "")
+    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
   )];
 
   const ordered = [];
@@ -1248,10 +1523,9 @@ function buildMonthlyStacks(rows){
   const byGroup = {};
   groups.forEach(g => byGroup[g] = Array(12).fill(0));
   // ...
-  rows.forEach(r=>{ 
-    const g = r.group_label;
-    if (g == null || g === "") return;
-    const m=parseInt(r.month,10); if(m>=1 && m<=12){ byGroup[r.group_label][m-1]+= (+r.value||0); } });
+  rows.forEach(r=>{
+    const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
+    const m=parseInt(r.month,10); if(m>=1 && m<=12){ byGroup[g][m-1]+= (+r.value||0); } });
   const datasets=groups.map((g,i)=>({label:g,data:byGroup[g],backgroundColor:COLORS[i%COLORS.length],stack:"S", categoryPercentage:0.9, barPercentage:0.9, datalabels: {
           display: false}}));
   return {labels,groups,byGroup,datasets};
@@ -1333,7 +1607,7 @@ async function drawMonthlyStacked(){
   // Build {groups, byGroup} for month=1..12
   function buildMonthlyStacksForRows(rows){
     let groups = [...new Set(
-      (rows||[]).map(r => r.group_label).filter(g => g != null && g !== "")
+      (rows||[]).map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
     )];
 
     // region ordering
@@ -1346,8 +1620,7 @@ async function drawMonthlyStacked(){
     groups.forEach(g => byGroup[g] = Array(12).fill(0));
 
     (rows||[]).forEach(r => {
-      const g = r.group_label;
-      if (!g) return;
+      const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
       const m = parseInt(r.month, 10);
       if (m >= 1 && m <= 12) byGroup[g][m-1] += (+r.value || 0);
     });
@@ -1436,6 +1709,7 @@ async function drawMonthlyStacked(){
     sales26CumTotal[i]  = sRun;
     target26CumTotal[i] = tRun;
   }
+
 
   // Percent helpers (for % charts: keep your original meaning = composition comparison)
   function toPercentStacksYear(byKey, lastIdxOrNull){
@@ -1584,25 +1858,33 @@ async function drawMonthlyStacked(){
   stackedMonthlyInst = new Chart(document.getElementById("stackedMonthlyChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25, ...ds26, ...dsT26] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 
   stackedMonthlyCumInst = new Chart(document.getElementById("stackedMonthlyCumChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25Cum, ...ds26Cum, ...dsT26Cum] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 
   stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25Pct, ...ds26Pct] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum] },
-    options: withStackKeyLegend(getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)"))
+    options: withStackKeyLegend(
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+    )
   });
 }
 
@@ -1686,7 +1968,7 @@ async function drawYearlyTotals() {
 function buildYearlyStacks(rows) {
   const labels = yearsLabels();
   let groups = [...new Set(
-    rows.map(r => r.group_label).filter(g => g != null && g !== "")
+    rows.map(r => (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label)
   )];
 
   const ordered = [];
@@ -1701,8 +1983,7 @@ function buildYearlyStacks(rows) {
   const byGroup = {};
   groups.forEach(g => (byGroup[g] = Array(labels.length).fill(0)));
   rows.forEach(r => {
-  const g = r.group_label;
-  if (g == null || g === "") return;       // skip null / empty groups
+  const g = (r.group_label == null || r.group_label === "") ? "COMMON" : r.group_label;
 
   const y = parseInt(r.year, 10);
   const idx = labels.indexOf(y);
@@ -1826,7 +2107,8 @@ async function initControls(){
   setActive(document.getElementById('regionBtns'),"val",filters.region);
   populateSelect(document.getElementById('salesman_name'),[...new Set(Object.values(REGION_SALESMEN).flat())].sort());
 
-  const groups=await fetchJSON("/api/product_group"); populateSelect(document.getElementById('product_group'),groups);
+  const groups = await fetchJSON("/api/product_group");
+  __PRODUCT_GROUP_OPTIONS = Array.isArray(groups) ? groups : (groups?.rows || []);
 
   const stg3 = await fetchJSON("/api/sold_to_groups");
   populateSelect(document.getElementById('sold_to_group'), stg3, true);
@@ -1876,20 +2158,25 @@ function renderProfitCombined(rows) {
           type: "line",
           label: "Profit %",
           data: profitPct,
-          yAxisID: "y1",   // right axis
+          yAxisID: "y1",
           tension: 0.25,
-          borderWidth: 2,
-          pointRadius: 2,
+          borderWidth: 2.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
           fill: false,
           borderColor: "#10b981",
-          pointBackgroundColor: "#10b981",
+          pointBackgroundColor: profitPct.map(v => v >= 0 ? "#10b981" : "#ef4444"),
           datalabels: {
+            display: ctx => gross[ctx.dataIndex] > 0,
             align: "top",
-            formatter: (v) => v == null ? "" : v.toFixed(2) + "%",
-            font: {
-            weight: "bold",
-            size : 20
-            }
+            anchor: "end",
+            offset: 4,
+            formatter: v => v == null ? "" : v.toFixed(1) + "%",
+            font: { weight: "bold", size: 10 },
+            color: ctx => profitPct[ctx.dataIndex] >= 0 ? "#065f46" : "#991b1b",
+            backgroundColor: "rgba(255,255,255,0.75)",
+            borderRadius: 3,
+            padding: { top: 1, bottom: 1, left: 3, right: 3 }
           }
         },
         // Bar group 1: Gross
@@ -1951,15 +2238,15 @@ function renderProfitCombined(rows) {
         },
         y1: {
           position: "right",
-          beginAtZero: true,
-          suggestedMax: 100,
+          min: -10,
+          max: 10,
           title: { display: true, text: "Profit %" },
           grid: { drawOnChartArea: false },
-          ticks: { callback: v => `${Math.round(v)}%` }
+          ticks: { callback: v => `${v}%` }
         }
       },
       plugins: {
-        datalabels: { display: false },
+        datalabels: { display: ctx => ctx.dataset.type === "line" },
         legend: { display: true },
         tooltip: {
           callbacks: {
@@ -2041,7 +2328,11 @@ function refreshAllDebounced(){
 
 (async function start(){
   await initControls();
-  
+  // Apply role-based filter locks BEFORE the first data refresh so the
+  // initial KPI / chart fetch already carries the right scope (BDE
+  // locked to own salesman, SM locked to own state).
+  await applyRoleScope();
+
   [...document.querySelectorAll("#catBtns .btn")].forEach(b=>b.classList.toggle("active",b.dataset.val===filters.category));
   await refreshAllWithKpi();
   
@@ -2099,6 +2390,7 @@ function refreshAllDebounced(){
 // ------------------------------
 // Pattern / Material custom dropdown redesign (NO datalist)
 // ------------------------------
+let __PRODUCT_GROUP_OPTIONS = [];
 let __PATTERN_OPTIONS = [];
 let __MATERIAL_OPTIONS = [];
 
@@ -2108,9 +2400,36 @@ let __SHIP_TO_OPTIONS = [];
 
 async function refreshSoldToCustom(){
   const stg = document.getElementById("sold_to_group")?.value || "ALL";
-  const res = await fetchJSON(`/api/sold_to_names?sold_to_group=${encodeURIComponent(stg)}`);
+  // Pass top_limit + filter context so the API can restrict the list
+  // to the top-N sold_to set when Top 10/20/30 is active.
+  const qs = new URLSearchParams({
+    sold_to_group: stg,
+    top_limit: filters.top_limit || 0,
+    metric: filters.metric || "qty",
+    category: filters.category || "ALL",
+    region: filters.region || "ALL",
+    salesman: filters.salesman || "ALL",
+    product_group: filters.product_group || "ALL",
+    pattern: filters.pattern || "ALL",
+    material: filters.material || "ALL",
+  }).toString();
+  const res = await fetchJSON(`/api/sold_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
   __SOLD_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+  // If the Sold-to dropdown is currently open (user changed region/top while
+  // browsing the list), force it to re-render with the new options.  Without
+  // this the stale list keeps showing until they click outside and reopen.
+  _redrawOpenDD("sold_to", "soldToMenu");
+}
+
+// Helper: if a custom dropdown's menu is open, trigger its input-event
+// handler so it re-reads getOptions() and re-renders with the latest data.
+function _redrawOpenDD(inputId, menuId){
+  const menu = document.getElementById(menuId);
+  const inp  = document.getElementById(inputId);
+  if (menu && inp && menu.style.display === "block"){
+    inp.dispatchEvent(new Event("input"));
+  }
 }
 
 async function refreshShipToCustom(){
@@ -2118,12 +2437,25 @@ async function refreshShipToCustom(){
   const soldTo = (document.getElementById("sold_to")?.value || "").trim();
   const qs = new URLSearchParams({
     sold_to_group: stg,
-    sold_to: soldTo ? soldTo : "ALL"
+    sold_to: soldTo ? soldTo : "ALL",
+    top_limit: filters.top_limit || 0,
+    metric: filters.metric || "qty",
+    category: filters.category || "ALL",
+    region: filters.region || "ALL",
+    salesman: filters.salesman || "ALL",
+    product_group: filters.product_group || "ALL",
+    pattern: filters.pattern || "ALL",
+    material: filters.material || "ALL",
   }).toString();
 
   const res = await fetchJSON(`/api/ship_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
-  __SHIP_TO_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+  __SHIP_TO_OPTIONS = rows.map(x => {
+    if (x === null || x === undefined) return '';
+    if (typeof x === 'object') return x.ship_to_name || x.name || x.v || x.label || '';
+    return String(x);
+  }).filter(Boolean);
+  _redrawOpenDD("ship_to", "shipToMenu");
 }
 
 function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
@@ -2146,6 +2478,7 @@ function ddRender(menuEl, items, onPick){
     div.addEventListener("mousedown", (e) => {
       e.preventDefault(); // keep focus
       onPick(v);
+      ddClose(menuEl);    // close after pick
     });
     menuEl.appendChild(div);
   });
@@ -2154,15 +2487,28 @@ function ddRender(menuEl, items, onPick){
 function ddFilter(options, q){
   const s = (q || "").trim().toLowerCase();
   if (!s) return options.slice(0, 500);
-  return options.filter(x => String(x).toLowerCase().includes(s)).slice(0, 500);
+  // Also try a separator-free match so that, for the Size field, a
+  // query like "22535" finds "225/35R19" — and similarly for any
+  // dropdown whose values contain slashes/dashes/spaces.
+  const sCompact = s.replace(/[^a-z0-9]+/g, "");
+  return options.filter(x => {
+    const t = String(x).toLowerCase();
+    if (t.includes(s)) return true;
+    return sCompact && t.replace(/[^a-z0-9]+/g, "").includes(sCompact);
+  }).slice(0, 500);
+}
+
+function ddUpdateActive(inp) {
+  const dd = inp.closest('.dd');
+  if (dd) dd.classList.toggle('dd-active', inp.value.trim() !== '');
 }
 
 function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
   const inp = document.getElementById(inputId);
   const btn = document.getElementById(btnId);
-  const clr = document.getElementById(clearId);
+  const clr = clearId ? document.getElementById(clearId) : null;
   const menu = document.getElementById(menuId);
-  if (!inp || !btn || !clr || !menu) return;
+  if (!inp || !btn || !menu) return;
 
   function openWithCurrent(){
     const opts = getOptions();
@@ -2179,17 +2525,69 @@ function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
   // typing filters list (still allows reselect without clearing via ▼)
   inp.addEventListener("input", () => openWithCurrent());
 
-  // clear
-  clr.addEventListener("click", () => {
-    inp.value = "";
-    onPick("ALL");
-    ddClose(menu);
-    inp.focus();
-  });
+  // update active state whenever input value changes
+  inp.addEventListener("input", () => ddUpdateActive(inp));
+
+  // clear (optional)
+  if (clr) {
+    clr.addEventListener("click", () => {
+      inp.value = "";
+      ddUpdateActive(inp);
+      onPick("ALL");
+      ddClose(menu);
+      inp.focus();
+    });
+  }
 
   // close when clicking outside
   document.addEventListener("mousedown", (e) => {
     if (!menu.contains(e.target) && e.target !== inp && e.target !== btn && e.target !== clr){
+      ddClose(menu);
+    }
+  });
+
+  // Keyboard navigation: ↑/↓ move highlight, Enter picks, Esc closes.
+  function activeItems(){ return menu.querySelectorAll(".dd-item"); }
+  function setActiveIdx(idx){
+    const items = activeItems();
+    if (!items.length) return;
+    items.forEach(el => el.classList.remove("dd-item-active"));
+    const i = ((idx % items.length) + items.length) % items.length;
+    const target = items[i];
+    target.classList.add("dd-item-active");
+    target.scrollIntoView({ block: "nearest" });
+  }
+  function currentIdx(){
+    const items = activeItems();
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].classList.contains("dd-item-active")) return i;
+    }
+    return -1;
+  }
+  inp.addEventListener("keydown", (e) => {
+    const open = menu.style.display === "block";
+    if (e.key === "ArrowDown") {
+      if (!open) { openWithCurrent(); setActiveIdx(0); }
+      else { setActiveIdx(currentIdx() + 1); }
+      e.preventDefault();
+    } else if (e.key === "ArrowUp") {
+      if (!open) { openWithCurrent(); setActiveIdx(-1); }
+      else { setActiveIdx(currentIdx() - 1); }
+      e.preventDefault();
+    } else if (e.key === "Enter") {
+      const items = activeItems();
+      const i = currentIdx();
+      if (open && i >= 0 && items[i]) {
+        onPick(items[i].textContent);
+        ddClose(menu);
+        e.preventDefault();
+      } else if (open && items.length === 1) {
+        // single result + Enter = pick it
+        onPick(items[0].textContent);
+        ddClose(menu);
+        e.preventDefault();
+      }
+    } else if (e.key === "Escape") {
       ddClose(menu);
     }
   });
@@ -2220,11 +2618,104 @@ async function refreshMaterialsCustom(){
 }
 
 // bind once on load
+// Role-based scope — call whoami once, then force / lock the right
+// filter values + show a small "Logged in as: …" badge.  Idempotent;
+// every page that imports app.js gets it.
+async function applyRoleScope() {
+  // Idempotent: cache the whoami response so duplicate calls (e.g. one
+  // from app.js start() and one from map.js DOMContentLoaded) only do
+  // the network round-trip once.
+  let me = window._me;
+  if (!me) {
+    try {
+      const r = await fetch("/api/whoami", { credentials: "include" });
+      me = await r.json();
+    } catch (e) { return; }
+    window._me = me;
+  }
+  if (!me || !me.logged_in) return;   // local / Tailscale → no scope
+
+  // BDE: lock the salesman dropdown to themselves.  Region buttons stay
+  // clickable — they'll still only see their own data because the
+  // salesman filter narrows the result, so clicking QLD just returns
+  // an empty NSW BDE in QLD set.  No UI-tree churn beyond this.
+  if (me.lock_salesman) {
+    filters.salesman = me.lock_salesman;
+    const sel = document.getElementById("salesman_name");
+    if (sel) {
+      if (![...sel.options].some(o => o.value === me.lock_salesman)) {
+        sel.add(new Option(me.lock_salesman, me.lock_salesman));
+      }
+      sel.value = me.lock_salesman;
+      sel.disabled = true;
+      sel.title = `Locked: ${me.name} (${me.role})`;
+    }
+  }
+  // SM: lock the region chip to their state.  Other regions disabled
+  // so the user can't accidentally widen the view.  Salesman dropdown
+  // left alone — the existing region-bound list gives them the right
+  // BDEs.
+  if (me.lock_region) {
+    filters.region = me.lock_region;
+    document.querySelectorAll("#regionBtns .btn").forEach(b => {
+      const is = b.dataset.val === me.lock_region;
+      b.classList.toggle("active", is);
+      if (!is) {
+        b.disabled = true;
+        b.style.opacity = "0.4";
+        b.style.cursor  = "not-allowed";
+        b.title = `Locked: ${me.name} (State Manager — ${me.state})`;
+      }
+    });
+  }
+  _renderRoleBadge(me);
+}
+function _renderRoleBadge(me) {
+  if (document.getElementById("roleBadge")) return;
+  const tag = document.createElement("div");
+  tag.id = "roleBadge";
+  const scope = me.lock_salesman ? `BDE · ${me.lock_salesman}`
+              : me.lock_region   ? `State Manager · ${me.lock_region}`
+              :                     `${me.role || "ALL"} · full scope`;
+  tag.innerHTML = `<span style="opacity:.7;">Signed in as</span> `
+                + `<b>${me.name || me.email}</b> · `
+                + `<span style="color:#2563eb;">${scope}</span>`;
+  tag.style.cssText = "position:fixed;bottom:6px;right:8px;z-index:5000;"
+    + "background:rgba(255,255,255,.92);padding:4px 10px;border-radius:14px;"
+    + "border:1px solid #e5e7eb;font-size:11px;color:#374151;"
+    + "box-shadow:0 1px 3px rgba(0,0,0,.08);pointer-events:none;";
+  document.body.appendChild(tag);
+}
+
 window.addEventListener("load", async () => {
   // initial load
   await refreshPatternsCustom();
   await refreshMaterialsCustom();
 
+  bindDropdown({
+    inputId: "product_group",
+    btnId: "pgBtn",
+    clearId: "pgClear",
+    menuId: "pgMenu",
+    getOptions: () => __PRODUCT_GROUP_OPTIONS,
+    onPick: async (val) => {
+      const v = (val === "ALL") ? "" : val;
+      const pgEl = document.getElementById("product_group");
+      if (pgEl) { pgEl.value = v; ddUpdateActive(pgEl); }
+      filters.product_group = v || "ALL";
+      const patEl = document.getElementById('pattern');
+      const matEl = document.getElementById('material');
+      if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
+      if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
+      filters.pattern = "ALL";
+      filters.material = "ALL";
+      await refreshPatternsCustom();
+      await refreshMaterialsCustom();
+      await refreshSoldToCustom();
+      await refreshShipToCustom();
+      refreshAllDebounced();
+    }
+  });
 
   bindDropdown({
     inputId: "sold_to",
@@ -2236,11 +2727,11 @@ window.addEventListener("load", async () => {
       const v = (val === "ALL") ? "" : val;
       const soldEl = document.getElementById("sold_to");
       const shipEl = document.getElementById("ship_to");
-      if (soldEl) soldEl.value = v;
+      if (soldEl) { soldEl.value = v; ddUpdateActive(soldEl); }
       filters.sold_to = v || "ALL";
 
       // sold-to changes -> reset ship-to + reload ship-to list
-      if (shipEl) shipEl.value = "";
+      if (shipEl) { shipEl.value = ""; ddUpdateActive(shipEl); }
       filters.ship_to = "ALL";
       await refreshShipToCustom();
 
@@ -2257,7 +2748,7 @@ window.addEventListener("load", async () => {
     onPick: (val) => {
       const v = (val === "ALL") ? "" : val;
       const shipEl = document.getElementById("ship_to");
-      if (shipEl) shipEl.value = v;
+      if (shipEl) { shipEl.value = v; ddUpdateActive(shipEl); }
       filters.ship_to = v || "ALL";
       refreshAllDebounced();
     }
@@ -2271,9 +2762,10 @@ window.addEventListener("load", async () => {
     getOptions: () => __PATTERN_OPTIONS,
     onPick: async (val) => {
       const v = (val === "ALL") ? "" : val;
-      document.getElementById("pattern").value = v;
+      const patEl = document.getElementById("pattern");
+      patEl.value = v; ddUpdateActive(patEl);
       filters.pattern = v || "ALL";
-      await refreshMaterialsCustom(); // pattern 바뀌면 material 옵션 갱신
+      await refreshMaterialsCustom();
       refreshAllDebounced();
     }
   });
@@ -2286,10 +2778,32 @@ window.addEventListener("load", async () => {
     getOptions: () => __MATERIAL_OPTIONS,
     onPick: (val) => {
       const v = (val === "ALL") ? "" : val;
-      document.getElementById("material").value = v;
+      const matEl = document.getElementById("material");
+      matEl.value = v; ddUpdateActive(matEl);
       filters.material = v || "ALL";
       refreshAllDebounced();
     }
   });
 });
 
+
+
+/* ── Price nav button injection ── */
+(function() {
+    function injectPriceBtn() {
+        const nav = document.getElementById('viewSwitch');
+        if (!nav) return;
+        const btns = nav.querySelectorAll('.btn');
+        for (const b of btns) { if (b.textContent.trim() === 'Price') return; }
+        const btn = document.createElement('button');
+        btn.className = 'btn' + (window.location.pathname === '/price' ? ' active' : '');
+        btn.textContent = 'Price';
+        btn.onclick = function() { window.location.href = '/price'; };
+        nav.appendChild(btn);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', injectPriceBtn);
+    } else {
+        injectPriceBtn();
+    }
+})();

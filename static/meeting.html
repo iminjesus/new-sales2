@@ -1,0 +1,2787 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BDE Visit Log</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+/* Prevent any single oversized element from blowing out the viewport on
+   mobile (BDEs are mostly on phones, so a horizontal scrollbar = the
+   whole layout reads zoomed-out). */
+html,body{max-width:100vw;overflow-x:hidden}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f3f4f6;color:#111827;font-size:13px}
+header{background:#1e3a5f;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:12px}
+header h1{font-size:14px;font-weight:700}
+header .sub{font-size:10px;opacity:.55}
+header .nav{margin-left:auto;display:flex;gap:6px}
+.btn{border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;font-weight:600;border:1px solid #d1d5db;background:#fff;color:#374151}
+.btn:hover{background:#f9fafb}
+.btn-primary{background:#2563eb;color:#fff;border-color:#2563eb}
+.btn-primary:hover{background:#1d4ed8}
+.btn.active{background:#374151;color:#fff;border-color:#374151}
+.container{padding:14px 22px;max-width:1800px;margin:0 auto;min-width:0}
+/* Three columns on a wide monitor: palette (narrow drag source) /
+   calendar + form (the planning + log writing area) / Recent
+   entries (history).  Stacks under 1100 px. */
+.planner-layout{display:grid;grid-template-columns:260px minmax(0,1.2fr) minmax(0,1.05fr);gap:14px;align-items:start}
+@media (max-width:1100px){
+  .planner-layout{grid-template-columns:minmax(0,1fr)}
+  /* Make planner-left "invisible" in the grid so its two children
+     (calendar, form) become direct grid items.  That lets us slot
+     the palette BETWEEN them on mobile, which makes the drag from
+     palette → calendar a single short swipe. */
+  .planner-left{display:contents}
+  .plan-board       {order:1}   /* calendar */
+  .planner-palette  {order:2}   /* ship-to palette */
+  .form-card        {order:3}   /* new visit form */
+  .planner-right    {order:4}   /* recent entries */
+  /* Highlight the palette as the obvious "selection area" on mobile.
+     Coloured border + tinted background + sticky label so it reads
+     as "this is where you pick a shop". */
+  .planner-palette .card{
+    border:2px solid #2563eb;background:#f0f7ff;
+    box-shadow:0 1px 6px rgba(37,99,235,.15);
+  }
+  .palette-row-tag{font-size:11px;color:#1d4ed8}
+  .palette-row-tag::before{background:#1d4ed8}
+  /* With only 5 chips by default the list itself is naturally short,
+     so the max-height just caps it if the user opens search results. */
+  .palette-list{max-height:170px}
+}
+@media (max-width:640px){
+  .palette-list{max-height:150px}
+  /* Compact calendar so 7 columns fit a 360-414px phone without
+     forcing horizontal scroll. */
+  .plan-board{padding:8px 8px}
+  .cal-grid{gap:2px}
+  .cal-head,.cal-cell{padding:3px 2px;min-height:54px;font-size:10px}
+  .cal-head{font-size:9px;padding:3px 0}
+  .cal-cell .d-num{font-size:10px;margin-bottom:1px}
+  .plan-chip{font-size:9px;padding:1px 3px;line-height:1.3}
+  .plan-toolbar{gap:5px}
+  .plan-toolbar button{padding:3px 7px;font-size:10px}
+  .plan-month{font-size:12px}
+}
+
+/* ── Calendar planner ─────────────────────────────────── */
+.plan-board{padding:12px 14px}
+
+.plan-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.plan-toolbar button{font-size:11px;padding:4px 10px;border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:5px;cursor:pointer}
+.plan-toolbar button:hover{background:#f3f4f6}
+.plan-month{font-weight:700;color:#1e3a5f;font-size:13px;flex:1}
+/* Weekends narrower (0.7fr) so the working week (Mon-Fri) gets the
+   width it actually needs.  minmax(0,...) is critical — without it
+   long unbreakable chip text inside a cell sets the column's
+   min-content size and pushes the rightmost columns off-screen. */
+.cal-grid{display:grid;grid-template-columns:minmax(0,.7fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) minmax(0,.7fr);gap:3px;background:#e5e7eb;border:1px solid #e5e7eb;border-radius:5px;overflow:hidden}
+.cal-head,.cal-cell{background:#fff;padding:4px 5px;min-height:78px;display:flex;flex-direction:column;font-size:11px;min-width:0}
+.cal-head{min-height:0;background:#f8fafc;font-weight:600;color:#6b7280;text-align:center;font-size:10px;padding:5px 0;text-transform:uppercase;letter-spacing:.4px}
+.cal-cell.dim{background:#fafafa;color:#cbd5e1}
+.cal-cell.dim .d-num{color:#cbd5e1;font-weight:500}
+.cal-cell.today{background:#fff7ed}
+.cal-cell .d-num{font-weight:600;color:#374151;font-size:11px;margin-bottom:2px}
+.cal-cell.today .d-num{color:#ea580c}
+.cal-cell.drag-over{background:#dbeafe;outline:2px dashed #2563eb;outline-offset:-2px}
+.cal-cell .chips{display:flex;flex-direction:column;gap:2px;overflow:hidden}
+.cal-cell .cell-stats{display:flex;justify-content:space-between;align-items:center;font-size:8px;font-weight:600;color:#6b7280;padding:0 1px;margin-bottom:2px;text-transform:uppercase;letter-spacing:.3px}
+.cal-cell .cell-stats .cs-logged{color:#16a34a}
+.cal-cell .bde-group{display:flex;flex-direction:column;gap:1px;margin-bottom:2px}
+.cal-cell .bde-group-label{font-size:8px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.3px;padding:0 2px;line-height:1.2}
+.more-chip{font-size:9px;font-weight:700;color:#2563eb;background:#eff6ff;border:1px dashed #93c5fd;border-radius:8px;padding:1px 6px;cursor:pointer;text-align:center;line-height:1.4;margin-top:1px}
+.more-chip:hover{background:#dbeafe;border-style:solid}
+.plan-chip{background:#dcfce7;border:1px solid #86efac;color:#14532d;font-size:10px;padding:1px 5px;border-radius:8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;justify-content:space-between;gap:3px;line-height:1.4}
+.plan-chip:hover{filter:brightness(.92)}
+.plan-chip .pc-rm{color:currentColor;font-weight:700;opacity:.65;margin-left:2px}
+.plan-chip:hover .pc-rm{opacity:1}
+
+/* Ship-to palette — sits directly below the calendar in the same
+   card.  Shorter than the calendar itself so the calendar dominates
+   the panel; chip list is the scrolling area. */
+.palette-row-tag{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+.palette-row-tag::before{content:"";flex:0 0 16px;height:2px;background:#2563eb;border-radius:2px}
+.palette-input{width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;margin-bottom:6px}
+.palette-input:focus{outline:none;border-color:#2563eb}
+/* Palette now sits in its own column beside the calendar, so it
+   can use a lot more vertical space — match the calendar's height
+   roughly so the eye doesn't see a short stub. */
+.palette-list{max-height:380px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;padding:2px;overscroll-behavior:contain}
+.ship-chip{padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;font-size:11px;color:#374151;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px}
+.ship-chip:active{cursor:grabbing}
+.ship-chip:hover{background:#eff6ff;border-color:#93c5fd}
+.ship-chip .sc-code{color:#6b7280;font-family:monospace;font-size:10px}
+.ship-chip.dragging{opacity:.5}
+.pot-chip{padding:5px 8px;border:1px solid #fdba74;border-radius:5px;background:#fff7ed;font-size:11px;color:#9a3412;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px;align-items:center}
+.pot-chip:hover{background:#ffedd5;border-color:#fb923c}
+.pot-chip.dragging{opacity:.5}
+.pot-chip .pc-st{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;background:#fed7aa;color:#9a3412;padding:1px 5px;border-radius:6px;flex-shrink:0}
+.pot-chip .pc-x{color:#dc2626;font-weight:700;opacity:.5;font-size:13px;line-height:1;cursor:pointer;margin-left:4px}
+.pot-chip .pc-x:hover{opacity:1}
+.selected-shop.selected-shop-potential{background:#fff7ed;border-color:#fb923c}
+.selected-shop.selected-shop-potential .ss-text{color:#9a3412}
+.palette-empty{color:#9ca3af;font-size:11px;padding:8px;text-align:center}
+.palette-count{font-size:10px;color:#9ca3af;margin-bottom:4px;text-align:right}
+.card{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.07);margin-bottom:12px}
+.card h2{font-size:13px;font-weight:700;color:#1e3a5f;margin-bottom:10px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media (max-width:640px){
+  body{padding-top:46px}
+  .grid{grid-template-columns:1fr}
+  header{flex-wrap:wrap;padding:8px 12px;gap:6px}
+  header h1{font-size:13px}
+  header .sub{display:none}
+  /* Pin the nav strip to the very top so it's always one tap away */
+  header .nav{
+    position:fixed !important;top:0;left:0;right:0;z-index:1000;
+    margin:0 !important;background:#1e3a5f;border-bottom:1px solid #15314e;
+    padding:6px 6px;display:flex;flex-wrap:nowrap;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;gap:4px;width:auto;
+  }
+  header .nav .btn{flex:0 0 auto;font-size:11px;padding:5px 10px;white-space:nowrap}
+  .container{padding:8px}
+  .card{padding:10px}
+  /* Recent entries table — let the table fit the viewport instead of
+     scrolling horizontally.  table-layout:fixed + word-break lets long
+     notes wrap, and a compact Visit-date column + small photos keep the
+     three-column layout readable on a 360 px phone. */
+  #recentWrap{overflow-x:hidden}
+  .recent-tbl{font-size:11px;table-layout:fixed;width:100%}
+  .recent-tbl th,.recent-tbl td{padding:5px 6px;word-break:break-word;overflow-wrap:anywhere}
+  .recent-tbl th:nth-child(1),.recent-tbl td:nth-child(1){width:58px}
+  .recent-tbl th:nth-child(3),.recent-tbl td:nth-child(3){width:72px}
+  .recent-tbl .ts{white-space:normal;font-size:10px;line-height:1.25}
+  .recent-tbl .photos{padding-left:2px;padding-right:2px}
+  .recent-tbl .photos a{margin-right:2px;margin-bottom:2px}
+  .recent-tbl .photos img{width:30px;height:30px}
+  /* Shop / purpose group banners may contain long shop names — let
+     them wrap too so they don't push the table wider than the card. */
+  .recent-tbl .grp-bde td,
+  .recent-tbl .grp-shop td,
+  .recent-tbl .grp-purp td{word-break:break-word;overflow-wrap:anywhere;white-space:normal}
+  /* The visit row uses inline padding-left:36px as an indent, which
+     wastes a lot of the narrow first column on mobile.  Shrink it. */
+  .recent-tbl tbody tr:not(.grp-bde):not(.grp-shop):not(.grp-purp) td:first-child{padding-left:8px !important}
+  .recent-tbl .grp-shop td{padding-left:10px !important}
+  .recent-tbl .grp-purp td{padding-left:14px !important}
+  .filt{flex-wrap:wrap;gap:4px}
+  .filt select,.filt input{font-size:11px}
+  /* Searchable dropdowns: full-width on mobile (no fixed 150px input) */
+  .dd-wrap input{width:auto;min-width:0}
+  .dd-menu{width:100%;left:0;right:0}
+  /* Submit button: full-width tap target */
+  .submit-row{flex-wrap:wrap}
+  .submit-row .btn-primary{flex:1 1 100%}
+}
+.field{display:flex;flex-direction:column;gap:3px}
+.field label{font-size:11px;color:#6b7280;font-weight:600}
+.field label .req{color:#dc2626}
+.field input,.field select,.field textarea{border:1px solid #d1d5db;border-radius:6px;padding:7px 9px;font-size:13px;font-family:inherit;width:100%;background:#fff}
+.field textarea{resize:vertical;min-height:80px}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:#2563eb}
+.field.col-full{grid-column:1/-1}
+.bde-id-line{font-size:11px;color:#6b7280;padding:6px 9px;background:#f3f4f6;border-radius:6px;margin-bottom:6px}
+.bde-id-line b{color:#1e3a5f}
+.submit-row{display:flex;gap:10px;align-items:center;margin-top:8px}
+#submitMsg{font-size:12px}
+#submitMsg.ok{color:#16a34a}
+#submitMsg.err{color:#dc2626}
+
+/* ── Floating drop banner (visible only during a chip drag) ── */
+.floating-drop{
+  position:fixed;top:8px;left:50%;transform:translateX(-50%);
+  background:#2563eb;color:#fff;padding:11px 26px;border-radius:24px;
+  font-size:13px;font-weight:600;letter-spacing:.3px;
+  box-shadow:0 6px 22px rgba(37,99,235,.45);
+  z-index:11000;display:none;pointer-events:none;
+  border:2px dashed rgba(255,255,255,.55);
+}
+.floating-drop.show{display:block;pointer-events:auto;animation:fdpop .15s ease-out}
+.floating-drop.drag-over{
+  background:#1d4ed8;transform:translateX(-50%) scale(1.06);
+  box-shadow:0 8px 28px rgba(29,78,216,.55);
+}
+@keyframes fdpop{from{transform:translateX(-50%) scale(.85);opacity:0}to{transform:translateX(-50%) scale(1);opacity:1}}
+
+/* ── Selected shop banner (set from palette click) ──────── */
+.selected-shop{
+  display:flex;align-items:center;gap:8px;
+  padding:9px 12px;border:1.5px dashed #cbd5e1;border-radius:8px;
+  background:#f8fafc;font-size:13px;color:#334155;line-height:1.3;
+}
+.selected-shop.selected-shop-empty{color:#94a3b8;font-style:italic}
+.selected-shop.selected-shop-set{
+  background:#eff6ff;border:1.5px solid #2563eb;color:#1e3a5f;font-style:normal;font-weight:600;
+}
+.selected-shop .ss-icon{font-size:14px}
+.selected-shop .ss-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.selected-shop .ss-sub{font-size:11px;color:#6b7280;font-weight:400;margin-left:4px}
+.selected-shop .ss-clear{
+  border:none;background:transparent;color:#dc2626;font-size:18px;
+  cursor:pointer;line-height:1;padding:0 4px;font-weight:700;
+}
+.ship-chip.selected{
+  background:#dbeafe !important;border-color:#2563eb !important;color:#1d4ed8 !important;font-weight:600
+}
+
+/* ── Voice → AI auto-fill panel (sits above the form) ────── */
+.voice-panel{margin:0 0 12px;padding:10px 12px;background:#f0f9ff;
+  border:1px solid #bae6fd;border-radius:8px}
+.voice-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.voice-btn{display:inline-flex;align-items:center;gap:6px;background:#0284c7;
+  color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:13px;
+  font-weight:600;cursor:pointer;transition:background .15s}
+.voice-btn:hover{background:#0369a1}
+.voice-btn.recording{background:#dc2626;animation:voicepulse 1.2s infinite}
+.voice-btn.recording:hover{background:#b91c1c}
+@keyframes voicepulse{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.5)}
+  50%{box-shadow:0 0 0 8px rgba(220,38,38,0)}}
+.voice-ico{font-size:15px}
+.voice-hint{font-size:11px;color:#0369a1;flex:1;min-width:160px}
+.voice-timer{font-family:ui-monospace,Menlo,monospace;font-size:13px;
+  font-weight:700;color:#dc2626}
+.voice-body{margin-top:8px}
+.voice-body textarea{width:100%;min-height:70px;padding:8px;border:1px solid #bae6fd;
+  border-radius:6px;font-size:12px;font-family:inherit;background:#fff;
+  box-sizing:border-box;resize:vertical}
+.voice-actions{display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap}
+.voice-fill{background:#16a34a;color:#fff;border:none;border-radius:6px;
+  padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.voice-fill:hover{background:#15803d}
+.voice-fill:disabled{background:#9ca3af;cursor:not-allowed}
+.voice-clear{background:#fff;color:#6b7280;border:1px solid #d1d5db;
+  border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.voice-clear:hover{background:#f3f4f6;color:#111827}
+.voice-status{font-size:11px;color:#6b7280}
+.voice-status.ok{color:#16a34a;font-weight:600}
+.voice-status.err{color:#dc2626;font-weight:600}
+.voice-panel.unsupported .voice-btn{display:none}
+.voice-panel.unsupported .voice-hint{color:#9ca3af}
+
+/* ── Purpose of visit — radio-button card group ─────────── */
+.purpose-cards{display:flex;gap:6px;flex-wrap:wrap}
+.purpose-cards input[type="radio"]{position:absolute;opacity:0;pointer-events:none;width:0;height:0}
+.purpose-card{
+  flex:1 1 calc(20% - 6px);min-width:110px;
+  padding:9px 10px;border:1.5px solid #d1d5db;border-radius:8px;
+  background:#fff;cursor:pointer;text-align:center;
+  font-size:12px;font-weight:500;color:#374151;
+  transition:all .12s;user-select:none;
+}
+.purpose-card:hover{border-color:#93c5fd;background:#eff6ff}
+.purpose-cards input[type="radio"]:checked + .purpose-card{
+  background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600;
+  box-shadow:0 1px 3px rgba(37,99,235,.25);
+}
+@media (max-width:640px){
+  /* min-width:110px (desktop) × 5 cards would force horizontal
+     overflow on a 360px phone — drop it on small screens so cards
+     can shrink to 2-per-row freely. */
+  .purpose-card{flex:1 1 calc(50% - 6px);min-width:0;font-size:11px;padding:7px 8px}
+}
+
+/* ── Custom searchable dropdown (same UX as the rest of the dashboard) ── */
+.dd{position:relative;display:flex;flex-direction:column;gap:3px;width:100%}
+.dd-wrap{display:flex;align-items:stretch;width:100%}
+.dd-wrap input{
+  flex:1;min-width:0;padding:7px 9px;
+  border:1px solid #d1d5db;border-right:none;border-radius:6px 0 0 6px;
+  font-size:13px;color:#374151;background:#fff;outline:none;
+  transition:border-color .12s,background .12s
+}
+.dd-wrap input:focus{border-color:#2563eb}
+.dd-wrap input:disabled{opacity:.55;cursor:not-allowed;background:#f3f4f6}
+.dd-btn{
+  padding:5px 9px;border:1px solid #d1d5db;border-right:none;
+  background:#f3f4f6;cursor:pointer;font-size:11px;color:#6b7280;
+  transition:background .12s;user-select:none
+}
+.dd-btn:hover:not(:disabled){background:#e5e7eb}
+.dd-btn:disabled{opacity:.5;cursor:not-allowed}
+.dd-btn.dd-clear-btn{color:#9ca3af}
+.dd-btn.dd-clear-btn:hover{background:#fee2e2;color:#ef4444}
+.dd-btn.dd-last{border-right:1px solid #d1d5db;border-radius:0 6px 6px 0}
+.dd.dd-active .dd-wrap input{border-color:#2563eb;background:#eff6ff;color:#1d4ed8;font-weight:600}
+.dd.dd-active .dd-btn{border-color:#2563eb;background:#dbeafe;color:#1d4ed8}
+.dd-menu{
+  position:absolute;top:calc(100% + 4px);left:0;right:0;
+  max-height:280px;overflow:auto;background:#fff;
+  border:1px solid #e5e7eb;border-radius:8px;
+  box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:9999;display:none
+}
+.dd-item{padding:7px 10px;cursor:pointer;white-space:nowrap;font-size:12px;color:#374151;overflow:hidden;text-overflow:ellipsis}
+.dd-item:hover,.dd-item.dd-item-active{background:#eff6ff;color:#2563eb}
+.dd-empty{padding:10px;color:#9ca3af;font-size:12px}
+.recent-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.recent-tbl th{background:#f8fafc;color:#374151;font-size:11px;font-weight:600;padding:6px 8px;text-align:left;border-bottom:1px solid #e5e7eb}
+.recent-tbl td{padding:6px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+.recent-tbl tr:hover td{background:#fafafa}
+.recent-tbl .ts{color:#6b7280;font-size:11px;white-space:nowrap}
+.recent-tbl .bde{font-weight:600;color:#1e3a5f}
+.recent-tbl .shop{color:#374151}
+.recent-tbl .notes{color:#111827}
+.recent-tbl .photos a{display:inline-block;margin-right:4px}
+.recent-tbl .photos img{width:36px;height:36px;object-fit:cover;border-radius:4px;border:1px solid #e5e7eb}
+
+/* ── Deep-link target (arrived via "Make a comment" in an email) ── */
+/* Persistent highlight on the visit row so the user can see at a
+   glance which entry needs their feedback.  The pulsing ring on the
+   composer block reinforces "type here". */
+.recent-tbl tr.fb-target-row td{
+  background:#fef3c7 !important;
+  border-top:2px solid #f59e0b;border-bottom:2px solid #f59e0b;
+  box-shadow:inset 4px 0 0 #f59e0b;
+}
+.fb-target-block{
+  margin:6px -4px !important;padding:6px 8px;
+  background:#fffbeb;border:2px solid #f59e0b;border-radius:6px;
+  animation:fbPulse 1.6s ease-in-out infinite;
+}
+@keyframes fbPulse{
+  0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,.55)}
+  50%   {box-shadow:0 0 0 8px rgba(245,158,11,0)}
+}
+.fb-jump-banner{
+  font-size:12px;font-weight:700;color:#92400e;
+  background:#fde68a;border:1px solid #f59e0b;
+  padding:6px 10px;border-radius:5px;margin:6px 0 4px;
+  text-align:center;letter-spacing:.3px;
+}
+.empty{padding:18px;text-align:center;color:#9ca3af;font-size:12px}
+.filt{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}
+.filt label{font-size:11px;color:#6b7280}
+.filt select,.filt input{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:12px}
+/* Filter row for Recent entries (State / BDE / Purpose) */
+.filt-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.filt-tag{font-size:10px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.4px}
+.filt-row select{border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;font-size:12px}
+.seg{display:inline-flex;border:1px solid #d1d5db;border-radius:6px;overflow:hidden;background:#fff}
+.seg-btn{border:none;background:#fff;color:#374151;padding:4px 10px;font-size:11px;cursor:pointer;border-right:1px solid #e5e7eb;font-weight:500}
+.seg-btn:last-child{border-right:none}
+.seg-btn:hover{background:#f3f4f6}
+.seg-btn.active{background:#2563eb;color:#fff}
+.seg-btn:disabled{opacity:.4;cursor:not-allowed;background:#fff !important;color:#9ca3af}
+</style>
+</head>
+<body>
+
+<!-- Floating drop banner — appears only while a ship-to / plan chip
+     is being dragged so the user can drop close to the cursor
+     instead of aiming at the form on the far side of the page. -->
+<div id="floatingDrop" class="floating-drop">
+  <span class="fd-text">📍 Drop here to log this visit</span>
+</div>
+
+<header>
+  <h1>BDE Visit Log</h1>
+  <span class="sub">post-visit memo · 1 min</span>
+  <div class="nav">
+    <button class="btn" onclick="location.href='/'">Graph View</button>
+    <button class="btn" onclick="location.href='/map'">Map View</button>
+    <button class="btn" onclick="location.href='/stock'">Stock</button>
+    <button class="btn" onclick="location.href='/rebate'">Rebate</button>
+    <button class="btn" onclick="location.href='/price'">Price</button>
+    <button class="btn active">Meeting</button>
+    <button class="btn" onclick="location.href='/claims'">Claims</button>
+  </div>
+</header>
+
+<div class="container">
+
+<div class="planner-layout">
+
+<!-- ── Column 1: Ship-to palette (drag source) ── -->
+<div class="planner-palette">
+  <div class="card">
+    <div class="palette-row-tag">Pick a shop · click to log, drag to schedule</div>
+
+    <!-- === POTENTIAL CUSTOMER START === -->
+    <div id="potBlock" style="margin-bottom:10px;padding:8px 10px;background:#fff7ed;
+         border:1px solid #fed7aa;border-radius:6px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;
+                  font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;
+                  letter-spacing:.4px;margin-bottom:5px;gap:8px;">
+        <span>🌱 Potential customers</span>
+        <span style="display:flex;gap:10px;">
+          <a href="javascript:void(0)" id="potViewAllBtn"
+             style="font-size:11px;color:#9a3412;text-decoration:underline;font-weight:700;">View all →</a>
+          <a href="javascript:void(0)" id="potAddBtn"
+             style="font-size:11px;color:#ea580c;text-decoration:underline;font-weight:700;">+ Add new</a>
+        </span>
+      </div>
+      <div id="potList" style="display:flex;flex-direction:column;gap:3px;
+                                max-height:140px;overflow-y:auto;"></div>
+      <div id="potForm" style="display:none;margin-top:6px;padding:8px;
+           background:#fff;border:1px dashed #fdba74;border-radius:5px;">
+        <label style="font-size:10px;color:#9a3412;font-weight:700;text-transform:uppercase;
+                      letter-spacing:.3px;display:block;margin-bottom:3px;">Ship-to name *</label>
+        <input id="potName" type="text" placeholder="e.g. ABC Tyres Brisbane"
+               style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;
+                      font-size:12px;margin-bottom:6px;">
+        <label style="font-size:10px;color:#9a3412;font-weight:700;text-transform:uppercase;
+                      letter-spacing:.3px;display:block;margin-bottom:3px;">Sold-to name (parent customer)</label>
+        <input id="potSold" type="text" placeholder="Leave blank if same as ship-to"
+               style="width:100%;padding:6px 8px;border:1px solid #d1d5db;border-radius:4px;
+                      font-size:12px;margin-bottom:6px;">
+        <div style="display:flex;gap:5px;justify-content:flex-end;">
+          <button type="button" id="potCancelBtn" style="font-size:11px;padding:4px 10px;
+                  background:#fff;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+          <button type="button" id="potSaveBtn" style="font-size:11px;padding:4px 10px;
+                  background:#ea580c;color:#fff;border:none;border-radius:4px;cursor:pointer;font-weight:600;">Save</button>
+        </div>
+        <div id="potMsg" style="font-size:11px;margin-top:5px;"></div>
+      </div>
+    </div>
+    <!-- === POTENTIAL CUSTOMER END === -->
+
+    <div style="margin-bottom:6px;">
+      <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
+        Sold-to <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(optional — narrows the list below)</span>
+      </label>
+      <div class="dd" id="palSoldDd" style="width:100%;">
+        <div class="dd-wrap">
+          <input id="palSold" type="text" placeholder="Search sold-to…" autocomplete="off">
+          <button class="dd-btn dd-clear-btn" type="button" id="palSoldClear" title="Clear" tabindex="-1">×</button>
+          <button class="dd-btn dd-last" type="button" id="palSoldOpen" title="Show all" tabindex="-1">▼</button>
+        </div>
+        <div class="dd-menu" id="palSoldMenu"></div>
+      </div>
+    </div>
+
+    <input id="shipSearch" class="palette-input" type="text"
+           placeholder="Search ship-to by name or code…" autocomplete="off">
+    <div class="palette-count" id="shipCount"></div>
+    <div id="shipList" class="palette-list">
+      <div class="palette-empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Column 2: Calendar + New visit form ── -->
+<div class="planner-left">
+
+  <!-- Calendar -->
+  <div class="card plan-board">
+    <div class="plan-toolbar">
+      <button type="button" id="calPrev">‹</button>
+      <span class="plan-month" id="calMonthLabel">…</span>
+      <button type="button" id="calToday">Today</button>
+      <button type="button" id="calNext">›</button>
+    </div>
+    <div id="calGrid" class="cal-grid"></div>
+    <div style="font-size:10px;color:#9ca3af;margin-top:6px;">
+      Tip: drag a ship-to chip from the palette on the left onto a date.  Click × on a chip to remove.
+    </div>
+  </div>
+
+  <!-- ── New entry form (left bottom — under Calendar + Palette) ── -->
+  <div class="card form-card">
+    <h2>New visit</h2>
+    <div id="bdeIdLine" class="bde-id-line" style="display:none;">
+      Signed in as <b id="bdeIdEmail">…</b>
+    </div>
+
+    <!-- ── Voice → AI auto-fill (Web Speech transcription, Claude extraction) ── -->
+    <div id="voicePanel" class="voice-panel">
+      <div class="voice-row">
+        <button type="button" id="voiceBtn" class="voice-btn" title="Tap and speak — AI fills the form">
+          <span class="voice-ico">🎙</span>
+          <span class="voice-label">Quick log by voice</span>
+        </button>
+        <span id="voiceHint" class="voice-hint">Tap, speak 20-30 sec, AI fills the form below</span>
+        <span id="voiceTimer" class="voice-timer" style="display:none;">0:00</span>
+      </div>
+      <div id="voiceBody" class="voice-body" style="display:none;">
+        <textarea id="voiceTranscript"
+          placeholder="Transcript appears here — edit if needed, then Auto-fill"></textarea>
+        <div class="voice-actions">
+          <button type="button" id="voiceFillBtn" class="voice-fill">✨ Auto-fill form</button>
+          <button type="button" id="voiceClearBtn" class="voice-clear">Discard</button>
+          <span id="voiceStatus" class="voice-status"></span>
+        </div>
+      </div>
+    </div>
+
+    <form id="meetingForm">
+      <div class="grid">
+        <div class="field">
+          <label>BDE <span class="req">*</span></label>
+          <select id="fBde" required>
+            <option value="">— select —</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Visit date <span class="req">*</span></label>
+          <input id="fVisitDate" type="date" required>
+        </div>
+
+        <div class="field col-full">
+          <label>Selected shop <span class="req">*</span>
+            <span style="color:#9ca3af;font-weight:400;">(click a ship-to on the left palette)</span>
+          </label>
+          <div id="selectedShop" class="selected-shop selected-shop-empty">
+            <span class="ss-icon">📍</span>
+            <span class="ss-text">No ship-to selected — pick one from the palette ←</span>
+            <button type="button" id="selectedShopClear" class="ss-clear" title="Clear" style="display:none;">×</button>
+          </div>
+          <input type="hidden" id="fSoldHidden">
+          <input type="hidden" id="fShipHidden">
+          <!-- Set when the user lands here by clicking a calendar plan
+               chip; tells the backend which BDE originally scheduled
+               this visit so feedback comments email them too. -->
+          <input type="hidden" id="fPlanBde" name="plan_bde_name">
+        </div>
+
+        <div class="field col-full">
+          <label>Meeting Preparation
+            <span style="color:#9ca3af;font-weight:400;">(optional — pre-visit notes, talking points, things to ask)</span>
+          </label>
+          <!-- Read-only block populated from prior prep_notes for the
+               currently-selected shop.  Shown only when at least one
+               previous prep exists, so the BDE can reference it
+               without typing it again into the textarea below. -->
+          <div id="prevPrep" style="display:none;margin-bottom:6px;"></div>
+          <textarea id="fPrep" name="prep_notes"
+            placeholder="Pre-visit prep — talking points, recent issues to raise, materials to bring …"
+            style="min-height:60px;"></textarea>
+        </div>
+
+        <div class="field col-full">
+          <label>Purpose of visit
+            <span style="color:#9ca3af;font-weight:400;">(required for an actual visit log · skip if you're only saving Meeting Preparation)</span>
+          </label>
+          <div class="purpose-cards">
+            <input type="radio" id="purp-promo"  name="visit_purpose" value="Promotion">
+            <label for="purp-promo"  class="purpose-card">Promotion</label>
+
+            <input type="radio" id="purp-intro"  name="visit_purpose" value="Product introduction">
+            <label for="purp-intro"  class="purpose-card">Product introduction</label>
+
+            <input type="radio" id="purp-claim"  name="visit_purpose" value="Claim support">
+            <label for="purp-claim"  class="purpose-card">Claim support</label>
+
+            <input type="radio" id="purp-rebate" name="visit_purpose" value="Rebate follow-up">
+            <label for="purp-rebate" class="purpose-card">Rebate follow-up</label>
+
+            <input type="radio" id="purp-stock"  name="visit_purpose" value="Stock">
+            <label for="purp-stock"  class="purpose-card">Stock</label>
+
+            <input type="radio" id="purp-other"  name="visit_purpose" value="Other">
+            <label for="purp-other"  class="purpose-card">Other</label>
+          </div>
+        </div>
+
+        <div class="field col-full">
+          <label>Met person <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
+          <input id="fMet" type="text" placeholder="e.g. store manager, owner, …">
+        </div>
+
+        <div class="field col-full">
+          <label>Met person contact <span style="color:#9ca3af;font-weight:400;">(optional — phone or email, remembered for next time)</span></label>
+          <input id="fMetContact" type="text" maxlength="80" placeholder="e.g. 0412 345 678 or nick@store.com">
+        </div>
+
+        <div class="field col-full">
+          <label>Meeting notes
+            <span style="color:#9ca3af;font-weight:400;">(required for an actual visit log · skip if you're only saving Meeting Preparation)</span>
+          </label>
+          <textarea id="fNotes" placeholder="What happened — orders, complaints, conversation summary"></textarea>
+        </div>
+
+        <div class="field col-full">
+          <label>Next action <span style="color:#9ca3af;font-weight:400;">(optional)</span></label>
+          <input id="fNext" type="text" placeholder="Follow-up needed, deadline, …">
+        </div>
+
+        <div class="field col-full">
+          <label>Feedback <span style="color:#9ca3af;font-weight:400;">(optional — can also be added later from the list below or from Map View)</span></label>
+          <textarea id="fFeedback" placeholder="Manager / team feedback on this visit"></textarea>
+        </div>
+
+        <div class="field col-full">
+          <label>Photos <span style="color:#9ca3af;font-weight:400;">(optional — up to 5, jpg/png/webp/heic)</span></label>
+          <input id="fPhotos" type="file" accept="image/*" multiple capture="environment">
+        </div>
+      </div>
+
+      <div class="submit-row">
+        <button type="submit" class="btn btn-primary">Submit</button>
+        <span id="submitMsg"></span>
+      </div>
+    </form>
+  </div>
+
+</div><!-- /planner-left -->
+
+<!-- ── Recent entries — full-height right column.  BDE → Shop →
+     Purpose → Visit-date grouping handled inside loadRecent(). ── -->
+<div class="planner-right">
+  <div class="card" id="recentSection">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h2 style="margin:0;">Recent entries</h2>
+      <!-- Tabs: Existing customers (visit logs, default) ↔ Potential
+           customers (pipeline). Both tabs share the State/BDE filters;
+           Purpose only matters for visit logs, so we hide that row in
+           the Potential tab. -->
+      <div class="seg" id="rightTabs" style="font-size:11px;">
+        <button type="button" class="seg-btn active" data-tab="logs">🏪 Existing</button>
+        <button type="button" class="seg-btn" data-tab="potentials">🌱 Potential</button>
+      </div>
+    </div>
+    <div class="filt-row">
+      <span class="filt-tag">State</span>
+      <div class="seg" id="filtStateSeg">
+        <button type="button" class="seg-btn active" data-st="">All</button>
+        <button type="button" class="seg-btn" data-st="NSW">NSW</button>
+        <button type="button" class="seg-btn" data-st="QLD">QLD</button>
+        <button type="button" class="seg-btn" data-st="VIC">VIC</button>
+        <button type="button" class="seg-btn" data-st="WA">WA</button>
+      </div>
+      <span class="filt-tag" style="margin-left:8px;">BDE</span>
+      <select id="filtBde"><option value="">All</option></select>
+      <span id="filtShopBadge" style="font-size:11px;color:#1e3a5f;display:none;">
+        <span style="color:#6b7280;">Shop:</span>
+        <b id="filtShopBadgeText"></b>
+        <a href="javascript:void(0)" id="filtShopBadgeClear"
+           style="color:#dc2626;margin-left:4px;font-weight:700;">×</a>
+      </span>
+      <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
+    </div>
+    <div class="filt-row" style="margin-top:4px;">
+      <span class="filt-tag">Purpose</span>
+      <div class="seg" id="filtPurposeSeg">
+        <button type="button" class="seg-btn active" data-pp="">All</button>
+        <button type="button" class="seg-btn" data-pp="Promotion">Promotion</button>
+        <button type="button" class="seg-btn" data-pp="Product introduction">Product intro</button>
+        <button type="button" class="seg-btn" data-pp="Claim support">Claim</button>
+        <button type="button" class="seg-btn" data-pp="Rebate follow-up">Rebate</button>
+        <button type="button" class="seg-btn" data-pp="Stock">Stock</button>
+        <button type="button" class="seg-btn" data-pp="Other">Other</button>
+      </div>
+      <span style="color:#9ca3af;font-size:11px;margin-left:8px;">
+        Pick a shop in the palette ← to filter by shop
+      </span>
+    </div>
+    <div id="recentWrap"><div class="empty">Loading…</div></div>
+    <div id="potTabWrap" style="display:none;"></div>
+  </div>
+</div><!-- /planner-right -->
+
+</div><!-- /planner-layout -->
+
+</div>
+
+<script>
+// ─── Touch → HTML5 drag-and-drop polyfill ──────────────────────────
+// HTML5 drag events don't fire on mobile.  This tiny shim translates
+// touch input into dragstart / dragover / drop on the same elements
+// so the rest of the code can stay pointer-agnostic.
+(function setupTouchDnD(){
+  if (!('ontouchstart' in window)) return;          // pointer-only env
+  let src = null, ghost = null, lastOver = null, dt = null;
+  function _dt(){
+    const bag = {};
+    return {
+      _bag: bag,
+      effectAllowed: "copy",
+      setData(t, v){ bag[t] = v; },
+      getData(t){ return bag[t] || ""; },
+      types: { includes(t){ return t in bag; } },
+    };
+  }
+  function _under(x, y){
+    if (ghost) ghost.style.display = "none";
+    const el = document.elementFromPoint(x, y);
+    if (ghost) ghost.style.display = "";
+    return el;
+  }
+  function _fire(target, type){
+    const e = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "dataTransfer", { value: dt, writable: false });
+    target.dispatchEvent(e);
+    return e;
+  }
+  function _mkGhost(el){
+    const r = el.getBoundingClientRect();
+    const g = el.cloneNode(true);
+    g.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;`
+      + `width:${r.width}px;pointer-events:none;opacity:.8;z-index:99999;`
+      + `transform:rotate(2deg);box-shadow:0 6px 18px rgba(0,0,0,.25);`;
+    document.body.appendChild(g);
+    return g;
+  }
+  document.addEventListener("touchstart", (e) => {
+    const t = e.target.closest('[draggable="true"]');
+    if (!t) return;
+    src = t; dt = _dt();
+    _fire(t, "dragstart");
+    ghost = _mkGhost(t);
+  }, { passive: true });
+  document.addEventListener("touchmove", (e) => {
+    if (!src) return;
+    e.preventDefault();
+    const tch = e.touches[0];
+    if (ghost){
+      ghost.style.left = (tch.clientX - ghost.offsetWidth / 2) + "px";
+      ghost.style.top  = (tch.clientY - 18) + "px";
+    }
+    const over = _under(tch.clientX, tch.clientY);
+    if (over !== lastOver){
+      if (lastOver) _fire(lastOver, "dragleave");
+      lastOver = over;
+    }
+    if (over) _fire(over, "dragover");
+  }, { passive: false });
+  document.addEventListener("touchend", (e) => {
+    if (!src) return;
+    const tch = e.changedTouches[0];
+    const over = _under(tch.clientX, tch.clientY);
+    if (over) _fire(over, "drop");
+    _fire(src, "dragend");
+    if (ghost) ghost.remove();
+    src = null; ghost = null; lastOver = null; dt = null;
+  }, { passive: true });
+})();
+const fBde       = document.getElementById("fBde");
+const fSold      = document.getElementById("fSold");
+const fShip      = document.getElementById("fShip");
+const fVisitDate = document.getElementById("fVisitDate");
+const fForm      = document.getElementById("meetingForm");
+const fMsg       = document.getElementById("submitMsg");
+const filtBde    = document.getElementById("filtBde");
+
+// Default visit date to today (editable so a BDE can log a past visit).
+// Cap the picker at today so future dates can't be picked.
+(function initVisitDate(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  const iso = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  fVisitDate.value = iso;
+  fVisitDate.max   = iso;
+})();
+
+// ── Custom searchable dropdown ───────────────────────────────────
+// options = [{label, value}, …].  bindPicker wires the input/button/menu
+// so typing filters the list and clicking an item stores the chosen
+// value on `picker.value`.  Same UX as the dashboard's bindDropdown but
+// trimmed to just what /meeting needs (single-select, no chips).
+function ddOpen(menu){ menu.style.display = "block"; }
+function ddClose(menu){ menu.style.display = "none"; }
+function ddRender(menu, items, onPick){
+  menu.innerHTML = "";
+  if (!items || !items.length){
+    const div = document.createElement("div");
+    div.className = "dd-empty"; div.textContent = "No matches";
+    menu.appendChild(div); return;
+  }
+  items.slice(0, 500).forEach(opt => {
+    const div = document.createElement("div");
+    div.className = "dd-item";
+    div.textContent = opt.label;
+    div.addEventListener("mousedown", (e) => {
+      e.preventDefault(); onPick(opt); ddClose(menu);
+    });
+    menu.appendChild(div);
+  });
+}
+function ddFilter(opts, q){
+  const s = (q || "").trim().toLowerCase();
+  if (!s) return opts;
+  return opts.filter(o => o.label.toLowerCase().includes(s));
+}
+
+function bindPicker({inputId, openBtnId, clearBtnId, menuId, onChange}){
+  const inp  = document.getElementById(inputId);
+  const open = document.getElementById(openBtnId);
+  const clr  = document.getElementById(clearBtnId);
+  const menu = document.getElementById(menuId);
+  const ddEl = inp.closest(".dd");
+
+  const state = { options: [], value: "", label: "" };
+
+  function setActive(on){ if (ddEl) ddEl.classList.toggle("dd-active", !!on); }
+
+  function pick(opt){
+    state.value = opt.value;
+    state.label = opt.label;
+    inp.value   = opt.label;
+    setActive(true);
+    if (onChange) onChange(opt);
+  }
+
+  function showAll(){ ddRender(menu, state.options, pick); ddOpen(menu); }
+  function showFiltered(){ ddRender(menu, ddFilter(state.options, inp.value), pick); ddOpen(menu); }
+
+  open.addEventListener("click", () => showAll());
+  inp.addEventListener("focus", () => showFiltered());
+  inp.addEventListener("input", () => {
+    // typing invalidates the previous pick until they actually select again
+    state.value = "";
+    setActive(false);
+    showFiltered();
+  });
+  clr.addEventListener("click", () => {
+    state.value = ""; state.label = ""; inp.value = "";
+    setActive(false); ddClose(menu);
+    if (onChange) onChange(null);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!menu.contains(e.target) && e.target !== inp
+        && e.target !== open && e.target !== clr){
+      ddClose(menu);
+    }
+  });
+
+  const api = {
+    setOptions(opts){ state.options = opts || []; api.__options = state.options; },
+    setDisabled(b){
+      inp.disabled = b; open.disabled = b; clr.disabled = b;
+      if (b){ state.value = ""; state.label = ""; inp.value = ""; setActive(false); }
+    },
+    setValue(opt){
+      // Programmatic pick — same effect as a user click but skips the
+      // onChange callback so we don't trigger cascades on auto-fill.
+      if (!opt) return;
+      state.value = opt.value;
+      state.label = opt.label;
+      inp.value   = opt.label;
+      setActive(true);
+    },
+    value(){ return state.value; },
+    label(){ return state.label; },
+    reset(){
+      state.value = ""; state.label = ""; inp.value = "";
+      setActive(false); ddClose(menu);
+    },
+    __options: [],
+  };
+  return api;
+}
+
+// Form's Sold-to / Ship-to pickers were removed — the LEFT palette
+// is now the single shop picker.  The form reads the selected
+// ship-to via _selectedShop (set by clicking a palette chip).
+let _selectedShop = null;   // {ship_to, ship_to_name, sold_to, sold_to_name}
+
+function _setSelectedShop(row){
+  _selectedShop = row || null;
+  // Any selection from outside a calendar chip (palette click, drag-drop)
+  // breaks the link to "this shop came from a planned chip", so drop
+  // the plan-BDE.  The chip click handler re-sets it after this call.
+  const planHid = document.getElementById("fPlanBde");
+  if (planHid) planHid.value = "";
+  const box = document.getElementById("selectedShop");
+  const clr = document.getElementById("selectedShopClear");
+  // Refresh Recent entries to show only this shop's history.
+  // (loadRecent reads _selectedShop directly.)
+  if (typeof loadRecent === "function") loadRecent();
+  // Show/hide the badge next to the BDE filter.
+  const badge = document.getElementById("filtShopBadge");
+  const badgeTxt = document.getElementById("filtShopBadgeText");
+  if (badge && badgeTxt){
+    if (row){
+      badge.style.display = "inline";
+      badgeTxt.textContent = (row.ship_to || "") +
+        (row.ship_to_name ? " · " + row.ship_to_name : "");
+    } else {
+      badge.style.display = "none";
+    }
+  }
+  if (!box) return;
+  if (row){
+    box.classList.remove("selected-shop-empty");
+    box.classList.add("selected-shop-set");
+    // Selected shop banner is read-only — both real and potential
+    // customer names are locked at the source (customer master or the
+    // potential's add form), so the meeting log can't drift from them.
+    const isPot = !!row.potential || (row.ship_to || "").startsWith("POT-");
+    box.classList.toggle("selected-shop-potential", isPot);
+    const badge = isPot
+      ? `<span style="background:#fed7aa;color:#9a3412;font-size:9px;font-weight:700;
+                      text-transform:uppercase;letter-spacing:.3px;padding:1px 6px;
+                      border-radius:6px;margin-right:6px;">🌱 Potential</span>`
+      : "";
+    const shipName = escapeHtml(row.ship_to_name || row.ship_to);
+    const soldName = escapeHtml(row.sold_to_name || "");
+    const shipCode = isPot ? "" : escapeHtml(row.ship_to || "");
+    box.querySelector(".ss-text").innerHTML =
+      `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+         ${badge}
+         <b style="font-size:13px;">${shipName}</b>
+         ${shipCode ? `<span class="ss-sub" style="font-family:ui-monospace,monospace;">${shipCode}</span>` : ""}
+       </div>
+       ${soldName ? `<div class="ss-sub" style="margin-top:2px;">
+         <span style="text-transform:uppercase;font-size:9px;font-weight:700;letter-spacing:.3px;color:#6b7280;">Sold-to</span>
+         · ${soldName}
+       </div>` : ""}`;
+    if (clr) clr.style.display = "inline-block";
+    document.getElementById("fSoldHidden").value = row.sold_to_name || row.sold_to || "";
+    document.getElementById("fShipHidden").value = row.ship_to || "";
+  } else {
+    box.classList.add("selected-shop-empty");
+    box.classList.remove("selected-shop-set");
+    box.classList.remove("selected-shop-potential");
+    box.querySelector(".ss-text").textContent =
+      "No ship-to selected — pick one from the palette ←";
+    if (clr) clr.style.display = "none";
+    document.getElementById("fSoldHidden").value = "";
+    document.getElementById("fShipHidden").value = "";
+  }
+  // Highlight the matching chip in the palette
+  document.querySelectorAll(".ship-chip").forEach(el => {
+    el.classList.toggle("selected", row && el.dataset.ship === row.ship_to);
+  });
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const clr = document.getElementById("selectedShopClear");
+  if (clr) clr.addEventListener("click", () => _setSelectedShop(null));
+
+  // Make the "Selected shop" banner a drop target too so drag-and-drop
+  // works for the form just like it does for the calendar.
+  const box = document.getElementById("selectedShop");
+  if (!box) return;
+  box.addEventListener("dragover", (e) => {
+    // Always preventDefault so drop fires — type-check happens at
+    // drop time below.  Firefox in particular doesn't surface custom
+    // types on dragover for security reasons.
+    e.preventDefault();
+    box.style.borderColor = "#2563eb";
+    box.style.background  = "#dbeafe";
+  });
+  box.addEventListener("dragleave", () => {
+    box.style.borderColor = "";
+    box.style.background  = "";
+  });
+  box.addEventListener("drop", (e) => {
+    e.preventDefault();
+    box.style.borderColor = "";
+    box.style.background  = "";
+    const ship = e.dataTransfer.getData("text/ship_to");
+    if (!ship) return;
+    // Resolve full row from cached palette options so we can store
+    // sold_to / sold_to_name alongside the ship-to.
+    const row = (_shipOptions || []).find(r => r.ship_to === ship);
+    _setSelectedShop(row || { ship_to: ship });
+  });
+
+  // ── Floating drop banner ─────────────────────────────────────
+  // Shown only while a ship-to / plan chip is mid-drag.  Drop on it
+  // = same as dropping on the in-form Selected-shop banner.
+  const fd = document.getElementById("floatingDrop");
+  if (!fd) return;
+  function _fdShow(){ fd.classList.add("show"); }
+  function _fdHide(){ fd.classList.remove("show"); fd.classList.remove("drag-over"); }
+  document.addEventListener("dragstart", (e) => {
+    const el = e.target;
+    if (!el || !el.classList) return;
+    // Show the floating drop banner whenever any ship-to bearing
+    // element starts being dragged — palette chips, calendar plan
+    // chips, AND Recent-entries shop group banners.
+    if (el.classList.contains("ship-chip")
+        || el.classList.contains("plan-chip")
+        || el.classList.contains("grp-shop")){
+      _fdShow();
+    }
+  });
+  document.addEventListener("dragend", _fdHide);
+  fd.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    fd.classList.add("drag-over");
+  });
+  fd.addEventListener("dragleave", () => fd.classList.remove("drag-over"));
+  fd.addEventListener("drop", (e) => {
+    e.preventDefault();
+    _fdHide();
+    const ship = e.dataTransfer.getData("text/ship_to");
+    if (!ship) return;
+    const row = (_shipOptions || []).find(r => r.ship_to === ship);
+    _setSelectedShop(row || { ship_to: ship });
+  });
+});
+
+async function fetchJSON(url){
+  const r = await fetch(url, {credentials: "include"});
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`);
+  return r.json();
+}
+
+// Auto-fill the BDE picker from /api/bdes_active.  If Cloudflare Access
+// gave us an authenticated email (via the Cf-Access-Authenticated-User-Email
+// header on the page request), match it to a BDE name; otherwise the user
+// picks manually.  The email shown is for transparency only.
+async function loadBdes(){
+  const list = await fetchJSON("/api/bdes_active").catch(() => []);
+  _allBdeNames = list.slice();        // cached so State filter can re-narrow it
+  // Make sure the people directory is loaded — rebuildBdeDropdown needs
+  // per-BDE state to filter by State button.
+  await _ensurePeople();
+  const opts = ['<option value="">— select —</option>',
+                ...list.map(n => `<option value="${n}">${n}</option>`)];
+  fBde.innerHTML    = opts.join("");
+  filtBde.innerHTML = ['<option value="">All</option>',
+                       ...list.map(n => `<option value="${n}">${n}</option>`)].join("");
+
+  // Auto-fill the BDE dropdown with the signed-in user (any role).
+  // For BDE role we also disable the dropdown so they can't submit
+  // on someone else's behalf.  SM / ALL stay editable.  whoami is
+  // also stashed on window._me so the calendar renderer can colour
+  // chips by BDE for SM / ALL viewers.
+  try {
+    const who = await fetchJSON("/api/whoami").catch(() => null);
+    if (who) window._me = who;
+    if (who && who.logged_in && who.name){
+      if (![...fBde.options].some(o => o.value === who.name)){
+        fBde.add(new Option(who.name, who.name));
+      }
+      fBde.value = who.name;
+      if (who.role === "BDE"){
+        fBde.disabled = true;
+        fBde.title = `Locked: ${who.name} (BDE)`;
+      }
+    }
+    // SM users are locked to their state — pre-select the matching
+    // State seg button and disable the others.  Falls through to "All"
+    // for ALL-role users (Hayden / JJ / Jayden) so leadership sees
+    // everything by default.
+    if (who && who.lock_region){
+      const st = (who.lock_region === "SA" || who.lock_region === "TAS")
+                 ? "VIC" : who.lock_region;
+      _filtState = st;
+      document.querySelectorAll("#filtStateSeg .seg-btn").forEach(b => {
+        const active = (b.dataset.st === st);
+        b.classList.toggle("active", active);
+        if (b.dataset.st !== st) b.disabled = true;
+      });
+      rebuildBdeDropdown();
+    }
+  } catch (e) { /* whoami optional — manual pick still works */ }
+}
+
+// loadSoldTos / loadShipTosFor were tied to the form's Sold-to /
+// Ship-to pickers, which have been removed.  Selection now happens
+// entirely through the palette below the calendar.
+
+// State + Purpose filters live entirely client-side: we fetch the rows
+// once (filtered by BDE / ship-to only) and then re-render in place
+// whenever a segmented-button toggles.  Saves a server round-trip on
+// every filter click.
+let _recentRows = [];
+let _filtState  = "";    // "" = All, else "NSW"/"QLD"/"VIC"/"WA"
+let _filtPurp   = "";    // "" = All, else exact visit_purpose value
+// === AI FEATURE START === (probed once from /api/ai_status; hides the
+// per-row "Ask AI" button when the server has no API key configured)
+let _aiEnabled  = false;
+let _aiModel    = "";
+// === AI FEATURE END ===
+
+async function loadRecent(){
+  const wrap = document.getElementById("recentWrap");
+  wrap.innerHTML = '<div class="empty">Loading…</div>';
+  const qs = new URLSearchParams();
+  if (filtBde.value) qs.set("bde", filtBde.value);
+  // Ship-to filter comes from the palette's selected shop, not a
+  // separate input field — single source of truth, same as the form.
+  if (_selectedShop && _selectedShop.ship_to){
+    qs.set("ship_to", _selectedShop.ship_to);
+  }
+  qs.set("limit", "100");
+  _recentRows = await fetchJSON("/api/meeting/list?" + qs.toString()).catch(() => []);
+  if (!Array.isArray(_recentRows)) _recentRows = [];
+  renderRecentRows();
+  // Pre-fill the form's Met person from the shop's most recent log
+  // (so the BDE doesn't have to retype "Nick Manager" every time they
+  // visit the same store).  Only writes when the field is empty so we
+  // never clobber what the user is currently typing.
+  _autofillMetPerson();
+}
+
+function _autofillMetPerson(){
+  if (!_selectedShop || !_selectedShop.ship_to) return;
+  const ship = String(_selectedShop.ship_to);
+  // Find the latest log for this shop that filled the field we're
+  // trying to autofill (met_person and met_person_contact each pick
+  // their own most-recent contributor independently).
+  const latest = (key) => {
+    let best = null;
+    for (const r of _recentRows){
+      if (String(r.ship_to || "") !== ship) continue;
+      const v = (r[key] || "").trim();
+      if (!v) continue;
+      if (!best || (r.created_at || "") > (best.created_at || "")) best = r;
+    }
+    return best ? best[key] : "";
+  };
+  const fMet     = document.getElementById("fMet");
+  const fContact = document.getElementById("fMetContact");
+  if (fMet     && (fMet.value     || "").trim() === "") fMet.value     = latest("met_person")        || fMet.value;
+  if (fContact && (fContact.value || "").trim() === "") fContact.value = latest("met_person_contact") || fContact.value;
+}
+
+function renderRecentRows(){
+  const wrap = document.getElementById("recentWrap");
+  if (!_recentRows.length){
+    wrap.innerHTML = '<div class="empty">No entries yet.</div>';
+    _maybeJumpToFeedbackFromHash();
+    _renderPrevPrepNotes();
+    return;
+  }
+  // Apply the State + Purpose filters client-side.
+  const rows = _recentRows.filter(r => {
+    if (_filtState && (r.bde_state || "") !== _filtState) return false;
+    if (_filtPurp  && (r.visit_purpose || "") !== _filtPurp)  return false;
+    return true;
+  });
+  if (!rows.length){
+    wrap.innerHTML = '<div class="empty">No entries match the current filters.</div>';
+    return;
+  }
+  // === AI FEATURE START === (one button summarising all visible rows)
+  const aiHeader = _aiEnabled ? `
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                margin-bottom:8px;padding:6px 10px;background:#faf5ff;
+                border:1px solid #e9d5ff;border-radius:6px;font-size:11px;
+                color:#581c87;">
+      <span>
+        <b>✨ AI digest</b> of the <b>${rows.length}</b> visible
+        ${rows.length === 1 ? "entry" : "entries"} (after filters).
+      </span>
+      <a href="javascript:void(0)" id="aiDigestBtn"
+         style="color:#7c3aed;font-weight:700;text-decoration:underline;cursor:pointer;">
+        Ask AI
+      </a>
+    </div>
+    <div id="aiDigestPanel" style="display:none;margin-bottom:10px;padding:10px 12px;
+         background:#faf5ff;border:1px solid #e9d5ff;border-radius:6px;
+         font-size:12px;color:#581c87;"></div>
+  ` : "";
+  // === AI FEATURE END ===
+  // Group by BDE → Shop → Purpose, with visit dates listed beneath.
+  // Backend already sorts in this order; we just inject header rows
+  // whenever (bde, shop, purpose) changes so the visual hierarchy is
+  // obvious and a shop's history reads top-to-bottom.
+  // Card-style layout replaces the three plain columns — drop the
+  // thead since each entry now carries its own column row inside the
+  // card (Visited / Planned / Purpose / Met).
+  let h = `${aiHeader}<table class="recent-tbl"><tbody>`;
+  let lastBde = null, lastShip = null, lastPurp = null;
+  for (const r of rows){
+    const photos = (r.photo_paths || [])
+      .map(p => `<a href="${p}" target="_blank"><img src="${p}" alt=""></a>`)
+      .join("");
+    // Own-entry actions: visible to the original BDE author only.
+    const owns = _isMine(r.bde_email, r.bde_name);
+    const actions = owns
+      ? `<div style="margin-top:4px;font-size:10px;">
+           <a href="javascript:void(0)" data-t="${_attr(r.notes || '')}"
+              onclick="editEntry(${r.id}, this.dataset.t)"
+              style="color:#2563eb;margin-right:8px;">edit</a>
+           <a href="javascript:void(0)" onclick="deleteEntry(${r.id})"
+              style="color:#dc2626;">delete</a>
+         </div>` : "";
+    const next = r.next_action ? `<div style="color:#6b7280;font-size:11px;margin-top:3px;">→ ${escapeHtml(r.next_action)}</div>` : "";
+    const prep = r.prep_notes ? `<div style="margin-bottom:6px;padding:5px 8px;background:#eff6ff;border-left:3px solid #2563eb;border-radius:3px;font-size:11px;color:#1e3a5f;"><b style="font-size:10px;text-transform:uppercase;letter-spacing:.3px;">Prep</b><div style="white-space:pre-wrap;">${escapeHtml(r.prep_notes)}</div></div>` : "";
+    const notesBody = r.notes ? `<div style="white-space:pre-wrap;">${escapeHtml(r.notes)}</div>` : "";
+    const met  = r.met_person  ? `<div style="color:#9ca3af;font-size:11px;margin-top:2px;">met: ${escapeHtml(r.met_person)}</div>` : "";
+    // One submission = one row, so prep and notes (when both present)
+    // share the same author and timestamp.  Show it once at the top so
+    // the user can tell who wrote what and when.
+    const author = `<div style="color:#6b7280;font-size:10px;margin-bottom:4px;">by ${escapeHtml(r.bde_name || "—")}${r.created_at ? ` · ${escapeHtml(r.created_at)}` : ""}</div>`;
+    const fbBlock = renderFeedbackBlock(r.id, r.thread || []);
+
+    const bdeKey  = r.bde_name || "";
+    const shipKey = r.ship_to  || "";
+    const purpKey = r.visit_purpose || "";
+
+    // BDE banner — top-level grouping.
+    if (bdeKey !== lastBde){
+      h += `<tr class="grp-bde"><td colspan="3"
+        style="background:#1e3a5f;color:#fff;padding:6px 10px;
+               font-size:12px;font-weight:700;letter-spacing:.3px;">
+        ${escapeHtml(bdeKey || "—")}</td></tr>`;
+      lastBde = bdeKey; lastShip = null; lastPurp = null;
+    }
+    // Shop sub-banner.  The banner itself is a drag source so the
+    // user can grab a past-visited ship-to and drop it on the
+    // calendar (schedule again) or the Selected-shop banner (log a
+    // new visit) without finding it in the palette.
+    if (shipKey !== lastShip){
+      h += `<tr class="grp-shop"><td colspan="3"
+        draggable="true"
+        data-ship="${_attr(shipKey)}" data-ship-name="${_attr(r.ship_to_name || '')}"
+        data-sold="${_attr(r.sold_to || '')}" data-sold-name="${_attr(r.sold_to_name || '')}"
+        title="Drag this shop onto a calendar date or the Selected-shop banner"
+        style="background:#eff6ff;color:#1e3a5f;padding:5px 10px 5px 22px;
+               font-size:12px;font-weight:600;border-top:1px solid #dbeafe;cursor:grab;">
+        <span style="display:inline-block;color:#94a3b8;font-size:10px;margin-right:6px;">⋮⋮</span>
+        ${escapeHtml(shipKey)} · <span style="font-weight:400;">${escapeHtml(r.ship_to_name || "")}</span>
+        ${r.sold_to_name ? `<span style="color:#6b7280;font-weight:400;font-size:11px;"> — ${escapeHtml(r.sold_to_name)}</span>` : ""}
+      </td></tr>`;
+      lastShip = shipKey; lastPurp = null;
+    }
+    // Purpose sub-sub-banner.
+    if (purpKey !== lastPurp){
+      h += `<tr class="grp-purp"><td colspan="3"
+        style="background:#f8fafc;color:#374151;padding:3px 10px 3px 36px;
+               font-size:11px;font-weight:600;">
+        <span style="display:inline-block;font-size:10px;font-weight:600;color:#1e3a5f;background:#e0e7ff;padding:1px 7px;border-radius:8px;">
+          ${escapeHtml(purpKey || "—")}
+        </span>
+      </td></tr>`;
+      lastPurp = purpKey;
+    }
+    // Visit row — Salesforce-style structured card with Planned first
+    // so the eye lands on the schedule, then the actual visit and a
+    // colour-coded badge that says at a glance whether the visit
+    // happened as planned.
+    // Same-week comparison: a visit that lands in the same Mon-Sun week
+    // as the plan counts as 'visited as planned' — one or two days off
+    // either side is fine.  Only when the visit slipped to a different
+    // week do we flag it as shifted.
+    const _mondayOf = (d) => {
+      if (!d) return null;
+      const x = new Date(d);
+      const day = x.getDay() || 7;   // Sun -> 7
+      x.setDate(x.getDate() - day + 1);
+      x.setHours(0, 0, 0, 0);
+      return x.getTime();
+    };
+    let stripeColor, statusBadge, plannedTxt;
+    if (r.plan_date == null){
+      stripeColor = "#94a3b8";   // gray — unplanned
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#475569;letter-spacing:.3px;">🆕 WALK-IN</span>`;
+      plannedTxt  = `<span style="color:#9ca3af;font-style:italic;">— no plan —</span>`;
+    } else if (_mondayOf(r.plan_date) === _mondayOf(r.visit_date)){
+      stripeColor = "#16a34a";   // green — visited within the planned week
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#dcfce7;color:#166534;letter-spacing:.3px;">✅ VISITED</span>`;
+      plannedTxt  = `<span style="font-weight:700;color:#1e3a5f;">📅 ${escapeHtml(r.plan_date)}</span>`;
+    } else {
+      stripeColor = "#d97706";   // amber — landed in a different week
+      statusBadge = `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#ffedd5;color:#9a3412;letter-spacing:.3px;">📅 SHIFTED</span>`;
+      plannedTxt  = `<span style="font-weight:700;color:#1e3a5f;">📅 ${escapeHtml(r.plan_date)}</span>`;
+    }
+    const purpBadge = r.visit_purpose
+      ? `<span style="display:inline-block;font-size:10px;font-weight:700;color:#1e3a5f;background:#e0e7ff;padding:2px 8px;border-radius:8px;letter-spacing:.2px;">${escapeHtml(r.visit_purpose)}</span>`
+      : `<span style="color:#9ca3af;font-style:italic;font-size:11px;">Prep only</span>`;
+    // Met person + contact (phone) — surface so the BDE can reach out
+    // again without digging through the customer master.  Phone falls
+    // back to the prospect record for POT-<id> ship_tos.
+    // tel: link only when the contact looks like a phone number (digits
+    // + the usual separators); otherwise treat as email-or-text.
+    const _telHref = (s) => /^[\s+()\-.0-9]{6,}$/.test(s) ? `tel:${s.replace(/\s+/g, "")}` :
+                            /^[^@]+@[^@]+$/.test(s) ? `mailto:${s}` : "";
+    const metBits = [];
+    if (r.met_person)      metBits.push(`<b>${escapeHtml(r.met_person)}</b>`);
+    if (r.met_person_contact){
+      const href = _telHref(r.met_person_contact.trim());
+      const icon = href.startsWith("tel:") ? "📞" : (href.startsWith("mailto:") ? "✉" : "👤");
+      metBits.push(href
+        ? `<a href="${href}" style="color:#2563eb;text-decoration:none;">${icon} ${escapeHtml(r.met_person_contact)}</a>`
+        : `${icon} ${escapeHtml(r.met_person_contact)}`);
+    }
+    if (r.contact_person && r.contact_person !== r.met_person)
+                            metBits.push(`<span style="color:#6b7280;">primary: ${escapeHtml(r.contact_person)}</span>`);
+    if (r.contact_phone)   metBits.push(`<a href="tel:${escapeHtml(r.contact_phone)}" style="color:#2563eb;text-decoration:none;">📞 ${escapeHtml(r.contact_phone)}</a>`);
+    const metCol = metBits.length
+      ? metBits.join(" · ")
+      : `<span style="color:#9ca3af;font-style:italic;">(not recorded)</span>`;
+    h += `<tr>
+      <td colspan="3" style="padding:0;">
+        <div style="display:flex;border:1px solid #e5e7eb;border-radius:8px;
+                    margin:6px 12px 8px 36px;background:#fff;overflow:hidden;">
+          <div style="width:4px;background:${stripeColor};flex-shrink:0;"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:grid;grid-template-columns:1fr 1.3fr 1fr 1.4fr;gap:0;
+                        border-bottom:1px solid #f1f5f9;font-size:11px;">
+              <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Planned</div>
+                <div>${plannedTxt}</div>
+              </div>
+              <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Visited</div>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  <span style="font-weight:700;color:#1e3a5f;">📍 ${escapeHtml(r.visit_date || r.created_at || "—")}</span>
+                  ${statusBadge}
+                </div>
+              </div>
+              <div style="padding:7px 10px;border-right:1px solid #f1f5f9;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Purpose</div>
+                <div>${purpBadge}</div>
+              </div>
+              <div style="padding:7px 10px;">
+                <div style="font-size:9px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:1px;">Met / Contact</div>
+                <div>${metCol}</div>
+              </div>
+            </div>
+            <div style="padding:8px 12px;">
+              ${author}${prep}${notesBody}${next}${actions}${photos ? `<div class="photos" style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">${photos}</div>` : ""}${fbBlock}
+            </div>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+  }
+  h += `</tbody></table>`;
+  wrap.innerHTML = h;
+
+  // === AI FEATURE START === (top digest button)
+  // Stash the filtered-row IDs on the panel so _aiDigestClick can read
+  // them; refreshing the panel (via filter change) updates this set.
+  wrap.__aiVisibleIds = rows.map(r => r.id);
+  const aiBtn = document.getElementById("aiDigestBtn");
+  if (aiBtn) aiBtn.addEventListener("click", () => _aiDigestClick(wrap));
+  // === AI FEATURE END ===
+
+  // Wire the shop-row banners as drag sources — drop on calendar
+  // date = schedule, drop on Selected-shop = log a new visit.
+  wrap.querySelectorAll(".grp-shop[draggable]").forEach(el => {
+    el.addEventListener("dragstart", (e) => {
+      const ship = el.dataset.ship || "";
+      if (!ship) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", ship);
+    });
+  });
+
+  // If the user arrived via a "Make a comment" link in an email
+  // (URL hash like #fb-123), scroll the matching entry into view,
+  // flash a highlight on it, and auto-open the feedback composer.
+  _maybeJumpToFeedbackFromHash();
+  // Refresh the "Previous prep notes" reference block in the form so
+  // it shows the prep history for the currently-selected shop.
+  _renderPrevPrepNotes();
+}
+
+// Read-only display above the Meeting Preparation textarea.  Shows
+// every prep_notes entry written so far for the selected shop so the
+// BDE can reference them while writing the actual visit log.  Stays
+// hidden when no shop is selected or no prep notes exist for it.
+function _renderPrevPrepNotes(){
+  const box = document.getElementById("prevPrep");
+  if (!box) return;
+  if (!_selectedShop || !_selectedShop.ship_to){
+    box.style.display = "none"; box.innerHTML = ""; return;
+  }
+  const matches = (_recentRows || [])
+    .filter(r => r.ship_to === _selectedShop.ship_to)
+    .filter(r => (r.prep_notes || "").trim());
+  if (!matches.length){
+    box.style.display = "none"; box.innerHTML = ""; return;
+  }
+  const items = matches.map(r => `
+    <div style="margin-bottom:5px;padding:6px 9px;background:#eff6ff;
+                border-left:3px solid #2563eb;border-radius:3px;
+                font-size:11px;color:#1e3a5f;">
+      <div style="font-size:10px;color:#6b7280;margin-bottom:3px;">
+        <b>${escapeHtml(r.bde_name || "")}</b>
+        · ${escapeHtml(r.visit_date || "")}
+      </div>
+      <div style="white-space:pre-wrap;">${escapeHtml(r.prep_notes)}</div>
+    </div>`).join("");
+  box.style.display = "block";
+  box.innerHTML =
+    `<div style="font-size:10px;font-weight:700;color:#6b7280;
+                  text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;">
+       ↓ Previous prep notes for this shop (reference)
+     </div>${items}`;
+}
+
+// Deep-link handler — invoked after every renderRecentList() pass.
+// Reads window.location.hash and, if it points at a feedback block,
+// reveals + highlights + opens the composer for that entry.  Clears
+// the in-progress flag so subsequent loadRecent() calls (e.g. after
+// posting a comment) don't re-trigger the jump.
+let _pendingFbJump = null;
+function _maybeJumpToFeedbackFromHash(){
+  const target = _pendingFbJump || (window.location.hash || "").match(/^#fb-(\d+)$/)?.[0];
+  if (!target) return;
+  const el = document.getElementById(target.slice(1));   // "fb-123"
+  if (!el){
+    // Entry not present in the current Recent list — most likely
+    // filtered out by the BDE filter or the selected shop.  Clear
+    // both filters once, reload, and try again on the next pass.
+    if (_pendingFbJump) { _pendingFbJump = null; return; }   // give up after 1 retry
+    _pendingFbJump = target;
+    if (filtBde && filtBde.value) filtBde.value = "";
+    _setSelectedShop(null);
+    loadRecent();
+    return;
+  }
+  _pendingFbJump = null;
+  // Clear the URL hash so subsequent loadRecent() calls (Cancel, Post,
+  // posting another comment) don't re-trigger this jump.  We're past
+  // the "land on the email link" moment now.
+  if (window.location.hash){
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  // Persistently highlight the visit row + add a "Leave your comment
+  // here" banner above the composer so a recipient arriving from an
+  // email link has zero doubt where to type.  The highlight stays put
+  // until the user posts or cancels (loadRecent() re-renders).
+  const row = el.closest("tr") || el;
+  row.classList.add("fb-target-row");
+  el.classList.add("fb-target-block");
+  el.scrollIntoView({behavior:"smooth", block:"center"});
+  // Open the composer so the user can just start typing.
+  const rid = parseInt(target.slice(4), 10);
+  if (!isNaN(rid)) setTimeout(() => {
+    openFeedbackComposer(rid);
+    // Inject a banner above the composer so it's unmistakably the
+    // place to type a reply.
+    const block = document.getElementById("fb-" + rid);
+    if (block && !block.querySelector(".fb-jump-banner")){
+      const composerBox = block.querySelector("div[style*='background:#f9fafb']");
+      if (composerBox){
+        const banner = document.createElement("div");
+        banner.className = "fb-jump-banner";
+        banner.innerHTML = "💬 Leave your comment here ↓";
+        composerBox.parentNode.insertBefore(banner, composerBox);
+      }
+    }
+    // openFeedbackComposer injects the textarea synchronously, so
+    // we can focus it immediately afterwards.
+    const ta = document.getElementById("fbInp-" + rid);
+    if (ta) { ta.focus(); ta.scrollIntoView({behavior:"smooth", block:"center"}); }
+  }, 350);
+}
+// Also re-trigger when the hash changes while the page is already
+// open (e.g. user clicks another email link in the same tab).
+window.addEventListener("hashchange", () => { loadRecent(); });
+
+function escapeHtml(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Feedback thread — list of comments + an "Add feedback" composer.
+// People dropdown is preloaded once from /api/people so commenters
+// can pick their identity (BDE / SM / Hayden / JJ).
+let _peopleCache = null;
+async function _ensurePeople(){
+  if (_peopleCache) return _peopleCache;
+  _peopleCache = await fetchJSON("/api/people").catch(() => []);
+  return _peopleCache;
+}
+function _peopleOptions(){
+  return (_peopleCache || []).map(p =>
+    `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`
+  ).join("");
+}
+
+// Current user's email/name (for own-entry edit/delete controls).  Legacy
+// rows may carry only bde_name (no email), so fall back to name match.
+function _meEmail(){ return ((window._me && window._me.email) || "").toLowerCase(); }
+function _meName (){ return ((window._me && window._me.name)  || "").toLowerCase(); }
+function _isMine(email, name){
+  const e  = (email || "").toLowerCase();
+  const n  = (name  || "").toLowerCase();
+  const me = _meEmail(), mn = _meName();
+  return (!!me && e === me) || (!!mn && n === mn);
+}
+
+async function editEntry(id, currentNotes){
+  const next = window.prompt("Edit notes:", currentNotes || "");
+  if (next == null) return;            // cancelled
+  const t = next.trim();
+  if (!t){ alert("Notes can't be empty."); return; }
+  const r = await fetch("/api/meeting/" + id, {
+    method:"PATCH", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({notes: t})
+  });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Edit failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+async function deleteEntry(id){
+  if (!confirm("Delete this visit log? (Feedback comments on it will also be removed.)")) return;
+  const r = await fetch("/api/meeting/" + id, {method:"DELETE"});
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Delete failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+async function editFeedback(fid, currentText){
+  const next = window.prompt("Edit feedback:", currentText || "");
+  if (next == null) return;
+  const t = next.trim();
+  if (!t){ alert("Comment can't be empty."); return; }
+  const r = await fetch("/api/meeting/feedback/" + fid, {
+    method:"PATCH", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({text: t})
+  });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Edit failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+async function deleteFeedback(fid){
+  if (!confirm("Delete this comment?")) return;
+  const r = await fetch("/api/meeting/feedback/" + fid, {method:"DELETE"});
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok){ alert(j.error || "Delete failed"); return; }
+  if (typeof loadRecent === "function") await loadRecent();
+}
+
+function _ownerActionsHtml(buttons){
+  return `<span style="margin-left:6px;font-size:10px;">${buttons}</span>`;
+}
+
+function renderFeedbackBlock(rid, thread){
+  const items = (thread || []).map(t => {
+    const mine = _isMine(t.author_email, t.author_name);
+    const actions = mine
+      ? _ownerActionsHtml(
+          `<a href="javascript:void(0)" onclick="editFeedback(${t.id}, this.dataset.t)"
+              data-t="${_attr(t.text || '')}"
+              style="color:#2563eb;margin-right:6px;">edit</a>` +
+          `<a href="javascript:void(0)" onclick="deleteFeedback(${t.id})"
+              style="color:#dc2626;">delete</a>`)
+      : "";
+    return `
+    <div style="margin-bottom:6px;">
+      <div style="font-size:10px;color:#6b7280;margin-bottom:2px;">
+        <b>${escapeHtml(t.author_name || t.author_email || "—")}</b>
+        · ${escapeHtml(t.created_at || "")}${actions}
+      </div>
+      <div style="padding:5px 9px;background:#fef3c7;border-left:3px solid #f59e0b;
+                  border-radius:3px;font-size:12px;color:#78350f;white-space:pre-wrap;">
+        ${escapeHtml(t.text || "")}
+      </div>
+    </div>`;
+  }).join("");
+  return `<div id="fb-${rid}" style="margin-top:6px;">
+    ${items}
+    <a href="javascript:void(0)" onclick="openFeedbackComposer(${rid})"
+       style="font-size:11px;color:#2563eb;">+ Add feedback</a>
+  </div>`;
+}
+async function openFeedbackComposer(rid){
+  await _ensurePeople();
+  const el = document.getElementById("fb-" + rid);
+  if (!el) return;
+  // Preserve the existing thread above the composer so it stays visible.
+  const above = el.innerHTML.replace(/<a [^>]*onclick="openFeedbackComposer[\s\S]*?<\/a>/, "");
+  el.innerHTML = above + `
+    <div style="margin-top:4px;padding:8px;background:#f9fafb;
+                border:1px solid #e5e7eb;border-radius:5px;">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;">
+        <span style="font-size:10px;color:#6b7280;font-weight:600;">FROM</span>
+        <select id="fbWho-${rid}" style="font-size:12px;padding:3px 6px;
+                border:1px solid #d1d5db;border-radius:4px;">
+          <option value="">— select —</option>${_peopleOptions()}
+        </select>
+      </div>
+      <textarea id="fbInp-${rid}"
+        placeholder="Your reply…"
+        style="width:100%;min-height:54px;font-size:12px;padding:6px;
+               border:1px solid #d1d5db;border-radius:4px;font-family:inherit;"
+      ></textarea>
+      <div style="margin-top:5px;display:flex;gap:6px;">
+        <button type="button" onclick="saveFeedback(${rid})"
+          style="font-size:11px;padding:3px 12px;background:#2563eb;color:#fff;
+                 border:none;border-radius:4px;cursor:pointer;">Post</button>
+        <button type="button" onclick="cancelFeedbackComposer()"
+          style="font-size:11px;padding:3px 10px;background:#fff;color:#374151;
+                 border:1px solid #d1d5db;border-radius:4px;cursor:pointer;">Cancel</button>
+      </div>
+    </div>`;
+  // Auto-fill FROM with the logged-in user's name (matched by email
+  // against the people directory).  Saves a manual pick when the
+  // recipient just wants to type a quick reply.
+  const meEmail = (window._me && window._me.email || "").toLowerCase();
+  if (meEmail){
+    const match = (_peopleCache || []).find(p =>
+      (p.email || "").toLowerCase() === meEmail);
+    if (match){
+      const sel = document.getElementById("fbWho-" + rid);
+      if (sel) sel.value = match.name;
+    }
+  }
+}
+
+// Cancel = restore the normal "all entries" view: drop the deep-link
+// state (highlight + URL hash) and re-render the recent list.
+function cancelFeedbackComposer(){
+  if (window.location.hash){
+    history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  loadRecent();
+}
+async function saveFeedback(rid){
+  const who = document.getElementById("fbWho-" + rid);
+  const inp = document.getElementById("fbInp-" + rid);
+  if (!who || !inp) return;
+  if (!who.value){ alert("Please pick who you are."); return; }
+  if (!inp.value.trim()){ alert("Type a comment first."); return; }
+  try {
+    const r = await fetch("/api/meeting/feedback", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      credentials: "include",
+      body: JSON.stringify({ id: rid, text: inp.value, author_name: who.value }),
+    });
+    const j = await r.json();
+    if (!r.ok || j.error){ alert("Save failed: " + (j.error || r.status)); return; }
+    loadRecent();
+  } catch (err){ alert("Error: " + err.message); }
+}
+
+fForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!fBde.value) { fMsg.textContent = "BDE is required"; fMsg.className = "err"; return; }
+  if (!_selectedShop || !_selectedShop.ship_to) {
+    fMsg.textContent = "Please pick a Ship-to from the palette ←";
+    fMsg.className = "err"; return;
+  }
+  // Validation rule: either Meeting notes (= actual visit log) OR
+  // Meeting Preparation must have content.  When the user filled in
+  // Meeting notes we treat it as a real visit log and require
+  // Purpose; otherwise (prep-only) Purpose is optional.
+  const prepVal  = document.getElementById("fPrep").value.trim();
+  const notesVal = document.getElementById("fNotes").value.trim();
+  const purposeEl = document.querySelector('input[name="visit_purpose"]:checked');
+  if (!notesVal && !prepVal){
+    fMsg.textContent = "Fill in Meeting Preparation or Meeting notes";
+    fMsg.className = "err"; return;
+  }
+  if (notesVal && !purposeEl){
+    fMsg.textContent = "Purpose of visit is required when Meeting notes is filled";
+    fMsg.className = "err"; return;
+  }
+
+  fMsg.textContent = "Submitting…"; fMsg.className = "";
+  const fd = new FormData();
+  fd.append("bde_name",      fBde.value);
+  fd.append("visit_date",    fVisitDate.value);
+  fd.append("sold_to",       _selectedShop.sold_to_name || _selectedShop.sold_to || "");
+  fd.append("ship_to",       _selectedShop.ship_to);
+  fd.append("visit_purpose", purposeEl ? purposeEl.value : "");
+  fd.append("met_person",         document.getElementById("fMet").value);
+  fd.append("met_person_contact", document.getElementById("fMetContact").value);
+  fd.append("notes",         document.getElementById("fNotes").value);
+  fd.append("next_action",   document.getElementById("fNext").value);
+  fd.append("feedback",    document.getElementById("fFeedback").value);
+  fd.append("prep_notes",     document.getElementById("fPrep").value);
+  fd.append("plan_bde_name",  document.getElementById("fPlanBde").value);
+  const files = document.getElementById("fPhotos").files;
+  for (let i = 0; i < Math.min(files.length, 5); i++){
+    fd.append("photos", files[i]);
+  }
+  try {
+    const r = await fetch("/api/meeting", { method:"POST", body: fd, credentials:"include" });
+    const j = await r.json();
+    if (!r.ok || j.error){
+      fMsg.textContent = "Failed: " + (j.error || r.status);
+      fMsg.className = "err";
+      return;
+    }
+    fMsg.textContent = `Saved (#${j.id})`;
+    fMsg.className = "ok";
+    // Reset writable fields, keep BDE selection.  Met person is left
+    // alone — it carries to the next visit so the BDE doesn't have to
+    // retype the same contact at the same shop.
+    document.getElementById("fNotes").value    = "";
+    document.getElementById("fNext").value     = "";
+    document.getElementById("fFeedback").value = "";
+    document.getElementById("fPrep").value     = "";
+    document.getElementById("fPhotos").value   = "";
+    document.querySelectorAll('input[name="visit_purpose"]').forEach(r => { r.checked = false; });
+    _setSelectedShop(null);   // also clears fPlanBde
+    loadRecent();
+    // Refresh the calendar so the just-logged plan chip flips from
+    // faded to full colour without needing a page reload.
+    loadPlansForMonth().then(renderCalendar).catch(() => {});
+    setTimeout(() => { fMsg.textContent = ""; }, 4000);
+  } catch (err) {
+    fMsg.textContent = "Error: " + err.message;
+    fMsg.className = "err";
+  }
+});
+
+document.getElementById("btnRefresh").addEventListener("click", loadRecent);
+filtBde.addEventListener("change", () => {
+  loadRecent(); renderCalendar();
+  if (typeof renderPotentialList === "function") renderPotentialList();
+  if (typeof _activeRightTab === "function" && _activeRightTab() === "potentials"){
+    renderPotentialHierarchy();
+  }
+});
+
+// State segmented buttons — filter BOTH the visible rows AND the BDE
+// dropdown so the dropdown only contains BDEs from the chosen state.
+// Re-renders client-side only (no API round-trip).
+document.getElementById("filtStateSeg").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn || btn.disabled) return;
+  _filtState = btn.dataset.st || "";
+  document.querySelectorAll("#filtStateSeg .seg-btn")
+    .forEach(b => b.classList.toggle("active", b === btn));
+  rebuildBdeDropdown();
+  // If the currently selected BDE doesn't belong to this state, drop
+  // them and refetch so the row set reflects "this state only".
+  if (filtBde.value && ![...filtBde.options].some(o => o.value === filtBde.value)){
+    filtBde.value = "";
+    loadRecent();
+  } else {
+    renderRecentRows();
+  }
+  // The State filter also narrows the calendar chip set + potential list +
+  // (when the Potentials tab is visible) the hierarchy view.
+  renderCalendar();
+  if (typeof renderPotentialList === "function") renderPotentialList();
+  if (typeof _activeRightTab === "function" && _activeRightTab() === "potentials"){
+    renderPotentialHierarchy();
+  }
+});
+
+// Purpose segmented buttons — pure client-side filter.
+document.getElementById("filtPurposeSeg").addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (!btn || btn.disabled) return;
+  _filtPurp = btn.dataset.pp || "";
+  document.querySelectorAll("#filtPurposeSeg .seg-btn")
+    .forEach(b => b.classList.toggle("active", b === btn));
+  renderRecentRows();
+  // The Purpose filter also narrows the calendar chip set (matched
+  // against the comma-joined visit_purpose list the backend attaches).
+  renderCalendar();
+});
+
+// Rebuild the BDE dropdown so it only lists BDEs whose state matches
+// the current _filtState (people directory tells us each BDE's state).
+// Called whenever the State segment changes or after loadBdes() has
+// populated _peopleCache.
+function rebuildBdeDropdown(){
+  if (!_allBdeNames || !_allBdeNames.length) return;
+  const cache = _peopleCache || [];
+  const stateOf = (name) => {
+    const p = cache.find(x => (x.name || "").toUpperCase() === (name || "").toUpperCase());
+    if (!p) return "";
+    return (p.state === "SA" || p.state === "TAS") ? "VIC" : (p.state || "");
+  };
+  const prev = filtBde.value;
+  const names = _allBdeNames.filter(n => !_filtState || stateOf(n) === _filtState);
+  filtBde.innerHTML = ['<option value="">All</option>',
+                       ...names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`)].join("");
+  // Keep the previous selection if it still belongs to this state.
+  if (prev && names.includes(prev)) filtBde.value = prev;
+}
+let _allBdeNames = [];
+// "Shop" badge × clears the palette selection (which also re-renders
+// Recent entries via _setSelectedShop's loadRecent call).
+const _shopBadgeClear = document.getElementById("filtShopBadgeClear");
+if (_shopBadgeClear) _shopBadgeClear.addEventListener("click", () => _setSelectedShop(null));
+
+// ──────────────────────────────────────────────────────────────────
+// Calendar planner + ship-to palette with drag-and-drop
+// ──────────────────────────────────────────────────────────────────
+const MONTHS = ["January","February","March","April","May","June",
+                "July","August","September","October","November","December"];
+const WEEKDAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+// Current month being viewed.
+const _calState = { year: (new Date()).getFullYear(), month: (new Date()).getMonth() + 1 };
+let _planRowsByDate = {};   // "YYYY-MM-DD" → [ {id, ship_to, ship_to_name, bde_name}, … ]
+let _shipOptions    = [];   // [{ship_to, ship_to_name, sold_to, sold_to_name}, …]
+// Cells with more chips than this get a "+N more" pill until the user
+// clicks to expand that specific date.
+const MAX_CHIPS_PER_CELL = 3;
+const _expandedCells = new Set();   // ISO dates the user clicked to expand
+
+// Stable per-BDE colour: hash the name → full 360° hue, fixed
+// saturation/lightness.  Sweeping the entire hue circle (instead of
+// quantising into a 10-slot palette where neighbours look similar)
+// makes two BDEs visibly different even when their hashes happen
+// to land close together.
+function _planColorFor(bdeName){
+  const s = String(bdeName || "").trim().toUpperCase();
+  if (!s) return "hsl(140 62% 42%)";
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return `hsl(${hue} 62% 42%)`;
+}
+
+function _isoDate(y, m, d) {
+  const pad = n => String(n).padStart(2,"0");
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+
+async function loadPlansForMonth(){
+  // Fetch prev + current + next month in parallel so the overflow
+  // (dim) cells from adjacent months show their chips too — and so a
+  // drop on a dim cell visibly lands a chip there instead of looking
+  // like it silently failed.
+  const {year, month} = _calState;
+  const prevY = month === 1  ? year - 1 : year;
+  const prevM = month === 1  ? 12       : month - 1;
+  const nextY = month === 12 ? year + 1 : year;
+  const nextM = month === 12 ? 1        : month + 1;
+  const months = [
+    {y: prevY, m: prevM},
+    {y: year,  m: month},
+    {y: nextY, m: nextM},
+  ];
+  const results = await Promise.all(months.map(({y, m}) => {
+    const qs = new URLSearchParams({year: y, month: m}).toString();
+    return fetchJSON("/api/meeting_plan?" + qs).catch(() => []);
+  }));
+  _planRowsByDate = {};
+  for (const rows of results) {
+    for (const r of (rows || [])) {
+      const d = r.plan_date;
+      if (!d) continue;
+      (_planRowsByDate[d] = _planRowsByDate[d] || []).push(r);
+    }
+  }
+}
+
+function renderCalendar(){
+  const root = document.getElementById("calGrid");
+  const label = document.getElementById("calMonthLabel");
+  if (!root) return;
+  const {year, month} = _calState;
+  if (label) label.textContent = `${MONTHS[month-1]} ${year}`;
+
+  // First day of month, total days, grid starting on Sunday.
+  const first    = new Date(year, month - 1, 1);
+  const dow      = first.getDay();   // 0=Sun
+  const daysInM  = new Date(year, month, 0).getDate();
+  const todayIso = (() => { const t = new Date();
+    return _isoDate(t.getFullYear(), t.getMonth()+1, t.getDate()); })();
+
+  // When the viewer is BDE-locked the calendar shows only their own
+  // plans (server-side filter), so leave the default green.  Otherwise
+  // (SM / ALL) colour each chip by the BDE who planned it so the
+  // owner is obvious at a glance.
+  const me = window._me || {};
+  const colorByBde = !me.lock_salesman;
+
+  // Two-letter initials so the BDE who planned a chip is identifiable
+  // even when two BDEs happen to hash to similar palette hues.
+  function _initials(nm){
+    const parts = String(nm || "").trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  // Renders one calendar cell.  Used for in-month days and for the dim
+  // overflow cells (previous / next month) so chips drop and render the
+  // same way on adjacent-month dates.
+  // Resolve a BDE's state (with SA/TAS rolled into VIC) so the State
+  // segment / BDE dropdown can filter calendar chips client-side.
+  function _calStateOf(name){
+    const p = (_peopleCache || []).find(
+      x => (x.name || "").toUpperCase() === (name || "").toUpperCase()
+    );
+    if (!p) return "";
+    return (p.state === "SA" || p.state === "TAS") ? "VIC" : (p.state || "");
+  }
+  // Filter plan rows for one date by the right-panel State / BDE /
+  // Purpose selection.  Purpose match uses the comma-joined list of
+  // logged purposes the backend attaches to each plan.
+  function _filteredRowsFor(iso){
+    const bdeSel = (filtBde.value || "").trim().toUpperCase();
+    return (_planRowsByDate[iso] || []).filter(r => {
+      // Compare BDE names case-insensitively — the dropdown comes from
+      // /api/bdes_active but meeting_plan rows can have a slightly
+      // different casing (e.g. "BUCKLEY Paul" vs "Buckley Paul").
+      if (bdeSel && (r.bde_name || "").trim().toUpperCase() !== bdeSel) return false;
+      if (_filtState && _calStateOf(r.bde_name) !== _filtState) return false;
+      if (_filtPurp){
+        const purposes = (r.purposes || "").split(",").filter(Boolean);
+        if (!purposes.includes(_filtPurp)) return false;
+      }
+      return true;
+    });
+  }
+  function _chipHtml(r){
+    let style = "";
+    let badge = "";
+    const logged = !!r.logged;
+    if (colorByBde && r.bde_name) {
+      const c = _planColorFor(r.bde_name);
+      // Logged plan = full colour (the visit actually happened);
+      // unlogged plan = faded so the user can see at a glance which
+      // dates still need a log entry.
+      const op = logged ? 1 : 0.40;
+      style = `style="background:${c};border-color:${c};color:#fff;opacity:${op};"`;
+      badge = `<span style="background:rgba(255,255,255,.28);color:#fff;
+                font-weight:700;font-size:9px;padding:0 4px;border-radius:6px;
+                margin-right:3px;">${_initials(r.bde_name)}</span>`;
+    } else {
+      // Default-green fallback uses the same opacity rule.
+      const op = logged ? 1 : 0.40;
+      style = `style="opacity:${op};"`;
+    }
+    return `<div class="plan-chip" data-id="${r.id}"
+                 data-ship="${_attr(r.ship_to || '')}"
+                 data-ship-name="${_attr(r.ship_to_name || '')}"
+                 data-sold="${_attr(r.sold_to || '')}"
+                 data-sold-name="${_attr(r.sold_to_name || '')}"
+                 data-bde="${_attr(r.bde_name || '')}"
+                 draggable="true" ${style}
+                 title="Click × to remove · Drag onto the form on the right to log this visit\n${_attr(r.ship_to_name || r.ship_to)} — ${_attr(r.bde_name)}">
+      <span style="display:flex;align-items:center;overflow:hidden;text-overflow:ellipsis;">${badge}${escapeHtml((r.ship_to_name || r.ship_to).slice(0, 16))}</span>
+      <span class="pc-rm">×</span>
+    </div>`;
+  }
+  // Group rows by BDE within a cell so the reader can tell at a glance
+  // who that BDE met that day; BDEs are ordered alphabetically and each
+  // group gets a small uppercase label above its chips.  When the cell
+  // has more chips than MAX_CHIPS_PER_CELL we truncate and append a
+  // "+N more" pill that the click handler expands in-place.
+  function _chipsHtml(iso){
+    const rows = _filteredRowsFor(iso);
+    if (!rows.length) return "";
+    const byBde = new Map();
+    for (const r of rows) {
+      const key = r.bde_name || "—";
+      if (!byBde.has(key)) byBde.set(key, []);
+      byBde.get(key).push(r);
+    }
+    const groups = [...byBde.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    const expanded = _expandedCells.has(iso);
+    const cap = expanded ? Infinity : MAX_CHIPS_PER_CELL;
+    let shown = 0;
+    const html = [];
+    for (const [bde, items] of groups){
+      if (shown >= cap) break;
+      const slice = items.slice(0, cap - shown);
+      shown += slice.length;
+      html.push(`<div class="bde-group">
+        <div class="bde-group-label">${escapeHtml(bde)}</div>
+        ${slice.map(_chipHtml).join("")}
+      </div>`);
+    }
+    const hidden = rows.length - shown;
+    if (hidden > 0){
+      html.push(`<div class="more-chip" data-more="${iso}">+${hidden} more</div>`);
+    } else if (expanded && rows.length > MAX_CHIPS_PER_CELL){
+      html.push(`<div class="more-chip" data-more="${iso}">Collapse</div>`);
+    }
+    return html.join("");
+  }
+  function _cellStatsHtml(iso){
+    const rows = _filteredRowsFor(iso);
+    if (!rows.length) return "";
+    const logged = rows.filter(r => r.logged).length;
+    return `<div class="cell-stats">
+      <span>${rows.length} plan${rows.length === 1 ? "" : "s"}</span>
+      <span class="cs-logged">${logged} logged</span>
+    </div>`;
+  }
+  function _cellHtml(y, m, d, dim){
+    const iso = _isoDate(y, m, d);
+    const isToday = (iso === todayIso) ? " today" : "";
+    const dimCls  = dim ? " dim" : "";
+    return `<div class="cal-cell${dimCls}${isToday}" data-date="${iso}">
+      <span class="d-num">${d}</span>
+      ${_cellStatsHtml(iso)}
+      <div class="chips">${_chipsHtml(iso)}</div>
+    </div>`;
+  }
+
+  let html = "";
+  for (const w of WEEKDAYS) html += `<div class="cal-head">${w}</div>`;
+  // Leading dim cells = trailing days of the previous month.
+  const prevYear  = (month === 1) ? year - 1 : year;
+  const prevMonth = (month === 1) ? 12       : month - 1;
+  const prevLast  = new Date(year, month - 1, 0).getDate();
+  for (let i = 0; i < dow; i++) {
+    const d = prevLast - dow + 1 + i;
+    html += _cellHtml(prevYear, prevMonth, d, true);
+  }
+  // Current month
+  for (let d = 1; d <= daysInM; d++) {
+    html += _cellHtml(year, month, d, false);
+  }
+  // Trailing dim cells = leading days of the next month.
+  const cellsUsed = dow + daysInM;
+  const trailing  = (7 - (cellsUsed % 7)) % 7;
+  const nextYear  = (month === 12) ? year + 1 : year;
+  const nextMonth = (month === 12) ? 1        : month + 1;
+  for (let i = 0; i < trailing; i++) {
+    html += _cellHtml(nextYear, nextMonth, i + 1, true);
+  }
+  root.innerHTML = html;
+
+  // Wire drop targets
+  root.querySelectorAll(".cal-cell[data-date]").forEach(cell => {
+    cell.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      cell.classList.add("drag-over");
+    });
+    cell.addEventListener("dragleave", () => cell.classList.remove("drag-over"));
+    cell.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      cell.classList.remove("drag-over");
+      const ship = e.dataTransfer.getData("text/ship_to");
+      const date = cell.dataset.date;
+      if (!ship || !date) return;
+      const bde = (window._me && window._me.lock_salesman) || document.getElementById("fBde").value || "";
+      try {
+        const r = await fetch("/api/meeting_plan", {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          credentials:"include",
+          body: JSON.stringify({ date, ship_to: ship, bde_name: bde }),
+        });
+        const j = await r.json();
+        if (!r.ok || j.error){ alert("Failed: " + (j.error || r.status)); return; }
+        await loadPlansForMonth();
+        renderCalendar();
+      } catch (err) { alert("Error: " + err.message); }
+    });
+  });
+  // "+N more" / Collapse pill — toggles a per-date expand flag and
+  // re-renders so the cell either reveals the rest of its chips or
+  // shrinks back to MAX_CHIPS_PER_CELL.
+  root.querySelectorAll(".more-chip").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const iso = el.dataset.more;
+      if (!iso) return;
+      if (_expandedCells.has(iso)) _expandedCells.delete(iso);
+      else _expandedCells.add(iso);
+      renderCalendar();
+    });
+  });
+
+  // Plan chip wiring:
+  //   × button click  → delete the plan
+  //   chip drag       → drop on Selected-shop banner = log the visit
+  //                      drop on another calendar date = (handled by the
+  //                      date drop handler above, but creates a new plan
+  //                      rather than moving the old one — fine for now)
+  root.querySelectorAll(".plan-chip").forEach(c => {
+    // Drag source for re-using a planned shop in the form.
+    c.addEventListener("dragstart", (e) => {
+      const ship = c.dataset.ship || "";
+      if (!ship) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", ship);
+      c.classList.add("dragging");
+    });
+    c.addEventListener("dragend", () => c.classList.remove("dragging"));
+    // Click on the chip body (anywhere except the × delete handle)
+    // selects this shop in the palette → form's Selected-shop banner
+    // + Recent entries auto-filters to its history.  Also pre-fills
+    // the form's BDE picker with the BDE who originally scheduled
+    // this plan, and stashes their name on the form so the submit
+    // POST can route comment emails back to them.
+    c.addEventListener("click", (e) => {
+      if (e.target.closest(".pc-rm")) return;  // × → delete handler below
+      const ship = c.dataset.ship || "";
+      if (!ship) return;
+      _setSelectedShop({
+        ship_to:      ship,
+        ship_to_name: c.dataset.shipName || "",
+        sold_to:      c.dataset.sold     || "",
+        sold_to_name: c.dataset.soldName || "",
+      });
+      // Carry the chip's calendar date into the Visit date field so the
+      // BDE doesn't have to retype it.  Skip if the chip is in the future
+      // (the date input is capped at today, so future plans would fail
+      // validation on submit).
+      const cell = c.closest(".cal-cell");
+      const chipDate = cell ? (cell.dataset.date || "") : "";
+      if (chipDate && fVisitDate){
+        const maxIso = fVisitDate.max || "";
+        if (!maxIso || chipDate <= maxIso) fVisitDate.value = chipDate;
+      }
+      const planBde = c.dataset.bde || "";
+      if (planBde){
+        const fBdeEl = document.getElementById("fBde");
+        if (fBdeEl && !fBdeEl.disabled){
+          // Add the plan-BDE as an option if the dropdown doesn't
+          // already have it (BDEs not in /api/bdes_active still need to
+          // be picked when their plan chip is clicked).
+          if (![...fBdeEl.options].some(o => o.value === planBde)){
+            fBdeEl.add(new Option(planBde, planBde));
+          }
+          fBdeEl.value = planBde;
+        }
+        // Stash for the submit POST.
+        const planBdeHid = document.getElementById("fPlanBde");
+        if (planBdeHid) planBdeHid.value = planBde;
+      }
+    });
+    // × on the right of the chip is the delete handle.
+    const rm = c.querySelector(".pc-rm");
+    if (!rm) return;
+    rm.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = c.dataset.id;
+      if (!id) return;
+      if (!confirm("Remove this planned visit?")) return;
+      try {
+        const r = await fetch(`/api/meeting_plan/${id}`, {
+          method:"DELETE", credentials:"include",
+        });
+        const j = await r.json();
+        if (!r.ok || j.error){ alert("Delete failed: " + (j.error || r.status)); return; }
+        await loadPlansForMonth();
+        renderCalendar();
+      } catch (err) { alert("Error: " + err.message); }
+    });
+  });
+}
+
+// Palette Sold-to picker (re-instated as the single source of truth
+// for both meeting-log target + calendar drag source).
+let _palSoldFilter = "";
+const palSoldPicker = bindPicker({
+  inputId: "palSold", openBtnId: "palSoldOpen",
+  clearBtnId: "palSoldClear", menuId: "palSoldMenu",
+  onChange: (opt) => {
+    _palSoldFilter = opt ? opt.value : "";
+    renderShipList();
+  },
+});
+
+async function loadShipOptions(){
+  const rows = await fetchJSON("/api/meeting_plan/shop_to_options").catch(() => []);
+  _shipOptions = Array.isArray(rows) ? rows : [];
+  // Build the Sold-to options for the palette picker.
+  const seen = new Set(), soldOpts = [];
+  for (const r of _shipOptions){
+    const nm = (r.sold_to_name || "").trim();
+    if (!nm || seen.has(nm)) continue;
+    seen.add(nm);
+    soldOpts.push({ label: nm, value: nm });
+  }
+  soldOpts.sort((a, b) => a.label.localeCompare(b.label));
+  palSoldPicker.setOptions(soldOpts);
+  renderShipList();
+}
+
+function renderShipList(){
+  const list = document.getElementById("shipList");
+  const cnt  = document.getElementById("shipCount");
+  const q    = (document.getElementById("shipSearch").value || "").trim().toLowerCase();
+  // Apply the Sold-to filter first (narrow domain), then the text
+  // search on top.  Backend now returns one row per (ship_to, sold_to)
+  // pair so a multi-parent ship_to appears under every parent — but
+  // when no Sold-to is selected we dedupe by ship_to so the palette
+  // doesn't repeat the same shop.
+  let base;
+  if (_palSoldFilter){
+    base = _shipOptions.filter(r => (r.sold_to_name || "") === _palSoldFilter);
+  } else {
+    const seenShip = new Set();
+    base = _shipOptions.filter(r => {
+      const k = r.ship_to;
+      if (seenShip.has(k)) return false;
+      seenShip.add(k); return true;
+    });
+  }
+  // On mobile keep the default chip list short (5) so the palette
+  // doesn't dominate the screen — the user types into the search box
+  // when they need a specific shop.  On desktop show up to 200.
+  const isMobile = window.matchMedia("(max-width:1100px)").matches;
+  const defaultLimit = isMobile ? 5 : 200;
+  const filtered = !q ? base.slice(0, defaultLimit)
+    : base.filter(r =>
+        (r.ship_to || "").toLowerCase().includes(q) ||
+        (r.ship_to_name || "").toLowerCase().includes(q) ||
+        (r.sold_to_name || "").toLowerCase().includes(q)
+      ).slice(0, 200);
+  if (cnt) {
+    const total = base.length;
+    if (q) {
+      cnt.textContent = `${filtered.length} of ${total} match` +
+                        (_palSoldFilter ? ` (in ${_palSoldFilter})` : "");
+    } else {
+      cnt.textContent = `${total} ship-tos` +
+                        (_palSoldFilter ? ` in ${_palSoldFilter}` : "") +
+                        (total > defaultLimit ? ` (showing first ${defaultLimit} — type to search)` : "");
+    }
+  }
+  if (!filtered.length){
+    list.innerHTML = '<div class="palette-empty">No matches</div>';
+    return;
+  }
+  const selShip = _selectedShop ? _selectedShop.ship_to : "";
+  list.innerHTML = filtered.map(r => {
+    const sel = (r.ship_to === selShip) ? " selected" : "";
+    return `
+    <div class="ship-chip${sel}" draggable="true" data-ship="${_attr(r.ship_to)}"
+         title="Click to log this visit · Drag onto a date to schedule\n${_attr(r.sold_to_name || '')} — ${_attr(r.ship_to_name || '')}">
+      <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(r.ship_to_name || r.ship_to)}</span>
+      <span class="sc-code">${escapeHtml(r.ship_to)}</span>
+    </div>`;
+  }).join("");
+  // Build a quick lookup from chip element → row, so click / drag handlers
+  // don't have to re-search _shipOptions each time.
+  const byShip = new Map(filtered.map(r => [r.ship_to, r]));
+  list.querySelectorAll(".ship-chip").forEach(el => {
+    el.addEventListener("dragstart", (e) => {
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", el.dataset.ship);
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("click", () => {
+      const row = byShip.get(el.dataset.ship);
+      if (row) _setSelectedShop(row);
+    });
+  });
+}
+
+function _attr(s){
+  return String(s == null ? "" : s).replace(/"/g, "&quot;").replace(/&/g, "&amp;");
+}
+
+document.getElementById("calPrev").addEventListener("click", async () => {
+  _calState.month -= 1;
+  if (_calState.month < 1){ _calState.month = 12; _calState.year -= 1; }
+  await loadPlansForMonth(); renderCalendar();
+});
+document.getElementById("calNext").addEventListener("click", async () => {
+  _calState.month += 1;
+  if (_calState.month > 12){ _calState.month = 1; _calState.year += 1; }
+  await loadPlansForMonth(); renderCalendar();
+});
+document.getElementById("calToday").addEventListener("click", async () => {
+  const t = new Date();
+  _calState.year = t.getFullYear();
+  _calState.month = t.getMonth() + 1;
+  await loadPlansForMonth(); renderCalendar();
+});
+document.getElementById("shipSearch").addEventListener("input", renderShipList);
+// Re-render the chip list when the viewport crosses the mobile
+// breakpoint (rotation, window resize) — the default chip count
+// differs on mobile vs desktop.
+window.matchMedia("(max-width:1100px)").addEventListener("change", renderShipList);
+
+// === AI FEATURE START === (status probe + digest click + renderer)
+async function _aiProbeStatus(){
+  try {
+    const j = await fetchJSON("/api/ai_status");
+    _aiEnabled = !!(j && j.enabled);
+    _aiModel   = (j && j.model) || "";
+  } catch { _aiEnabled = false; }
+}
+function _aiRender(j){
+  const fmt = (txt) =>
+    `<div style="white-space:pre-wrap;line-height:1.45;">${escapeHtml(txt || "—")}</div>`;
+  const model = j.model ? `<span style="color:#9ca3af;font-weight:400;"> · ${escapeHtml(j.model)}</span>` : "";
+  const count = j.count ? `<span style="color:#9ca3af;font-weight:400;"> · ${j.count} entries</span>` : "";
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+      <b style="text-transform:uppercase;letter-spacing:.3px;font-size:10px;">✨ AI digest${model}${count}</b>
+      <a href="javascript:void(0)" class="ai-regen" style="font-size:11px;color:#7c3aed;text-decoration:underline;">Regenerate</a>
+    </div>
+    <div style="margin-bottom:8px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:3px;">Summary</div>
+      ${fmt(j.summary)}
+    </div>
+    <div>
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:#6b21a8;margin-bottom:3px;">Strategy</div>
+      ${fmt(j.strategy)}
+    </div>
+  `;
+}
+async function _aiDigestClick(wrap, opts){
+  opts = opts || {};
+  const panel = document.getElementById("aiDigestPanel");
+  if (!panel) return;
+  if (!opts.regen && panel.style.display === "block"){
+    panel.style.display = "none"; return;
+  }
+  const ids = (wrap && wrap.__aiVisibleIds) || [];
+  if (!ids.length){
+    panel.style.display = "block";
+    panel.innerHTML = `<span style="color:#dc2626;">No entries to summarise.</span>`;
+    return;
+  }
+  panel.style.display = "block";
+  panel.innerHTML = `<em style="color:#7c3aed;">Asking AI to digest ${ids.length} ${ids.length === 1 ? "entry" : "entries"}…</em>`;
+  try {
+    const r = await fetch("/api/meeting/ai_digest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ ids }),
+    });
+    const j = await r.json();
+    if (!r.ok){
+      panel.innerHTML = `<span style="color:#dc2626;">${escapeHtml(j.error || ("AI error " + r.status))}</span>`;
+      return;
+    }
+    panel.innerHTML = _aiRender(j);
+    const regen = panel.querySelector(".ai-regen");
+    if (regen) regen.addEventListener("click", () => _aiDigestClick(wrap, { regen: true }));
+  } catch (err){
+    panel.innerHTML = `<span style="color:#dc2626;">${escapeHtml(err.message)}</span>`;
+  }
+}
+// === AI FEATURE END ===
+
+// === POTENTIAL CUSTOMER START === (palette section + drag source)
+let _potentials = [];
+
+async function loadPotentials(){
+  try {
+    const r = await fetchJSON("/api/potential_customers");
+    _potentials = (r && r.potentials) || [];
+  } catch { _potentials = []; }
+  renderPotentialList();
+}
+
+function renderPotentialList(){
+  const box = document.getElementById("potList");
+  if (!box) return;
+  // Apply the same State / BDE narrowing the rest of the panel uses.
+  const stateSel = (_filtState || "").toUpperCase();
+  const bdeSel   = (filtBde && filtBde.value || "").trim().toUpperCase();
+  const stateOf  = (s) => (s === "SA" || s === "TAS") ? "VIC" : (s || "");
+  const items = _potentials.filter(p => {
+    if (stateSel && stateOf(p.state) !== stateSel) return false;
+    if (bdeSel   && (p.bde_name || "").trim().toUpperCase() !== bdeSel) return false;
+    return true;
+  });
+  if (!items.length){
+    box.innerHTML = `<div style="font-size:11px;color:#9ca3af;font-style:italic;padding:4px 2px;">
+      No potential customers ${stateSel || bdeSel ? "match the current filter" : "yet — add one to start tracking"}.
+    </div>`;
+    return;
+  }
+  box.innerHTML = items.map(p => `
+    <div class="pot-chip" draggable="true"
+         data-ship="${escapeHtml(p.pseudo_ship_to)}"
+         data-name="${escapeHtml(p.name)}"
+         data-pot-id="${p.id}"
+         title="${escapeHtml(p.address || '')}${p.contact_person ? ' · ' + escapeHtml(p.contact_person) : ''}${p.phone ? ' · ' + escapeHtml(p.phone) : ''}">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">
+        ${escapeHtml(p.name)}
+      </span>
+      <span class="pc-st">${escapeHtml((p.state || "—").toUpperCase())}</span>
+      <span class="pc-x" title="Delete" data-del="${p.id}">×</span>
+    </div>
+  `).join("");
+  box.querySelectorAll(".pot-chip").forEach(el => {
+    el.addEventListener("dragstart", (e) => {
+      const ship = el.dataset.ship || "";
+      const name = el.dataset.name || "";
+      if (!ship) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to", ship);
+      e.dataTransfer.setData("text/ship_to_name", name);
+      e.dataTransfer.setData("text/potential", "1");
+      el.classList.add("dragging");
+    });
+    el.addEventListener("dragend", () => el.classList.remove("dragging"));
+    el.addEventListener("click", (e) => {
+      if (e.target.classList.contains("pc-x")) return;
+      const id   = el.dataset.potId;
+      const p    = _potentials.find(x => String(x.id) === String(id));
+      if (!p) return;
+      _setSelectedShop({
+        ship_to:      p.pseudo_ship_to,
+        ship_to_name: p.name,
+        sold_to:      "",
+        sold_to_name: p.sold_to_name || p.name,
+        potential:    true,
+        potential_id: p.id,
+      });
+    });
+    const del = el.querySelector(".pc-x");
+    if (del) del.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = del.dataset.del;
+      if (!confirm("Remove this potential customer?")) return;
+      try {
+        const r = await fetch("/api/potential_customer/" + id, {
+          method: "DELETE", credentials: "include",
+        });
+        if (!r.ok){ alert("Delete failed"); return; }
+        await loadPotentials();
+      } catch (err){ alert("Error: " + err.message); }
+    });
+  });
+}
+
+function wirePotentialForm(){
+  const addBtn = document.getElementById("potAddBtn");
+  const form   = document.getElementById("potForm");
+  const cancel = document.getElementById("potCancelBtn");
+  const save   = document.getElementById("potSaveBtn");
+  const msg    = document.getElementById("potMsg");
+  if (!addBtn) return;
+  addBtn.addEventListener("click", () => {
+    form.style.display = form.style.display === "none" ? "block" : "none";
+    if (form.style.display === "block"){
+      msg.textContent = "";
+      document.getElementById("potName").focus();
+    }
+  });
+  const fields = ["potName", "potSold"];
+  cancel.addEventListener("click", () => {
+    form.style.display = "none";
+    fields.forEach(id => document.getElementById(id).value = "");
+    msg.textContent = "";
+  });
+  save.addEventListener("click", async () => {
+    const name = (document.getElementById("potName").value || "").trim();
+    const sold = (document.getElementById("potSold").value || "").trim();
+    if (!name){ msg.textContent = "Ship-to name is required."; msg.style.color = "#dc2626"; return; }
+    save.disabled = true; save.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/potential_customer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name, sold_to_name: sold || name }),
+      });
+      const j = await r.json();
+      if (!r.ok){ msg.textContent = j.error || ("HTTP " + r.status); msg.style.color = "#dc2626"; }
+      else {
+        msg.textContent = "Saved.";
+        msg.style.color = "#16a34a";
+        fields.forEach(id => document.getElementById(id).value = "");
+        await loadPotentials();
+        if (typeof _activeRightTab === "function" && _activeRightTab() === "potentials"){
+          renderPotentialHierarchy();
+        }
+        setTimeout(() => { form.style.display = "none"; msg.textContent = ""; }, 800);
+      }
+    } catch (err){
+      msg.textContent = err.message; msg.style.color = "#dc2626";
+    }
+    save.disabled = false; save.textContent = "Save";
+  });
+}
+
+// Render the State → BDE → Prospect hierarchy inside the Recent
+// entries panel.  Reuses _potentials (loaded by loadPotentials) and
+// honours the panel's State / BDE filters so the same selectors that
+// scope visit logs also scope prospects.
+function _stateRemapPot(s){
+  return (s === "SA" || s === "TAS") ? "VIC" : (s || "—");
+}
+function renderPotentialHierarchy(){
+  const wrap = document.getElementById("potTabWrap");
+  if (!wrap) return;
+  const bdeSel = (filtBde && filtBde.value || "").trim().toUpperCase();
+  const items = _potentials.filter(p => {
+    if (_filtState && _stateRemapPot(p.state) !== _filtState) return false;
+    if (bdeSel   && (p.bde_name || "").trim().toUpperCase() !== bdeSel) return false;
+    return true;
+  });
+  if (!items.length){
+    wrap.innerHTML = `<div class="empty">
+      No potential customers ${_filtState || bdeSel ? "match the current filter" : "yet"}.<br>
+      Use “+ Add new” in the palette to start tracking.
+    </div>`;
+    return;
+  }
+  // Group: state → bde
+  const tree = new Map();
+  for (const p of items){
+    const st = _stateRemapPot(p.state);
+    if (!tree.has(st)) tree.set(st, new Map());
+    const byBde = tree.get(st);
+    const bk = p.bde_name || "—";
+    if (!byBde.has(bk)) byBde.set(bk, []);
+    byBde.get(bk).push(p);
+  }
+  const stOrder = ["NSW","QLD","VIC","WA"];
+  const sortedStates = [...tree.entries()].sort((a, b) => {
+    const ai = stOrder.indexOf(a[0]), bi = stOrder.indexOf(b[0]);
+    if (ai >= 0 && bi >= 0) return ai - bi;
+    if (ai >= 0) return -1;
+    if (bi >= 0) return 1;
+    return a[0].localeCompare(b[0]);
+  });
+  let html = "";
+  for (const [st, byBde] of sortedStates){
+    const totalSt = [...byBde.values()].reduce((s, arr) => s + arr.length, 0);
+    html += `<div style="margin-top:10px;padding:7px 11px;background:#1e3a5f;
+                          color:#fff;border-radius:6px;font-weight:700;font-size:12px;
+                          display:flex;justify-content:space-between;">
+      <span>${escapeHtml(st)}</span>
+      <span style="font-weight:400;font-size:11px;opacity:.85;">${totalSt} prospect${totalSt === 1 ? "" : "s"}</span>
+    </div>`;
+    const sortedBdes = [...byBde.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [bde, arr] of sortedBdes){
+      html += `<div style="margin-top:5px;padding:5px 11px;background:#fff7ed;
+                            border-left:3px solid #ea580c;color:#9a3412;
+                            font-weight:600;font-size:12px;display:flex;
+                            justify-content:space-between;align-items:center;">
+        <span>${escapeHtml(bde)}</span>
+        <span style="font-weight:400;color:#6b7280;font-size:11px;">${arr.length}</span>
+      </div>`;
+      const sortedProspects = arr.slice().sort((a, b) => a.name.localeCompare(b.name));
+      for (const p of sortedProspects){
+        const meta = [];
+        if (p.sold_to_name && p.sold_to_name !== p.name)
+          meta.push(`<span style="color:#6b7280;">Sold-to</span> <b>${escapeHtml(p.sold_to_name)}</b>`);
+        if (p.phone)          meta.push(`📞 <b>${escapeHtml(p.phone)}</b>`);
+        if (p.contact_person) meta.push(`👤 <b>${escapeHtml(p.contact_person)}</b>`);
+        if (p.address)        meta.push(`📍 <b>${escapeHtml(p.address)}</b>`);
+        const stCls = (p.status || "Lead");
+        const stColor = {
+          Lead:"#fef3c7;color:#92400e",
+          Visited:"#dbeafe;color:#1e40af",
+          Negotiating:"#fde68a;color:#92400e",
+          Converted:"#dcfce7;color:#166534",
+          Lost:"#fee2e2;color:#991b1b",
+        }[stCls] || "#f3f4f6;color:#374151";
+        html += `<div style="margin:3px 0 3px 8px;padding:8px 11px;background:#fff;
+                              border:1px solid #e5e7eb;border-radius:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:700;color:#1e3a5f;font-size:12px;">${escapeHtml(p.name)}</div>
+              <div style="font-size:10px;color:#6b7280;margin-top:1px;">${escapeHtml(p.pseudo_ship_to)} · added ${escapeHtml(p.created_at || "")}</div>
+              ${meta.length ? `<div style="font-size:11px;color:#374151;margin-top:4px;display:flex;gap:9px;flex-wrap:wrap;">${meta.join("")}</div>` : ""}
+              ${p.notes ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;white-space:pre-wrap;">${escapeHtml(p.notes)}</div>` : ""}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+              <span style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;
+                           text-transform:uppercase;letter-spacing:.3px;background:${stColor};">${escapeHtml(stCls)}</span>
+              <a href="javascript:void(0)" data-pot-del="${p.id}"
+                 style="font-size:11px;color:#dc2626;text-decoration:underline;">Delete</a>
+            </div>
+          </div>
+        </div>`;
+      }
+    }
+  }
+  wrap.innerHTML = html;
+  wrap.querySelectorAll("[data-pot-del]").forEach(el => {
+    el.addEventListener("click", async (e) => {
+      const id = el.dataset.potDel;
+      const p = _potentials.find(x => String(x.id) === String(id));
+      if (!p || !confirm(`Remove "${p.name}"?`)) return;
+      try {
+        await fetch("/api/potential_customer/" + id, { method: "DELETE" });
+        await loadPotentials();
+        renderPotentialHierarchy();
+      } catch (err) { alert("Delete failed: " + err.message); }
+    });
+  });
+}
+
+// Tab switcher between Visit logs and Potentials.
+function _setRightTab(tab){
+  const recent = document.getElementById("recentWrap");
+  const pot    = document.getElementById("potTabWrap");
+  const purp   = document.getElementById("filtPurposeSeg");
+  const purpRow = purp ? purp.closest(".filt-row") : null;
+  const isPot = tab === "potentials";
+  if (recent) recent.style.display = isPot ? "none" : "";
+  if (pot)    pot.style.display    = isPot ? "block" : "none";
+  if (purpRow) purpRow.style.display = isPot ? "none" : "";
+  document.querySelectorAll("#rightTabs .seg-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.tab === tab);
+  });
+  if (isPot) renderPotentialHierarchy();
+}
+function _activeRightTab(){
+  const a = document.querySelector("#rightTabs .seg-btn.active");
+  return a ? a.dataset.tab : "logs";
+}
+// === POTENTIAL CUSTOMER END ===
+
+(async () => {
+  await _aiProbeStatus();   // === AI FEATURE === (cheap; reads one env var)
+  await loadBdes();
+  await loadRecent();
+  await loadShipOptions();
+  await loadPlansForMonth();
+  renderCalendar();
+  wirePotentialForm();      // === POTENTIAL CUSTOMER ===
+  await loadPotentials();
+  // Wire the Recent-entries tab switcher (Logs ↔ Potentials).
+  document.getElementById("rightTabs").addEventListener("click", (e) => {
+    const b = e.target.closest(".seg-btn");
+    if (!b) return;
+    _setRightTab(b.dataset.tab);
+  });
+  // "View all →" in the palette opens the Potentials tab inline.
+  const va = document.getElementById("potViewAllBtn");
+  if (va) va.addEventListener("click", () => _setRightTab("potentials"));
+})();
+
+// ── Voice → AI auto-fill ─────────────────────────────────────────
+// Uses the browser's Web Speech API for free, in-browser transcription
+// (Chrome desktop + Android, Safari iOS 14.5+ all support it). The
+// resulting transcript is POSTed to /api/meeting/voice_extract, which
+// asks Claude Haiku to pull out notes / met person / contact / purpose /
+// next action — then we write those into the form, but only into fields
+// the user hasn't already filled in, so a manual edit is never clobbered.
+(function initVoiceCapture(){
+  const panel       = document.getElementById("voicePanel");
+  const btn         = document.getElementById("voiceBtn");
+  const hint        = document.getElementById("voiceHint");
+  const timerEl     = document.getElementById("voiceTimer");
+  const body        = document.getElementById("voiceBody");
+  const transcript  = document.getElementById("voiceTranscript");
+  const fillBtn     = document.getElementById("voiceFillBtn");
+  const clearBtn    = document.getElementById("voiceClearBtn");
+  const statusEl    = document.getElementById("voiceStatus");
+  if (!panel || !btn) return;
+
+  // SpeechRecognition is webkit-prefixed on Safari/Chrome and unprefixed
+  // on Firefox (where it doesn't actually work yet).  Bail with a hint
+  // rather than showing a button that does nothing.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    panel.classList.add("unsupported");
+    hint.textContent = "Voice input not supported in this browser — use Chrome or Safari.";
+    return;
+  }
+
+  let recognition = null;
+  let timerHandle = null;
+  let elapsed     = 0;
+  let finalText   = "";
+  let interimText = "";
+
+  function _setStatus(msg, cls){
+    statusEl.textContent = msg || "";
+    statusEl.className = "voice-status" + (cls ? " " + cls : "");
+  }
+  function _fmtTime(s){
+    const m = Math.floor(s / 60), r = s % 60;
+    return `${m}:${String(r).padStart(2, "0")}`;
+  }
+  function _startTimer(){
+    elapsed = 0;
+    timerEl.textContent = "0:00";
+    timerEl.style.display = "";
+    timerHandle = setInterval(() => {
+      elapsed += 1;
+      timerEl.textContent = _fmtTime(elapsed);
+    }, 1000);
+  }
+  function _stopTimer(){
+    if (timerHandle) clearInterval(timerHandle);
+    timerHandle = null;
+    timerEl.style.display = "none";
+  }
+
+  function _startRecording(){
+    finalText = "";
+    interimText = "";
+    transcript.value = "";
+    _setStatus("");
+    body.style.display = "";
+    recognition = new SR();
+    recognition.continuous     = true;
+    recognition.interimResults = true;
+    recognition.lang           = navigator.language || "en-AU";
+    recognition.onresult = (e) => {
+      // Web Speech delivers a growing result list; entries past
+      // resultIndex are new this fire.  We keep "final" pieces in
+      // finalText and overwrite interimText as it's revised in place.
+      interimText = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const chunk = e.results[i][0].transcript;
+        if (e.results[i].isFinal) finalText += chunk + " ";
+        else                       interimText += chunk;
+      }
+      transcript.value = (finalText + interimText).trim();
+    };
+    recognition.onerror = (e) => {
+      _setStatus("Voice error: " + (e.error || "unknown"), "err");
+      _stopRecording();
+    };
+    recognition.onend = () => {
+      // Browser auto-stops after a long pause; reflect that in the UI.
+      btn.classList.remove("recording");
+      btn.querySelector(".voice-label").textContent = "Record again";
+      _stopTimer();
+      if ((transcript.value || "").trim()) {
+        _setStatus("Tap Auto-fill when ready.", "");
+      }
+    };
+    try {
+      recognition.start();
+      btn.classList.add("recording");
+      btn.querySelector(".voice-label").textContent = "Stop";
+      _startTimer();
+      _setStatus("Listening…", "");
+    } catch (err) {
+      _setStatus("Mic permission denied or unavailable.", "err");
+    }
+  }
+
+  function _stopRecording(){
+    if (recognition) {
+      try { recognition.stop(); } catch(e){}
+    }
+    btn.classList.remove("recording");
+    btn.querySelector(".voice-label").textContent = "Record again";
+    _stopTimer();
+  }
+
+  btn.addEventListener("click", () => {
+    if (btn.classList.contains("recording")) _stopRecording();
+    else                                      _startRecording();
+  });
+
+  clearBtn.addEventListener("click", () => {
+    _stopRecording();
+    transcript.value = "";
+    finalText = "";
+    interimText = "";
+    body.style.display = "none";
+    btn.querySelector(".voice-label").textContent = "Quick log by voice";
+    _setStatus("");
+  });
+
+  // Only fill a field if the user hasn't already typed something into
+  // it — manual edits always win over the AI's guess.
+  function _fillIfBlank(el, v){
+    if (!el || !v) return false;
+    if ((el.value || "").trim()) return false;
+    el.value = v;
+    return true;
+  }
+
+  fillBtn.addEventListener("click", async () => {
+    const text = (transcript.value || "").trim();
+    if (!text) { _setStatus("Nothing to extract.", "err"); return; }
+    fillBtn.disabled = true;
+    _setStatus("Asking Claude…", "");
+    try {
+      const r = await fetch("/api/meeting/voice_extract", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        credentials: "include",
+        body: JSON.stringify({ transcript: text }),
+      });
+      const j = await r.json();
+      if (!r.ok) {
+        _setStatus("Failed: " + (j.error || ("HTTP " + r.status)), "err");
+        return;
+      }
+      const filled = [];
+      if (_fillIfBlank(document.getElementById("fNotes"),       j.notes))              filled.push("notes");
+      if (_fillIfBlank(document.getElementById("fMet"),         j.met_person))         filled.push("met person");
+      if (_fillIfBlank(document.getElementById("fMetContact"),  j.met_person_contact)) filled.push("contact");
+      if (_fillIfBlank(document.getElementById("fNext"),        j.next_action))        filled.push("next action");
+      // Purpose is a radio group — set only if nothing is currently checked.
+      if (j.visit_purpose) {
+        const current = document.querySelector('input[name="visit_purpose"]:checked');
+        if (!current) {
+          const radios = document.querySelectorAll('input[name="visit_purpose"]');
+          for (const r of radios) {
+            if (r.value === j.visit_purpose) { r.checked = true; filled.push("purpose"); break; }
+          }
+        }
+      }
+      _setStatus(filled.length
+        ? `Filled: ${filled.join(", ")}. Review and Save.`
+        : "Already filled — nothing to overwrite.", "ok");
+    } catch (e) {
+      _setStatus("Error: " + e.message, "err");
+    } finally {
+      fillBtn.disabled = false;
+    }
+  });
+})();
+</script>
+</body>
+</html>

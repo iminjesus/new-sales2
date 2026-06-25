@@ -1,0 +1,3 @@
+app.py merge=ours
+static/index.html merge=ours
+static/map.html merge=ours

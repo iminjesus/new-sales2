@@ -3,19 +3,14 @@ import time
 import glob
 import csv
 import win32com.client
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from openpyxl import load_workbook
 
 """
-MB52 Auto Export -> detects SAP-created EXPORT_*.xlsx -> converts to CSV.
-
-Fix for your current error:
-- Your SAP GUI does NOT have the menu id: wnd[0]/mbar/menu[0]/menu[3]/menu[1]
-  (List -> Export -> Spreadsheet)
-- This version uses multiple fallback strategies:
-  1) Try ALV Grid toolbar export (most stable across layouts)
-  2) Try menu selection by text (List/Export/Spreadsheet), not by index
-  3) Try a few common menu index paths
+ZSDR24030 Sales Export → Local CSV
+- Sales Organization: 4200
+- Billing date: 1st of current month ~ last working day
+- Output: <repo>/rawdata/unlock/sales_thismonth.csv  (next to this script)
 
 Pre-req:
 - SAP GUI must be OPEN and LOGGED IN
@@ -23,19 +18,39 @@ Pre-req:
 """
 
 # ================= CONFIG =================
-PLANT_LOW  = "42R0"
-PLANT_HIGH = "42R4"
+TCODE          = "ZSDR24030"
+SALES_ORG      = "4200"
 
-SAP_EXPORT_DIR  = r"C:\temp"         # where EXPORT_*.xlsx appears
+SAP_EXPORT_DIR  = r"C:\temp"
 SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 
-# Resolve relative to this script so any checkout writes into its own
-# rawdata\unlock\ directory (same pattern as sapcrawling_sales.py).
+# Resolve relative to this script so the same code runs on every checkout
+# regardless of the absolute path the repo was cloned to.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUT_CSV  = os.path.join(BASE_DIR, "rawdata", "unlock", "mb52_42.csv")
+OUT_CSV  = os.path.join(BASE_DIR, "rawdata", "unlock", "sales_thismonth.csv")
 
 DELETE_XLSX_AFTER_CONVERT = False
 MIN_CSV_SIZE = 200  # bytes
+
+
+# ================= DATE HELPERS =================
+def last_business_day(ref: date) -> date:
+    d = ref - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+def first_business_day(ref: date) -> date:
+    d = ref.replace(day=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+def month_start(ref: date) -> date:
+    return ref.replace(day=1)
+
+def sap_date(d: date) -> str:
+    return d.strftime("%d.%m.%Y")
 
 
 # ================= HELPERS =================
@@ -58,48 +73,75 @@ def close_popups(session, max_steps=6):
     for _ in range(max_steps):
         if not exists(session, "wnd[1]"):
             return
-        try:
-            session.findById("wnd[1]/tbar[0]/btn[0]").press()
-            wait(0.25)
-            continue
-        except:
-            pass
-        try:
-            session.findById("wnd[1]/usr/btnSPOP-OPTION1").press()
-            wait(0.25)
-            continue
-        except:
-            pass
-        try:
-            session.findById("wnd[1]").sendVKey(0)
-            wait(0.25)
-            continue
-        except:
-            pass
-        return
+        for wid in ("wnd[1]/tbar[0]/btn[0]",
+                    "wnd[1]/usr/btnSPOP-OPTION1"):
+            try:
+                session.findById(wid).press()
+                wait(0.25)
+                break
+            except:
+                pass
+        else:
+            try:
+                session.findById("wnd[1]").sendVKey(0)
+                wait(0.25)
+            except:
+                return
 
-def start_mb52_fresh(session):
-    session.findById("wnd[0]/tbar[0]/okcd").Text = "/nMB52"
+def start_tcode(session, tcode):
+    session.findById("wnd[0]/tbar[0]/okcd").Text = f"/n{tcode}"
     session.findById("wnd[0]").sendVKey(0)
-    wait(1.0)
+    wait(1.5)
     close_popups(session, 4)
 
-def set_plant(session):
-    # LOW = 42R0
-    try:
-        session.findById("wnd[0]/usr/ctxtWERKS-LOW").Text = PLANT_LOW
-    except:
-        session.findById("wnd[0]/usr/ctxtWERKS").Text = PLANT_LOW
+def set_selection_fields(session, date_from: str, date_to: str):
+    """Sales Organization 4200 + Billing Date 설정"""
 
-    # HIGH = 42R4
-    try:
-        session.findById("wnd[0]/usr/ctxtWERKS-HIGH").Text = PLANT_HIGH
-    except:
-        pass
+    # Sales Organization
+    for wid in (
+        "wnd[0]/usr/ctxtS_VKORG-LOW",
+        "wnd[0]/usr/ctxtP_VKORG",
+        "wnd[0]/usr/txtS_VKORG-LOW",
+    ):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = SALES_ORG
+                print(f"  Sales Org set via {wid}")
+                break
+            except:
+                pass
 
-    session.findById("wnd[0]").sendVKey(0)
-    wait(0.5)
-    close_popups(session, 3)
+    # Billing Date FROM
+    for wid in (
+        "wnd[0]/usr/ctxtS_FKDAT-LOW",
+        "wnd[0]/usr/ctxtP_FKDAT-LOW",
+        "wnd[0]/usr/txtS_FKDAT-LOW",
+        "wnd[0]/usr/txtP_FKDAT-LOW",
+    ):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = date_from
+                print(f"  Billing Date FROM set via {wid}")
+                break
+            except:
+                pass
+
+    # Billing Date TO
+    for wid in (
+        "wnd[0]/usr/ctxtS_FKDAT-HIGH",
+        "wnd[0]/usr/ctxtP_FKDAT-HIGH",
+        "wnd[0]/usr/txtS_FKDAT-HIGH",
+        "wnd[0]/usr/txtP_FKDAT-HIGH",
+    ):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = date_to
+                print(f"  Billing Date TO   set via {wid}")
+                break
+            except:
+                pass
+
+    wait(0.3)
 
 def newest_export_xlsx(after_ts: float) -> str:
     pattern = os.path.join(SAP_EXPORT_DIR, SAP_EXPORT_GLOB)
@@ -122,47 +164,34 @@ def xlsx_to_csv(xlsx_path: str, csv_path: str):
     ensure_out_dir(csv_path)
 
     def norm(v):
-        if v is None:
-            return ""
-        s = str(v).strip()
-        return s
+        return "" if v is None else str(v).strip()
 
-    def is_number_like(s: str) -> bool:
-        # "234,252" / "1234.56" / "-10" 같은 걸 숫자로 판단
+    def is_number_like(s):
         if not s:
             return False
-        t = s.replace(",", "")
         try:
-            float(t)
+            float(s.replace(",", ""))
             return True
         except:
             return False
 
-    def is_trailing_summary_row(values) -> bool:
-        # 규칙:
-        # - 비어있지 않은 셀이 1~2개 정도로 매우 적고
-        # - 그 값들이 숫자처럼 보이면 "요약 줄"로 간주
+    def is_trailing_summary_row(values):
         non_empty = [v for v in values if v != ""]
         if len(non_empty) == 0:
-            return True  # 완전 빈 줄은 제거
+            return True
         if len(non_empty) <= 2 and all(is_number_like(v) for v in non_empty):
             return True
         return False
 
-    # 1) 엑셀 전체를 리스트로 읽기
     rows = []
     for row in ws.iter_rows(values_only=True):
         rows.append([norm(v) for v in row])
 
-    # 2) 뒤쪽의 빈 줄 제거
     while rows and all(v == "" for v in rows[-1]):
         rows.pop()
-
-    # 3) 마지막 줄이 "요약 줄" 패턴이면 제거 (필요하면 연속으로 여러 줄도 제거)
     while rows and is_trailing_summary_row(rows[-1]):
         rows.pop()
 
-    # 4) CSV로 저장
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for r in rows:
@@ -175,12 +204,8 @@ def file_ok(path, min_size):
         return False
 
 
-# ---------- Export trigger strategies ----------
+# ---------- Export strategies ----------
 def try_export_via_alv_toolbar(session) -> bool:
-    """
-    ALV grid export is usually the most stable method.
-    Typical grid IDs vary; we try several common ones.
-    """
     grid_ids = [
         "wnd[0]/usr/cntlGRID1/shellcont/shell",
         "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
@@ -192,12 +217,10 @@ def try_export_via_alv_toolbar(session) -> bool:
             continue
         try:
             grid = session.findById(gid)
-
-            # open export context
             opened = False
-            for export_btn in ("&MB_EXPORT", "EXPORT", "&EXPORT"):
+            for btn in ("&MB_EXPORT", "EXPORT", "&EXPORT"):
                 try:
-                    grid.pressToolbarContextButton(export_btn)
+                    grid.pressToolbarContextButton(btn)
                     wait(0.4)
                     opened = True
                     break
@@ -205,8 +228,6 @@ def try_export_via_alv_toolbar(session) -> bool:
                     continue
             if not opened:
                 continue
-
-            # choose spreadsheet/xxl
             for item in ("&XXL", "XXL", "&SPREADSHEET", "SPREADSHEET", "&PC", "PC"):
                 try:
                     grid.selectContextMenuItem(item)
@@ -219,24 +240,17 @@ def try_export_via_alv_toolbar(session) -> bool:
             continue
     return False
 
-
 def find_menu_path_by_text(session, texts):
-    """
-    Finds nested menu path by visible text, e.g. ["List","Export","Spreadsheet"].
-    Returns the final menu item object or None.
-    """
     try:
         mbar = session.findById("wnd[0]/mbar")
     except:
         return None
-
     level = []
     try:
         for i in range(mbar.Children.Count):
             level.append(mbar.Children(i))
     except:
         return None
-
     last_hit = None
     for t in texts:
         hit = None
@@ -251,7 +265,6 @@ def find_menu_path_by_text(session, texts):
         if hit is None:
             return None
         last_hit = hit
-        # next level
         nxt = []
         try:
             for i in range(hit.Children.Count):
@@ -259,12 +272,9 @@ def find_menu_path_by_text(session, texts):
         except:
             nxt = []
         level = nxt
-
     return last_hit
 
-
 def try_export_via_menu(session) -> bool:
-    # by text
     for path in (["List", "Export", "Spreadsheet"],
                  ["List", "Export", "Local File"],
                  ["List", "Export", "Spreadsheet..."]):
@@ -277,8 +287,6 @@ def try_export_via_menu(session) -> bool:
                 return True
             except:
                 pass
-
-    # by common indexes
     fallbacks = [
         "wnd[0]/mbar/menu[0]/menu[3]/menu[1]",
         "wnd[0]/mbar/menu[0]/menu[11]/menu[1]",
@@ -296,7 +304,6 @@ def try_export_via_menu(session) -> bool:
                 pass
     return False
 
-
 def trigger_export(session):
     if try_export_via_alv_toolbar(session):
         return True
@@ -307,8 +314,25 @@ def trigger_export(session):
 
 # ================= MAIN =================
 def main():
-    ensure_out_dir(OUT_CSV)
+    today   = date.today()
 
+    # 이달 첫 번째 비즈니스 데이 당일 또는 그 이전이면 전달 데이터로 다운로드
+    if today <= first_business_day(today):
+        last_day_prev = month_start(today) - timedelta(days=1)
+        d_from = month_start(last_day_prev)
+        d_to   = last_business_day(month_start(today))
+        print("[INFO] 이달 첫 번째 비즈니스 데이 이전 → 전달 데이터 범위로 다운로드")
+    else:
+        d_from = month_start(today)
+        d_to   = last_business_day(today)
+
+    date_from = sap_date(d_from)
+    date_to   = sap_date(d_to)
+
+    print(f"Billing date : {date_from} ~ {date_to}")
+    print(f"Output file  : {OUT_CSV}")
+
+    ensure_out_dir(OUT_CSV)
     if os.path.exists(OUT_CSV):
         try:
             os.remove(OUT_CSV)
@@ -322,11 +346,9 @@ def main():
 
     if app.Children.Count == 0:
         raise RuntimeError("No SAP connection found. Open SAP GUI and log in first.")
-
     conn = app.Children(0)
     if conn.Children.Count == 0:
         raise RuntimeError("No SAP session found.")
-
     session = conn.Children(0)
 
     try:
@@ -334,8 +356,8 @@ def main():
     except:
         pass
 
-    start_mb52_fresh(session)
-    set_plant(session)
+    start_tcode(session, TCODE)
+    set_selection_fields(session, date_from, date_to)
 
     # Execute (F8)
     session.findById("wnd[0]/tbar[1]/btn[8]").press()
@@ -344,9 +366,8 @@ def main():
 
     ok = trigger_export(session)
     if not ok:
-        raise RuntimeError("Could not trigger export (menu/ALV export controls not found).")
+        raise RuntimeError("Could not trigger export.")
 
-    # wait for XLSX to appear
     xlsx_path = ""
     for _ in range(40):
         xlsx_path = newest_export_xlsx(export_start_ts)
@@ -359,24 +380,19 @@ def main():
         wait(0.6)
 
     if not xlsx_path:
-        raise RuntimeError(
-            f"Could not find SAP auto-export XLSX in {SAP_EXPORT_DIR} "
-            f"(pattern {SAP_EXPORT_GLOB}) after {datetime.fromtimestamp(export_start_ts)}"
-        )
+        raise RuntimeError(f"Could not find SAP export XLSX in {SAP_EXPORT_DIR}")
 
     print("Detected XLSX:", xlsx_path)
-
     xlsx_to_csv(xlsx_path, OUT_CSV)
 
     if not file_ok(OUT_CSV, MIN_CSV_SIZE):
-        raise RuntimeError("CSV conversion failed or CSV is too small.")
+        raise RuntimeError("CSV conversion failed or file too small.")
 
     print("CSV saved:", OUT_CSV)
 
     if DELETE_XLSX_AFTER_CONVERT:
         try:
             os.remove(xlsx_path)
-            print("Deleted XLSX:", xlsx_path)
         except Exception as e:
             print("[WARN] Could not delete XLSX:", e)
 

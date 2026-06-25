@@ -2,9 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stock</title>
 
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20260605a">
 
   <link
     rel="stylesheet"
@@ -13,82 +14,143 @@
     crossorigin=""
   />
 
-  <style>
-    #stockMap{ height: 1200px; min-height: 760px; }
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
-    .status{
-      position:absolute;left:12px;bottom:12px;z-index:800;
-      background:rgba(255,255,255,0.92);
-      border:1px solid #ddd;border-radius:8px;
-      padding:8px 10px;font-size:12px;max-width:520px
-    }
-    .legend{margin-top:6px;border-top:1px dashed #ddd;padding-top:6px;color:#555}
-    .legend .row{display:flex;gap:10px;align-items:center;margin-top:4px}
-    .swatch{width:10px;height:10px;border-radius:50%}
-    .swatch.stock{background:#1e78ff}
-    .swatch.orders{background:#999}
-    .swatch.incoming{background:#8b5cf6}
-  </style>
 </head>
 
 <body>
-  <h2>Stock</h2>
+  <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Stock</h2>
 
-  <div id="topRow" class="controls"
-       style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+  <!-- Mobile: toggle button for filter panel -->
+  <button id="filterToggleBtn" class="filter-toggle-btn">
+    <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
+  </button>
 
-    <div id="catBtns" style="display:flex; gap:6px; flex-wrap:wrap;">
-      <button class="btn active" data-val="ALL">All</button>
-      <button class="btn" data-val="PCLT">PCLT</button>
-      <button class="btn" data-val="TBR">TBR</button>
-      <button class="btn" data-val="18PLUS">18+ Inch</button>
-      <button class="btn" data-val="ISEG">EV/iSeg</button>
-      <button class="btn" data-val="SUV">SUV</button>
-      <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
-      <button class="btn" data-val="HM">HM</button>
-    </div>
+  <div id="filterPanel">
 
-    <div id="ordersMetricBtns" class="controls" style="gap:6px; margin-left:20px;">
-      <button class="btn active" data-metric="po">Orders PO</button>
-      <button class="btn" data-metric="confirm">Orders Confirm</button>
-    </div>
+  <!-- ── Top filter bar (includes dropdowns) ── -->
+  <div style="display:flex; gap:8px; align-items:stretch; margin-bottom:6px;">
+    <div id="topRow" class="filter-bar" style="flex:1; margin-bottom:0; flex-wrap:wrap; width:100%;">
+      <div id="catBtns" style="display:flex; gap:5px; flex-wrap:wrap;">
+        <button class="btn active" data-val="ALL">All</button>
+        <button class="btn" data-val="PCLT">PCLT</button>
+        <button class="btn" data-val="TBR">TBR</button>
+        <button class="btn" data-val="18PLUS">18+ Inch</button>
+        <button class="btn" data-val="ISEG">EV/iSeg</button>
+        <button class="btn" data-val="SUV">SUV</button>
+        <button class="btn" data-val="LOWPROFILE">Low profile / Strategic TBR</button>
+        <button class="btn" data-val="HM">HM</button>
+        <button class="btn" data-val="HK">HK</button>
+        <button class="btn" data-val="LF">LF</button>
+      </div>
 
-    <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
-      <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
-      <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>
-      <button class="btn active">Stock</button>
+      <div class="filter-sep"></div>
+
+      <div id="ordersMetricBtns" style="display:flex; gap:5px;">
+        <button class="btn active" data-metric="po">Orders PO</button>
+        <button class="btn" data-metric="confirm">Ready to Ship</button>
+      </div>
+
+      <div class="filter-sep"></div>
+
+      <!-- Product Group (moved from second bar) -->
+      <div class="dd" id="ddProductGroup">
+        <label for="product_group">Product Group</label>
+        <div class="dd-wrap">
+          <input id="product_group" type="text" placeholder="All Groups" autocomplete="off">
+          <button type="button" class="dd-btn" id="pgBtn">▼</button>
+          <button type="button" class="dd-btn dd-clear-btn" id="pgClear">✕</button>
+        </div>
+        <div class="dd-menu" id="pgMenu"></div>
+      </div>
+
+      <!-- Pattern -->
+      <div class="dd" id="ddPattern">
+        <label for="pattern">Pattern</label>
+        <div class="dd-wrap">
+          <input id="pattern" type="text" placeholder="Search Pattern" autocomplete="off">
+          <button type="button" class="dd-btn" id="patternBtn">▼</button>
+          <button type="button" class="dd-btn dd-clear-btn" id="patternClear">✕</button>
+        </div>
+        <div class="dd-menu" id="patternMenu"></div>
+      </div>
+
+      <!-- Size -->
+      <div class="dd" id="ddMaterial">
+        <label for="material">Size</label>
+        <div class="dd-wrap">
+          <input id="material" type="text" placeholder="Search Size" autocomplete="off">
+          <button type="button" class="dd-btn" id="materialBtn">▼</button>
+          <button type="button" class="dd-btn dd-clear-btn" id="materialClear">✕</button>
+        </div>
+        <div class="dd-menu" id="materialMenu"></div>
+      </div>
+
+      <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
+        <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
+        <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>
+        <button class="btn active">Stock</button>
+        <button class="btn" onclick="window.location.href='/rebate'">Rebate</button>
+        <button class="btn" onclick="window.location.href='/price'">Price</button>
+        <button class="btn" onclick="window.location.href='/meeting'">Meeting</button>
+        <button class="btn" onclick="window.location.href='/claims'">Claims</button>
+      </div>
     </div>
   </div>
 
-  <div class="controls">
-    <label>Product Group:</label>
-    <select id="product_group"><option value="ALL">ALL</option></select>
-
-    <label style="margin-left:8px;">Pattern:</label>
-    <input list="pattern_list" id="pattern" placeholder="Search Pattern" />
-    <datalist id="pattern_list"></datalist>
-
-    <label style="margin-left:8px;">Material:</label>
-    <input list="material_list" id="material" placeholder="Search Material" />
-    <datalist id="material_list"></datalist>
-
-    <button id="btnApply" class="btn" style="margin-left:12px;">Apply</button>
-    <button id="btnClear" class="btn">Clear</button>
-    <button id="btnRefresh" class="btn">Refresh</button>
-  </div>
+  </div><!-- end #filterPanel -->
 
   <div id="errbar" class="errbar" hidden></div>
 
-  <div style="position:relative; margin-top:4px;">
-    <div id="stockMap"></div>
+  <div id="stockLayout">
+    <!-- Left: map -->
+    <div id="stockMapWrapper">
+      <div id="stockMap"></div>
+    </div>
 
-    <div class="status">
-      <div id="statusLine">Ready.</div>
-      <div class="legend">
-        <div>Same filters applied to all layers.</div>
-        <div class="row"><span class="swatch stock"></span><span>Stock (Plant)</span></div>
-        <div class="row"><span class="swatch orders"></span><span>Orders (Origin)</span></div>
-        <div class="row"><span class="swatch incoming"></span><span>Incoming (in transit)</span></div>
+    <!-- Right: state table + sales charts -->
+    <div id="stockSidePanel">
+
+      <!-- Price box -->
+      <div id="priceBox" style="display:flex; gap:16px; align-items:center; justify-content:center; background:#fff; border:1px solid #e5e7eb; border-radius:7px; padding:10px 20px; flex-shrink:0;">
+        <div class="price-cell">
+          <span class="price-lbl">List Price</span>
+          <span class="price-val" id="priceList">—</span>
+        </div>
+      </div>
+
+      <!-- State breakdown table (moved from top) -->
+      <div id="stateTableWrap">
+        <table id="stateTable">
+          <thead>
+            <tr>
+              <th>State</th>
+              <th>3M</th>
+              <th>6M</th>
+              <th>12M</th>
+              <th>Base Sales</th>
+              <th class="st-qty-hdr">Stock Qty</th>
+              <th class="st-qty-hdr">+ Water Qty</th>
+              <th class="st-qty-hdr">+ Factory Qty</th>
+              <th>Stock</th>
+              <th>+ Water</th>
+              <th>+ Factory</th>
+            </tr>
+          </thead>
+          <tbody id="stateTableBody">
+            <tr><td colspan="11" class="st-loading">Loading…</td></tr>
+          </tbody>
+          <tfoot id="stateTableFoot"></tfoot>
+        </table>
+      </div>
+      <div class="stockChartPane">
+        <h4>Monthly Sales</h4>
+        <canvas id="salesMonthlyChart"></canvas>
+      </div>
+      <div class="stockChartPane">
+        <h4>Yearly Sales</h4>
+        <canvas id="salesYearlyChart"></canvas>
       </div>
     </div>
   </div>
@@ -99,6 +161,19 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/stock.js" defer></script>
+  <script>
+  (function () {
+    var btn = document.getElementById("filterToggleBtn");
+    var panel = document.getElementById("filterPanel");
+    if (btn && panel) {
+      btn.addEventListener("click", function () {
+        var open = panel.classList.toggle("open");
+        btn.querySelector(".filter-toggle-arrow").textContent = open ? "\u25b2" : "\u25bc";
+      });
+    }
+  })();
+  </script>
+
+  <script src="/static/stock.js?v=20260318" defer></script>
 </body>
 </html>
