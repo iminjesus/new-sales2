@@ -900,7 +900,7 @@ def debug_salesman():
         # 4. Sample sales_2526 rows for a WA ship_to (check sold_to presence)
         cur.execute(
             f"SELECT s.ship_to, s.sold_to, s.year, SUM(s.amt) AS amt"
-            f" FROM sales_2526 s"
+            f" FROM {_sales_2526_from('s')}"
             f" WHERE s.ship_to IN (SELECT DISTINCT ship_to FROM customer WHERE bde_state IN ({ph}))"
             f" AND s.year = 2025"
             f" GROUP BY s.ship_to, s.sold_to, s.year"
@@ -1118,7 +1118,7 @@ def api_sales_stats():
     cur  = conn.cursor(dictionary=True)
     try:
         # Determine the latest (year, month) present in sales_2526
-        cur.execute("SELECT MAX(year*100 + month) AS ym FROM sales_2526")
+        cur.execute("SELECT MAX(YEAR(billing_date)*100 + MONTH(billing_date)) AS ym FROM sales_2526")
         r = cur.fetchone()
         latest_ym = int((r or {}).get("ym") or 0)
         if not latest_ym:
@@ -1179,7 +1179,7 @@ def api_sales_stats():
             where_sql  = ("WHERE " + " AND ".join(wh_all)) if wh_all else ""
             cur.execute(f"""
                 SELECT SUM(s.qty) AS qty
-                FROM sales_2526 s
+                FROM {_sales_2526_from("s")}
                 {join_sql}
                 {where_sql}
             """, params_all)
@@ -1221,7 +1221,7 @@ def api_sales_stats_by_state():
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        cur.execute("SELECT MAX(year*100 + month) AS ym FROM sales_2526")
+        cur.execute("SELECT MAX(YEAR(billing_date)*100 + MONTH(billing_date)) AS ym FROM sales_2526")
         r = cur.fetchone()
         latest_ym = int((r or {}).get("ym") or 0)
         if not latest_ym:
@@ -1369,7 +1369,7 @@ def api_sales_stats_by_state():
             where_sql  = ("WHERE " + " AND ".join(wh_all)) if wh_all else ""
             cur.execute(f"""
                 SELECT cus.bde_state AS state, SUM(s.qty) AS qty
-                FROM sales_2526 s
+                FROM {_sales_2526_from("s")}
                 {join_sql}
                 {where_sql}
                 GROUP BY state
@@ -1736,7 +1736,7 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
 
     sql = f"""
       SELECT sTop.sold_to
-        FROM sales_2526 sTop
+        FROM {_sales_2526_from("s")}Top
         {' '.join(joins)}
         {where_sql}
        GROUP BY sTop.sold_to
@@ -2128,7 +2128,7 @@ def v2_dashboard():
 
         cur.execute(f"""
             SELECT s.year AS year, s.month AS month, SUM(s.{value}) AS value
-            FROM sales_2526 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins_m)}
             {where_m}
             GROUP BY s.year, s.month
@@ -2146,7 +2146,7 @@ def v2_dashboard():
         group_col_m = group_cols_sales[group_by]
         cur.execute(f"""
             SELECT s.year AS year, s.month AS month, {label_col_sales} AS group_label, SUM(s.{value}) AS value
-            FROM sales_2526 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins_m_break)}
             {where_m}
             GROUP BY s.year, s.month, {group_col_m}
@@ -3138,7 +3138,7 @@ def export_excel_sales2526():
                 s.sold_to AS sold_to_code,
                 s.ship_to AS ship_to_code,
                 {pivot_cols}
-            FROM sales_2526 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql}
             GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
@@ -3311,7 +3311,7 @@ def monthly_sales():
         if use_2026_union:
             from_sql = "FROM " + _sales_2026_union(cur, alias="s")
         else:
-            from_sql = "FROM sales_2526 s"
+            from_sql = "FROM " + _sales_2526_from("s")
 
         top_sold_to = None
 
@@ -3470,7 +3470,7 @@ def monthly_breakdown():
         if use_2026_union:
             from_sql = "FROM " + _sales_2026_union(cur, alias="s")
         else:
-            from_sql = "FROM sales_2526 s"
+            from_sql = "FROM " + _sales_2526_from("s")
 
         top_sold_to = None
 
@@ -4493,7 +4493,7 @@ def sales_map():
                 MAX(c.salesman_name)  AS bde,
                 SUM(s.{value})        AS total_value,
                 SUM(CASE WHEN s.year = 2026 THEN s.{value} ELSE 0 END) AS total_2026
-            FROM sales_2526 s
+            FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql2}
             GROUP BY
@@ -5711,6 +5711,28 @@ _REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
 # every month — sales_2607, sales_2608, …  Discover them via
 # INFORMATION_SCHEMA so a fresh month doesn't require a code change.
 _SALES_2026_TABLES_CACHE = {"ts": 0, "names": []}
+
+def _sales_2526_from(alias: str = "s") -> str:
+    """Wrapping subquery over the rebuilt sales_2526 layout.  The fresh
+    table stores time as a single `billing_date` column (matching the
+    sales_26XX shape), so every downstream query that still reads
+    `s.year` / `s.month` / `s.day` needs those values synthesised on
+    the fly.  Returning a derived table keeps the rest of each query
+    (joins, where, group-by, select) unchanged — only the `FROM` source
+    is swapped.
+
+    `alias` matches whatever the outer query already uses (`s`, `sTop`,
+    …) so we don't have to rewrite column references downstream.
+    """
+    return (
+        "(SELECT YEAR(billing_date)  AS year, "
+        "        MONTH(billing_date) AS month, "
+        "        DAY(billing_date)   AS day, "
+        "        billing_date, "
+        "        so_type, sold_to, ship_to, brand, material, "
+        "        qty, amt, cogs, dc_rate, p_rate "
+        f" FROM sales_2526) AS {alias}"
+    )
 
 def _sales_2026_tables(cur):
     """Return the ordered list of sales tables that hold 2026 data:
