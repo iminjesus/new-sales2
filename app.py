@@ -5946,15 +5946,17 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
             f"CASE WHEN {c}.line = 'PCLT' AND EXISTS ({match_sql}) "
             f"THEN 'Promotion' ELSE 'Non-Promotion' END"
         )
-    # detail = one row per matching promo *category* (the part before
-    # the first underscore: '443'/'iON'/'TrueBlue'), matching the
-    # promo-button row's category grouping.  Without this, the chart
-    # shows '443' and '443_30%' as separate stacks and the headline
-    # 443 bucket reads far smaller than the sales team expects, because
-    # the higher-DC '443_30%' tier hoovers up the larger-volume sales.
+    # detail = the matched promo bucket itself.  promo_customer.promo
+    # is now stored as the top-level category (443 / iON / TrueBlue) —
+    # the per-tier split moved into dc_rate_start..dc_rate_end ranges
+    # on each row.  MIN() is still here as a safety net for the rare
+    # case where a single sale qualifies under two rows (e.g. the same
+    # customer is listed twice for distinct DC bands of the same promo);
+    # the user confirmed the three categories don't overlap so MIN is
+    # safe across categories too.
     return (
         f"CASE WHEN {c}.line = 'PCLT' THEN "
-        f"COALESCE((SELECT MIN(SUBSTRING_INDEX(pc.promo, '_', 1)) FROM promo_customer pc "
+        f"COALESCE((SELECT MIN(pc.promo) FROM promo_customer pc "
         f"LEFT JOIN promo_plan pp ON pp.promo = pc.promo "
         f"WHERE {s}.qty >= pc.min_qty AND {s}.dc_rate BETWEEN pc.dc_rate_start AND pc.dc_rate_end "
         f"AND {s}.brand = pc.brand AND ("
@@ -5971,15 +5973,18 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
 
 @app.get("/api/promo/buttons")
 def api_promo_buttons():
-    """Return the top-level promo categories + the sub-promos under each,
-    derived live from DISTINCT promo_customer.promo.  No mapping table
-    needed: category = part before the first underscore.
+    """Return the active promo categories derived live from
+    promo_customer.promo.  After the schema simplification, promo IS
+    the category (443 / iON / TrueBlue); the per-tier split lives in
+    dc_rate_start..dc_rate_end on each row instead of in the promo
+    name suffix.  Each category surfaces as a single sub-button so the
+    response shape stays compatible with the existing button row.
 
     Shape:
       { "categories": [
-          { "name": "443",      "subs": ["443","443_30%"] },
-          { "name": "iON",      "subs": ["iON_70%"] },
-          { "name": "TrueBlue", "subs": ["TrueBlue_12%","TrueBlue_18%"] },
+          { "name": "443",      "subs": ["443"] },
+          { "name": "iON",      "subs": ["iON"] },
+          { "name": "TrueBlue", "subs": ["TrueBlue"] },
         ] }
     """
     try:
