@@ -3256,12 +3256,12 @@ def monthly_sales():
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
     # Selected sub-promos from the new 443 / iON / TrueBlue buttons.
-    # Promo filtering is only meaningful within the 2026 calendar year
-    # (the promo_customer / promo_plan tables don't cover 2025 data),
-    # so we silently ignore the param when year != 2026.
+    # Both 2025 and 2026 are now in scope — promo_plan covers both
+    # years (TrueBlue activates from July 2025, the others from start
+    # of FY).  The promo helpers gate each sale on the plan period
+    # via promo_plan.start_date / end_date, so a 2025 query simply
+    # picks up the rules whose period covers that month.
     promos = request.args.getlist("promo")
-    if year != 2026:
-        promos = []
     use_2026_union = (year == 2026)
 
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
@@ -3369,13 +3369,11 @@ def monthly_breakdown():
     # 0 or missing = no top filter
     top_limit = int(request.args.get("top_limit", 0) or 0)
 
-    # Promo filter — only meaningful for 2026 (promo_customer / promo_plan
-    # don't cover 2025).  When promos are selected, the FROM clause
-    # switches to the 2026 monthly-tables union and the PCLT + promo
-    # match conditions get added via _promo_filter_clauses.
+    # Promo filter — promo_plan now covers both 2025 and 2026, so a
+    # query for either year picks up the rules whose period covers it.
+    # When promos are selected, _promo_filter_clauses adds the PCLT
+    # + customer + dc_rate-range + plan-period match conditions.
     promos = request.args.getlist("promo")
-    if year != 2026:
-        promos = []
     use_2026_union = (year == 2026)
 
     # Which dimension to group by?
@@ -3839,8 +3837,8 @@ def yearly_breakdown():
         return jsonify({"error": "invalid group_by"}), 400
     if is_promo_group:
         # sales_21_25 carries year + month, so the promo helper works as-is.
-        # promo_plan only covers 2026 dates, so historical years harmlessly
-        # bucket entirely under 'Non-Promotion'.
+        # promo_plan now covers 2025 + 2026; pre-2025 years naturally
+        # bucket under 'Non-Promotion' because no rule's period matches.
         group_col = _promotion_group_col_sql(
             detail=(group_by == "promotion_detail"),
         )
