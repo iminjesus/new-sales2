@@ -340,21 +340,14 @@ def _ensure_carrying_join(alias: str, joins: list) -> None:
 
 
 def _customer_join(alias: str) -> str:
-    """Returns a deduplicated LEFT JOIN for customer (one row per ship_to) to avoid
-    inflating aggregates when a ship_to appears in multiple customer rows."""
-    return (
-        f"LEFT JOIN ("
-        f"SELECT ship_to,"
-        f" MIN(NULLIF(TRIM(bde_state),''))      AS bde_state,"
-        f" MIN(NULLIF(TRIM(salesman_name),'' )) AS salesman_name,"
-        f" MIN(NULLIF(TRIM(sold_to_group),'' )) AS sold_to_group,"
-        f" MIN(NULLIF(TRIM(sold_to_name),'' ))  AS sold_to_name,"
-        f" MIN(NULLIF(TRIM(ship_to_name),'' ))  AS ship_to_name,"
-        f" MIN(NULLIF(TRIM(channels),''))       AS channels,"
-        f" MIN(NULLIF(TRIM(sold_to),''))        AS sold_to"
-        f" FROM customer GROUP BY ship_to"
-        f") cus ON cus.ship_to = {alias}.ship_to"
-    )
+    """LEFT JOIN against the pre-materialised customer_rollup table
+    rather than re-aggregating customer per query.  customer is small
+    (~5k rows) but every chart query was running its own GROUP BY
+    ship_to over it, which adds up when a Group-By change fires
+    ~10 endpoints in parallel.  customer_rollup is rebuilt at startup
+    by _ensure_customer_rollup() and again whenever the operator
+    refreshes via /api/admin/refresh_customer_rollup."""
+    return f"LEFT JOIN customer_rollup cus ON cus.ship_to = {alias}.ship_to"
 
 
 def _ensure_customer_join(alias: str, joins: list) -> None:
@@ -5834,6 +5827,59 @@ def _ensure_sales_2526_indexes():
         pass
 
 _ensure_sales_2526_indexes()
+
+
+def _refresh_customer_rollup():
+    """(Re)build customer_rollup as a materialised per-ship_to roll-up
+    of customer.  Every chart query LEFT JOINs against it for
+    bde_state / salesman / sold_to_group / channels / etc., so
+    pre-computing it once means each query just does an index lookup
+    on cus.ship_to instead of re-running GROUP BY ship_to over the
+    whole customer master.
+
+    Idempotent — drops and rebuilds.  customer is small (~5k rows) so
+    a full rebuild takes milliseconds.  Call again from an admin
+    endpoint after a customer-master refresh."""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("DROP TABLE IF EXISTS customer_rollup")
+        cur.execute(
+            "CREATE TABLE customer_rollup AS "
+            "SELECT ship_to, "
+            "       MIN(NULLIF(TRIM(bde_state),''))      AS bde_state, "
+            "       MIN(NULLIF(TRIM(salesman_name),'' )) AS salesman_name, "
+            "       MIN(NULLIF(TRIM(sold_to_group),'' )) AS sold_to_group, "
+            "       MIN(NULLIF(TRIM(sold_to_name),'' ))  AS sold_to_name, "
+            "       MIN(NULLIF(TRIM(ship_to_name),'' ))  AS ship_to_name, "
+            "       MIN(NULLIF(TRIM(channels),''))       AS channels, "
+            "       MIN(NULLIF(TRIM(sold_to),''))        AS sold_to "
+            "FROM customer GROUP BY ship_to"
+        )
+        try:
+            cur.execute("ALTER TABLE customer_rollup ADD PRIMARY KEY (ship_to)")
+        except Exception:
+            pass
+        for col in ("sold_to", "sold_to_group", "channels", "salesman_name", "bde_state"):
+            try:
+                cur.execute(
+                    f"CREATE INDEX idx_cr_{col} ON customer_rollup ({col})"
+                )
+            except Exception:
+                pass
+        conn.commit(); cur.close(); conn.close()
+        print("[customer_rollup] rebuilt")
+    except Exception as e:
+        print(f"[customer_rollup] rebuild skipped: {e}")
+
+_refresh_customer_rollup()
+
+
+@app.get("/api/admin/refresh_customer_rollup")
+def admin_refresh_customer_rollup():
+    """Manual hook: rebuild customer_rollup after editing the customer
+    master.  Returns simple {"ok": True} on success."""
+    _refresh_customer_rollup()
+    return jsonify({"ok": True})
 
 
 def _sales_2526_from(alias: str = "s", year=None) -> str:
