@@ -5795,6 +5795,47 @@ def _ensure_promo_indexes():
 _ensure_promo_indexes()
 
 
+def _ensure_sales_2526_indexes():
+    """Add the indexes monthly_sales / monthly_breakdown / map view /
+    rebate roll-up etc. actually need on the rebuilt sales_2526.  The
+    table only ships with billing_date, but every query gates either on
+    billing_date (for the year filter) or joins on ship_to / sold_to /
+    material.  Without these indexes those gates degrade to a full
+    table scan, which is what was making Group-By switches still slow
+    even after the wrapping-subquery rewrite.
+
+    Idempotent — duplicate-key errors on existing indexes are swallowed
+    so we can keep adding new ones in a single migration."""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+    except Exception as e:
+        print(f"[sales_2526 idx] connect skipped: {e}")
+        return
+    plans = [
+        ("idx_s2526_billing_date",         "(billing_date)"),
+        ("idx_s2526_ship_to",              "(ship_to)"),
+        ("idx_s2526_sold_to",              "(sold_to)"),
+        ("idx_s2526_material",             "(material)"),
+        ("idx_s2526_brand",                "(brand)"),
+        # composite for any same-day ship_to roll-up done over
+        # historical months (mirrors the sales_thismonth dq join).
+        ("idx_s2526_billing_ship_brand",   "(billing_date, ship_to, brand)"),
+    ]
+    for idx, cols in plans:
+        try:
+            cur.execute(f"CREATE INDEX {idx} ON sales_2526 {cols}")
+        except Exception as e:
+            msg = str(e)
+            if "1061" not in msg and "Duplicate" not in msg:
+                print(f"[sales_2526 idx] {idx} create skipped: {e}")
+    try:
+        conn.commit(); cur.close(); conn.close()
+    except Exception:
+        pass
+
+_ensure_sales_2526_indexes()
+
+
 def _sales_2526_from(alias: str = "s", year=None) -> str:
     """Direct reference to sales_2526 with no derived-table wrap.
 
