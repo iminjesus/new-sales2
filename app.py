@@ -6125,17 +6125,19 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
             f"CASE WHEN {c}.line = 'PCLT' AND EXISTS ({match_sql}) "
             f"THEN 'Promotion' ELSE 'Non-Promotion' END"
         )
-    # detail = the matched promo bucket itself.  promo_customer.promo
-    # is now stored as the top-level category (443 / iON / TrueBlue) —
-    # the per-tier split moved into dc_rate_start..dc_rate_end ranges
-    # on each row.  MIN() is still here as a safety net for the rare
-    # case where a single sale qualifies under two rows (e.g. the same
-    # customer is listed twice for distinct DC bands of the same promo);
-    # the user confirmed the three categories don't overlap so MIN is
-    # safe across categories too.
+    # detail = the matched promo's top-level category.  promo_customer.
+    # promo is typically the category itself (443 / iON / TrueBlue) but
+    # variants like '443_beforeTrueBlue' (a Jan-Jun 2025 override that
+    # ends when TrueBlue activates) still exist.  Bucket on the part
+    # before the first underscore so both `443` and `443_beforeTrueBlue`
+    # render as a single `443` stack — matches what the promo-button
+    # row already does via _promo_category_of.  MIN() collapses the
+    # rare case where one sale qualifies under two rows; SUBSTRING_INDEX
+    # of names without an underscore returns the name itself, so this
+    # is safe for non-variant promos too.
     return (
         f"CASE WHEN {c}.line = 'PCLT' THEN "
-        f"COALESCE((SELECT MIN(pc.promo) FROM promo_customer pc "
+        f"COALESCE((SELECT MIN(SUBSTRING_INDEX(pc.promo, '_', 1)) FROM promo_customer pc "
         f"LEFT JOIN promo_plan pp ON pp.promo = pc.promo "
         f"WHERE ({qty_check}) AND {s}.dc_rate BETWEEN pc.dc_rate_start AND pc.dc_rate_end "
         f"AND {s}.brand = pc.brand AND ("
