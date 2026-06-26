@@ -5972,7 +5972,7 @@ def _promo_filter_clauses(promos, sales_alias="s",
               AND (
                 pp.promo IS NULL
                 OR (
-                  {c}.product_group = pp.product_group
+                  (pp.product_group = '' OR {c}.product_group = pp.product_group)
                   AND ({y_e} * 100 + {m_e}) BETWEEN
                        (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND
                        (YEAR(pp.end_date)   * 100 + MONTH(pp.end_date))
@@ -6054,7 +6054,7 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
         f"(pc.sold_to <> '' AND pc.sold_to = {s}.sold_to) OR "
         f"(pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)"
         f") AND (pp.promo IS NULL OR ("
-        f"{c}.product_group = pp.product_group AND "
+        f"(pp.product_group = '' OR {c}.product_group = pp.product_group) AND "
         f"({y_e} * 100 + {m_e}) BETWEEN "
         f"(YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND "
         f"(YEAR(pp.end_date) * 100 + MONTH(pp.end_date)) AND "
@@ -6373,7 +6373,7 @@ def api_monthly_highlights():
                                   AND (
                                     pp.promo IS NULL
                                     OR (
-                                      mat.product_group = pp.product_group
+                                      (pp.product_group = '' OR mat.product_group = pp.product_group)
                                       AND ({ym_year_lit} * 100 + {ym_month_lit}) BETWEEN
                                            (YEAR(pp.start_date)*100 + MONTH(pp.start_date)) AND
                                            (YEAR(pp.end_date)*100   + MONTH(pp.end_date))
