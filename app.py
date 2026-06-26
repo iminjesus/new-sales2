@@ -5710,46 +5710,70 @@ _REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
 # INFORMATION_SCHEMA so a fresh month doesn't require a code change.
 _SALES_2026_TABLES_CACHE = {"ts": 0, "names": []}
 
-def _sales_2526_from(alias: str = "s", year=None) -> str:
-    """Wrapping subquery over the rebuilt sales_2526 layout.  The fresh
-    table stores time as a single `billing_date` column (matching the
-    sales_26XX shape), so every downstream query that still reads
-    `s.year` / `s.month` / `s.day` needs those values synthesised on
-    the fly.  Returning a derived table keeps the rest of each query
-    (joins, where, group-by, select) unchanged — only the `FROM` source
-    is swapped.
+def _ensure_sales_2526_generated_cols():
+    """Add VIRTUAL generated year/month/day columns + composite index to
+    sales_2526 if they're not already there.
 
-    `alias` matches whatever the outer query already uses (`s`, `sTop`,
-    …) so we don't have to rewrite column references downstream.
+    The fresh sales_2526 stores time as a single billing_date column.
+    Every monthly / breakdown query reads s.year / s.month / s.day, so
+    earlier code wrapped the table in a derived subquery synthesising
+    those aliases on the fly — but MySQL had to materialise the entire
+    17-month table before any JOIN or GROUP BY could run, which made
+    Group-By switching take minutes.
 
-    `year` (optional) pushes a `WHERE billing_date >= 'Y-01-01' AND
-    billing_date < '(Y+1)-01-01'` filter into the subquery so the
-    billing_date index actually gets used.  Without it, every callsite
-    materialises the entire sales_2526 table (25 + 26 = ~17 months of
-    rows) and the Promotion EXISTS scan on top of that becomes very
-    slow.  Outer queries that gate on `s.year = 2025` still work, but
-    only after MySQL has done the full table scan — pushing the date
-    range here lets the index do the prune up front.
+    VIRTUAL generated columns:
+      * computed on read, no row storage cost,
+      * indexable (the index stores the computed values), so
+        `WHERE year=2025` and `GROUP BY year, month` use the index
+        instead of a full scan,
+      * fully auto-managed by MySQL — no maintenance burden on the
+        operator, matching the "I just want billing_date" spirit.
+
+    Idempotent: skips when `year` column already exists.
     """
-    where_sql = ""
-    if year is not None:
-        try:
-            y = int(year)
-            where_sql = (
-                f" WHERE billing_date >= '{y}-01-01'"
-                f"   AND billing_date <  '{y+1}-01-01'"
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("SHOW COLUMNS FROM sales_2526 LIKE 'year'")
+        if cur.fetchone() is None:
+            cur.execute(
+                "ALTER TABLE sales_2526"
+                " ADD COLUMN year  INT GENERATED ALWAYS AS (YEAR(billing_date))  VIRTUAL,"
+                " ADD COLUMN month INT GENERATED ALWAYS AS (MONTH(billing_date)) VIRTUAL,"
+                " ADD COLUMN day   INT GENERATED ALWAYS AS (DAY(billing_date))   VIRTUAL"
             )
-        except (TypeError, ValueError):
-            where_sql = ""
-    return (
-        "(SELECT YEAR(billing_date)  AS year, "
-        "        MONTH(billing_date) AS month, "
-        "        DAY(billing_date)   AS day, "
-        "        billing_date, "
-        "        so_type, sold_to, ship_to, brand, material, "
-        "        qty, amt, cogs, dc_rate, p_rate "
-        f" FROM sales_2526{where_sql}) AS {alias}"
-    )
+            try:
+                cur.execute(
+                    "CREATE INDEX idx_year_month_day "
+                    "ON sales_2526 (year, month, day)"
+                )
+            except Exception as e:
+                print(f"[sales_2526] year/month/day index skipped: {e}")
+            conn.commit()
+            print("[sales_2526] year/month/day VIRTUAL columns + index added")
+        cur.close(); conn.close()
+    except Exception as e:
+        print(f"[sales_2526] generated columns setup skipped: {e}")
+
+_ensure_sales_2526_generated_cols()
+
+def _sales_2526_from(alias: str = "s", year=None) -> str:
+    """Direct reference to sales_2526 with no derived-table wrap.
+
+    Earlier iterations wrapped the table in a SELECT-with-aliases
+    subquery so existing `s.year` / `s.month` / `s.day` references kept
+    working, but MySQL had to materialise the entire 17-month table
+    before JOIN / GROUP BY ran — slow enough that Group-By switching
+    on the Monthly chart took minutes.  _ensure_sales_2526_generated_
+    cols() now adds those same year / month / day aliases as VIRTUAL
+    generated columns with a composite index on the table itself, so
+    `FROM sales_2526 s` is enough and queries that gate on `s.year =
+    2025` / `GROUP BY s.month` use the index path directly.
+
+    `year` is kept on the signature for backward-compatible callsites;
+    it's ignored here because the outer query is expected to gate on
+    `s.year` (which is now indexed) or `s.billing_date` directly.
+    """
+    return f"sales_2526 {alias}"
 
 def _sales_2026_tables(cur):
     """Return the ordered list of sales tables that hold 2026 data:
