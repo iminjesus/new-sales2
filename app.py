@@ -900,7 +900,7 @@ def debug_salesman():
         # 4. Sample sales_2526 rows for a WA ship_to (check sold_to presence)
         cur.execute(
             f"SELECT s.ship_to, s.sold_to, s.year, SUM(s.amt) AS amt"
-            f" FROM {_sales_2526_from('s')}"
+            f" FROM {_sales_2526_from('s', year=2025)}"
             f" WHERE s.ship_to IN (SELECT DISTINCT ship_to FROM customer WHERE bde_state IN ({ph}))"
             f" AND s.year = 2025"
             f" GROUP BY s.ship_to, s.sold_to, s.year"
@@ -1736,7 +1736,7 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
 
     sql = f"""
       SELECT sTop.sold_to
-        FROM {_sales_2526_from("s")}Top
+        FROM {_sales_2526_from("sTop", year=2026)}
         {' '.join(joins)}
         {where_sql}
        GROUP BY sTop.sold_to
@@ -3311,7 +3311,7 @@ def monthly_sales():
         if use_2026_union:
             from_sql = "FROM " + _sales_2026_union(cur, alias="s")
         else:
-            from_sql = "FROM " + _sales_2526_from("s")
+            from_sql = "FROM " + _sales_2526_from("s", year=year)
 
         top_sold_to = None
 
@@ -3468,7 +3468,7 @@ def monthly_breakdown():
         if use_2026_union:
             from_sql = "FROM " + _sales_2026_union(cur, alias="s")
         else:
-            from_sql = "FROM " + _sales_2526_from("s")
+            from_sql = "FROM " + _sales_2526_from("s", year=year)
 
         top_sold_to = None
 
@@ -5710,7 +5710,7 @@ _REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
 # INFORMATION_SCHEMA so a fresh month doesn't require a code change.
 _SALES_2026_TABLES_CACHE = {"ts": 0, "names": []}
 
-def _sales_2526_from(alias: str = "s") -> str:
+def _sales_2526_from(alias: str = "s", year=None) -> str:
     """Wrapping subquery over the rebuilt sales_2526 layout.  The fresh
     table stores time as a single `billing_date` column (matching the
     sales_26XX shape), so every downstream query that still reads
@@ -5721,7 +5721,26 @@ def _sales_2526_from(alias: str = "s") -> str:
 
     `alias` matches whatever the outer query already uses (`s`, `sTop`,
     …) so we don't have to rewrite column references downstream.
+
+    `year` (optional) pushes a `WHERE billing_date >= 'Y-01-01' AND
+    billing_date < '(Y+1)-01-01'` filter into the subquery so the
+    billing_date index actually gets used.  Without it, every callsite
+    materialises the entire sales_2526 table (25 + 26 = ~17 months of
+    rows) and the Promotion EXISTS scan on top of that becomes very
+    slow.  Outer queries that gate on `s.year = 2025` still work, but
+    only after MySQL has done the full table scan — pushing the date
+    range here lets the index do the prune up front.
     """
+    where_sql = ""
+    if year is not None:
+        try:
+            y = int(year)
+            where_sql = (
+                f" WHERE billing_date >= '{y}-01-01'"
+                f"   AND billing_date <  '{y+1}-01-01'"
+            )
+        except (TypeError, ValueError):
+            where_sql = ""
     return (
         "(SELECT YEAR(billing_date)  AS year, "
         "        MONTH(billing_date) AS month, "
@@ -5729,7 +5748,7 @@ def _sales_2526_from(alias: str = "s") -> str:
         "        billing_date, "
         "        so_type, sold_to, ship_to, brand, material, "
         "        qty, amt, cogs, dc_rate, p_rate "
-        f" FROM sales_2526) AS {alias}"
+        f" FROM sales_2526{where_sql}) AS {alias}"
     )
 
 def _sales_2026_tables(cur):
