@@ -1615,13 +1615,14 @@ async function drawMonthlyTotals(){
   function _syncedLegendOnClick(e, legendItem, legend){
     const ci = legend.chart;
     const idx = legendItem.datasetIndex;
-    // Default toggle visibility on the clicked chart's dataset.
-    const willBeHidden = !ci.isDatasetVisible(idx);
-    ci.setDatasetVisibility(idx, !willBeHidden);
+    // Toggle: if currently visible, hide it (and vice versa).
+    const wasVisible = ci.isDatasetVisible(idx);
+    ci.setDatasetVisibility(idx, !wasVisible);
     ci.update();
-    // Propagate to the four Stacked Monthly variants by stack key.
+    // Propagate the same hide/show to the four Stacked Monthly variants
+    // — wasVisible=true means we just hid it, so hidden=true downstream.
     const stackKey = _yearStackKeyFromLabel(legendItem.text);
-    if (stackKey) _toggleStackOnAll(stackKey, willBeHidden);
+    if (stackKey) _toggleStackOnAll(stackKey, wasVisible);
   }
   function _withSyncedLegend(opts){
     const out = {...(opts || {})};
