@@ -512,5 +512,21 @@
 
 })();
 </script>
+
+<!-- ── Chart enlarge modal ─────────────────────────────────────
+     Clicking the zoom button on any chart box clones the chart into
+     this overlay so the user can read crowded labels / stacks at full
+     size.  Backdrop click + ESC + the × close it. -->
+<div id="chartZoomModal" style="display:none;">
+  <div class="czm-backdrop"></div>
+  <div class="czm-frame">
+    <button class="czm-close" type="button" title="Close" aria-label="Close">×</button>
+    <h3 class="czm-title"></h3>
+    <div class="czm-canvas-wrap">
+      <canvas id="chartZoomCanvas"></canvas>
+    </div>
+  </div>
+</div>
+<script src="/static/chart_zoom.js?v=20260605a" defer></script>
 </body>
 </html>
