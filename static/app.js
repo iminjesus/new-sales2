@@ -1589,6 +1589,47 @@ async function drawMonthlyTotals(){
 
   [monthlyInst, monthlyCumInst].forEach(c => c && c.destroy());
 
+  // Cross-chart legend sync: clicking SalesQty (2025) / SalesQty (2026)
+  // / Target (2026) on the simple bar charts also hides the matching
+  // stack group (Y2025 / Y2026 / T2026) on all four Stacked Monthly
+  // variants, so a "show 2026 only" decision propagates to the whole
+  // monthly row instead of having to click every chart's legend.
+  function _yearStackKeyFromLabel(label){
+    const s = String(label || "");
+    if (/target/i.test(s) && /2026/.test(s)) return "T2026";
+    if (/2026/.test(s)) return "Y2026";
+    if (/2025/.test(s)) return "Y2025";
+    return null;
+  }
+  function _toggleStackOnAll(stackKey, hidden){
+    const targets = [stackedMonthlyInst, stackedMonthlyCumInst,
+                     stackedMonthlyPctInst, stackedMonthlyCumPctInst];
+    for (const c of targets) {
+      if (!c) continue;
+      c.data.datasets.forEach((ds, i) => {
+        if (ds.stack === stackKey) c.setDatasetVisibility(i, !hidden);
+      });
+      c.update();
+    }
+  }
+  function _syncedLegendOnClick(e, legendItem, legend){
+    const ci = legend.chart;
+    const idx = legendItem.datasetIndex;
+    // Default toggle visibility on the clicked chart's dataset.
+    const willBeHidden = !ci.isDatasetVisible(idx);
+    ci.setDatasetVisibility(idx, !willBeHidden);
+    ci.update();
+    // Propagate to the four Stacked Monthly variants by stack key.
+    const stackKey = _yearStackKeyFromLabel(legendItem.text);
+    if (stackKey) _toggleStackOnAll(stackKey, willBeHidden);
+  }
+  function _withSyncedLegend(opts){
+    const out = {...(opts || {})};
+    out.plugins = {...(out.plugins || {})};
+    out.plugins.legend = {...(out.plugins.legend || {}), onClick: _syncedLegendOnClick};
+    return out;
+  }
+
   monthlyInst = new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
     data:{ labels, datasets:[
@@ -1628,7 +1669,7 @@ async function drawMonthlyTotals(){
         datalabels:{ display:false }
       }
     ]},
-    options:getCommonOptions(false)
+    options:_withSyncedLegend(getCommonOptions(false))
   });
 
   monthlyCumInst = new Chart(document.getElementById("monthlyCumChart"),{
@@ -1665,7 +1706,7 @@ async function drawMonthlyTotals(){
         datalabels:{ display:false }
       }
     ]},
-    options:getCommonOptions(false)
+    options:_withSyncedLegend(getCommonOptions(false))
   });
 }
 
