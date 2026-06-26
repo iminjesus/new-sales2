@@ -3283,6 +3283,18 @@ def monthly_sales():
         wh.append("mat.size = %s")
         params.append(f["material"])
 
+    # 2025 path runs directly on sales_2526 with billing_date inline
+    # (year filter as a date range so the billing_date index prunes,
+    # MONTH(billing_date) in SELECT/GROUP BY so we avoid materialising
+    # a derived table); 2026 still uses the per-month union which
+    # already exposes year/month as constants.
+    if use_2026_union:
+        year_expr  = "s.year"
+        month_expr = "s.month"
+    else:
+        year_expr  = "YEAR(s.billing_date)"
+        month_expr = "MONTH(s.billing_date)"
+
     if promos:
         # Promo filter needs carrying_26 (mat) for line/product_group +
         # customer (cus) for the sold_to_group fallback in the EXISTS.
@@ -3292,15 +3304,22 @@ def monthly_sales():
         # this aggregation layer is too expensive).
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
-        promo_wh, promo_p = _promo_filter_clauses(promos)
+        promo_wh, promo_p = _promo_filter_clauses(
+            promos,
+            year_expr=year_expr,
+            month_expr=month_expr,
+        )
         wh.extend(promo_wh)
         params.extend(promo_p)
 
     # year condition — only when staying on sales_2526.  When we switch
     # to the 2026 union below, the table set itself bounds the year.
+    # On sales_2526 we push the filter as a billing_date range so the
+    # index can prune, rather than YEAR(billing_date) = 2025 which is
+    # not index-friendly.
     if not use_2026_union:
-        wh.append("s.year = %s")
-        params.append(year)
+        wh.append("s.billing_date >= %s AND s.billing_date < %s")
+        params.extend([f"{year}-01-01", f"{year+1}-01-01"])
 
     conn = get_connection()
     cur = conn.cursor(dictionary=True)
@@ -3311,7 +3330,7 @@ def monthly_sales():
         if use_2026_union:
             from_sql = "FROM " + _sales_2026_union(cur, alias="s")
         else:
-            from_sql = "FROM " + _sales_2526_from("s", year=year)
+            from_sql = "FROM sales_2526 s"
 
         top_sold_to = None
 
@@ -3336,12 +3355,12 @@ def monthly_sales():
         where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
 
         monthly_sql = f"""
-        SELECT s.month AS month_num, SUM(s.{value}) AS monthly_total
+        SELECT {month_expr} AS month_num, SUM(s.{value}) AS monthly_total
             {from_sql}
             {' '.join(joins)}
             {where_sql2}
-        GROUP BY s.month
-        ORDER BY s.month
+        GROUP BY {month_expr}
+        ORDER BY {month_expr}
         """
         cur.execute(monthly_sql, tuple(params2))
         rows = cur.fetchall()
@@ -3393,15 +3412,28 @@ def monthly_breakdown():
     is_promo_group = group_by in ("promotion", "promotion_detail")
     if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
+
+    # 2025 path runs directly on sales_2526; 2026 still uses the
+    # per-month union which exposes year/month/day as constants.
+    if use_2026_union:
+        year_expr  = "s.year"
+        month_expr = "s.month"
+    else:
+        year_expr  = "YEAR(s.billing_date)"
+        month_expr = "MONTH(s.billing_date)"
+
     if is_promo_group:
-        # Promotion buckets: sales_2526 and the 2026 union both expose
-        # s.year + s.month, so no literal injection needed here.
+        # Promotion buckets: feed the right year/month expression so
+        # the promo_plan period check works on both sales_2526 (inline
+        # YEAR(billing_date)) and the 2026 union (s.year column).
         # NOTE: monthly_breakdown stays on per-row qty for TrueBlue (the
         # ship_to+day SUM variant lives on daily_breakdown only — adding
         # a self-referencing UNION subquery inside EXISTS at this layer
         # is too expensive on the monthly aggregation roll-up).
         group_col = _promotion_group_col_sql(
             detail=(group_by == "promotion_detail"),
+            year_expr=year_expr,
+            month_expr=month_expr,
         )
         label_col = group_col
     elif group_by == "sold_to":
@@ -3449,15 +3481,21 @@ def monthly_breakdown():
         # customer (cus) for the sold_to_group fallback in the EXISTS.
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
-        promo_wh, promo_p = _promo_filter_clauses(promos)
+        promo_wh, promo_p = _promo_filter_clauses(
+            promos,
+            year_expr=year_expr,
+            month_expr=month_expr,
+        )
         wh.extend(promo_wh)
         params.extend(promo_p)
 
-    # Year condition — only when staying on sales_2526.  When the
-    # FROM source switches to the 2026 union below, the table set
-    # itself bounds the year.
+    # Year condition — only when staying on sales_2526.  Push it as a
+    # billing_date range so the index can prune; YEAR(billing_date)=N
+    # is not index-friendly.  2026 union path doesn't need this — the
+    # set of source tables is already year-bounded.
     if not use_2026_union:
-        wh.append("s.year = %s"); params.append(year)
+        wh.append("s.billing_date >= %s AND s.billing_date < %s")
+        params.extend([f"{year}-01-01", f"{year+1}-01-01"])
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -3468,7 +3506,7 @@ def monthly_breakdown():
         if use_2026_union:
             from_sql = "FROM " + _sales_2026_union(cur, alias="s")
         else:
-            from_sql = "FROM " + _sales_2526_from("s", year=year)
+            from_sql = "FROM sales_2526 s"
 
         top_sold_to = None
 
@@ -3492,22 +3530,22 @@ def monthly_breakdown():
 
         where_sql2 = ("WHERE " + " AND ".join(wh2)) if wh2 else ""
 
-        # NOTE: use s.month consistently (same as monthly_sales)
         # Same alias trick as daily_breakdown: avoid duplicating the
-        # promo CASE/EXISTS in GROUP BY.
+        # promo CASE/EXISTS in GROUP BY.  month_expr is whichever
+        # alias matches the chosen FROM source.
         if is_promo_group:
-            group_by_sql = "GROUP BY s.month, group_label"
+            group_by_sql = f"GROUP BY {month_expr}, group_label"
         else:
-            group_by_sql = f"GROUP BY s.month, {group_col}"
+            group_by_sql = f"GROUP BY {month_expr}, {group_col}"
         sql = f"""
-        SELECT s.month AS month,
+        SELECT {month_expr} AS month,
                 {label_col} AS group_label,
                 SUM(s.{value}) AS value
             {from_sql}
             {' '.join(joins)}
             {where_sql2}
         {group_by_sql}
-        ORDER BY s.month
+        ORDER BY {month_expr}
         """
         try:
             cur.execute(sql, tuple(params2))
@@ -5709,53 +5747,6 @@ _REBATE_SO_TYPES_IN = "(" + ",".join("'%s'" % t for t in REBATE_SO_TYPES) + ")"
 # every month — sales_2607, sales_2608, …  Discover them via
 # INFORMATION_SCHEMA so a fresh month doesn't require a code change.
 _SALES_2026_TABLES_CACHE = {"ts": 0, "names": []}
-
-def _ensure_sales_2526_generated_cols():
-    """Add VIRTUAL generated year/month/day columns + composite index to
-    sales_2526 if they're not already there.
-
-    The fresh sales_2526 stores time as a single billing_date column.
-    Every monthly / breakdown query reads s.year / s.month / s.day, so
-    earlier code wrapped the table in a derived subquery synthesising
-    those aliases on the fly — but MySQL had to materialise the entire
-    17-month table before any JOIN or GROUP BY could run, which made
-    Group-By switching take minutes.
-
-    VIRTUAL generated columns:
-      * computed on read, no row storage cost,
-      * indexable (the index stores the computed values), so
-        `WHERE year=2025` and `GROUP BY year, month` use the index
-        instead of a full scan,
-      * fully auto-managed by MySQL — no maintenance burden on the
-        operator, matching the "I just want billing_date" spirit.
-
-    Idempotent: skips when `year` column already exists.
-    """
-    try:
-        conn = get_connection(); cur = conn.cursor()
-        cur.execute("SHOW COLUMNS FROM sales_2526 LIKE 'year'")
-        if cur.fetchone() is None:
-            cur.execute(
-                "ALTER TABLE sales_2526"
-                " ADD COLUMN year  INT GENERATED ALWAYS AS (YEAR(billing_date))  VIRTUAL,"
-                " ADD COLUMN month INT GENERATED ALWAYS AS (MONTH(billing_date)) VIRTUAL,"
-                " ADD COLUMN day   INT GENERATED ALWAYS AS (DAY(billing_date))   VIRTUAL"
-            )
-            try:
-                cur.execute(
-                    "CREATE INDEX idx_year_month_day "
-                    "ON sales_2526 (year, month, day)"
-                )
-            except Exception as e:
-                print(f"[sales_2526] year/month/day index skipped: {e}")
-            conn.commit()
-            print("[sales_2526] year/month/day VIRTUAL columns + index added")
-        cur.close(); conn.close()
-    except Exception as e:
-        print(f"[sales_2526] generated columns setup skipped: {e}")
-
-_ensure_sales_2526_generated_cols()
-
 
 def _ensure_promo_indexes():
     """Adds the indexes the promo EXISTS predicate needs to stop
