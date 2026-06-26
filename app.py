@@ -5756,6 +5756,54 @@ def _ensure_sales_2526_generated_cols():
 
 _ensure_sales_2526_generated_cols()
 
+
+def _ensure_promo_indexes():
+    """Adds the indexes the promo EXISTS predicate needs to stop
+    full-scanning promo_customer / promo_plan per outer sales row.
+    Without these, every Group By / Category switch on a chart that
+    uses the promo logic re-walks both tables N × M times.
+
+    Idempotent — skips when each index is already there.  Failures
+    on any one don't block the others (different MySQL versions
+    have slightly different syntax for IF NOT EXISTS on indexes,
+    so we just swallow duplicate errors)."""
+    try:
+        conn = get_connection(); cur = conn.cursor()
+    except Exception as e:
+        print(f"[promo idx] connect skipped: {e}")
+        return
+    plans = [
+        ("promo_customer", "idx_pc_promo",            "(promo)"),
+        ("promo_customer", "idx_pc_brand_dc",         "(brand, dc_rate_start, dc_rate_end)"),
+        ("promo_customer", "idx_pc_sold_to",          "(sold_to)"),
+        ("promo_customer", "idx_pc_customer_group",   "(customer_group)"),
+        ("promo_plan",     "idx_pp_promo",            "(promo)"),
+        ("promo_plan",     "idx_pp_product_group",    "(product_group)"),
+        ("promo_plan",     "idx_pp_dates",            "(start_date, end_date)"),
+        # Customer master is hit by the per-ship_to roll-up subquery
+        # on every chart query.  These two indexes turn that aggregate
+        # into an index scan rather than a full table sort.
+        ("customer",       "idx_cust_ship_to",        "(ship_to)"),
+        ("customer",       "idx_cust_sold_to",        "(sold_to)"),
+    ]
+    for tbl, idx, cols in plans:
+        try:
+            cur.execute(f"CREATE INDEX {idx} ON {tbl} {cols}")
+        except Exception as e:
+            msg = str(e)
+            # 'Duplicate key name' / errno 1061 just means the index
+            # already exists; anything else gets surfaced once so the
+            # operator knows to investigate.
+            if "1061" not in msg and "Duplicate" not in msg:
+                print(f"[promo idx] {tbl}.{idx} create skipped: {e}")
+    try:
+        conn.commit(); cur.close(); conn.close()
+    except Exception:
+        pass
+
+_ensure_promo_indexes()
+
+
 def _sales_2526_from(alias: str = "s", year=None) -> str:
     """Direct reference to sales_2526 with no derived-table wrap.
 
