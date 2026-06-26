@@ -5973,9 +5973,12 @@ def _promo_filter_clauses(promos, sales_alias="s",
                 pp.promo IS NULL
                 OR (
                   (pp.product_group = '' OR {c}.product_group = pp.product_group)
-                  AND ({y_e} * 100 + {m_e}) BETWEEN
-                       (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND
-                       (YEAR(pp.end_date)   * 100 + MONTH(pp.end_date))
+                  AND (pp.start_date IS NULL
+                       OR ({y_e} * 100 + {m_e}) >=
+                          (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)))
+                  AND (pp.end_date IS NULL
+                       OR ({y_e} * 100 + {m_e}) <=
+                          (YEAR(pp.end_date) * 100 + MONTH(pp.end_date)))
                   AND (pp.material = '' OR pp.material = {s}.material)
                 )
               )
@@ -6025,10 +6028,13 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
           AND (
             pp.promo IS NULL
             OR (
-              {c}.product_group = pp.product_group
-              AND ({y_e} * 100 + {m_e}) BETWEEN
-                   (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND
-                   (YEAR(pp.end_date)   * 100 + MONTH(pp.end_date))
+              (pp.product_group = '' OR {c}.product_group = pp.product_group)
+              AND (pp.start_date IS NULL
+                   OR ({y_e} * 100 + {m_e}) >=
+                      (YEAR(pp.start_date) * 100 + MONTH(pp.start_date)))
+              AND (pp.end_date IS NULL
+                   OR ({y_e} * 100 + {m_e}) <=
+                      (YEAR(pp.end_date) * 100 + MONTH(pp.end_date)))
               AND (pp.material = '' OR pp.material = {s}.material)
             )
           )"""
@@ -6055,9 +6061,10 @@ def _promotion_group_col_sql(detail=False, sales_alias="s",
         f"(pc.sold_to = '' AND pc.customer_group = {cu}.sold_to_group)"
         f") AND (pp.promo IS NULL OR ("
         f"(pp.product_group = '' OR {c}.product_group = pp.product_group) AND "
-        f"({y_e} * 100 + {m_e}) BETWEEN "
-        f"(YEAR(pp.start_date) * 100 + MONTH(pp.start_date)) AND "
-        f"(YEAR(pp.end_date) * 100 + MONTH(pp.end_date)) AND "
+        f"(pp.start_date IS NULL OR "
+        f"  ({y_e} * 100 + {m_e}) >= (YEAR(pp.start_date) * 100 + MONTH(pp.start_date))) AND "
+        f"(pp.end_date IS NULL OR "
+        f"  ({y_e} * 100 + {m_e}) <= (YEAR(pp.end_date) * 100 + MONTH(pp.end_date))) AND "
         f"(pp.material = '' OR pp.material = {s}.material)"
         f"))), 'Non-Promotion') ELSE 'Non-Promotion' END"
     )
@@ -6374,9 +6381,12 @@ def api_monthly_highlights():
                                     pp.promo IS NULL
                                     OR (
                                       (pp.product_group = '' OR mat.product_group = pp.product_group)
-                                      AND ({ym_year_lit} * 100 + {ym_month_lit}) BETWEEN
-                                           (YEAR(pp.start_date)*100 + MONTH(pp.start_date)) AND
-                                           (YEAR(pp.end_date)*100   + MONTH(pp.end_date))
+                                      AND (pp.start_date IS NULL
+                                           OR ({ym_year_lit} * 100 + {ym_month_lit}) >=
+                                              (YEAR(pp.start_date)*100 + MONTH(pp.start_date)))
+                                      AND (pp.end_date IS NULL
+                                           OR ({ym_year_lit} * 100 + {ym_month_lit}) <=
+                                              (YEAR(pp.end_date)*100 + MONTH(pp.end_date)))
                                       AND (pp.material = '' OR pp.material = s.material)
                                     )
                                   )
