@@ -1419,6 +1419,198 @@ def api_sales_stats_by_state():
         cur.close()
         conn.close()
 
+
+@app.route("/api/sales_stats_by_product_level")
+def api_sales_stats_by_product_level():
+    """Same metric set as /api/sales_stats_by_state but grouped by a
+    product dimension (line / product_group / pattern / size) so the
+    user can drill PCLT → Kinergy → K125 → 205/55R16 on the stock page.
+
+    Cascade params:
+      level         = "line" (default) | "product_group" | "pattern" | "size"
+      line          = ancestor filter (required when level != "line")
+      product_group = ancestor filter (required for level in {pattern, size})
+      pattern       = ancestor filter (required for level == "size")
+
+    Plus the same UI filters as sales_stats_by_state (category /
+    product_group / pattern / material) — the user's existing filter
+    row still narrows the rows on every cascade level.
+    """
+    level    = (request.args.get("level") or "line").strip()
+    bucket_map = {
+        "line":          "c.line",
+        "product_group": "c.product_group",
+        "pattern":       "c.pattern",
+        "size":          "c.size",
+    }
+    if level not in bucket_map:
+        return jsonify({"error": "invalid level"}), 400
+    bucket_col = bucket_map[level]
+
+    line_anc = (request.args.get("line") or "").strip()
+    pg_anc   = (request.args.get("product_group_anc") or "").strip()
+    pat_anc  = (request.args.get("pattern_anc") or "").strip()
+
+    # Compose ancestor filter (top-level cascade restricts to PCLT/TBR
+    # to match the dashboard's Product cascade behaviour).
+    anc_wh = []
+    anc_p  = []
+    if level == "line":
+        anc_wh.append("c.line IN ('PCLT','TBR')")
+    else:
+        if not line_anc:
+            return jsonify({"error": "line ancestor required"}), 400
+        anc_wh.append("c.line = %s"); anc_p.append(line_anc)
+        if level in ("pattern", "size"):
+            if not pg_anc:
+                return jsonify({"error": "product_group ancestor required"}), 400
+            anc_wh.append("c.product_group = %s"); anc_p.append(pg_anc)
+        if level == "size":
+            if not pat_anc:
+                return jsonify({"error": "pattern ancestor required"}), 400
+            anc_wh.append("c.pattern = %s"); anc_p.append(pat_anc)
+    # Drop empty bucket labels — usually carrying_26 rows missing the
+    # dimension; we don't want a blank row.
+    anc_wh.append(f"{bucket_col} IS NOT NULL AND TRIM({bucket_col}) <> ''")
+
+    # Existing UI filters layered on top.
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+
+    extra_wh = []
+    extra_p  = []
+    if prod_group and prod_group != "ALL":
+        extra_wh.append("c.product_group = %s"); extra_p.append(prod_group)
+    if pattern:
+        extra_wh.append("c.pattern LIKE %s"); extra_p.append(f"%{pattern}%")
+    if material:
+        extra_wh.append("c.size LIKE %s"); extra_p.append(f"%{material}%")
+    if category == "PCLT":
+        extra_wh.append("c.line = 'PCLT'")
+    elif category == "TBR":
+        extra_wh.append("c.line = 'TBR'")
+    elif category == "18PLUS":
+        extra_wh.append("c.line = 'PCLT'")
+        extra_wh.append("CAST(SUBSTRING_INDEX(c.size,'R',-1) AS DECIMAL(5,2)) >= 18.0")
+
+    all_wh     = anc_wh + extra_wh
+    all_params = anc_p  + extra_p
+    where_sql  = "WHERE " + " AND ".join(all_wh)
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        def _agg(table_sql, val_col, extra_clause=""):
+            sql = (
+                f"SELECT {bucket_col} AS bucket, SUM(t.{val_col}) AS val "
+                f"FROM {table_sql} t "
+                f"JOIN carrying_26 c ON c.m_code = t.material "
+                f"{where_sql}{extra_clause} "
+                f"GROUP BY {bucket_col}"
+            )
+            cur.execute(sql, all_params)
+            return {(r['bucket'] or ''): float(r['val'] or 0) for r in cur.fetchall()}
+
+        stock_by   = _agg("stock",    "unrestricted")
+        water_by   = _agg("incoming", "po_qty")
+        factory_by = _agg(
+            "orders", "po_qty",
+            extra_clause=(
+                " AND t.po_no NOT IN (SELECT DISTINCT po_no FROM incoming"
+                " WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')"
+            ),
+        )
+        cy_by      = _agg("orders", "confirm_qty",
+                          extra_clause=" AND t.po_no LIKE '42%'")
+
+        # Sales 3M / 6M / 12M — sales_2526 + billing_date date-range.
+        cur.execute(
+            "SELECT MAX(YEAR(billing_date)*100 + MONTH(billing_date)) AS ym "
+            "FROM sales_2526"
+        )
+        r = cur.fetchone()
+        latest_ym = int((r or {}).get("ym") or 0)
+        if not latest_ym:
+            return jsonify({"rows": [], "level": level})
+        latest_y = latest_ym // 100
+        latest_m = latest_ym % 100
+
+        def _months_back(n):
+            out = []
+            y, m = latest_y, latest_m
+            for _ in range(n):
+                out.append((y, m))
+                m -= 1
+                if m == 0: m = 12; y -= 1
+            return out
+
+        def _period_clause(periods, alias="s"):
+            if not periods:
+                return "1=0"
+            parts = []
+            for y, m in periods:
+                first = f"{y}-{m:02d}-01"
+                ny, nm = (y+1, 1) if m == 12 else (y, m+1)
+                nxt   = f"{ny}-{nm:02d}-01"
+                parts.append(
+                    f"({alias}.billing_date >= '{first}'"
+                    f" AND {alias}.billing_date < '{nxt}')"
+                )
+            return "(" + " OR ".join(parts) + ")"
+
+        # sales bucket col: same dimension but via mat alias on sales side.
+        sales_bucket_col = bucket_col.replace("c.", "mat.")
+        sales_by_bucket = {}
+        for label, periods in (("3m", _months_back(3)),
+                                ("6m", _months_back(6)),
+                                ("12m", _months_back(12))):
+            pcond = _period_clause(periods, "s")
+            cur.execute(
+                f"SELECT {sales_bucket_col} AS bucket, SUM(s.qty) AS qty "
+                f"FROM sales_2526 s "
+                f"JOIN carrying_26 mat ON mat.m_code = s.material "
+                f"{where_sql.replace('c.', 'mat.')} AND {pcond} "
+                f"GROUP BY {sales_bucket_col}",
+                all_params,
+            )
+            for row in cur.fetchall():
+                b = row['bucket'] or ''
+                sales_by_bucket.setdefault(b, {})[label] = float(row['qty'] or 0)
+
+        all_buckets = set()
+        all_buckets.update(stock_by.keys(), water_by.keys(),
+                           factory_by.keys(), cy_by.keys(),
+                           sales_by_bucket.keys())
+        rows_out = []
+        for b in sorted(b for b in all_buckets if b):
+            sd = sales_by_bucket.get(b, {})
+            q3  = sd.get('3m',  0) or 0
+            q6  = sd.get('6m',  0) or 0
+            q12 = sd.get('12m', 0) or 0
+            stk = stock_by.get(b, 0)
+            wtr = water_by.get(b, 0)
+            cy  = cy_by.get(b, 0)
+            fac = factory_by.get(b, 0)
+            if (q3 == 0 and q6 == 0 and q12 == 0
+                and stk == 0 and wtr == 0 and cy == 0 and fac == 0):
+                continue
+            rows_out.append({
+                "bucket":      b,
+                "qty_3m":      int(q3),
+                "qty_6m":      int(q6),
+                "qty_12m":     int(q12),
+                "base_sales":  round((q3 + q6 + q12) / 3),
+                "stock_qty":   round(stk),
+                "water_qty":   round(wtr),
+                "cy_qty":      round(cy),
+                "factory_qty": round(fac),
+            })
+        return jsonify({"rows": rows_out, "level": level})
+    finally:
+        cur.close(); conn.close()
+
+
 ORIGIN_GEO = {
     "CHN": {"name": "China", "lat": 33.8617, "lon": 104.1954},
     "KOR": {"name": "Korea", "lat": 33.5, "lon": 127.8},

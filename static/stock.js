@@ -509,6 +509,148 @@
     </tr>`;
   }
 
+  // ── Cascade table (Line → Product Group → Pattern → Size) ───────
+  // Mirrors graph-view's click-to-drill: clicking a Line row narrows
+  // to that line's Product Groups, clicking a Product Group narrows
+  // to its Patterns, clicking a Pattern narrows to its Sizes.  The
+  // first-column header carries the breadcrumb so the user always
+  // sees where they are; ← Back chip pops one level.
+  const CASCADE_LEVELS = ["line", "product_group", "pattern", "size"];
+  const CASCADE_LABEL  = {
+    line:          "Line",
+    product_group: "Product Group",
+    pattern:       "Pattern",
+    size:          "Size",
+  };
+  let cascadeState = { level: "line", line: "", pg: "", pat: "" };
+
+  function _renderCascadeCrumb(){
+    const crumb = document.getElementById("cascadeCrumb");
+    const back  = document.getElementById("cascadeBack");
+    if (!crumb || !back) return;
+    const parts = ["All"];
+    if (cascadeState.line) parts.push(cascadeState.line);
+    if (cascadeState.pg)   parts.push(cascadeState.pg);
+    if (cascadeState.pat)  parts.push(cascadeState.pat);
+    parts.push(CASCADE_LABEL[cascadeState.level]);
+    crumb.textContent = parts.join(" › ");
+    back.style.display = (cascadeState.level === "line") ? "none" : "";
+    const th = document.getElementById("cascadeBucketTh");
+    if (th) th.textContent = CASCADE_LABEL[cascadeState.level];
+  }
+
+  async function fetchAndRenderCascadeTable(){
+    _renderCascadeCrumb();
+    const tbody = document.getElementById("cascadeTableBody");
+    const tfoot = document.getElementById("cascadeTableFoot");
+    if (!tbody || !tfoot) return;
+    const qs = buildQueryParams({
+      metric:             "qty",
+      level:              cascadeState.level,
+      line:               cascadeState.line,
+      product_group_anc:  cascadeState.pg,
+      pattern_anc:        cascadeState.pat,
+    });
+    const data = await fetchJSON(`/api/sales_stats_by_product_level?${qs}`);
+    if (!data || !data.rows || data.rows.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="12" class="st-loading">No data</td></tr>`;
+      tfoot.innerHTML = "";
+      return;
+    }
+    const drillable = (cascadeState.level !== "size");
+    let totQ3=0, totQ6=0, totQ12=0,
+        totStock=0, totWater=0, totCy=0, totFactory=0;
+    tbody.innerHTML = data.rows.map(r => {
+      const bs = r.base_sales;
+      const sq = r.stock_qty   || 0;
+      const wq = r.water_qty   || 0;
+      const cy = r.cy_qty      || 0;
+      const fqRaw   = r.factory_qty || 0;
+      const fqMinus = Math.max(0, fqRaw - cy);
+      totQ3      += r.qty_3m;
+      totQ6      += r.qty_6m;
+      totQ12     += r.qty_12m;
+      totStock   += sq; totWater += wq; totCy += cy; totFactory += fqMinus;
+      const pipeS   = bs ? (sq                       / bs) : 0;
+      const pipeSW  = bs ? ((sq + wq)                / bs) : 0;
+      const pipeSWF = bs ? ((sq + wq + cy + fqMinus) / bs) : 0;
+      const cls   = drillable ? "cascade-clickable" : "";
+      const dataB = drillable ? ` data-bucket="${(r.bucket || "").replace(/"/g, "&quot;")}"` : "";
+      return `<tr class="${cls}"${dataB}>
+        <td>${r.bucket || "—"}</td>
+        <td>${fmtQty(r.qty_3m)}</td>
+        <td>${fmtQty(r.qty_6m)}</td>
+        <td>${fmtQty(r.qty_12m)}</td>
+        <td class="st-base">${fmtQty(bs)}</td>
+        <td class="st-qty">${fmtQty(sq)}</td>
+        <td class="st-qty">${fmtQty(wq)}</td>
+        <td class="st-qty">${fmtQty(cy)}</td>
+        <td class="st-qty">${fmtQty(fqMinus)}</td>
+        <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
+        <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
+        <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
+      </tr>`;
+    }).join("");
+    const totBase = Math.round((totQ3 + totQ6 + totQ12) / 3);
+    const tpipeS   = totBase ? fmtPipe(totStock / totBase) : "—";
+    const tpipeSW  = totBase ? fmtPipe((totStock+totWater) / totBase) : "—";
+    const tpipeSWF = totBase
+      ? fmtPipe((totStock+totWater+totCy+totFactory) / totBase)
+      : "—";
+    tfoot.innerHTML = `<tr class="st-total">
+      <td>TOTAL</td>
+      <td>${fmtQty(totQ3)}</td>
+      <td>${fmtQty(totQ6)}</td>
+      <td>${fmtQty(totQ12)}</td>
+      <td class="st-base">${fmtQty(totBase)}</td>
+      <td class="st-qty">${fmtQty(totStock)}</td>
+      <td class="st-qty">${fmtQty(totWater)}</td>
+      <td class="st-qty">${fmtQty(totCy)}</td>
+      <td class="st-qty">${fmtQty(totFactory)}</td>
+      <td class="st-pipe">${tpipeS}</td>
+      <td class="st-pipe">${tpipeSW}</td>
+      <td class="st-pipe">${tpipeSWF}</td>
+    </tr>`;
+  }
+
+  function _cascadeAdvance(bucket){
+    if (!bucket) return;
+    const lvl = cascadeState.level;
+    if (lvl === "line") {
+      cascadeState = { level: "product_group", line: bucket, pg: "", pat: "" };
+    } else if (lvl === "product_group") {
+      cascadeState = { level: "pattern", line: cascadeState.line, pg: bucket, pat: "" };
+    } else if (lvl === "pattern") {
+      cascadeState = { level: "size", line: cascadeState.line, pg: cascadeState.pg, pat: bucket };
+    } else {
+      return; // size = terminal
+    }
+    fetchAndRenderCascadeTable();
+  }
+
+  function _cascadeBack(){
+    const lvl = cascadeState.level;
+    if (lvl === "product_group") {
+      cascadeState = { level: "line", line: "", pg: "", pat: "" };
+    } else if (lvl === "pattern") {
+      cascadeState = { level: "product_group", line: cascadeState.line, pg: "", pat: "" };
+    } else if (lvl === "size") {
+      cascadeState = { level: "pattern", line: cascadeState.line, pg: cascadeState.pg, pat: "" };
+    } else {
+      return;
+    }
+    fetchAndRenderCascadeTable();
+  }
+
+  document.addEventListener("click", function(e){
+    const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
+    if (row && row.dataset.bucket != null) {
+      _cascadeAdvance(row.dataset.bucket);
+      return;
+    }
+    if (e.target && e.target.id === "cascadeBack") _cascadeBack();
+  });
+
   async function fetchAndRenderSales(){
     const qs = buildQueryParams({ metric: "qty" });
     const [rows25, rows26, yearRows] = await Promise.all([
@@ -569,6 +711,9 @@
       ]);
       renderPipeline(stockTotal, waterTotal, factoryTotal, baseSales);
       await fetchAndRenderStateTable();
+      // Cascade table (Line → Product Group → Pattern → Size) sits
+      // under the State table and respects the same filter set.
+      await fetchAndRenderCascadeTable();
 
       setStatus(
         `Done. Stock: ${(stockRes?.rows||[]).length}, ` +

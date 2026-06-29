@@ -1056,3 +1056,57 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
 .st-qty-hdr {
   background: #f9fafb !important;
 }
+
+/* ── Cascade (Line → Product Group → Pattern → Size) table ──
+   Reuses #stateTable styling for cell padding / colour scheme; only
+   the wrapper + header chrome are extra.  Rows are clickable on the
+   first three cascade levels (drill in), inert on size (terminal). */
+#cascadeTableWrap { margin-top: 8px; }
+#cascadeTableWrap .cascade-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 4px 0 6px;
+}
+#cascadeTableWrap .cascade-header #cascadeCrumb {
+  font-size: 12px; font-weight: 700; color: #1e3a5f;
+  letter-spacing: 0.02em;
+}
+#cascadeTableWrap .cascade-header #cascadeBack {
+  font-size: 11px; font-weight: 600;
+  background: #fef3c7; border: 1px solid #fbbf24; color: #92400e;
+  border-radius: 5px; padding: 3px 9px; cursor: pointer;
+}
+#cascadeTableWrap .cascade-header #cascadeBack:hover {
+  background: #fde68a; border-color: #d97706;
+}
+
+#cascadeTable {
+  width: 100%; border-collapse: collapse; font-size: 14px;
+  background: #fff; border: 1px solid #e5e7eb; border-radius: 7px;
+  overflow: hidden; table-layout: fixed;
+}
+#cascadeTable th, #cascadeTable td { width: 8.33%; }
+#cascadeTable thead th {
+  background: #f3f4f6; color: #6b7280; font-weight: 600;
+  font-size: 12px; padding: 7px 10px; text-align: right;
+  border-bottom: 1px solid #e5e7eb; white-space: nowrap;
+}
+#cascadeTable thead th:first-child { text-align: left; }
+#cascadeTable tbody td {
+  padding: 6px 10px; text-align: right;
+  border-bottom: 1px solid #f3f4f6; color: #374151;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#cascadeTable tbody td:first-child { text-align: left; font-weight: 600; color: #111827; }
+#cascadeTable tbody tr.cascade-clickable { cursor: pointer; }
+#cascadeTable tbody tr.cascade-clickable:hover { background: #eff6ff; }
+#cascadeTable tbody tr.cascade-clickable td:first-child::after {
+  content: " ›"; color: #93c5fd; font-weight: 700;
+}
+#cascadeTable tfoot tr.st-total td {
+  background: #eff6ff; font-weight: 700;
+  border-top: 2px solid #bfdbfe; color: #1e40af;
+  padding: 6px 10px; text-align: right; white-space: nowrap;
+}
+#cascadeTable tfoot tr.st-total td:first-child {
+  text-align: left; color: #1e3a8a;
+}

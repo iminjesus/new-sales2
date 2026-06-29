@@ -159,6 +159,40 @@
           <tfoot id="stateTableFoot"></tfoot>
         </table>
       </div>
+
+      <!-- Cascade table: drills Line → Product Group → Pattern → Size
+           with the same metric set as the State table.  First column
+           header carries the breadcrumb so the user always sees where
+           they are in the cascade.  Row click drills one step deeper;
+           the ← Back chip in the header steps out. -->
+      <div id="cascadeTableWrap">
+        <div class="cascade-header">
+          <span id="cascadeCrumb">All › Line</span>
+          <button id="cascadeBack" type="button" style="display:none;">← Back</button>
+        </div>
+        <table id="cascadeTable">
+          <thead>
+            <tr>
+              <th id="cascadeBucketTh">Line</th>
+              <th>3M</th>
+              <th>6M</th>
+              <th>12M</th>
+              <th>Base Sales</th>
+              <th class="st-qty-hdr">Stock</th>
+              <th class="st-qty-hdr">Water</th>
+              <th class="st-qty-hdr">CY</th>
+              <th class="st-qty-hdr">Factory</th>
+              <th>Stock.idx</th>
+              <th>+Water.idx</th>
+              <th>+Factory.idx</th>
+            </tr>
+          </thead>
+          <tbody id="cascadeTableBody">
+            <tr><td colspan="12" class="st-loading">Loading…</td></tr>
+          </tbody>
+          <tfoot id="cascadeTableFoot"></tfoot>
+        </table>
+      </div>
     </div>
   </div>
 
