@@ -592,6 +592,11 @@ window._drillStack = [];
 function _renderDrillCrumb(){
   const el = document.getElementById("groupDrillCrumb");
   const back = document.getElementById("groupBackBtn");
+  // Body class drives the per-chart back-button visibility (CSS toggles
+  // `.chart-back-btn` based on body.drilled).  We update it here so
+  // every drill / undrill action also reveals / hides the chart-level
+  // back buttons attached by chart_zoom.js.
+  document.body.classList.toggle("drilled", !!window._drillStack.length);
   if (!el || !back) return;
   if (!window._drillStack.length) {
     el.textContent = "";
@@ -651,6 +656,9 @@ function _drillBack(){
   refreshAllDebounced();
 }
 document.getElementById("groupBackBtn")?.addEventListener("click", _drillBack);
+// Expose so chart_zoom.js's per-chart back buttons can call the same
+// pop-one-level routine.
+window._drillBack = _drillBack;
 // Picking a different top-level Group By wipes the drill stack
 // (cascade restarts from scratch).
 (function(){

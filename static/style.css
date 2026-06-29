@@ -297,6 +297,21 @@ tr.is-region  > td{ border-top:2px solid #ececec; }
 .box:hover .chart-zoom-btn { opacity:0.95; }
 .box .chart-zoom-btn:hover { background:#eff6ff; border-color:#93c5fd; color:#1d4ed8; }
 
+/* Drill-back button: appears at the top-right of every chart box
+   only while a drill is in effect.  Sits to the left of the zoom
+   button.  Yellow palette so it stands out as a "way out" of the
+   current drill. */
+.box .chart-back-btn {
+  display:none;
+  position:absolute; top:6px; right:36px; z-index:5;
+  padding:2px 9px; height:24px;
+  background:#fef3c7; border:1px solid #fbbf24; border-radius:5px;
+  color:#92400e; font-size:11px; font-weight:600; line-height:1;
+  cursor:pointer;
+}
+.box .chart-back-btn:hover { background:#fde68a; border-color:#d97706; }
+body.drilled .box .chart-back-btn { display:inline-block; }
+
 /* Modal overlay for the enlarged chart. */
 #chartZoomModal { position:fixed; top:0; left:0; right:0; bottom:0; z-index:9999;
   display:flex; align-items:center; justify-content:center; }

@@ -107,16 +107,41 @@
     btn.addEventListener("click", function (e) {
       e.preventDefault();
       e.stopPropagation();
-      // Late-resolved so the latest instance always opens, even when
-      // refreshAllWithKpi() destroyed and re-created the chart.
       const ch = (typeof Chart !== "undefined") ? Chart.getChart(canvas) : null;
       if (ch) openModal(ch, pickBoxTitle(boxEl));
     });
     boxEl.appendChild(btn);
   }
 
+  // Drill-back button next to the zoom button.  CSS hides it unless
+  // <body> carries the .drilled class — see app.js which toggles
+  // that class whenever the drill stack changes.  Click delegates
+  // to the global window._drillBack so any chart's back button does
+  // the same "pop one level" action across the whole dashboard.
+  function attachBackButton(boxEl) {
+    if (!boxEl || boxEl.dataset.backBound) return;
+    const canvas = boxEl.querySelector("canvas");
+    if (!canvas) return;
+    boxEl.dataset.backBound = "1";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chart-back-btn";
+    btn.title = "Step back one level";
+    btn.textContent = "← Back";
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof window._drillBack === "function") window._drillBack();
+    });
+    boxEl.appendChild(btn);
+  }
+
   function attachAll() {
-    document.querySelectorAll(".box").forEach(attachZoomButton);
+    document.querySelectorAll(".box").forEach(function(boxEl){
+      attachZoomButton(boxEl);
+      attachBackButton(boxEl);
+    });
   }
 
   // ── boot ───────────────────────────────────────────────────────────
