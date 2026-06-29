@@ -108,6 +108,19 @@
     <!-- Left: map -->
     <div id="stockMapWrapper">
       <div id="stockMap"></div>
+      <!-- Floating overlay: Monthly + Yearly sales charts sit over the
+           Indian-Ocean blank space of the map so the right column can
+           give every pixel to the (about-to-be-wider) State table. -->
+      <div id="stockChartsOverlay">
+        <div class="stockChartPane">
+          <h4>Monthly Sales</h4>
+          <canvas id="salesMonthlyChart"></canvas>
+        </div>
+        <div class="stockChartPane">
+          <h4>Yearly Sales</h4>
+          <canvas id="salesYearlyChart"></canvas>
+        </div>
+      </div>
     </div>
 
     <!-- Right: state table + sales charts -->
@@ -145,14 +158,6 @@
           </tbody>
           <tfoot id="stateTableFoot"></tfoot>
         </table>
-      </div>
-      <div class="stockChartPane">
-        <h4>Monthly Sales</h4>
-        <canvas id="salesMonthlyChart"></canvas>
-      </div>
-      <div class="stockChartPane">
-        <h4>Yearly Sales</h4>
-        <canvas id="salesYearlyChart"></canvas>
       </div>
     </div>
   </div>
