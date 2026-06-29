@@ -332,6 +332,13 @@
     return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   }
 
+  // Charts float over the world map.  Solid bar fills used to paint
+  // over coastlines and cluster bubbles — keep the fill semi-transparent
+  // so the map shows through but the bars stay readable.  Same constant
+  // is reused by the yearly chart below.
+  const _OVERLAY_BAR_25 = "rgba(171,222,230,0.55)";
+  const _OVERLAY_BAR_26 = "rgba(147,197,253,0.55)";
+
   function drawMonthlySales(rows25, rows26){
     const canvas = document.getElementById("salesMonthlyChart");
     if (!canvas || typeof Chart === "undefined") return;
@@ -355,18 +362,23 @@
       data: {
         labels,
         datasets: [
-          { label: "Sales (2025)", data: data25, backgroundColor: "#ABDEE6", categoryPercentage: 0.8, barPercentage: 0.9 },
-          { label: "Sales (2026)", data: data26, backgroundColor: "#93c5fd", categoryPercentage: 0.8, barPercentage: 0.9 }
+          { label: "Sales (2025)", data: data25, backgroundColor: _OVERLAY_BAR_25, categoryPercentage: 0.8, barPercentage: 0.9 },
+          { label: "Sales (2026)", data: data26, backgroundColor: _OVERLAY_BAR_26, categoryPercentage: 0.8, barPercentage: 0.9 }
         ]
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: true, position: "bottom", labels: { boxWidth: 12, font: { size: 11 } } },
+          legend: { display: true, position: "bottom", labels: { boxWidth: 10, font: { size: 9 } } },
           tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt(c.parsed.y)}` } }
         },
-        scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } } }
+        scales: {
+          x: { ticks: { font: { size: 9 } }, grid: { display: false } },
+          y: { beginAtZero: true,
+               ticks: { callback: (v) => fmt(v), font: { size: 9 } },
+               grid: { color: "rgba(0,0,0,0.05)" } }
+        }
       }
     });
   }
@@ -390,7 +402,7 @@
       type: "bar",
       data: {
         labels,
-        datasets: [{ label: "Yearly Sales", data, backgroundColor: "#ABDEE6", categoryPercentage: 0.8, barPercentage: 0.9 }]
+        datasets: [{ label: "Yearly Sales", data, backgroundColor: _OVERLAY_BAR_25, categoryPercentage: 0.8, barPercentage: 0.9 }]
       },
       options: {
         responsive: true,
@@ -399,7 +411,12 @@
           legend: { display: false },
           tooltip: { callbacks: { label: (c) => fmt(c.parsed.y) } }
         },
-        scales: { y: { beginAtZero: true, ticks: { callback: (v) => fmt(v) } } }
+        scales: {
+          x: { ticks: { font: { size: 9 } }, grid: { display: false } },
+          y: { beginAtZero: true,
+               ticks: { callback: (v) => fmt(v), font: { size: 9 } },
+               grid: { color: "rgba(0,0,0,0.05)" } }
+        }
       }
     });
   }

@@ -473,36 +473,39 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
    Chart.js tooltips still work. */
 #stockChartsOverlay {
   position: absolute;
-  left: 16px;
-  bottom: 16px;
-  width: 44%;
-  max-width: 640px;
-  min-width: 320px;
+  left: 12px;
+  bottom: 12px;
+  width: 28%;
+  max-width: 380px;
+  min-width: 240px;
   z-index: 800;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   pointer-events: none; /* allow map drag through the gaps */
 }
+/* Cards are kept low-opacity so the coastline / cluster bubbles
+   underneath stay visible.  Chart bars themselves get an alpha pass
+   in stock.js (see _OVERLAY_ALPHA) so they don't paint over the map. */
 #stockChartsOverlay .stockChartPane {
-  background: rgba(255,255,255,0.92);
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.12);
-  padding: 8px 10px;
-  height: 200px;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(229,231,235,0.7);
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  padding: 5px 7px;
+  height: 130px;
   position: relative;
   pointer-events: auto; /* but the chart card itself is interactive */
 }
 #stockChartsOverlay .stockChartPane h4 {
-  margin: 0 0 4px;
-  font-size: 12px;
+  margin: 0 0 2px;
+  font-size: 11px;
   font-weight: 700;
-  color: #1f2937;
+  color: rgba(31,41,55,0.75);
 }
 #stockChartsOverlay .stockChartPane canvas {
   position: absolute !important;
-  top: 24px; left: 8px; right: 8px; bottom: 8px;
+  top: 20px; left: 6px; right: 6px; bottom: 6px;
   width: auto !important; height: auto !important;
 }
 #stockSidePanel {
