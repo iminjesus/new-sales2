@@ -352,8 +352,15 @@ const showDataValuesPlugin = {
 };
 
 function getCommonOptions(stacked=false, yMax, yTitle){
+  // Stacked charts get click-to-drill + pointer cursor on hover so a
+  // single click on a PCLT slice (or NSW, or Channel, …) advances the
+  // cascade.  _drillChartOptions is registered later in this file.
+  const drill = (stacked && typeof window._drillChartOptions === "function")
+    ? window._drillChartOptions()
+    : null;
   return {
     responsive:true,
+    ...(drill || {}),
     plugins:{
       legend:{
         position:"right",
@@ -518,6 +525,106 @@ window._effectiveGroupBy = function (g) {
   const chain = GROUP_CHAIN[g] || [g];
   const depth = Math.min(window._detailDepth || 0, chain.length - 1);
   return chain[depth];
+};
+
+// ── Click-to-drill on stacked charts ────────────────────────────────
+// When the user clicks a stack segment (e.g. the PCLT slice of a
+// daily bar) we:
+//   1. Apply the clicked value as a filter at the current cascade step
+//   2. Advance _detailDepth by one
+//   3. Sync the visible UI controls so the filter row reflects the
+//      drill (region button, salesman dropdown, etc.)
+//   4. Refresh every chart
+// The Detail button still works for "next-level without filter".  The
+// click is for "drill into this specific value, then next level".
+const STEP_TO_FILTER = {
+  // cascade step → (filters key, optional UI sync callback)
+  line:             { key: "category",       sync: _syncCategoryButtons },
+  product_group:    { key: "product_group",  sync: _syncProductGroupDropdown },
+  pattern:          { key: "pattern",        sync: _syncPatternDropdown },
+  region:           { key: "region",         sync: _syncRegionButtons },
+  salesman:         { key: "salesman",       sync: _syncSalesmanDropdown },
+  channel:          { key: "channel",        sync: _syncChannelDropdown },
+  sold_to_group:    { key: "sold_to_group",  sync: _syncSoldToGroupDropdown },
+  sold_to:          { key: "sold_to",        sync: _syncSoldToInput },
+};
+function _syncCategoryButtons(val){
+  const sel = val === "PCLT" ? "PCLT"
+            : val === "TBR"  ? "TBR"
+            : val;
+  document.querySelectorAll(".cat-btn[data-val]")
+    .forEach(b => b.classList.toggle("active", b.dataset.val === sel));
+}
+function _syncProductGroupDropdown(val){
+  const el = document.getElementById("product_group");
+  if (el) { el.value = val; el.classList.add("sel-active"); }
+}
+function _syncPatternDropdown(val){
+  const el = document.getElementById("pattern");
+  if (el) { el.value = val; el.classList.add("sel-active"); }
+}
+function _syncRegionButtons(val){
+  document.querySelectorAll("#regionBtns .btn")
+    .forEach(b => b.classList.toggle("active", b.dataset.val === val));
+}
+function _syncSalesmanDropdown(val){
+  const el = document.getElementById("salesman_name");
+  if (el) { el.value = val; el.classList.toggle("sel-active", val !== "ALL"); }
+}
+function _syncChannelDropdown(val){
+  const el = document.getElementById("channel");
+  if (el) { el.value = val; el.classList.toggle("sel-active", val !== "ALL"); }
+}
+function _syncSoldToGroupDropdown(val){
+  const el = document.getElementById("sold_to_group");
+  if (el) { el.value = val; el.classList.toggle("sel-active", val !== "ALL"); }
+}
+function _syncSoldToInput(val){
+  const el = document.getElementById("sold_to");
+  if (el) { el.value = val; }
+}
+
+// Called by every stacked Chart.js onClick handler.
+window._drillStackClick = function(label){
+  if (!label || label === "COMMON" || label === "Other" || label === "Non-Promotion") {
+    return;  // these "catch-all" buckets aren't drill targets
+  }
+  const top = filters.group_by;
+  const chain = GROUP_CHAIN[top] || [top];
+  const curLevel = Math.min(window._detailDepth || 0, chain.length - 1);
+  const step = chain[curLevel];
+  const map = STEP_TO_FILTER[step];
+  if (map && map.key) {
+    filters[map.key] = label;
+    try { map.sync && map.sync(label); } catch (_) {}
+  }
+  if (curLevel + 1 < chain.length) {
+    window._detailDepth = curLevel + 1;
+    _syncGroupDetailBtn();
+  }
+  refreshAllDebounced();
+};
+
+// Chart.js options snippet that turns a stacked chart into a drillable
+// one — pointer cursor on hover, click handler that hands the bucket
+// label off to _drillStackClick.
+window._drillChartOptions = function(){
+  return {
+    onClick: function(e, els, chart){
+      if (!els || !els.length) return;
+      const ds = chart.data.datasets[els[0].datasetIndex];
+      if (!ds) return;
+      // Stacked monthly labels look like "PCLT (2025)" — strip the
+      // year suffix so the filter takes the raw bucket name.
+      const raw = String(ds.label || "");
+      const cleaned = raw.replace(/\s*\((?:2025|2026)(?:\s+(?:Actual|Target))?\)\s*$/i, "");
+      window._drillStackClick(cleaned);
+    },
+    onHover: function(e, els, chart){
+      const tgt = e && e.native && e.native.target;
+      if (tgt) tgt.style.cursor = (els && els.length) ? "pointer" : "default";
+    },
+  };
 };
 document.getElementById('regionBtns').addEventListener("click", async (e) => {
   if(!e.target.classList.contains("btn"))return;
