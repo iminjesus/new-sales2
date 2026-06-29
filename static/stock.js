@@ -445,7 +445,8 @@
       return;
     }
 
-    let totQ3 = 0, totQ6 = 0, totQ12 = 0, totStock = 0, totWater = 0, totFactory = 0;
+    let totQ3 = 0, totQ6 = 0, totQ12 = 0,
+        totStock = 0, totWater = 0, totCy = 0, totFactory = 0;
     const rows = data.rows;   // backend already excludes COMMON and zero rows
 
     tbody.innerHTML = rows.map(r => {
@@ -454,10 +455,12 @@
       totQ12     += r.qty_12m;
       totStock   += r.stock_qty   || 0;
       totWater   += r.water_qty   || 0;
+      totCy      += r.cy_qty      || 0;
       totFactory += r.factory_qty || 0;
       const bs  = r.base_sales;
       const sq  = r.stock_qty   || 0;
       const wq  = r.water_qty   || 0;
+      const cy  = r.cy_qty      || 0;
       const fq  = r.factory_qty || 0;
       const pipeS   = bs ? (sq          / bs) : 0;
       const pipeSW  = bs ? ((sq+wq)     / bs) : 0;
@@ -470,6 +473,7 @@
         <td class="st-base">${fmtQty(bs)}</td>
         <td class="st-qty">${fmtQty(sq)}</td>
         <td class="st-qty">${fmtQty(wq)}</td>
+        <td class="st-qty">${fmtQty(cy)}</td>
         <td class="st-qty">${fmtQty(fq)}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
@@ -490,6 +494,7 @@
       <td class="st-base">${fmtQty(totBase)}</td>
       <td class="st-qty">${fmtQty(totStock)}</td>
       <td class="st-qty">${fmtQty(totWater)}</td>
+      <td class="st-qty">${fmtQty(totCy)}</td>
       <td class="st-qty">${fmtQty(totFactory)}</td>
       <td class="st-pipe">${tpipeS}</td>
       <td class="st-pipe">${tpipeSW}</td>

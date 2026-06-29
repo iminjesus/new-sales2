@@ -1314,6 +1314,12 @@ def api_sales_stats_by_state():
         stock_by_plant   = _plant_totals("stock",    "unrestricted")
         water_by_plant   = _plant_totals("incoming", "po_qty")
         factory_by_plant = _plant_totals("orders",   "po_qty", extra_wh=_orders_extra)
+        # CY = Ready-to-Ship factory confirmations.  Mirrors the PO-
+        # prefix filter the /api/orders confirm metric uses — real
+        # factory RTS POs start with '42'; sample / internal moves
+        # otherwise inflate the number.
+        cy_by_plant      = _plant_totals("orders",   "confirm_qty",
+                                         extra_wh=["t.po_no LIKE '42%'"])
 
         # aggregate plant totals to state
         def _to_state(by_plant):
@@ -1327,6 +1333,7 @@ def api_sales_stats_by_state():
         stock_by_state   = _to_state(stock_by_plant)
         water_by_state   = _to_state(water_by_plant)
         factory_by_state = _to_state(factory_by_plant)
+        cy_by_state      = _to_state(cy_by_plant)
 
         # ?? sales per state ?????????????????????????????????????????
         # Use a deduplicated subquery for the customer join so that ship_tos
@@ -1386,12 +1393,13 @@ def api_sales_stats_by_state():
             stk = stock_by_state.get(st, 0)
             wtr = water_by_state.get(st, 0)
             fac = factory_by_state.get(st, 0)
+            cy  = cy_by_state.get(st, 0)
             # Skip only when EVERY column would be zero — a state with
             # no sales for the current filter but plant inventory still
             # in transit (or sitting in stock) should stay visible so
             # the map dot matches a table row.
             if (q3 == 0 and q6 == 0 and q12 == 0
-                and stk == 0 and wtr == 0 and fac == 0):
+                and stk == 0 and wtr == 0 and fac == 0 and cy == 0):
                 continue
             base = round((q3 + q6 + q12) / 3)
             rows_out.append({
@@ -1402,6 +1410,7 @@ def api_sales_stats_by_state():
                 "base_sales":  base,
                 "stock_qty":   round(stk),
                 "water_qty":   round(wtr),
+                "cy_qty":      round(cy),
                 "factory_qty": round(fac),
             })
 
