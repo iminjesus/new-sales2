@@ -430,85 +430,6 @@
     _baseSales = baseSales || _baseSales;
   }
 
-  // ---------------------- state table ----------------------
-  // stockTotal / waterTotal / factoryTotal are the global totals (pipeline numerators)
-  let _stockTotal = 0, _waterTotal = 0, _factoryTotal = 0;
-
-  async function fetchAndRenderStateTable(){
-    const qs   = buildQueryParams({ metric: "qty" });
-    const data = await fetchJSON(`/api/sales_stats_by_state?${qs}`);
-    const tbody = document.getElementById("stateTableBody");
-    const tfoot = document.getElementById("stateTableFoot");
-    if (!tbody || !tfoot) return;
-    if (!data || !data.rows || data.rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="8" class="st-loading">No data</td></tr>`;
-      return;
-    }
-
-    let totQ3 = 0, totQ6 = 0, totQ12 = 0,
-        totStock = 0, totWater = 0, totCy = 0, totFactory = 0;
-    const rows = data.rows;   // backend already excludes COMMON and zero rows
-
-    tbody.innerHTML = rows.map(r => {
-      const bs       = r.base_sales;
-      const sq       = r.stock_qty   || 0;
-      const wq       = r.water_qty   || 0;
-      const cy       = r.cy_qty      || 0;
-      // "Factory" cell shows total orders minus the Ready-to-Ship (CY)
-      // share, so CY isn't double-counted in the pipeline view.
-      const fqRaw    = r.factory_qty || 0;
-      const fqMinus  = Math.max(0, fqRaw - cy);
-      totQ3      += r.qty_3m;
-      totQ6      += r.qty_6m;
-      totQ12     += r.qty_12m;
-      totStock   += sq;
-      totWater   += wq;
-      totCy      += cy;
-      totFactory += fqMinus;
-      const pipeS   = bs ? (sq                       / bs) : 0;
-      const pipeSW  = bs ? ((sq + wq)                / bs) : 0;
-      const pipeSWF = bs ? ((sq + wq + cy + fqMinus) / bs) : 0;
-      return `<tr>
-        <td class="st-state">${r.state}</td>
-        <td>${fmtQty(r.qty_3m)}</td>
-        <td>${fmtQty(r.qty_6m)}</td>
-        <td>${fmtQty(r.qty_12m)}</td>
-        <td class="st-base">${fmtQty(bs)}</td>
-        <td class="st-qty">${fmtQty(sq)}</td>
-        <td class="st-qty">${fmtQty(wq)}</td>
-        <td class="st-qty">${fmtQty(cy)}</td>
-        <td class="st-qty">${fmtQty(fqMinus)}</td>
-        <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
-        <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
-        <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
-      </tr>`;
-    }).join("");
-
-    // Total footer row.  totFactory already has CY subtracted per row
-    // (see render loop above), so the SWF pipe folds CY back in here
-    // alongside totFactory.
-    const totBase = Math.round((totQ3 + totQ6 + totQ12) / 3);
-    const tpipeS   = totBase ? fmtPipe(totStock / totBase) : "—";
-    const tpipeSW  = totBase ? fmtPipe((totStock + totWater) / totBase) : "—";
-    const tpipeSWF = totBase
-      ? fmtPipe((totStock + totWater + totCy + totFactory) / totBase)
-      : "—";
-    tfoot.innerHTML = `<tr class="st-total">
-      <td>TOTAL</td>
-      <td>${fmtQty(totQ3)}</td>
-      <td>${fmtQty(totQ6)}</td>
-      <td>${fmtQty(totQ12)}</td>
-      <td class="st-base">${fmtQty(totBase)}</td>
-      <td class="st-qty">${fmtQty(totStock)}</td>
-      <td class="st-qty">${fmtQty(totWater)}</td>
-      <td class="st-qty">${fmtQty(totCy)}</td>
-      <td class="st-qty">${fmtQty(totFactory)}</td>
-      <td class="st-pipe">${tpipeS}</td>
-      <td class="st-pipe">${tpipeSW}</td>
-      <td class="st-pipe">${tpipeSWF}</td>
-    </tr>`;
-  }
-
   // ── Cascade table (Line → Product Group → Pattern → Size) ───────
   // Mirrors graph-view's click-to-drill: clicking a Line row narrows
   // to that line's Product Groups, clicking a Product Group narrows
@@ -553,14 +474,60 @@
     });
     const data = await fetchJSON(`/api/sales_stats_by_product_level?${qs}`);
     if (!data || !data.rows || data.rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="12" class="st-loading">No data</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="13" class="st-loading">No data</td></tr>`;
       tfoot.innerHTML = "";
       return;
     }
     const drillable = (cascadeState.level !== "size");
     let totQ3=0, totQ6=0, totQ12=0,
         totStock=0, totWater=0, totCy=0, totFactory=0;
-    tbody.innerHTML = data.rows.map(r => {
+
+    // Each bucket row emits 4 NSW/QLD/VIC/WA sub-rows followed by a
+    // per-bucket subtotal row.  The bucket label sits in a rowSpan'd
+    // first cell on the first state row so the product name lines up
+    // visually with its state group.
+    const html = [];
+    data.rows.forEach(r => {
+      const by = r.by_state || [];
+      const cls   = drillable ? "cascade-clickable" : "";
+      const dataB = drillable
+        ? ` data-bucket="${(r.bucket || "").replace(/"/g, "&quot;")}"`
+        : "";
+      const bucketLabel = r.bucket || "—";
+
+      const span = by.length + 1; // 4 states + 1 subtotal row
+      by.forEach((s, idx) => {
+        const bs       = s.base_sales;
+        const sq       = s.stock_qty   || 0;
+        const wq       = s.water_qty   || 0;
+        const cy       = s.cy_qty      || 0;
+        const fqRaw    = s.factory_qty || 0;
+        const fqMinus  = Math.max(0, fqRaw - cy);
+        const pipeS    = bs ? (sq                       / bs) : 0;
+        const pipeSW   = bs ? ((sq + wq)                / bs) : 0;
+        const pipeSWF  = bs ? ((sq + wq + cy + fqMinus) / bs) : 0;
+        const bucketCell = (idx === 0)
+          ? `<td class="cas-bucket" rowspan="${span}">${bucketLabel}</td>`
+          : "";
+        html.push(`<tr class="${cls} cas-state-row"${dataB}>
+          ${bucketCell}
+          <td class="cas-state">${s.state}</td>
+          <td>${fmtQty(s.qty_3m)}</td>
+          <td>${fmtQty(s.qty_6m)}</td>
+          <td>${fmtQty(s.qty_12m)}</td>
+          <td class="st-base">${fmtQty(bs)}</td>
+          <td class="st-qty">${fmtQty(sq)}</td>
+          <td class="st-qty">${fmtQty(wq)}</td>
+          <td class="st-qty">${fmtQty(cy)}</td>
+          <td class="st-qty">${fmtQty(fqMinus)}</td>
+          <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
+          <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
+          <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
+        </tr>`);
+      });
+
+      // Per-bucket subtotal — same metric set as the State table TOTAL
+      // row, scoped to this bucket only.
       const bs = r.base_sales;
       const sq = r.stock_qty   || 0;
       const wq = r.water_qty   || 0;
@@ -574,10 +541,14 @@
       const pipeS   = bs ? (sq                       / bs) : 0;
       const pipeSW  = bs ? ((sq + wq)                / bs) : 0;
       const pipeSWF = bs ? ((sq + wq + cy + fqMinus) / bs) : 0;
-      const cls   = drillable ? "cascade-clickable" : "";
-      const dataB = drillable ? ` data-bucket="${(r.bucket || "").replace(/"/g, "&quot;")}"` : "";
-      return `<tr class="${cls}"${dataB}>
-        <td>${r.bucket || "—"}</td>
+      // If we had no states for this bucket, the bucket cell wasn't
+      // emitted above — include it on the subtotal row instead.
+      const bucketSubCell = (by.length === 0)
+        ? `<td class="cas-bucket">${bucketLabel}</td>`
+        : "";
+      html.push(`<tr class="cas-subtotal ${cls}"${dataB}>
+        ${bucketSubCell}
+        <td class="cas-state">Sub</td>
         <td>${fmtQty(r.qty_3m)}</td>
         <td>${fmtQty(r.qty_6m)}</td>
         <td>${fmtQty(r.qty_12m)}</td>
@@ -589,8 +560,10 @@
         <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
-      </tr>`;
-    }).join("");
+      </tr>`);
+    });
+    tbody.innerHTML = html.join("");
+
     const totBase = Math.round((totQ3 + totQ6 + totQ12) / 3);
     const tpipeS   = totBase ? fmtPipe(totStock / totBase) : "—";
     const tpipeSW  = totBase ? fmtPipe((totStock+totWater) / totBase) : "—";
@@ -599,6 +572,7 @@
       : "—";
     tfoot.innerHTML = `<tr class="st-total">
       <td>TOTAL</td>
+      <td></td>
       <td>${fmtQty(totQ3)}</td>
       <td>${fmtQty(totQ6)}</td>
       <td>${fmtQty(totQ12)}</td>
@@ -710,9 +684,10 @@
         fetchAndRenderPrice(),
       ]);
       renderPipeline(stockTotal, waterTotal, factoryTotal, baseSales);
-      await fetchAndRenderStateTable();
-      // Cascade table (Line → Product Group → Pattern → Size) sits
-      // under the State table and respects the same filter set.
+      // Cascade table (Line → Product Group → Pattern → Size) is the
+      // only on-page table now — each product row drops 4 state sub-rows
+      // (NSW / QLD / VIC / WA) underneath itself so the separate State
+      // table on top is no longer needed.
       await fetchAndRenderCascadeTable();
 
       setStatus(

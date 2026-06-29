@@ -1082,24 +1082,42 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
 #cascadeTable {
   width: 100%; border-collapse: collapse; font-size: 14px;
   background: #fff; border: 1px solid #e5e7eb; border-radius: 7px;
-  overflow: hidden; table-layout: fixed;
+  overflow: hidden; table-layout: auto;
 }
-#cascadeTable th, #cascadeTable td { width: 8.33%; }
+/* Bucket column gets enough room for full sizes like 265/45R20 109V XL
+   (was ellipsis-truncating at the State table's 8.33% width).  The
+   remaining 12 columns share the rest evenly via table-layout:auto. */
+#cascadeTable th:first-child,
+#cascadeTable td.cas-bucket { min-width: 130px; }
 #cascadeTable thead th {
   background: #f3f4f6; color: #6b7280; font-weight: 600;
   font-size: 12px; padding: 7px 10px; text-align: right;
   border-bottom: 1px solid #e5e7eb; white-space: nowrap;
 }
-#cascadeTable thead th:first-child { text-align: left; }
+#cascadeTable thead th:first-child,
+#cascadeTable thead th:nth-child(2) { text-align: left; }
 #cascadeTable tbody td {
   padding: 6px 10px; text-align: right;
   border-bottom: 1px solid #f3f4f6; color: #374151;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
 }
-#cascadeTable tbody td:first-child { text-align: left; font-weight: 600; color: #111827; }
+#cascadeTable tbody td.cas-bucket {
+  text-align: left; font-weight: 600; color: #111827;
+  vertical-align: middle; border-right: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+#cascadeTable tbody td.cas-state {
+  text-align: left; color: #4b5563; font-weight: 500;
+}
+#cascadeTable tbody tr.cas-state-row { cursor: inherit; }
+#cascadeTable tbody tr.cas-subtotal td {
+  background: #f8fafc; font-weight: 600; color: #1f2937;
+  border-top: 1px solid #d1d5db;
+}
+#cascadeTable tbody tr.cas-subtotal td.cas-state { color: #6b7280; }
 #cascadeTable tbody tr.cascade-clickable { cursor: pointer; }
 #cascadeTable tbody tr.cascade-clickable:hover { background: #eff6ff; }
-#cascadeTable tbody tr.cascade-clickable td:first-child::after {
+#cascadeTable tbody tr.cascade-clickable td.cas-bucket::after {
   content: " ›"; color: #93c5fd; font-weight: 700;
 }
 #cascadeTable tfoot tr.st-total td {

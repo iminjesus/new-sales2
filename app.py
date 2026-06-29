@@ -1515,16 +1515,35 @@ def api_sales_stats_by_product_level():
             " FROM carrying_26 GROUP BY m_code) c"
         )
 
+        # State table semantics carried over: plant code → physical
+        # state, with SA / NT / TAS / ACT folded into the closest hub so
+        # every bucket bottoms out at exactly NSW / QLD / VIC / WA.
+        PLANT_STATE = {"42R1": "NSW", "42R0": "QLD",
+                       "42R2": "VIC", "42R4": "WA"}
+        STATE_ORDER = ["NSW", "QLD", "VIC", "WA"]
+        STATE_REMAP = {"SA": "VIC", "NT": "WA", "TAS": "VIC", "ACT": "NSW"}
+
         def _agg(table_sql, val_col, extra_clause=""):
+            """Returns {bucket: {state: qty}} grouped by both dims so
+            the cascade can show 4 state sub-rows per product row."""
             sql = (
-                f"SELECT {bucket_col} AS bucket, SUM(t.{val_col}) AS val "
+                f"SELECT {bucket_col} AS bucket, t.plant AS plant, "
+                f"       SUM(t.{val_col}) AS val "
                 f"FROM {table_sql} t "
                 f"JOIN {DEDUP_C} ON c.m_code = t.material "
                 f"{where_sql}{extra_clause} "
-                f"GROUP BY {bucket_col}"
+                f"GROUP BY {bucket_col}, t.plant"
             )
             cur.execute(sql, all_params)
-            return {(r['bucket'] or ''): float(r['val'] or 0) for r in cur.fetchall()}
+            out = {}
+            for r in cur.fetchall():
+                st = PLANT_STATE.get(r['plant'])
+                if not st:
+                    continue
+                b = r['bucket'] or ''
+                out.setdefault(b, {})
+                out[b][st] = out[b].get(st, 0.0) + float(r['val'] or 0)
+            return out
 
         stock_by   = _agg("stock",    "unrestricted")
         water_by   = _agg("incoming", "po_qty")
@@ -1593,27 +1612,35 @@ def api_sales_stats_by_product_level():
             f"  GROUP BY ship_to"
             f") cus ON cus.ship_to = s.ship_to"
         )
+        # sales_by_bucket: {bucket: {state: {label: monthly_avg_qty}}}
         sales_by_bucket = {}
         for label, periods in (("3m", _months_back(3)),
                                 ("6m", _months_back(6)),
                                 ("12m", _months_back(12))):
             pcond = _period_clause(periods, "s")
             cur.execute(
-                f"SELECT {sales_bucket_col} AS bucket, SUM(s.qty) AS qty "
+                f"SELECT {sales_bucket_col} AS bucket, "
+                f"       cus.bde_state AS state, "
+                f"       SUM(s.qty) AS qty "
                 f"FROM sales_2526 s "
                 f"{sales_joins} "
                 f"{where_sql.replace('c.', 'mat.')} AND {pcond} "
-                f"GROUP BY {sales_bucket_col}",
+                f"GROUP BY {sales_bucket_col}, cus.bde_state",
                 all_params,
             )
-            # State table divides the period sum by N months to yield a
-            # monthly-average sales rate.  Mirror that here so the cascade
-            # 3M / 6M / 12M columns are comparable to the State row above
-            # and TOTAL footers across the two tables line up.
+            # Divide the period sum by N to match the State table's
+            # monthly-average semantics.
             n_months = {"3m": 3, "6m": 6, "12m": 12}[label]
             for row in cur.fetchall():
+                st = row['state']
+                if not st or st == 'COMMON':
+                    continue
+                st = STATE_REMAP.get(st, st)
+                if st not in STATE_ORDER:
+                    continue
                 b = row['bucket'] or ''
-                sales_by_bucket.setdefault(b, {})[label] = (
+                d = sales_by_bucket.setdefault(b, {}).setdefault(st, {})
+                d[label] = d.get(label, 0.0) + (
                     float(row['qty'] or 0) / n_months
                 )
 
@@ -1623,27 +1650,51 @@ def api_sales_stats_by_product_level():
                            sales_by_bucket.keys())
         rows_out = []
         for b in sorted(b for b in all_buckets if b):
-            sd = sales_by_bucket.get(b, {})
-            q3  = sd.get('3m',  0) or 0
-            q6  = sd.get('6m',  0) or 0
-            q12 = sd.get('12m', 0) or 0
-            stk = stock_by.get(b, 0)
-            wtr = water_by.get(b, 0)
-            cy  = cy_by.get(b, 0)
-            fac = factory_by.get(b, 0)
-            if (q3 == 0 and q6 == 0 and q12 == 0
-                and stk == 0 and wtr == 0 and cy == 0 and fac == 0):
+            by_state_sales   = sales_by_bucket.get(b, {})
+            by_state_stock   = stock_by.get(b, {})
+            by_state_water   = water_by.get(b, {})
+            by_state_cy      = cy_by.get(b, {})
+            by_state_factory = factory_by.get(b, {})
+            states_out = []
+            tQ3 = tQ6 = tQ12 = 0.0
+            tStk = tWtr = tCy = tFac = 0.0
+            for st in STATE_ORDER:
+                sd  = by_state_sales.get(st, {})
+                q3  = sd.get('3m',  0) or 0
+                q6  = sd.get('6m',  0) or 0
+                q12 = sd.get('12m', 0) or 0
+                stk = by_state_stock.get(st, 0)
+                wtr = by_state_water.get(st, 0)
+                cy  = by_state_cy.get(st, 0)
+                fac = by_state_factory.get(st, 0)
+                tQ3  += q3;  tQ6  += q6;  tQ12 += q12
+                tStk += stk; tWtr += wtr; tCy  += cy; tFac += fac
+                states_out.append({
+                    "state":       st,
+                    "qty_3m":      int(round(q3)),
+                    "qty_6m":      int(round(q6)),
+                    "qty_12m":     int(round(q12)),
+                    "base_sales":  int(round((q3 + q6 + q12) / 3)),
+                    "stock_qty":   int(round(stk)),
+                    "water_qty":   int(round(wtr)),
+                    "cy_qty":      int(round(cy)),
+                    "factory_qty": int(round(fac)),
+                })
+            if (tQ3 == 0 and tQ6 == 0 and tQ12 == 0
+                and tStk == 0 and tWtr == 0
+                and tCy == 0 and tFac == 0):
                 continue
             rows_out.append({
                 "bucket":      b,
-                "qty_3m":      int(q3),
-                "qty_6m":      int(q6),
-                "qty_12m":     int(q12),
-                "base_sales":  round((q3 + q6 + q12) / 3),
-                "stock_qty":   round(stk),
-                "water_qty":   round(wtr),
-                "cy_qty":      round(cy),
-                "factory_qty": round(fac),
+                "qty_3m":      int(round(tQ3)),
+                "qty_6m":      int(round(tQ6)),
+                "qty_12m":     int(round(tQ12)),
+                "base_sales":  int(round((tQ3 + tQ6 + tQ12) / 3)),
+                "stock_qty":   int(round(tStk)),
+                "water_qty":   int(round(tWtr)),
+                "cy_qty":      int(round(tCy)),
+                "factory_qty": int(round(tFac)),
+                "by_state":    states_out,
             })
         return jsonify({"rows": rows_out, "level": level})
     finally:
