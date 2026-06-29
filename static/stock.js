@@ -450,21 +450,24 @@
     const rows = data.rows;   // backend already excludes COMMON and zero rows
 
     tbody.innerHTML = rows.map(r => {
+      const bs       = r.base_sales;
+      const sq       = r.stock_qty   || 0;
+      const wq       = r.water_qty   || 0;
+      const cy       = r.cy_qty      || 0;
+      // "Factory" cell shows total orders minus the Ready-to-Ship (CY)
+      // share, so CY isn't double-counted in the pipeline view.
+      const fqRaw    = r.factory_qty || 0;
+      const fqMinus  = Math.max(0, fqRaw - cy);
       totQ3      += r.qty_3m;
       totQ6      += r.qty_6m;
       totQ12     += r.qty_12m;
-      totStock   += r.stock_qty   || 0;
-      totWater   += r.water_qty   || 0;
-      totCy      += r.cy_qty      || 0;
-      totFactory += r.factory_qty || 0;
-      const bs  = r.base_sales;
-      const sq  = r.stock_qty   || 0;
-      const wq  = r.water_qty   || 0;
-      const cy  = r.cy_qty      || 0;
-      const fq  = r.factory_qty || 0;
-      const pipeS   = bs ? (sq          / bs) : 0;
-      const pipeSW  = bs ? ((sq+wq)     / bs) : 0;
-      const pipeSWF = bs ? ((sq+wq+fq)  / bs) : 0;
+      totStock   += sq;
+      totWater   += wq;
+      totCy      += cy;
+      totFactory += fqMinus;
+      const pipeS   = bs ? (sq                       / bs) : 0;
+      const pipeSW  = bs ? ((sq + wq)                / bs) : 0;
+      const pipeSWF = bs ? ((sq + wq + cy + fqMinus) / bs) : 0;
       return `<tr>
         <td class="st-state">${r.state}</td>
         <td>${fmtQty(r.qty_3m)}</td>
@@ -474,18 +477,22 @@
         <td class="st-qty">${fmtQty(sq)}</td>
         <td class="st-qty">${fmtQty(wq)}</td>
         <td class="st-qty">${fmtQty(cy)}</td>
-        <td class="st-qty">${fmtQty(fq)}</td>
+        <td class="st-qty">${fmtQty(fqMinus)}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeS)   : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSW)  : "—"}</td>
         <td class="st-pipe">${bs ? fmtPipe(pipeSWF) : "—"}</td>
       </tr>`;
     }).join("");
 
-    // Total footer row
+    // Total footer row.  totFactory already has CY subtracted per row
+    // (see render loop above), so the SWF pipe folds CY back in here
+    // alongside totFactory.
     const totBase = Math.round((totQ3 + totQ6 + totQ12) / 3);
     const tpipeS   = totBase ? fmtPipe(totStock / totBase) : "—";
-    const tpipeSW  = totBase ? fmtPipe((totStock+totWater) / totBase) : "—";
-    const tpipeSWF = totBase ? fmtPipe((totStock+totWater+totFactory) / totBase) : "—";
+    const tpipeSW  = totBase ? fmtPipe((totStock + totWater) / totBase) : "—";
+    const tpipeSWF = totBase
+      ? fmtPipe((totStock + totWater + totCy + totFactory) / totBase)
+      : "—";
     tfoot.innerHTML = `<tr class="st-total">
       <td>TOTAL</td>
       <td>${fmtQty(totQ3)}</td>
