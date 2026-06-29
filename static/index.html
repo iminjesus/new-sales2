@@ -59,17 +59,17 @@
     <div style="display:flex; align-items:center; gap:6px;">
       <label>Group By:</label>
       <select id="group_by">
+        <option value="product">Product</option>
         <option value="region" selected>Region</option>
-        <option value="channel">Channel</option>
-        <option value="product_group">Product Group</option>
+        <option value="customer">Customer</option>
         <option value="promotion">Promotion</option>
       </select>
       <!-- Generic drill-down button.  Each top-level group_by has a
            chain of detail levels (defined in app.js GROUP_CHAIN):
-             Region        → Salesman
-             Channel       → Sold-to Group → Sold-to
-             Product Group → Pattern
-             Promotion     → Promo Type (sub-promo)
+             Product   → Product Group → Pattern   (PCLT/TBR → groups → patterns)
+             Region    → Salesman
+             Customer  → Sold-to Group → Sold-to   (Channel → groups → sold-tos)
+             Promotion → Promo Type (sub-promo)
            Label shows the *next* level we'd jump to so the user always
            sees what Detail means in the current context. -->
       <button id="groupDetailBtn" type="button" class="btn"

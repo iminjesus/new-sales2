@@ -2002,7 +2002,7 @@ def v2_dashboard():
         # filter or group_by needs it.  Size is stored on carrying_26.size
         # (the dropdown value is the size string, not a material code), so
         # filtering by size requires the carrying join.
-        if (group_by in ("product_group", "pattern") or
+        if (group_by in ("line", "product_group", "pattern") or
             f["product_group"] != "ALL" or f["pattern"] != "ALL" or
             f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_d)
@@ -2099,7 +2099,7 @@ def v2_dashboard():
         joins_m, wh_m, params_m = build_customer_filters("s", f, use_sold_to_name=False)
         mj, mw = category_filters_sales("s", f["category"])
         joins_m += mj; wh_m += mw
-        if (group_by in ("product_group", "pattern") or
+        if (group_by in ("line", "product_group", "pattern") or
             f["product_group"] != "ALL" or f["pattern"] != "ALL" or
             f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_m)
@@ -2232,7 +2232,7 @@ def v2_dashboard():
         if f["category"] != "443":
             yj, yw = category_filters_sales("s", f["category"])
             joins_y += yj; wh_y += yw
-        if (group_by in ("product_group", "pattern") or
+        if (group_by in ("line", "product_group", "pattern") or
             f["product_group"] != "ALL" or f["pattern"] != "ALL" or
             f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_y)
@@ -2495,6 +2495,7 @@ def daily_breakdown():
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
+        "line":          "mat.line",
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
@@ -2520,13 +2521,19 @@ def daily_breakdown():
         wh    += cat_where
 
     # Carrying/customer join needed for group_by or filter
-    if (group_by in ("product_group", "pattern") or
+    if (group_by in ("line", "product_group", "pattern") or
         is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
+    # Force the Product top-level cascade to only show PCLT + TBR (the
+    # two carrying lines that make sense as a product split).  HM and
+    # any future lines are intentionally hidden because HM reads as a
+    # customer-side pivot, not a product one.
+    if group_by == "line":
+        wh.append("mat.line IN ('PCLT','TBR')")
 
     # Pre-aggregated qty per (ship_to, day, brand) for TrueBlue's
     # "X tires at this shop on this day" rule.  Added lazily — only
@@ -3394,6 +3401,7 @@ def monthly_breakdown():
     # match by the same key, but SELECT the resolved name as the label
     # so the legend is readable.
     group_cols = {
+        "line":          "mat.line",
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
@@ -3444,13 +3452,17 @@ def monthly_breakdown():
     joins += cat_joins
     wh    += cat_where
 
-    if (group_by in ("product_group", "pattern") or
+    if (group_by in ("line", "product_group", "pattern") or
         is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
+    # Force the Product top-level cascade to only show PCLT + TBR
+    # (the two carrying lines that make sense as a product split).
+    if group_by == "line":
+        wh.append("mat.line IN ('PCLT','TBR')")
     # scus = per-sold_to name resolver (one row per sold_to). Used as
     # the label source when group_by == 'sold_to' so the resulting
     # legend doesn't have a mix of names and raw codes for the same
@@ -3647,6 +3659,7 @@ def monthly_target_breakdown():
     # master rather than target_26, so we route them through the
     # per-sold_to tcus subquery joined below.
     group_cols = {
+        "line":          "mat.line",
         "product_group": "mat.product_group",
         "region":        "t.state",
         "salesman":      "t.bde",
@@ -3689,9 +3702,9 @@ def monthly_target_breakdown():
             ") tcus ON tcus.sold_to = t.sold_to"
         )
 
-    # carrying_26 join needed for group_by or filter on product_group/pattern
+    # carrying_26 join needed for group_by or filter on product_group/pattern/line
     carrying_join = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
-    needs_carrying = group_by in ("product_group", "pattern")
+    needs_carrying = group_by in ("line", "product_group", "pattern")
 
     if f["product_group"] != "ALL":
         needs_carrying = True
@@ -3705,6 +3718,9 @@ def monthly_target_breakdown():
 
     if needs_carrying and carrying_join not in joins:
         joins.append(carrying_join)
+    # Force the Product top-level cascade to only show PCLT + TBR
+    if group_by == "line":
+        wh.append("mat.line IN ('PCLT','TBR')")
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -3855,6 +3871,7 @@ def yearly_breakdown():
     # For sold_to: group by code, label as name (consistent with the
     # other breakdown endpoints).
     group_cols = {
+        "line":          "mat.line",
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
@@ -3895,13 +3912,16 @@ def yearly_breakdown():
             ") scus ON scus.sold_to = s.sold_to"
         )
 
-    if (group_by in ("product_group", "pattern") or
+    if (group_by in ("line", "product_group", "pattern") or
         is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
         _ensure_carrying_join("s", joins)
     if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
+    # Force the Product top-level cascade to only show PCLT + TBR.
+    if group_by == "line":
+        wh.append("mat.line IN ('PCLT','TBR')")
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["pattern"] != "ALL":

@@ -453,20 +453,28 @@ document.getElementById('group_by').addEventListener("change",()=>{
 // *next* level we'd jump to so the user can tell what Detail will do
 // in the current context.
 const GROUP_CHAIN = {
-  region:        ["region", "salesman"],
-  channel:       ["channel", "sold_to_group", "sold_to"],
-  product_group: ["product_group", "pattern"],
-  promotion:     ["promotion", "promotion_detail"],
+  // Each dropdown option maps to its cascade chain.  The 0-index is
+  // the initial level shown when the user picks it.  Detail button
+  // walks down each chain step-by-step.
+  product:   ["line", "product_group", "pattern"],
+  region:    ["region", "salesman"],
+  customer:  ["channel", "sold_to_group", "sold_to"],
+  promotion: ["promotion", "promotion_detail"],
 };
 const GROUP_LABEL = {
+  // Top-level dropdown labels
+  product:           "Product",
   region:            "Region",
+  customer:          "Customer",
+  promotion:         "Promotion",
+  // Cascade-step labels (used for "Detail: <next level>" hints)
+  line:              "PCLT / TBR",
+  product_group:     "Product Group",
+  pattern:           "Pattern",
   salesman:          "Salesman",
   channel:           "Channel",
   sold_to_group:     "Sold-to Group",
   sold_to:           "Sold-to",
-  product_group:     "Product Group",
-  pattern:           "Pattern",
-  promotion:         "Promotion",
   promotion_detail:  "Promo Category",
 };
 window._detailDepth = 0;
