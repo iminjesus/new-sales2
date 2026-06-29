@@ -584,6 +584,25 @@ function _syncSoldToInput(val){
   if (el) { el.value = val; }
 }
 
+// Stack of {filterKey, prevValue, label} so Back can undo one drill
+// step at a time — restoring the filter the user had before the
+// click + dropping a cascade level.
+window._drillStack = [];
+
+function _renderDrillCrumb(){
+  const el = document.getElementById("groupDrillCrumb");
+  const back = document.getElementById("groupBackBtn");
+  if (!el || !back) return;
+  if (!window._drillStack.length) {
+    el.textContent = "";
+    back.style.display = "none";
+    return;
+  }
+  back.style.display = "";
+  const topLbl = (GROUP_LABEL[filters.group_by]) || filters.group_by;
+  el.textContent = "› " + [topLbl].concat(window._drillStack.map(d => d.label)).join(" › ");
+}
+
 // Called by every stacked Chart.js onClick handler.
 window._drillStackClick = function(label){
   if (!label || label === "COMMON" || label === "Other" || label === "Non-Promotion") {
@@ -595,6 +614,11 @@ window._drillStackClick = function(label){
   const step = chain[curLevel];
   const map = STEP_TO_FILTER[step];
   if (map && map.key) {
+    window._drillStack.push({
+      filterKey: map.key,
+      prevValue: filters[map.key],
+      label:     label,
+    });
     filters[map.key] = label;
     try { map.sync && map.sync(label); } catch (_) {}
   }
@@ -602,8 +626,41 @@ window._drillStackClick = function(label){
     window._detailDepth = curLevel + 1;
     _syncGroupDetailBtn();
   }
+  _renderDrillCrumb();
   refreshAllDebounced();
 };
+
+// Pop one level off the drill stack: restore the previous filter
+// value, decrement _detailDepth, re-sync the matching UI control.
+function _drillBack(){
+  const entry = window._drillStack.pop();
+  if (!entry) return;
+  filters[entry.filterKey] = (entry.prevValue == null ? "ALL" : entry.prevValue);
+  // Re-sync the UI to the restored filter — look up the step that
+  // owns this filterKey so we can call the right sync function.
+  for (const step of Object.keys(STEP_TO_FILTER)) {
+    const m = STEP_TO_FILTER[step];
+    if (m.key === entry.filterKey) {
+      try { m.sync && m.sync(filters[entry.filterKey]); } catch(_) {}
+      break;
+    }
+  }
+  if (window._detailDepth > 0) window._detailDepth -= 1;
+  _syncGroupDetailBtn();
+  _renderDrillCrumb();
+  refreshAllDebounced();
+}
+document.getElementById("groupBackBtn")?.addEventListener("click", _drillBack);
+// Picking a different top-level Group By wipes the drill stack
+// (cascade restarts from scratch).
+(function(){
+  const sel = document.getElementById("group_by");
+  if (!sel) return;
+  sel.addEventListener("change", () => {
+    window._drillStack = [];
+    _renderDrillCrumb();
+  });
+})();
 
 // Chart.js options snippet that turns a stacked chart into a drillable
 // one — pointer cursor on hover, click handler that hands the bucket
@@ -2430,7 +2487,13 @@ function toPercentStacksNYears(byKey, labelsLen) {
 }
 
 async function drawYearlyStacked() {
-  const effectiveGroup = filters.group_by;
+  // Resolve the actual SQL grouping for the current cascade depth —
+  // same as monthly/daily.  Without this the yearly stacks would stay
+  // at the top-level (region) even after drilling into a salesman.
+  const top = filters.group_by;
+  const effectiveGroup = (typeof window._effectiveGroupBy === "function")
+    ? window._effectiveGroupBy(top)
+    : top;
   const rows = await fetchYearlyBreakdownWithGroup(effectiveGroup);
 
   // no data -> show single total per year

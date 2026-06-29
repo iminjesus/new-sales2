@@ -77,6 +77,19 @@
               title="Drill the stacked charts down one level">
         Detail
       </button>
+      <!-- Drill back button — pops the last click-drill (clearing the
+           filter that was applied + dropping a level).  Hidden until
+           there's actually something on the drill stack. -->
+      <button id="groupBackBtn" type="button" class="btn"
+              style="display:none;font-size:11px;padding:2px 8px;margin-left:2px;
+                     background:#fef3c7;border-color:#fbbf24;color:#92400e"
+              title="Step back to the previous cascade level">
+        ← Back
+      </button>
+      <!-- Breadcrumb of the current drill path, e.g.
+             "Product › PCLT › Dynapro"
+           Empty when no drill has been performed. -->
+      <span id="groupDrillCrumb" style="margin-left:6px;font-size:11px;color:#6b7280;"></span>
     </div>
 
     <!-- Export buttons live on the top bar (left of the view switch)
