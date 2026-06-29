@@ -946,7 +946,18 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
   border: 1px solid #e5e7eb;
   border-radius: 7px;
   overflow: hidden;
+  /* Uniform column widths — fixed layout keeps every td the same
+     horizontal slice regardless of its number's character count, so
+     Stock / Water / CY / Factory / Stock.idx / +Water.idx /
+     +Factory.idx all align cleanly. */
+  table-layout: fixed;
 }
+#stateTable th,
+#stateTable td {
+  width: 8.33%;  /* 12 columns: State + 3M+6M+12M + Base + 4 qty + 3 idx */
+}
+#stateTable th:first-child,
+#stateTable td:first-child { width: 8.33%; }
 #stateTable thead th {
   background: #f3f4f6;
   color: #6b7280;
