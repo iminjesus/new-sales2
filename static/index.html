@@ -534,6 +534,10 @@
   <div class="czm-backdrop"></div>
   <div class="czm-frame">
     <button class="czm-close" type="button" title="Close" aria-label="Close">×</button>
+    <!-- Drill-back button inside the modal — same behaviour as the
+         per-chart Back chip on the dashboard.  CSS keeps it hidden
+         unless body.drilled is set. -->
+    <button class="czm-back" type="button" title="Step back one level">← Back</button>
     <h3 class="czm-title"></h3>
     <div class="czm-canvas-wrap">
       <canvas id="chartZoomCanvas"></canvas>

@@ -330,6 +330,19 @@ body.drilled .box .chart-back-btn { display:inline-block; }
   font-size:20px; line-height:1; cursor:pointer; color:#374151; }
 #chartZoomModal .czm-close:hover { background:#fee2e2; border-color:#fecaca; color:#dc2626; }
 
+/* Drill-back chip inside the modal — same yellow palette as the
+   per-chart back button, only visible while body.drilled is set. */
+#chartZoomModal .czm-back {
+  display:none;
+  position:absolute; top:14px; right:54px;
+  padding:4px 10px; height:28px;
+  background:#fef3c7; border:1px solid #fbbf24; border-radius:6px;
+  color:#92400e; font-size:12px; font-weight:600; line-height:1;
+  cursor:pointer;
+}
+#chartZoomModal .czm-back:hover { background:#fde68a; border-color:#d97706; }
+body.drilled #chartZoomModal .czm-back { display:inline-block; }
+
 /* Fix the chart height */
 .chart-fixed {
   position: relative;

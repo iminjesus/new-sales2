@@ -633,6 +633,12 @@ window._drillStackClick = function(label){
   }
   _renderDrillCrumb();
   refreshAllDebounced();
+  // If the enlarge modal is open on this same chart, re-clone from
+  // the source after the dashboard refresh settles so the modal
+  // tracks the new drill level too.
+  if (typeof window._refreshModalFromSource === "function") {
+    setTimeout(window._refreshModalFromSource, 400);
+  }
 };
 
 // Pop one level off the drill stack: restore the previous filter
@@ -654,6 +660,10 @@ function _drillBack(){
   _syncGroupDetailBtn();
   _renderDrillCrumb();
   refreshAllDebounced();
+  // Mirror the new state in the enlarge modal if it's open.
+  if (typeof window._refreshModalFromSource === "function") {
+    setTimeout(window._refreshModalFromSource, 400);
+  }
 }
 document.getElementById("groupBackBtn")?.addEventListener("click", _drillBack);
 // Expose so chart_zoom.js's per-chart back buttons can call the same

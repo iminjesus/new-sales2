@@ -15,6 +15,9 @@
   const MODAL_ID         = "chartZoomModal";
   const MODAL_CANVAS_ID  = "chartZoomCanvas";
   let modalChartInst     = null;
+  // Track which canvas the modal is mirroring so we can re-clone from
+  // its updated state after the dashboard refreshes from a drill.
+  let modalSourceCanvasId = null;
 
   // ── helpers ────────────────────────────────────────────────────────
   function deepCloneSafe(value) {
@@ -35,41 +38,34 @@
   }
 
   // ── modal open / close ─────────────────────────────────────────────
-  function openModal(srcChart, title) {
-    const modal = document.getElementById(MODAL_ID);
-    if (!modal || !srcChart) return;
-    modal.style.display = "flex";
-
-    // Title — picked from the source box's <h3> when present.
-    const titleEl = modal.querySelector(".czm-title");
-    if (titleEl) titleEl.textContent = title || "";
-
-    // Destroy any previous modal chart before re-rendering.
+  function _renderModalFromChart(srcChart) {
+    if (!srcChart) return;
     if (modalChartInst) {
       try { modalChartInst.destroy(); } catch (_) {}
       modalChartInst = null;
     }
-
     const ctx = document.getElementById(MODAL_CANVAS_ID);
     if (!ctx) return;
 
-    // Deep-clone data + options so the modal chart doesn't share live
-    // references with the underlying chart (a click on the modal's
-    // legend shouldn't mutate the dashboard's hidden flags).  We do
-    // re-use the chart `type` directly since it's a string.
+    // Deep-clone data so the modal chart doesn't share live references
+    // with the underlying chart.  Options keep their function-typed
+    // callbacks (onClick / onHover for drill, datalabel formatters,
+    // …) so we reuse the source options object directly instead of
+    // JSON-cloning it.
     const data = deepCloneSafe(srcChart.config.data) || srcChart.data;
-    const opts = deepCloneSafe(srcChart.config.options) || {};
-
-    // Force responsive + non-aspect-ratio so the chart fills the modal.
-    opts.responsive = true;
-    opts.maintainAspectRatio = false;
+    const baseOpts = srcChart.config.options || {};
+    const opts = Object.assign({}, baseOpts, {
+      responsive: true,
+      maintainAspectRatio: false,
+    });
+    // The cross-chart legend onClick in app.js only makes sense on the
+    // dashboard's monthly bars, not on this modal copy — drop it so
+    // clicking a legend in the modal just toggles locally.
     if (opts.plugins && opts.plugins.legend) {
-      // The cross-chart legend onClick in app.js loses meaning here
-      // (modal chart isn't on the dashboard), so reset to Chart.js
-      // default which just toggles the local dataset.
-      delete opts.plugins.legend.onClick;
+      opts.plugins = Object.assign({}, opts.plugins, {
+        legend: Object.assign({}, opts.plugins.legend, { onClick: undefined }),
+      });
     }
-
     try {
       modalChartInst = new Chart(ctx, {
         type: srcChart.config.type,
@@ -82,6 +78,21 @@
     }
   }
 
+  function openModal(srcChart, title) {
+    const modal = document.getElementById(MODAL_ID);
+    if (!modal || !srcChart) return;
+    modal.style.display = "flex";
+
+    const titleEl = modal.querySelector(".czm-title");
+    if (titleEl) titleEl.textContent = title || "";
+
+    // Remember which canvas we cloned from so a drill firing inside
+    // the modal can re-pull from the same source after the dashboard
+    // refreshes.
+    modalSourceCanvasId = srcChart.canvas && srcChart.canvas.id;
+    _renderModalFromChart(srcChart);
+  }
+
   function closeModal() {
     const modal = document.getElementById(MODAL_ID);
     if (modal) modal.style.display = "none";
@@ -89,7 +100,30 @@
       try { modalChartInst.destroy(); } catch (_) {}
       modalChartInst = null;
     }
+    modalSourceCanvasId = null;
   }
+
+  // Called by app.js after a drill / back so the modal mirrors the
+  // dashboard's new state instead of getting stuck on stale data.
+  // Retries a few times because chart redraw lags behind the SQL
+  // round-trip (refreshAllDebounced fires ~250 ms after the action,
+  // then each draw() takes a few ms more).
+  function refreshModalFromSource(attempt) {
+    if (!modalSourceCanvasId) return;
+    const modal = document.getElementById(MODAL_ID);
+    if (!modal || modal.style.display === "none") return;
+    const canvas = document.getElementById(modalSourceCanvasId);
+    const src = (canvas && typeof Chart !== "undefined") ? Chart.getChart(canvas) : null;
+    if (!src) {
+      // Source chart not yet re-created — try again shortly, up to 8x.
+      if ((attempt || 0) < 8) {
+        setTimeout(function(){ refreshModalFromSource((attempt || 0) + 1); }, 150);
+      }
+      return;
+    }
+    _renderModalFromChart(src);
+  }
+  window._refreshModalFromSource = refreshModalFromSource;
 
   // ── zoom-button attachment ─────────────────────────────────────────
   function attachZoomButton(boxEl) {
@@ -154,12 +188,20 @@
     obs.observe(document.body, { childList: true, subtree: true });
 
     // Backdrop click + close button + ESC dismiss the modal.
+    // Inside-modal Back chip calls the same window._drillBack the
+    // dashboard's chips use.
     const modal = document.getElementById(MODAL_ID);
     if (modal) {
       const backdrop = modal.querySelector(".czm-backdrop");
       const closeBtn = modal.querySelector(".czm-close");
+      const backBtn  = modal.querySelector(".czm-back");
       if (backdrop) backdrop.addEventListener("click", closeModal);
       if (closeBtn) closeBtn.addEventListener("click", closeModal);
+      if (backBtn) backBtn.addEventListener("click", function(e){
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof window._drillBack === "function") window._drillBack();
+      });
     }
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") closeModal();
