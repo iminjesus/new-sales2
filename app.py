@@ -1606,9 +1606,16 @@ def api_sales_stats_by_product_level():
                 f"GROUP BY {sales_bucket_col}",
                 all_params,
             )
+            # State table divides the period sum by N months to yield a
+            # monthly-average sales rate.  Mirror that here so the cascade
+            # 3M / 6M / 12M columns are comparable to the State row above
+            # and TOTAL footers across the two tables line up.
+            n_months = {"3m": 3, "6m": 6, "12m": 12}[label]
             for row in cur.fetchall():
                 b = row['bucket'] or ''
-                sales_by_bucket.setdefault(b, {})[label] = float(row['qty'] or 0)
+                sales_by_bucket.setdefault(b, {})[label] = (
+                    float(row['qty'] or 0) / n_months
+                )
 
         all_buckets = set()
         all_buckets.update(stock_by.keys(), water_by.keys(),
