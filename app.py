@@ -1501,11 +1501,25 @@ def api_sales_stats_by_product_level():
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
+        # carrying_26 has multiple rows per m_code (size/pattern
+        # variants), so a plain JOIN multiplies the metric by N.
+        # Dedupe to one row per m_code first — MIN per dimension is
+        # stable because the per-material attributes never change
+        # across the duplicate rows for the same m_code.
+        DEDUP_C = (
+            "(SELECT m_code,"
+            "        MIN(line)          AS line,"
+            "        MIN(product_group) AS product_group,"
+            "        MIN(pattern)       AS pattern,"
+            "        MIN(size)          AS size"
+            " FROM carrying_26 GROUP BY m_code) c"
+        )
+
         def _agg(table_sql, val_col, extra_clause=""):
             sql = (
                 f"SELECT {bucket_col} AS bucket, SUM(t.{val_col}) AS val "
                 f"FROM {table_sql} t "
-                f"JOIN carrying_26 c ON c.m_code = t.material "
+                f"JOIN {DEDUP_C} ON c.m_code = t.material "
                 f"{where_sql}{extra_clause} "
                 f"GROUP BY {bucket_col}"
             )
@@ -1560,7 +1574,25 @@ def api_sales_stats_by_product_level():
             return "(" + " OR ".join(parts) + ")"
 
         # sales bucket col: same dimension but via mat alias on sales side.
+        # Reuses the same dedup'd carrying subquery so the JOIN doesn't
+        # inflate qty when carrying_26 has multiple rows per m_code.
+        # Customer join with COMMON exclusion mirrors the State table
+        # so the per-bucket sales sum to the same TOTAL the State table
+        # shows in its footer.
+        # Same dedup'd carrying subquery, aliased as `mat` for the
+        # sales-side JOIN.  DEDUP_C ends with ') c', swap to ') mat'.
+        assert DEDUP_C.endswith(") c"), "DEDUP_C alias contract broken"
+        DEDUP_MAT = DEDUP_C[:-3] + ") mat"
         sales_bucket_col = bucket_col.replace("c.", "mat.")
+        sales_joins = (
+            f"JOIN {DEDUP_MAT} ON mat.m_code = s.material "
+            f"JOIN ("
+            f"  SELECT ship_to, MIN(bde_state) AS bde_state"
+            f"  FROM customer"
+            f"  WHERE bde_state IS NOT NULL AND bde_state != 'COMMON'"
+            f"  GROUP BY ship_to"
+            f") cus ON cus.ship_to = s.ship_to"
+        )
         sales_by_bucket = {}
         for label, periods in (("3m", _months_back(3)),
                                 ("6m", _months_back(6)),
@@ -1569,7 +1601,7 @@ def api_sales_stats_by_product_level():
             cur.execute(
                 f"SELECT {sales_bucket_col} AS bucket, SUM(s.qty) AS qty "
                 f"FROM sales_2526 s "
-                f"JOIN carrying_26 mat ON mat.m_code = s.material "
+                f"{sales_joins} "
                 f"{where_sql.replace('c.', 'mat.')} AND {pcond} "
                 f"GROUP BY {sales_bucket_col}",
                 all_params,
