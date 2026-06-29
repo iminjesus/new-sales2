@@ -509,7 +509,11 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
   width: auto !important; height: auto !important;
 }
 #stockSidePanel {
-  flex: 0 0 920px;
+  /* Cascade table now carries a State sub-column plus 12 metric
+     columns — at 920px the rightmost +Factory.idx kept getting
+     ellipsis-clipped, so push the map/table boundary further left
+     to give the table the room it needs. */
+  flex: 0 0 1120px;
   height: 100%;
   display: flex;
   flex-direction: column;
