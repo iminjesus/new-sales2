@@ -1569,22 +1569,33 @@ def api_sales_stats_by_product_level():
 
     all_wh     = anc_wh + extra_wh
     all_params = anc_p  + extra_p
-    where_sql  = "WHERE " + " AND ".join(all_wh)
+    # carrying_26 holds many rows per m_code (size / pattern / load-
+    # rating variants).  We have to dedupe to one row per m_code so
+    # the JOIN doesn't multiply stock / sales by N — but the filters
+    # MUST be applied *inside* the dedup subquery, not after.
+    #
+    # Why: an outer WHERE on MIN(size) loses any m_code whose MIN
+    # happens to be a different size than the one the user picked.
+    # E.g. carrying has m_code 9999 with sizes {"14X4", "185R14"};
+    # MIN(size) = "14X4" lexicographically, so an outer
+    # "WHERE c.size LIKE '%185R14%'" would drop m_code 9999 even
+    # though it really does carry 185R14 stock.  Moving the same
+    # condition inside the SELECT-from-carrying-then-GROUP-BY ensures
+    # MIN() is taken over rows that already match, so the dedup row
+    # is guaranteed to satisfy the filter.
+    inner_wh     = " AND ".join(w.replace("c.", "") for w in all_wh) or "1=1"
+    inner_params = list(all_params)
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
-        # carrying_26 has multiple rows per m_code (size/pattern
-        # variants), so a plain JOIN multiplies the metric by N.
-        # Dedupe to one row per m_code first — MIN per dimension is
-        # stable because the per-material attributes never change
-        # across the duplicate rows for the same m_code.
         DEDUP_C = (
             "(SELECT m_code,"
             "        MIN(line)          AS line,"
             "        MIN(product_group) AS product_group,"
             "        MIN(pattern)       AS pattern,"
             "        MIN(size)          AS size"
-            " FROM carrying_26 GROUP BY m_code) c"
+            f" FROM carrying_26 WHERE {inner_wh}"
+            " GROUP BY m_code) c"
         )
 
         # State table semantics carried over: plant code → physical
@@ -1597,16 +1608,19 @@ def api_sales_stats_by_product_level():
 
         def _agg(table_sql, val_col, extra_clause=""):
             """Returns {bucket: {state: qty}} grouped by both dims so
-            the cascade can show 4 state sub-rows per product row."""
+            the cascade can show 4 state sub-rows per product row.
+            Filters live inside DEDUP_C; the outer query only needs
+            extra_clause for table-specific predicates (incoming
+            exclusion, '42%' PO prefix, etc.)."""
             sql = (
                 f"SELECT {bucket_col} AS bucket, t.plant AS plant, "
                 f"       SUM(t.{val_col}) AS val "
                 f"FROM {table_sql} t "
                 f"JOIN {DEDUP_C} ON c.m_code = t.material "
-                f"{where_sql}{extra_clause} "
+                f"WHERE 1=1{extra_clause} "
                 f"GROUP BY {bucket_col}, t.plant"
             )
-            cur.execute(sql, all_params)
+            cur.execute(sql, inner_params)
             out = {}
             for r in cur.fetchall():
                 st = PLANT_STATE.get(r['plant'])
@@ -1665,13 +1679,8 @@ def api_sales_stats_by_product_level():
             return "(" + " OR ".join(parts) + ")"
 
         # sales bucket col: same dimension but via mat alias on sales side.
-        # Reuses the same dedup'd carrying subquery so the JOIN doesn't
-        # inflate qty when carrying_26 has multiple rows per m_code.
-        # Customer join with COMMON exclusion mirrors the State table
-        # so the per-bucket sales sum to the same TOTAL the State table
-        # shows in its footer.
-        # Same dedup'd carrying subquery, aliased as `mat` for the
-        # sales-side JOIN.  DEDUP_C ends with ') c', swap to ') mat'.
+        # Same filter-inside-the-dedup trick as DEDUP_C — we just
+        # rename the alias to `mat` so the outer JOIN doesn't collide.
         assert DEDUP_C.endswith(") c"), "DEDUP_C alias contract broken"
         DEDUP_MAT = DEDUP_C[:-3] + ") mat"
         sales_bucket_col = bucket_col.replace("c.", "mat.")
@@ -1696,9 +1705,9 @@ def api_sales_stats_by_product_level():
                 f"       SUM(s.qty) AS qty "
                 f"FROM sales_2526 s "
                 f"{sales_joins} "
-                f"{where_sql.replace('c.', 'mat.')} AND {pcond} "
+                f"WHERE {pcond} "
                 f"GROUP BY {sales_bucket_col}, cus.bde_state",
-                all_params,
+                inner_params,
             )
             # Divide the period sum by N to match the State table's
             # monthly-average semantics.
