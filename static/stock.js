@@ -241,6 +241,11 @@
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });
+    // Surface progress via body[data-loading] → reveals the floating
+    // #loadingBadge + flips the cursor so a filter click doesn't look
+    // like a frozen page.
+    if (disabled) document.body.setAttribute("data-loading", "1");
+    else          document.body.removeAttribute("data-loading");
   }
 
   const ORIGIN_COLOR = {

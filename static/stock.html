@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stock</title>
 
-  <link rel="stylesheet" href="/static/style.css?v=20260629g">
+  <link rel="stylesheet" href="/static/style.css?v=20260629h">
 
   <link
     rel="stylesheet"
@@ -104,6 +104,14 @@
 
   <div id="errbar" class="errbar" hidden></div>
 
+  <!-- Floating "Loading…" badge.  setFiltersDisabled(true) toggles
+       data-loading="1" on <body>; CSS slides the badge into view so
+       the user sees that a filter click is being processed. -->
+  <div id="loadingBadge" aria-hidden="true">
+    <span class="lb-spin"></span>
+    <span>Loading…</span>
+  </div>
+
   <div id="stockLayout">
     <!-- Left: map -->
     <div id="stockMapWrapper">
@@ -190,6 +198,6 @@
   })();
   </script>
 
-  <script src="/static/stock.js?v=20260629d" defer></script>
+  <script src="/static/stock.js?v=20260629e" defer></script>
 </body>
 </html>

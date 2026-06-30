@@ -368,6 +368,45 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
   max-width:85%;
   font-size:13px;
 }
+
+/* Floating loading badge — pinned top-center.  Hidden by default;
+   body[data-loading="1"] reveals it while a filter-driven refetch is
+   in flight, plus the cursor goes to wait so the user knows the
+   click registered and we're working on it. */
+#loadingBadge {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translate(-50%, -120%);
+  z-index: 10000;
+  display: flex; align-items: center; gap: 8px;
+  background: #1e3a8a; color: #fff;
+  border-radius: 18px;
+  padding: 6px 14px 6px 12px;
+  font-size: 12px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(30,58,138,0.35);
+  opacity: 0;
+  transition: transform 180ms ease, opacity 180ms ease;
+  pointer-events: none;
+}
+body[data-loading="1"] #loadingBadge {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+body[data-loading="1"] { cursor: progress; }
+body[data-loading="1"] .btn,
+body[data-loading="1"] .dd input,
+body[data-loading="1"] .dd-btn { cursor: progress !important; }
+
+#loadingBadge .lb-spin {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.35);
+  border-top-color: #fff;
+  animation: lbSpin 0.7s linear infinite;
+}
+@keyframes lbSpin { to { transform: rotate(360deg); } }
 /* First column text size in the KPI table */
 #kpiRegionGridWrap .kpi-table th:first-child,
 #kpiRegionGridWrap .kpi-table td:first-child {
