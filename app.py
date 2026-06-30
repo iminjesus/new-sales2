@@ -1440,38 +1440,55 @@ def api_cascade_ancestors():
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         if material:
+            # Pin only what's unambiguous.  A size like 185R14 often
+            # shows up under multiple patterns / product_groups (one
+            # m_code per variant); picking arbitrary ancestors and
+            # locking the cascade to them hides the other m_codes'
+            # stock and the user sees "No data".  Pin the line only
+            # when it's unique, leave pg / pattern empty so the
+            # cascade aggregates across every m_code carrying the
+            # size.
             cur.execute(
-                "SELECT line, product_group, pattern, size "
+                "SELECT DISTINCT line, product_group, pattern "
                 "FROM carrying_26 "
-                "WHERE line IN ('PCLT','TBR') AND size = %s "
-                "LIMIT 1",
+                "WHERE line IN ('PCLT','TBR') AND size = %s",
                 (material,),
             )
-            r = cur.fetchone()
-            if r:
-                return jsonify({
-                    "level":         "size",
-                    "line":          r["line"]          or "",
-                    "product_group": r["product_group"] or "",
-                    "pattern":       r["pattern"]       or "",
-                    "size":          r["size"]          or "",
-                })
+            rows = cur.fetchall()
+            if rows:
+                lines = {r["line"] for r in rows if r["line"]}
+                pgs   = {r["product_group"] for r in rows if r["product_group"]}
+                pats  = {r["pattern"] for r in rows if r["pattern"]}
+                if len(lines) == 1:
+                    return jsonify({
+                        "level":         "size",
+                        "line":          next(iter(lines)),
+                        "product_group": next(iter(pgs))  if len(pgs)  == 1 else "",
+                        "pattern":       next(iter(pats)) if len(pats) == 1 else "",
+                        "size":          material,
+                    })
+                # Spans both PCLT and TBR — fall back to the line root
+                # so the user can pick which side they meant.
+                return jsonify({"level": "line"})
         if pattern:
             cur.execute(
-                "SELECT line, product_group, pattern "
+                "SELECT DISTINCT line, product_group "
                 "FROM carrying_26 "
-                "WHERE line IN ('PCLT','TBR') AND pattern = %s "
-                "LIMIT 1",
+                "WHERE line IN ('PCLT','TBR') AND pattern = %s",
                 (pattern,),
             )
-            r = cur.fetchone()
-            if r:
-                return jsonify({
-                    "level":         "pattern",
-                    "line":          r["line"]          or "",
-                    "product_group": r["product_group"] or "",
-                    "pattern":       r["pattern"]       or "",
-                })
+            rows = cur.fetchall()
+            if rows:
+                lines = {r["line"] for r in rows if r["line"]}
+                pgs   = {r["product_group"] for r in rows if r["product_group"]}
+                if len(lines) == 1:
+                    return jsonify({
+                        "level":         "pattern",
+                        "line":          next(iter(lines)),
+                        "product_group": next(iter(pgs)) if len(pgs) == 1 else "",
+                        "pattern":       pattern,
+                    })
+                return jsonify({"level": "line"})
         if pg and pg != "ALL":
             cur.execute(
                 "SELECT line, product_group "
@@ -1533,13 +1550,14 @@ def api_sales_stats_by_product_level():
         if not line_anc:
             return jsonify({"error": "line ancestor required"}), 400
         anc_wh.append("c.line = %s"); anc_p.append(line_anc)
-        if level in ("pattern", "size"):
-            if not pg_anc:
-                return jsonify({"error": "product_group ancestor required"}), 400
+        # pg_anc and pat_anc are OPTIONAL — when the user reaches a
+        # deeper level via a search-box pick (e.g. Size = 185R14 with
+        # no Product Group / Pattern picked), we want the cascade to
+        # aggregate stock across every m_code carrying that size
+        # rather than locking to one arbitrary pattern's m_code.
+        if level in ("pattern", "size") and pg_anc:
             anc_wh.append("c.product_group = %s"); anc_p.append(pg_anc)
-        if level == "size":
-            if not pat_anc:
-                return jsonify({"error": "pattern ancestor required"}), 400
+        if level == "size" and pat_anc:
             anc_wh.append("c.pattern = %s"); anc_p.append(pat_anc)
     # Drop empty bucket labels — usually carrying_26 rows missing the
     # dimension; we don't want a blank row.

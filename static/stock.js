@@ -724,9 +724,22 @@
     if (lvl === "product_group") {
       cascadeState = { level: "line", line: "", pg: "", pat: "" };
     } else if (lvl === "pattern") {
-      cascadeState = { level: "product_group", line: cascadeState.line, pg: "", pat: "" };
+      // If pg was empty (size pick path), step all the way back to
+      // line so the user isn't stranded at an emptier intermediate.
+      if (!cascadeState.pg) {
+        cascadeState = { level: "line", line: "", pg: "", pat: "" };
+      } else {
+        cascadeState = { level: "product_group", line: cascadeState.line, pg: "", pat: "" };
+      }
     } else if (lvl === "size") {
-      cascadeState = { level: "pattern", line: cascadeState.line, pg: cascadeState.pg, pat: "" };
+      // size → pattern, but skip levels we never pinned.
+      if (cascadeState.pg && cascadeState.pat) {
+        cascadeState = { level: "pattern", line: cascadeState.line, pg: cascadeState.pg, pat: "" };
+      } else if (cascadeState.line) {
+        cascadeState = { level: "product_group", line: cascadeState.line, pg: "", pat: "" };
+      } else {
+        cascadeState = { level: "line", line: "", pg: "", pat: "" };
+      }
     } else {
       return;
     }
