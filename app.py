@@ -1586,6 +1586,9 @@ def api_sales_stats_by_product_level():
     inner_wh     = " AND ".join(w.replace("c.", "") for w in all_wh) or "1=1"
     inner_params = list(all_params)
 
+    debug_mode = (request.args.get("debug") == "1")
+    debug_dump = {} if debug_mode else None
+
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         DEDUP_C = (
@@ -1597,6 +1600,20 @@ def api_sales_stats_by_product_level():
             f" FROM carrying_26 WHERE {inner_wh}"
             " GROUP BY m_code) c"
         )
+        if debug_mode:
+            # Run the inner dedup standalone so we can see what
+            # m_codes it actually returns for the user's filter.
+            probe_sql = (
+                "SELECT m_code, MIN(line) AS line, MIN(product_group) AS pg, "
+                "MIN(pattern) AS pat, MIN(size) AS sz, COUNT(*) AS n_rows "
+                f"FROM carrying_26 WHERE {inner_wh} GROUP BY m_code LIMIT 20"
+            )
+            cur.execute(probe_sql, inner_params)
+            debug_dump["dedup_rows"] = cur.fetchall()
+            debug_dump["inner_wh"]   = inner_wh
+            debug_dump["inner_params"] = [str(p) for p in inner_params]
+            debug_dump["bucket_col"]   = bucket_col
+            debug_dump["level"]        = level
 
         # State table semantics carried over: plant code → physical
         # state, with SA / NT / TAS / ACT folded into the closest hub so
@@ -1777,7 +1794,16 @@ def api_sales_stats_by_product_level():
                 "factory_qty": int(round(tFac)),
                 "by_state":    states_out,
             })
-        return jsonify({"rows": rows_out, "level": level})
+        resp = {"rows": rows_out, "level": level}
+        if debug_mode:
+            debug_dump["stock_by"]   = stock_by
+            debug_dump["water_by"]   = water_by
+            debug_dump["factory_by"] = factory_by
+            debug_dump["cy_by"]      = cy_by
+            debug_dump["sales_by_bucket"] = sales_by_bucket
+            debug_dump["all_buckets"] = sorted(all_buckets)
+            resp["debug"] = debug_dump
+        return jsonify(resp)
     finally:
         cur.close(); conn.close()
 
