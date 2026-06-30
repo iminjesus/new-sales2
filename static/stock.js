@@ -237,7 +237,7 @@
       if (el) el.disabled = disabled;
     });
     // Dropdown toggle/clear buttons
-    ["pgBtn","patternBtn","patternClear","materialBtn","materialClear"].forEach(id => {
+    ["pgBtn","pgClear","patternBtn","patternClear","materialBtn","materialClear"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.disabled = disabled;
     });
@@ -904,6 +904,7 @@
     bindDropdown({
       inputId: "product_group",
       btnId: "pgBtn",
+      clearId: "pgClear",
       menuId: "pgMenu",
       getOptions: () => __PRODUCT_GROUP_OPTIONS,
       onPick: async (val) => {
