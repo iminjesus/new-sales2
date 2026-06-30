@@ -190,47 +190,39 @@ function buildRemarkable(j){
   const items = [];
 
   const sum = j.summary || {};
-  const mom = sum.mom_pct, yoy = sum.yoy_pct;
+  const v3  = sum.vs_avg3_pct;
 
-  // Total MoM / YoY swing if material (>=5%).
-  if (mom != null && Math.abs(mom) >= 5) {
-    const tone = mom > 0 ? "good" : "bad";
-    const dir  = mom > 0 ? "up" : "down";
+  // Total vs 3M avg if material (>= 5%).
+  if (v3 != null && Math.abs(v3) >= 5) {
+    const tone = v3 > 0 ? "good" : "bad";
+    const dir  = v3 > 0 ? "up" : "down";
     items.push({
-      score: Math.abs(mom) * 2,
-      chip: "MoM", tone,
-      line: `Total sales are <b>${dir} ${Math.abs(mom).toFixed(1)}%</b> vs last month (${unitVal(sum.this?.[metric])} vs ${unitVal(sum.prev?.[metric])}).`,
+      score: Math.abs(v3) * 2,
+      chip: "vs 3M avg", tone,
+      line: `Total sales are <b>${dir} ${Math.abs(v3).toFixed(1)}%</b> vs the 3-month average (${unitVal(sum.this?.[metric])} vs ${unitVal(sum.avg3?.[metric])}).`,
       detail: `<b>This month:</b> ${unitVal(sum.this?.[metric])}<br>
-               <b>Prev month:</b> ${unitVal(sum.prev?.[metric])}<br>
+               <b>3-month average:</b> ${unitVal(sum.avg3?.[metric])}<br>
+               <b>Prev month:</b> ${unitVal(sum.prev?.[metric])} (${fmtPct(sum.mom_pct)})<br>
                <b>Daily avg:</b> ${unitVal(sum.daily_avg)} across ${sum.working_days || "—"} working days.`
     });
   }
-  if (yoy != null && Math.abs(yoy) >= 5) {
-    const tone = yoy > 0 ? "good" : "bad";
-    const dir  = yoy > 0 ? "up" : "down";
-    items.push({
-      score: Math.abs(yoy) * 1.5,
-      chip: "YoY", tone,
-      line: `Year-over-year is <b>${dir} ${Math.abs(yoy).toFixed(1)}%</b> vs the same month last year.`,
-      detail: `<b>This month:</b> ${unitVal(sum.this?.[metric])}<br>
-               <b>Same month last year:</b> ${unitVal(sum.py?.[metric])}`
-    });
-  }
 
-  // Region: biggest YoY mover (positive AND negative).
-  const regions = (j.regions || []).filter(r => r.region && r.region !== "COMMON" && r.yoy_pct != null);
+  // Region: biggest vs-3M-avg mover.
+  const regions = (j.regions || []).filter(r => r.region && r.region !== "COMMON" && r.vs_avg3_pct != null);
   if (regions.length) {
-    const byYoy = [...regions].sort((a,b) => Math.abs(b.yoy_pct) - Math.abs(a.yoy_pct));
-    const top = byYoy[0];
-    if (top && Math.abs(top.yoy_pct) >= 10) {
-      const tone = top.yoy_pct > 0 ? "good" : "bad";
-      const dir  = top.yoy_pct > 0 ? "up" : "down";
+    const byAvg3 = [...regions].sort((a,b) => Math.abs(b.vs_avg3_pct) - Math.abs(a.vs_avg3_pct));
+    const top = byAvg3[0];
+    if (top && Math.abs(top.vs_avg3_pct) >= 10) {
+      const tone = top.vs_avg3_pct > 0 ? "good" : "bad";
+      const dir  = top.vs_avg3_pct > 0 ? "up" : "down";
       items.push({
-        score: Math.abs(top.yoy_pct) * 1.2,
+        score: Math.abs(top.vs_avg3_pct) * 1.2,
         chip: `Region · ${top.region}`, tone,
-        line: `<b>${esc(top.region)}</b> is <b>${dir} ${Math.abs(top.yoy_pct).toFixed(1)}% YoY</b> — biggest regional swing this month.`,
+        line: `<b>${esc(top.region)}</b> is <b>${dir} ${Math.abs(top.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> — biggest regional swing this month.`,
         detail: `<table>
           <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
+          <tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>
+          <tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>
           <tr><th>vs Prev M</th><td>${fmtPct(top.mom_pct)}</td></tr>
           <tr><th>vs Prev Y</th><td>${fmtPct(top.yoy_pct)}</td></tr>
           <tr><th>Share of total</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
@@ -239,123 +231,129 @@ function buildRemarkable(j){
     }
   }
 
-  // Product Group: biggest MoM mover among top 10 (filter tiny groups).
-  const pgs = (j.product_groups || []).filter(p => p.product_group && p.mom_pct != null && (p.this || 0) > 0);
+  // Product Group: biggest vs-3M-avg mover among top 10 (filter tiny).
+  const pgs = (j.product_groups || []).filter(p => p.product_group && p.vs_avg3_pct != null && (p.this || 0) > 0);
   if (pgs.length) {
-    const byMom = [...pgs].sort((a,b) => Math.abs(b.mom_pct) - Math.abs(a.mom_pct));
-    const top = byMom[0];
-    if (top && Math.abs(top.mom_pct) >= 30) {
-      const tone = top.mom_pct > 0 ? "good" : "bad";
-      const dir  = top.mom_pct > 0 ? "surged" : "dropped";
+    const byAvg3 = [...pgs].sort((a,b) => Math.abs(b.vs_avg3_pct) - Math.abs(a.vs_avg3_pct));
+    const top = byAvg3[0];
+    if (top && Math.abs(top.vs_avg3_pct) >= 30) {
+      const tone = top.vs_avg3_pct > 0 ? "good" : "bad";
+      const dir  = top.vs_avg3_pct > 0 ? "surged" : "dropped";
       items.push({
-        score: Math.abs(top.mom_pct),
+        score: Math.abs(top.vs_avg3_pct),
         chip: "Product", tone,
-        line: `<b>${esc(top.product_group)}</b> ${dir} <b>${Math.abs(top.mom_pct).toFixed(1)}% MoM</b> (now ${unitVal(top.this)}, ${top.share != null ? top.share.toFixed(1) + "%": "—"} share).`,
+        line: `<b>${esc(top.product_group)}</b> ${dir} <b>${Math.abs(top.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> (now ${unitVal(top.this)}, ${top.share != null ? top.share.toFixed(1) + "%": "—"} share).`,
         detail: `<table>
           <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
+          <tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>
+          <tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>
           <tr><th>vs Prev M</th><td>${fmtPct(top.mom_pct)}</td></tr>
           <tr><th>vs Prev Y</th><td>${fmtPct(top.yoy_pct)}</td></tr>
           <tr><th>Share</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
         </table>`
       });
     }
-    // Also flag the runner-up if it also swung hard in the OTHER direction.
-    if (byMom.length > 1) {
-      const second = byMom[1];
-      if (second && top && Math.sign(second.mom_pct) !== Math.sign(top.mom_pct)
-          && Math.abs(second.mom_pct) >= 30) {
-        const tone = second.mom_pct > 0 ? "good" : "bad";
-        const dir  = second.mom_pct > 0 ? "surged" : "dropped";
+    // Runner-up only if it moved hard in the OPPOSITE direction.
+    if (byAvg3.length > 1) {
+      const second = byAvg3[1];
+      if (second && top && Math.sign(second.vs_avg3_pct) !== Math.sign(top.vs_avg3_pct)
+          && Math.abs(second.vs_avg3_pct) >= 30) {
+        const tone = second.vs_avg3_pct > 0 ? "good" : "bad";
+        const dir  = second.vs_avg3_pct > 0 ? "surged" : "dropped";
         items.push({
-          score: Math.abs(second.mom_pct) * 0.9,
+          score: Math.abs(second.vs_avg3_pct) * 0.9,
           chip: "Product", tone,
-          line: `<b>${esc(second.product_group)}</b> ${dir} <b>${Math.abs(second.mom_pct).toFixed(1)}% MoM</b> — second-biggest product swing.`,
+          line: `<b>${esc(second.product_group)}</b> ${dir} <b>${Math.abs(second.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> — second-biggest product swing.`,
           detail: `<table>
             <tr><th>This month</th><td>${unitVal(second.this)}</td></tr>
+            <tr><th>3M average</th><td>${unitVal(second.avg3)}</td></tr>
+            <tr><th>vs 3M avg</th><td>${fmtPct(second.vs_avg3_pct)}</td></tr>
             <tr><th>vs Prev M</th><td>${fmtPct(second.mom_pct)}</td></tr>
-            <tr><th>vs Prev Y</th><td>${fmtPct(second.yoy_pct)}</td></tr>
           </table>`
         });
       }
     }
   }
 
-  // Promo vs Non-Promo share swing — flag a notable shift in the
-  // mix between promo-driven and organic sales.
+  // Promo vs Non-Promo share swing — vs 3M-avg share (not prev).
   const agg = j.promo_aggregate;
-  if (agg && agg.promo_share_this != null && agg.promo_share_prev != null) {
-    const delta = +(agg.promo_share_this - agg.promo_share_prev).toFixed(1);
+  if (agg && agg.promo_share_this != null && agg.promo_share_avg3 != null) {
+    const delta = +(agg.promo_share_this - agg.promo_share_avg3).toFixed(1);
     if (Math.abs(delta) >= 3) {
       const tone = delta > 0 ? "good" : "bad";
       const dir  = delta > 0 ? "up" : "down";
       items.push({
         score: Math.abs(delta) * 4,
         chip: "Promo mix", tone,
-        line: `Promo share is <b>${dir} ${Math.abs(delta).toFixed(1)} ppt</b> (${agg.promo_share_this.toFixed(1)}% vs ${agg.promo_share_prev.toFixed(1)}% last month).`,
+        line: `Promo share is <b>${dir} ${Math.abs(delta).toFixed(1)} ppt vs 3M avg</b> (${agg.promo_share_this.toFixed(1)}% vs 3M ${agg.promo_share_avg3.toFixed(1)}%).`,
         detail: `<table>
           <tr><th>Promo this</th><td>${unitVal(agg.promo_this)} (${agg.promo_share_this.toFixed(1)}%)</td></tr>
-          <tr><th>Promo prev</th><td>${unitVal(agg.promo_prev)} (${agg.promo_share_prev.toFixed(1)}%)</td></tr>
+          <tr><th>Promo 3M avg</th><td>${unitVal(agg.promo_avg3)} (${agg.promo_share_avg3.toFixed(1)}%)</td></tr>
           <tr><th>Non-Promo this</th><td>${unitVal(agg.non_promo_this)} (${agg.non_promo_share_this != null ? agg.non_promo_share_this.toFixed(1) + "%" : "—"})</td></tr>
-          <tr><th>Promo MoM</th><td>${fmtPct(agg.promo_mom_pct)}</td></tr>
-          <tr><th>Non-Promo MoM</th><td>${fmtPct(agg.non_promo_mom_pct)}</td></tr>
+          <tr><th>Promo vs 3M</th><td>${fmtPct(agg.promo_vs_avg3_pct)}</td></tr>
+          <tr><th>Non-Promo vs 3M</th><td>${fmtPct(agg.non_promo_vs_avg3_pct)}</td></tr>
         </table>`
       });
     }
   }
 
-  // Per-promo: biggest MoM among 443 / iON / TrueBlue.
-  const promos = (j.promotions || []).filter(p => p.mom_pct != null && p.participants > 0);
+  // Per-promo: biggest vs-3M-avg mover among 443 / iON / TrueBlue.
+  const promos = (j.promotions || []).filter(p => p.vs_avg3_pct != null && (p.this || 0) > 0);
   if (promos.length) {
-    const byMom = [...promos].sort((a,b) => Math.abs(b.mom_pct) - Math.abs(a.mom_pct));
-    const top = byMom[0];
-    if (top && Math.abs(top.mom_pct) >= 5) {
-      const tone = top.mom_pct > 0 ? "good" : "bad";
-      const dir  = top.mom_pct > 0 ? "up" : "down";
+    const byAvg3 = [...promos].sort((a,b) => Math.abs(b.vs_avg3_pct) - Math.abs(a.vs_avg3_pct));
+    const top = byAvg3[0];
+    if (top && Math.abs(top.vs_avg3_pct) >= 5) {
+      const tone = top.vs_avg3_pct > 0 ? "good" : "bad";
+      const dir  = top.vs_avg3_pct > 0 ? "up" : "down";
       items.push({
-        score: Math.abs(top.mom_pct) * 1.5,
+        score: Math.abs(top.vs_avg3_pct) * 1.5,
         chip: `Promo · ${top.promo}`, tone,
-        line: `<b>${esc(top.promo)}</b> is <b>${dir} ${Math.abs(top.mom_pct).toFixed(1)}% MoM</b> (${unitVal(top.this)}, ${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "% of total promo" : ""}).`,
+        line: `<b>${esc(top.promo)}</b> is <b>${dir} ${Math.abs(top.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> (${unitVal(top.this)}, ${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "% of total promo" : ""}).`,
         detail: `<table>
           <tr><th>Participants</th><td>${top.participants} / ${top.total_shops}</td></tr>
           <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
-          <tr><th>Prev month</th><td>${unitVal(top.prev)}</td></tr>
+          <tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>
+          <tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>
           <tr><th>MoM</th><td>${fmtPct(top.mom_pct)}</td></tr>
-          <tr><th>Share of Promo</th><td>${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "%" : "—"}${top.share_of_promo_prev != null ? " (prev " + top.share_of_promo_prev.toFixed(1) + "%)" : ""}</td></tr>
+          <tr><th>Share of Promo</th><td>${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "%" : "—"}${top.share_of_promo_avg3 != null ? " (3M " + top.share_of_promo_avg3.toFixed(1) + "%)" : ""}</td></tr>
           <tr><th>Share of Total</th><td>${top.share_of_total_this != null ? top.share_of_total_this.toFixed(1) + "%" : "—"}</td></tr>
         </table>`
       });
     }
   }
 
-  // Sold-to: biggest single gainer / loser.
+  // Sold-to: biggest gainer / loser vs 3M avg.  Backend exposes
+  // sold_to.gainers_vs_avg3 / losers_vs_avg3 (3-month per-sold_to
+  // average computed alongside the existing MoM gainers/losers).
   const sold = j.sold_to || {};
-  const gainers = sold.gainers || [], losers = sold.losers || [];
-  if (gainers.length) {
-    const g = gainers[0];
+  const gainersA = sold.gainers_vs_avg3 || [];
+  const losersA  = sold.losers_vs_avg3  || [];
+  if (gainersA.length) {
+    const g = gainersA[0];
     if (g && g.delta != null) {
       items.push({
-        score: 30, // fixed mid-priority
-        chip: "Customer", tone: "good",
-        line: `<b>${esc(g.name)}</b> is the month's top gainer — added <b>${unitVal(g.delta)}</b> (${fmtPct(g.delta_pct)}).`,
+        score: 30,
+        chip: "Customer · vs 3M", tone: "good",
+        line: `<b>${esc(g.name)}</b> is the month's biggest gainer vs 3M avg — added <b>${unitVal(g.delta)}</b> (${fmtPct(g.delta_pct)}).`,
         detail: `<table>
           <tr><th>Sold-to</th><td>${esc(g.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;">#${esc(g.sold_to)}</span></td></tr>
-          <tr><th>Prev month</th><td>${unitVal(g.prev)}</td></tr>
+          <tr><th>3M average</th><td>${unitVal(g.avg3)}</td></tr>
           <tr><th>This month</th><td>${unitVal(g.this)}</td></tr>
           <tr><th>Delta</th><td><span class="delta-up">+${unitVal(g.delta)}</span> (${fmtPct(g.delta_pct)})</td></tr>
         </table>`
       });
     }
   }
-  if (losers.length) {
-    const l = losers[0];
+  if (losersA.length) {
+    const l = losersA[0];
     if (l && l.delta != null) {
       items.push({
         score: 30,
-        chip: "Customer", tone: "bad",
-        line: `<b>${esc(l.name)}</b> fell the most — <b>${unitVal(l.delta)}</b> (${fmtPct(l.delta_pct)}) vs last month.`,
+        chip: "Customer · vs 3M", tone: "bad",
+        line: `<b>${esc(l.name)}</b> fell the most vs 3M avg — <b>${unitVal(l.delta)}</b> (${fmtPct(l.delta_pct)}).`,
         detail: `<table>
           <tr><th>Sold-to</th><td>${esc(l.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;">#${esc(l.sold_to)}</span></td></tr>
-          <tr><th>Prev month</th><td>${unitVal(l.prev)}</td></tr>
+          <tr><th>3M average</th><td>${unitVal(l.avg3)}</td></tr>
           <tr><th>This month</th><td>${unitVal(l.this)}</td></tr>
           <tr><th>Delta</th><td><span class="delta-dn">${unitVal(l.delta)}</span> (${fmtPct(l.delta_pct)})</td></tr>
         </table>`

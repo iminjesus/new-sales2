@@ -7193,6 +7193,35 @@ def api_monthly_highlights():
         losers  = sorted([r for r in rows if (r["delta"] or 0) < 0],
                          key=lambda r: r["delta"])[:30]
 
+        # Sold-to vs 3M-avg variant: per-sold_to 3-month average over
+        # M-1 / M-2 / M-3 (reuses trailing3 from the top of the
+        # handler).  Same ranking + top-30 cut as the MoM gainers.
+        trailing3_sold = [per_sold_to(y, m) for (y, m) in trailing3]
+        rows_avg3 = []
+        candidates_a = set()
+        for d in trailing3_sold:
+            candidates_a |= set(d.keys())
+        candidates_a |= set(tm.keys())
+        for st in candidates_a:
+            if not st:
+                continue
+            tv = tm.get(st, {}).get(metric, 0)
+            avg3 = sum(d.get(st, {}).get(metric, 0) for d in trailing3_sold) / 3.0
+            rows_avg3.append({
+                "sold_to":  st,
+                "name":     name_map.get(st, st),
+                "this":     round(tv, 2),
+                "avg3":     round(avg3, 2),
+                "delta":    round(tv - avg3, 2),
+                "delta_pct": _highlights_pct(tv, avg3),
+            })
+        gainers_vs_avg3 = sorted(
+            [r for r in rows_avg3 if (r["delta"] or 0) > 0],
+            key=lambda r: -r["delta"])[:30]
+        losers_vs_avg3 = sorted(
+            [r for r in rows_avg3 if (r["delta"] or 0) < 0],
+            key=lambda r: r["delta"])[:30]
+
         # Newly Active = no sales in last 3 months, positive this month.
         # Newly Silent = positive prev month, zero this month.
         newly_active = []
@@ -7246,10 +7275,12 @@ def api_monthly_highlights():
             "promotions":     promotions,
             "promo_aggregate": promo_aggregate,
             "sold_to": {
-                "gainers":       gainers,
-                "losers":        losers,
-                "newly_active":  newly_active,
-                "newly_silent":  newly_silent,
+                "gainers":          gainers,
+                "losers":           losers,
+                "gainers_vs_avg3":  gainers_vs_avg3,
+                "losers_vs_avg3":   losers_vs_avg3,
+                "newly_active":     newly_active,
+                "newly_silent":     newly_silent,
                 "notes": {
                     "gainers_limit": 30,
                     "losers_limit":  30,
