@@ -6783,6 +6783,19 @@ def api_monthly_highlights():
         prev_year, prev_month = year, month - 1
     py_year, py_month = year - 1, month
 
+    # Trailing 3-month window (M-1, M-2, M-3) — the three months
+    # *before* the requested one, used for the "vs 3M avg" comparison
+    # in every section.
+    def _months_back(n):
+        out, y, m = [], year, month
+        for _ in range(n):
+            m -= 1
+            if m == 0:
+                m = 12; y -= 1
+            out.append((y, m))
+        return out
+    trailing3 = _months_back(3)
+
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
 
@@ -6886,13 +6899,21 @@ def api_monthly_highlights():
         this_t = totals(year, month)
         prev_t = totals(prev_year, prev_month)
         py_t   = totals(py_year, py_month)
+        # 3-month trailing average.  Reuses totals() per month so the
+        # day-column probe / source-table selection stays consistent
+        # with the M-1 / YoY paths.
+        trailing3_totals = [totals(y, m) for (y, m) in trailing3]
+        avg3_v = sum(t[metric] for t in trailing3_totals) / 3.0
         this_v = this_t[metric]; prev_v = prev_t[metric]; py_v = py_t[metric]
         summary = {
             "this":         this_t,
             "prev":         prev_t,
             "py":           py_t,
+            "avg3":         {"qty": sum(t["qty"] for t in trailing3_totals) / 3.0,
+                             "amt": sum(t["amt"] for t in trailing3_totals) / 3.0},
             "mom_pct":      _highlights_pct(this_v, prev_v),
             "yoy_pct":      _highlights_pct(this_v, py_v),
+            "vs_avg3_pct":  _highlights_pct(this_v, avg3_v),
             "working_days": this_t["days"],
             "daily_avg":    (this_v / this_t["days"]) if this_t["days"] > 0 else None,
         }
@@ -6901,7 +6922,12 @@ def api_monthly_highlights():
         this_reg = per_region(year, month)
         prev_reg = per_region(prev_year, prev_month)
         py_reg   = per_region(py_year, py_month)
+        trailing3_reg = [per_region(y, m) for (y, m) in trailing3]
+        def _reg_avg3(r):
+            return sum(d.get(r, {}).get(metric, 0) for d in trailing3_reg) / 3.0
         all_regions = set(this_reg) | set(prev_reg) | set(py_reg)
+        for d in trailing3_reg:
+            all_regions |= set(d)
         # Stable order: standard 4 first, COMMON last.
         order = ["NSW", "QLD", "VIC", "WA", "COMMON"]
         ordered = [r for r in order if r in all_regions] + [r for r in all_regions if r not in order]
@@ -6911,13 +6937,16 @@ def api_monthly_highlights():
             tv = this_reg.get(r, {}).get(metric, 0)
             pv = prev_reg.get(r, {}).get(metric, 0)
             yv = py_reg.get(r, {}).get(metric, 0)
+            av = _reg_avg3(r)
             regions.append({
                 "region":  r,
                 "this":    round(tv, 2),
                 "prev":    round(pv, 2),
                 "py":      round(yv, 2),
+                "avg3":    round(av, 2),
                 "mom_pct": _highlights_pct(tv, pv),
                 "yoy_pct": _highlights_pct(tv, yv),
+                "vs_avg3_pct": _highlights_pct(tv, av),
                 "share":   round(tv / total_metric * 100, 1),
             })
 
@@ -6925,19 +6954,25 @@ def api_monthly_highlights():
         this_pg = per_product_group(year, month)
         prev_pg = per_product_group(prev_year, prev_month)
         py_pg   = per_product_group(py_year, py_month)
+        trailing3_pg = [per_product_group(y, m) for (y, m) in trailing3]
+        def _pg_avg3(pg):
+            return sum(d.get(pg, {}).get(metric, 0) for d in trailing3_pg) / 3.0
         pg_total = sum(d.get(metric, 0) for d in this_pg.values()) or 1
         pg_rows = []
         for pg, d in this_pg.items():
             tv = d.get(metric, 0)
             pv = prev_pg.get(pg, {}).get(metric, 0)
             yv = py_pg.get(pg, {}).get(metric, 0)
+            av = _pg_avg3(pg)
             pg_rows.append({
                 "product_group": pg,
                 "this":   round(tv, 2),
                 "prev":   round(pv, 2),
                 "py":     round(yv, 2),
+                "avg3":   round(av, 2),
                 "mom_pct": _highlights_pct(tv, pv),
                 "yoy_pct": _highlights_pct(tv, yv),
+                "vs_avg3_pct": _highlights_pct(tv, av),
                 "share":   round(tv / pg_total * 100, 1),
             })
         pg_rows.sort(key=lambda r: -(r["this"] or 0))
@@ -7008,11 +7043,22 @@ def api_monthly_highlights():
             prev_tbl, prev_where, prev_ps = _highlights_src_for(
                 cur, prev_year, prev_month)
 
+            # Precompute per_sold_to + month-source for each trailing
+            # month so the 3M-average loop doesn't requery per promo.
+            trailing3_pst = [per_sold_to(y, m) for (y, m) in trailing3]
+            trailing3_src = [_highlights_src_for(cur, y, m)
+                             for (y, m) in trailing3]
+            trailing3_all = [sum(d.get(metric, 0) for d in pst.values())
+                             for pst in trailing3_pst]
+            avg3_all = sum(trailing3_all) / 3.0
+
             # All-promo (deduped union of participants across the three
             # promos) so Promo vs Non-Promo isn't double-counted when a
             # shop qualifies for multiple promos in the same month.
             promo_participants_this = set()
             promo_participants_prev = set()
+            # Same for trailing months — one deduped union per month.
+            trailing3_promo_part = [set() for _ in trailing3]
 
             for promo_name in ANALYZED_PROMOS:
                 participants_this = _participants_for(
@@ -7026,12 +7072,28 @@ def api_monthly_highlights():
 
                 p_this = sum(tm.get(st, {}).get(metric, 0) for st in participants_this)
                 p_prev = sum(pm.get(st, {}).get(metric, 0) for st in participants_prev)
+
+                # Trailing 3M: per month, find that month's participants,
+                # sum their qty.  Average across the three months.
+                p_trailing = []
+                for idx, (y, m) in enumerate(trailing3):
+                    src = trailing3_src[idx]
+                    if not src or not src[0]:
+                        p_trailing.append(0.0); continue
+                    parts = _participants_for(
+                        promo_name, src[0], src[1], src[2], y, m)
+                    trailing3_promo_part[idx] |= parts
+                    pst = trailing3_pst[idx]
+                    p_trailing.append(
+                        sum(pst.get(st, {}).get(metric, 0) for st in parts))
+                p_avg3 = sum(p_trailing) / 3.0
+
                 # 443 / TrueBlue are always-on; iON kicks in only some
                 # months.  Hide the row when there's literally nothing
                 # to analyse (no participants either side, no qty).
                 if (promo_name == "iON"
                         and not participants_this and not participants_prev
-                        and p_this == 0 and p_prev == 0):
+                        and p_this == 0 and p_prev == 0 and p_avg3 == 0):
                     continue
                 promotions.append({
                     "promo":        promo_name,
@@ -7039,13 +7101,23 @@ def api_monthly_highlights():
                     "total_shops":  len({k for k in tm.keys() if k}),
                     "this":         round(p_this, 2),
                     "prev":         round(p_prev, 2),
+                    "avg3":         round(p_avg3, 2),
                     "mom_pct":      _highlights_pct(p_this, p_prev),
+                    "vs_avg3_pct":  _highlights_pct(p_this, p_avg3),
                 })
 
             promo_this = sum(tm.get(st, {}).get(metric, 0) for st in promo_participants_this)
             promo_prev = sum(pm.get(st, {}).get(metric, 0) for st in promo_participants_prev)
             non_promo_this = max(all_this - promo_this, 0)
             non_promo_prev = max(all_prev - promo_prev, 0)
+            # 3M-average aggregate uses each month's deduped promo set.
+            trailing3_promo_qty = [
+                sum(trailing3_pst[i].get(st, {}).get(metric, 0)
+                    for st in trailing3_promo_part[i])
+                for i in range(3)
+            ]
+            avg3_promo     = sum(trailing3_promo_qty) / 3.0
+            avg3_non_promo = max(avg3_all - avg3_promo, 0)
 
             def _share(n, d):
                 return round(n / d * 100, 1) if d else None
@@ -7053,24 +7125,33 @@ def api_monthly_highlights():
             promo_aggregate = {
                 "total_this":     round(all_this, 2),
                 "total_prev":     round(all_prev, 2),
+                "total_avg3":     round(avg3_all, 2),
                 "promo_this":     round(promo_this, 2),
                 "promo_prev":     round(promo_prev, 2),
+                "promo_avg3":     round(avg3_promo, 2),
                 "non_promo_this": round(non_promo_this, 2),
                 "non_promo_prev": round(non_promo_prev, 2),
-                "promo_mom_pct":      _highlights_pct(promo_this, promo_prev),
-                "non_promo_mom_pct":  _highlights_pct(non_promo_this, non_promo_prev),
+                "non_promo_avg3": round(avg3_non_promo, 2),
+                "promo_mom_pct":          _highlights_pct(promo_this, promo_prev),
+                "promo_vs_avg3_pct":      _highlights_pct(promo_this, avg3_promo),
+                "non_promo_mom_pct":      _highlights_pct(non_promo_this, non_promo_prev),
+                "non_promo_vs_avg3_pct":  _highlights_pct(non_promo_this, avg3_non_promo),
                 "promo_share_this":      _share(promo_this,     all_this),
                 "promo_share_prev":      _share(promo_prev,     all_prev),
+                "promo_share_avg3":      _share(avg3_promo,     avg3_all),
                 "non_promo_share_this":  _share(non_promo_this, all_this),
                 "non_promo_share_prev":  _share(non_promo_prev, all_prev),
+                "non_promo_share_avg3":  _share(avg3_non_promo, avg3_all),
             }
 
-            # Per-promo share within total promotion (this and prev).
+            # Per-promo share within total promotion (this / prev / avg3).
             for p in promotions:
                 p["share_of_promo_this"] = _share(p["this"], promo_this)
                 p["share_of_promo_prev"] = _share(p["prev"], promo_prev)
+                p["share_of_promo_avg3"] = _share(p["avg3"], avg3_promo)
                 p["share_of_total_this"] = _share(p["this"], all_this)
                 p["share_of_total_prev"] = _share(p["prev"], all_prev)
+                p["share_of_total_avg3"] = _share(p["avg3"], avg3_all)
 
         # ── ⑤ Sold-to movement ────────────────────────────────────
         tm = per_sold_to(year, month)
