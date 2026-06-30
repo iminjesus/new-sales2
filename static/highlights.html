@@ -54,6 +54,41 @@ td.name{font-weight:500;color:#1e3a5f}
 .status-msg{padding:30px;text-align:center;color:#6b7280;font-size:13px}
 .status-msg.err{color:#dc2626;font-weight:600}
 
+/* Floating loading badge — pinned top-center while a fetch is in
+   flight.  Highlights queries can take several seconds when a half-
+   year or state filter is on, so the user needs a clear "we're
+   working on it" signal between the click and the new render. */
+#loadingBadge {
+  position: fixed; top: 12px; left: 50%;
+  transform: translate(-50%, -120%);
+  z-index: 10000;
+  display: flex; align-items: center; gap: 8px;
+  background: #1e3a8a; color: #fff;
+  border-radius: 18px; padding: 6px 14px 6px 12px;
+  font-size: 12px; font-weight: 600;
+  box-shadow: 0 4px 14px rgba(30,58,138,0.35);
+  opacity: 0;
+  transition: transform 180ms ease, opacity 180ms ease;
+  pointer-events: none;
+}
+body[data-loading="1"] #loadingBadge {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+body[data-loading="1"] { cursor: progress; }
+body[data-loading="1"] .toolbar button,
+body[data-loading="1"] .toolbar select { cursor: progress !important; opacity: 0.65; pointer-events: none; }
+body[data-loading="1"] #wrap { opacity: 0.55; transition: opacity 120ms ease; pointer-events: none; }
+#loadingBadge .lb-spin {
+  display: inline-block;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.35);
+  border-top-color: #fff;
+  animation: lbSpin 0.7s linear infinite;
+}
+@keyframes lbSpin { to { transform: rotate(360deg); } }
+
 /* Remarkable card — one-sentence headlines that expand to detail.
    Each item is a <details>: native browser expand/collapse + zero
    JS state to manage.  Summary line stays compact; the detail
@@ -127,6 +162,11 @@ td.name{font-weight:500;color:#1e3a5f}
   </div>
 </div>
 
+<div id="loadingBadge" aria-hidden="true">
+  <span class="lb-spin"></span>
+  <span>Loading highlights…</span>
+</div>
+
 <div class="wrap" id="wrap">
   <div class="status-msg" id="status">Loading…</div>
 </div>
@@ -170,6 +210,10 @@ async function load(){
   const wrap = document.getElementById("wrap");
   const status = document.getElementById("status");
   if (status) { status.className = "status-msg"; status.textContent = "Loading…"; status.style.display = ""; }
+  // Flip body[data-loading] so the floating badge slides in and the
+  // previously-rendered cards dim — half-year + state filter queries
+  // can take several seconds and the page used to look frozen.
+  document.body.setAttribute("data-loading", "1");
   const month = document.getElementById("monthSel").value;
   try {
     const stateQs = stateFilter ? `&state=${encodeURIComponent(stateFilter)}` : "";
@@ -179,6 +223,8 @@ async function load(){
     render(j);
   } catch (e) {
     if (status) { status.className = "status-msg err"; status.textContent = "Error: " + e.message; }
+  } finally {
+    document.body.removeAttribute("data-loading");
   }
 }
 
