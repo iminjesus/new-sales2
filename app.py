@@ -6943,39 +6943,30 @@ def api_monthly_highlights():
         pg_rows.sort(key=lambda r: -(r["this"] or 0))
         product_groups = pg_rows[:10]
 
-        # ── ④ Promotion — counts + lift ppt vs non-participating ───
+        # ── ④ Promotion ─ MoM per promo + Promo vs Non-Promo share ─
+        # Per request, restricted to the three real promos the team
+        # actively analyses (443 / iON / TrueBlue).  443_beforeTrueblue
+        # is a backfill artefact for pre-TrueBlue 2025 months and is
+        # excluded from the highlights view.
+        ANALYZED_PROMOS = ["443", "iON", "TrueBlue"]
         promotions = []
+        promo_aggregate = None   # {promo: X, non_promo: Y, share, ...}
         this_tbl, this_where, this_ps = _highlights_src_for(cur, year, month)
         if this_tbl:
-            # We compute lift as (participating MoM%) - (non-participating MoM%).
-            # Need: for each promo, the set of sold_to that qualified this
-            # month, then sum their this/prev month metric vs everyone else's.
-            ym_int = year * 100 + month
-            # Distinct promos in promo_customer with a non-zero match.
-            try:
-                cur.execute("""
-                    SELECT DISTINCT promo FROM promo_customer
-                    WHERE promo IS NOT NULL AND TRIM(promo) <> ''
-                    ORDER BY promo
-                """)
-                promo_list = [r["promo"] for r in cur.fetchall()]
-            except Exception:
-                promo_list = []
+            ym_year_lit  = year
+            ym_month_lit = month
 
-            # Build a single "this-month sales row matches promo X" subquery
-            # and fan out per promo.  Keeps the query budget bounded.
-            for promo_name in promo_list:
-                # Sold_tos qualifying this month for this promo.
-                day_join = "" if this_tbl == "sales_thismonth" else ""
-                ym_year_lit  = year
-                ym_month_lit = month
+            def _participants_for(promo_name, src_tbl, src_where, src_ps,
+                                  yy, mm):
+                """Sold_tos qualifying for `promo_name` in the given month
+                source.  Same match logic as the original ④ query."""
                 try:
                     cur.execute(
                         f"""SELECT DISTINCT s.sold_to AS sold_to
-                            FROM {this_tbl} s
+                            FROM {src_tbl} s
                             LEFT JOIN carrying_26 mat ON mat.m_code = s.material
                             LEFT JOIN customer    cus ON cus.ship_to = s.ship_to
-                            {this_where + (' AND ' if this_where else 'WHERE ')}
+                            {src_where + (' AND ' if src_where else 'WHERE ')}
                               mat.line = 'PCLT'
                               AND EXISTS (
                                 SELECT 1 FROM promo_customer pc
@@ -6993,52 +6984,86 @@ def api_monthly_highlights():
                                     OR (
                                       (pp.product_group = '' OR mat.product_group = pp.product_group)
                                       AND (pp.start_date IS NULL
-                                           OR ({ym_year_lit} * 100 + {ym_month_lit}) >=
+                                           OR ({yy} * 100 + {mm}) >=
                                               (YEAR(pp.start_date)*100 + MONTH(pp.start_date)))
                                       AND (pp.end_date IS NULL
-                                           OR ({ym_year_lit} * 100 + {ym_month_lit}) <=
+                                           OR ({yy} * 100 + {mm}) <=
                                               (YEAR(pp.end_date)*100 + MONTH(pp.end_date)))
                                       AND (pp.material = '' OR pp.material = s.material)
                                     )
                                   )
                               )
                         """,
-                        tuple(this_ps) + (promo_name,)
+                        tuple(src_ps) + (promo_name,)
                     )
-                    participants = {r["sold_to"] for r in cur.fetchall() if r["sold_to"]}
+                    return {r["sold_to"] for r in cur.fetchall() if r["sold_to"]}
                 except Exception:
-                    participants = set()
+                    return set()
 
-                # Per-sold_to totals for this + prev month — already
-                # collected above for the sold-to movement section.
-                # Reuse if already computed below; otherwise compute now.
-                # (Keep call independent for clarity.)
-                pass
+            tm = per_sold_to(year, month)
+            pm = per_sold_to(prev_year, prev_month)
+            all_this = sum((d.get(metric, 0) for d in tm.values()))
+            all_prev = sum((d.get(metric, 0) for d in pm.values()))
 
-                # Aggregate metric for participating vs non-participating.
-                tm = per_sold_to(year, month)
-                pm = per_sold_to(prev_year, prev_month)
-                part_this = sum((tm.get(st, {}).get(metric, 0) for st in participants))
-                part_prev = sum((pm.get(st, {}).get(metric, 0) for st in participants))
-                all_this  = sum((d.get(metric, 0) for d in tm.values()))
-                all_prev  = sum((d.get(metric, 0) for d in pm.values()))
-                non_this  = all_this - part_this
-                non_prev  = all_prev - part_prev
+            prev_tbl, prev_where, prev_ps = _highlights_src_for(
+                cur, prev_year, prev_month)
 
+            # All-promo (deduped union of participants across the three
+            # promos) so Promo vs Non-Promo isn't double-counted when a
+            # shop qualifies for multiple promos in the same month.
+            promo_participants_this = set()
+            promo_participants_prev = set()
+
+            for promo_name in ANALYZED_PROMOS:
+                participants_this = _participants_for(
+                    promo_name, this_tbl, this_where, this_ps, year, month)
+                participants_prev = (_participants_for(
+                    promo_name, prev_tbl, prev_where, prev_ps,
+                    prev_year, prev_month) if prev_tbl else set())
+
+                promo_participants_this |= participants_this
+                promo_participants_prev |= participants_prev
+
+                p_this = sum(tm.get(st, {}).get(metric, 0) for st in participants_this)
+                p_prev = sum(pm.get(st, {}).get(metric, 0) for st in participants_prev)
                 promotions.append({
-                    "promo":           promo_name,
-                    "participants":    len(participants),
-                    "total_shops":     len({k for k in tm.keys() if k}),
-                    "this":            round(part_this, 2),
-                    "prev":            round(part_prev, 2),
-                    "part_mom_pct":    _highlights_pct(part_this, part_prev),
-                    "non_part_mom_pct":_highlights_pct(non_this, non_prev),
+                    "promo":        promo_name,
+                    "participants": len(participants_this),
+                    "total_shops":  len({k for k in tm.keys() if k}),
+                    "this":         round(p_this, 2),
+                    "prev":         round(p_prev, 2),
+                    "mom_pct":      _highlights_pct(p_this, p_prev),
                 })
-            # Lift ppt is part − non-part once both exist.
+
+            promo_this = sum(tm.get(st, {}).get(metric, 0) for st in promo_participants_this)
+            promo_prev = sum(pm.get(st, {}).get(metric, 0) for st in promo_participants_prev)
+            non_promo_this = max(all_this - promo_this, 0)
+            non_promo_prev = max(all_prev - promo_prev, 0)
+
+            def _share(n, d):
+                return round(n / d * 100, 1) if d else None
+
+            promo_aggregate = {
+                "total_this":     round(all_this, 2),
+                "total_prev":     round(all_prev, 2),
+                "promo_this":     round(promo_this, 2),
+                "promo_prev":     round(promo_prev, 2),
+                "non_promo_this": round(non_promo_this, 2),
+                "non_promo_prev": round(non_promo_prev, 2),
+                "promo_mom_pct":      _highlights_pct(promo_this, promo_prev),
+                "non_promo_mom_pct":  _highlights_pct(non_promo_this, non_promo_prev),
+                "promo_share_this":      _share(promo_this,     all_this),
+                "promo_share_prev":      _share(promo_prev,     all_prev),
+                "non_promo_share_this":  _share(non_promo_this, all_this),
+                "non_promo_share_prev":  _share(non_promo_prev, all_prev),
+            }
+
+            # Per-promo share within total promotion (this and prev).
             for p in promotions:
-                a = p.get("part_mom_pct")
-                b = p.get("non_part_mom_pct")
-                p["lift_ppt"] = round(a - b, 1) if (a is not None and b is not None) else None
+                p["share_of_promo_this"] = _share(p["this"], promo_this)
+                p["share_of_promo_prev"] = _share(p["prev"], promo_prev)
+                p["share_of_total_this"] = _share(p["this"], all_this)
+                p["share_of_total_prev"] = _share(p["prev"], all_prev)
 
         # ── ⑤ Sold-to movement ────────────────────────────────────
         tm = per_sold_to(year, month)
@@ -7131,6 +7156,7 @@ def api_monthly_highlights():
             "regions":        regions,
             "product_groups": product_groups,
             "promotions":     promotions,
+            "promo_aggregate": promo_aggregate,
             "sold_to": {
                 "gainers":       gainers,
                 "losers":        losers,

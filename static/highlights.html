@@ -280,27 +280,49 @@ function buildRemarkable(j){
     }
   }
 
-  // Promotion: biggest lift (positive OR negative).  Skip promos with
-  // 0 participants since the ppt computation collapses to NaN/0.
-  const promos = (j.promotions || []).filter(p => p.lift_ppt != null && p.participants > 0);
-  if (promos.length) {
-    const byLift = [...promos].sort((a,b) => Math.abs(b.lift_ppt) - Math.abs(a.lift_ppt));
-    const top = byLift[0];
-    if (top && Math.abs(top.lift_ppt) >= 5) {
-      const tone = top.lift_ppt > 0 ? "good" : "bad";
-      const verb = top.lift_ppt > 0 ? "outperforms" : "underperforms";
+  // Promo vs Non-Promo share swing — flag a notable shift in the
+  // mix between promo-driven and organic sales.
+  const agg = j.promo_aggregate;
+  if (agg && agg.promo_share_this != null && agg.promo_share_prev != null) {
+    const delta = +(agg.promo_share_this - agg.promo_share_prev).toFixed(1);
+    if (Math.abs(delta) >= 3) {
+      const tone = delta > 0 ? "good" : "bad";
+      const dir  = delta > 0 ? "up" : "down";
       items.push({
-        score: Math.abs(top.lift_ppt) * 3,
+        score: Math.abs(delta) * 4,
+        chip: "Promo mix", tone,
+        line: `Promo share is <b>${dir} ${Math.abs(delta).toFixed(1)} ppt</b> (${agg.promo_share_this.toFixed(1)}% vs ${agg.promo_share_prev.toFixed(1)}% last month).`,
+        detail: `<table>
+          <tr><th>Promo this</th><td>${unitVal(agg.promo_this)} (${agg.promo_share_this.toFixed(1)}%)</td></tr>
+          <tr><th>Promo prev</th><td>${unitVal(agg.promo_prev)} (${agg.promo_share_prev.toFixed(1)}%)</td></tr>
+          <tr><th>Non-Promo this</th><td>${unitVal(agg.non_promo_this)} (${agg.non_promo_share_this != null ? agg.non_promo_share_this.toFixed(1) + "%" : "—"})</td></tr>
+          <tr><th>Promo MoM</th><td>${fmtPct(agg.promo_mom_pct)}</td></tr>
+          <tr><th>Non-Promo MoM</th><td>${fmtPct(agg.non_promo_mom_pct)}</td></tr>
+        </table>`
+      });
+    }
+  }
+
+  // Per-promo: biggest MoM among 443 / iON / TrueBlue.
+  const promos = (j.promotions || []).filter(p => p.mom_pct != null && p.participants > 0);
+  if (promos.length) {
+    const byMom = [...promos].sort((a,b) => Math.abs(b.mom_pct) - Math.abs(a.mom_pct));
+    const top = byMom[0];
+    if (top && Math.abs(top.mom_pct) >= 5) {
+      const tone = top.mom_pct > 0 ? "good" : "bad";
+      const dir  = top.mom_pct > 0 ? "up" : "down";
+      items.push({
+        score: Math.abs(top.mom_pct) * 1.5,
         chip: `Promo · ${top.promo}`, tone,
-        line: `<b>${esc(top.promo)}</b> ${verb} non-participants by <b>${(top.lift_ppt>0?"+":"")}${top.lift_ppt.toFixed(1)} ppt</b> (${top.participants}/${top.total_shops} shops).`,
+        line: `<b>${esc(top.promo)}</b> is <b>${dir} ${Math.abs(top.mom_pct).toFixed(1)}% MoM</b> (${unitVal(top.this)}, ${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "% of total promo" : ""}).`,
         detail: `<table>
           <tr><th>Participants</th><td>${top.participants} / ${top.total_shops}</td></tr>
-          <tr><th>Participant MoM%</th><td>${fmtPct(top.part_mom_pct)}</td></tr>
-          <tr><th>Non-participant MoM%</th><td>${fmtPct(top.non_part_mom_pct)}</td></tr>
-          <tr><th>Lift</th><td>${fmtPpt(top.lift_ppt)}</td></tr>
-          <tr><th>This-month qty</th><td>${unitVal(top.this)}</td></tr>
-        </table>
-        <div class="notes" style="margin-top:6px;">Lift = participant MoM% − non-participant MoM%.  Positive ppt means the promo accelerated participants beyond what the broader market was already doing.</div>`
+          <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
+          <tr><th>Prev month</th><td>${unitVal(top.prev)}</td></tr>
+          <tr><th>MoM</th><td>${fmtPct(top.mom_pct)}</td></tr>
+          <tr><th>Share of Promo</th><td>${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "%" : "—"}${top.share_of_promo_prev != null ? " (prev " + top.share_of_promo_prev.toFixed(1) + "%)" : ""}</td></tr>
+          <tr><th>Share of Total</th><td>${top.share_of_total_this != null ? top.share_of_total_this.toFixed(1) + "%" : "—"}</td></tr>
+        </table>`
       });
     }
   }
@@ -509,19 +531,75 @@ function render(j){
     </div>
   `);
 
-  // ④ Promotion
+  // ④ Promotion — three real promos only (443 / iON / TrueBlue),
+  // plus a Promo vs Non-Promo aggregate split.  443_beforeTrueblue
+  // (a backfill artefact) is filtered out backend-side.
   const promos = j.promotions || [];
+  const agg    = j.promo_aggregate || null;
+  const shareCell = (cur, prev) => {
+    if (cur == null) return "—";
+    const delta = (prev == null) ? null : +(cur - prev).toFixed(1);
+    const sub = (delta == null)
+      ? ""
+      : `<div style="font-size:10px;color:#6b7280;">prev ${prev.toFixed(1)}% &nbsp;${
+          delta > 0 ? '<span class="delta-up">+' + delta.toFixed(1) + ' ppt</span>'
+                    : (delta < 0 ? '<span class="delta-dn">' + delta.toFixed(1) + ' ppt</span>'
+                                 : '<span class="delta-fl">0.0 ppt</span>')
+        }</div>`;
+    return `<b>${cur.toFixed(1)}%</b>${sub}`;
+  };
   html.push(`
     <div class="card">
       <h2>④ Promotion</h2>
+      ${agg ? `
+        <h3 style="font-size:11px;color:#1e3a5f;margin:4px 0 6px;">Promo vs Non-Promo</h3>
+        <table style="margin-bottom:14px;">
+          <thead><tr>
+            <th>Bucket</th>
+            <th class="num">This month</th>
+            <th class="num">Prev month</th>
+            <th class="num">MoM</th>
+            <th class="num">Share of total — this</th>
+            <th class="num">Share of total — prev</th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td class="name">🎯 Promo (443 + iON + TrueBlue)</td>
+              <td class="num">${unitVal(agg.promo_this)}</td>
+              <td class="num">${unitVal(agg.promo_prev)}</td>
+              <td class="num">${fmtPct(agg.promo_mom_pct)}</td>
+              <td class="num">${shareCell(agg.promo_share_this, agg.promo_share_prev)}</td>
+              <td class="num">${agg.promo_share_prev != null ? agg.promo_share_prev.toFixed(1) + "%" : "—"}</td>
+            </tr>
+            <tr>
+              <td class="name">⚪ Non-Promo</td>
+              <td class="num">${unitVal(agg.non_promo_this)}</td>
+              <td class="num">${unitVal(agg.non_promo_prev)}</td>
+              <td class="num">${fmtPct(agg.non_promo_mom_pct)}</td>
+              <td class="num">${shareCell(agg.non_promo_share_this, agg.non_promo_share_prev)}</td>
+              <td class="num">${agg.non_promo_share_prev != null ? agg.non_promo_share_prev.toFixed(1) + "%" : "—"}</td>
+            </tr>
+            <tr style="background:#f9fafb;font-weight:600;">
+              <td class="name">Total</td>
+              <td class="num">${unitVal(agg.total_this)}</td>
+              <td class="num">${unitVal(agg.total_prev)}</td>
+              <td class="num">—</td>
+              <td class="num">100.0%</td>
+              <td class="num">100.0%</td>
+            </tr>
+          </tbody>
+        </table>` : ""
+      }
+      <h3 style="font-size:11px;color:#1e3a5f;margin:10px 0 6px;">Per-Promo MoM &amp; Share within Promotion</h3>
       <table>
         <thead><tr>
           <th>Promo</th>
           <th class="num">Participants</th>
           <th class="num">This month</th>
-          <th class="num">Part. MoM%</th>
-          <th class="num">Non-part. MoM%</th>
-          <th class="num">Lift</th>
+          <th class="num">Prev month</th>
+          <th class="num">MoM</th>
+          <th class="num">Share of Promo</th>
+          <th class="num">Share of Total</th>
         </tr></thead>
         <tbody>
           ${promos.map(p => `
@@ -529,16 +607,18 @@ function render(j){
               <td class="name">${esc(p.promo)}</td>
               <td class="num">${p.participants} / ${p.total_shops}</td>
               <td class="num">${unitVal(p.this)}</td>
-              <td class="num">${fmtPct(p.part_mom_pct)}</td>
-              <td class="num">${fmtPct(p.non_part_mom_pct)}</td>
-              <td class="num">${fmtPpt(p.lift_ppt)}</td>
+              <td class="num">${unitVal(p.prev)}</td>
+              <td class="num">${fmtPct(p.mom_pct)}</td>
+              <td class="num">${shareCell(p.share_of_promo_this, p.share_of_promo_prev)}</td>
+              <td class="num">${shareCell(p.share_of_total_this, p.share_of_total_prev)}</td>
             </tr>
-          `).join("") || `<tr><td colspan="6" style="color:#9ca3af;text-align:center;padding:14px;">No promos active in this month.</td></tr>`}
+          `).join("") || `<tr><td colspan="7" style="color:#9ca3af;text-align:center;padding:14px;">No promos active in this month.</td></tr>`}
         </tbody>
       </table>
       <div class="notes">
-        <b>Lift</b> = participating shops' Month-over-Month % minus non-participating shops' MoM %, expressed in percentage points (ppt).
-        Participating = shops whose sales rows this month qualify for the promo (PCLT + dc_rate + min_qty + customer + period match).
+        <b>Participants</b> = shops whose this-month sales rows qualify for the promo (PCLT + dc_rate + min_qty + customer + period match).
+        <b>Share of Promo</b> = this promo's qty ÷ sum of qty across the three promos (deduped, shops in multiple promos counted once on the aggregate).
+        <b>Share of Total</b> = this promo's qty ÷ total month qty.
       </div>
     </div>
   `);
