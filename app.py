@@ -7223,30 +7223,24 @@ def api_monthly_highlights():
             key=lambda r: r["delta"])[:30]
 
         # Newly Active = no sales in last 3 months, positive this month.
-        # Newly Silent = positive prev month, zero this month.
+        # Newly Silent = regular buyer that just dropped to zero —
+        # qty > 100 in EACH of the trailing 3 months AND zero this
+        # month.  Threshold prevents one-off shops from polluting
+        # the list; we want to flag steady customers that suddenly
+        # stopped.
+        NEWLY_SILENT_MIN_QTY = 100
         newly_active = []
         newly_silent = []
         try:
-            # Get all sold_to with positive sales in the previous 3
-            # months (excluding this one).  Three queries — keep simple.
+            # Per-sold_to qty in each of the trailing 3 months.
+            # trailing3_sold was already collected above for the
+            # vs-3M-avg gainers/losers; reuse it.
             three_back_sold = set()
-            for back in range(1, 4):
-                bm_year, bm_month = year, month - back
-                while bm_month < 1:
-                    bm_month += 12; bm_year -= 1
-                t, w, p = _highlights_src_for(cur, bm_year, bm_month)
-                if not t:
-                    continue
-                cur.execute(
-                    f"SELECT DISTINCT s.sold_to FROM {t} s {w}",
-                    p,
-                )
-                for r in cur.fetchall():
-                    if r.get("sold_to"):
-                        three_back_sold.add(r["sold_to"])
+            for d in trailing3_sold:
+                for st, qd in d.items():
+                    if st and (qd.get(metric, 0) or 0) > 0:
+                        three_back_sold.add(st)
             this_sold = {st for st, d in tm.items()
-                         if st and (d.get(metric, 0) or 0) > 0}
-            prev_sold = {st for st, d in pm.items()
                          if st and (d.get(metric, 0) or 0) > 0}
             for st in (this_sold - three_back_sold):
                 newly_active.append({
@@ -7254,14 +7248,28 @@ def api_monthly_highlights():
                     "name":    name_map.get(st, st),
                     "this":    round(tm.get(st, {}).get(metric, 0), 2),
                 })
-            for st in (prev_sold - this_sold):
-                newly_silent.append({
-                    "sold_to": st,
-                    "name":    name_map.get(st, st),
-                    "prev":    round(pm.get(st, {}).get(metric, 0), 2),
-                })
+
+            # Newly silent: must have hit > MIN_QTY in EVERY trailing
+            # month, then zero this month.
+            this_qty = {st: (d.get(metric, 0) or 0) for st, d in tm.items() if st}
+            steady_candidates = set(trailing3_sold[0].keys()) if trailing3_sold else set()
+            for d in trailing3_sold[1:]:
+                steady_candidates &= set(d.keys())
+            for st in steady_candidates:
+                if not st:
+                    continue
+                qs = [trailing3_sold[i].get(st, {}).get(metric, 0) or 0
+                      for i in range(3)]
+                if all(q > NEWLY_SILENT_MIN_QTY for q in qs) and (this_qty.get(st, 0) or 0) == 0:
+                    newly_silent.append({
+                        "sold_to":   st,
+                        "name":      name_map.get(st, st),
+                        "prev":      round(qs[0], 2),
+                        "trailing3": [round(q, 2) for q in qs],
+                        "avg3":      round(sum(qs) / 3.0, 2),
+                    })
             newly_active.sort(key=lambda r: -(r["this"] or 0))
-            newly_silent.sort(key=lambda r: -(r["prev"] or 0))
+            newly_silent.sort(key=lambda r: -(r.get("avg3", 0) or 0))
         except Exception:
             pass
 
@@ -7285,7 +7293,7 @@ def api_monthly_highlights():
                     "gainers_limit": 30,
                     "losers_limit":  30,
                     "newly_active":  "Sold-to with zero sales in the previous 3 months AND positive sales this month.",
-                    "newly_silent":  "Sold-to with positive sales in the previous month AND zero sales this month.",
+                    "newly_silent":  "Steady customers that just stopped buying — qty > 100 in EACH of the trailing 3 months AND zero sales this month.",
                 }
             },
         })

@@ -368,18 +368,19 @@ function buildRemarkable(j){
       </div>`
     });
   }
-  if (newS.length >= 5) {
+  if (newS.length >= 1) {
     items.push({
-      score: 15 + newS.length * 0.3,
+      score: 15 + newS.length * 0.5,
       chip: "Customer", tone: "bad",
-      line: `<b>${newS.length}</b> sold-tos went silent this month (had sales last month, none this month).`,
-      detail: `<div style="max-height:220px;overflow:auto;">
+      line: `<b>${newS.length}</b> steady customer${newS.length === 1 ? "" : "s"} went silent — had qty &gt; 100 in each of the last 3 months, zero this month.`,
+      detail: `<div style="max-height:240px;overflow:auto;">
         <table>
-          <tr><th>Sold-to</th><th class="num">Prev month</th></tr>
+          <tr><th>Sold-to</th><th class="num">3M avg</th><th class="num">M-3 / M-2 / M-1</th></tr>
           ${newS.slice(0, 30).map(r => `
             <tr>
               <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
-              <td class="num">${unitVal(r.prev)}</td>
+              <td class="num">${unitVal(r.avg3)}</td>
+              <td class="num" style="font-family:ui-monospace,monospace;font-size:11px;">${(r.trailing3 || []).slice().reverse().map(unitVal).join(" / ")}</td>
             </tr>`).join("")}
         </table>
         ${newS.length > 30 ? `<div class="notes">+ ${newS.length - 30} more — see Sold-to Movement section.</div>` : ""}
@@ -706,15 +707,17 @@ function render(j){
           <table>
             <thead><tr>
               <th>Sold-to</th>
-              <th class="num">Prev month</th>
+              <th class="num">3M avg</th>
+              <th class="num">M-3 / M-2 / M-1</th>
             </tr></thead>
             <tbody>
               ${newlyS.map(r => `
                 <tr>
                   <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
-                  <td class="num">${unitVal(r.prev)}</td>
+                  <td class="num">${unitVal(r.avg3)}</td>
+                  <td class="num" style="font-family:ui-monospace,monospace;font-size:11px;">${(r.trailing3 || []).slice().reverse().map(unitVal).join(" / ")}</td>
                 </tr>
-              `).join("") || `<tr><td colspan="2" style="color:#9ca3af;text-align:center;padding:14px;">No newly silent sold-to.</td></tr>`}
+              `).join("") || `<tr><td colspan="3" style="color:#9ca3af;text-align:center;padding:14px;">No newly silent sold-to.</td></tr>`}
             </tbody>
           </table>
         </div>
