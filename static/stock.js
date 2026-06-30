@@ -614,6 +614,48 @@
     </tr>`;
   }
 
+  // Reverse direction of _syncPageFiltersFromCascade: when the user
+  // narrows via the search/dropdowns (product_group / pattern /
+  // material), jump the cascade to the matching level so the table
+  // bottoms out at exactly what they searched for.  /api/cascade_
+  // ancestors resolves the most-specific filter back to its line /
+  // product_group / pattern chain.  Returns true if cascadeState
+  // actually moved.
+  async function _syncCascadeFromFilters(){
+    const params = new URLSearchParams();
+    if (state.material && state.material !== "ALL")
+      params.set("material", state.material);
+    if (state.pattern && state.pattern !== "ALL")
+      params.set("pattern", state.pattern);
+    if (state.product_group && state.product_group !== "ALL")
+      params.set("product_group", state.product_group);
+
+    // No narrowing filter? Reset cascade back to the line root so the
+    // user sees PCLT / TBR again instead of being stranded mid-drill.
+    if (![...params].length) {
+      cascadeState = { level: "line", line: "", pg: "", pat: "" };
+      return true;
+    }
+
+    const d = await fetchJSON(`/api/cascade_ancestors?${params.toString()}`);
+    if (!d || !d.level) return false;
+    if (d.level === "size") {
+      cascadeState = { level: "size",
+                       line: d.line || "", pg: d.product_group || "",
+                       pat: d.pattern || "" };
+    } else if (d.level === "pattern") {
+      cascadeState = { level: "pattern",
+                       line: d.line || "", pg: d.product_group || "",
+                       pat: "" };
+    } else if (d.level === "product_group") {
+      cascadeState = { level: "product_group",
+                       line: d.line || "", pg: "", pat: "" };
+    } else {
+      cascadeState = { level: "line", line: "", pg: "", pat: "" };
+    }
+    return true;
+  }
+
   // Mirror cascade ancestor state into the top-bar filters so the map
   // + sales charts narrow alongside the table.  Material is handled
   // separately (size-row click sets it directly; back/advance clears
@@ -877,6 +919,10 @@
         state.material = "ALL";
         await refreshPatterns();
         await refreshMaterials();
+        // Auto-jump the cascade to product_group level so the user
+        // sees the picked group's patterns instead of starting back at
+        // PCLT / TBR.
+        await _syncCascadeFromFilters();
         await fetchAndRender();
       }
     });
@@ -893,6 +939,10 @@
         patEl.value = v; ddUpdateActive(patEl);
         state.pattern = v || "ALL";
         await refreshMaterials();
+        // Auto-jump cascade to pattern level (resolves the ancestor
+        // line / product_group from carrying_26 even when the user
+        // skipped picking those filters).
+        await _syncCascadeFromFilters();
         await fetchAndRender();
       }
     });
@@ -908,6 +958,12 @@
         const matEl = document.getElementById("material");
         matEl.value = v; ddUpdateActive(matEl);
         state.material = v || "ALL";
+        // Skip the product-group / pattern dropdowns? — that's the
+        // common workflow when a customer asks about a specific size.
+        // Look up its ancestors and jump the cascade straight to size
+        // level so the user sees which category / pattern that size
+        // belongs to alongside the per-state stock.
+        await _syncCascadeFromFilters();
         await fetchAndRender();
       }
     });

@@ -1420,6 +1420,78 @@ def api_sales_stats_by_state():
         conn.close()
 
 
+@app.route("/api/cascade_ancestors")
+def api_cascade_ancestors():
+    """Given the most specific filter the user has narrowed to
+    (material > pattern > product_group), return the cascade
+    ancestor chain so the Stock page can auto-jump the cascade
+    table to that level instead of forcing the user to drill
+    Line → Product Group → Pattern → Size manually.
+
+    Only resolves PCLT / TBR lines (the cascade table's universe).
+    If the size/pattern/product_group belongs to another line
+    (HM / HK / LF), returns level=line so the table falls back to
+    the default top-level view.
+    """
+    material = (request.args.get("material")      or "").strip()
+    pattern  = (request.args.get("pattern")       or "").strip()
+    pg       = (request.args.get("product_group") or "").strip()
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        if material:
+            cur.execute(
+                "SELECT line, product_group, pattern, size "
+                "FROM carrying_26 "
+                "WHERE line IN ('PCLT','TBR') AND size = %s "
+                "LIMIT 1",
+                (material,),
+            )
+            r = cur.fetchone()
+            if r:
+                return jsonify({
+                    "level":         "size",
+                    "line":          r["line"]          or "",
+                    "product_group": r["product_group"] or "",
+                    "pattern":       r["pattern"]       or "",
+                    "size":          r["size"]          or "",
+                })
+        if pattern:
+            cur.execute(
+                "SELECT line, product_group, pattern "
+                "FROM carrying_26 "
+                "WHERE line IN ('PCLT','TBR') AND pattern = %s "
+                "LIMIT 1",
+                (pattern,),
+            )
+            r = cur.fetchone()
+            if r:
+                return jsonify({
+                    "level":         "pattern",
+                    "line":          r["line"]          or "",
+                    "product_group": r["product_group"] or "",
+                    "pattern":       r["pattern"]       or "",
+                })
+        if pg and pg != "ALL":
+            cur.execute(
+                "SELECT line, product_group "
+                "FROM carrying_26 "
+                "WHERE line IN ('PCLT','TBR') AND product_group = %s "
+                "LIMIT 1",
+                (pg,),
+            )
+            r = cur.fetchone()
+            if r:
+                return jsonify({
+                    "level":         "product_group",
+                    "line":          r["line"]          or "",
+                    "product_group": r["product_group"] or "",
+                })
+        return jsonify({"level": "line"})
+    finally:
+        cur.close(); conn.close()
+
+
 @app.route("/api/sales_stats_by_product_level")
 def api_sales_stats_by_product_level():
     """Same metric set as /api/sales_stats_by_state but grouped by a
