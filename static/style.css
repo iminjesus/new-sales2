@@ -492,7 +492,7 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
   border: 1px solid rgba(229,231,235,0.7);
   border-radius: 7px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  padding: 3px 5px;
+  padding: 5px 7px;
   /* The generic .stockChartPane (used elsewhere) hard-codes
      min-height: 350px / max-height: 400px / flex: 1 1 0.  Reset
      those here so the floating overlay pane can actually be the
@@ -500,20 +500,20 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
   flex: none;
   min-height: 0;
   max-height: none;
-  height: 80px;
+  height: 150px;
   position: relative;
   pointer-events: auto; /* but the chart card itself is interactive */
 }
 #stockChartsOverlay .stockChartPane h4 {
-  margin: 0 0 1px;
-  font-size: 10px;
+  margin: 0 0 2px;
+  font-size: 11px;
   font-weight: 700;
   color: rgba(31,41,55,0.75);
   line-height: 1.1;
 }
 #stockChartsOverlay .stockChartPane canvas {
   position: absolute !important;
-  top: 14px; left: 4px; right: 4px; bottom: 4px;
+  top: 20px; left: 6px; right: 6px; bottom: 6px;
   width: auto !important; height: auto !important;
 }
 #stockSidePanel {
