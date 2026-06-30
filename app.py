@@ -1440,19 +1440,23 @@ def api_cascade_ancestors():
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         if material:
-            # Pin only what's unambiguous.  A size like 185R14 often
-            # shows up under multiple patterns / product_groups (one
-            # m_code per variant); picking arbitrary ancestors and
-            # locking the cascade to them hides the other m_codes'
-            # stock and the user sees "No data".  Pin the line only
-            # when it's unique, leave pg / pattern empty so the
-            # cascade aggregates across every m_code carrying the
-            # size.
+            # Narrow by every filter the user already set.  Picking
+            # Pattern = RA18 AND Size = 185R14 should pin both —
+            # picking ONLY Size = 185R14 should leave pattern / pg
+            # empty so the cascade aggregates across every m_code
+            # carrying that size (one size often appears under
+            # multiple patterns).
+            where  = ["line IN ('PCLT','TBR')", "size = %s"]
+            params = [material]
+            if pattern:
+                where.append("pattern = %s"); params.append(pattern)
+            if pg and pg != "ALL":
+                where.append("product_group = %s"); params.append(pg)
             cur.execute(
                 "SELECT DISTINCT line, product_group, pattern "
                 "FROM carrying_26 "
-                "WHERE line IN ('PCLT','TBR') AND size = %s",
-                (material,),
+                f"WHERE {' AND '.join(where)}",
+                params,
             )
             rows = cur.fetchall()
             if rows:
@@ -1471,11 +1475,15 @@ def api_cascade_ancestors():
                 # so the user can pick which side they meant.
                 return jsonify({"level": "line"})
         if pattern:
+            where  = ["line IN ('PCLT','TBR')", "pattern = %s"]
+            params = [pattern]
+            if pg and pg != "ALL":
+                where.append("product_group = %s"); params.append(pg)
             cur.execute(
                 "SELECT DISTINCT line, product_group "
                 "FROM carrying_26 "
-                "WHERE line IN ('PCLT','TBR') AND pattern = %s",
-                (pattern,),
+                f"WHERE {' AND '.join(where)}",
+                params,
             )
             rows = cur.fetchall()
             if rows:
