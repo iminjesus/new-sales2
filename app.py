@@ -7026,6 +7026,13 @@ def api_monthly_highlights():
 
                 p_this = sum(tm.get(st, {}).get(metric, 0) for st in participants_this)
                 p_prev = sum(pm.get(st, {}).get(metric, 0) for st in participants_prev)
+                # 443 / TrueBlue are always-on; iON kicks in only some
+                # months.  Hide the row when there's literally nothing
+                # to analyse (no participants either side, no qty).
+                if (promo_name == "iON"
+                        and not participants_this and not participants_prev
+                        and p_this == 0 and p_prev == 0):
+                    continue
                 promotions.append({
                     "promo":        promo_name,
                     "participants": len(participants_this),
