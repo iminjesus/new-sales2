@@ -107,10 +107,6 @@ td.name{font-weight:500;color:#1e3a5f}
       <option value="2026-06" selected>2026 June</option>
     </select>
   </label>
-  <div style="display:flex;gap:4px;">
-    <button id="mQty"    class="active">Qty</button>
-    <button id="mAmt">Amount</button>
-  </div>
   <div class="nav">
     <a href="/">Graph</a>
     <a href="/map">Map</a>
@@ -148,18 +144,9 @@ function fmtPpt(p){
   return `<span class="${cls}">${sign}${p.toFixed(1)} ppt</span>`;
 }
 
-let metric = "qty";
+// Highlights page is qty-only — the team analyses units, not AUD.
+const metric = "qty";
 
-document.getElementById("mQty").addEventListener("click", () => {
-  metric = "qty"; setMetricButtons(); load();
-});
-document.getElementById("mAmt").addEventListener("click", () => {
-  metric = "amt"; setMetricButtons(); load();
-});
-function setMetricButtons(){
-  document.getElementById("mQty").classList.toggle("active", metric === "qty");
-  document.getElementById("mAmt").classList.toggle("active", metric === "amt");
-}
 document.getElementById("monthSel").addEventListener("change", load);
 
 async function load(){
