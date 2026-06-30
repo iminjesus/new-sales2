@@ -495,7 +495,13 @@
       tfoot.innerHTML = "";
       return;
     }
-    const drillable = (cascadeState.level !== "size");
+    // Above-size rows drill the cascade.  Size rows are still
+    // clickable but they don't drill — they set state.material so the
+    // map + charts narrow to that exact size.  Both paths share the
+    // .cascade-clickable hook; the visual chevron (`›`) is suppressed
+    // on size rows via .cas-terminal.
+    const drillable = true;
+    const terminalCls = (cascadeState.level === "size") ? " cas-terminal" : "";
     let totQ3=0, totQ6=0, totQ12=0,
         totStock=0, totWater=0, totCy=0, totFactory=0;
 
@@ -506,10 +512,8 @@
     const html = [];
     data.rows.forEach(r => {
       const by = r.by_state || [];
-      const cls   = drillable ? "cascade-clickable" : "";
-      const dataB = drillable
-        ? ` data-bucket="${(r.bucket || "").replace(/"/g, "&quot;")}"`
-        : "";
+      const cls   = "cascade-clickable" + terminalCls;
+      const dataB = ` data-bucket="${(r.bucket || "").replace(/"/g, "&quot;")}"`;
       const bucketLabel = r.bucket || "—";
 
       const span = by.length + 1; // 4 states + 1 subtotal row
@@ -604,22 +608,70 @@
     </tr>`;
   }
 
-  function _cascadeAdvance(bucket){
+  // Mirror cascade ancestor state into the top-bar filters so the map
+  // + sales charts narrow alongside the table.  Material is handled
+  // separately (size-row click sets it directly; back/advance clears
+  // it via the caller).
+  function _syncPageFiltersFromCascade(){
+    const catVal = cascadeState.line || "ALL";
+    state.category = (catVal === "PCLT" || catVal === "TBR") ? catVal : "ALL";
+    setActiveButtons("catBtns", "val", state.category);
+
+    state.product_group = cascadeState.pg || "ALL";
+    const pgEl = document.getElementById("product_group");
+    if (pgEl) {
+      pgEl.value = state.product_group === "ALL" ? "" : state.product_group;
+      ddUpdateActive(pgEl);
+    }
+
+    state.pattern = cascadeState.pat || "ALL";
+    const patEl = document.getElementById("pattern");
+    if (patEl) {
+      patEl.value = state.pattern === "ALL" ? "" : state.pattern;
+      ddUpdateActive(patEl);
+    }
+  }
+
+  function _clearMaterialFilter(){
+    state.material = "ALL";
+    const matEl = document.getElementById("material");
+    if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
+  }
+
+  async function _cascadeAdvance(bucket){
     if (!bucket) return;
     const lvl = cascadeState.level;
     if (lvl === "line") {
       cascadeState = { level: "product_group", line: bucket, pg: "", pat: "" };
+      _clearMaterialFilter();
     } else if (lvl === "product_group") {
       cascadeState = { level: "pattern", line: cascadeState.line, pg: bucket, pat: "" };
+      _clearMaterialFilter();
     } else if (lvl === "pattern") {
       cascadeState = { level: "size", line: cascadeState.line, pg: cascadeState.pg, pat: bucket };
+      _clearMaterialFilter();
+    } else if (lvl === "size") {
+      // Size is terminal — clicking a size row sets the material
+      // filter so the map + charts narrow to that exact size.  No
+      // further cascade drilling.
+      state.material = bucket;
+      const matEl = document.getElementById("material");
+      if (matEl) { matEl.value = bucket; ddUpdateActive(matEl); }
     } else {
-      return; // size = terminal
+      return;
     }
-    fetchAndRenderCascadeTable();
+    _syncPageFiltersFromCascade();
+    // Refresh dropdown options so the secondary lists reflect the new
+    // ancestor (pattern list = patterns within selected product_group,
+    // material list = sizes within selected pattern, etc.).
+    await refreshPatterns();
+    await refreshMaterials();
+    // Full re-render: map dots + monthly/yearly charts + price box +
+    // cascade table itself.
+    fetchAndRender();
   }
 
-  function _cascadeBack(){
+  async function _cascadeBack(){
     const lvl = cascadeState.level;
     if (lvl === "product_group") {
       cascadeState = { level: "line", line: "", pg: "", pat: "" };
@@ -630,7 +682,13 @@
     } else {
       return;
     }
-    fetchAndRenderCascadeTable();
+    // Going back also drops any size-specific material filter that
+    // was set by a size-row click on the way down.
+    _clearMaterialFilter();
+    _syncPageFiltersFromCascade();
+    await refreshPatterns();
+    await refreshMaterials();
+    fetchAndRender();
   }
 
   document.addEventListener("click", function(e){

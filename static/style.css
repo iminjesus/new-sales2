@@ -1127,6 +1127,9 @@ body.drilled #chartZoomModal .czm-back { display:inline-block; }
 #cascadeTable tbody tr.cascade-clickable td.cas-bucket::after {
   content: " ›"; color: #93c5fd; font-weight: 700;
 }
+/* Size rows are still clickable (to set the material filter) but
+   don't drill further, so suppress the chevron. */
+#cascadeTable tbody tr.cas-terminal td.cas-bucket::after { content: ""; }
 #cascadeTable tfoot tr.st-total td {
   background: #eff6ff; font-weight: 700;
   border-top: 2px solid #bfdbfe; color: #1e40af;
