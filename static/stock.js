@@ -332,12 +332,13 @@
     return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   }
 
-  // Charts float over the world map.  Solid bar fills used to paint
-  // over coastlines and cluster bubbles — keep the fill semi-transparent
-  // so the map shows through but the bars stay readable.  Same constant
-  // is reused by the yearly chart below.
-  const _OVERLAY_BAR_25 = "rgba(171,222,230,0.55)";
-  const _OVERLAY_BAR_26 = "rgba(147,197,253,0.55)";
+  // Charts float over the world map.  The map itself is dense blue
+  // (coastlines + cluster bubbles), so the bars use warm tones — amber
+  // for prior year, deeper orange for current — to read cleanly
+  // against the blue map.  Fill alpha is high enough (0.75) to look
+  // saturated but still lets faint coastline show through.
+  const _OVERLAY_BAR_25 = "rgba(251,191,36,0.75)";   // amber-400
+  const _OVERLAY_BAR_26 = "rgba(234,88,12,0.75)";    // orange-600
 
   function drawMonthlySales(rows25, rows26){
     const canvas = document.getElementById("salesMonthlyChart");
