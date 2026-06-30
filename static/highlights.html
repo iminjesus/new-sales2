@@ -53,6 +53,45 @@ td.name{font-weight:500;color:#1e3a5f}
 .notes b{color:#374151;font-style:normal}
 .status-msg{padding:30px;text-align:center;color:#6b7280;font-size:13px}
 .status-msg.err{color:#dc2626;font-weight:600}
+
+/* Remarkable card — one-sentence headlines that expand to detail.
+   Each item is a <details>: native browser expand/collapse + zero
+   JS state to manage.  Summary line stays compact; the detail
+   panel slides in with a soft background so the "what's behind
+   this fact" feels like a drill rather than a wall of numbers. */
+.card.remarkable h2 { color: #b45309; }
+.rem-list { display:flex; flex-direction:column; gap:6px; }
+.rem-item { border:1px solid #fef3c7; border-radius:6px;
+  background:#fffbeb; }
+.rem-item[open] { border-color:#fbbf24; box-shadow:0 1px 3px rgba(180,83,9,0.08); }
+.rem-item summary {
+  list-style:none; cursor:pointer; padding:9px 12px;
+  display:flex; align-items:center; gap:8px;
+  font-size:13px; font-weight:500; color:#1f2937;
+}
+.rem-item summary::-webkit-details-marker { display:none; }
+.rem-item summary::before {
+  content:"▸"; color:#b45309; font-size:11px; flex:0 0 auto;
+  transition:transform 120ms ease;
+}
+.rem-item[open] summary::before { transform:rotate(90deg); }
+.rem-item .rem-chip {
+  display:inline-block; font-size:10px; font-weight:700;
+  padding:2px 7px; border-radius:9px;
+  background:#fde68a; color:#78350f; letter-spacing:.3px;
+  text-transform:uppercase; flex:0 0 auto;
+}
+.rem-item .rem-chip.bad  { background:#fecaca; color:#7f1d1d; }
+.rem-item .rem-chip.good { background:#bbf7d0; color:#14532d; }
+.rem-item .rem-chip.info { background:#dbeafe; color:#1e3a8a; }
+.rem-item .rem-detail {
+  padding:8px 14px 12px; border-top:1px dashed #fde68a;
+  font-size:12px; color:#4b5563; line-height:1.55;
+}
+.rem-item .rem-detail b { color:#111827; }
+.rem-item .rem-detail table { margin-top:6px; max-width:480px; }
+.rem-item .rem-detail table th { background:transparent; padding:3px 8px 3px 0; }
+.rem-item .rem-detail table td { padding:3px 8px 3px 0; border-bottom:1px solid #fef3c7; }
 </style>
 </head>
 <body>
@@ -144,6 +183,232 @@ function unitVal(v){
   return metric === "qty" ? fmtNum(v) : "$" + fmtNum(v);
 }
 
+// ────────── Remarkable: derive the few "look at this" facts ──────────
+// Each entry: { tone: 'good'|'bad'|'info', chip: 'YoY'|'MoM'|..., line: '...', detail: '...html...' }
+// We score candidates and keep the top ~5 to avoid burying the user.
+function buildRemarkable(j){
+  const items = [];
+
+  const sum = j.summary || {};
+  const mom = sum.mom_pct, yoy = sum.yoy_pct;
+
+  // Total MoM / YoY swing if material (>=5%).
+  if (mom != null && Math.abs(mom) >= 5) {
+    const tone = mom > 0 ? "good" : "bad";
+    const dir  = mom > 0 ? "up" : "down";
+    items.push({
+      score: Math.abs(mom) * 2,
+      chip: "MoM", tone,
+      line: `Total sales are <b>${dir} ${Math.abs(mom).toFixed(1)}%</b> vs last month (${unitVal(sum.this?.[metric])} vs ${unitVal(sum.prev?.[metric])}).`,
+      detail: `<b>This month:</b> ${unitVal(sum.this?.[metric])}<br>
+               <b>Prev month:</b> ${unitVal(sum.prev?.[metric])}<br>
+               <b>Daily avg:</b> ${unitVal(sum.daily_avg)} across ${sum.working_days || "—"} working days.`
+    });
+  }
+  if (yoy != null && Math.abs(yoy) >= 5) {
+    const tone = yoy > 0 ? "good" : "bad";
+    const dir  = yoy > 0 ? "up" : "down";
+    items.push({
+      score: Math.abs(yoy) * 1.5,
+      chip: "YoY", tone,
+      line: `Year-over-year is <b>${dir} ${Math.abs(yoy).toFixed(1)}%</b> vs the same month last year.`,
+      detail: `<b>This month:</b> ${unitVal(sum.this?.[metric])}<br>
+               <b>Same month last year:</b> ${unitVal(sum.py?.[metric])}`
+    });
+  }
+
+  // Region: biggest YoY mover (positive AND negative).
+  const regions = (j.regions || []).filter(r => r.region && r.region !== "COMMON" && r.yoy_pct != null);
+  if (regions.length) {
+    const byYoy = [...regions].sort((a,b) => Math.abs(b.yoy_pct) - Math.abs(a.yoy_pct));
+    const top = byYoy[0];
+    if (top && Math.abs(top.yoy_pct) >= 10) {
+      const tone = top.yoy_pct > 0 ? "good" : "bad";
+      const dir  = top.yoy_pct > 0 ? "up" : "down";
+      items.push({
+        score: Math.abs(top.yoy_pct) * 1.2,
+        chip: `Region · ${top.region}`, tone,
+        line: `<b>${esc(top.region)}</b> is <b>${dir} ${Math.abs(top.yoy_pct).toFixed(1)}% YoY</b> — biggest regional swing this month.`,
+        detail: `<table>
+          <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
+          <tr><th>vs Prev M</th><td>${fmtPct(top.mom_pct)}</td></tr>
+          <tr><th>vs Prev Y</th><td>${fmtPct(top.yoy_pct)}</td></tr>
+          <tr><th>Share of total</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
+        </table>`
+      });
+    }
+  }
+
+  // Product Group: biggest MoM mover among top 10 (filter tiny groups).
+  const pgs = (j.product_groups || []).filter(p => p.product_group && p.mom_pct != null && (p.this || 0) > 0);
+  if (pgs.length) {
+    const byMom = [...pgs].sort((a,b) => Math.abs(b.mom_pct) - Math.abs(a.mom_pct));
+    const top = byMom[0];
+    if (top && Math.abs(top.mom_pct) >= 30) {
+      const tone = top.mom_pct > 0 ? "good" : "bad";
+      const dir  = top.mom_pct > 0 ? "surged" : "dropped";
+      items.push({
+        score: Math.abs(top.mom_pct),
+        chip: "Product", tone,
+        line: `<b>${esc(top.product_group)}</b> ${dir} <b>${Math.abs(top.mom_pct).toFixed(1)}% MoM</b> (now ${unitVal(top.this)}, ${top.share != null ? top.share.toFixed(1) + "%": "—"} share).`,
+        detail: `<table>
+          <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
+          <tr><th>vs Prev M</th><td>${fmtPct(top.mom_pct)}</td></tr>
+          <tr><th>vs Prev Y</th><td>${fmtPct(top.yoy_pct)}</td></tr>
+          <tr><th>Share</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
+        </table>`
+      });
+    }
+    // Also flag the runner-up if it also swung hard in the OTHER direction.
+    if (byMom.length > 1) {
+      const second = byMom[1];
+      if (second && top && Math.sign(second.mom_pct) !== Math.sign(top.mom_pct)
+          && Math.abs(second.mom_pct) >= 30) {
+        const tone = second.mom_pct > 0 ? "good" : "bad";
+        const dir  = second.mom_pct > 0 ? "surged" : "dropped";
+        items.push({
+          score: Math.abs(second.mom_pct) * 0.9,
+          chip: "Product", tone,
+          line: `<b>${esc(second.product_group)}</b> ${dir} <b>${Math.abs(second.mom_pct).toFixed(1)}% MoM</b> — second-biggest product swing.`,
+          detail: `<table>
+            <tr><th>This month</th><td>${unitVal(second.this)}</td></tr>
+            <tr><th>vs Prev M</th><td>${fmtPct(second.mom_pct)}</td></tr>
+            <tr><th>vs Prev Y</th><td>${fmtPct(second.yoy_pct)}</td></tr>
+          </table>`
+        });
+      }
+    }
+  }
+
+  // Promotion: biggest lift (positive OR negative).  Skip promos with
+  // 0 participants since the ppt computation collapses to NaN/0.
+  const promos = (j.promotions || []).filter(p => p.lift_ppt != null && p.participants > 0);
+  if (promos.length) {
+    const byLift = [...promos].sort((a,b) => Math.abs(b.lift_ppt) - Math.abs(a.lift_ppt));
+    const top = byLift[0];
+    if (top && Math.abs(top.lift_ppt) >= 5) {
+      const tone = top.lift_ppt > 0 ? "good" : "bad";
+      const verb = top.lift_ppt > 0 ? "outperforms" : "underperforms";
+      items.push({
+        score: Math.abs(top.lift_ppt) * 3,
+        chip: `Promo · ${top.promo}`, tone,
+        line: `<b>${esc(top.promo)}</b> ${verb} non-participants by <b>${(top.lift_ppt>0?"+":"")}${top.lift_ppt.toFixed(1)} ppt</b> (${top.participants}/${top.total_shops} shops).`,
+        detail: `<table>
+          <tr><th>Participants</th><td>${top.participants} / ${top.total_shops}</td></tr>
+          <tr><th>Participant MoM%</th><td>${fmtPct(top.part_mom_pct)}</td></tr>
+          <tr><th>Non-participant MoM%</th><td>${fmtPct(top.non_part_mom_pct)}</td></tr>
+          <tr><th>Lift</th><td>${fmtPpt(top.lift_ppt)}</td></tr>
+          <tr><th>This-month qty</th><td>${unitVal(top.this)}</td></tr>
+        </table>
+        <div class="notes" style="margin-top:6px;">Lift = participant MoM% − non-participant MoM%.  Positive ppt means the promo accelerated participants beyond what the broader market was already doing.</div>`
+      });
+    }
+  }
+
+  // Sold-to: biggest single gainer / loser.
+  const sold = j.sold_to || {};
+  const gainers = sold.gainers || [], losers = sold.losers || [];
+  if (gainers.length) {
+    const g = gainers[0];
+    if (g && g.delta != null) {
+      items.push({
+        score: 30, // fixed mid-priority
+        chip: "Customer", tone: "good",
+        line: `<b>${esc(g.name)}</b> is the month's top gainer — added <b>${unitVal(g.delta)}</b> (${fmtPct(g.delta_pct)}).`,
+        detail: `<table>
+          <tr><th>Sold-to</th><td>${esc(g.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;">#${esc(g.sold_to)}</span></td></tr>
+          <tr><th>Prev month</th><td>${unitVal(g.prev)}</td></tr>
+          <tr><th>This month</th><td>${unitVal(g.this)}</td></tr>
+          <tr><th>Delta</th><td><span class="delta-up">+${unitVal(g.delta)}</span> (${fmtPct(g.delta_pct)})</td></tr>
+        </table>`
+      });
+    }
+  }
+  if (losers.length) {
+    const l = losers[0];
+    if (l && l.delta != null) {
+      items.push({
+        score: 30,
+        chip: "Customer", tone: "bad",
+        line: `<b>${esc(l.name)}</b> fell the most — <b>${unitVal(l.delta)}</b> (${fmtPct(l.delta_pct)}) vs last month.`,
+        detail: `<table>
+          <tr><th>Sold-to</th><td>${esc(l.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;">#${esc(l.sold_to)}</span></td></tr>
+          <tr><th>Prev month</th><td>${unitVal(l.prev)}</td></tr>
+          <tr><th>This month</th><td>${unitVal(l.this)}</td></tr>
+          <tr><th>Delta</th><td><span class="delta-dn">${unitVal(l.delta)}</span> (${fmtPct(l.delta_pct)})</td></tr>
+        </table>`
+      });
+    }
+  }
+
+  // Newly active / silent counts (only when notable).
+  const newA = sold.newly_active || [], newS = sold.newly_silent || [];
+  if (newA.length >= 5) {
+    items.push({
+      score: 15 + newA.length * 0.3,
+      chip: "Customer", tone: "info",
+      line: `<b>${newA.length}</b> sold-tos came back this month after a 3-month silence.`,
+      detail: `<div style="max-height:220px;overflow:auto;">
+        <table>
+          <tr><th>Sold-to</th><th class="num">This month</th></tr>
+          ${newA.slice(0, 30).map(r => `
+            <tr>
+              <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
+              <td class="num">${unitVal(r.this)}</td>
+            </tr>`).join("")}
+        </table>
+        ${newA.length > 30 ? `<div class="notes">+ ${newA.length - 30} more — see Sold-to Movement section.</div>` : ""}
+      </div>`
+    });
+  }
+  if (newS.length >= 5) {
+    items.push({
+      score: 15 + newS.length * 0.3,
+      chip: "Customer", tone: "bad",
+      line: `<b>${newS.length}</b> sold-tos went silent this month (had sales last month, none this month).`,
+      detail: `<div style="max-height:220px;overflow:auto;">
+        <table>
+          <tr><th>Sold-to</th><th class="num">Prev month</th></tr>
+          ${newS.slice(0, 30).map(r => `
+            <tr>
+              <td class="name">${esc(r.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;font-size:10px;">#${esc(r.sold_to)}</span></td>
+              <td class="num">${unitVal(r.prev)}</td>
+            </tr>`).join("")}
+        </table>
+        ${newS.length > 30 ? `<div class="notes">+ ${newS.length - 30} more — see Sold-to Movement section.</div>` : ""}
+      </div>`
+    });
+  }
+
+  // Rank by score, keep top 6 so the card stays scannable.
+  items.sort((a, b) => b.score - a.score);
+  return items.slice(0, 6);
+}
+
+function renderRemarkableCard(j){
+  const items = buildRemarkable(j);
+  if (!items.length) {
+    return `<div class="card remarkable">
+      <h2>🌟 Remarkable</h2>
+      <div class="notes">Nothing especially out of the ordinary in this month.  Browse the sections below for the underlying detail.</div>
+    </div>`;
+  }
+  return `<div class="card remarkable">
+    <h2>🌟 Remarkable</h2>
+    <div class="rem-list">
+      ${items.map(it => `
+        <details class="rem-item">
+          <summary>
+            <span class="rem-chip ${it.tone}">${esc(it.chip)}</span>
+            <span>${it.line}</span>
+          </summary>
+          <div class="rem-detail">${it.detail}</div>
+        </details>
+      `).join("")}
+    </div>
+  </div>`;
+}
+
 function render(j){
   const wrap = document.getElementById("wrap");
   const status = document.getElementById("status");
@@ -155,6 +420,9 @@ function render(j){
   const py_v   = (sum.py   || {})[metric] || 0;
 
   const html = [];
+
+  // 🌟 Remarkable — sits above ① Summary; each line expands inline.
+  html.push(renderRemarkableCard(j));
 
   // ① Summary
   html.push(`
