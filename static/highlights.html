@@ -105,6 +105,7 @@ td.name{font-weight:500;color:#1e3a5f}
       <option value="2026-04">2026 April</option>
       <option value="2026-05">2026 May</option>
       <option value="2026-06" selected>2026 June</option>
+      <option value="2026-H1">2026 1st Half (Jan–Jun)</option>
     </select>
   </label>
   <div class="nav">
@@ -178,170 +179,201 @@ function buildRemarkable(j){
 
   const sum = j.summary || {};
   const v3  = sum.vs_avg3_pct;
+  const isRange = !!j.is_range;
+  // Range mode anchors on prev period (M-1 ≡ prev half) + YoY since
+  // "vs 3M avg" doesn't apply to a 6-month window.
+  const anchorPct = isRange ? sum.mom_pct : v3;
+  const anchorChip = isRange ? "vs Prev 6M" : "vs 3M avg";
+  const anchorWord = isRange ? "the previous 6 months" : "the 3-month average";
 
-  // Total vs 3M avg if material (>= 5%).
-  if (v3 != null && Math.abs(v3) >= 5) {
-    const tone = v3 > 0 ? "good" : "bad";
-    const dir  = v3 > 0 ? "up" : "down";
+  // Total swing if material (>= 5%).
+  if (anchorPct != null && Math.abs(anchorPct) >= 5) {
+    const tone = anchorPct > 0 ? "good" : "bad";
+    const dir  = anchorPct > 0 ? "up" : "down";
+    const baselineVal = isRange ? sum.prev?.[metric] : sum.avg3?.[metric];
     items.push({
-      score: Math.abs(v3) * 2,
-      chip: "vs 3M avg", tone,
-      line: `Total sales are <b>${dir} ${Math.abs(v3).toFixed(1)}%</b> vs the 3-month average (${unitVal(sum.this?.[metric])} vs ${unitVal(sum.avg3?.[metric])}).`,
-      detail: `<b>This month:</b> ${unitVal(sum.this?.[metric])}<br>
-               <b>3-month average:</b> ${unitVal(sum.avg3?.[metric])}<br>
-               <b>Prev month:</b> ${unitVal(sum.prev?.[metric])} (${fmtPct(sum.mom_pct)})<br>
+      score: Math.abs(anchorPct) * 2,
+      chip: anchorChip, tone,
+      line: `Total sales are <b>${dir} ${Math.abs(anchorPct).toFixed(1)}%</b> vs ${anchorWord} (${unitVal(sum.this?.[metric])} vs ${unitVal(baselineVal)}).`,
+      detail: `<b>${isRange ? "Period" : "This month"}:</b> ${unitVal(sum.this?.[metric])}<br>
+               <b>${isRange ? "Previous 6 months" : "3-month average"}:</b> ${unitVal(baselineVal)}<br>
+               <b>YoY same ${isRange ? "half" : "month"}:</b> ${unitVal(sum.py?.[metric])} (${fmtPct(sum.yoy_pct)})<br>
                <b>Daily avg:</b> ${unitVal(sum.daily_avg)} across ${sum.working_days || "—"} working days.`
     });
   }
+  // YoY callout in range mode (it's the most natural "this half vs
+  // last year same half" comparison).
+  if (isRange && sum.yoy_pct != null && Math.abs(sum.yoy_pct) >= 5) {
+    const tone = sum.yoy_pct > 0 ? "good" : "bad";
+    const dir  = sum.yoy_pct > 0 ? "up" : "down";
+    items.push({
+      score: Math.abs(sum.yoy_pct) * 1.5,
+      chip: "vs Same 6M LY", tone,
+      line: `Period vs last year's same half: <b>${dir} ${Math.abs(sum.yoy_pct).toFixed(1)}%</b> (${unitVal(sum.this?.[metric])} vs ${unitVal(sum.py?.[metric])}).`,
+      detail: `<b>This period:</b> ${unitVal(sum.this?.[metric])}<br>
+               <b>Same half last year:</b> ${unitVal(sum.py?.[metric])}`
+    });
+  }
 
-  // Region: biggest vs-3M-avg mover.
-  const regions = (j.regions || []).filter(r => r.region && r.region !== "COMMON" && r.vs_avg3_pct != null);
+  // Region: biggest vs-anchor mover (vs 3M avg in single-month mode,
+  // vs prev 6M in range mode).
+  const regionMetric = isRange ? "mom_pct" : "vs_avg3_pct";
+  const regions = (j.regions || []).filter(r => r.region && r.region !== "COMMON" && r[regionMetric] != null);
   if (regions.length) {
-    const byAvg3 = [...regions].sort((a,b) => Math.abs(b.vs_avg3_pct) - Math.abs(a.vs_avg3_pct));
-    const top = byAvg3[0];
-    if (top && Math.abs(top.vs_avg3_pct) >= 10) {
-      const tone = top.vs_avg3_pct > 0 ? "good" : "bad";
-      const dir  = top.vs_avg3_pct > 0 ? "up" : "down";
+    const byAnchor = [...regions].sort(
+      (a,b) => Math.abs(b[regionMetric]) - Math.abs(a[regionMetric]));
+    const top = byAnchor[0];
+    if (top && Math.abs(top[regionMetric]) >= 10) {
+      const v = top[regionMetric];
+      const tone = v > 0 ? "good" : "bad";
+      const dir  = v > 0 ? "up" : "down";
       items.push({
-        score: Math.abs(top.vs_avg3_pct) * 1.2,
+        score: Math.abs(v) * 1.2,
         chip: `Region · ${top.region}`, tone,
-        line: `<b>${esc(top.region)}</b> is <b>${dir} ${Math.abs(top.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> — biggest regional swing this month.`,
+        line: `<b>${esc(top.region)}</b> is <b>${dir} ${Math.abs(v).toFixed(1)}% ${anchorChip}</b> — biggest regional swing this ${isRange ? "period" : "month"}.`,
         detail: `<table>
-          <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
-          <tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>
-          <tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>
-          <tr><th>vs Prev M</th><td>${fmtPct(top.mom_pct)}</td></tr>
-          <tr><th>vs Prev Y</th><td>${fmtPct(top.yoy_pct)}</td></tr>
+          <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(top.this)}</td></tr>
+          ${isRange ? "" : `<tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>`}
+          ${isRange ? "" : `<tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>`}
+          <tr><th>${isRange ? "vs Prev 6M" : "vs Prev M"}</th><td>${fmtPct(top.mom_pct)}</td></tr>
+          <tr><th>${isRange ? "vs Same 6M LY" : "vs Prev Y"}</th><td>${fmtPct(top.yoy_pct)}</td></tr>
           <tr><th>Share of total</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
         </table>`
       });
     }
   }
 
-  // Product Group: biggest vs-3M-avg mover among top 10 (filter tiny).
-  const pgs = (j.product_groups || []).filter(p => p.product_group && p.vs_avg3_pct != null && (p.this || 0) > 0);
+  // Product Group: biggest vs-anchor mover among top 10 (filter tiny).
+  const pgMetric = isRange ? "mom_pct" : "vs_avg3_pct";
+  const pgs = (j.product_groups || []).filter(p => p.product_group && p[pgMetric] != null && (p.this || 0) > 0);
   if (pgs.length) {
-    const byAvg3 = [...pgs].sort((a,b) => Math.abs(b.vs_avg3_pct) - Math.abs(a.vs_avg3_pct));
-    const top = byAvg3[0];
-    if (top && Math.abs(top.vs_avg3_pct) >= 30) {
-      const tone = top.vs_avg3_pct > 0 ? "good" : "bad";
-      const dir  = top.vs_avg3_pct > 0 ? "surged" : "dropped";
+    const byAnchor = [...pgs].sort((a,b) => Math.abs(b[pgMetric]) - Math.abs(a[pgMetric]));
+    const top = byAnchor[0];
+    if (top && Math.abs(top[pgMetric]) >= 30) {
+      const v = top[pgMetric];
+      const tone = v > 0 ? "good" : "bad";
+      const dir  = v > 0 ? "surged" : "dropped";
       items.push({
-        score: Math.abs(top.vs_avg3_pct),
+        score: Math.abs(v),
         chip: "Product", tone,
-        line: `<b>${esc(top.product_group)}</b> ${dir} <b>${Math.abs(top.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> (now ${unitVal(top.this)}, ${top.share != null ? top.share.toFixed(1) + "%": "—"} share).`,
+        line: `<b>${esc(top.product_group)}</b> ${dir} <b>${Math.abs(v).toFixed(1)}% ${anchorChip}</b> (now ${unitVal(top.this)}, ${top.share != null ? top.share.toFixed(1) + "%": "—"} share).`,
         detail: `<table>
-          <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
-          <tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>
-          <tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>
-          <tr><th>vs Prev M</th><td>${fmtPct(top.mom_pct)}</td></tr>
-          <tr><th>vs Prev Y</th><td>${fmtPct(top.yoy_pct)}</td></tr>
+          <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(top.this)}</td></tr>
+          ${isRange ? "" : `<tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>`}
+          ${isRange ? "" : `<tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>`}
+          <tr><th>${isRange ? "vs Prev 6M" : "vs Prev M"}</th><td>${fmtPct(top.mom_pct)}</td></tr>
+          <tr><th>${isRange ? "vs Same 6M LY" : "vs Prev Y"}</th><td>${fmtPct(top.yoy_pct)}</td></tr>
           <tr><th>Share</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
         </table>`
       });
     }
     // Runner-up only if it moved hard in the OPPOSITE direction.
-    if (byAvg3.length > 1) {
-      const second = byAvg3[1];
-      if (second && top && Math.sign(second.vs_avg3_pct) !== Math.sign(top.vs_avg3_pct)
-          && Math.abs(second.vs_avg3_pct) >= 30) {
-        const tone = second.vs_avg3_pct > 0 ? "good" : "bad";
-        const dir  = second.vs_avg3_pct > 0 ? "surged" : "dropped";
+    if (byAnchor.length > 1) {
+      const second = byAnchor[1];
+      if (second && top && Math.sign(second[pgMetric]) !== Math.sign(top[pgMetric])
+          && Math.abs(second[pgMetric]) >= 30) {
+        const v = second[pgMetric];
+        const tone = v > 0 ? "good" : "bad";
+        const dir  = v > 0 ? "surged" : "dropped";
         items.push({
-          score: Math.abs(second.vs_avg3_pct) * 0.9,
+          score: Math.abs(v) * 0.9,
           chip: "Product", tone,
-          line: `<b>${esc(second.product_group)}</b> ${dir} <b>${Math.abs(second.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> — second-biggest product swing.`,
+          line: `<b>${esc(second.product_group)}</b> ${dir} <b>${Math.abs(v).toFixed(1)}% ${anchorChip}</b> — second-biggest product swing.`,
           detail: `<table>
-            <tr><th>This month</th><td>${unitVal(second.this)}</td></tr>
-            <tr><th>3M average</th><td>${unitVal(second.avg3)}</td></tr>
-            <tr><th>vs 3M avg</th><td>${fmtPct(second.vs_avg3_pct)}</td></tr>
-            <tr><th>vs Prev M</th><td>${fmtPct(second.mom_pct)}</td></tr>
+            <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(second.this)}</td></tr>
+            ${isRange ? "" : `<tr><th>3M average</th><td>${unitVal(second.avg3)}</td></tr>`}
+            <tr><th>${isRange ? "vs Prev 6M" : "vs Prev M"}</th><td>${fmtPct(second.mom_pct)}</td></tr>
           </table>`
         });
       }
     }
   }
 
-  // Promo vs Non-Promo share swing — vs 3M-avg share (not prev).
+  // Promo vs Non-Promo share swing — vs anchor share.
   const agg = j.promo_aggregate;
-  if (agg && agg.promo_share_this != null && agg.promo_share_avg3 != null) {
-    const delta = +(agg.promo_share_this - agg.promo_share_avg3).toFixed(1);
+  const aggShareBaseline = isRange ? agg?.promo_share_prev : agg?.promo_share_avg3;
+  if (agg && agg.promo_share_this != null && aggShareBaseline != null) {
+    const delta = +(agg.promo_share_this - aggShareBaseline).toFixed(1);
     if (Math.abs(delta) >= 3) {
       const tone = delta > 0 ? "good" : "bad";
       const dir  = delta > 0 ? "up" : "down";
       items.push({
         score: Math.abs(delta) * 4,
         chip: "Promo mix", tone,
-        line: `Promo share is <b>${dir} ${Math.abs(delta).toFixed(1)} ppt vs 3M avg</b> (${agg.promo_share_this.toFixed(1)}% vs 3M ${agg.promo_share_avg3.toFixed(1)}%).`,
+        line: `Promo share is <b>${dir} ${Math.abs(delta).toFixed(1)} ppt ${anchorChip}</b> (${agg.promo_share_this.toFixed(1)}% vs ${aggShareBaseline.toFixed(1)}%).`,
         detail: `<table>
-          <tr><th>Promo this</th><td>${unitVal(agg.promo_this)} (${agg.promo_share_this.toFixed(1)}%)</td></tr>
-          <tr><th>Promo 3M avg</th><td>${unitVal(agg.promo_avg3)} (${agg.promo_share_avg3.toFixed(1)}%)</td></tr>
+          <tr><th>Promo ${isRange ? "period" : "this"}</th><td>${unitVal(agg.promo_this)} (${agg.promo_share_this.toFixed(1)}%)</td></tr>
+          <tr><th>Promo ${isRange ? "prev 6M" : "3M avg"}</th><td>${unitVal(isRange ? agg.promo_prev : agg.promo_avg3)} (${aggShareBaseline.toFixed(1)}%)</td></tr>
           <tr><th>Non-Promo this</th><td>${unitVal(agg.non_promo_this)} (${agg.non_promo_share_this != null ? agg.non_promo_share_this.toFixed(1) + "%" : "—"})</td></tr>
-          <tr><th>Promo vs 3M</th><td>${fmtPct(agg.promo_vs_avg3_pct)}</td></tr>
-          <tr><th>Non-Promo vs 3M</th><td>${fmtPct(agg.non_promo_vs_avg3_pct)}</td></tr>
+          <tr><th>Promo ${anchorChip}</th><td>${fmtPct(isRange ? agg.promo_mom_pct : agg.promo_vs_avg3_pct)}</td></tr>
+          <tr><th>Non-Promo ${anchorChip}</th><td>${fmtPct(isRange ? agg.non_promo_mom_pct : agg.non_promo_vs_avg3_pct)}</td></tr>
         </table>`
       });
     }
   }
 
-  // Per-promo: biggest vs-3M-avg mover among 443 / iON / TrueBlue.
-  const promos = (j.promotions || []).filter(p => p.vs_avg3_pct != null && (p.this || 0) > 0);
+  // Per-promo: biggest vs-anchor mover among 443 / iON / TrueBlue.
+  const promoMetric = isRange ? "mom_pct" : "vs_avg3_pct";
+  const promos = (j.promotions || []).filter(p => p[promoMetric] != null && (p.this || 0) > 0);
   if (promos.length) {
-    const byAvg3 = [...promos].sort((a,b) => Math.abs(b.vs_avg3_pct) - Math.abs(a.vs_avg3_pct));
-    const top = byAvg3[0];
-    if (top && Math.abs(top.vs_avg3_pct) >= 5) {
-      const tone = top.vs_avg3_pct > 0 ? "good" : "bad";
-      const dir  = top.vs_avg3_pct > 0 ? "up" : "down";
+    const byAnchor = [...promos].sort((a,b) => Math.abs(b[promoMetric]) - Math.abs(a[promoMetric]));
+    const top = byAnchor[0];
+    if (top && Math.abs(top[promoMetric]) >= 5) {
+      const v = top[promoMetric];
+      const tone = v > 0 ? "good" : "bad";
+      const dir  = v > 0 ? "up" : "down";
       items.push({
-        score: Math.abs(top.vs_avg3_pct) * 1.5,
+        score: Math.abs(v) * 1.5,
         chip: `Promo · ${top.promo}`, tone,
-        line: `<b>${esc(top.promo)}</b> is <b>${dir} ${Math.abs(top.vs_avg3_pct).toFixed(1)}% vs 3M avg</b> (${unitVal(top.this)}, ${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "% of total promo" : ""}).`,
+        line: `<b>${esc(top.promo)}</b> is <b>${dir} ${Math.abs(v).toFixed(1)}% ${anchorChip}</b> (${unitVal(top.this)}, ${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "% of total promo" : ""}).`,
         detail: `<table>
           <tr><th>Participants</th><td>${top.participants} / ${top.total_shops}</td></tr>
-          <tr><th>This month</th><td>${unitVal(top.this)}</td></tr>
-          <tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>
-          <tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>
-          <tr><th>MoM</th><td>${fmtPct(top.mom_pct)}</td></tr>
-          <tr><th>Share of Promo</th><td>${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "%" : "—"}${top.share_of_promo_avg3 != null ? " (3M " + top.share_of_promo_avg3.toFixed(1) + "%)" : ""}</td></tr>
+          <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(top.this)}</td></tr>
+          <tr><th>${isRange ? "Prev 6M" : "3M average"}</th><td>${unitVal(isRange ? top.prev : top.avg3)}</td></tr>
+          <tr><th>${anchorChip}</th><td>${fmtPct(v)}</td></tr>
+          <tr><th>Share of Promo</th><td>${top.share_of_promo_this != null ? top.share_of_promo_this.toFixed(1) + "%" : "—"}</td></tr>
           <tr><th>Share of Total</th><td>${top.share_of_total_this != null ? top.share_of_total_this.toFixed(1) + "%" : "—"}</td></tr>
         </table>`
       });
     }
   }
 
-  // Sold-to: biggest gainer / loser vs 3M avg.  Backend exposes
-  // sold_to.gainers_vs_avg3 / losers_vs_avg3 (3-month per-sold_to
-  // average computed alongside the existing MoM gainers/losers).
+  // Sold-to: biggest gainer / loser.  Range mode falls back to MoM
+  // gainers/losers (which compare to prev period) since the
+  // vs-3M-avg variant doesn't apply.
   const sold = j.sold_to || {};
-  const gainersA = sold.gainers_vs_avg3 || [];
-  const losersA  = sold.losers_vs_avg3  || [];
-  if (gainersA.length) {
-    const g = gainersA[0];
+  const gainersList = isRange ? (sold.gainers || []) : (sold.gainers_vs_avg3 || []);
+  const losersList  = isRange ? (sold.losers  || []) : (sold.losers_vs_avg3  || []);
+  const customerChip = isRange ? "Customer · vs Prev 6M" : "Customer · vs 3M";
+  const baselineLabel = isRange ? "Prev 6 months" : "3M average";
+  const baselineKey   = isRange ? "prev" : "avg3";
+  if (gainersList.length) {
+    const g = gainersList[0];
     if (g && g.delta != null) {
       items.push({
         score: 30,
-        chip: "Customer · vs 3M", tone: "good",
-        line: `<b>${esc(g.name)}</b> is the month's biggest gainer vs 3M avg — added <b>${unitVal(g.delta)}</b> (${fmtPct(g.delta_pct)}).`,
+        chip: customerChip, tone: "good",
+        line: `<b>${esc(g.name)}</b> is the ${isRange ? "period's" : "month's"} biggest gainer ${isRange ? "vs prev 6M" : "vs 3M avg"} — added <b>${unitVal(g.delta)}</b> (${fmtPct(g.delta_pct)}).`,
         detail: `<table>
           <tr><th>Sold-to</th><td>${esc(g.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;">#${esc(g.sold_to)}</span></td></tr>
-          <tr><th>3M average</th><td>${unitVal(g.avg3)}</td></tr>
-          <tr><th>This month</th><td>${unitVal(g.this)}</td></tr>
+          <tr><th>${baselineLabel}</th><td>${unitVal(g[baselineKey])}</td></tr>
+          <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(g.this)}</td></tr>
           <tr><th>Delta</th><td><span class="delta-up">+${unitVal(g.delta)}</span> (${fmtPct(g.delta_pct)})</td></tr>
         </table>`
       });
     }
   }
-  if (losersA.length) {
-    const l = losersA[0];
+  if (losersList.length) {
+    const l = losersList[0];
     if (l && l.delta != null) {
       items.push({
         score: 30,
-        chip: "Customer · vs 3M", tone: "bad",
-        line: `<b>${esc(l.name)}</b> fell the most vs 3M avg — <b>${unitVal(l.delta)}</b> (${fmtPct(l.delta_pct)}).`,
+        chip: customerChip, tone: "bad",
+        line: `<b>${esc(l.name)}</b> fell the most ${isRange ? "vs prev 6M" : "vs 3M avg"} — <b>${unitVal(l.delta)}</b> (${fmtPct(l.delta_pct)}).`,
         detail: `<table>
           <tr><th>Sold-to</th><td>${esc(l.name)} <span style="color:#9ca3af;font-family:ui-monospace,monospace;">#${esc(l.sold_to)}</span></td></tr>
-          <tr><th>3M average</th><td>${unitVal(l.avg3)}</td></tr>
-          <tr><th>This month</th><td>${unitVal(l.this)}</td></tr>
+          <tr><th>${baselineLabel}</th><td>${unitVal(l[baselineKey])}</td></tr>
+          <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(l.this)}</td></tr>
           <tr><th>Delta</th><td><span class="delta-dn">${unitVal(l.delta)}</span> (${fmtPct(l.delta_pct)})</td></tr>
         </table>`
       });
@@ -427,6 +459,13 @@ function render(j){
   const prev_v = (sum.prev || {})[metric] || 0;
   const py_v   = (sum.py   || {})[metric] || 0;
 
+  // Period mode: half-year compares to the previous half + same half
+  // last year; "vs 3M avg" doesn't apply and is hidden.
+  const isRange   = !!j.is_range;
+  const prevLabel = isRange ? "vs Prev 6M"  : "vs Prev M";
+  const yoyLabel  = isRange ? "vs Same 6M LY" : "vs Prev Y";
+  const showAvg3  = !isRange;
+
   const html = [];
 
   // 🌟 Remarkable — sits above ① Summary; each line expands inline.
@@ -439,24 +478,25 @@ function render(j){
       <h2>① Summary — ${esc(j.month)}</h2>
       <div class="kpis">
         <div class="kpi">
-          <div class="label">This month total</div>
+          <div class="label">${isRange ? "Period total" : "This month total"}</div>
           <div class="value">${unitVal(this_v)}</div>
           <div class="sub">${metric === "qty" ? "units" : "AUD"}</div>
         </div>
         <div class="kpi">
-          <div class="label">vs Previous month</div>
+          <div class="label">${isRange ? "vs Previous 6 months" : "vs Previous month"}</div>
           <div class="value">${fmtPct(sum.mom_pct)}</div>
           <div class="sub">Prev: ${unitVal(prev_v)}</div>
         </div>
+        ${showAvg3 ? `
         <div class="kpi">
           <div class="label">vs 3-month average</div>
           <div class="value">${fmtPct(sum.vs_avg3_pct)}</div>
           <div class="sub">3M avg: ${unitVal(avg3_v)}</div>
-        </div>
+        </div>` : ""}
         <div class="kpi">
-          <div class="label">vs Same month last year</div>
+          <div class="label">${isRange ? "vs Same half last year" : "vs Same month last year"}</div>
           <div class="value">${fmtPct(sum.yoy_pct)}</div>
-          <div class="sub">Last year: ${unitVal(py_v)}</div>
+          <div class="sub">${isRange ? "Last year" : "Last year"}: ${unitVal(py_v)}</div>
         </div>
         <div class="kpi">
           <div class="label">Daily avg · Working days</div>
@@ -475,10 +515,10 @@ function render(j){
       <table>
         <thead><tr>
           <th>Region</th>
-          <th class="num">This month</th>
-          <th class="num">vs Prev M</th>
-          <th class="num">vs 3M avg</th>
-          <th class="num">vs Prev Y</th>
+          <th class="num">${isRange ? "Period" : "This month"}</th>
+          <th class="num">${prevLabel}</th>
+          ${showAvg3 ? `<th class="num">vs 3M avg</th>` : ""}
+          <th class="num">${yoyLabel}</th>
           <th class="num">Share</th>
         </tr></thead>
         <tbody>
@@ -487,7 +527,7 @@ function render(j){
               <td class="name">${esc(r.region)}</td>
               <td class="num">${unitVal(r.this)}</td>
               <td class="num">${fmtPct(r.mom_pct)}</td>
-              <td class="num">${fmtPct(r.vs_avg3_pct)}<div style="font-size:10px;color:#9ca3af;">${unitVal(r.avg3)}</div></td>
+              ${showAvg3 ? `<td class="num">${fmtPct(r.vs_avg3_pct)}<div style="font-size:10px;color:#9ca3af;">${unitVal(r.avg3)}</div></td>` : ""}
               <td class="num">${fmtPct(r.yoy_pct)}</td>
               <td class="num">${r.share != null ? r.share.toFixed(1) + "%" : "—"}</td>
             </tr>
@@ -501,14 +541,14 @@ function render(j){
   const pgs = j.product_groups || [];
   html.push(`
     <div class="card">
-      <h2>③ Product Group (Top 10 by this-month ${metric === "qty" ? "qty" : "amount"})</h2>
+      <h2>③ Product Group (Top 10 by ${isRange ? "period" : "this-month"} qty)</h2>
       <table>
         <thead><tr>
           <th>Product Group</th>
-          <th class="num">This month</th>
-          <th class="num">vs Prev M</th>
-          <th class="num">vs 3M avg</th>
-          <th class="num">vs Prev Y</th>
+          <th class="num">${isRange ? "Period" : "This month"}</th>
+          <th class="num">${prevLabel}</th>
+          ${showAvg3 ? `<th class="num">vs 3M avg</th>` : ""}
+          <th class="num">${yoyLabel}</th>
           <th class="num">Share</th>
         </tr></thead>
         <tbody>
@@ -517,11 +557,11 @@ function render(j){
               <td class="name">${esc(r.product_group)}</td>
               <td class="num">${unitVal(r.this)}</td>
               <td class="num">${fmtPct(r.mom_pct)}</td>
-              <td class="num">${fmtPct(r.vs_avg3_pct)}<div style="font-size:10px;color:#9ca3af;">${unitVal(r.avg3)}</div></td>
+              ${showAvg3 ? `<td class="num">${fmtPct(r.vs_avg3_pct)}<div style="font-size:10px;color:#9ca3af;">${unitVal(r.avg3)}</div></td>` : ""}
               <td class="num">${fmtPct(r.yoy_pct)}</td>
               <td class="num">${r.share != null ? r.share.toFixed(1) + "%" : "—"}</td>
             </tr>
-          `).join("") || `<tr><td colspan="6" style="color:#9ca3af;text-align:center;padding:14px;">No data for this month.</td></tr>`}
+          `).join("") || `<tr><td colspan="${showAvg3 ? 6 : 5}" style="color:#9ca3af;text-align:center;padding:14px;">No data for this period.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -552,54 +592,54 @@ function render(j){
         <table style="margin-bottom:14px;">
           <thead><tr>
             <th>Bucket</th>
-            <th class="num">This month</th>
-            <th class="num">Prev month</th>
-            <th class="num">3M avg</th>
-            <th class="num">MoM</th>
-            <th class="num">vs 3M avg</th>
-            <th class="num">Share — this / prev / 3M</th>
+            <th class="num">${isRange ? "Period" : "This month"}</th>
+            <th class="num">${isRange ? "Prev 6M" : "Prev month"}</th>
+            ${showAvg3 ? `<th class="num">3M avg</th>` : ""}
+            <th class="num">${prevLabel}</th>
+            ${showAvg3 ? `<th class="num">vs 3M avg</th>` : ""}
+            <th class="num">${showAvg3 ? "Share — this / prev / 3M" : "Share — this / prev"}</th>
           </tr></thead>
           <tbody>
             <tr>
               <td class="name">🎯 Promo (443 + iON + TrueBlue)</td>
               <td class="num">${unitVal(agg.promo_this)}</td>
               <td class="num">${unitVal(agg.promo_prev)}</td>
-              <td class="num">${unitVal(agg.promo_avg3)}</td>
+              ${showAvg3 ? `<td class="num">${unitVal(agg.promo_avg3)}</td>` : ""}
               <td class="num">${fmtPct(agg.promo_mom_pct)}</td>
-              <td class="num">${fmtPct(agg.promo_vs_avg3_pct)}</td>
-              <td class="num">${shareCell(agg.promo_share_this, agg.promo_share_prev)}<div style="font-size:10px;color:#9ca3af;">3M ${agg.promo_share_avg3 != null ? agg.promo_share_avg3.toFixed(1) + "%" : "—"}</div></td>
+              ${showAvg3 ? `<td class="num">${fmtPct(agg.promo_vs_avg3_pct)}</td>` : ""}
+              <td class="num">${shareCell(agg.promo_share_this, agg.promo_share_prev)}${showAvg3 ? `<div style="font-size:10px;color:#9ca3af;">3M ${agg.promo_share_avg3 != null ? agg.promo_share_avg3.toFixed(1) + "%" : "—"}</div>` : ""}</td>
             </tr>
             <tr>
               <td class="name">⚪ Non-Promo</td>
               <td class="num">${unitVal(agg.non_promo_this)}</td>
               <td class="num">${unitVal(agg.non_promo_prev)}</td>
-              <td class="num">${unitVal(agg.non_promo_avg3)}</td>
+              ${showAvg3 ? `<td class="num">${unitVal(agg.non_promo_avg3)}</td>` : ""}
               <td class="num">${fmtPct(agg.non_promo_mom_pct)}</td>
-              <td class="num">${fmtPct(agg.non_promo_vs_avg3_pct)}</td>
-              <td class="num">${shareCell(agg.non_promo_share_this, agg.non_promo_share_prev)}<div style="font-size:10px;color:#9ca3af;">3M ${agg.non_promo_share_avg3 != null ? agg.non_promo_share_avg3.toFixed(1) + "%" : "—"}</div></td>
+              ${showAvg3 ? `<td class="num">${fmtPct(agg.non_promo_vs_avg3_pct)}</td>` : ""}
+              <td class="num">${shareCell(agg.non_promo_share_this, agg.non_promo_share_prev)}${showAvg3 ? `<div style="font-size:10px;color:#9ca3af;">3M ${agg.non_promo_share_avg3 != null ? agg.non_promo_share_avg3.toFixed(1) + "%" : "—"}</div>` : ""}</td>
             </tr>
             <tr style="background:#f9fafb;font-weight:600;">
               <td class="name">Total</td>
               <td class="num">${unitVal(agg.total_this)}</td>
               <td class="num">${unitVal(agg.total_prev)}</td>
-              <td class="num">${unitVal(agg.total_avg3)}</td>
+              ${showAvg3 ? `<td class="num">${unitVal(agg.total_avg3)}</td>` : ""}
               <td class="num">—</td>
-              <td class="num">—</td>
+              ${showAvg3 ? `<td class="num">—</td>` : ""}
               <td class="num">100.0%</td>
             </tr>
           </tbody>
         </table>` : ""
       }
-      <h3 style="font-size:11px;color:#1e3a5f;margin:10px 0 6px;">Per-Promo MoM / 3M-avg &amp; Share within Promotion</h3>
+      <h3 style="font-size:11px;color:#1e3a5f;margin:10px 0 6px;">Per-Promo ${showAvg3 ? "MoM / 3M-avg" : "MoM"} &amp; Share within Promotion</h3>
       <table>
         <thead><tr>
           <th>Promo</th>
           <th class="num">Participants</th>
-          <th class="num">This</th>
-          <th class="num">Prev</th>
-          <th class="num">3M avg</th>
-          <th class="num">MoM</th>
-          <th class="num">vs 3M avg</th>
+          <th class="num">${isRange ? "Period" : "This"}</th>
+          <th class="num">${isRange ? "Prev 6M" : "Prev"}</th>
+          ${showAvg3 ? `<th class="num">3M avg</th>` : ""}
+          <th class="num">${prevLabel}</th>
+          ${showAvg3 ? `<th class="num">vs 3M avg</th>` : ""}
           <th class="num">Share of Promo</th>
           <th class="num">Share of Total</th>
         </tr></thead>
@@ -610,13 +650,13 @@ function render(j){
               <td class="num">${p.participants} / ${p.total_shops}</td>
               <td class="num">${unitVal(p.this)}</td>
               <td class="num">${unitVal(p.prev)}</td>
-              <td class="num">${unitVal(p.avg3)}</td>
+              ${showAvg3 ? `<td class="num">${unitVal(p.avg3)}</td>` : ""}
               <td class="num">${fmtPct(p.mom_pct)}</td>
-              <td class="num">${fmtPct(p.vs_avg3_pct)}</td>
-              <td class="num">${shareCell(p.share_of_promo_this, p.share_of_promo_prev)}<div style="font-size:10px;color:#9ca3af;">3M ${p.share_of_promo_avg3 != null ? p.share_of_promo_avg3.toFixed(1) + "%" : "—"}</div></td>
-              <td class="num">${shareCell(p.share_of_total_this, p.share_of_total_prev)}<div style="font-size:10px;color:#9ca3af;">3M ${p.share_of_total_avg3 != null ? p.share_of_total_avg3.toFixed(1) + "%" : "—"}</div></td>
+              ${showAvg3 ? `<td class="num">${fmtPct(p.vs_avg3_pct)}</td>` : ""}
+              <td class="num">${shareCell(p.share_of_promo_this, p.share_of_promo_prev)}${showAvg3 ? `<div style="font-size:10px;color:#9ca3af;">3M ${p.share_of_promo_avg3 != null ? p.share_of_promo_avg3.toFixed(1) + "%" : "—"}</div>` : ""}</td>
+              <td class="num">${shareCell(p.share_of_total_this, p.share_of_total_prev)}${showAvg3 ? `<div style="font-size:10px;color:#9ca3af;">3M ${p.share_of_total_avg3 != null ? p.share_of_total_avg3.toFixed(1) + "%" : "—"}</div>` : ""}</td>
             </tr>
-          `).join("") || `<tr><td colspan="9" style="color:#9ca3af;text-align:center;padding:14px;">No promos active in this month.</td></tr>`}
+          `).join("") || `<tr><td colspan="${showAvg3 ? 9 : 7}" style="color:#9ca3af;text-align:center;padding:14px;">No promos active in this period.</td></tr>`}
         </tbody>
       </table>
       <div class="notes">
