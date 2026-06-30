@@ -108,6 +108,13 @@ td.name{font-weight:500;color:#1e3a5f}
       <option value="2026-H1">2026 1st Half (Jan–Jun)</option>
     </select>
   </label>
+  <div id="stateBtns" style="display:flex;gap:4px;">
+    <button data-state=""    class="active">All States</button>
+    <button data-state="NSW">NSW</button>
+    <button data-state="QLD">QLD</button>
+    <button data-state="VIC">VIC</button>
+    <button data-state="WA">WA</button>
+  </div>
   <div class="nav">
     <a href="/">Graph</a>
     <a href="/map">Map</a>
@@ -147,8 +154,17 @@ function fmtPpt(p){
 
 // Highlights page is qty-only — the team analyses units, not AUD.
 const metric = "qty";
+let stateFilter = "";  // "" = all states; otherwise NSW/QLD/VIC/WA
 
 document.getElementById("monthSel").addEventListener("change", load);
+document.getElementById("stateBtns").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-state]");
+  if (!btn) return;
+  stateFilter = btn.dataset.state || "";
+  document.querySelectorAll("#stateBtns button").forEach(b =>
+    b.classList.toggle("active", (b.dataset.state || "") === stateFilter));
+  load();
+});
 
 async function load(){
   const wrap = document.getElementById("wrap");
@@ -156,7 +172,8 @@ async function load(){
   if (status) { status.className = "status-msg"; status.textContent = "Loading…"; status.style.display = ""; }
   const month = document.getElementById("monthSel").value;
   try {
-    const r = await fetch(`/api/monthly_highlights?month=${encodeURIComponent(month)}&metric=${metric}`);
+    const stateQs = stateFilter ? `&state=${encodeURIComponent(stateFilter)}` : "";
+    const r = await fetch(`/api/monthly_highlights?month=${encodeURIComponent(month)}&metric=${metric}${stateQs}`);
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
     render(j);

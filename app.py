@@ -6768,6 +6768,17 @@ def api_monthly_highlights():
     month_str = (request.args.get("month") or "").strip()
     metric    = (request.args.get("metric") or "qty").strip().lower()
     metric    = "qty" if metric == "qty" else "amt"
+    # Optional NSW / QLD / VIC / WA filter.  Folds SA/TAS into VIC,
+    # NT into WA, ACT into NSW the same way the Region section does
+    # so the totals reconcile.
+    state_filter = (request.args.get("state") or "").strip().upper()
+    _STATE_FILTER_EXPAND = {
+        "NSW": ("NSW", "ACT"),
+        "QLD": ("QLD",),
+        "VIC": ("VIC", "SA", "TAS"),
+        "WA":  ("WA",  "NT"),
+    }
+    state_filter_members = _STATE_FILTER_EXPAND.get(state_filter) if state_filter else None
 
     # ── Period resolution ────────────────────────────────────────
     # Supports both single-month (YYYY-MM) and half-year (YYYY-H1 /
@@ -6831,9 +6842,35 @@ def api_monthly_highlights():
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
 
+        # Customer-side state filter.  When a state button is on,
+        # splice an extra JOIN between `FROM {tbl} s` and the existing
+        # WHERE so totals / product groups / sold-tos / promo
+        # participants all narrow together.  No alias collision: the
+        # customer join uses cf_state; everything else still uses `s`.
+        if state_filter_members:
+            placeholders = ",".join(["%s"] * len(state_filter_members))
+            state_join_sql = (
+                f" JOIN customer cf_state ON cf_state.ship_to = s.ship_to "
+                f"AND cf_state.bde_state IN ({placeholders}) "
+            )
+            state_join_ps  = list(state_filter_members)
+        else:
+            state_join_sql = ""
+            state_join_ps  = []
+
+        def _src_with_state(y, m):
+            """Per-month source + WHERE; injects the optional state
+            JOIN before the existing WHERE so every helper reuses
+            one filter path."""
+            tbl, where, ps = _highlights_src_for(cur, y, m)
+            if tbl and state_join_sql:
+                where = state_join_sql + (where or "")
+                ps    = list(state_join_ps) + list(ps)
+            return tbl, where, ps
+
         # ── helpers that re-use the cursor ──────────────────────────
         def totals(y, m):
-            tbl, where, ps = _highlights_src_for(cur, y, m)
+            tbl, where, ps = _src_with_state(y, m)
             if not tbl:
                 return {"qty": 0.0, "amt": 0.0, "days": 0}
             # Probe for a `day` column — per-month tables (sales_2601…)
@@ -6860,7 +6897,7 @@ def api_monthly_highlights():
                     "days": int(r.get("days") or 0)}
 
         def per_region(y, m):
-            tbl, where, ps = _highlights_src_for(cur, y, m)
+            tbl, where, ps = _src_with_state(y, m)
             if not tbl:
                 return {}
             cur.execute(
@@ -6890,7 +6927,7 @@ def api_monthly_highlights():
             return out
 
         def per_product_group(y, m):
-            tbl, where, ps = _highlights_src_for(cur, y, m)
+            tbl, where, ps = _src_with_state(y, m)
             if not tbl:
                 return {}
             cur.execute(
@@ -6911,7 +6948,7 @@ def api_monthly_highlights():
             return out
 
         def per_sold_to(y, m):
-            tbl, where, ps = _highlights_src_for(cur, y, m)
+            tbl, where, ps = _src_with_state(y, m)
             if not tbl:
                 return {}
             cur.execute(
@@ -7062,7 +7099,7 @@ def api_monthly_highlights():
         ANALYZED_PROMOS = ["443", "iON", "TrueBlue"]
         promotions = []
         promo_aggregate = None   # {promo: X, non_promo: Y, share, ...}
-        this_tbl, this_where, this_ps = _highlights_src_for(cur, year, month)
+        this_tbl, this_where, this_ps = _src_with_state(year, month)
         if this_tbl:
             ym_year_lit  = year
             ym_month_lit = month
@@ -7123,7 +7160,7 @@ def api_monthly_highlights():
             def _participants_over(months, promo_name):
                 parts = set()
                 for (y, m) in months:
-                    src = _highlights_src_for(cur, y, m)
+                    src = _src_with_state(y, m)
                     if not src or not src[0]:
                         continue
                     parts |= _participants_for(
@@ -7132,7 +7169,7 @@ def api_monthly_highlights():
 
             # Trailing 3 (single-month only).
             trailing3_pst = [] if is_range else [per_sold_to(y, m) for (y, m) in trailing3]
-            trailing3_src = [] if is_range else [_highlights_src_for(cur, y, m)
+            trailing3_src = [] if is_range else [_src_with_state(y, m)
                                                  for (y, m) in trailing3]
             trailing3_all = [sum(d.get(metric, 0) for d in pst.values())
                              for pst in trailing3_pst]
