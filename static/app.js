@@ -2020,7 +2020,68 @@ async function drawMonthlyStacked(){
                 });
               }
 
+              // Stack-role key: one row per (2025) / (2026 Actual) /
+              // (2026 Target) so the reader can tell the three grouped
+              // bars apart.  We use a neutral grey sample painted with
+              // each role's visual (dim / solid / dashed) rather than
+              // a real dataset's color, so the swatch reads as "this
+              // shading = this year/role" independent of any region.
+              const ROLE_ORDER = [
+                { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "rgba(107,114,128,0.55)", dash: [] },
+                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#6b7280",                dash: [] },
+                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#374151",                dash: [4, 3] },
+              ];
+              const rolesPresent = new Set();
+              chart.data.datasets.forEach((ds) => {
+                if (!ds) return;
+                const lbl = String(ds.label || "");
+                ROLE_ORDER.forEach(r => { if (lbl.includes(r.key)) rolesPresent.add(r.key); });
+              });
+              if (rolesPresent.size >= 2) {
+                out.push({ text: " ", fillStyle: "transparent", strokeStyle: "transparent",
+                           lineWidth: 0, hidden: true, _spacer: true });
+                ROLE_ORDER.forEach(r => {
+                  if (!rolesPresent.has(r.key)) return;
+                  out.push({
+                    text:        r.text,
+                    fillStyle:   r.fill,
+                    strokeStyle: r.stroke,
+                    lineWidth:   r.dash.length ? 1.5 : 0,
+                    lineDash:    r.dash,
+                    hidden:      false,
+                    _roleKey:    r.key,   // used by onClick to toggle whole stack
+                  });
+                });
+              }
+
               return out;
+            }
+          },
+          // Custom onClick: role-key entries toggle every dataset
+          // whose label contains that role suffix (so clicking
+          // "2025 Actual" hides all "(2025)" datasets across every
+          // region).  Group-key entries fall back to the default
+          // per-dataset toggle Chart.js gives us.
+          onClick(evt, item, legend){
+            if (item && item._spacer) return;
+            const chart = legend.chart;
+            if (item && item._roleKey) {
+              const roleKey = item._roleKey;
+              chart.data.datasets.forEach((ds, i) => {
+                if (!ds || String(ds.label || "").indexOf(roleKey) === -1) return;
+                const meta = chart.getDatasetMeta(i);
+                meta.hidden = meta.hidden === null ? !ds.hidden : null;
+              });
+              chart.update();
+              return;
+            }
+            const existing = (baseOpts.plugins?.legend?.onClick);
+            if (typeof existing === "function") { existing(evt, item, legend); return; }
+            // Default Chart.js behaviour when no custom onClick was set.
+            if (typeof item?.datasetIndex === "number") {
+              const meta = chart.getDatasetMeta(item.datasetIndex);
+              meta.hidden = meta.hidden === null ? !chart.data.datasets[item.datasetIndex].hidden : null;
+              chart.update();
             }
           }
         }
