@@ -1732,21 +1732,15 @@ async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
 }
 
 async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
-  // Apply the drill level ourselves — same _effectiveGroupBy that
-  // the actual-sales fetcher uses.  Without this, Target stayed on
-  // the top-level cascade (Region) even after the user drilled to
-  // Salesman, so Target bars stacked by state while Actuals stacked
-  // by BDE — the classic "Target one step behind" symptom.
-  const effective = (window._effectiveGroupBy || (g => g))(groupBy);
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
     product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
-    group_by: effective, top_limit:filters.top_limit || 0,
+    group_by: groupBy, top_limit:filters.top_limit || 0,
     year: year
   }).toString();
 
-  return fetchJSON(`/api/monthly_target_breakdown?${qs}`);
+  return fetchJSON(`/api/monthly_target_breakdown?${qs}`); // <-- you need this endpoint
 }
 
 async function drawMonthlyTotals(){
