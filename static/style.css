@@ -1,6 +1,30 @@
 body { font-family: Arial, sans-serif; margin:16px; background:#f4f4f4; }
 h1, h2 { margin: 6px 0; color:#333; }
 
+/* Sticky top toolbar — every page's filter/nav bar stays pinned to
+   the top of the viewport while the user scrolls the charts below.
+   Applied to the shared #filterPanel (index / map / stock) and the
+   .toolbar / header wrappers used by highlights / rebate / meeting /
+   claims.  The subtle backdrop-color + shadow means content
+   scrolling underneath doesn't bleed through. */
+#filterPanel,
+body > header,
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 900;
+  background: #f4f4f4;
+  padding-top: 4px;
+  margin-top: -4px;
+  box-shadow: 0 4px 8px -6px rgba(0,0,0,0.15);
+}
+/* Highlights + admin tools ship the toolbar as a solid navy bar —
+   don't paint the light grey behind it. */
+.toolbar { background: #1e3a5f; }
+/* Rebate / meeting use a plain <header>; the outer body margin
+   creates a visible gap at the top, so extend the sticky area up. */
+body > header { background: #f4f4f4; }
+
 /* ─── Filter bar cards ─────────────────────────────────────── */
 .filter-bar {
   background: #fff;
