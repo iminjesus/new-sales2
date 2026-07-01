@@ -6853,12 +6853,27 @@ def highlights_page():
 def _highlights_src_for(cur, year, month):
     """Resolve (year, month) → (table_name, where_clause, params_tuple).
     Picks the 2026 monthly table when available, sales_thismonth for
-    the current month, sales_2526 for other years (with year+month
-    filter applied)."""
+    the *business-effective* current month, sales_2526 for other years
+    (with year+month filter applied).
+
+    The business-effective month matches the frontend's effectiveMonth()
+    logic: on the first business day of a new month, sales_thismonth
+    still holds the previous month's overnight-loaded rows.  So on
+    July 1 a request for June 2026 should read from sales_thismonth,
+    NOT fall through to an empty sales_2606 archive."""
     if year == 2026:
-        from datetime import date as _d
-        today = _d.today()
-        if year == today.year and month == today.month:
+        eff_y, eff_m = _business_effective_ym()
+        if year == eff_y and month == eff_m:
+            # Only fall back to sales_thismonth if the "closed" archive
+            # for that month doesn't exist yet.  Prevents double-counting
+            # once the batch job has moved June into sales_2606.
+            candidate = f"sales_{year % 100:02d}{month:02d}"
+            try:
+                cur.execute("SHOW TABLES LIKE %s", (candidate,))
+                if cur.fetchone():
+                    return (candidate, "", ())
+            except Exception:
+                pass
             return ("sales_thismonth", "", ())
         candidate = f"sales_{year % 100:02d}{month:02d}"
         try:
