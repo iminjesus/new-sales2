@@ -308,22 +308,27 @@
         e.stopPropagation();
         modalLabelsOn = !modalLabelsOn;
         labelsBtn.classList.toggle("active", modalLabelsOn);
-        // Live-update the current chart's plugin config AND each
-        // dataset's own datalabels config (dataset-level wins over
-        // chart-level in the plugin, so we can't skip this step).
+        // Chart.js's datalabels plugin caches its resolved config
+        // per-dataset the first time it renders, so a live options
+        // patch + update() doesn't always turn labels back off.
+        // Rebuild the modal from source with the new state so every
+        // dataset's config is re-evaluated cleanly.
+        if (modalSourceCanvasId && typeof Chart !== "undefined") {
+          const canvas = document.getElementById(modalSourceCanvasId);
+          const src = canvas ? Chart.getChart(canvas) : null;
+          if (src) { _renderModalFromChart(src); return; }
+        }
+        // Fallback (source chart no longer available): live-patch the
+        // current instance as before.
         if (modalChartInst) {
           modalChartInst.options.plugins = modalChartInst.options.plugins || {};
           modalChartInst.options.plugins.datalabels = _modalDatalabelsConfig();
           const dsList = (modalChartInst.data && modalChartInst.data.datasets) || [];
           dsList.forEach((ds) => {
             const dsType = ds.type || modalChartInst.config.type;
-            if (dsType === "bar") {
+            if (dsType === "bar" || !modalLabelsOn) {
               ds.datalabels = _modalDatalabelsConfig();
-            } else if (!modalLabelsOn) {
-              ds.datalabels = { display: false };
             } else {
-              // Turning labels back on: drop any explicit dataset
-              // config so the chart-level plugin takes over again.
               delete ds.datalabels;
             }
           });
