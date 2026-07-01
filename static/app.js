@@ -1998,6 +1998,17 @@ async function drawMonthlyStacked(){
                      && window.getActivePromos().length > 0);
   const _skipTarget = _hasPromo || effectiveGroup === "promotion";
 
+  // Sales-side fetcher wraps in _effectiveGroupBy internally (so it
+  // sends the drilled cascade level).  The target-side fetcher is
+  // shared with the KPI region grid — mustn't touch its signature —
+  // so apply the drill here at the caller and hand the already-
+  // drilled level directly.  Without this, Target stayed on the
+  // top-level cascade (Region) even after Detail-drill to Salesman,
+  // and the Target bars stacked one step behind the Actual bars.
+  const drilledGroup = (typeof window._effectiveGroupBy === "function")
+    ? window._effectiveGroupBy(effectiveGroup)
+    : effectiveGroup;
+
   // Fetch:
   // - 2025 actual breakdown (for comparison stack)
   // - 2026 actual breakdown
@@ -2006,7 +2017,7 @@ async function drawMonthlyStacked(){
   const [rows25, rows26, rowsT26, sales26TotalRows] = await Promise.all([
     fetchMonthlyBreakdownWithGroup(effectiveGroup, 2025),
     fetchMonthlyBreakdownWithGroup(effectiveGroup, 2026),
-    _skipTarget ? Promise.resolve([]) : fetchMonthlyTargetBreakdownWithGroup(effectiveGroup, 2026),
+    _skipTarget ? Promise.resolve([]) : fetchMonthlyTargetBreakdownWithGroup(drilledGroup, 2026),
     fetchMonthlySales(2026)
   ]);
   // Legend: show only the stack key (group label), not year/actual/target suffixes
