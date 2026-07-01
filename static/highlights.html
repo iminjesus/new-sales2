@@ -307,8 +307,16 @@ function buildRemarkable(j){
   }
 
   // Product Group: biggest vs-anchor mover among top 10 (filter tiny).
+  // Skip anything below ~3% share of total or without a real name — a
+  // brand-new product jumping "+98% from a tiny base" is noise, not a
+  // remarkable finding, and blank-name rows read as broken.
+  const PG_MIN_SHARE = 3.0;
   const pgMetric = isRange ? "mom_pct" : "vs_avg3_pct";
-  const pgs = (j.product_groups || []).filter(p => p.product_group && p[pgMetric] != null && (p.this || 0) > 0);
+  const pgs = (j.product_groups || []).filter(p =>
+    p.product_group && String(p.product_group).trim() !== "" && String(p.product_group).trim() !== "—"
+    && p[pgMetric] != null
+    && (p.this || 0) > 0
+    && (p.share == null || p.share >= PG_MIN_SHARE));
   if (pgs.length) {
     const byAnchor = [...pgs].sort((a,b) => Math.abs(b[pgMetric]) - Math.abs(a[pgMetric]));
     const top = byAnchor[0];
@@ -404,9 +412,21 @@ function buildRemarkable(j){
   // Sold-to: biggest gainer / loser.  Range mode falls back to MoM
   // gainers/losers (which compare to prev period) since the
   // vs-3M-avg variant doesn't apply.
+  //
+  // Skip customers below a minimum activity threshold on BOTH sides
+  // of the comparison — a shop that jumped from 5 → 500 units is
+  // technically the "biggest %" mover but nobody cares about a shop
+  // that small.  Require the baseline OR the current value to hit at
+  // least SOLD_TO_MIN_QTY so we only surface real customers.
+  const SOLD_TO_MIN_QTY = 100;
   const sold = j.sold_to || {};
-  const gainersList = isRange ? (sold.gainers || []) : (sold.gainers_vs_avg3 || []);
-  const losersList  = isRange ? (sold.losers  || []) : (sold.losers_vs_avg3  || []);
+  const _bigEnough = (r, key) =>
+    r && ((+r.this || 0) >= SOLD_TO_MIN_QTY || (+r[key] || 0) >= SOLD_TO_MIN_QTY)
+      && String(r.name || "").trim() !== "";
+  const gainersList = (isRange ? (sold.gainers || []) : (sold.gainers_vs_avg3 || []))
+    .filter(r => _bigEnough(r, isRange ? "prev" : "avg3"));
+  const losersList  = (isRange ? (sold.losers  || []) : (sold.losers_vs_avg3  || []))
+    .filter(r => _bigEnough(r, isRange ? "prev" : "avg3"));
   const customerChip = isRange ? "Customer · vs Prev 6M" : "Customer · vs 3M";
   const baselineLabel = isRange ? "Prev 6 months" : "3M average";
   const baselineKey   = isRange ? "prev" : "avg3";
