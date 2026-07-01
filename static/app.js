@@ -2320,9 +2320,9 @@ async function drawMonthlyStacked(){
   const dsT26 = groups.map((g,i)=>({
     label: `${g} (2026 Target)`,
     data: byT26[g] || Array(12).fill(null),
-    backgroundColor: withAlpha(COLORS[i%COLORS.length], "70"),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "b0"),
     borderColor:    TARGET_BORDER,
-    borderWidth:    2,
+    borderWidth:    1.5,
     borderDash:     [4, 3],
     stack: "T2026",
     categoryPercentage: 0.9,
@@ -2353,9 +2353,9 @@ async function drawMonthlyStacked(){
   const dsT26Cum = groups.map((g,i)=>({
     label: `${g} (2026 Target)`,
     data: byT26Cum[g] || Array(12).fill(null),
-    backgroundColor: withAlpha(COLORS[i%COLORS.length], "70"),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "b0"),
     borderColor:    TARGET_BORDER,
-    borderWidth:    2,
+    borderWidth:    1.5,
     borderDash:     [4, 3],
     stack: "T2026",
     categoryPercentage: 0.9,
