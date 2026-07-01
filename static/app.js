@@ -1874,7 +1874,7 @@ async function drawMonthlyTotals(){
         label: (filters.metric==="amount" ? "Sales Amount (2025)" : "SalesQty (2025)"),
         type:"bar",
         data:sales25,
-        backgroundColor:"#94a3b8",
+        backgroundColor:"#64748b",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
@@ -1915,7 +1915,7 @@ async function drawMonthlyTotals(){
         label: (filters.metric==="amount" ? "Cumulative Amount (2025)" : "Cumulative Qty (2025)"),
         type:"bar",
         data:salesCum25,
-        backgroundColor:"#94a3b8",
+        backgroundColor:"#64748b",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
@@ -2393,7 +2393,7 @@ async function drawMonthlyStacked(){
   const ds25 = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: by25[g] || Array(12).fill(0),
-    backgroundColor: withAlpha(COLORS[i%COLORS.length], "30"),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -2426,7 +2426,7 @@ async function drawMonthlyStacked(){
   const ds25Cum = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: by25Cum[g] || Array(12).fill(0),
-    backgroundColor: withAlpha(COLORS[i%COLORS.length], "30"),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -2459,7 +2459,7 @@ async function drawMonthlyStacked(){
   const ds25Pct = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: pct25[g] || Array(12).fill(0),
-    backgroundColor: withAlpha(COLORS[i%COLORS.length], "30"),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
@@ -2479,7 +2479,7 @@ async function drawMonthlyStacked(){
   const ds25PctCum = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: pct25Cum[g] || Array(12).fill(0),
-    backgroundColor: withAlpha(COLORS[i%COLORS.length], "30"),
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
     stack: "Y2025",
     categoryPercentage: 0.9,
     barPercentage: 0.9,
