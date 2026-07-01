@@ -92,16 +92,57 @@
       responsive: true,
       maintainAspectRatio: false,
     });
-    // The cross-chart legend onClick in app.js only makes sense on the
-    // dashboard's monthly bars, not on this modal copy — drop it so
-    // clicking a legend in the modal just toggles locally.
-    // At the same time, override the datalabels plugin config so ALL
-    // datasets (bars + lines) show their values by default when
-    // enlarged — the enlarged view's whole point is legibility.  The
-    // toggle chip in the header flips this on/off per session.
+    // The dashboard's synced legend onClick propagates hide/show
+    // across multiple charts on the main page — that would misfire
+    // inside the modal.  Replace it with a local group-/role-aware
+    // toggle so ✕-legend clicks still turn off every dataset that
+    // shares the clicked key (NSW → all three stack roles at once)
+    // AND flip the label's hidden flag so Chart.js draws the
+    // strikethrough that signals "removed".  Also override the
+    // datalabels plugin config so ALL datasets (bars + lines) show
+    // their values by default when enlarged.
     opts.plugins = Object.assign({}, opts.plugins || {});
     if (opts.plugins.legend) {
-      opts.plugins.legend = Object.assign({}, opts.plugins.legend, { onClick: undefined });
+      opts.plugins.legend = Object.assign({}, opts.plugins.legend, {
+        onClick: function(evt, item, legend){
+          if (item && item._spacer) return;
+          const chart = legend.chart;
+          function _toggleMatching(pred){
+            const matches = [];
+            chart.data.datasets.forEach((ds, i) => {
+              if (!ds || !pred(ds)) return;
+              matches.push(i);
+            });
+            if (!matches.length) return;
+            let anyVisible = false;
+            matches.forEach(i => {
+              const meta = chart.getDatasetMeta(i);
+              const dsHidden = (meta.hidden !== null) ? meta.hidden : !!chart.data.datasets[i].hidden;
+              if (!dsHidden) anyVisible = true;
+            });
+            const targetHidden = anyVisible;
+            matches.forEach(i => {
+              const meta = chart.getDatasetMeta(i);
+              meta.hidden = targetHidden ? true : null;
+            });
+            chart.update();
+          }
+          if (item && item._roleKey) {
+            _toggleMatching(ds => String(ds.label || "").indexOf(item._roleKey) !== -1);
+            return;
+          }
+          if (item && item._groupKey) {
+            _toggleMatching(ds => String(ds.label || "").split(" (")[0].trim() === item._groupKey);
+            return;
+          }
+          // Simple charts: fall back to default single-dataset toggle.
+          if (typeof item?.datasetIndex === "number") {
+            const meta = chart.getDatasetMeta(item.datasetIndex);
+            meta.hidden = meta.hidden === null ? !chart.data.datasets[item.datasetIndex].hidden : null;
+            chart.update();
+          }
+        }
+      });
     }
     opts.plugins.datalabels = _modalDatalabelsConfig();
     // Some source charts also set per-dataset `datalabels` (either
