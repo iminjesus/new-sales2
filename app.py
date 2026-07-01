@@ -4165,6 +4165,34 @@ def monthly_target():
 # ------------------------- Monthly Target Breakdown --------------------------
 from mysql.connector import Error as MySQLError
 
+@app.get("/api/admin/target_26_diag")
+def admin_target_26_diag():
+    """Diagnostic: for a given state, return distinct bde values and
+    per-bde qty totals so we can see whether target_26 has real
+    per-salesman rows or just a state-level lump.
+
+    /api/admin/target_26_diag?state=VIC
+    """
+    state = (request.args.get("state") or "VIC").strip().upper()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT COALESCE(NULLIF(TRIM(bde), ''), '(empty)') AS bde, "
+            "       COUNT(*) AS rows, "
+            "       SUM(qty) AS qty, "
+            "       COUNT(DISTINCT ship_to) AS n_ship_to "
+            "FROM target_26 "
+            "WHERE state = %s "
+            "GROUP BY COALESCE(NULLIF(TRIM(bde), ''), '(empty)') "
+            "ORDER BY qty DESC",
+            (state,),
+        )
+        rows = cur.fetchall()
+        return jsonify({"state": state, "bde_breakdown": rows})
+    finally:
+        cur.close(); conn.close()
+
+
 @app.get("/api/monthly_target_breakdown")
 @cached_endpoint(60)
 def monthly_target_breakdown():
