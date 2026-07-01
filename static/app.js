@@ -301,8 +301,12 @@ function xAxisDdMm(stacked=false){
       maxRotation: 0,
       autoSkip: true,
       callback: function(value){
+        // 3-char cap so monthly labels stay distinguishable ("Jan"
+        // vs "Jun" vs "Jul", "Mar" vs "May") — 2-char slice collapsed
+        // Ma/Ju to the same string.  Day-number labels ("1", "23")
+        // are 1-2 chars so they're unaffected by the wider cap.
         const full = this.getLabelForValue(value);
-        return typeof full === 'string' ? full.slice(0,2) : full; // dd
+        return typeof full === 'string' ? full.slice(0,3) : full;
       }
     }
   };
