@@ -2668,6 +2668,18 @@ def v2_dashboard():
                 "  FROM customer GROUP BY sold_to"
                 ") tcus ON tcus.sold_to = t.sold_to"
             )
+        # Salesman: use customer.salesman_name (mixed-case, matches
+        # sales side) so the Target stacks merge with the Actual
+        # stacks in the legend instead of splitting into phantom
+        # uppercase groups from raw t.bde.
+        if group_by == "salesman":
+            joins_mt.append(
+                "LEFT JOIN ("
+                "  SELECT ship_to,"
+                "         MIN(NULLIF(TRIM(salesman_name),'')) AS salesman_name"
+                "  FROM customer GROUP BY ship_to"
+                ") tsm ON tsm.ship_to = t.ship_to"
+            )
         where_mt = ("WHERE " + " AND ".join(wh_mt)) if wh_mt else ""
         cur.execute(f"""
             SELECT t.month AS month, SUM(t.{value}) AS value
@@ -2687,8 +2699,18 @@ def v2_dashboard():
 
         # target breakdown stacks
         group_col_mt = group_cols_target[group_by]
+        # Override for salesman so both grouping and label match the
+        # sales side's cus.salesman_name (mixed case), not raw t.bde.
+        # Fall back to t.bde when customer master has no salesman.
+        _label_col_mt = label_col_target
+        if group_by == "salesman":
+            group_col_mt = (
+                "COALESCE(NULLIF(TRIM(tsm.salesman_name),''), "
+                "NULLIF(TRIM(t.bde),''), 'COMMON')"
+            )
+            _label_col_mt = group_col_mt
         cur.execute(f"""
-            SELECT t.month AS month, {label_col_target} AS group_label, SUM(t.{value}) AS value
+            SELECT t.month AS month, {_label_col_mt} AS group_label, SUM(t.{value}) AS value
             FROM target_26 t
             {' '.join(joins_mt)}
             {where_mt}
@@ -4206,6 +4228,25 @@ def monthly_target_breakdown():
             "  FROM customer GROUP BY sold_to"
             ") tcus ON tcus.sold_to = t.sold_to"
         )
+    # Salesman: align the target label with the sales side's
+    # `cus.salesman_name` (mixed-case) so stacks merge under the same
+    # legend entry.  target_26.bde is case-inconsistent ("BELLOTTO
+    # NICOLA" vs "Bellotto Nicola") which was leaving the Target
+    # stacks under phantom uppercase groups that had no matching
+    # actual data — so the Target bar looked barely stacked.
+    if group_by == "salesman":
+        joins.append(
+            "LEFT JOIN ("
+            "  SELECT ship_to,"
+            "         MIN(NULLIF(TRIM(salesman_name),'')) AS salesman_name"
+            "  FROM customer GROUP BY ship_to"
+            ") tsm ON tsm.ship_to = t.ship_to"
+        )
+        # Group + label by the customer-master name when we can resolve
+        # it, else fall back to whatever target_26.bde carries so the
+        # row still shows up somewhere.
+        group_col = "COALESCE(NULLIF(TRIM(tsm.salesman_name),''), NULLIF(TRIM(t.bde),''), 'COMMON')"
+        label_col = group_col
 
     # carrying_26 join needed for group_by or filter on product_group/pattern/line
     carrying_join = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
