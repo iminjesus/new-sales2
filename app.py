@@ -4417,6 +4417,7 @@ def yearly_breakdown():
     # other breakdown endpoints).
     group_cols = {
         "line":          "mat.line",
+        "brand":         "mat.brand",
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
