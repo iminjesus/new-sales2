@@ -84,6 +84,7 @@ const filters={
   material:"ALL",
   category:"ALL",
   category_target:"ALL",
+  brand:"ALL",   // HK / LF — Product cascade sub-layer between line and product_group
   top_limit: 0
 };
 
@@ -157,6 +158,18 @@ function _fetchCacheGet(url) {
 }
 
 async function _cachedFetch(u) {
+  // Auto-inject the Product cascade's brand filter into every /api/*
+  // request so the ~20 URLSearchParams call sites throughout this
+  // file don't each need a brand:filters.brand plumbing line.  The
+  // brand is baked into the URL *before* the cache lookup so
+  // different brand values get distinct cache entries.
+  if (typeof u === "string" && u.indexOf("/api/") !== -1
+      && typeof filters !== "undefined"
+      && filters.brand && filters.brand !== "ALL"
+      && u.indexOf("brand=") === -1) {
+    u = u + (u.indexOf("?") === -1 ? "?" : "&")
+          + "brand=" + encodeURIComponent(filters.brand);
+  }
   const cached = _fetchCacheGet(u);
   if (cached !== undefined) return cached;
   const pending = _fetchInFlight.get(u);
@@ -463,7 +476,7 @@ const GROUP_CHAIN = {
   // Each dropdown option maps to its cascade chain.  The 0-index is
   // the initial level shown when the user picks it.  Detail button
   // walks down each chain step-by-step.
-  product:   ["line", "product_group", "pattern"],
+  product:   ["line", "brand", "product_group", "pattern"],
   region:    ["region", "salesman"],
   customer:  ["channel", "sold_to_group", "sold_to"],
   promotion: ["promotion", "promotion_detail"],
@@ -476,6 +489,7 @@ const GROUP_LABEL = {
   promotion:         "Promotion",
   // Cascade-step labels (used for "Detail: <next level>" hints)
   line:              "PCLT / TBR",
+  brand:             "HK / LF",
   product_group:     "Product Group",
   pattern:           "Pattern",
   salesman:          "Salesman",
@@ -540,6 +554,7 @@ window._effectiveGroupBy = function (g) {
 const STEP_TO_FILTER = {
   // cascade step → (filters key, optional UI sync callback)
   line:             { key: "category",       sync: _syncCategoryButtons },
+  brand:            { key: "brand",           sync: _syncBrandFilter },
   product_group:    { key: "product_group",  sync: _syncProductGroupDropdown },
   pattern:          { key: "pattern",        sync: _syncPatternDropdown },
   region:           { key: "region",         sync: _syncRegionButtons },
@@ -555,6 +570,10 @@ function _syncCategoryButtons(val){
   document.querySelectorAll(".cat-btn[data-val]")
     .forEach(b => b.classList.toggle("active", b.dataset.val === sel));
 }
+// Brand cascade step has no dedicated UI control — the breadcrumb
+// alone signals the drill.  Kept as a no-op so STEP_TO_FILTER can
+// treat every step uniformly.
+function _syncBrandFilter(_val){ /* no UI element to sync */ }
 function _syncProductGroupDropdown(val){
   const el = document.getElementById("product_group");
   if (el) { el.value = val; el.classList.add("sel-active"); }

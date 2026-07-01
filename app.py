@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, jsonify, send_file,send_from_directory
+from flask import Flask, request, jsonify, send_file,send_from_directory
 from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
 import mysql.connector
@@ -127,6 +127,8 @@ def parse_filters(req):
         "product_group": (req.args.get("product_group") or "ALL").strip(),
         "pattern":       (req.args.get("pattern") or "ALL").strip(),
         "material":       (req.args.get("material") or "ALL").strip(),
+        # HK / LF (brand) — Product cascade layer between line and pg.
+        "brand":         (req.args.get("brand") or "ALL").upper().strip(),
     }
 
 # States that belong to each sales region.
@@ -2141,6 +2143,8 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
         _ensure_carrying_join("sTop", joins)
     if f.get("product_group") != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f.get("pattern") != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material") != "ALL":
@@ -2367,6 +2371,7 @@ def v2_dashboard():
         "sold_to_group": "cus.sold_to_group",
         "sold_to":       "s.sold_to",
         "pattern":       "mat.pattern",
+        "brand":         "mat.brand",
     }
     group_cols_target = {
         "product_group": "mat.product_group",
@@ -2374,6 +2379,7 @@ def v2_dashboard():
         "salesman":      "t.bde",
         "sold_to":       "t.sold_to",
         "pattern":       "mat.pattern",
+        "brand":         "mat.brand",
     }
     if group_by not in group_cols_sales:
         return jsonify({"error": "invalid group_by"}), 400
@@ -2426,7 +2432,7 @@ def v2_dashboard():
         # filter or group_by needs it.  Size is stored on carrying_26.size
         # (the dropdown value is the size string, not a material code), so
         # filtering by size requires the carrying join.
-        if (group_by in ("line", "product_group", "pattern") or
+        if (group_by in ("line", "brand", "product_group", "pattern") or
             f["product_group"] != "ALL" or f["pattern"] != "ALL" or
             f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_d)
@@ -2434,6 +2440,8 @@ def v2_dashboard():
             _ensure_customer_join("s", joins_d)
         if f["product_group"] != "ALL":
             wh_d.append("mat.product_group = %s"); params_d.append(f["product_group"])
+        if f["brand"] != "ALL":
+            wh_d.append("mat.brand = %s"); params_d.append(f["brand"])
         if f["pattern"] != "ALL":
             wh_d.append("mat.pattern = %s"); params_d.append(f["pattern"])
         if f["material"] != "ALL":
@@ -2491,6 +2499,9 @@ def v2_dashboard():
         if f["product_group"] != "ALL":
             needs_carrying_t = True
             wh_t.append("mat.product_group = %s"); params_t.append(f["product_group"])
+        if f["brand"] != "ALL":
+            needs_carrying_t = True
+            wh_t.append("mat.brand = %s"); params_t.append(f["brand"])
         if f["pattern"] != "ALL":
             needs_carrying_t = True
             wh_t.append("mat.pattern = %s"); params_t.append(f["pattern"])
@@ -2523,7 +2534,7 @@ def v2_dashboard():
         joins_m, wh_m, params_m = build_customer_filters("s", f, use_sold_to_name=False)
         mj, mw = category_filters_sales("s", f["category"])
         joins_m += mj; wh_m += mw
-        if (group_by in ("line", "product_group", "pattern") or
+        if (group_by in ("line", "brand", "product_group", "pattern") or
             f["product_group"] != "ALL" or f["pattern"] != "ALL" or
             f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_m)
@@ -2531,6 +2542,8 @@ def v2_dashboard():
             _ensure_customer_join("s", joins_m)
         if f["product_group"] != "ALL":
             wh_m.append("mat.product_group = %s"); params_m.append(f["product_group"])
+        if f["brand"] != "ALL":
+            wh_m.append("mat.brand = %s"); params_m.append(f["brand"])
         if f["pattern"] != "ALL":
             wh_m.append("mat.pattern = %s"); params_m.append(f["pattern"])
         if f["material"] != "ALL":
@@ -2595,10 +2608,13 @@ def v2_dashboard():
         joins_mt += tj2; wh_mt += tw2
         # carrying_26 needed for product_group/pattern (not stored in target_26 directly)
         carrying_join_mt = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
-        needs_carrying_mt = group_by in ("product_group", "pattern")
+        needs_carrying_mt = group_by in ("brand", "product_group", "pattern")
         if f["product_group"] != "ALL":
             needs_carrying_mt = True
             wh_mt.append("mat.product_group = %s"); params_mt.append(f["product_group"])
+        if f["brand"] != "ALL":
+            needs_carrying_mt = True
+            wh_mt.append("mat.brand = %s"); params_mt.append(f["brand"])
         if f["pattern"] != "ALL":
             needs_carrying_mt = True
             wh_mt.append("mat.pattern = %s"); params_mt.append(f["pattern"])
@@ -2656,7 +2672,7 @@ def v2_dashboard():
         if f["category"] != "443":
             yj, yw = category_filters_sales("s", f["category"])
             joins_y += yj; wh_y += yw
-        if (group_by in ("line", "product_group", "pattern") or
+        if (group_by in ("line", "brand", "product_group", "pattern") or
             f["product_group"] != "ALL" or f["pattern"] != "ALL" or
             f["material"] != "ALL"):
             _ensure_carrying_join("s", joins_y)
@@ -2664,6 +2680,8 @@ def v2_dashboard():
             _ensure_customer_join("s", joins_y)
         if f["product_group"] != "ALL":
             wh_y.append("mat.product_group = %s"); params_y.append(f["product_group"])
+        if f["brand"] != "ALL":
+            wh_y.append("mat.brand = %s"); params_y.append(f["brand"])
         if f["pattern"] != "ALL":
             wh_y.append("mat.pattern = %s"); params_y.append(f["pattern"])
         if f["material"] != "ALL":
@@ -2819,6 +2837,9 @@ def daily_sales():
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
         params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s")
+        params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s")
         params.append(f["pattern"])
@@ -2920,6 +2941,7 @@ def daily_breakdown():
     group_by = (request.args.get("group_by") or "region").strip()
     group_cols = {
         "line":          "mat.line",
+        "brand":         "mat.brand",
         "product_group": "mat.product_group",
         "region":        "cus.bde_state",
         "salesman":      "cus.salesman_name",
@@ -2945,7 +2967,7 @@ def daily_breakdown():
         wh    += cat_where
 
     # Carrying/customer join needed for group_by or filter
-    if (group_by in ("line", "product_group", "pattern") or
+    if (group_by in ("line", "brand", "product_group", "pattern") or
         is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
@@ -2956,7 +2978,12 @@ def daily_breakdown():
     # two carrying lines that make sense as a product split).  HM and
     # any future lines are intentionally hidden because HM reads as a
     # customer-side pivot, not a product one.
-    if group_by == "line":
+    if group_by in ("line", "brand"):
+        # Restrict the Product cascade's top two levels to PCLT + TBR
+        # (the two carrying lines that make sense as a product split).
+        # HM / HK-only / LF-only rows for other lines are intentionally
+        # hidden because HM reads as a customer-side pivot, not a
+        # product one.  Brand level (HK vs LF) inherits the same gate.
         wh.append("mat.line IN ('PCLT','TBR')")
 
     # Pre-aggregated qty per (ship_to, day, brand) for TrueBlue's
@@ -2991,6 +3018,8 @@ def daily_breakdown():
         group_col = group_cols[group_by]
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
@@ -3105,6 +3134,8 @@ def daily_target():
             joins.append(carrying_join_dt)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f["material"] != "ALL":
@@ -3298,6 +3329,8 @@ def fetch_table_rows(top_limit: int):
         _ensure_carrying_join("s", joins)
     if f.get("product_group", "ALL") != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f.get("pattern", "ALL") != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material", "ALL") != "ALL":
@@ -3522,6 +3555,8 @@ def _build_export_common_filters(f, joins, wh, params, alias="s"):
         _ensure_carrying_join(alias, joins)
     if f.get("product_group", "ALL") != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f.get("pattern", "ALL") != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f.get("material", "ALL") != "ALL":
@@ -3700,6 +3735,9 @@ def monthly_sales():
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
         params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s")
+        params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s")
         params.append(f["pattern"])
@@ -3876,7 +3914,7 @@ def monthly_breakdown():
     joins += cat_joins
     wh    += cat_where
 
-    if (group_by in ("line", "product_group", "pattern") or
+    if (group_by in ("line", "brand", "product_group", "pattern") or
         is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
@@ -3885,7 +3923,12 @@ def monthly_breakdown():
         _ensure_customer_join("s", joins)
     # Force the Product top-level cascade to only show PCLT + TBR
     # (the two carrying lines that make sense as a product split).
-    if group_by == "line":
+    if group_by in ("line", "brand"):
+        # Restrict the Product cascade's top two levels to PCLT + TBR
+        # (the two carrying lines that make sense as a product split).
+        # HM / HK-only / LF-only rows for other lines are intentionally
+        # hidden because HM reads as a customer-side pivot, not a
+        # product one.  Brand level (HK vs LF) inherits the same gate.
         wh.append("mat.line IN ('PCLT','TBR')")
     # scus = per-sold_to name resolver (one row per sold_to). Used as
     # the label source when group_by == 'sold_to' so the resulting
@@ -3900,6 +3943,8 @@ def monthly_breakdown():
         )
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
@@ -4015,6 +4060,8 @@ def monthly_target():
             joins.append(carrying_join_mt)
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s"); params.append(f["pattern"])
     if f["material"] != "ALL":
@@ -4128,11 +4175,14 @@ def monthly_target_breakdown():
 
     # carrying_26 join needed for group_by or filter on product_group/pattern/line
     carrying_join = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
-    needs_carrying = group_by in ("line", "product_group", "pattern")
+    needs_carrying = group_by in ("line", "brand", "product_group", "pattern")
 
     if f["product_group"] != "ALL":
         needs_carrying = True
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        needs_carrying = True
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f["pattern"] != "ALL":
         needs_carrying = True
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
@@ -4143,7 +4193,12 @@ def monthly_target_breakdown():
     if needs_carrying and carrying_join not in joins:
         joins.append(carrying_join)
     # Force the Product top-level cascade to only show PCLT + TBR
-    if group_by == "line":
+    if group_by in ("line", "brand"):
+        # Restrict the Product cascade's top two levels to PCLT + TBR
+        # (the two carrying lines that make sense as a product split).
+        # HM / HK-only / LF-only rows for other lines are intentionally
+        # hidden because HM reads as a customer-side pivot, not a
+        # product one.  Brand level (HK vs LF) inherits the same gate.
         wh.append("mat.line IN ('PCLT','TBR')")
 
     conn = get_connection()
@@ -4224,6 +4279,9 @@ def yearly_sales():
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
         params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s")
+        params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s")
         params.append(f["pattern"])
@@ -4336,7 +4394,7 @@ def yearly_breakdown():
             ") scus ON scus.sold_to = s.sold_to"
         )
 
-    if (group_by in ("line", "product_group", "pattern") or
+    if (group_by in ("line", "brand", "product_group", "pattern") or
         is_promo_group or
         f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL"):
@@ -4344,10 +4402,17 @@ def yearly_breakdown():
     if group_by in ("region", "salesman", "channel", "sold_to_group", "sold_to") or is_promo_group:
         _ensure_customer_join("s", joins)
     # Force the Product top-level cascade to only show PCLT + TBR.
-    if group_by == "line":
+    if group_by in ("line", "brand"):
+        # Restrict the Product cascade's top two levels to PCLT + TBR
+        # (the two carrying lines that make sense as a product split).
+        # HM / HK-only / LF-only rows for other lines are intentionally
+        # hidden because HM reads as a customer-side pivot, not a
+        # product one.  Brand level (HK vs LF) inherits the same gate.
         wh.append("mat.line IN ('PCLT','TBR')")
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s"); params.append(f["brand"])
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s");       params.append(f["pattern"])
     if f["material"] != "ALL":
@@ -4838,6 +4903,8 @@ def profit_monthly():
                 _ensure_carrying_join("p", joins_p)
             if f.get("product_group", "ALL") != "ALL":
                 wh_p.append("mat.product_group = %s"); params_p.append(f["product_group"])
+            if f["brand"] != "ALL":
+                wh_p.append("mat.brand = %s"); params_p.append(f["brand"])
             if f.get("pattern", "ALL") != "ALL":
                 wh_p.append("mat.pattern = %s"); params_p.append(f["pattern"])
             if f["material"] != "ALL":
@@ -4913,6 +4980,9 @@ def sales_map():
     if f["product_group"] != "ALL":
         wh.append("mat.product_group = %s")
         params.append(f["product_group"])
+    if f["brand"] != "ALL":
+        wh.append("mat.brand = %s")
+        params.append(f["brand"])
 
     if f["pattern"] != "ALL":
         wh.append("mat.pattern = %s")
