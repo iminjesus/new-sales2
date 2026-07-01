@@ -4194,6 +4194,7 @@ def monthly_target_breakdown():
     # per-sold_to tcus subquery joined below.
     group_cols = {
         "line":          "mat.line",
+        "brand":         "mat.brand",
         "product_group": "mat.product_group",
         "region":        "t.state",
         "salesman":      "t.bde",
