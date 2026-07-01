@@ -2412,15 +2412,6 @@ def v2_dashboard():
         return jsonify({"error": "invalid group_by"}), 400
     # scus / tcus = per-sold_to name resolvers — guarantee one label
     # per sold_to regardless of ship_to row joined.  See SOLD_TO_NAME_JOIN.
-    #
-    # Salesman is the one dimension where sales side (cus.salesman_name)
-    # and target side (t.bde) hold different casings for the same
-    # person.  Normalise both to UPPER(TRIM()) so the actual and target
-    # stacks merge under the same legend entry instead of splitting
-    # into "Bellotto Nicola" (sales) vs "BELLOTTO NICOLA" (target).
-    if group_by == "salesman":
-        group_cols_sales["salesman"]  = "UPPER(TRIM(cus.salesman_name))"
-        group_cols_target["salesman"] = "UPPER(TRIM(t.bde))"
     label_col_sales  = ("MIN(COALESCE(scus.sold_to_name, s.sold_to))"
                        if group_by == "sold_to"
                        else f"COALESCE(NULLIF(TRIM({group_cols_sales[group_by]}),''), 'COMMON')")
@@ -3919,12 +3910,6 @@ def monthly_breakdown():
     is_promo_group = group_by in ("promotion", "promotion_detail")
     if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
-    # Salesman: uppercase-normalise so the Actual stacks in this
-    # endpoint merge with the Target stacks from
-    # /api/monthly_target_breakdown (target_26.bde is UPPERCASE while
-    # customer.salesman_name is mixed case).
-    if group_by == "salesman":
-        group_cols["salesman"] = "UPPER(TRIM(cus.salesman_name))"
 
     # 2025 path runs directly on sales_2526; 2026 still uses the
     # per-month union which exposes year/month/day as constants.
@@ -4250,15 +4235,6 @@ def monthly_target_breakdown():
             "  FROM customer GROUP BY sold_to"
             ") tcus ON tcus.sold_to = t.sold_to"
         )
-    # Salesman: uppercase-normalise so Target stacks merge with the
-    # Actual stacks from /api/monthly_breakdown.  target_26.bde is
-    # UPPERCASE while customer.salesman_name is mixed case; both
-    # sides use UPPER(TRIM(...)) so the same person shows up under
-    # the same legend entry.
-    if group_by == "salesman":
-        group_col = "UPPER(TRIM(t.bde))"
-        label_col = f"COALESCE(NULLIF({group_col},''), 'COMMON')"
-
     # carrying_26 join needed for group_by or filter on product_group/pattern/line
     carrying_join = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
     needs_carrying = group_by in ("line", "brand", "product_group", "pattern")
