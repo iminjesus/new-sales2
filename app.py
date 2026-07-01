@@ -111,6 +111,33 @@ class SQLiteConnectionWrapper:
         return getattr(self._conn, name)
 
 
+def _business_effective_ym():
+    """Return (year, month) representing the "effective current month"
+    for graph aggregations.
+
+    Sales_thismonth (and, by extension, the nightly import job that
+    pushes those rows into sales_2526) is populated *overnight* from
+    the previous calendar day.  On the first business day of a new
+    month the rows carry MONTH()=<current month> even though the
+    underlying billing dates are all from the *prior* month — the
+    Monthly Stacked chart then shows a phantom bar at the new month
+    that shouldn't be there yet.
+
+    Mirror the frontend's effectiveMonth() logic: if today is on or
+    before the first weekday of the current month, treat the prior
+    month as the effective current month."""
+    from datetime import date, timedelta
+    today = date.today()
+    first = today.replace(day=1)
+    while first.weekday() >= 5:   # 5=Saturday, 6=Sunday
+        first += timedelta(days=1)
+    if today <= first:
+        # First business day (or before) — the current calendar month
+        # is still populating overnight, so treat previous as current.
+        return (today.year, 12) if today.month == 1 else (today.year, today.month - 1)
+    return (today.year, today.month)
+
+
 def parse_filters(req):
     """Uniform filter extraction."""
     return {
@@ -2549,6 +2576,13 @@ def v2_dashboard():
         if f["material"] != "ALL":
             wh_m.append("mat.size = %s"); params_m.append(f["material"])
         wh_m.append("s.year IN (2025, 2026)")
+        # Suppress future-month rows.  The nightly import puts each
+        # day's sales_thismonth batch into sales_2526 tagged with the
+        # CURRENT calendar month — so on July 1 (before the first
+        # business day) the June-30 batch shows up as a phantom July
+        # bar.  Cap year*100+month to today's effective month.
+        _eff_y, _eff_m = _business_effective_ym()
+        wh_m.append(f"(s.year * 100 + s.month) <= {_eff_y * 100 + _eff_m}")
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_m.append(f"s.sold_to IN ({placeholders})")
@@ -6443,6 +6477,17 @@ def _sales_2026_tables(cur):
             except Exception:
                 return (9999, 99)
         names.sort(key=_key)
+        # Prevent double-counting: if sales_thismonth's effective month
+        # (which _sales_table_year_month resolves to the business-
+        # effective one) already has a matching sales_26MM archive in
+        # the list, drop sales_thismonth from the union so June's data
+        # doesn't count twice on July 1 (once from sales_2606, once
+        # from sales_thismonth still holding June's rows).
+        if "sales_thismonth" in names:
+            eff_y, eff_m = _business_effective_ym()
+            archive = f"sales_{eff_y % 100:02d}{eff_m:02d}"
+            if archive in names:
+                names = [n for n in names if n != "sales_thismonth"]
         _SALES_2026_TABLES_CACHE["ts"]    = now
         _SALES_2026_TABLES_CACHE["names"] = names
         return list(names)
@@ -6457,11 +6502,14 @@ def _sales_table_year_month(table_name):
     """Derive (year, month) from a 2026 sales table name.  The per-month
     tables are named `sales_YYMM` (e.g. sales_2603 = March 2026), and
     `sales_thismonth` is the current calendar month — so we don't need
-    the underlying table to expose year/month columns of its own."""
+    the underlying table to expose year/month columns of its own.
+
+    Uses the business-effective month for sales_thismonth so that on
+    the first business day of a new month (when the table still holds
+    the *previous* month's overnight-loaded rows) we don't spawn a
+    phantom bar at the new month.  See _business_effective_ym()."""
     if table_name == "sales_thismonth":
-        from datetime import date as _d
-        d = _d.today()
-        return d.year, d.month
+        return _business_effective_ym()
     if table_name.startswith("sales_") and len(table_name) == len("sales_") + 4:
         yymm = table_name[len("sales_"):]
         try:
