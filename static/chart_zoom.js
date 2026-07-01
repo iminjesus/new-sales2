@@ -18,6 +18,10 @@
   // Track which canvas the modal is mirroring so we can re-clone from
   // its updated state after the dashboard refreshes from a drill.
   let modalSourceCanvasId = null;
+  // Enlarged view defaults to labels ON — the reader is here to see
+  // exact values.  Click the Labels chip to toggle.  Sticky across
+  // reopens so the user's last preference wins.
+  let modalLabelsOn      = true;
 
   // ── helpers ────────────────────────────────────────────────────────
   function deepCloneSafe(value) {
@@ -35,6 +39,36 @@
     // when present (every chart box on the dashboard has one).
     const h = boxEl && boxEl.querySelector("h3");
     return h ? h.textContent.trim() : "";
+  }
+
+  // Build the datalabels plugin config we splice into every modal
+  // chart.  Toggle chip in the header flips modalLabelsOn; when off
+  // the plugin is inert (display: false), when on we show a compact
+  // number above each data point regardless of the source chart's
+  // own display rule.
+  function _modalDatalabelsConfig() {
+    if (!modalLabelsOn) return { display: false };
+    return {
+      display: (ctx) => {
+        const v = ctx.dataset && ctx.dataset.data
+          ? ctx.dataset.data[ctx.dataIndex] : null;
+        if (v == null) return false;
+        const n = typeof v === "object" ? (v.y ?? v.value ?? 0) : v;
+        return Number(n) !== 0;
+      },
+      anchor: "end",
+      align:  "top",
+      offset: 2,
+      color:  "#111827",
+      font:   { size: 10, weight: 600 },
+      formatter: (val) => {
+        const n = typeof val === "object" ? (val.y ?? val.value ?? 0) : val;
+        const num = Number(n);
+        if (!isFinite(num) || num === 0) return "";
+        if (Math.abs(num) >= 1000) return Math.round(num).toLocaleString();
+        return (Math.round(num * 10) / 10).toString();
+      },
+    };
   }
 
   // ── modal open / close ─────────────────────────────────────────────
@@ -61,11 +95,15 @@
     // The cross-chart legend onClick in app.js only makes sense on the
     // dashboard's monthly bars, not on this modal copy — drop it so
     // clicking a legend in the modal just toggles locally.
-    if (opts.plugins && opts.plugins.legend) {
-      opts.plugins = Object.assign({}, opts.plugins, {
-        legend: Object.assign({}, opts.plugins.legend, { onClick: undefined }),
-      });
+    // At the same time, override the datalabels plugin config so ALL
+    // datasets (bars + lines) show their values by default when
+    // enlarged — the enlarged view's whole point is legibility.  The
+    // toggle chip in the header flips this on/off per session.
+    opts.plugins = Object.assign({}, opts.plugins || {});
+    if (opts.plugins.legend) {
+      opts.plugins.legend = Object.assign({}, opts.plugins.legend, { onClick: undefined });
     }
+    opts.plugins.datalabels = _modalDatalabelsConfig();
     try {
       modalChartInst = new Chart(ctx, {
         type: srcChart.config.type,
@@ -85,6 +123,9 @@
 
     const titleEl = modal.querySelector(".czm-title");
     if (titleEl) titleEl.textContent = title || "";
+    // Reflect the current labels-on state on the toggle chip.
+    const labelsBtn = modal.querySelector(".czm-labels");
+    if (labelsBtn) labelsBtn.classList.toggle("active", modalLabelsOn);
 
     // Remember which canvas we cloned from so a drill firing inside
     // the modal can re-pull from the same source after the dashboard
@@ -195,12 +236,27 @@
       const backdrop = modal.querySelector(".czm-backdrop");
       const closeBtn = modal.querySelector(".czm-close");
       const backBtn  = modal.querySelector(".czm-back");
+      const labelsBtn = modal.querySelector(".czm-labels");
       if (backdrop) backdrop.addEventListener("click", closeModal);
       if (closeBtn) closeBtn.addEventListener("click", closeModal);
       if (backBtn) backBtn.addEventListener("click", function(e){
         e.preventDefault();
         e.stopPropagation();
         if (typeof window._drillBack === "function") window._drillBack();
+      });
+      if (labelsBtn) labelsBtn.addEventListener("click", function(e){
+        e.preventDefault();
+        e.stopPropagation();
+        modalLabelsOn = !modalLabelsOn;
+        labelsBtn.classList.toggle("active", modalLabelsOn);
+        // Live-update the current chart's plugin config without
+        // re-cloning — cheaper and preserves any in-progress hover
+        // state.
+        if (modalChartInst) {
+          modalChartInst.options.plugins = modalChartInst.options.plugins || {};
+          modalChartInst.options.plugins.datalabels = _modalDatalabelsConfig();
+          modalChartInst.update();
+        }
       });
     }
     document.addEventListener("keydown", function (e) {

@@ -538,12 +538,16 @@
          per-chart Back chip on the dashboard.  CSS keeps it hidden
          unless body.drilled is set. -->
     <button class="czm-back" type="button" title="Step back one level">← Back</button>
+    <!-- Data-label toggle.  Default is ON in the enlarged view so
+         the reader can see exact values without hovering; click to
+         switch it off. -->
+    <button class="czm-labels active" type="button" title="Toggle value labels">🏷️ Labels</button>
     <h3 class="czm-title"></h3>
     <div class="czm-canvas-wrap">
       <canvas id="chartZoomCanvas"></canvas>
     </div>
   </div>
 </div>
-<script src="/static/chart_zoom.js?v=20260605a" defer></script>
+<script src="/static/chart_zoom.js?v=20260701" defer></script>
 </body>
 </html>

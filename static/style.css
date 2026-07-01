@@ -343,6 +343,18 @@ body.drilled .box .chart-back-btn { display:inline-block; }
 #chartZoomModal .czm-back:hover { background:#fde68a; border-color:#d97706; }
 body.drilled #chartZoomModal .czm-back { display:inline-block; }
 
+/* Labels-on/off toggle chip in the enlarge modal. */
+#chartZoomModal .czm-labels {
+  position:absolute; top:12px; right:120px;
+  font-size:11px; font-weight:600; padding:4px 10px;
+  background:#f3f4f6; border:1px solid #d1d5db; color:#374151;
+  border-radius:5px; cursor:pointer;
+}
+#chartZoomModal .czm-labels:hover { background:#e5e7eb; }
+#chartZoomModal .czm-labels.active {
+  background:#dbeafe; border-color:#93c5fd; color:#1e40af;
+}
+
 /* Fix the chart height */
 .chart-fixed {
   position: relative;
