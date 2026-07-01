@@ -306,58 +306,44 @@ function buildRemarkable(j){
     }
   }
 
-  // Product Group: biggest vs-anchor mover among top 10 (filter tiny).
-  // Skip anything below ~3% share of total or without a real name — a
-  // brand-new product jumping "+98% from a tiny base" is noise, not a
-  // remarkable finding, and blank-name rows read as broken.
+  // Product Group: surface the biggest riser AND biggest faller
+  // separately, so the reader always sees which real product grew
+  // and which shrank in the period.  Skip anything below the share
+  // floor / without a real name — a brand-new product jumping
+  // "+98% from a tiny base" is noise.  Threshold lowered to ±5% so
+  // the callouts actually show up on months with modest swings.
   const PG_MIN_SHARE = 3.0;
+  const PG_MIN_SWING = 5.0;
   const pgMetric = isRange ? "mom_pct" : "vs_avg3_pct";
   const pgs = (j.product_groups || []).filter(p =>
     p.product_group && String(p.product_group).trim() !== "" && String(p.product_group).trim() !== "—"
     && p[pgMetric] != null
     && (p.this || 0) > 0
     && (p.share == null || p.share >= PG_MIN_SHARE));
+  function _pgItem(row, kind){
+    const v    = row[pgMetric];
+    const tone = kind === "up" ? "good" : "bad";
+    const chip = kind === "up" ? "Product · biggest gainer" : "Product · biggest faller";
+    const dir  = kind === "up" ? "surged" : "dropped";
+    return {
+      score: Math.abs(v) + 10,   // small bump so product items keep priority
+      chip, tone,
+      line: `<b>${esc(row.product_group)}</b> ${dir} <b>${Math.abs(v).toFixed(1)}% ${anchorChip}</b> (now ${unitVal(row.this)}, ${row.share != null ? row.share.toFixed(1) + "%" : "—"} share).`,
+      detail: `<table>
+        <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(row.this)}</td></tr>
+        ${isRange ? "" : `<tr><th>3M average</th><td>${unitVal(row.avg3)}</td></tr>`}
+        ${isRange ? "" : `<tr><th>vs 3M avg</th><td>${fmtPct(row.vs_avg3_pct)}</td></tr>`}
+        <tr><th>${isRange ? "vs Prev 6M" : "vs Prev M"}</th><td>${fmtPct(row.mom_pct)}</td></tr>
+        <tr><th>${isRange ? "vs Same 6M LY" : "vs Prev Y"}</th><td>${fmtPct(row.yoy_pct)}</td></tr>
+        <tr><th>Share</th><td>${row.share != null ? row.share.toFixed(1) + "%" : "—"}</td></tr>
+      </table>`
+    };
+  }
   if (pgs.length) {
-    const byAnchor = [...pgs].sort((a,b) => Math.abs(b[pgMetric]) - Math.abs(a[pgMetric]));
-    const top = byAnchor[0];
-    if (top && Math.abs(top[pgMetric]) >= 30) {
-      const v = top[pgMetric];
-      const tone = v > 0 ? "good" : "bad";
-      const dir  = v > 0 ? "surged" : "dropped";
-      items.push({
-        score: Math.abs(v),
-        chip: "Product", tone,
-        line: `<b>${esc(top.product_group)}</b> ${dir} <b>${Math.abs(v).toFixed(1)}% ${anchorChip}</b> (now ${unitVal(top.this)}, ${top.share != null ? top.share.toFixed(1) + "%": "—"} share).`,
-        detail: `<table>
-          <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(top.this)}</td></tr>
-          ${isRange ? "" : `<tr><th>3M average</th><td>${unitVal(top.avg3)}</td></tr>`}
-          ${isRange ? "" : `<tr><th>vs 3M avg</th><td>${fmtPct(top.vs_avg3_pct)}</td></tr>`}
-          <tr><th>${isRange ? "vs Prev 6M" : "vs Prev M"}</th><td>${fmtPct(top.mom_pct)}</td></tr>
-          <tr><th>${isRange ? "vs Same 6M LY" : "vs Prev Y"}</th><td>${fmtPct(top.yoy_pct)}</td></tr>
-          <tr><th>Share</th><td>${top.share != null ? top.share.toFixed(1) + "%" : "—"}</td></tr>
-        </table>`
-      });
-    }
-    // Runner-up only if it moved hard in the OPPOSITE direction.
-    if (byAnchor.length > 1) {
-      const second = byAnchor[1];
-      if (second && top && Math.sign(second[pgMetric]) !== Math.sign(top[pgMetric])
-          && Math.abs(second[pgMetric]) >= 30) {
-        const v = second[pgMetric];
-        const tone = v > 0 ? "good" : "bad";
-        const dir  = v > 0 ? "surged" : "dropped";
-        items.push({
-          score: Math.abs(v) * 0.9,
-          chip: "Product", tone,
-          line: `<b>${esc(second.product_group)}</b> ${dir} <b>${Math.abs(v).toFixed(1)}% ${anchorChip}</b> — second-biggest product swing.`,
-          detail: `<table>
-            <tr><th>${isRange ? "Period" : "This month"}</th><td>${unitVal(second.this)}</td></tr>
-            ${isRange ? "" : `<tr><th>3M average</th><td>${unitVal(second.avg3)}</td></tr>`}
-            <tr><th>${isRange ? "vs Prev 6M" : "vs Prev M"}</th><td>${fmtPct(second.mom_pct)}</td></tr>
-          </table>`
-        });
-      }
-    }
+    const risers  = pgs.filter(p => p[pgMetric] >  0).sort((a,b) => b[pgMetric] - a[pgMetric]);
+    const fallers = pgs.filter(p => p[pgMetric] <  0).sort((a,b) => a[pgMetric] - b[pgMetric]);
+    if (risers.length  && Math.abs(risers[0][pgMetric])  >= PG_MIN_SWING) items.push(_pgItem(risers[0],  "up"));
+    if (fallers.length && Math.abs(fallers[0][pgMetric]) >= PG_MIN_SWING) items.push(_pgItem(fallers[0], "down"));
   }
 
   // Promo vs Non-Promo share swing — vs anchor share.
