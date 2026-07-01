@@ -1837,7 +1837,27 @@ async function drawMonthlyTotals(){
   function _withSyncedLegend(opts){
     const out = {...(opts || {})};
     out.plugins = {...(out.plugins || {})};
-    out.plugins.legend = {...(out.plugins.legend || {}), onClick: _syncedLegendOnClick};
+    out.plugins.legend = {
+      ...(out.plugins.legend || {}),
+      onClick: _syncedLegendOnClick,
+      labels: {
+        ...(out.plugins.legend?.labels || {}),
+        // Prefix every legend chip with ✕ so the reader knows they
+        // can click to hide it, matching the dismissable-chip idiom.
+        // Skip line datasets (Ach%, 100% ref) — those aren't
+        // meaningfully toggleable in the users' mental model.
+        generateLabels(chart){
+          const src = Chart.defaults.plugins.legend.labels.generateLabels(chart);
+          return src.map(lbl => {
+            if (lbl && lbl.text && !lbl.text.startsWith("✕ ")) {
+              const ds = chart.data.datasets[lbl.datasetIndex];
+              if (!ds || ds.type !== "line") lbl.text = "✕ " + lbl.text;
+            }
+            return lbl;
+          });
+        },
+      },
+    };
     return out;
   }
 
@@ -2000,6 +2020,11 @@ async function drawMonthlyStacked(){
               const out = [];
 
               // Keep the first occurrence of each group key (NSW/QLD/... or Salesman name, etc.)
+              // "✕ " prefix on every clickable entry signals that
+              // clicking removes that group's bars — matches the
+              // dismiss-chip metaphor without adding a real button.
+              // Hidden entries show the ✕ struck through (rendered
+              // via Chart.js's built-in strikethrough on hidden).
               for (let i = 0; i < chart.data.datasets.length; i++){
                 const ds = chart.data.datasets[i];
                 if (!ds) continue;
@@ -2011,14 +2036,28 @@ async function drawMonthlyStacked(){
                 if (!key || seen.has(key)) continue;
 
                 seen.add(key);
+                // Every dataset with this group key gets toggled
+                // together, so consider the group "hidden" only when
+                // ALL its datasets are hidden.  Otherwise a single
+                // stack layer still showing keeps the entry active.
+                let allHidden = true, anyMatch = false;
+                for (let j = 0; j < chart.data.datasets.length; j++){
+                  const d = chart.data.datasets[j];
+                  if (!d) continue;
+                  if (String(d.label || "").split(" (")[0].trim() !== key) continue;
+                  anyMatch = true;
+                  const meta = chart.getDatasetMeta(j);
+                  const dsHidden = (meta.hidden !== null) ? meta.hidden : !!d.hidden;
+                  if (!dsHidden) { allHidden = false; break; }
+                }
                 out.push({
-                  text: key,
+                  text: "✕ " + key,
                   fillStyle: ds.backgroundColor,
                   strokeStyle: ds.borderColor || ds.backgroundColor,
                   lineWidth: 0,
-                  hidden: false,
-                  // Toggle visibility of the first dataset that represents this key
-                  datasetIndex: i
+                  hidden: anyMatch && allHidden,
+                  _groupKey: key,       // used by onClick to toggle all matching datasets
+                  datasetIndex: i        // fallback for hover / focus
                 });
               }
 
@@ -2044,13 +2083,24 @@ async function drawMonthlyStacked(){
                            lineWidth: 0, hidden: true, _spacer: true });
                 ROLE_ORDER.forEach(r => {
                   if (!rolesPresent.has(r.key)) return;
+                  // Are all datasets tagged with this role hidden?
+                  let allHidden = true, anyMatch = false;
+                  for (let j = 0; j < chart.data.datasets.length; j++){
+                    const d = chart.data.datasets[j];
+                    if (!d) continue;
+                    if (String(d.label || "").indexOf(r.key) === -1) continue;
+                    anyMatch = true;
+                    const meta = chart.getDatasetMeta(j);
+                    const dsHidden = (meta.hidden !== null) ? meta.hidden : !!d.hidden;
+                    if (!dsHidden) { allHidden = false; break; }
+                  }
                   out.push({
-                    text:        r.text,
+                    text:        "✕ " + r.text,
                     fillStyle:   r.fill,
                     strokeStyle: r.stroke,
                     lineWidth:   r.dash.length ? 1.5 : 0,
                     lineDash:    r.dash,
-                    hidden:      false,
+                    hidden:      anyMatch && allHidden,
                     _roleKey:    r.key,   // used by onClick to toggle whole stack
                   });
                 });
@@ -2067,14 +2117,42 @@ async function drawMonthlyStacked(){
           onClick(evt, item, legend){
             if (item && item._spacer) return;
             const chart = legend.chart;
-            if (item && item._roleKey) {
-              const roleKey = item._roleKey;
+
+            // Toggle helper: match all datasets whose label contains
+            // (roleKey) or whose group prefix equals groupKey, decide
+            // a single target hidden state (opposite of the current
+            // majority) and apply it uniformly so partial-hidden
+            // states can't get "stuck".
+            function _toggleMatching(pred){
+              const matches = [];
               chart.data.datasets.forEach((ds, i) => {
-                if (!ds || String(ds.label || "").indexOf(roleKey) === -1) return;
+                if (!ds) return;
+                if (!pred(ds)) return;
+                matches.push(i);
+              });
+              if (!matches.length) return;
+              // If any match is currently visible, hide all; otherwise
+              // reveal all.
+              let anyVisible = false;
+              matches.forEach(i => {
                 const meta = chart.getDatasetMeta(i);
-                meta.hidden = meta.hidden === null ? !ds.hidden : null;
+                const dsHidden = (meta.hidden !== null) ? meta.hidden : !!chart.data.datasets[i].hidden;
+                if (!dsHidden) anyVisible = true;
+              });
+              const targetHidden = anyVisible; // hide if any visible; else show
+              matches.forEach(i => {
+                const meta = chart.getDatasetMeta(i);
+                meta.hidden = targetHidden ? true : null;
               });
               chart.update();
+            }
+
+            if (item && item._roleKey) {
+              _toggleMatching(ds => String(ds.label || "").indexOf(item._roleKey) !== -1);
+              return;
+            }
+            if (item && item._groupKey) {
+              _toggleMatching(ds => String(ds.label || "").split(" (")[0].trim() === item._groupKey);
               return;
             }
             const existing = (baseOpts.plugins?.legend?.onClick);
