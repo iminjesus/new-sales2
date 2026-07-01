@@ -104,6 +104,24 @@
       opts.plugins.legend = Object.assign({}, opts.plugins.legend, { onClick: undefined });
     }
     opts.plugins.datalabels = _modalDatalabelsConfig();
+    // Some source charts also set per-dataset `datalabels` (either
+    // { display:false } for cumulative overlays or a bespoke formatter
+    // for lines).  Per-dataset config wins over chart-level in the
+    // datalabels plugin, so we must override each dataset too or the
+    // labels stay hidden on bars.  Preserve line-dataset styling
+    // (they already look right) — only stomp on bar datasets.
+    if (data && Array.isArray(data.datasets)) {
+      data.datasets.forEach((ds) => {
+        const dsType = ds.type || (srcChart.config.type);
+        if (dsType === "bar") {
+          ds.datalabels = _modalDatalabelsConfig();
+        } else if (!modalLabelsOn) {
+          // Labels chip switched off — hide line labels too so the
+          // toggle affects the whole chart, not just bars.
+          ds.datalabels = { display: false };
+        }
+      });
+    }
     try {
       modalChartInst = new Chart(ctx, {
         type: srcChart.config.type,
@@ -249,12 +267,25 @@
         e.stopPropagation();
         modalLabelsOn = !modalLabelsOn;
         labelsBtn.classList.toggle("active", modalLabelsOn);
-        // Live-update the current chart's plugin config without
-        // re-cloning — cheaper and preserves any in-progress hover
-        // state.
+        // Live-update the current chart's plugin config AND each
+        // dataset's own datalabels config (dataset-level wins over
+        // chart-level in the plugin, so we can't skip this step).
         if (modalChartInst) {
           modalChartInst.options.plugins = modalChartInst.options.plugins || {};
           modalChartInst.options.plugins.datalabels = _modalDatalabelsConfig();
+          const dsList = (modalChartInst.data && modalChartInst.data.datasets) || [];
+          dsList.forEach((ds) => {
+            const dsType = ds.type || modalChartInst.config.type;
+            if (dsType === "bar") {
+              ds.datalabels = _modalDatalabelsConfig();
+            } else if (!modalLabelsOn) {
+              ds.datalabels = { display: false };
+            } else {
+              // Turning labels back on: drop any explicit dataset
+              // config so the chart-level plugin takes over again.
+              delete ds.datalabels;
+            }
+          });
           modalChartInst.update();
         }
       });
