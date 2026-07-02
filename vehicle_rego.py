@@ -225,6 +225,8 @@ def process_package(
     pkg: dict,
     out_dir: Path,
     keep_raw: bool,
+    min_qty: int = 0,
+    rollup: bool = False,
 ) -> dict[str, Path]:
     """Download every relevant resource in pkg, classify, and write
     normalised outputs.  Returns a dict of {kind: path_written}."""
@@ -319,6 +321,23 @@ def process_package(
                 pd.to_numeric(renamed["year_of_manufacture"], errors="coerce")
                   .astype("Int64")
             )
+
+        # BITRE ships TOTAL summary rows (state='-' or make='-' etc.)
+        # inside the same CSV — they double-count everything when we
+        # aggregate later.  Drop them.
+        summary_mask = None
+        for c in ("state", "make", "model", "postcode"):
+            if c in renamed.columns:
+                col_is_dash = renamed[c].astype(str).str.strip().isin(
+                    ("-", "—", "TOTAL", "ALL", "nan", "NAN", "")
+                )
+                summary_mask = col_is_dash if summary_mask is None else (summary_mask | col_is_dash)
+        if summary_mask is not None:
+            before = len(renamed)
+            renamed = renamed[~summary_mask].copy()
+            if before != len(renamed):
+                print(f"      dropped {before - len(renamed):,} TOTAL / summary rows")
+
         buckets[kind].append(renamed)
         print(f"    ✓ {path.name}  →  {kind}  ({len(renamed):,} rows)")
 
@@ -335,7 +354,31 @@ def process_package(
         ) if c in merged.columns]
         if group_cols and "qty" in merged.columns:
             merged = merged.groupby(group_cols, dropna=False, as_index=False)["qty"].sum()
-        merged.sort_values(group_cols, inplace=True, ignore_index=True)
+
+        # Rollup: collapse over vehicle_type + motive_power so each
+        # (state, postcode, make, model[, year]) row shows the *sum*
+        # across fuel types / body styles.  Larger cells means BITRE's
+        # RR3 noise (every tiny slice rounded to 0 or 3) mostly cancels
+        # out, and the numbers become usable for demand analysis.
+        if rollup:
+            drop_dims = [c for c in ("vehicle_type", "motive_power") if c in merged.columns]
+            if drop_dims:
+                keep_dims = [c for c in group_cols if c not in drop_dims]
+                if keep_dims and "qty" in merged.columns:
+                    merged = merged.groupby(keep_dims, dropna=False, as_index=False)["qty"].sum()
+                    group_cols = keep_dims
+
+        # Threshold: BITRE random-rounds small cells to base-3, so the
+        # bulk of rows below ~6 are just noise (real value 0-4).  Drop
+        # them when --min-qty is set so the exports stay analysable.
+        if min_qty > 0 and "qty" in merged.columns:
+            before = len(merged)
+            merged = merged[merged["qty"] >= min_qty]
+            if before != len(merged):
+                print(f"      {kind}: dropped {before - len(merged):,} rows below qty {min_qty}")
+
+        if group_cols:
+            merged.sort_values(group_cols, inplace=True, ignore_index=True)
         out_path = out_dir / f"vehicle_{kind}.csv"
         merged.to_csv(out_path, index=False)
         print(f"  wrote {out_path.name}  ({len(merged):,} rows)")
@@ -423,6 +466,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="out/rego", help="output directory")
     ap.add_argument("--keep-raw", action="store_true",
                     help="keep the raw downloads under out/_raw/")
+    ap.add_argument("--min-qty", type=int, default=0,
+                    help="Drop rows with qty below this threshold.  BITRE "
+                         "random-rounds every tiny (postcode × make × model × "
+                         "fuel) slice to base-3, so millions of rows end up "
+                         "with qty=3 that really means 1-4 vehicles.  Try "
+                         "--min-qty 6 to skip the RR3 noise floor and keep "
+                         "only cells where the real count is definitely "
+                         "meaningful.")
+    ap.add_argument("--rollup", action="store_true",
+                    help="Collapse over vehicle_type + motive_power so the "
+                         "output is one row per (state, postcode, make, "
+                         "model[, year]) with qty summed.  Coarser cells "
+                         "cancel out most of the RR3 rounding error and give "
+                         "cleaner totals for territory / demand analysis.")
     args = ap.parse_args(argv)
 
     sess = _session()
@@ -444,7 +501,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  [{i:>2}] {fmt:<6}  {nm}")
                 print(f"       {url}")
             return 0
-        process_package(sess, pkg, out, keep_raw=args.keep_raw)
+        process_package(sess, pkg, out, keep_raw=args.keep_raw,
+                        min_qty=args.min_qty, rollup=args.rollup)
         return 0
 
     hits = search_packages(sess, args.query)
@@ -469,7 +527,8 @@ def main(argv: list[str] | None = None) -> int:
     pick = hits[0]
     print(f"\nProcessing first match — pass --dataset-id to pick another.")
     print(f"→ {pick.get('title')}\n")
-    process_package(sess, pick, out, keep_raw=args.keep_raw)
+    process_package(sess, pick, out, keep_raw=args.keep_raw,
+                    min_qty=args.min_qty, rollup=args.rollup)
     return 0
 
 
