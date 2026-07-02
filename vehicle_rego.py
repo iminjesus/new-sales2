@@ -232,6 +232,7 @@ def process_package(
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     downloaded: list[Path] = []
+    used_names: set[str] = set()
     for res in (pkg.get("resources") or []):
         url  = res.get("url") or ""
         name = res.get("name") or Path(url).name or "resource"
@@ -240,10 +241,32 @@ def process_package(
         if not any(low.endswith(x) for x in (".csv", ".xlsx", ".xls", ".zip")) \
                 and fmt not in ("csv", "xlsx", "xls", "zip"):
             continue
-        # infer a sane filename
-        stem = _slug(name)[:64] or _slug(Path(url).name)[:64] or "resource"
-        ext  = Path(url).suffix.lower() if "." in url.split("/")[-1] else f".{fmt}"
-        dest = raw_dir / f"{stem}{ext}"
+
+        # Filename strategy: the URL's own basename is almost always
+        # unique (BITRE ships each resource with a distinct
+        # rva-YYYY-mvs-*.csv name), so use that first.  Fall back to a
+        # slug of the resource name only when the URL doesn't carry a
+        # usable filename.  Truncating similar names to 64 chars used
+        # to collapse three or four resources onto the same file and
+        # Windows would then throw a "Permission denied" on the second
+        # writer.  Belt-and-braces: add "_1", "_2" suffixes if a
+        # collision still slips through.
+        url_base = Path(url.split("?", 1)[0]).name  # strip any query string
+        if url_base and "." in url_base:
+            stem = Path(url_base).stem
+            ext  = Path(url_base).suffix.lower()
+        else:
+            stem = _slug(name)[:80] or "resource"
+            ext  = f".{fmt}" if fmt else ".csv"
+        stem = _slug(stem)[:100] or "resource"
+        candidate = f"{stem}{ext}"
+        i = 1
+        while candidate in used_names:
+            candidate = f"{stem}_{i}{ext}"
+            i += 1
+        used_names.add(candidate)
+        dest = raw_dir / candidate
+
         print(f"  → downloading: {name}")
         try:
             _download(sess, url, dest)
