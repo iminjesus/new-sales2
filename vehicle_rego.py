@@ -324,6 +324,7 @@ def process_package(
 
     # write one normalised CSV per non-empty bucket
     written: dict[str, Path] = {}
+    aggregated: dict[str, pd.DataFrame] = {}
     for kind, frames in buckets.items():
         if not frames: continue
         merged = pd.concat(frames, ignore_index=True)
@@ -339,6 +340,47 @@ def process_package(
         merged.to_csv(out_path, index=False)
         print(f"  wrote {out_path.name}  ({len(merged):,} rows)")
         written[kind] = out_path
+        aggregated[kind] = merged
+
+    # Derived estimate: postcode × make × model × year.
+    #
+    # BITRE publishes postcode × make × model (no year) and separately
+    # make × model × year (no postcode).  Combine them with a
+    # proportional allocation — for each (make, model) pair the
+    # year-mix from the second file is applied to the postcode-level
+    # totals from the first.  Assumption: within a make/model, age
+    # distribution is roughly uniform across postcodes.  That's not
+    # perfect (richer areas tend to skew newer) but it's a defensible
+    # starting point for tyre-replacement-cycle sizing.
+    if "postcode_make_model" in aggregated and "make_model_year" in aggregated \
+            and "postcode_make_model_year" not in written:
+        pmm  = aggregated["postcode_make_model"]
+        mmy  = aggregated["make_model_year"]
+        # per-(make,model) year share, sums to 1 within each pair
+        year_totals = (mmy.groupby(["make", "model"], as_index=False)["qty"]
+                          .sum().rename(columns={"qty": "mm_total"}))
+        share = mmy.merge(year_totals, on=["make", "model"], how="left")
+        share = share[share["mm_total"] > 0].copy()
+        share["year_share"] = share["qty"] / share["mm_total"]
+        share = share[["make", "model", "year_of_manufacture", "year_share"]]
+        # apply share to postcode-level qty
+        est = pmm.merge(share, on=["make", "model"], how="inner")
+        est["qty"] = (est["qty"] * est["year_share"]).round().astype(int)
+        est.drop(columns=["year_share"], inplace=True)
+        # drop rows that rounded to zero — noise, and shrinks the file
+        est = est[est["qty"] > 0]
+        # aggregate to be safe (state/postcode dups if the postcode file
+        # already had state)
+        gk = [c for c in ("state", "postcode", "vehicle_type",
+                          "motive_power", "make", "model",
+                          "year_of_manufacture") if c in est.columns]
+        est = est.groupby(gk, dropna=False, as_index=False)["qty"].sum()
+        est.sort_values(gk, inplace=True, ignore_index=True)
+        est_path = out_dir / "vehicle_postcode_make_model_year_estimate.csv"
+        est.to_csv(est_path, index=False)
+        print(f"  wrote {est_path.name}  ({len(est):,} rows)  "
+              f"[derived: postcode_make_model × make_model_year year-share]")
+        written["postcode_make_model_year_estimate"] = est_path
 
     if not keep_raw:
         for p in raw_dir.iterdir():
