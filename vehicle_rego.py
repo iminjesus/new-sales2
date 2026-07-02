@@ -356,30 +356,46 @@ def process_package(
             and "postcode_make_model_year" not in written:
         pmm  = aggregated["postcode_make_model"]
         mmy  = aggregated["make_model_year"]
-        # per-(make,model) year share, sums to 1 within each pair
-        year_totals = (mmy.groupby(["make", "model"], as_index=False)["qty"]
-                          .sum().rename(columns={"qty": "mm_total"}))
-        share = mmy.merge(year_totals, on=["make", "model"], how="left")
+
+        # Step 1: pre-collapse mmy to unique (make, model, year).  It
+        # arrived aggregated at (make, model, year, vehicle_type,
+        # motive_power) so the same (make, model, year) appears several
+        # times.  Without this collapse the (make, model) join on the
+        # right side had ~300 rows per key and blew out to a 1.25 B-row
+        # merge (~9 GB) before the OS ran out of RAM.
+        mmy = (mmy.groupby(["make", "model", "year_of_manufacture"],
+                           dropna=False, as_index=False)["qty"].sum())
+
+        # Step 2: per-(make, model) year share, sums to 1 within each pair
+        totals = (mmy.groupby(["make", "model"], as_index=False)["qty"]
+                     .sum().rename(columns={"qty": "mm_total"}))
+        share = mmy.merge(totals, on=["make", "model"], how="left")
         share = share[share["mm_total"] > 0].copy()
         share["year_share"] = share["qty"] / share["mm_total"]
         share = share[["make", "model", "year_of_manufacture", "year_share"]]
-        # apply share to postcode-level qty
-        est = pmm.merge(share, on=["make", "model"], how="inner")
-        est["qty"] = (est["qty"] * est["year_share"]).round().astype(int)
-        est.drop(columns=["year_share"], inplace=True)
-        # drop rows that rounded to zero — noise, and shrinks the file
-        est = est[est["qty"] > 0]
-        # aggregate to be safe (state/postcode dups if the postcode file
-        # already had state)
-        gk = [c for c in ("state", "postcode", "vehicle_type",
-                          "motive_power", "make", "model",
-                          "year_of_manufacture") if c in est.columns]
-        est = est.groupby(gk, dropna=False, as_index=False)["qty"].sum()
-        est.sort_values(gk, inplace=True, ignore_index=True)
+        share.sort_values(["make", "model"], inplace=True, ignore_index=True)
+
+        # Step 3: stream the merge in chunks of pmm and append to the
+        # output CSV.  Each chunk × share is small enough to hold in
+        # RAM, and pmm is already deduplicated on
+        # (state, postcode, vehicle_type, motive_power, make, model) so
+        # no post-pass groupby is needed.
         est_path = out_dir / "vehicle_postcode_make_model_year_estimate.csv"
-        est.to_csv(est_path, index=False)
-        print(f"  wrote {est_path.name}  ({len(est):,} rows)  "
-              f"[derived: postcode_make_model × make_model_year year-share]")
+        CHUNK = 200_000
+        header_written = False
+        n_written = 0
+        for start in range(0, len(pmm), CHUNK):
+            chunk = pmm.iloc[start:start + CHUNK]
+            part  = chunk.merge(share, on=["make", "model"], how="inner")
+            part["qty"] = (part["qty"] * part["year_share"]).round().astype(int)
+            part.drop(columns=["year_share"], inplace=True)
+            part = part[part["qty"] > 0]
+            part.to_csv(est_path, mode="w" if not header_written else "a",
+                        index=False, header=not header_written)
+            header_written = True
+            n_written += len(part)
+        print(f"  wrote {est_path.name}  ({n_written:,} rows)  "
+              f"[derived: postcode_make_model × make_model_year year-share, streamed]")
         written["postcode_make_model_year_estimate"] = est_path
 
     if not keep_raw:
