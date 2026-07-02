@@ -318,12 +318,12 @@ function renderShop(j){
   const focusHtml = `
     <div class="focus-btn-wrap">
       <button id="meetingFocusBtn" class="focus-btn" type="button">
-        <span class="ico">🎙️</span>
-        <span id="meetingFocusLabel">Meeting Focus — read aloud</span>
+        <span class="ico">🔊</span>
+        <span id="meetingFocusLabel">▶ Play voice briefing</span>
       </button>
       <div class="focus-hint">
-        Speaks last visit, next action, 6-month trend, and rebate progress.
-        Tap again to stop.
+        The phone speaks a summary — last visit, next action, 6-month
+        trend, and rebate progress.  Tap again to stop.
       </div>
     </div>
   `;
@@ -526,7 +526,7 @@ function _toggleMeetingFocusSpeech(){
     state._speaking = false;
     state._utter = null;
     btn.classList.remove("speaking");
-    lbl.textContent = "Meeting Focus — read aloud";
+    lbl.textContent = "▶ Play voice briefing";
     return;
   }
   if (!("speechSynthesis" in window)) {
@@ -552,12 +552,12 @@ function _toggleMeetingFocusSpeech(){
     state._speaking = false;
     state._utter = null;
     btn.classList.remove("speaking");
-    lbl.textContent = "Meeting Focus — read aloud";
+    lbl.textContent = "▶ Play voice briefing";
   };
   state._utter = u;
   state._speaking = true;
   btn.classList.add("speaking");
-  lbl.textContent = "🔴 Speaking — tap to stop";
+  lbl.textContent = "⏸ Speaking — tap to stop";
   try {
     // Chrome sometimes queues a stale utterance after a previous
     // cancel; a paranoid cancel-then-speak avoids the "no sound"
@@ -568,7 +568,7 @@ function _toggleMeetingFocusSpeech(){
     console.error("[meeting-focus] TTS failed:", e);
     state._speaking = false;
     btn.classList.remove("speaking");
-    lbl.textContent = "Meeting Focus — read aloud";
+    lbl.textContent = "▶ Play voice briefing";
   }
 }
 
