@@ -3755,7 +3755,6 @@ def monthly_sales():
     # via promo_plan.start_date / end_date, so a 2025 query simply
     # picks up the rules whose period covers that month.
     promos = request.args.getlist("promo")
-    use_2026_union = (year == 2026)
 
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
 
@@ -3779,17 +3778,11 @@ def monthly_sales():
         wh.append("mat.size = %s")
         params.append(f["material"])
 
-    # 2025 path runs directly on sales_2526 with billing_date inline
-    # (year filter as a date range so the billing_date index prunes,
-    # MONTH(billing_date) in SELECT/GROUP BY so we avoid materialising
-    # a derived table); 2026 still uses the per-month union which
-    # already exposes year/month as constants.
-    if use_2026_union:
-        year_expr  = "s.year"
-        month_expr = "s.month"
-    else:
-        year_expr  = "YEAR(s.billing_date)"
-        month_expr = "MONTH(s.billing_date)"
+    # Both 2025 and 2026 now run directly on sales_2526 using the
+    # generated s.year / s.month columns.  Same source as v2_dashboard,
+    # so an update to sales_2526 is reflected immediately on the chart.
+    year_expr  = "s.year"
+    month_expr = "s.month"
 
     if promos:
         # Promo filter needs carrying_26 (mat) for line/product_group +
@@ -3808,25 +3801,20 @@ def monthly_sales():
         wh.extend(promo_wh)
         params.extend(promo_p)
 
-    # year condition — only when staying on sales_2526.  When we switch
-    # to the 2026 union below, the table set itself bounds the year.
-    # On sales_2526 we push the filter as a billing_date range so the
-    # index can prune, rather than YEAR(billing_date) = 2025 which is
-    # not index-friendly.
-    if not use_2026_union:
-        wh.append("s.billing_date >= %s AND s.billing_date < %s")
-        params.extend([f"{year}-01-01", f"{year+1}-01-01"])
+    # Year filter via the generated s.year column (index-friendly).
+    wh.append("s.year = %s")
+    params.append(year)
+    # Cap at the business-effective current month so the nightly
+    # sales_thismonth batch tagged with the CURRENT calendar month
+    # doesn't spawn a phantom bar at the next month.  Same guard
+    # v2_dashboard applies.
+    _eff_y, _eff_m = _business_effective_ym()
+    wh.append(f"(s.year * 100 + s.month) <= {_eff_y * 100 + _eff_m}")
 
     conn = get_connection()
     cur = conn.cursor(dictionary=True)
     try:
-        # Pick the FROM source: 2026 union for the current calendar
-        # year (so the monthly chart goes through the current month),
-        # sales_2526 for any other year.
-        if use_2026_union:
-            from_sql = "FROM " + _sales_2026_union(cur, alias="s")
-        else:
-            from_sql = "FROM sales_2526 s"
+        from_sql = "FROM sales_2526 s"
 
         top_sold_to = None
 
@@ -3889,7 +3877,6 @@ def monthly_breakdown():
     # When promos are selected, _promo_filter_clauses adds the PCLT
     # + customer + dc_rate-range + plan-period match conditions.
     promos = request.args.getlist("promo")
-    use_2026_union = (year == 2026)
 
     # Which dimension to group by?
     group_by = (request.args.get("group_by") or "region").strip()
@@ -3911,19 +3898,15 @@ def monthly_breakdown():
     if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
 
-    # 2025 path runs directly on sales_2526; 2026 still uses the
-    # per-month union which exposes year/month/day as constants.
-    if use_2026_union:
-        year_expr  = "s.year"
-        month_expr = "s.month"
-    else:
-        year_expr  = "YEAR(s.billing_date)"
-        month_expr = "MONTH(s.billing_date)"
+    # Both 2025 and 2026 run directly on sales_2526 using the
+    # generated s.year / s.month columns.  Same source as v2_dashboard,
+    # so an update to sales_2526 is reflected immediately on the chart.
+    year_expr  = "s.year"
+    month_expr = "s.month"
 
     if is_promo_group:
-        # Promotion buckets: feed the right year/month expression so
-        # the promo_plan period check works on both sales_2526 (inline
-        # YEAR(billing_date)) and the 2026 union (s.year column).
+        # Promotion buckets: feed the year/month expression so the
+        # promo_plan period check gates each row correctly.
         # NOTE: monthly_breakdown stays on per-row qty for TrueBlue (the
         # ship_to+day SUM variant lives on daily_breakdown only — adding
         # a self-referencing UNION subquery inside EXISTS at this layer
@@ -3998,24 +3981,20 @@ def monthly_breakdown():
         wh.extend(promo_wh)
         params.extend(promo_p)
 
-    # Year condition — only when staying on sales_2526.  Push it as a
-    # billing_date range so the index can prune; YEAR(billing_date)=N
-    # is not index-friendly.  2026 union path doesn't need this — the
-    # set of source tables is already year-bounded.
-    if not use_2026_union:
-        wh.append("s.billing_date >= %s AND s.billing_date < %s")
-        params.extend([f"{year}-01-01", f"{year+1}-01-01"])
+    # Year filter via the generated s.year column (index-friendly).
+    wh.append("s.year = %s")
+    params.append(year)
+    # Cap at the business-effective current month so the nightly
+    # sales_thismonth batch tagged with the CURRENT calendar month
+    # doesn't spawn a phantom bar at the next month.  Same guard
+    # v2_dashboard applies.
+    _eff_y, _eff_m = _business_effective_ym()
+    wh.append(f"(s.year * 100 + s.month) <= {_eff_y * 100 + _eff_m}")
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        # Pick the FROM source: 2026 union for the current calendar
-        # year (so stacks go through the current month), sales_2526
-        # for any other year.
-        if use_2026_union:
-            from_sql = "FROM " + _sales_2026_union(cur, alias="s")
-        else:
-            from_sql = "FROM sales_2526 s"
+        from_sql = "FROM sales_2526 s"
 
         top_sold_to = None
 
