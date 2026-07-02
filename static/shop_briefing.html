@@ -436,56 +436,65 @@ function _monthLabelToSpoken(m){
   return String(m || "").trim();
 }
 
-function _composeFocusScript(state){
+// Composes the voice briefing as a *list of section chunks* instead
+// of one flat string.  Each chunk becomes its own SpeechSynthesis
+// utterance with a real pause between them (see _speakChunks below),
+// so the reader gets a moment to catch up between "next action" and
+// "sales trend" — that mash-up was the main "hard to listen to"
+// complaint.
+//
+// Copy is intentionally conversational — contractions, transition
+// phrases like "Alright" / "Now" / "One more thing", short sentences
+// mixed with longer ones — so the OS voice sounds less like a menu
+// prompt and more like a colleague briefing you before you walk in.
+function _composeFocusChunks(state){
   const s = state || {};
-  const parts = [];
+  const chunks = [];
 
+  // ── Intro ──────────────────────────────────────────────
   const shopName = (s.shop && (s.shop.ship_to_name || s.shop.ship_to)) || "this shop";
   const bde      = (s.shop && s.shop.salesman_name) || "";
-  parts.push(`Meeting focus for ${shopName}.`);
-  if (bde) parts.push(`BDE on this account is ${bde}.`);
+  const introBits = [`Alright, quick brief on ${shopName}.`];
+  if (bde) introBits.push(`Your BDE on this account is ${bde}.`);
+  chunks.push(introBits.join(" "));
 
-  // Last visit
+  // ── Last visit ────────────────────────────────────────
   const lm = s.lastMeeting;
   if (lm) {
     const when = lm.visit_date ? daysAgo(lm.visit_date) : "recently";
-    let sentence = `Last visit was ${when}`;
-    if (lm.bde_name) sentence += `, by ${lm.bde_name}`;
-    if (lm.met_person) sentence += `, meeting with ${lm.met_person}`;
-    if (lm.visit_purpose) sentence += `, on ${lm.visit_purpose}`;
-    parts.push(sentence + ".");
+    const lead = /(day|week|month|year|ago|today|yesterday)/i.test(when)
+      ? `The last visit was ${when}`
+      : `Last visit was ${when}`;
+    let sentence = lead;
+    if (lm.bde_name)      sentence += `, by ${lm.bde_name}`;
+    if (lm.met_person)    sentence += `, meeting with ${lm.met_person}`;
+    if (lm.visit_purpose) sentence += `, and it was about ${lm.visit_purpose}`;
+    chunks.push(sentence + ".");
     if (lm.notes) {
-      // Trim to something narratable — first ~250 chars, ended at
-      // sentence boundary if possible.
       let n = String(lm.notes).replace(/\s+/g, " ").trim();
       if (n.length > 260) {
         const cut = n.lastIndexOf(". ", 260);
         n = (cut > 60 ? n.slice(0, cut + 1) : n.slice(0, 250) + "…");
       }
-      parts.push("Notes: " + n);
+      chunks.push(`Here's what happened: ${n}`);
     }
     if (lm.next_action) {
-      parts.push("Next action: " + lm.next_action);
+      chunks.push(`So the next action is to ${lm.next_action.replace(/^to\s+/i, "")}.`);
     }
   } else {
-    parts.push("No prior visit log for this shop.");
+    chunks.push("There's no prior visit logged for this shop yet.");
   }
 
-  // 6-month sales trend + explicit last-3-month direction call.
+  // ── 6-month sales trend + last-3-month direction ─────
   const t = s.trend || [];
   if (t.length) {
     const totalQty = s.totalQty || 0;
     const avg = Math.round(totalQty / t.length);
-    let trendSent = `Over the last six months this shop bought ${totalQty} units, averaging ${avg} per month.`;
-    parts.push(trendSent);
+    chunks.push(
+      `Now on the numbers. Over the last six months they've bought ${totalQty.toLocaleString()} units in total, `
+      + `so around ${avg.toLocaleString()} a month on average.`
+    );
 
-    // Direction of the last 3 months — up / down / stay.  Simple
-    // rule: compare the average of the last 3 months to the
-    // average of the 3 months before that.  If the change is
-    // ≥ 10 % either way it's a real move; otherwise it's holding
-    // steady.  Also detect a monotonic sequence (m1 < m2 < m3 or
-    // m1 > m2 > m3) as an extra "consistently rising / falling"
-    // signal on top of the aggregate direction.
     if (t.length >= 3) {
       const last3 = t.slice(-3).map(x => +x.qty || 0);
       const prev3 = t.slice(-6, -3).map(x => +x.qty || 0);
@@ -493,48 +502,54 @@ function _composeFocusScript(state){
       const avgPrev3 = prev3.length ? prev3.reduce((a,b)=>a+b,0) / prev3.length : 0;
       const monotonicUp   = last3[0] < last3[1] && last3[1] < last3[2];
       const monotonicDown = last3[0] > last3[1] && last3[1] > last3[2];
-      let direction = "holding steady";
-      let strength  = "";
+      let sentence = "";
       if (avgPrev3 > 0) {
         const pct = Math.round((avgLast3 - avgPrev3) / avgPrev3 * 100);
-        if (pct >= 10)      { direction = "trending up";   strength = ` — up about ${pct} percent versus the prior three months`; }
-        else if (pct <= -10){ direction = "trending down"; strength = ` — down about ${Math.abs(pct)} percent versus the prior three months`; }
+        if (pct >= 10)          sentence = `The last three months are trending up — about ${pct} percent higher than the three months before.`;
+        else if (pct <= -10)    sentence = `Heads up — the last three months are trending down, about ${Math.abs(pct)} percent lower than the three months before.`;
+        else if (monotonicUp)   sentence = "The last three months are creeping up, slowly but consistently.";
+        else if (monotonicDown) sentence = "The last three months are creeping down, slowly but consistently.";
+        else                    sentence = "The last three months are pretty steady, no big swing.";
       } else if (avgLast3 > 0) {
-        direction = "picking up from nothing";
+        sentence = "The last three months are picking up from basically nothing — a fresh account starting to move.";
       }
-      // Monotonic sequence overrides / clarifies the label when the
-      // three-month walk itself is consistent, even if the aggregate
-      // percentage isn't dramatic.
-      if (direction === "holding steady") {
-        if (monotonicUp)   direction = "creeping up";
-        if (monotonicDown) direction = "creeping down";
-      }
-      parts.push(`The last three months are ${direction}${strength}.`);
+      if (sentence) chunks.push(sentence);
     }
   }
 
-  // Rebate progress
+  // ── Rebate progress ───────────────────────────────────
   const rebRows = s.rebateRows || [];
   if (rebRows.length) {
-    parts.push("Rebate progress this month.");
+    chunks.push("One more thing — rebate progress for this month.");
     for (const r of rebRows) {
       const parsed = _parseRebateStructure(r.structure_name);
       const forWho = [parsed.brandSpoken, parsed.lineSpoken ? "for " + parsed.lineSpoken : ""]
-        .filter(Boolean).join(" ");
+        .filter(Boolean).join(" ").trim();
+      const who = forWho || r.structure_name;
       if (!r.next_threshold) {
-        parts.push(`For ${forWho || r.structure_name}, they've reached the top tier at ${r.curr_rate} percent.`);
+        chunks.push(`On ${who}, they've already hit the top tier at ${r.curr_rate} percent. Nice.`);
         continue;
       }
       const needed = (r.unit === "Q") ? r.needed_qty : r.needed_amt;
       const unit   = (r.unit === "Q") ? "units" : "dollars";
       const nRound = Math.round(needed || 0).toLocaleString();
-      parts.push(
-        `For ${forWho || r.structure_name}, ${nRound} more ${unit} to move from ${r.curr_rate} to ${r.next_rate} percent.`
+      chunks.push(
+        `On ${who}, they need ${nRound} more ${unit} to jump from ${r.curr_rate} to ${r.next_rate} percent.`
       );
     }
   }
 
-  return parts.join(" ");
+  // ── Closer ────────────────────────────────────────────
+  chunks.push("That's the brief. Good luck.");
+
+  return chunks;
+}
+
+// Legacy compose helper — some UI paths (SSR alerts, tests) still
+// expect a flat string.  Join the chunks with a period + space so it
+// reads like one long sentence when TTS isn't available.
+function _composeFocusScript(state){
+  return _composeFocusChunks(state).join(" ");
 }
 
 function _toggleMeetingFocusSpeech(){
@@ -555,44 +570,74 @@ function _toggleMeetingFocusSpeech(){
   if (!("speechSynthesis" in window)) {
     // Fallback — dump the text into a div so at least the reader
     // can see what would have been said.
-    const script = _composeFocusScript(state);
-    alert(script);
+    alert(_composeFocusScript(state));
     return;
   }
 
-  const script = _composeFocusScript(state);
-  const u = new SpeechSynthesisUtterance(script);
-  u.rate   = 1.02;   // small speed-up — natural but not rushed
-  u.pitch  = 1.0;
-  u.volume = 1.0;
-  // Prefer an en-AU voice if the OS ships one; otherwise let the
-  // engine pick.
+  // Pick a natural-ish voice once so every chunk uses the same voice
+  // (mixing voices between chunks reads as glitchy).  Prefer an
+  // en-AU voice when the OS has one; otherwise fall back to a Google
+  // / Microsoft "Natural" voice on Chromium / Edge, then en-GB / en-US.
   const voices = window.speechSynthesis.getVoices() || [];
+  const pickVoice = (v) =>
+       voices.find(vc => v.test(vc.name) && /en/i.test(vc.lang));
   const auVoice = voices.find(v => /en[-_]AU/i.test(v.lang))
-              || voices.find(v => /en[-_](GB|US)/i.test(v.lang));
-  if (auVoice) u.voice = auVoice;
-  u.onend = u.onerror = () => {
+              || pickVoice(/natural|neural|online/i)
+              || voices.find(v => /en[-_](GB|US)/i.test(v.lang))
+              || voices[0];
+
+  const chunks = _composeFocusChunks(state);
+  if (!chunks.length) return;
+
+  // Between-section gap.  Each chunk becomes its own utterance and
+  // we insert this many milliseconds of real silence before starting
+  // the next one — enough for the listener to reset their attention
+  // between "next action" and "sales trend" without feeling slow.
+  const GAP_MS = 420;
+
+  state._speaking = true;
+  btn.classList.add("speaking");
+  lbl.textContent = "⏸ Speaking — tap to stop";
+
+  // Cancel any lingering utterance (Chrome sometimes leaves a stale
+  // one queued after a previous stop) and reset before speaking.
+  try { window.speechSynthesis.cancel(); } catch (_) {}
+
+  let idx = 0;
+  const done = () => {
     state._speaking = false;
     state._utter = null;
     btn.classList.remove("speaking");
     lbl.textContent = "▶ Play voice briefing";
   };
-  state._utter = u;
-  state._speaking = true;
-  btn.classList.add("speaking");
-  lbl.textContent = "⏸ Speaking — tap to stop";
-  try {
-    // Chrome sometimes queues a stale utterance after a previous
-    // cancel; a paranoid cancel-then-speak avoids the "no sound"
-    // symptom.
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  } catch (e) {
-    console.error("[meeting-focus] TTS failed:", e);
-    state._speaking = false;
-    btn.classList.remove("speaking");
-    lbl.textContent = "▶ Play voice briefing";
-  }
+  const speakNext = () => {
+    // User hit Stop midway → bail
+    if (!state._speaking) return;
+    if (idx >= chunks.length) { done(); return; }
+    const text = chunks[idx++];
+    const u = new SpeechSynthesisUtterance(text);
+    // Slightly slower than default so it reads as measured, not
+    // rushed.  Tiny pitch variation between chunks would sound more
+    // natural still but breaks the "one voice" illusion — leave
+    // pitch constant.
+    u.rate   = 0.97;
+    u.pitch  = 1.02;
+    u.volume = 1.0;
+    if (auVoice) u.voice = auVoice;
+    u.onerror = () => { done(); };
+    u.onend   = () => {
+      if (!state._speaking) return;
+      if (idx < chunks.length) setTimeout(speakNext, GAP_MS);
+      else done();
+    };
+    state._utter = u;
+    try { window.speechSynthesis.speak(u); }
+    catch (e) {
+      console.error("[meeting-focus] TTS failed:", e);
+      done();
+    }
+  };
+  speakNext();
 }
 
 // Rebate next-tier — uses the existing /api/rebate_data endpoint
