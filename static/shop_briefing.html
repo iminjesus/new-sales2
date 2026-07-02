@@ -471,23 +471,46 @@ function _composeFocusScript(state){
     parts.push("No prior visit log for this shop.");
   }
 
-  // 6-month sales trend
+  // 6-month sales trend + explicit last-3-month direction call.
   const t = s.trend || [];
   if (t.length) {
     const totalQty = s.totalQty || 0;
     const avg = Math.round(totalQty / t.length);
     let trendSent = `Over the last six months this shop bought ${totalQty} units, averaging ${avg} per month.`;
-    // Momentum: compare the last month to the 5-month average behind it.
-    const last = t[t.length - 1] || {};
-    const rest = t.slice(0, -1);
-    const restAvg = rest.length ? rest.reduce((a,b)=>a+(b.qty||0),0)/rest.length : 0;
-    if (restAvg > 0) {
-      const pct = Math.round(((last.qty || 0) - restAvg) / restAvg * 100);
-      if (Math.abs(pct) >= 10) {
-        trendSent += ` ${_monthLabelToSpoken(last.month)} is ${pct > 0 ? "up" : "down"} ${Math.abs(pct)} percent versus the prior five months' average.`;
-      }
-    }
     parts.push(trendSent);
+
+    // Direction of the last 3 months — up / down / stay.  Simple
+    // rule: compare the average of the last 3 months to the
+    // average of the 3 months before that.  If the change is
+    // ≥ 10 % either way it's a real move; otherwise it's holding
+    // steady.  Also detect a monotonic sequence (m1 < m2 < m3 or
+    // m1 > m2 > m3) as an extra "consistently rising / falling"
+    // signal on top of the aggregate direction.
+    if (t.length >= 3) {
+      const last3 = t.slice(-3).map(x => +x.qty || 0);
+      const prev3 = t.slice(-6, -3).map(x => +x.qty || 0);
+      const avgLast3 = last3.reduce((a,b)=>a+b,0) / last3.length;
+      const avgPrev3 = prev3.length ? prev3.reduce((a,b)=>a+b,0) / prev3.length : 0;
+      const monotonicUp   = last3[0] < last3[1] && last3[1] < last3[2];
+      const monotonicDown = last3[0] > last3[1] && last3[1] > last3[2];
+      let direction = "holding steady";
+      let strength  = "";
+      if (avgPrev3 > 0) {
+        const pct = Math.round((avgLast3 - avgPrev3) / avgPrev3 * 100);
+        if (pct >= 10)      { direction = "trending up";   strength = ` — up about ${pct} percent versus the prior three months`; }
+        else if (pct <= -10){ direction = "trending down"; strength = ` — down about ${Math.abs(pct)} percent versus the prior three months`; }
+      } else if (avgLast3 > 0) {
+        direction = "picking up from nothing";
+      }
+      // Monotonic sequence overrides / clarifies the label when the
+      // three-month walk itself is consistent, even if the aggregate
+      // percentage isn't dramatic.
+      if (direction === "holding steady") {
+        if (monotonicUp)   direction = "creeping up";
+        if (monotonicDown) direction = "creeping down";
+      }
+      parts.push(`The last three months are ${direction}${strength}.`);
+    }
   }
 
   // Rebate progress
