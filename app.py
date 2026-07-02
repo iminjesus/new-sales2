@@ -3778,11 +3778,14 @@ def monthly_sales():
         wh.append("mat.size = %s")
         params.append(f["material"])
 
-    # Both 2025 and 2026 now run directly on sales_2526 using the
-    # generated s.year / s.month columns.  Same source as v2_dashboard,
-    # so an update to sales_2526 is reflected immediately on the chart.
-    year_expr  = "s.year"
-    month_expr = "s.month"
+    # Both 2025 and 2026 read directly from sales_2526 using
+    # billing_date (the base column that's guaranteed to be there and
+    # indexed).  Grouping happens on MONTH(billing_date) so June's
+    # sales_2526 rows land in the June bar as soon as the table is
+    # loaded — no per-month union / no dependency on generated year /
+    # month columns.
+    year_expr  = "YEAR(s.billing_date)"
+    month_expr = "MONTH(s.billing_date)"
 
     if promos:
         # Promo filter needs carrying_26 (mat) for line/product_group +
@@ -3801,15 +3804,17 @@ def monthly_sales():
         wh.extend(promo_wh)
         params.extend(promo_p)
 
-    # Year filter via the generated s.year column (index-friendly).
-    wh.append("s.year = %s")
-    params.append(year)
-    # Cap at the business-effective current month so the nightly
-    # sales_thismonth batch tagged with the CURRENT calendar month
-    # doesn't spawn a phantom bar at the next month.  Same guard
-    # v2_dashboard applies.
+    # Year filter as a billing_date range so the index can prune.
+    wh.append("s.billing_date >= %s AND s.billing_date < %s")
+    params.extend([f"{year}-01-01", f"{year+1}-01-01"])
+    # Cap at the last day of the business-effective current month so
+    # the nightly sales_thismonth batch tagged with the CURRENT
+    # calendar month doesn't spawn a phantom bar at the next month.
+    from calendar import monthrange as _mr
     _eff_y, _eff_m = _business_effective_ym()
-    wh.append(f"(s.year * 100 + s.month) <= {_eff_y * 100 + _eff_m}")
+    _eff_last = _mr(_eff_y, _eff_m)[1]
+    wh.append("s.billing_date <= %s")
+    params.append(f"{_eff_y}-{_eff_m:02d}-{_eff_last:02d}")
 
     conn = get_connection()
     cur = conn.cursor(dictionary=True)
@@ -3898,11 +3903,14 @@ def monthly_breakdown():
     if not is_promo_group and group_by not in group_cols:
         return jsonify({"error": "invalid group_by"}), 400
 
-    # Both 2025 and 2026 run directly on sales_2526 using the
-    # generated s.year / s.month columns.  Same source as v2_dashboard,
-    # so an update to sales_2526 is reflected immediately on the chart.
-    year_expr  = "s.year"
-    month_expr = "s.month"
+    # Both 2025 and 2026 read directly from sales_2526 using
+    # billing_date (the base column that's guaranteed to be there and
+    # indexed).  Grouping happens on MONTH(billing_date) so June's
+    # sales_2526 rows land in the June bar as soon as the table is
+    # loaded — no per-month union / no dependency on generated year /
+    # month columns.
+    year_expr  = "YEAR(s.billing_date)"
+    month_expr = "MONTH(s.billing_date)"
 
     if is_promo_group:
         # Promotion buckets: feed the year/month expression so the
@@ -3981,15 +3989,17 @@ def monthly_breakdown():
         wh.extend(promo_wh)
         params.extend(promo_p)
 
-    # Year filter via the generated s.year column (index-friendly).
-    wh.append("s.year = %s")
-    params.append(year)
-    # Cap at the business-effective current month so the nightly
-    # sales_thismonth batch tagged with the CURRENT calendar month
-    # doesn't spawn a phantom bar at the next month.  Same guard
-    # v2_dashboard applies.
+    # Year filter as a billing_date range so the index can prune.
+    wh.append("s.billing_date >= %s AND s.billing_date < %s")
+    params.extend([f"{year}-01-01", f"{year+1}-01-01"])
+    # Cap at the last day of the business-effective current month so
+    # the nightly sales_thismonth batch tagged with the CURRENT
+    # calendar month doesn't spawn a phantom bar at the next month.
+    from calendar import monthrange as _mr
     _eff_y, _eff_m = _business_effective_ym()
-    wh.append(f"(s.year * 100 + s.month) <= {_eff_y * 100 + _eff_m}")
+    _eff_last = _mr(_eff_y, _eff_m)[1]
+    wh.append("s.billing_date <= %s")
+    params.append(f"{_eff_y}-{_eff_m:02d}-{_eff_last:02d}")
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
