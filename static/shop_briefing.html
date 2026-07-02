@@ -413,7 +413,10 @@ function _parseRebateStructure(name){
   const tokens = String(name || "").split("_").map(t => t.trim()).filter(Boolean);
   let brand = "", line = "";
   const brands = new Set(["HK", "LF", "HKLF", "LFH", "HANKOOK", "LAUFENN"]);
-  const lines  = new Set(["ALL", "PCLT", "TBR", "18PLUS", "SUV", "HM", "HK", "LF"]);
+  // HK / LF are brand codes only — keep them out of the lines set so
+  // a token like "HK" always resolves to brand "Hankook" (not spelled
+  // as line "H K").
+  const lines  = new Set(["ALL", "PCLT", "TBR", "18PLUS", "SUV", "HM"]);
   for (const t of tokens) {
     const up = t.toUpperCase();
     if (!brand && brands.has(up)) brand = up;
@@ -447,100 +450,95 @@ function _monthLabelToSpoken(m){
 // phrases like "Alright" / "Now" / "One more thing", short sentences
 // mixed with longer ones — so the OS voice sounds less like a menu
 // prompt and more like a colleague briefing you before you walk in.
+// Ultra-short summary of a free-text field — trims to the first
+// sentence when there is one, otherwise the first ~100 chars ending
+// on a word boundary.  Meeting notes are minute-style long-form
+// blocks; reading them verbatim was the "too long" complaint, so we
+// hand the listener the headline and let them open the card if they
+// want the full text.
+function _shortSummary(text, maxChars = 110){
+  let n = String(text || "").replace(/\s+/g, " ").trim();
+  if (!n) return "";
+  // Prefer a clean sentence boundary inside the budget.
+  const period = n.search(/[.!?](\s|$)/);
+  if (period > 0 && period <= maxChars) return n.slice(0, period + 1);
+  if (n.length <= maxChars) return n;
+  const cut = n.lastIndexOf(" ", maxChars);
+  return (cut > 40 ? n.slice(0, cut) : n.slice(0, maxChars)) + "…";
+}
+
 function _composeFocusChunks(state){
   const s = state || {};
   const chunks = [];
 
-  // ── Intro ──────────────────────────────────────────────
+  // ── Intro (very short) ────────────────────────────────
   const shopName = (s.shop && (s.shop.ship_to_name || s.shop.ship_to)) || "this shop";
-  const bde      = (s.shop && s.shop.salesman_name) || "";
-  const introBits = [`Alright, quick brief on ${shopName}.`];
-  if (bde) introBits.push(`Your BDE on this account is ${bde}.`);
-  chunks.push(introBits.join(" "));
+  chunks.push(`Quick brief on ${shopName}.`);
 
-  // ── Last visit ────────────────────────────────────────
+  // ── Last visit (one-line summary) ─────────────────────
   const lm = s.lastMeeting;
   if (lm) {
     const when = lm.visit_date ? daysAgo(lm.visit_date) : "recently";
-    const lead = /(day|week|month|year|ago|today|yesterday)/i.test(when)
-      ? `The last visit was ${when}`
-      : `Last visit was ${when}`;
-    let sentence = lead;
-    if (lm.bde_name)      sentence += `, by ${lm.bde_name}`;
-    if (lm.met_person)    sentence += `, meeting with ${lm.met_person}`;
-    if (lm.visit_purpose) sentence += `, and it was about ${lm.visit_purpose}`;
+    let sentence = `Last visit ${when}`;
+    if (lm.met_person) sentence += `, with ${lm.met_person}`;
+    if (lm.visit_purpose) sentence += `, about ${lm.visit_purpose}`;
     chunks.push(sentence + ".");
-    if (lm.notes) {
-      let n = String(lm.notes).replace(/\s+/g, " ").trim();
-      if (n.length > 260) {
-        const cut = n.lastIndexOf(". ", 260);
-        n = (cut > 60 ? n.slice(0, cut + 1) : n.slice(0, 250) + "…");
-      }
-      chunks.push(`Here's what happened: ${n}`);
-    }
+    // Notes → one short paraphrased headline, not the whole minute.
+    const noteBrief = _shortSummary(lm.notes, 110);
+    if (noteBrief) chunks.push(noteBrief);
+    // Next action — trimmed to a short line too.
     if (lm.next_action) {
-      chunks.push(`So the next action is to ${lm.next_action.replace(/^to\s+/i, "")}.`);
+      const na = _shortSummary(lm.next_action.replace(/^to\s+/i, ""), 100);
+      chunks.push(`Next, ${na}`);
     }
   } else {
-    chunks.push("There's no prior visit logged for this shop yet.");
+    chunks.push("No prior visit logged.");
   }
 
-  // ── 6-month sales trend + last-3-month direction ─────
+  // ── 3-month direction (no totals) ─────────────────────
   const t = s.trend || [];
-  if (t.length) {
-    const totalQty = s.totalQty || 0;
-    const avg = Math.round(totalQty / t.length);
-    chunks.push(
-      `Now on the numbers. Over the last six months they've bought ${totalQty.toLocaleString()} units in total, `
-      + `so around ${avg.toLocaleString()} a month on average.`
-    );
-
-    if (t.length >= 3) {
-      const last3 = t.slice(-3).map(x => +x.qty || 0);
-      const prev3 = t.slice(-6, -3).map(x => +x.qty || 0);
-      const avgLast3 = last3.reduce((a,b)=>a+b,0) / last3.length;
-      const avgPrev3 = prev3.length ? prev3.reduce((a,b)=>a+b,0) / prev3.length : 0;
-      const monotonicUp   = last3[0] < last3[1] && last3[1] < last3[2];
-      const monotonicDown = last3[0] > last3[1] && last3[1] > last3[2];
-      let sentence = "";
-      if (avgPrev3 > 0) {
-        const pct = Math.round((avgLast3 - avgPrev3) / avgPrev3 * 100);
-        if (pct >= 10)          sentence = `The last three months are trending up — about ${pct} percent higher than the three months before.`;
-        else if (pct <= -10)    sentence = `Heads up — the last three months are trending down, about ${Math.abs(pct)} percent lower than the three months before.`;
-        else if (monotonicUp)   sentence = "The last three months are creeping up, slowly but consistently.";
-        else if (monotonicDown) sentence = "The last three months are creeping down, slowly but consistently.";
-        else                    sentence = "The last three months are pretty steady, no big swing.";
-      } else if (avgLast3 > 0) {
-        sentence = "The last three months are picking up from basically nothing — a fresh account starting to move.";
-      }
-      if (sentence) chunks.push(sentence);
+  if (t.length >= 3) {
+    const last3 = t.slice(-3).map(x => +x.qty || 0);
+    const prev3 = t.slice(-6, -3).map(x => +x.qty || 0);
+    const avgLast3 = last3.reduce((a,b)=>a+b,0) / last3.length;
+    const avgPrev3 = prev3.length ? prev3.reduce((a,b)=>a+b,0) / prev3.length : 0;
+    const monotonicUp   = last3[0] < last3[1] && last3[1] < last3[2];
+    const monotonicDown = last3[0] > last3[1] && last3[1] > last3[2];
+    let sentence = "";
+    if (avgPrev3 > 0) {
+      const pct = Math.round((avgLast3 - avgPrev3) / avgPrev3 * 100);
+      if (pct >= 10)          sentence = `Sales are trending up, about ${pct} percent over the prior three months.`;
+      else if (pct <= -10)    sentence = `Sales are trending down, about ${Math.abs(pct)} percent below the prior three months.`;
+      else if (monotonicUp)   sentence = "Sales are creeping up.";
+      else if (monotonicDown) sentence = "Sales are creeping down.";
+      else                    sentence = "Sales are pretty steady.";
+    } else if (avgLast3 > 0) {
+      sentence = "Sales are picking up from nothing.";
     }
+    if (sentence) chunks.push(sentence);
   }
 
-  // ── Rebate progress ───────────────────────────────────
+  // ── Rebate (brand names pronounced, one line each) ────
   const rebRows = s.rebateRows || [];
   if (rebRows.length) {
-    chunks.push("One more thing — rebate progress for this month.");
     for (const r of rebRows) {
       const parsed = _parseRebateStructure(r.structure_name);
-      const forWho = [parsed.brandSpoken, parsed.lineSpoken ? "for " + parsed.lineSpoken : ""]
-        .filter(Boolean).join(" ").trim();
-      const who = forWho || r.structure_name;
+      const brand  = parsed.brandSpoken || parsed.brand || "";
+      const line   = parsed.lineSpoken  || parsed.line  || "";
+      const who    = [brand, line ? "for " + line : ""].filter(Boolean).join(" ").trim()
+                     || r.structure_name;
       if (!r.next_threshold) {
-        chunks.push(`On ${who}, they've already hit the top tier at ${r.curr_rate} percent. Nice.`);
+        chunks.push(`Rebate: ${who}, top tier already at ${r.curr_rate} percent.`);
         continue;
       }
       const needed = (r.unit === "Q") ? r.needed_qty : r.needed_amt;
       const unit   = (r.unit === "Q") ? "units" : "dollars";
       const nRound = Math.round(needed || 0).toLocaleString();
       chunks.push(
-        `On ${who}, they need ${nRound} more ${unit} to jump from ${r.curr_rate} to ${r.next_rate} percent.`
+        `Rebate: ${who}, ${nRound} more ${unit} to reach ${r.next_rate} percent.`
       );
     }
   }
-
-  // ── Closer ────────────────────────────────────────────
-  chunks.push("That's the brief. Good luck.");
 
   return chunks;
 }
@@ -589,11 +587,10 @@ function _toggleMeetingFocusSpeech(){
   const chunks = _composeFocusChunks(state);
   if (!chunks.length) return;
 
-  // Between-section gap.  Each chunk becomes its own utterance and
-  // we insert this many milliseconds of real silence before starting
-  // the next one — enough for the listener to reset their attention
-  // between "next action" and "sales trend" without feeling slow.
-  const GAP_MS = 420;
+  // Between-section gap.  Each chunk becomes its own utterance with
+  // this much silence between them — a natural comma-length beat,
+  // not a full pause, so the whole briefing still feels tight.
+  const GAP_MS = 180;
 
   state._speaking = true;
   btn.classList.add("speaking");
