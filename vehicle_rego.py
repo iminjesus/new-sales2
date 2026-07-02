@@ -60,9 +60,14 @@ USER_AGENT    = "vehicle_rego.py/1.0 (+bitre-fetch)"
 POSTCODE_ALIASES = {"postcode", "post_code", "registered_postcode", "regd_postcode"}
 MAKE_ALIASES     = {"make", "vehicle_make", "manufacturer"}
 MODEL_ALIASES    = {"model", "vehicle_model"}
-STATE_ALIASES    = {"state", "state_territory", "state_of_registration", "state_of_regn"}
-QTY_ALIASES      = {"count", "number", "vehicles", "qty", "quantity", "registered_vehicles", "n"}
+STATE_ALIASES    = {"state", "state_abb", "state_territory",
+                    "state_of_registration", "state_of_regn"}
+QTY_ALIASES      = {"count", "number", "vehicles", "qty", "quantity",
+                    "registered_vehicles", "no_vehicles", "n"}
 TYPE_ALIASES     = {"vehicle_type", "type", "vehicle_category"}
+MOTIVE_ALIASES   = {"motive_power", "fuel", "fuel_type"}
+YEAR_ALIASES     = {"year_of_manufacture", "manufacture_year", "manufacturing_year",
+                    "year_manufactured", "yom", "vehicle_year", "model_year"}
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────
@@ -141,12 +146,14 @@ def _norm_cols(cols: Iterable[str]) -> dict[str, str]:
     out = {}
     for c in cols:
         key = _slug(str(c))
-        if key in POSTCODE_ALIASES: out[c] = "postcode"
-        elif key in MAKE_ALIASES:   out[c] = "make"
-        elif key in MODEL_ALIASES:  out[c] = "model"
-        elif key in STATE_ALIASES:  out[c] = "state"
-        elif key in QTY_ALIASES:    out[c] = "qty"
-        elif key in TYPE_ALIASES:   out[c] = "vehicle_type"
+        if key in POSTCODE_ALIASES:  out[c] = "postcode"
+        elif key in MAKE_ALIASES:    out[c] = "make"
+        elif key in MODEL_ALIASES:   out[c] = "model"
+        elif key in STATE_ALIASES:   out[c] = "state"
+        elif key in QTY_ALIASES:     out[c] = "qty"
+        elif key in TYPE_ALIASES:    out[c] = "vehicle_type"
+        elif key in MOTIVE_ALIASES:  out[c] = "motive_power"
+        elif key in YEAR_ALIASES:    out[c] = "year_of_manufacture"
     return out
 
 
@@ -169,27 +176,31 @@ def _read_csv_or_excel(path: Path) -> pd.DataFrame | None:
 
 
 def _classify(df: pd.DataFrame) -> tuple[str, dict[str, str]]:
-    """Look at df's columns; return (kind, colmap) where kind is:
-    - "postcode_make_model"  — the gold table (postcode × make × model)
-    - "postcode_make"        — postcode × make totals
-    - "make_model"           — make × model totals (no postcode)
-    - "postcode_only"        — postcode totals
-    - "other"                — didn't recognise
+    """Look at df's columns; return (kind, colmap).
+
+    Kinds are ordered from richest to sparsest — the richer the
+    dimension set, the more analytics you can do with it later.
+    year_of_manufacture is a top-tier dimension because BITRE sometimes
+    publishes it in a separate resource; when it appears together with
+    make/model it unlocks fleet-age / renewal-cycle analysis.
     """
     colmap = _norm_cols(df.columns)
     keys = set(colmap.values())
     has_qty = "qty" in keys
     if not has_qty:
-        # Some releases pivot years into columns; try last numeric col.
-        # Skip for now — user can extend the aliases list.
         return "other", colmap
-    has_pc = "postcode" in keys
-    has_mk = "make" in keys
-    has_md = "model" in keys
-    if has_pc and has_mk and has_md: return "postcode_make_model", colmap
-    if has_pc and has_mk:            return "postcode_make",       colmap
-    if has_mk and has_md:            return "make_model",          colmap
-    if has_pc:                       return "postcode_only",       colmap
+    has_pc   = "postcode" in keys
+    has_mk   = "make" in keys
+    has_md   = "model" in keys
+    has_yr   = "year_of_manufacture" in keys
+
+    if has_pc and has_mk and has_md and has_yr: return "postcode_make_model_year", colmap
+    if has_mk and has_md and has_yr:            return "make_model_year",          colmap
+    if has_pc and has_mk and has_md:            return "postcode_make_model",      colmap
+    if has_pc and has_mk:                       return "postcode_make",            colmap
+    if has_mk and has_md:                       return "make_model",               colmap
+    if has_pc:                                  return "postcode_only",            colmap
+    if has_yr and has_qty:                      return "year_only",                colmap
     return "other", colmap
 
 
@@ -254,10 +265,13 @@ def process_package(
 
     # classify each and collect the best-matching frames
     buckets: dict[str, list[pd.DataFrame]] = {
-        "postcode_make_model": [],
-        "postcode_make":       [],
-        "make_model":          [],
-        "postcode_only":       [],
+        "postcode_make_model_year": [],   # richest: every dimension
+        "make_model_year":          [],   # year present but no postcode
+        "postcode_make_model":      [],
+        "postcode_make":            [],
+        "make_model":               [],
+        "postcode_only":            [],
+        "year_only":                [],
     }
     for path in plain:
         df = _read_csv_or_excel(path)
@@ -274,9 +288,14 @@ def process_package(
             )
         if "qty" in renamed.columns:
             renamed["qty"] = pd.to_numeric(renamed["qty"], errors="coerce").fillna(0).astype(int)
-        for c in ("make", "model", "state", "vehicle_type"):
+        for c in ("make", "model", "state", "vehicle_type", "motive_power"):
             if c in renamed.columns:
                 renamed[c] = renamed[c].astype(str).str.strip().str.upper()
+        if "year_of_manufacture" in renamed.columns:
+            renamed["year_of_manufacture"] = (
+                pd.to_numeric(renamed["year_of_manufacture"], errors="coerce")
+                  .astype("Int64")
+            )
         buckets[kind].append(renamed)
         print(f"    ✓ {path.name}  →  {kind}  ({len(renamed):,} rows)")
 
@@ -286,8 +305,10 @@ def process_package(
         if not frames: continue
         merged = pd.concat(frames, ignore_index=True)
         # aggregate — duplicate rows across resource splits collapse to one
-        group_cols = [c for c in ("state", "postcode", "vehicle_type", "make", "model")
-                      if c in merged.columns]
+        group_cols = [c for c in (
+            "state", "postcode", "vehicle_type",
+            "motive_power", "year_of_manufacture", "make", "model",
+        ) if c in merged.columns]
         if group_cols and "qty" in merged.columns:
             merged = merged.groupby(group_cols, dropna=False, as_index=False)["qty"].sum()
         merged.sort_values(group_cols, inplace=True, ignore_index=True)
@@ -314,6 +335,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="Skip search — download this data.gov.au dataset id / slug directly")
     ap.add_argument("--list", action="store_true",
                     help="Only list matching datasets, don't download")
+    ap.add_argument("--list-resources", action="store_true",
+                    help="For --dataset-id, print every resource (name/format/url) "
+                         "instead of downloading — helps you spot the "
+                         "'manufacturing year' file before processing.")
     ap.add_argument("--out", default="out/rego", help="output directory")
     ap.add_argument("--keep-raw", action="store_true",
                     help="keep the raw downloads under out/_raw/")
@@ -328,6 +353,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[error] dataset id '{args.dataset_id}' not found on data.gov.au")
             return 1
         print(f"Using dataset: {pkg.get('title')}  ({pkg.get('name')})")
+        if args.list_resources:
+            resources = pkg.get("resources") or []
+            print(f"\n{len(resources)} resource(s):")
+            for i, res in enumerate(resources, 1):
+                nm  = res.get("name") or "?"
+                fmt = (res.get("format") or "?").upper()
+                url = res.get("url") or ""
+                print(f"  [{i:>2}] {fmt:<6}  {nm}")
+                print(f"       {url}")
+            return 0
         process_package(sess, pkg, out, keep_raw=args.keep_raw)
         return 0
 
