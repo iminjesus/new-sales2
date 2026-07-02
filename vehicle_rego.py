@@ -337,10 +337,30 @@ def process_package(
             merged = merged.groupby(group_cols, dropna=False, as_index=False)["qty"].sum()
         merged.sort_values(group_cols, inplace=True, ignore_index=True)
         out_path = out_dir / f"vehicle_{kind}.csv"
-        merged.to_csv(out_path, index=False)
-        print(f"  wrote {out_path.name}  ({len(merged):,} rows)")
-        written[kind] = out_path
+        # Always keep the aggregated frame in memory so the derived
+        # estimate step below can still run even if this specific CSV
+        # can't be written (usually because the user has it open in
+        # Excel — Windows locks the file and pandas throws EACCES 13).
         aggregated[kind] = merged
+        try:
+            merged.to_csv(out_path, index=False)
+            print(f"  wrote {out_path.name}  ({len(merged):,} rows)")
+            written[kind] = out_path
+        except PermissionError as e:
+            # Fall back to a timestamped filename so the pipeline still
+            # produces the data — the user can rename after closing
+            # Excel.
+            import datetime as _dt
+            alt = out_dir / f"vehicle_{kind}__{_dt.datetime.now():%Y%m%d_%H%M%S}.csv"
+            print(f"  [warn] {out_path.name} is locked (probably open in "
+                  f"Excel); writing to {alt.name} instead.  Close the file "
+                  f"and rerun to overwrite the canonical name.")
+            try:
+                merged.to_csv(alt, index=False)
+                print(f"  wrote {alt.name}  ({len(merged):,} rows)")
+                written[kind] = alt
+            except Exception as e2:
+                print(f"  [error] fallback write also failed: {e2}")
 
     # Derived estimate: postcode × make × model × year.
     #
@@ -377,10 +397,21 @@ def process_package(
         est = est.groupby(gk, dropna=False, as_index=False)["qty"].sum()
         est.sort_values(gk, inplace=True, ignore_index=True)
         est_path = out_dir / "vehicle_postcode_make_model_year_estimate.csv"
-        est.to_csv(est_path, index=False)
-        print(f"  wrote {est_path.name}  ({len(est):,} rows)  "
-              f"[derived: postcode_make_model × make_model_year year-share]")
-        written["postcode_make_model_year_estimate"] = est_path
+        try:
+            est.to_csv(est_path, index=False)
+            print(f"  wrote {est_path.name}  ({len(est):,} rows)  "
+                  f"[derived: postcode_make_model × make_model_year year-share]")
+            written["postcode_make_model_year_estimate"] = est_path
+        except PermissionError:
+            import datetime as _dt
+            alt = out_dir / f"vehicle_postcode_make_model_year_estimate__{_dt.datetime.now():%Y%m%d_%H%M%S}.csv"
+            print(f"  [warn] estimate file is locked; writing to {alt.name}")
+            try:
+                est.to_csv(alt, index=False)
+                written["postcode_make_model_year_estimate"] = alt
+                print(f"  wrote {alt.name}  ({len(est):,} rows)")
+            except Exception as e2:
+                print(f"  [error] fallback write also failed: {e2}")
 
     if not keep_raw:
         for p in raw_dir.iterdir():
