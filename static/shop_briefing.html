@@ -106,6 +106,25 @@ body.embed .wrap{padding:12px}
 .status-msg{padding:14px;color:#6b7280;font-size:12px;text-align:center}
 .error-msg{padding:14px;color:#dc2626;font-size:12px;text-align:center;font-weight:600}
 
+/* Meeting-focus voice button sits at the very bottom of the briefing
+   so it's the last thing under the rebate card.  Click → speaks a
+   paraphrased summary of the last visit / next action / 6-month
+   trend / rebate progress via the Web Speech API.  Click again while
+   speaking to stop. */
+.focus-btn-wrap{position:sticky;bottom:8px;padding:12px 0 4px}
+.focus-btn{width:100%;padding:14px 16px;border:none;border-radius:10px;
+  background:linear-gradient(180deg,#2563eb,#1d4ed8);color:#fff;
+  font-size:14px;font-weight:700;letter-spacing:.02em;cursor:pointer;
+  box-shadow:0 3px 12px rgba(37,99,235,.35);display:flex;align-items:center;
+  justify-content:center;gap:10px}
+.focus-btn:hover{background:linear-gradient(180deg,#1d4ed8,#1e40af)}
+.focus-btn:active{transform:translateY(1px)}
+.focus-btn.speaking{background:linear-gradient(180deg,#dc2626,#b91c1c);
+  box-shadow:0 3px 12px rgba(220,38,38,.35)}
+.focus-btn .ico{font-size:18px;line-height:1}
+.focus-hint{font-size:10px;color:#9ca3af;text-align:center;margin-top:6px;
+  line-height:1.4}
+
 @media (max-width:540px){
   .comm-btn{flex:1 1 calc(50% - 4px);min-width:auto}
   .lm-row .lm-key{flex:0 0 70px}
@@ -293,8 +312,42 @@ function renderShop(j){
     </div>
   `;
 
-  wrap.innerHTML = headHtml + meetingHtml + contactsHtml + trendHtml + rebateHtml;
+  // Meeting-focus voice button pinned under everything.  Reads the
+  // same data the cards above show, so the BDE can walk into a shop
+  // holding the phone up to their ear and get a 30-second recap.
+  const focusHtml = `
+    <div class="focus-btn-wrap">
+      <button id="meetingFocusBtn" class="focus-btn" type="button">
+        <span class="ico">🎙️</span>
+        <span id="meetingFocusLabel">Meeting Focus — read aloud</span>
+      </button>
+      <div class="focus-hint">
+        Speaks last visit, next action, 6-month trend, and rebate progress.
+        Tap again to stop.
+      </div>
+    </div>
+  `;
+
+  wrap.innerHTML = headHtml + meetingHtml + contactsHtml + trendHtml + rebateHtml + focusHtml;
   drawTrend(trend, "qty");
+
+  // Stash the state the focus script paraphrases so it doesn't have
+  // to reach back into the DOM.  rebateRows fills in when loadRebate
+  // finishes; the button waits for that or speaks with the parts it
+  // has if the user is fast.
+  window._focusState = {
+    shop:         shop,
+    lastMeeting:  lm,
+    trend:        trend,
+    totalQty:     totalQty,
+    totalAmt:     totalAmt,
+    rebateRows:   [],
+    _speaking:    false,
+    _utter:       null,
+  };
+
+  const focusBtn = document.getElementById("meetingFocusBtn");
+  if (focusBtn) focusBtn.addEventListener("click", _toggleMeetingFocusSpeech);
 
   document.getElementById("trendToggle").addEventListener("click", (e) => {
     const cur = e.target.dataset.mode || "qty";
@@ -342,6 +395,181 @@ function drawTrend(trend, mode){
       </div>
     `;
   }).join("");
+}
+
+// ── Meeting-focus voice summary ─────────────────────────────────────
+// Composes a spoken paraphrase of the briefing so a BDE can hear the
+// last-visit / next-action / trend / rebate story on the way into the
+// shop.  Uses the browser's Web Speech API — no extra dependency, no
+// server round-trip.  Falls back to a printable div if TTS isn't
+// available (rare on desktop, sometimes on Android WebView).
+
+// Rebate structures usually look like "HK_ALL_ABJ_Q_SR", where the
+// first token is the brand (HK / LF / HKLF), the second is the line
+// (ALL / PCLT / TBR / …), the fourth is the unit (Q / A).  Parse
+// what we can; leave "" for whatever we can't and let the script
+// gracefully skip those bits.
+function _parseRebateStructure(name){
+  const tokens = String(name || "").split("_").map(t => t.trim()).filter(Boolean);
+  let brand = "", line = "";
+  const brands = new Set(["HK", "LF", "HKLF", "LFH", "HANKOOK", "LAUFENN"]);
+  const lines  = new Set(["ALL", "PCLT", "TBR", "18PLUS", "SUV", "HM", "HK", "LF"]);
+  for (const t of tokens) {
+    const up = t.toUpperCase();
+    if (!brand && brands.has(up)) brand = up;
+    else if (!line && lines.has(up)) line = up;
+  }
+  // Nicer spoken forms
+  const brandSpoken = ({
+    "HK": "Hankook", "LF": "Laufenn", "HKLF": "Hankook and Laufenn",
+    "HANKOOK": "Hankook", "LAUFENN": "Laufenn",
+  })[brand] || brand;
+  const lineSpoken = ({
+    "ALL": "all lines", "PCLT": "P C L T", "TBR": "T B R",
+    "18PLUS": "18 inch plus", "SUV": "S U V", "HM": "heavy machinery",
+  })[line] || line;
+  return { brand, line, brandSpoken, lineSpoken };
+}
+
+function _monthLabelToSpoken(m){
+  // API returns tokens like "Feb" — spoken form is fine as-is.
+  return String(m || "").trim();
+}
+
+function _composeFocusScript(state){
+  const s = state || {};
+  const parts = [];
+
+  const shopName = (s.shop && (s.shop.ship_to_name || s.shop.ship_to)) || "this shop";
+  const bde      = (s.shop && s.shop.salesman_name) || "";
+  parts.push(`Meeting focus for ${shopName}.`);
+  if (bde) parts.push(`BDE on this account is ${bde}.`);
+
+  // Last visit
+  const lm = s.lastMeeting;
+  if (lm) {
+    const when = lm.visit_date ? daysAgo(lm.visit_date) : "recently";
+    let sentence = `Last visit was ${when}`;
+    if (lm.bde_name) sentence += `, by ${lm.bde_name}`;
+    if (lm.met_person) sentence += `, meeting with ${lm.met_person}`;
+    if (lm.visit_purpose) sentence += `, on ${lm.visit_purpose}`;
+    parts.push(sentence + ".");
+    if (lm.notes) {
+      // Trim to something narratable — first ~250 chars, ended at
+      // sentence boundary if possible.
+      let n = String(lm.notes).replace(/\s+/g, " ").trim();
+      if (n.length > 260) {
+        const cut = n.lastIndexOf(". ", 260);
+        n = (cut > 60 ? n.slice(0, cut + 1) : n.slice(0, 250) + "…");
+      }
+      parts.push("Notes: " + n);
+    }
+    if (lm.next_action) {
+      parts.push("Next action: " + lm.next_action);
+    }
+  } else {
+    parts.push("No prior visit log for this shop.");
+  }
+
+  // 6-month sales trend
+  const t = s.trend || [];
+  if (t.length) {
+    const totalQty = s.totalQty || 0;
+    const avg = Math.round(totalQty / t.length);
+    let trendSent = `Over the last six months this shop bought ${totalQty} units, averaging ${avg} per month.`;
+    // Momentum: compare the last month to the 5-month average behind it.
+    const last = t[t.length - 1] || {};
+    const rest = t.slice(0, -1);
+    const restAvg = rest.length ? rest.reduce((a,b)=>a+(b.qty||0),0)/rest.length : 0;
+    if (restAvg > 0) {
+      const pct = Math.round(((last.qty || 0) - restAvg) / restAvg * 100);
+      if (Math.abs(pct) >= 10) {
+        trendSent += ` ${_monthLabelToSpoken(last.month)} is ${pct > 0 ? "up" : "down"} ${Math.abs(pct)} percent versus the prior five months' average.`;
+      }
+    }
+    parts.push(trendSent);
+  }
+
+  // Rebate progress
+  const rebRows = s.rebateRows || [];
+  if (rebRows.length) {
+    parts.push("Rebate progress this month.");
+    for (const r of rebRows) {
+      const parsed = _parseRebateStructure(r.structure_name);
+      const forWho = [parsed.brandSpoken, parsed.lineSpoken ? "for " + parsed.lineSpoken : ""]
+        .filter(Boolean).join(" ");
+      if (!r.next_threshold) {
+        parts.push(`For ${forWho || r.structure_name}, they've reached the top tier at ${r.curr_rate} percent.`);
+        continue;
+      }
+      const needed = (r.unit === "Q") ? r.needed_qty : r.needed_amt;
+      const unit   = (r.unit === "Q") ? "units" : "dollars";
+      const nRound = Math.round(needed || 0).toLocaleString();
+      parts.push(
+        `For ${forWho || r.structure_name}, ${nRound} more ${unit} to move from ${r.curr_rate} to ${r.next_rate} percent.`
+      );
+    }
+  }
+
+  return parts.join(" ");
+}
+
+function _toggleMeetingFocusSpeech(){
+  const state = window._focusState;
+  const btn   = document.getElementById("meetingFocusBtn");
+  const lbl   = document.getElementById("meetingFocusLabel");
+  if (!state || !btn || !lbl) return;
+
+  // Already speaking? Cancel and reset.
+  if (state._speaking) {
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    state._speaking = false;
+    state._utter = null;
+    btn.classList.remove("speaking");
+    lbl.textContent = "Meeting Focus — read aloud";
+    return;
+  }
+  if (!("speechSynthesis" in window)) {
+    // Fallback — dump the text into a div so at least the reader
+    // can see what would have been said.
+    const script = _composeFocusScript(state);
+    alert(script);
+    return;
+  }
+
+  const script = _composeFocusScript(state);
+  const u = new SpeechSynthesisUtterance(script);
+  u.rate   = 1.02;   // small speed-up — natural but not rushed
+  u.pitch  = 1.0;
+  u.volume = 1.0;
+  // Prefer an en-AU voice if the OS ships one; otherwise let the
+  // engine pick.
+  const voices = window.speechSynthesis.getVoices() || [];
+  const auVoice = voices.find(v => /en[-_]AU/i.test(v.lang))
+              || voices.find(v => /en[-_](GB|US)/i.test(v.lang));
+  if (auVoice) u.voice = auVoice;
+  u.onend = u.onerror = () => {
+    state._speaking = false;
+    state._utter = null;
+    btn.classList.remove("speaking");
+    lbl.textContent = "Meeting Focus — read aloud";
+  };
+  state._utter = u;
+  state._speaking = true;
+  btn.classList.add("speaking");
+  lbl.textContent = "🔴 Speaking — tap to stop";
+  try {
+    // Chrome sometimes queues a stale utterance after a previous
+    // cancel; a paranoid cancel-then-speak avoids the "no sound"
+    // symptom.
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch (e) {
+    console.error("[meeting-focus] TTS failed:", e);
+    state._speaking = false;
+    btn.classList.remove("speaking");
+    lbl.textContent = "Meeting Focus — read aloud";
+  }
 }
 
 // Rebate next-tier — uses the existing /api/rebate_data endpoint
@@ -395,8 +623,11 @@ async function loadRebate(){
 
     if (!rows.length) {
       status.textContent = "No rebate structure mapped for this shop.";
+      if (window._focusState) window._focusState.rebateRows = [];
       return;
     }
+    // Feed the meeting-focus voice summary too.
+    if (window._focusState) window._focusState.rebateRows = rows;
     body.innerHTML = rows.map(r => {
       const fmt = (n) => r.unit === "Q" ? fmtNum(n) + " units" : fmtMoney(n);
       const needed = r.unit === "Q" ? r.needed_qty : r.needed_amt;
