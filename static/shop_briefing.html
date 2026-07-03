@@ -439,63 +439,53 @@ function _monthLabelToSpoken(m){
   return String(m || "").trim();
 }
 
-// Composes the voice briefing as a *list of section chunks* instead
-// of one flat string.  Each chunk becomes its own SpeechSynthesis
-// utterance with a real pause between them (see _speakChunks below),
-// so the reader gets a moment to catch up between "next action" and
-// "sales trend" — that mash-up was the main "hard to listen to"
-// complaint.
+// Compose the briefing as SECTION-level chunks (not sentence-level).
+// Each returned chunk becomes ONE SpeechSynthesisUtterance — sentence
+// pauses come from the "." punctuation inside a chunk, which the TTS
+// engine handles naturally, so we don't accumulate the ~400-600 ms
+// dead-air stall the browser inserts between separate utterances at
+// every sentence boundary.
 //
-// Copy is intentionally conversational — contractions, transition
-// phrases like "Alright" / "Now" / "One more thing", short sentences
-// mixed with longer ones — so the OS voice sounds less like a menu
-// prompt and more like a colleague briefing you before you walk in.
-// Ultra-short summary of a free-text field — trims to the first
-// sentence when there is one, otherwise the first ~100 chars ending
-// on a word boundary.  Meeting notes are minute-style long-form
-// blocks; reading them verbatim was the "too long" complaint, so we
-// hand the listener the headline and let them open the card if they
-// want the full text.
-function _shortSummary(text, maxChars = 110){
-  let n = String(text || "").replace(/\s+/g, " ").trim();
-  if (!n) return "";
-  // Prefer a clean sentence boundary inside the budget.
-  const period = n.search(/[.!?](\s|$)/);
-  if (period > 0 && period <= maxChars) return n.slice(0, period + 1);
-  if (n.length <= maxChars) return n;
-  const cut = n.lastIndexOf(" ", maxChars);
-  return (cut > 40 ? n.slice(0, cut) : n.slice(0, maxChars)) + "…";
-}
-
+// Section headers are spoken as full-word intros ("Now, previous
+// visit notes", "For the rebate,…") instead of colon-labels — the OS
+// voice tends to mumble a naked "Rebate:" but reads a natural
+// sentence clearly.
 function _composeFocusChunks(state){
   const s = state || {};
   const chunks = [];
 
-  // ── Intro (very short) ────────────────────────────────
+  // ── Chunk 1 — intro + last-visit meta ─────────────────
+  const parts1 = [];
   const shopName = (s.shop && (s.shop.ship_to_name || s.shop.ship_to)) || "this shop";
-  chunks.push(`Quick brief on ${shopName}.`);
-
-  // ── Last visit (one-line summary) ─────────────────────
+  parts1.push(`Quick brief on ${shopName}.`);
   const lm = s.lastMeeting;
   if (lm) {
     const when = lm.visit_date ? daysAgo(lm.visit_date) : "recently";
-    let sentence = `Last visit ${when}`;
-    if (lm.met_person) sentence += `, with ${lm.met_person}`;
+    let sentence = `Last visit was ${when}`;
+    if (lm.met_person)   sentence += `, with ${lm.met_person}`;
     if (lm.visit_purpose) sentence += `, about ${lm.visit_purpose}`;
-    chunks.push(sentence + ".");
-    // Notes → one short paraphrased headline, not the whole minute.
-    const noteBrief = _shortSummary(lm.notes, 110);
-    if (noteBrief) chunks.push(noteBrief);
-    // Next action — trimmed to a short line too.
-    if (lm.next_action) {
-      const na = _shortSummary(lm.next_action.replace(/^to\s+/i, ""), 100);
-      chunks.push(`Next, ${na}`);
-    }
+    parts1.push(sentence + ".");
   } else {
-    chunks.push("No prior visit logged.");
+    parts1.push("No prior visit logged.");
+  }
+  chunks.push(parts1.join(" "));
+
+  // ── Chunk 2 — previous meeting notes, read in FULL ────
+  // Summarising was cutting off at the first sentence and losing the
+  // rest, so read the whole minute back verbatim (with a short intro
+  // so the listener knows the section changed).  Long notes just take
+  // a bit longer — that's fine, the listener can hit stop.
+  if (lm && lm.notes && lm.notes.trim()) {
+    const notes = String(lm.notes).replace(/\s+/g, " ").trim();
+    chunks.push("Now, previous meeting notes. " + notes);
   }
 
-  // ── 3-month direction (no totals) ─────────────────────
+  // ── Chunk 3 — next action + 3-month trend + rebate ────
+  const parts3 = [];
+  if (lm && lm.next_action) {
+    const na = String(lm.next_action).replace(/^to\s+/i, "").trim();
+    parts3.push(`Next action, ${na}.`);
+  }
   const t = s.trend || [];
   if (t.length >= 3) {
     const last3 = t.slice(-3).map(x => +x.qty || 0);
@@ -511,16 +501,15 @@ function _composeFocusChunks(state){
       else if (pct <= -10)    sentence = `Sales are trending down, about ${Math.abs(pct)} percent below the prior three months.`;
       else if (monotonicUp)   sentence = "Sales are creeping up.";
       else if (monotonicDown) sentence = "Sales are creeping down.";
-      else                    sentence = "Sales are pretty steady.";
+      else                    sentence = "Sales have been pretty steady.";
     } else if (avgLast3 > 0) {
       sentence = "Sales are picking up from nothing.";
     }
-    if (sentence) chunks.push(sentence);
+    if (sentence) parts3.push(sentence);
   }
-
-  // ── Rebate (brand names pronounced, one line each) ────
   const rebRows = s.rebateRows || [];
   if (rebRows.length) {
+    parts3.push("For the rebate.");
     for (const r of rebRows) {
       const parsed = _parseRebateStructure(r.structure_name);
       const brand  = parsed.brandSpoken || parsed.brand || "";
@@ -528,17 +517,18 @@ function _composeFocusChunks(state){
       const who    = [brand, line ? "for " + line : ""].filter(Boolean).join(" ").trim()
                      || r.structure_name;
       if (!r.next_threshold) {
-        chunks.push(`Rebate: ${who}, top tier already at ${r.curr_rate} percent.`);
+        parts3.push(`On ${who}, we're already at the top tier at ${r.curr_rate} percent.`);
         continue;
       }
       const needed = (r.unit === "Q") ? r.needed_qty : r.needed_amt;
       const unit   = (r.unit === "Q") ? "units" : "dollars";
       const nRound = Math.round(needed || 0).toLocaleString();
-      chunks.push(
-        `Rebate: ${who}, ${nRound} more ${unit} to reach ${r.next_rate} percent.`
+      parts3.push(
+        `On ${who}, we need ${nRound} more ${unit} to reach ${r.next_rate} percent.`
       );
     }
   }
+  if (parts3.length) chunks.push(parts3.join(" "));
 
   return chunks;
 }
@@ -587,10 +577,12 @@ function _toggleMeetingFocusSpeech(){
   const chunks = _composeFocusChunks(state);
   if (!chunks.length) return;
 
-  // Between-section gap.  Each chunk becomes its own utterance with
-  // this much silence between them — a natural comma-length beat,
-  // not a full pause, so the whole briefing still feels tight.
-  const GAP_MS = 180;
+  // Between-section gap.  Chrome / Safari already insert ~400-600 ms
+  // of dead air between two separate utterances all on their own, so
+  // adding a setTimeout on top of that stacked into the "too wide"
+  // gap complaint.  Fire the next chunk immediately — the browser
+  // pause is already the natural section beat.
+  const GAP_MS = 0;
 
   state._speaking = true;
   btn.classList.add("speaking");
