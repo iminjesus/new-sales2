@@ -494,16 +494,22 @@ function _composeFocusChunks(state){
     const avgPrev3 = prev3.length ? prev3.reduce((a,b)=>a+b,0) / prev3.length : 0;
     const monotonicUp   = last3[0] < last3[1] && last3[1] < last3[2];
     const monotonicDown = last3[0] > last3[1] && last3[1] > last3[2];
+    // Preamble ("Now, on sales,") gives the OS voice a beat to settle
+    // before the actual sibilant-heavy content word — without it, most
+    // female TTS voices swallow the opening "S" of "Sales" and the
+    // trend read starts as a mumble.  The comma inside the preamble
+    // is important: it forces a natural micro-pause between the
+    // preamble and the payload.
     let sentence = "";
     if (avgPrev3 > 0) {
       const pct = Math.round((avgLast3 - avgPrev3) / avgPrev3 * 100);
-      if (pct >= 10)          sentence = `Sales are trending up, about ${pct} percent over the prior three months.`;
-      else if (pct <= -10)    sentence = `Sales are trending down, about ${Math.abs(pct)} percent below the prior three months.`;
-      else if (monotonicUp)   sentence = "Sales are creeping up.";
-      else if (monotonicDown) sentence = "Sales are creeping down.";
-      else                    sentence = "Sales have been pretty steady.";
+      if (pct >= 10)          sentence = `Now, on sales, we're trending up about ${pct} percent over the prior three months.`;
+      else if (pct <= -10)    sentence = `Now, on sales, we're trending down about ${Math.abs(pct)} percent below the prior three months.`;
+      else if (monotonicUp)   sentence = "Now, on sales, we're creeping up.";
+      else if (monotonicDown) sentence = "Now, on sales, we're creeping down.";
+      else                    sentence = "Now, on sales, we've been pretty steady.";
     } else if (avgLast3 > 0) {
-      sentence = "Sales are picking up from nothing.";
+      sentence = "Now, on sales, we're picking up from nothing.";
     }
     if (sentence) parts3.push(sentence);
   }
