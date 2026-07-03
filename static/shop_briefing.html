@@ -583,12 +583,12 @@ function _toggleMeetingFocusSpeech(){
   const chunks = _composeFocusChunks(state);
   if (!chunks.length) return;
 
-  // Between-section gap.  Chrome / Safari already insert ~400-600 ms
-  // of dead air between two separate utterances all on their own, so
-  // adding a setTimeout on top of that stacked into the "too wide"
-  // gap complaint.  Fire the next chunk immediately — the browser
-  // pause is already the natural section beat.
-  const GAP_MS = 0;
+  // Merge every section into ONE utterance so section boundaries no
+  // longer clip the opening syllable.  The chunks stay separated by
+  // "  " (period-space-space) which the TTS engine reads as a natural
+  // beat — the pause is real, but it happens INSIDE the utterance
+  // where nothing gets cut off.
+  const fullText = chunks.join("  ");
 
   state._speaking = true;
   btn.classList.add("speaking");
@@ -598,41 +598,41 @@ function _toggleMeetingFocusSpeech(){
   // one queued after a previous stop) and reset before speaking.
   try { window.speechSynthesis.cancel(); } catch (_) {}
 
-  let idx = 0;
   const done = () => {
     state._speaking = false;
     state._utter = null;
     btn.classList.remove("speaking");
     lbl.textContent = "▶ Play voice briefing";
   };
-  const speakNext = () => {
-    // User hit Stop midway → bail
-    if (!state._speaking) return;
-    if (idx >= chunks.length) { done(); return; }
-    const text = chunks[idx++];
-    const u = new SpeechSynthesisUtterance(text);
-    // Slightly slower than default so it reads as measured, not
-    // rushed.  Tiny pitch variation between chunks would sound more
-    // natural still but breaks the "one voice" illusion — leave
-    // pitch constant.
-    u.rate   = 0.97;
-    u.pitch  = 1.02;
-    u.volume = 1.0;
-    if (auVoice) u.voice = auVoice;
-    u.onerror = () => { done(); };
-    u.onend   = () => {
-      if (!state._speaking) return;
-      if (idx < chunks.length) setTimeout(speakNext, GAP_MS);
-      else done();
-    };
-    state._utter = u;
-    try { window.speechSynthesis.speak(u); }
-    catch (e) {
-      console.error("[meeting-focus] TTS failed:", e);
-      done();
-    }
-  };
-  speakNext();
+
+  // Warmup: a silent utterance to prime the browser's audio pipeline.
+  // Without this, the very first ~80 ms of the real utterance gets
+  // clipped ("uick brief on…" instead of "Quick brief on…") because
+  // the audio graph hasn't started running when speech begins.  A
+  // volume-0 "." queued first forces the pipeline up without making
+  // any audible sound.
+  const warmup = new SpeechSynthesisUtterance(".");
+  warmup.volume = 0;
+  warmup.rate   = 1.0;
+  if (auVoice) warmup.voice = auVoice;
+
+  const u = new SpeechSynthesisUtterance(fullText);
+  // Slightly slower than default so it reads as measured, not rushed.
+  u.rate   = 0.97;
+  u.pitch  = 1.02;
+  u.volume = 1.0;
+  if (auVoice) u.voice = auVoice;
+  u.onerror = () => { done(); };
+  u.onend   = () => { if (state._speaking) done(); };
+  state._utter = u;
+
+  try {
+    window.speechSynthesis.speak(warmup);
+    window.speechSynthesis.speak(u);
+  } catch (e) {
+    console.error("[meeting-focus] TTS failed:", e);
+    done();
+  }
 }
 
 // Rebate next-tier — uses the existing /api/rebate_data endpoint
