@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Special Price Request Form</title>
+<style>
+  :root{
+    --border:#c8c8c8;
+    --border-strong:#8f8f8f;
+    --bg:#f6f7f9;
+    --panel:#fff;
+    --hdr:#eef1f4;
+    --hdr-dark:#4c4c4c;
+    --hdr-text:#fff;
+    --muted:#6c757d;
+    --danger:#c62828;
+    --hint:#fff8d5;
+    --yellow:#fff3b0;
+    --pink:#ffd7e6;
+    --focus:#1976d2;
+    --focus-bg:#e6f0fb;
+    --tbl-thead:#3c3c3c;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#222;background:var(--bg);}
+  .wrap{max-width:1500px;margin:16px auto;padding:0 12px 40px;}
+
+  /* header */
+  .hdr{
+    display:grid;
+    grid-template-columns:auto 1fr auto auto;
+    gap:12px;align-items:center;
+    background:var(--panel);border:1px solid var(--border);border-bottom:none;
+    padding:10px 14px;
+  }
+  .hdr .logo{font-weight:800;color:#e60012;font-size:20px;letter-spacing:.5px}
+  .hdr .logo small{display:block;color:#333;font-weight:500;font-size:11px;letter-spacing:.5px}
+  .hdr .co{font-size:12px;color:#333;line-height:1.4}
+  .hdr .co b{display:block;color:#111;margin-bottom:2px}
+  .hdr .internal{
+    border:2px solid var(--danger);color:var(--danger);
+    padding:6px 14px;font-weight:700;letter-spacing:.5px;
+    background:#fff;border-radius:2px;
+  }
+  .hdr .title{
+    background:#f5c518;color:#000;text-align:center;
+    padding:8px 12px;font-weight:800;line-height:1.15;
+    border:1px solid #c9a20f;
+  }
+  .hdr .title small{display:block;font-weight:700;font-size:12px;margin-top:2px}
+
+  /* section band */
+  .band{
+    background:var(--tbl-thead);color:#fff;
+    text-align:center;font-weight:700;letter-spacing:.4px;
+    padding:6px 8px;border:1px solid var(--tbl-thead);
+    font-size:13px;
+  }
+
+  /* two-column meta block (Customer | Order#) */
+  .meta{
+    display:grid;grid-template-columns:1fr 1fr;gap:0;
+    background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
+  }
+  .meta .col{border-top:1px solid var(--border);}
+  .meta .col:last-child{border-left:1px solid var(--border);}
+
+  /* uniform label/value grid inside each meta col */
+  .grid{
+    display:grid;grid-template-columns:150px 1fr;
+  }
+  .grid > div{
+    border-bottom:1px solid var(--border);
+    padding:5px 8px;font-size:12.5px;
+    min-height:28px;display:flex;align-items:center;
+  }
+  .grid .lbl{background:#eef1f4;font-weight:700;color:#333;border-right:1px solid var(--border);}
+  .grid .val{background:#fff;}
+  .grid .val input, .grid .val textarea, .grid .val select{
+    width:100%;border:1px solid transparent;background:transparent;
+    font:inherit;color:inherit;padding:2px 4px;outline:none;border-radius:2px;
+  }
+  .grid .val input:focus, .grid .val textarea:focus, .grid .val select:focus{
+    background:var(--focus-bg);border-color:var(--focus);
+  }
+  .grid .val.readonly input{background:#f7f7f9;color:#333;}
+  .grid .val.wide{grid-column: span 1;}
+
+  /* nested-label rows (e.g. Base DC with three sub cells) */
+  .grid .valgroup{display:grid;grid-template-columns:1fr 1fr 1fr;padding:0;}
+  .grid .valgroup > div{
+    padding:5px 8px;border-right:1px dashed var(--border);
+    display:flex;align-items:center;justify-content:center;font-size:12px;
+  }
+  .grid .valgroup > div:last-child{border-right:none}
+  .grid .valgroup .sub-hdr{background:#f2c9d9;color:#111;font-weight:700;border-bottom:1px dashed var(--border);}
+  .grid .valgroup .sub-hdr.pk{background:#f2c9d9}
+  .grid .valgroup .sub-hdr.wh{background:#dfe9f3}
+  .grid .valgroup .sub-hdr.gr{background:#e6ddf3}
+  .grid .valgroup .sub-val{background:#fff}
+  .grid .valgroup.two{grid-template-columns:1fr 1fr}
+
+  /* rebate row split (YES/NO) */
+  .rebate{display:grid;grid-template-columns:80px 1fr 80px 1fr;padding:0;}
+  .rebate > div{padding:5px 8px;display:flex;align-items:center;justify-content:center;border-right:1px dashed var(--border);font-size:12.5px}
+  .rebate > div:last-child{border-right:none}
+  .rebate .yes{background:#eaf6ea;font-weight:700}
+  .rebate .no{background:#fdecec;font-weight:700}
+
+  /* sovd summary strip */
+  .sovd{
+    background:#f4f4f4;border:1px solid var(--border);border-top:none;
+    padding:6px 10px;text-align:right;font-size:12.5px;font-weight:700;
+    display:flex;justify-content:flex-end;align-items:center;gap:8px;
+  }
+  .sovd input{
+    width:120px;text-align:right;background:#fffbe0;border:1px solid #d1b900;padding:2px 6px;border-radius:2px;
+  }
+
+  /* order lines table */
+  .lines-wrap{border:1px solid var(--border);border-top:none;background:#fff;overflow-x:auto;}
+  table.lines{
+    width:100%;border-collapse:collapse;font-size:12px;min-width:1400px;
+  }
+  table.lines thead th{
+    background:var(--tbl-thead);color:#fff;font-weight:600;
+    padding:8px 6px;border:1px solid #2a2a2a;text-align:center;line-height:1.2;
+    position:sticky;top:0;z-index:1;
+  }
+  table.lines thead th.pink{background:#c8548a;color:#fff;}
+  table.lines thead th.olive{background:#a08b3c;color:#fff;}
+  table.lines thead th.narrow{width:60px}
+  table.lines thead th.mid{width:90px}
+  table.lines thead th.wide{width:200px}
+  table.lines tbody td{
+    border:1px solid var(--border);padding:0;height:32px;background:#fff;
+  }
+  table.lines tbody td input{
+    width:100%;height:100%;border:none;background:transparent;padding:4px 6px;font:inherit;outline:none;
+  }
+  table.lines tbody td input:focus{background:var(--focus-bg);}
+  table.lines tbody td.readonly input{background:#fafafa;color:#444;}
+  table.lines tbody td.num input{text-align:right;font-variant-numeric:tabular-nums}
+  table.lines tbody td.center input{text-align:center}
+  table.lines tbody td.red-num input{color:#c62828;font-weight:600}
+  table.lines tbody td.pct-cell input{color:#b45309;background:#fff8e6;font-weight:700;text-align:right;}
+  table.lines tbody td.total-cell input{background:#fff8e6;text-align:right;font-weight:700}
+  table.lines tbody tr.total-row td{background:#f0f0f0;font-weight:800;}
+  table.lines tbody tr.total-row td.label{text-align:center}
+  table.lines tbody tr.total-row td .totalv{padding:6px;font-size:13px;text-align:right;color:#111}
+
+  .status{
+    font-size:11.5px;color:var(--muted);padding:6px 4px;
+  }
+  .status .ok{color:#2e7d32}
+  .status .warn{color:#c26400}
+  .status .err{color:#c62828}
+
+  .toolbar{
+    display:flex;gap:8px;justify-content:flex-end;
+    padding:8px 0 12px;
+  }
+  .toolbar button{
+    padding:6px 12px;font:inherit;border:1px solid var(--border-strong);
+    background:#fff;border-radius:4px;cursor:pointer;
+  }
+  .toolbar button.primary{background:#1976d2;color:#fff;border-color:#155a9c}
+  .toolbar button.ghost{background:#f5f5f5}
+  .toolbar button:hover{filter:brightness(0.97)}
+
+  /* datalist styling helpers */
+  .hint-note{font-size:11.5px;color:var(--muted);padding:4px 8px;}
+
+  @media (max-width: 900px){
+    .meta{grid-template-columns:1fr}
+    .meta .col:last-child{border-left:none}
+    .grid{grid-template-columns:130px 1fr}
+    .hdr{grid-template-columns:1fr;text-align:center}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ═══════════════ Header ═══════════════ -->
+  <div class="hdr">
+    <div class="logo">HANKOOK<small>driving emotion</small></div>
+    <div class="co">
+      <b>Hankook Tyre Australia Pty Ltd</b>
+      Building A, Level 3, 11 Talavera Road, Macquarie Park NSW 2113<br>
+      Ph 1300 13 30 30 &nbsp;|&nbsp; ABN 77 082 389 704 &nbsp;|&nbsp; www.hankooktyre.com.au
+    </div>
+    <div class="internal">Internal Use Only</div>
+    <div class="title">Special Price Request Form<small id="hdrPeriod">June 2026</small></div>
+  </div>
+
+  <!-- ═══════════════ Customer + Order# meta ═══════════════ -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
+    <div class="band">Customer Details</div>
+    <div class="band">Order Number Details</div>
+  </div>
+
+  <div class="meta">
+    <!-- ─── Customer column ─── -->
+    <div class="col">
+      <div class="grid">
+        <div class="lbl">Sold-to Account</div>
+        <div class="val"><input id="sold_to" list="sold_to_list" placeholder="e.g. 728059" autocomplete="off"/></div>
+
+        <div class="lbl">Ship-to Account</div>
+        <div class="val"><input id="ship_to" list="ship_to_list" placeholder="ship-to code" autocomplete="off"/></div>
+
+        <div class="lbl">Customer Group</div>
+        <div class="val readonly"><input id="customer_group" readonly placeholder="—"/></div>
+
+        <div class="lbl">Base DC</div>
+        <div class="val" style="padding:0">
+          <div class="valgroup">
+            <div class="sub-hdr pk">HK-PCLT</div>
+            <div class="sub-hdr wh">TBR (HK&amp;LF)</div>
+            <div class="sub-hdr gr">LF-PCLT</div>
+            <div class="sub-val"><input id="basedc_hkpclt" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+            <div class="sub-val"><input id="basedc_tbr"    placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+            <div class="sub-val"><input id="basedc_lfpclt" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+          </div>
+        </div>
+
+        <div class="lbl">Sold-to Name</div>
+        <div class="val readonly"><input id="sold_to_name" readonly placeholder="—"/></div>
+
+        <div class="lbl">Ship-to Name</div>
+        <div class="val readonly"><input id="ship_to_name" readonly placeholder="—"/></div>
+
+        <div class="lbl">Ship-to Address</div>
+        <div class="val" style="padding:0">
+          <div class="valgroup two" style="grid-template-columns:2fr 1fr 1fr">
+            <div class="sub-val"><input id="ship_to_address" placeholder="—" style="border:none;width:100%;background:transparent;padding:2px 4px"/></div>
+            <div class="sub-hdr" style="background:#eef1f4;font-weight:700;border-right:1px dashed var(--border)">State</div>
+            <div class="sub-val"><input id="ship_to_state" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+          </div>
+        </div>
+
+        <div class="lbl">Phone No (Email)</div>
+        <div class="val"><input id="phone_email" placeholder="—"/></div>
+
+        <div class="lbl">Mobile Number</div>
+        <div class="val"><input id="mobile" placeholder="—"/></div>
+
+        <div class="lbl">Rebate-able</div>
+        <div class="val" style="padding:0">
+          <div class="rebate">
+            <div class="yes">YES</div>
+            <div><input id="rebate_yes" placeholder="" style="border:none;width:100%;background:transparent;text-align:center"/></div>
+            <div class="no">NO</div>
+            <div><input id="rebate_no"  placeholder="" style="border:none;width:100%;background:transparent;text-align:center"/></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Order# column ─── -->
+    <div class="col">
+      <div class="grid" style="grid-template-columns:150px 1fr 90px 1fr">
+        <div class="lbl">Purchase Order #</div>
+        <div class="val" style="grid-column: span 3"><input id="po_number" placeholder=""/></div>
+
+        <div class="lbl">Date</div>
+        <div class="val" style="grid-column: span 3"><input id="doc_date" type="date"/></div>
+
+        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:flex-start">Sales Person Details / Price Discount Request Justification :</div>
+
+        <div class="lbl">HKAU BDE Name</div>
+        <div class="val" style="grid-column: span 3"><input id="bde_name" placeholder=""/></div>
+
+        <div class="lbl">Special Instruction</div>
+        <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
+
+        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:center">Management Approval / Reason Behind Pricing</div>
+
+        <div class="val" style="grid-column: span 4;padding:0"><textarea id="mgmt_reason" rows="3" style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ SOVD strip ═══════════════ -->
+  <div class="sovd">
+    SOVD TTL &nbsp;→
+    <input id="sovd_ttl" readonly value="0"/>
+  </div>
+
+  <!-- ═══════════════ Order Details band ═══════════════ -->
+  <div class="band">Order Details (all prices are ex GST)</div>
+
+  <div class="lines-wrap">
+    <table class="lines" id="linesTable">
+      <thead>
+        <tr>
+          <th class="mid">M-Code</th>
+          <th class="narrow">Qty</th>
+          <th class="wide">Description</th>
+          <th class="narrow">Brand</th>
+          <th class="mid">Product Name</th>
+          <th class="narrow">Pattern</th>
+          <th class="mid">Load / Speed</th>
+          <th class="mid">List Price</th>
+          <th class="narrow">Base DC %</th>
+          <th class="narrow">MTH Special DC %</th>
+          <th class="pink narrow">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
+          <th class="narrow">Volume DC %</th>
+          <th class="narrow">Current DC %</th>
+          <th class="mid">Current Price</th>
+          <th class="olive narrow">Additional<br>Special DC %</th>
+          <th class="mid">Proposed Price</th>
+          <th class="mid">Total Amount</th>
+          <th class="narrow">Proposed DC %</th>
+        </tr>
+      </thead>
+      <tbody id="linesBody">
+        <!-- rows injected by JS -->
+      </tbody>
+      <tfoot>
+        <tr class="total-row">
+          <td class="label" colspan="16">Total</td>
+          <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <div class="status" id="status">Enter Sold-to or Ship-to to auto-fill customer details. Enter M-Code or Description to auto-link the tyre line.</div>
+
+  <div class="toolbar">
+    <button class="ghost" id="btnAddRow">+ Add row</button>
+    <button class="ghost" id="btnClear">Clear form</button>
+    <button class="primary" id="btnPrint" onclick="window.print()">Print / PDF</button>
+  </div>
+</div>
+
+<!-- shared datalists (populated on first focus) -->
+<datalist id="sold_to_list"></datalist>
+<datalist id="ship_to_list"></datalist>
+<datalist id="mcode_list"></datalist>
+<datalist id="desc_list"></datalist>
+
+<script>
+/* ────────────────────────── constants & helpers ────────────────────────── */
+const $  = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+const fmtMoney = n => Number(n||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtQty   = n => Number(n||0).toLocaleString(undefined, {maximumFractionDigits:0});
+const toNum    = v => { const x = parseFloat(String(v).replace(/,/g,'')); return Number.isFinite(x) ? x : 0; };
+
+let customerCache = {};   // {ship_to|sold_to: row}
+let materialCache = {};   // {m_code: row}
+
+async function apiGet(url){
+  try{
+    const r = await fetch(url, {credentials:"same-origin"});
+    if(!r.ok) return null;
+    return await r.json();
+  }catch(e){ console.warn("[orders]", url, e); return null; }
+}
+
+function setStatus(html, kind){
+  const el = $("#status"); if(!el) return;
+  el.innerHTML = html;
+  el.className = "status " + (kind || "");
+}
+
+/* ────────────────────────── customer lookup ────────────────────────── */
+async function fillCustomerFromSoldTo(soldTo){
+  soldTo = String(soldTo||"").trim(); if(!soldTo) return;
+  const data = await apiGet(`/api/orders/customer?sold_to=${encodeURIComponent(soldTo)}`);
+  if(!data || data.error){ setStatus(`Sold-to <b>${soldTo}</b> not found`, "warn"); return; }
+  applyCustomer(data);
+}
+async function fillCustomerFromShipTo(shipTo){
+  shipTo = String(shipTo||"").trim(); if(!shipTo) return;
+  const data = await apiGet(`/api/orders/customer?ship_to=${encodeURIComponent(shipTo)}`);
+  if(!data || data.error){ setStatus(`Ship-to <b>${shipTo}</b> not found`, "warn"); return; }
+  applyCustomer(data);
+}
+function applyCustomer(row){
+  if(!row) return;
+  const set = (id, v) => { const el=$(id); if(!el) return; if(el.tagName==="INPUT"||el.tagName==="TEXTAREA") el.value = v ?? ""; };
+  set("#sold_to",         row.sold_to || "");
+  set("#ship_to",         row.ship_to || "");
+  set("#sold_to_name",    row.sold_to_name || "");
+  set("#ship_to_name",    row.ship_to_name || "");
+  set("#customer_group",  row.customer_group || row.sold_to_group || "");
+  set("#ship_to_address", row.address || "");
+  set("#ship_to_state",   row.state || row.bde_state || "");
+  set("#phone_email",     row.phone || row.email || "");
+  set("#mobile",          row.mobile || "");
+  setStatus(`Customer loaded: <b>${row.ship_to_name||row.sold_to_name||"—"}</b>`, "ok");
+}
+
+/* ────────────────────────── material lookup ────────────────────────── */
+async function fillMaterialFromCode(row, mcode){
+  mcode = String(mcode||"").trim(); if(!mcode) return;
+  const data = await apiGet(`/api/orders/material?m_code=${encodeURIComponent(mcode)}`);
+  if(!data || data.error){
+    setStatus(`M-Code <b>${mcode}</b> not found`, "warn");
+    return;
+  }
+  applyMaterial(row, data);
+}
+async function fillMaterialFromDesc(row, desc){
+  desc = String(desc||"").trim(); if(!desc) return;
+  const data = await apiGet(`/api/orders/material?description=${encodeURIComponent(desc)}`);
+  if(!data || data.error){
+    setStatus(`Description <b>${desc}</b> not found`, "warn");
+    return;
+  }
+  applyMaterial(row, data);
+}
+function applyMaterial(rowEl, data){
+  const set = (name, v) => { const el = rowEl.querySelector(`[data-col="${name}"]`); if(el) el.value = v ?? ""; };
+  set("m_code",       data.m_code);
+  set("description",  data.description);
+  set("brand",        data.brand);
+  set("product_name", data.product_name);
+  set("pattern",      data.pattern);
+  set("load_speed",   data.load_speed);
+  set("list_price",   data.list_price != null ? fmtMoney(data.list_price) : "");
+  recalcRow(rowEl);
+  setStatus(`Material linked: <b>${data.m_code} — ${data.description||""}</b>`, "ok");
+}
+
+/* ────────────────────────── row math ────────────────────────── */
+function recalcRow(row){
+  const q       = toNum(row.querySelector('[data-col="qty"]').value);
+  const list    = toNum(row.querySelector('[data-col="list_price"]').value);
+  const baseDC  = toNum(row.querySelector('[data-col="base_dc"]').value);
+  const mthDC   = toNum(row.querySelector('[data-col="mth_dc"]').value);
+  const spDC    = toNum(row.querySelector('[data-col="sp_dc"]').value);
+  const volDC   = toNum(row.querySelector('[data-col="vol_dc"]').value);
+  const addDC   = toNum(row.querySelector('[data-col="add_dc"]').value);
+
+  // Current DC is the sum of the input DCs (excluding additional).
+  // Later on the real formula will come from HK's DC ladder — for now
+  // just add them so the layout works and the numbers move.
+  const currentDC = baseDC + mthDC + spDC + volDC;
+  const proposedDC = currentDC + addDC;
+
+  const currentPrice  = list * (1 - currentDC/100);
+  const proposedPrice = list * (1 - proposedDC/100);
+  const totalAmount   = q * proposedPrice;
+
+  row.querySelector('[data-col="current_dc"]').value    = currentDC ? currentDC.toFixed(2) : "";
+  row.querySelector('[data-col="current_price"]').value = list ? fmtMoney(currentPrice) : "";
+  row.querySelector('[data-col="proposed_price"]').value= list ? fmtMoney(proposedPrice) : "";
+  row.querySelector('[data-col="total_amount"]').value  = list ? fmtMoney(totalAmount) : "";
+  row.querySelector('[data-col="proposed_dc"]').value   = proposedDC ? proposedDC.toFixed(2)+"%" : "";
+  updateTotals();
+}
+function updateTotals(){
+  let sumQty = 0, sumAmt = 0;
+  $$("#linesBody tr").forEach(r => {
+    sumQty += toNum(r.querySelector('[data-col="qty"]').value);
+    sumAmt += toNum(r.querySelector('[data-col="total_amount"]').value);
+  });
+  $("#sovd_ttl").value    = fmtQty(sumQty);
+  $("#grandTotal").textContent = fmtMoney(sumAmt);
+}
+
+/* ────────────────────────── row template ────────────────────────── */
+function newRow(){
+  const tr = document.createElement("tr");
+  const cells = [
+    {c:"m_code",         cls:"", list:"mcode_list"},
+    {c:"qty",            cls:"num center"},
+    {c:"description",    cls:"", list:"desc_list"},
+    {c:"brand",          cls:"center readonly", ro:true},
+    {c:"product_name",   cls:"readonly", ro:true},
+    {c:"pattern",        cls:"center readonly", ro:true},
+    {c:"load_speed",     cls:"center readonly", ro:true},
+    {c:"list_price",     cls:"num readonly", ro:true},
+    {c:"base_dc",        cls:"num"},
+    {c:"mth_dc",         cls:"num"},
+    {c:"sp_dc",          cls:"num"},
+    {c:"vol_dc",         cls:"num"},
+    {c:"current_dc",     cls:"num readonly", ro:true},
+    {c:"current_price",  cls:"num red-num readonly", ro:true},
+    {c:"add_dc",         cls:"pct-cell"},
+    {c:"proposed_price", cls:"num red-num readonly", ro:true},
+    {c:"total_amount",   cls:"total-cell num readonly", ro:true},
+    {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
+  ];
+  for(const cell of cells){
+    const td = document.createElement("td");
+    td.className = cell.cls || "";
+    const inp = document.createElement("input");
+    inp.setAttribute("data-col", cell.c);
+    if(cell.ro) inp.readOnly = true;
+    if(cell.list) inp.setAttribute("list", cell.list);
+    td.appendChild(inp);
+    tr.appendChild(td);
+  }
+  // Wire events
+  tr.querySelector('[data-col="m_code"]').addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
+  tr.querySelector('[data-col="description"]').addEventListener("change", e => fillMaterialFromDesc(tr, e.target.value));
+  ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc"].forEach(c => {
+    tr.querySelector(`[data-col="${c}"]`).addEventListener("input", () => recalcRow(tr));
+  });
+  return tr;
+}
+function addRow(){
+  $("#linesBody").appendChild(newRow());
+}
+
+/* ────────────────────────── customer field wire-up ────────────────────────── */
+$("#sold_to").addEventListener("change", e => fillCustomerFromSoldTo(e.target.value));
+$("#ship_to").addEventListener("change", e => fillCustomerFromShipTo(e.target.value));
+
+/* ────────────────────────── toolbar buttons ────────────────────────── */
+$("#btnAddRow").addEventListener("click", addRow);
+$("#btnClear").addEventListener("click", () => {
+  if(!confirm("Clear the whole form?")) return;
+  $$("input, textarea").forEach(el => { if(!el.closest("thead")) el.value = ""; });
+  $("#linesBody").innerHTML = "";
+  for(let i=0;i<5;i++) addRow();
+  updateTotals();
+});
+
+/* ────────────────────────── header date ────────────────────────── */
+function seedDate(){
+  const now = new Date();
+  const iso = now.toISOString().slice(0,10);
+  $("#doc_date").value = iso;
+  const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  $("#hdrPeriod").textContent = `${months[now.getMonth()]} ${now.getFullYear()}`;
+}
+
+/* ────────────────────────── boot ────────────────────────── */
+(function boot(){
+  seedDate();
+  // Seed with 5 empty lines so the layout looks like the source form.
+  for(let i=0;i<5;i++) addRow();
+  updateTotals();
+})();
+</script>
+</body>
+</html>

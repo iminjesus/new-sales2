@@ -990,6 +990,185 @@ def map_page():
 def stock_page():
     return app.send_static_file("stock.html")
 
+@app.route("/orders")
+def orders_page():
+    """Special Price Request Form — interactive layout.  Backing data
+    comes from /api/orders/customer and /api/orders/material."""
+    return app.send_static_file("orders.html")
+
+
+def _list_columns(cur, table):
+    """Return the lower-cased set of columns on `table`, or empty set
+    if the table can't be introspected (permissions, wrong schema, etc.).
+    Used by the orders lookup endpoints so they gracefully skip columns
+    that aren't in this deployment's customer / carrying_26 schema."""
+    try:
+        cur.execute(f"SHOW COLUMNS FROM {table}")
+        cols = set()
+        for r in cur.fetchall():
+            name = r[0] if not isinstance(r, dict) else (r.get("Field") or r.get("field"))
+            if name:
+                cols.add(name.lower())
+        return cols
+    except Exception:
+        return set()
+
+
+@app.get("/api/orders/customer")
+def api_orders_customer():
+    """Look up a customer row by ?sold_to=... or ?ship_to=... and
+    return whatever address / phone / email columns exist.  Missing
+    columns come back as empty strings so the Orders form can just
+    consume them without checking each field."""
+    sold_to = (request.args.get("sold_to") or "").strip()
+    ship_to = (request.args.get("ship_to") or "").strip()
+    if not sold_to and not ship_to:
+        return jsonify({"error": "sold_to or ship_to required"}), 400
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cols = _list_columns(cur, "customer")
+        # Everything we might want to surface — take whatever the
+        # deployment actually has, expose the rest as "".
+        wanted = {
+            "sold_to":         "sold_to",
+            "sold_to_name":    "sold_to_name",
+            "ship_to":         "ship_to",
+            "ship_to_name":    "ship_to_name",
+            "sold_to_group":   "sold_to_group",
+            "bde_state":       "bde_state",
+            "channels":        "channels",
+            "salesman_name":   "salesman_name",
+            # optional / deployment-specific columns
+            "address":         "address",
+            "ship_to_address": "ship_to_address",
+            "state":           "state",
+            "phone":           "phone",
+            "contact_phone":   "contact_phone",
+            "mobile":          "mobile",
+            "email":           "email",
+            "contact_email":   "contact_email",
+        }
+        select_cols = [c for c in wanted if c in cols]
+        if not select_cols:
+            return jsonify({"error": "customer table has no known columns"}), 500
+
+        if ship_to:
+            sql = f"SELECT {', '.join(select_cols)} FROM customer WHERE ship_to = %s LIMIT 1"
+            cur.execute(sql, (ship_to,))
+        else:
+            # sold_to may resolve to multiple ship_tos — MIN() collapses
+            # to a stable pick, but the label fields (sold_to_name, group)
+            # are the same across ship_tos so any row works for display.
+            sql = f"SELECT {', '.join(select_cols)} FROM customer WHERE sold_to = %s LIMIT 1"
+            cur.execute(sql, (sold_to,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+
+        # Merge synonym columns so the frontend can key on a single name.
+        out = {k: (row.get(k) or "") for k in select_cols}
+        # canonicals for UI
+        out["address"] = out.get("address") or out.get("ship_to_address") or ""
+        out["phone"]   = out.get("phone")   or out.get("contact_phone")   or ""
+        out["email"]   = out.get("email")   or out.get("contact_email")   or ""
+        out["state"]   = out.get("state")   or out.get("bde_state")       or ""
+        out["customer_group"] = out.get("sold_to_group") or ""
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/orders/material")
+def api_orders_material():
+    """Look up a carrying_26 row by ?m_code=... or ?description=... .
+    On description match, does an exact-then-LIKE fallback so half-
+    typed sizes still resolve.  Returns the fields the Orders form
+    needs (brand, product_name, pattern, load/speed, list_price).
+    Falls back to empty strings for columns absent on this schema."""
+    m_code = (request.args.get("m_code") or "").strip()
+    desc   = (request.args.get("description") or "").strip()
+    if not m_code and not desc:
+        return jsonify({"error": "m_code or description required"}), 400
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cols = _list_columns(cur, "carrying_26")
+        # Column-name aliases across deployments.
+        pick = lambda *cands: next((c for c in cands if c in cols), None)
+        c_m_code       = pick("m_code")
+        c_description  = pick("description", "size", "material_desc")
+        c_brand        = pick("brand")
+        c_product_name = pick("product_name", "product", "pattern_name")
+        c_pattern      = pick("pattern")
+        c_load         = pick("load_speed", "load", "load_index")
+        c_speed        = pick("speed", "speed_rating")
+        c_list_price   = pick("list_price", "price")
+        if not c_m_code:
+            return jsonify({"error": "carrying_26 has no m_code column"}), 500
+
+        parts = [f"{c_m_code} AS m_code"]
+        if c_description:  parts.append(f"{c_description} AS description")
+        if c_brand:        parts.append(f"{c_brand} AS brand")
+        if c_product_name: parts.append(f"{c_product_name} AS product_name")
+        if c_pattern:      parts.append(f"{c_pattern} AS pattern")
+        # Combine load + speed into a single string like "88H" when
+        # split — the source form always displays it joined.
+        if c_load and c_speed and c_load != c_speed:
+            parts.append(f"CONCAT_WS('', {c_load}, {c_speed}) AS load_speed")
+        elif c_load:
+            parts.append(f"{c_load} AS load_speed")
+        if c_list_price:   parts.append(f"{c_list_price} AS list_price")
+
+        select_sql = ", ".join(parts)
+
+        if m_code:
+            cur.execute(f"SELECT {select_sql} FROM carrying_26 WHERE {c_m_code} = %s LIMIT 1", (m_code,))
+            row = cur.fetchone()
+        else:
+            if not c_description:
+                return jsonify({"error": "description column not available"}), 500
+            # Exact first (paste from existing form), then LIKE fallback
+            # for partial input.
+            cur.execute(
+                f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} = %s LIMIT 1",
+                (desc,),
+            )
+            row = cur.fetchone()
+            if not row:
+                cur.execute(
+                    f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} LIKE %s LIMIT 1",
+                    (f"%{desc}%",),
+                )
+                row = cur.fetchone()
+
+        if not row:
+            return jsonify({"error": "not found"}), 404
+
+        # Normalise numeric list_price (comes as Decimal from MySQL)
+        if row and row.get("list_price") is not None:
+            try:
+                row["list_price"] = float(row["list_price"])
+            except Exception:
+                row["list_price"] = None
+        return jsonify(row)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
 # plant 醫뚰몴 留ㅽ븨 (?덇? 以?媛믪쑝濡??낅뜲?댄듃)
 PLANT_GEO = {
     "42R0": {"lat": -27.8688, "lon": 153.2093},
