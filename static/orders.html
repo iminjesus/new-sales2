@@ -477,14 +477,28 @@ async function suggestMaterial(q){
     else rows = [];
   }
   // Show "size · pattern" in the size dropdown so different tread
-  // patterns on the same size are distinguishable at a glance.  Same
-  // combined value goes into the input on select; the resolver splits
-  // by " · " to recover both parts.  M-Code dropdown labels also
-  // carry the pattern so tabbing through m_codes is scannable.
-  const combo = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
+  // patterns on the same size are distinguishable at a glance.  Chrome
+  // only filters options by their VALUE substring (label is ignored),
+  // so for each row we publish BOTH the canonical "215/70R14 · H724"
+  // AND a noise-stripped "21570R14 · H724" form — typing "21570"
+  // matches the stripped one; typing "215/70" matches the canonical
+  // one; picking either resolves the same material and applyMaterial
+  // overwrites the cell with the canonical size after resolve.
+  const strip = s => String(s || "").toLowerCase().replace(/[\s/,.\-'&+()]/g, '');
+  const combo    = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
+  const comboRaw = r => {
+    const s = strip(r.description);
+    return r.pattern ? `${s} · ${r.pattern}` : s;
+  };
   const codeLabel = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
+  const descItems = [];
+  for (const r of rows) {
+    descItems.push({value: combo(r),    label: r.m_code});
+    const raw = comboRaw(r);
+    if (raw && raw !== combo(r)) descItems.push({value: raw, label: r.m_code});
+  }
   fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
-  fillDatalist("desc_list",  rows.map(r => ({value: combo(r),  label: r.m_code})));
+  fillDatalist("desc_list",  descItems);
 }
 const debouncedSuggestMat = debounce(suggestMaterial, 180);
 

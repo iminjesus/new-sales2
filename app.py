@@ -1434,14 +1434,28 @@ def api_orders_material():
                 )
                 row = cur.fetchone()
             if not row:
+                # Noise-stripped LIKE — the last-resort rescue for free
+                # typing.  When a pattern was carried along (picked from
+                # the "stripped-size · pattern" dropdown entry) gate on
+                # the pattern too so a size shared by several treads
+                # doesn't resolve to the wrong one.
                 dnorm = _strip_noise_py(desc_part)
                 if dnorm:
-                    cur.execute(
-                        f"SELECT {select_sql} FROM carrying_26 "
-                        f"WHERE {_strip_noise_sql(c_description)} LIKE %s LIMIT 1",
-                        (f"%{dnorm}%",),
-                    )
-                    row = cur.fetchone()
+                    if pat_part and c_pattern:
+                        cur.execute(
+                            f"SELECT {select_sql} FROM carrying_26 "
+                            f"WHERE {_strip_noise_sql(c_description)} LIKE %s "
+                            f"  AND {c_pattern} = %s LIMIT 1",
+                            (f"%{dnorm}%", pat_part),
+                        )
+                        row = cur.fetchone()
+                    if not row:
+                        cur.execute(
+                            f"SELECT {select_sql} FROM carrying_26 "
+                            f"WHERE {_strip_noise_sql(c_description)} LIKE %s LIMIT 1",
+                            (f"%{dnorm}%",),
+                        )
+                        row = cur.fetchone()
 
         if not row:
             return jsonify({"error": "not found"}), 404
