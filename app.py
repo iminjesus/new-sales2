@@ -1121,12 +1121,21 @@ def api_orders_customer():
 # "185/70R14" / "18570R14" all match the same tyre size, and "Bob's
 # Tyres" / "Bobs Tyres" / "bobstyres" all match the same shop.
 _NOISE_CHARS = " /,.-'&+()"
+def _sql_lit(ch):
+    """Quote a single character as a MySQL string literal, doubling
+    the apostrophe when it IS the apostrophe.  Without this the
+    generated SQL for the apostrophe entry ended up as
+    REPLACE(..., ''', '') — a syntax error — which killed the whole
+    suggest endpoint on any query."""
+    if ch == "'":
+        return "''''"      # '' = doubled apostrophe inside a '…' literal
+    return "'" + ch + "'"
 def _strip_noise_sql(col):
     """MySQL expression that lowers and strips the noise chars from
     a column so LIKE comparisons are punctuation-agnostic."""
     expr = f"LOWER({col})"
     for ch in _NOISE_CHARS:
-        expr = f"REPLACE({expr}, '{ch}', '')"
+        expr = f"REPLACE({expr}, {_sql_lit(ch)}, '')"
     return expr
 def _strip_noise_py(s):
     s = (s or "").lower()
