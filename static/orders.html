@@ -232,10 +232,10 @@
     <div class="col">
       <div class="grid">
         <div class="lbl">Sold-to Account</div>
-        <div class="val"><input id="sold_to" list="sold_to_list" placeholder="e.g. 728059" autocomplete="off"/></div>
+        <div class="val"><input id="sold_to" list="sold_code_list" placeholder="type code or name" autocomplete="off"/></div>
 
         <div class="lbl">Ship-to Account</div>
-        <div class="val"><input id="ship_to" list="ship_to_list" placeholder="ship-to code" autocomplete="off"/></div>
+        <div class="val"><input id="ship_to" list="ship_code_list" placeholder="type code or name" autocomplete="off"/></div>
 
         <div class="lbl">Customer Group</div>
         <div class="val readonly"><input id="customer_group" readonly placeholder="—"/></div>
@@ -253,10 +253,10 @@
         </div>
 
         <div class="lbl">Sold-to Name</div>
-        <div class="val readonly"><input id="sold_to_name" readonly placeholder="—"/></div>
+        <div class="val"><input id="sold_to_name" list="sold_name_list" placeholder="type name or code" autocomplete="off"/></div>
 
         <div class="lbl">Ship-to Name</div>
-        <div class="val readonly"><input id="ship_to_name" readonly placeholder="—"/></div>
+        <div class="val"><input id="ship_to_name" list="ship_name_list" placeholder="type name or code" autocomplete="off"/></div>
 
         <div class="lbl">Ship-to Address</div>
         <div class="val" style="padding:0">
@@ -364,9 +364,11 @@
   </div>
 </div>
 
-<!-- shared datalists (populated on first focus) -->
-<datalist id="sold_to_list"></datalist>
-<datalist id="ship_to_list"></datalist>
+<!-- shared datalists (populated on-input via debounced /suggest calls) -->
+<datalist id="sold_code_list"></datalist>
+<datalist id="sold_name_list"></datalist>
+<datalist id="ship_code_list"></datalist>
+<datalist id="ship_name_list"></datalist>
 <datalist id="mcode_list"></datalist>
 <datalist id="desc_list"></datalist>
 
@@ -395,51 +397,122 @@ function setStatus(html, kind){
   el.className = "status " + (kind || "");
 }
 
-/* ────────────────────────── customer lookup ────────────────────────── */
-async function fillCustomerFromSoldTo(soldTo){
-  soldTo = String(soldTo||"").trim(); if(!soldTo) return;
-  const data = await apiGet(`/api/orders/customer?sold_to=${encodeURIComponent(soldTo)}`);
-  if(!data || data.error){ setStatus(`Sold-to <b>${soldTo}</b> not found`, "warn"); return; }
-  applyCustomer(data);
-}
-async function fillCustomerFromShipTo(shipTo){
-  shipTo = String(shipTo||"").trim(); if(!shipTo) return;
-  const data = await apiGet(`/api/orders/customer?ship_to=${encodeURIComponent(shipTo)}`);
-  if(!data || data.error){ setStatus(`Ship-to <b>${shipTo}</b> not found`, "warn"); return; }
-  applyCustomer(data);
-}
-function applyCustomer(row){
-  if(!row) return;
-  const set = (id, v) => { const el=$(id); if(!el) return; if(el.tagName==="INPUT"||el.tagName==="TEXTAREA") el.value = v ?? ""; };
-  set("#sold_to",         row.sold_to || "");
-  set("#ship_to",         row.ship_to || "");
-  set("#sold_to_name",    row.sold_to_name || "");
-  set("#ship_to_name",    row.ship_to_name || "");
-  set("#customer_group",  row.customer_group || row.sold_to_group || "");
-  set("#ship_to_address", row.address || "");
-  set("#ship_to_state",   row.state || row.bde_state || "");
-  set("#phone_email",     row.phone || row.email || "");
-  set("#mobile",          row.mobile || "");
-  setStatus(`Customer loaded: <b>${row.ship_to_name||row.sold_to_name||"—"}</b>`, "ok");
+/* ────────────────────────── autocomplete engine ────────────────────────── */
+// Small debounced fetcher — each input field with a datalist calls this
+// on every keystroke, but only the last request within `wait` ms fires.
+function debounce(fn, wait=200){
+  let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
 }
 
-/* ────────────────────────── material lookup ────────────────────────── */
+// Rebuild a <datalist> from an array of {value, label} entries.
+// `label` becomes the little grey hint text next to the value in the
+// dropdown so both a code and its name are visible per row.
+function fillDatalist(listId, items){
+  const dl = document.getElementById(listId); if(!dl) return;
+  dl.innerHTML = "";
+  const seen = new Set();
+  for(const it of items){
+    const v = String(it.value ?? "").trim();
+    if(!v || seen.has(v)) continue;
+    seen.add(v);
+    const opt = document.createElement("option");
+    opt.value = v;
+    if(it.label) opt.label = it.label;
+    dl.appendChild(opt);
+  }
+}
+
+// Customer suggest: hits /api/orders/customer_suggest, then populates
+// BOTH datalists (code-side and name-side) so whichever field the user
+// types into, the dropdown carries the counterpart as the label.
+const _custCache = {};   // {kind:q: rows} — cheap in-memory cache
+async function suggestCustomer(kind, q){
+  q = String(q||"").trim();
+  if(q.length < 1){
+    fillDatalist(kind === "ship" ? "ship_code_list" : "sold_code_list", []);
+    fillDatalist(kind === "ship" ? "ship_name_list" : "sold_name_list", []);
+    return;
+  }
+  const key = kind + ":" + q.toLowerCase();
+  let rows = _custCache[key];
+  if(!rows){
+    rows = await apiGet(`/api/orders/customer_suggest?kind=${kind}&q=${encodeURIComponent(q)}`) || [];
+    if(Array.isArray(rows)) _custCache[key] = rows;
+    else rows = [];
+  }
+  const codeList = kind === "ship" ? "ship_code_list" : "sold_code_list";
+  const nameList = kind === "ship" ? "ship_name_list" : "sold_name_list";
+  fillDatalist(codeList, rows.map(r => ({value: r.code, label: r.name})));
+  fillDatalist(nameList, rows.map(r => ({value: r.name, label: r.code})));
+}
+const debouncedSuggestSold = debounce(q => suggestCustomer("sold", q), 180);
+const debouncedSuggestShip = debounce(q => suggestCustomer("ship", q), 180);
+
+// Material suggest — same pattern for /api/orders/material_suggest.
+const _matCache = {};
+async function suggestMaterial(q){
+  q = String(q||"").trim();
+  if(q.length < 1){
+    fillDatalist("mcode_list", []);
+    fillDatalist("desc_list", []);
+    return;
+  }
+  const key = q.toLowerCase();
+  let rows = _matCache[key];
+  if(!rows){
+    rows = await apiGet(`/api/orders/material_suggest?q=${encodeURIComponent(q)}`) || [];
+    if(Array.isArray(rows)) _matCache[key] = rows;
+    else rows = [];
+  }
+  fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: r.description})));
+  fillDatalist("desc_list",  rows.map(r => ({value: r.description, label: r.m_code})));
+}
+const debouncedSuggestMat = debounce(suggestMaterial, 180);
+
+/* ────────────────────────── customer resolve ────────────────────────── */
+// Once the user picks (or blurs) a field, resolve the row from ONE key
+// and fan out to fill every dependent field.  All four inputs
+// (sold_to code/name, ship_to code/name) route through this.
+async function resolveCustomer(kind, field, value){
+  value = String(value||"").trim(); if(!value) return;
+  const param = ({
+    "sold:code": "sold_to",       "sold:name": "sold_to_name",
+    "ship:code": "ship_to",       "ship:name": "ship_to_name",
+  })[`${kind}:${field}`];
+  if(!param) return;
+  const data = await apiGet(`/api/orders/customer?${param}=${encodeURIComponent(value)}`);
+  if(!data || data.error){ setStatus(`${param} <b>${value}</b> not found`, "warn"); return; }
+  applyCustomer(data);
+}
+
+function applyCustomer(row){
+  if(!row) return;
+  const set = (id, v) => { const el = document.getElementById(id.replace("#","")); if(!el) return; el.value = v ?? ""; };
+  set("sold_to",         row.sold_to || "");
+  set("ship_to",         row.ship_to || "");
+  set("sold_to_name",    row.sold_to_name || "");
+  set("ship_to_name",    row.ship_to_name || "");
+  set("customer_group",  row.customer_group || row.sold_to_group || "");
+  set("ship_to_address", row.address || "");
+  set("ship_to_state",   row.state || row.bde_state || "");
+  set("phone_email",     row.phone || row.email || "");
+  set("mobile",          row.mobile || "");
+  // BDE / salesman — the Order# column has its own bde_name input.
+  set("bde_name",        row.bde_name || row.salesman_name || "");
+  setStatus(`Loaded <b>${row.ship_to_name||row.sold_to_name||"—"}</b> · BDE: ${row.bde_name||row.salesman_name||"—"}`, "ok");
+}
+
+/* ────────────────────────── material resolve ────────────────────────── */
 async function fillMaterialFromCode(row, mcode){
   mcode = String(mcode||"").trim(); if(!mcode) return;
   const data = await apiGet(`/api/orders/material?m_code=${encodeURIComponent(mcode)}`);
-  if(!data || data.error){
-    setStatus(`M-Code <b>${mcode}</b> not found`, "warn");
-    return;
-  }
+  if(!data || data.error){ setStatus(`M-Code <b>${mcode}</b> not found`, "warn"); return; }
   applyMaterial(row, data);
 }
 async function fillMaterialFromDesc(row, desc){
   desc = String(desc||"").trim(); if(!desc) return;
   const data = await apiGet(`/api/orders/material?description=${encodeURIComponent(desc)}`);
-  if(!data || data.error){
-    setStatus(`Description <b>${desc}</b> not found`, "warn");
-    return;
-  }
+  if(!data || data.error){ setStatus(`Description <b>${desc}</b> not found`, "warn"); return; }
   applyMaterial(row, data);
 }
 function applyMaterial(rowEl, data){
@@ -526,8 +599,12 @@ function newRow(){
     tr.appendChild(td);
   }
   // Wire events
-  tr.querySelector('[data-col="m_code"]').addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
-  tr.querySelector('[data-col="description"]').addEventListener("change", e => fillMaterialFromDesc(tr, e.target.value));
+  const mcodeInp = tr.querySelector('[data-col="m_code"]');
+  const descInp  = tr.querySelector('[data-col="description"]');
+  mcodeInp.addEventListener("input",  e => debouncedSuggestMat(e.target.value));
+  mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
+  descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
+  descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`).addEventListener("input", () => recalcRow(tr));
   });
@@ -538,8 +615,18 @@ function addRow(){
 }
 
 /* ────────────────────────── customer field wire-up ────────────────────────── */
-$("#sold_to").addEventListener("change", e => fillCustomerFromSoldTo(e.target.value));
-$("#ship_to").addEventListener("change", e => fillCustomerFromShipTo(e.target.value));
+// Every code / name input triggers both a debounced /suggest for the
+// datalist AND — on change (blur/pick) — a full resolve that fills the
+// rest of the customer block.  Typing the code lists matching names,
+// typing the name lists matching codes; either can complete the row.
+$("#sold_to")     .addEventListener("input",  e => debouncedSuggestSold(e.target.value));
+$("#sold_to")     .addEventListener("change", e => resolveCustomer("sold", "code", e.target.value));
+$("#sold_to_name").addEventListener("input",  e => debouncedSuggestSold(e.target.value));
+$("#sold_to_name").addEventListener("change", e => resolveCustomer("sold", "name", e.target.value));
+$("#ship_to")     .addEventListener("input",  e => debouncedSuggestShip(e.target.value));
+$("#ship_to")     .addEventListener("change", e => resolveCustomer("ship", "code", e.target.value));
+$("#ship_to_name").addEventListener("input",  e => debouncedSuggestShip(e.target.value));
+$("#ship_to_name").addEventListener("change", e => resolveCustomer("ship", "name", e.target.value));
 
 /* ────────────────────────── toolbar buttons ────────────────────────── */
 $("#btnAddRow").addEventListener("click", addRow);

@@ -1016,21 +1016,27 @@ def _list_columns(cur, table):
 
 @app.get("/api/orders/customer")
 def api_orders_customer():
-    """Look up a customer row by ?sold_to=... or ?ship_to=... and
-    return whatever address / phone / email columns exist.  Missing
-    columns come back as empty strings so the Orders form can just
-    consume them without checking each field."""
-    sold_to = (request.args.get("sold_to") or "").strip()
-    ship_to = (request.args.get("ship_to") or "").strip()
-    if not sold_to and not ship_to:
-        return jsonify({"error": "sold_to or ship_to required"}), 400
+    """Look up a customer row by any of:
+      ?sold_to=…      exact sold_to code
+      ?ship_to=…      exact ship_to code
+      ?sold_to_name=… exact sold_to_name
+      ?ship_to_name=… exact ship_to_name
+
+    Returns whatever address / phone / email columns exist plus a
+    canonical `bde_name` alias for the salesman.  Missing columns
+    come back as empty strings so the Orders form can consume the
+    response without per-field null checks."""
+    sold_to      = (request.args.get("sold_to")      or "").strip()
+    ship_to      = (request.args.get("ship_to")      or "").strip()
+    sold_to_name = (request.args.get("sold_to_name") or "").strip()
+    ship_to_name = (request.args.get("ship_to_name") or "").strip()
+    if not (sold_to or ship_to or sold_to_name or ship_to_name):
+        return jsonify({"error": "one of sold_to / ship_to / sold_to_name / ship_to_name required"}), 400
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
         cols = _list_columns(cur, "customer")
-        # Everything we might want to surface — take whatever the
-        # deployment actually has, expose the rest as "".
         wanted = {
             "sold_to":         "sold_to",
             "sold_to_name":    "sold_to_name",
@@ -1054,27 +1060,174 @@ def api_orders_customer():
         if not select_cols:
             return jsonify({"error": "customer table has no known columns"}), 500
 
+        # Choose the WHERE clause based on which query param was given.
+        # Code lookups are always exact; name lookups do an exact match
+        # first (paste from an existing form) and fall back to nothing
+        # further — the /suggest endpoint is what handles partial name
+        # search.
         if ship_to:
-            sql = f"SELECT {', '.join(select_cols)} FROM customer WHERE ship_to = %s LIMIT 1"
-            cur.execute(sql, (ship_to,))
+            where_sql, params = "ship_to = %s", (ship_to,)
+        elif sold_to:
+            where_sql, params = "sold_to = %s", (sold_to,)
+        elif ship_to_name and "ship_to_name" in cols:
+            where_sql, params = "TRIM(ship_to_name) = %s", (ship_to_name,)
+        elif sold_to_name and "sold_to_name" in cols:
+            where_sql, params = "TRIM(sold_to_name) = %s", (sold_to_name,)
         else:
-            # sold_to may resolve to multiple ship_tos — MIN() collapses
-            # to a stable pick, but the label fields (sold_to_name, group)
-            # are the same across ship_tos so any row works for display.
-            sql = f"SELECT {', '.join(select_cols)} FROM customer WHERE sold_to = %s LIMIT 1"
-            cur.execute(sql, (sold_to,))
+            return jsonify({"error": "no usable lookup key"}), 400
+
+        sql = f"SELECT {', '.join(select_cols)} FROM customer WHERE {where_sql} LIMIT 1"
+        cur.execute(sql, params)
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
 
-        # Merge synonym columns so the frontend can key on a single name.
         out = {k: (row.get(k) or "") for k in select_cols}
-        # canonicals for UI
         out["address"] = out.get("address") or out.get("ship_to_address") or ""
         out["phone"]   = out.get("phone")   or out.get("contact_phone")   or ""
         out["email"]   = out.get("email")   or out.get("contact_email")   or ""
         out["state"]   = out.get("state")   or out.get("bde_state")       or ""
         out["customer_group"] = out.get("sold_to_group") or ""
+        out["bde_name"] = out.get("salesman_name") or ""
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/orders/customer_suggest")
+def api_orders_customer_suggest():
+    """Autocomplete backend for the Sold-to / Ship-to inputs.
+      ?q=…           1+ char, matched against code OR name (case-insensitive prefix / substring)
+      ?kind=sold|ship  which pair to search (default: sold)
+      ?limit=15      max rows returned (hard cap 50)
+    Returns [{code, name, sold_to, sold_to_name, ship_to, ship_to_name,
+             bde_name}, …] so the frontend can populate a datalist with
+    "code — name" labels and resolve the full row on select."""
+    q    = (request.args.get("q") or "").strip()
+    kind = (request.args.get("kind") or "sold").strip().lower()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 15) or 15), 50))
+    except ValueError:
+        limit = 15
+    if not q:
+        return jsonify([])
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cols = _list_columns(cur, "customer")
+        code_col = "ship_to" if kind == "ship" else "sold_to"
+        name_col = "ship_to_name" if kind == "ship" else "sold_to_name"
+        if code_col not in cols:
+            return jsonify({"error": f"{code_col} column missing"}), 500
+
+        # Discover which optional label columns exist so the response
+        # can carry them for the frontend to use directly on pick.
+        pick_cols = [c for c in ("sold_to", "sold_to_name", "ship_to", "ship_to_name",
+                                 "salesman_name") if c in cols]
+        if code_col not in pick_cols: pick_cols.append(code_col)
+
+        # DISTINCT collapses the multi-ship_to-per-sold_to duplication
+        # to a single suggestion per (code, name) pair — otherwise a big
+        # sold_to with 20 ship_tos shows up as 20 identical rows.
+        select_sql = "DISTINCT " + ", ".join(pick_cols)
+        params = []
+        wh = []
+        # Prefix match first (fastest); if the caller wants substring
+        # we OR in a %q% pattern — keeps the query index-friendly for
+        # short queries and still finds "Bob's Tyres" from "Tyres".
+        wh.append(f"{code_col} LIKE %s")
+        params.append(f"{q}%")
+        if name_col in cols:
+            wh.append(f"{name_col} LIKE %s")
+            params.append(f"%{q}%")
+        sql = (
+            f"SELECT {select_sql} FROM customer "
+            f"WHERE {' OR '.join(wh)} "
+            f"ORDER BY {code_col} LIMIT {limit}"
+        )
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+
+        # Shape a compact, uniform response.
+        out = []
+        for r in rows:
+            code = (r.get(code_col) or "").strip()
+            name = (r.get(name_col) or "").strip() if name_col in r else ""
+            out.append({
+                "code":         code,
+                "name":         name,
+                "sold_to":      (r.get("sold_to") or "").strip(),
+                "sold_to_name": (r.get("sold_to_name") or "").strip(),
+                "ship_to":      (r.get("ship_to") or "").strip(),
+                "ship_to_name": (r.get("ship_to_name") or "").strip(),
+                "bde_name":     (r.get("salesman_name") or "").strip(),
+            })
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/orders/material_suggest")
+def api_orders_material_suggest():
+    """Autocomplete backend for the M-Code / Description inputs on the
+    Orders form.  Same shape as /api/orders/customer_suggest — the
+    frontend populates a datalist with "code — description" labels and
+    calls /api/orders/material to fill the row on selection."""
+    q = (request.args.get("q") or "").strip()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 15) or 15), 50))
+    except ValueError:
+        limit = 15
+    if not q:
+        return jsonify([])
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cols = _list_columns(cur, "carrying_26")
+        c_desc = "description" if "description" in cols else ("size" if "size" in cols else None)
+        c_brand = "brand" if "brand" in cols else None
+        c_prod  = "product_name" if "product_name" in cols else None
+        if "m_code" not in cols:
+            return jsonify({"error": "m_code column missing"}), 500
+
+        select_parts = ["m_code"]
+        if c_desc:  select_parts.append(f"{c_desc} AS description")
+        if c_brand: select_parts.append("brand")
+        if c_prod:  select_parts.append("product_name")
+
+        wh = ["m_code LIKE %s"]
+        params = [f"{q}%"]
+        if c_desc:
+            wh.append(f"{c_desc} LIKE %s")
+            params.append(f"%{q}%")
+
+        sql = (
+            f"SELECT DISTINCT {', '.join(select_parts)} FROM carrying_26 "
+            f"WHERE {' OR '.join(wh)} "
+            f"ORDER BY m_code LIMIT {limit}"
+        )
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+        out = [{
+            "m_code":       (r.get("m_code") or "").strip(),
+            "description":  (r.get("description") or "").strip(),
+            "brand":        (r.get("brand") or "").strip() if c_brand else "",
+            "product_name": (r.get("product_name") or "").strip() if c_prod else "",
+        } for r in rows]
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
