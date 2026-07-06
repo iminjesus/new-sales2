@@ -1273,9 +1273,10 @@ def api_orders_material_suggest():
     cur  = conn.cursor(dictionary=True)
     try:
         cols = _list_columns(cur, "carrying_26")
-        c_desc = "description" if "description" in cols else ("size" if "size" in cols else None)
+        c_desc  = "description" if "description" in cols else ("size" if "size" in cols else None)
         c_brand = "brand" if "brand" in cols else None
         c_prod  = "product_name" if "product_name" in cols else None
+        c_pat   = "pattern" if "pattern" in cols else None
         if "m_code" not in cols:
             return jsonify({"error": "m_code column missing"}), 500
 
@@ -1283,12 +1284,15 @@ def api_orders_material_suggest():
         if c_desc:  select_parts.append(f"{c_desc} AS description")
         if c_brand: select_parts.append("brand")
         if c_prod:  select_parts.append("product_name")
+        if c_pat:   select_parts.append("pattern")
 
         # Punctuation-agnostic multi-token match — see
         # customer_suggest for the rationale.  "185 70r14" and
-        # "18570R14" both find "185/70R14…".
+        # "18570R14" both find "185/70R14…".  Pattern is added to the
+        # OR set so typing "215 70r14 h724" narrows to the exact tread.
         code_expr = _strip_noise_sql("m_code")
         desc_expr = _strip_noise_sql(c_desc) if c_desc else None
+        pat_expr  = _strip_noise_sql(c_pat)  if c_pat  else None
         tokens = [t for t in q.split() if t.strip()] or [q]
         wh_and = []
         params = []
@@ -1299,6 +1303,9 @@ def api_orders_material_suggest():
             params.append(f"%{tok_norm}%")
             if desc_expr:
                 per_tok.append(f"{desc_expr} LIKE %s")
+                params.append(f"%{tok_norm}%")
+            if pat_expr:
+                per_tok.append(f"{pat_expr} LIKE %s")
                 params.append(f"%{tok_norm}%")
             wh_and.append("(" + " OR ".join(per_tok) + ")")
         if not wh_and:
@@ -1316,6 +1323,7 @@ def api_orders_material_suggest():
             "description":  (r.get("description") or "").strip(),
             "brand":        (r.get("brand") or "").strip() if c_brand else "",
             "product_name": (r.get("product_name") or "").strip() if c_prod else "",
+            "pattern":      (r.get("pattern") or "").strip() if c_pat else "",
         } for r in rows]
         return jsonify(out)
     except Exception as e:
@@ -1389,22 +1397,44 @@ def api_orders_material():
         else:
             if not c_description:
                 return jsonify({"error": "description column not available"}), 500
-            # Exact → LIKE → normalised-LIKE.  The last step is what
-            # rescues freely-typed input like "18570R14" that never
-            # matches the raw "185/70R14…" via plain LIKE.
-            cur.execute(
-                f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} = %s LIMIT 1",
-                (desc,),
-            )
-            row = cur.fetchone()
-            if not row:
+            # The Size dropdown now offers "size · pattern" as the
+            # picked value so a single size with multiple patterns is
+            # disambiguated at the point of pick.  Split on " · " and,
+            # if a pattern component is present, gate matches on both
+            # columns — otherwise fall through to size-only matching.
+            desc_part, pat_part = desc, ""
+            if " · " in desc:
+                left, right = desc.split(" · ", 1)
+                desc_part, pat_part = left.strip(), right.strip()
+
+            row = None
+            if pat_part and c_pattern:
+                # size + pattern → the (size, pattern) pair is unique in
+                # carrying_26, so this exact-match wins first.
                 cur.execute(
-                    f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} LIKE %s LIMIT 1",
-                    (f"%{desc}%",),
+                    f"SELECT {select_sql} FROM carrying_26 "
+                    f"WHERE {c_description} = %s AND {c_pattern} = %s LIMIT 1",
+                    (desc_part, pat_part),
+                )
+                row = cur.fetchone()
+
+            if not row:
+                # Exact size, then LIKE, then normalised-LIKE fallback —
+                # the last step rescues freely-typed "18570R14" against
+                # a raw "185/70R14…" via plain LIKE.
+                cur.execute(
+                    f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} = %s LIMIT 1",
+                    (desc_part,),
                 )
                 row = cur.fetchone()
             if not row:
-                dnorm = _strip_noise_py(desc)
+                cur.execute(
+                    f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} LIKE %s LIMIT 1",
+                    (f"%{desc_part}%",),
+                )
+                row = cur.fetchone()
+            if not row:
+                dnorm = _strip_noise_py(desc_part)
                 if dnorm:
                     cur.execute(
                         f"SELECT {select_sql} FROM carrying_26 "

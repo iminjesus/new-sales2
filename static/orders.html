@@ -331,7 +331,7 @@
         <tr>
           <th class="mcode">M-Code</th>
           <th class="narrow">Qty</th>
-          <th class="wide">Description</th>
+          <th class="wide">Size</th>
           <th class="narrow">Brand</th>
           <th class="mid">Product Name</th>
           <th class="narrow">Pattern</th>
@@ -476,8 +476,15 @@ async function suggestMaterial(q){
     if(Array.isArray(rows)) _matCache[key] = rows;
     else rows = [];
   }
-  fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: r.description})));
-  fillDatalist("desc_list",  rows.map(r => ({value: r.description, label: r.m_code})));
+  // Show "size · pattern" in the size dropdown so different tread
+  // patterns on the same size are distinguishable at a glance.  Same
+  // combined value goes into the input on select; the resolver splits
+  // by " · " to recover both parts.  M-Code dropdown labels also
+  // carry the pattern so tabbing through m_codes is scannable.
+  const combo = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
+  const codeLabel = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
+  fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
+  fillDatalist("desc_list",  rows.map(r => ({value: combo(r),  label: r.m_code})));
 }
 const debouncedSuggestMat = debounce(suggestMaterial, 180);
 
