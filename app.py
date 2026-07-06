@@ -1486,6 +1486,89 @@ def api_orders_stock_by_material():
         except: pass
 
 
+# TBR (HK & LF) discount is a fixed 56% for every customer at the
+# moment — the dc_basic_customer feed doesn't split PCLT vs TBR, so
+# the two brand rows there feed the PCLT columns and TBR is stamped
+# from this constant.  Move to a separate table once the feed is
+# split by line.
+_ORDERS_TBR_HKLF_PCT = 56.00
+
+
+@app.get("/api/orders/base_dc")
+def api_orders_base_dc():
+    """Look up Base DC % for a sold-to from dc_basic_customer.
+
+      ?sold_to=…        the bill_to_partner code on that table
+
+    Returns
+      { "HK_PCLT": 52.00, "LF_PCLT": 50.00, "TBR_HKLF": 56.00 }
+
+    - HK / LF pick the most recent still-valid row per brand (max
+      valid_from where CURDATE() is between valid_from and valid_to).
+    - Amount is stored as a negative percent on the feed (-52.00 =
+      52% discount); we flip the sign so the form shows +XX.XX%.
+    - Brands other than HK / LF (KS etc.) are ignored per current
+      product rule.
+    - TBR (HK&LF) is a fixed constant (see _ORDERS_TBR_HKLF_PCT)
+      until the feed splits PCLT vs TBR.
+    - If the table doesn't exist yet, the endpoint still returns
+      {TBR_HKLF: 56.00, HK_PCLT: None, LF_PCLT: None} so the form
+      just leaves the two brand cells blank instead of erroring."""
+    sold_to = (request.args.get("sold_to") or "").strip()
+    out = {"HK_PCLT": None, "LF_PCLT": None, "TBR_HKLF": _ORDERS_TBR_HKLF_PCT}
+    if not sold_to:
+        return jsonify(out)
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        # Silently no-op when the table isn't loaded on this deployment
+        # — the form still functions with TBR fixed and the PCLT cells
+        # blank, which is what "customer master hasn't been loaded yet"
+        # should look like.
+        try:
+            cur.execute("SHOW TABLES LIKE 'dc_basic_customer'")
+            if not cur.fetchone():
+                return jsonify(out)
+        except Exception:
+            return jsonify(out)
+
+        # ROW_NUMBER() partition per brand picks the row with the
+        # latest valid_from that's still current (CURDATE() covered).
+        # KS and any other brand are excluded by the outer IN filter.
+        cur.execute(
+            """
+            SELECT brand, ABS(amount) AS pct
+            FROM (
+                SELECT brand, amount, valid_from,
+                       ROW_NUMBER() OVER (PARTITION BY brand
+                                          ORDER BY valid_from DESC) AS rn
+                FROM dc_basic_customer
+                WHERE bill_to_partner = %s
+                  AND brand IN ('HK', 'LF')
+                  AND CURDATE() BETWEEN valid_from AND valid_to
+            ) t
+            WHERE t.rn = 1
+            """,
+            (sold_to,),
+        )
+        for r in cur.fetchall() or []:
+            key = "HK_PCLT" if r["brand"] == "HK" else "LF_PCLT"
+            try:
+                out[key] = float(r["pct"])
+            except Exception:
+                pass
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 PLANT_GEO = {
     "42R0": {"lat": -27.8688, "lon": 153.2093},
     "42R1": {"lat": -33.86,   "lon": 150.20},

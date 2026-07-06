@@ -512,6 +512,20 @@ function applyCustomer(row){
   // BDE / salesman — the Order# column has its own bde_name input.
   set("bde_name",        row.bde_name || row.salesman_name || "");
   setStatus(`Loaded <b>${row.ship_to_name||row.sold_to_name||"—"}</b> · BDE: ${row.bde_name||row.salesman_name||"—"}`, "ok");
+  // Fire the Base DC lookup once the customer is known — keyed off
+  // sold_to (the bill_to_partner side of dc_basic_customer).  Kept
+  // out of the main /customer response so a deployment that hasn't
+  // loaded dc_basic_customer yet still returns customer instantly.
+  if (row.sold_to) fillBaseDC(row.sold_to);
+}
+
+async function fillBaseDC(soldTo){
+  const data = await apiGet(`/api/orders/base_dc?sold_to=${encodeURIComponent(soldTo)}`);
+  const fmtPct = v => (v == null) ? "" : `+${(+v).toFixed(2)}%`;
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set("basedc_hkpclt", fmtPct(data && data.HK_PCLT));
+  set("basedc_tbr",    fmtPct(data && data.TBR_HKLF));
+  set("basedc_lfpclt", fmtPct(data && data.LF_PCLT));
 }
 
 /* ────────────────────────── material resolve ────────────────────────── */
