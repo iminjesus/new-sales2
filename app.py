@@ -1421,6 +1421,59 @@ def api_orders_material():
         except: pass
 
 # plant 醫뚰몴 留ㅽ븨 (?덇? 以?媛믪쑝濡??낅뜲?댄듃)
+# Plant → State mapping for the Orders form's per-state stock columns.
+# Kept next to the endpoint that uses it so the schema-agnostic lookup
+# doesn't have to reach into PLANT_GEO for something that's really
+# about jurisdictions, not geometry.
+_ORDER_PLANT_STATE = {"42R1": "NSW", "42R0": "QLD", "42R2": "VIC", "42R4": "WA"}
+
+
+@app.get("/api/orders/stock_by_material")
+def api_orders_stock_by_material():
+    """Return {NSW, QLD, VIC, WA, TOTAL} stock for one or more materials.
+    Batches multiple m_codes when ?m_code=... appears more than once so
+    the form only pays for one round trip when a whole page of rows
+    resolves at once.  Uses the same `unrestricted` column the Stock
+    page shows, aggregated per (material, plant) and folded to state.
+    Missing (material, plant) pairs come back as 0 so the form can
+    render clean zeros instead of blanks."""
+    codes = [c.strip() for c in request.args.getlist("m_code") if c.strip()]
+    if not codes:
+        return jsonify({})
+
+    ph = ",".join(["%s"] * len(codes))
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            f"SELECT material, plant, SUM(unrestricted) AS qty "
+            f"FROM stock "
+            f"WHERE material IN ({ph}) "
+            f"  AND plant IN ({','.join(['%s']*len(_ORDER_PLANT_STATE))}) "
+            f"GROUP BY material, plant",
+            tuple(codes) + tuple(_ORDER_PLANT_STATE.keys()),
+        )
+        rows = cur.fetchall() or []
+        out = {c: {s: 0 for s in _ORDER_PLANT_STATE.values()} for c in codes}
+        for r in rows:
+            m = str(r.get("material") or "").strip()
+            st = _ORDER_PLANT_STATE.get(r.get("plant"))
+            if not m or not st or m not in out:
+                continue
+            out[m][st] = int(float(r.get("qty") or 0))
+        for m, buckets in out.items():
+            buckets["TOTAL"] = sum(buckets.values())
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 PLANT_GEO = {
     "42R0": {"lat": -27.8688, "lon": 153.2093},
     "42R1": {"lat": -33.86,   "lon": 150.20},

@@ -130,9 +130,15 @@
   }
   table.lines thead th.pink{background:#c8548a;color:#fff;}
   table.lines thead th.olive{background:#a08b3c;color:#fff;}
+  table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
   table.lines thead th.narrow{width:60px}
   table.lines thead th.mid{width:90px}
   table.lines thead th.wide{width:200px}
+  table.lines tbody td.stock-cell input{
+    background:#eefaf1;color:#1e3a2f;font-weight:700;text-align:right;
+    font-variant-numeric:tabular-nums;
+  }
+  table.lines tbody td.stock-cell.zero input{background:#fdecec;color:#a03030}
   table.lines tbody td{
     border:1px solid var(--border);padding:0;height:32px;background:#fff;
   }
@@ -340,6 +346,10 @@
           <th class="mid">Proposed Price</th>
           <th class="mid">Total Amount</th>
           <th class="narrow">Proposed DC %</th>
+          <th class="stock narrow" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
+          <th class="stock narrow" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
+          <th class="stock narrow" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
+          <th class="stock narrow" title="Stock in WA plant (42R4)">WA<br>stock</th>
         </tr>
       </thead>
       <tbody id="linesBody">
@@ -350,6 +360,7 @@
           <td class="label" colspan="16">Total</td>
           <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
           <td></td>
+          <td colspan="4"></td>
         </tr>
       </tfoot>
     </table>
@@ -526,6 +537,33 @@ function applyMaterial(rowEl, data){
   set("list_price",   data.list_price != null ? fmtMoney(data.list_price) : "");
   recalcRow(rowEl);
   setStatus(`Material linked: <b>${data.m_code} — ${data.description||""}</b>`, "ok");
+  // Fire-and-forget stock lookup so the row's four state columns
+  // populate as soon as the material is known.  Kept separate from
+  // /api/orders/material so the material link itself stays a single
+  // fast row-lookup — the stock join can be slower under load.
+  if (data.m_code) fillStockForRow(rowEl, data.m_code);
+}
+
+async function fillStockForRow(rowEl, mcode){
+  const stockMap = {NSW:"stock_nsw", QLD:"stock_qld", VIC:"stock_vic", WA:"stock_wa"};
+  // Optimistic: clear before fetching so a re-link on the same row
+  // doesn't leave stale numbers if the API is slow.
+  for (const col of Object.values(stockMap)){
+    const td = rowEl.querySelector(`[data-col="${col}"]`)?.parentElement;
+    td?.classList.remove("zero");
+    const el = rowEl.querySelector(`[data-col="${col}"]`); if (el) el.value = "…";
+  }
+  const data = await apiGet(`/api/orders/stock_by_material?m_code=${encodeURIComponent(mcode)}`);
+  const buckets = (data && data[mcode]) || {NSW:0, QLD:0, VIC:0, WA:0};
+  for (const [state, col] of Object.entries(stockMap)){
+    const el = rowEl.querySelector(`[data-col="${col}"]`);
+    if (!el) continue;
+    const n = +buckets[state] || 0;
+    el.value = n ? fmtQty(n) : "0";
+    // Zero-stock cell paints red so a stock-out is obvious at a glance.
+    const td = el.parentElement;
+    if (td) td.classList.toggle("zero", n === 0);
+  }
 }
 
 /* ────────────────────────── row math ────────────────────────── */
@@ -587,6 +625,10 @@ function newRow(){
     {c:"proposed_price", cls:"num red-num readonly", ro:true},
     {c:"total_amount",   cls:"total-cell num readonly", ro:true},
     {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
+    {c:"stock_nsw",      cls:"stock-cell readonly", ro:true},
+    {c:"stock_qld",      cls:"stock-cell readonly", ro:true},
+    {c:"stock_vic",      cls:"stock-cell readonly", ro:true},
+    {c:"stock_wa",       cls:"stock-cell readonly", ro:true},
   ];
   for(const cell of cells){
     const td = document.createElement("td");
