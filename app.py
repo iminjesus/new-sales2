@@ -1044,15 +1044,20 @@ def api_orders_customer():
             "ship_to_name":    "ship_to_name",
             "sold_to_group":   "sold_to_group",
             "bde_state":       "bde_state",
+            "ship_to_state":   "ship_to_state",
             "channels":        "channels",
             "salesman_name":   "salesman_name",
             # optional / deployment-specific columns
             "address":         "address",
+            "address_1":       "address_1",
             "ship_to_address": "ship_to_address",
+            "city":            "city",
             "state":           "state",
             "phone":           "phone",
+            "telephone":       "telephone",
             "contact_phone":   "contact_phone",
             "mobile":          "mobile",
+            "mobile_phone":    "mobile_phone",
             "email":           "email",
             "contact_email":   "contact_email",
         }
@@ -1100,10 +1105,17 @@ def api_orders_customer():
             return jsonify({"error": "not found"}), 404
 
         out = {k: (row.get(k) or "") for k in select_cols}
-        out["address"] = out.get("address") or out.get("ship_to_address") or ""
-        out["phone"]   = out.get("phone")   or out.get("contact_phone")   or ""
-        out["email"]   = out.get("email")   or out.get("contact_email")   or ""
-        out["state"]   = out.get("state")   or out.get("bde_state")       or ""
+        # Canonicalise cross-schema synonyms so the frontend only reads
+        # one field name per concept, regardless of which column the
+        # deployment actually stores the value in.
+        addr_parts = [out.get("address"), out.get("address_1"), out.get("ship_to_address"), out.get("city")]
+        out["address"] = ", ".join([p for p in addr_parts if p]) or ""
+        out["phone"]   = out.get("phone")     or out.get("telephone")     or out.get("contact_phone") or ""
+        out["mobile"]  = out.get("mobile")    or out.get("mobile_phone")  or ""
+        out["email"]   = out.get("email")     or out.get("contact_email") or ""
+        # ship_to_state is the authoritative jurisdiction on the customer
+        # row; bde_state is the sales-org region and can differ from it.
+        out["state"]   = out.get("ship_to_state") or out.get("state") or out.get("bde_state") or ""
         out["customer_group"] = out.get("sold_to_group") or ""
         out["bde_name"] = out.get("salesman_name") or ""
         return jsonify(out)
