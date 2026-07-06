@@ -1061,24 +1061,41 @@ def api_orders_customer():
             return jsonify({"error": "customer table has no known columns"}), 500
 
         # Choose the WHERE clause based on which query param was given.
-        # Code lookups are always exact; name lookups do an exact match
-        # first (paste from an existing form) and fall back to nothing
-        # further — the /suggest endpoint is what handles partial name
-        # search.
+        # Codes: exact.  Names: exact → normalised-LIKE so freely typed
+        # "bobstyres" still resolves to "Bob's Tyres".
+        row = None
+        base_sql = f"SELECT {', '.join(select_cols)} FROM customer"
         if ship_to:
-            where_sql, params = "ship_to = %s", (ship_to,)
+            cur.execute(f"{base_sql} WHERE ship_to = %s LIMIT 1", (ship_to,))
+            row = cur.fetchone()
         elif sold_to:
-            where_sql, params = "sold_to = %s", (sold_to,)
+            cur.execute(f"{base_sql} WHERE sold_to = %s LIMIT 1", (sold_to,))
+            row = cur.fetchone()
         elif ship_to_name and "ship_to_name" in cols:
-            where_sql, params = "TRIM(ship_to_name) = %s", (ship_to_name,)
+            cur.execute(f"{base_sql} WHERE TRIM(ship_to_name) = %s LIMIT 1", (ship_to_name,))
+            row = cur.fetchone()
+            if not row:
+                n = _strip_noise_py(ship_to_name)
+                if n:
+                    cur.execute(
+                        f"{base_sql} WHERE {_strip_noise_sql('ship_to_name')} LIKE %s LIMIT 1",
+                        (f"%{n}%",),
+                    )
+                    row = cur.fetchone()
         elif sold_to_name and "sold_to_name" in cols:
-            where_sql, params = "TRIM(sold_to_name) = %s", (sold_to_name,)
+            cur.execute(f"{base_sql} WHERE TRIM(sold_to_name) = %s LIMIT 1", (sold_to_name,))
+            row = cur.fetchone()
+            if not row:
+                n = _strip_noise_py(sold_to_name)
+                if n:
+                    cur.execute(
+                        f"{base_sql} WHERE {_strip_noise_sql('sold_to_name')} LIKE %s LIMIT 1",
+                        (f"%{n}%",),
+                    )
+                    row = cur.fetchone()
         else:
             return jsonify({"error": "no usable lookup key"}), 400
 
-        sql = f"SELECT {', '.join(select_cols)} FROM customer WHERE {where_sql} LIMIT 1"
-        cur.execute(sql, params)
-        row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
 
@@ -1100,15 +1117,40 @@ def api_orders_customer():
         except: pass
 
 
+# Punctuation the suggest layer treats as invisible so "185 70 R14" /
+# "185/70R14" / "18570R14" all match the same tyre size, and "Bob's
+# Tyres" / "Bobs Tyres" / "bobstyres" all match the same shop.
+_NOISE_CHARS = " /,.-'&+()"
+def _strip_noise_sql(col):
+    """MySQL expression that lowers and strips the noise chars from
+    a column so LIKE comparisons are punctuation-agnostic."""
+    expr = f"LOWER({col})"
+    for ch in _NOISE_CHARS:
+        expr = f"REPLACE({expr}, '{ch}', '')"
+    return expr
+def _strip_noise_py(s):
+    s = (s or "").lower()
+    for ch in _NOISE_CHARS:
+        s = s.replace(ch, "")
+    return s
+
+
 @app.get("/api/orders/customer_suggest")
 def api_orders_customer_suggest():
     """Autocomplete backend for the Sold-to / Ship-to inputs.
-      ?q=…           1+ char, matched against code OR name (case-insensitive prefix / substring)
+      ?q=…           1+ char, matched against code OR name (punctuation-agnostic)
       ?kind=sold|ship  which pair to search (default: sold)
       ?limit=15      max rows returned (hard cap 50)
     Returns [{code, name, sold_to, sold_to_name, ship_to, ship_to_name,
              bde_name}, …] so the frontend can populate a datalist with
-    "code — name" labels and resolve the full row on select."""
+    "code — name" labels and resolve the full row on select.
+
+    Matching is normalized on BOTH sides — the noise chars in
+    `_NOISE_CHARS` (spaces, /, ,, ., -, ', &, +, parens) are stripped
+    from the column and from the query before LIKE runs, so typing
+    "bobstyres" finds "Bob's Tyres" and typing "18570r14" finds a
+    material stored as "185/70R14".  Multi-word queries are AND-ed
+    per token (case-insensitive) so word order doesn't matter."""
     q    = (request.args.get("q") or "").strip()
     kind = (request.args.get("kind") or "sold").strip().lower()
     try:
@@ -1134,22 +1176,34 @@ def api_orders_customer_suggest():
         if code_col not in pick_cols: pick_cols.append(code_col)
 
         # DISTINCT collapses the multi-ship_to-per-sold_to duplication
-        # to a single suggestion per (code, name) pair — otherwise a big
-        # sold_to with 20 ship_tos shows up as 20 identical rows.
+        # to a single suggestion per (code, name) pair.
         select_sql = "DISTINCT " + ", ".join(pick_cols)
+
+        # Build per-token AND — each whitespace-separated token in q
+        # must appear in the stripped code OR the stripped name.
+        tokens = [t for t in q.split() if t.strip()]
+        if not tokens:
+            tokens = [q]
+        code_expr = _strip_noise_sql(code_col)
+        name_expr = _strip_noise_sql(name_col) if name_col in cols else None
+        wh_and = []
         params = []
-        wh = []
-        # Prefix match first (fastest); if the caller wants substring
-        # we OR in a %q% pattern — keeps the query index-friendly for
-        # short queries and still finds "Bob's Tyres" from "Tyres".
-        wh.append(f"{code_col} LIKE %s")
-        params.append(f"{q}%")
-        if name_col in cols:
-            wh.append(f"{name_col} LIKE %s")
-            params.append(f"%{q}%")
+        for tok in tokens:
+            tok_norm = _strip_noise_py(tok)
+            if not tok_norm:
+                continue
+            per_tok = [f"{code_expr} LIKE %s"]
+            params.append(f"%{tok_norm}%")
+            if name_expr:
+                per_tok.append(f"{name_expr} LIKE %s")
+                params.append(f"%{tok_norm}%")
+            wh_and.append("(" + " OR ".join(per_tok) + ")")
+        if not wh_and:
+            return jsonify([])
+
         sql = (
             f"SELECT {select_sql} FROM customer "
-            f"WHERE {' OR '.join(wh)} "
+            f"WHERE {' AND '.join(wh_and)} "
             f"ORDER BY {code_col} LIMIT {limit}"
         )
         cur.execute(sql, tuple(params))
@@ -1209,15 +1263,29 @@ def api_orders_material_suggest():
         if c_brand: select_parts.append("brand")
         if c_prod:  select_parts.append("product_name")
 
-        wh = ["m_code LIKE %s"]
-        params = [f"{q}%"]
-        if c_desc:
-            wh.append(f"{c_desc} LIKE %s")
-            params.append(f"%{q}%")
+        # Punctuation-agnostic multi-token match — see
+        # customer_suggest for the rationale.  "185 70r14" and
+        # "18570R14" both find "185/70R14…".
+        code_expr = _strip_noise_sql("m_code")
+        desc_expr = _strip_noise_sql(c_desc) if c_desc else None
+        tokens = [t for t in q.split() if t.strip()] or [q]
+        wh_and = []
+        params = []
+        for tok in tokens:
+            tok_norm = _strip_noise_py(tok)
+            if not tok_norm: continue
+            per_tok = [f"{code_expr} LIKE %s"]
+            params.append(f"%{tok_norm}%")
+            if desc_expr:
+                per_tok.append(f"{desc_expr} LIKE %s")
+                params.append(f"%{tok_norm}%")
+            wh_and.append("(" + " OR ".join(per_tok) + ")")
+        if not wh_and:
+            return jsonify([])
 
         sql = (
             f"SELECT DISTINCT {', '.join(select_parts)} FROM carrying_26 "
-            f"WHERE {' OR '.join(wh)} "
+            f"WHERE {' AND '.join(wh_and)} "
             f"ORDER BY m_code LIMIT {limit}"
         )
         cur.execute(sql, tuple(params))
@@ -1284,13 +1352,25 @@ def api_orders_material():
         select_sql = ", ".join(parts)
 
         if m_code:
+            # Exact m_code first, then a normalised (case+noise-stripped)
+            # fallback so "1017693 " or "1,017,693" still resolve.
             cur.execute(f"SELECT {select_sql} FROM carrying_26 WHERE {c_m_code} = %s LIMIT 1", (m_code,))
             row = cur.fetchone()
+            if not row:
+                mnorm = _strip_noise_py(m_code)
+                if mnorm:
+                    cur.execute(
+                        f"SELECT {select_sql} FROM carrying_26 "
+                        f"WHERE {_strip_noise_sql(c_m_code)} = %s LIMIT 1",
+                        (mnorm,),
+                    )
+                    row = cur.fetchone()
         else:
             if not c_description:
                 return jsonify({"error": "description column not available"}), 500
-            # Exact first (paste from existing form), then LIKE fallback
-            # for partial input.
+            # Exact → LIKE → normalised-LIKE.  The last step is what
+            # rescues freely-typed input like "18570R14" that never
+            # matches the raw "185/70R14…" via plain LIKE.
             cur.execute(
                 f"SELECT {select_sql} FROM carrying_26 WHERE {c_description} = %s LIMIT 1",
                 (desc,),
@@ -1302,6 +1382,15 @@ def api_orders_material():
                     (f"%{desc}%",),
                 )
                 row = cur.fetchone()
+            if not row:
+                dnorm = _strip_noise_py(desc)
+                if dnorm:
+                    cur.execute(
+                        f"SELECT {select_sql} FROM carrying_26 "
+                        f"WHERE {_strip_noise_sql(c_description)} LIKE %s LIMIT 1",
+                        (f"%{dnorm}%",),
+                    )
+                    row = cur.fetchone()
 
         if not row:
             return jsonify({"error": "not found"}), 404
