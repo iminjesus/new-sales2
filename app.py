@@ -990,7 +990,7 @@ def map_page():
 def stock_page():
     return app.send_static_file("stock.html")
 
-@app.route("/orders")
+@app.route("/order")
 def orders_page():
     """Special Price Request Form — interactive layout.  Backing data
     comes from /api/orders/customer and /api/orders/material."""
