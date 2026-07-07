@@ -4348,6 +4348,10 @@ def export_excel_sales2526():
         cur.close(); conn.close()
 
         # ------ 3. Merge sales + target on (sold_to, ship_to) ------
+        # Target numbers are always whole units — targets aren't set to
+        # a fractional tyre — so round each pivot cell and the total to
+        # int before they land on the sheet.
+        as_int = lambda v: int(round(float(v or 0)))
         target_map = {
             (r.get("sold_to_code") or "", r.get("ship_to_code") or ""): r
             for r in target_rows
@@ -4356,9 +4360,9 @@ def export_excel_sales2526():
             key = (r.get("sold_to_code") or "", r.get("ship_to_code") or "")
             t = target_map.pop(key, None)
             for lbl in target_labels:
-                r[lbl] = float((t or {}).get(lbl) or 0)
+                r[lbl] = as_int((t or {}).get(lbl))
             r["Total"]        = sum(float(r.get(c) or 0) for c in col_labels)
-            r["Target_Total"] = sum(float(r.get(l) or 0) for l in target_labels)
+            r["Target_Total"] = sum(r.get(l) or 0 for l in target_labels)
         # Target-only ship_tos (no sales row yet) — append with sales
         # months as zero so they still show up on the sheet.
         for key, t in target_map.items():
@@ -4374,9 +4378,9 @@ def export_excel_sales2526():
             for lbl in col_labels:
                 new_row[lbl] = 0
             for lbl in target_labels:
-                new_row[lbl] = float(t.get(lbl) or 0)
+                new_row[lbl] = as_int(t.get(lbl))
             new_row["Total"]        = 0
-            new_row["Target_Total"] = sum(float(t.get(l) or 0) for l in target_labels)
+            new_row["Target_Total"] = sum(new_row.get(l) or 0 for l in target_labels)
             rows.append(new_row)
 
         header_order = (["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
