@@ -4322,22 +4322,27 @@ def export_excel_sales2526():
             t_joins.append(cust_join_t)
 
         t_where_sql = ("WHERE " + " AND ".join(t_wh)) if t_wh else ""
+        # Wrap every non-grouped column in MIN() so only_full_group_by
+        # accepts the SELECT.  Each (sold_to, ship_to) resolves to a
+        # single customer row, so MIN() is equivalent to picking the
+        # only value; it just satisfies the strict-mode checker that
+        # can't see the alias-equivalence through the COALESCE stack.
         cur.execute(f"""
             SELECT
-                COALESCE(NULLIF(TRIM(tcus.bde_state),''),
-                         NULLIF(TRIM(t.state),''), 'COMMON') AS region,
-                COALESCE(NULLIF(TRIM(tcus.salesman_name),''),
-                         NULLIF(TRIM(t.bde),''), '') AS bde,
-                COALESCE(NULLIF(TRIM(tcus.sold_to_group),''), '') AS sold_to_group,
-                COALESCE(NULLIF(TRIM(tcus.sold_to_name),''), t.sold_to) AS sold_to_name,
-                COALESCE(NULLIF(TRIM(tcus.ship_to_name),''), t.ship_to) AS ship_to_name,
+                COALESCE(NULLIF(TRIM(MIN(tcus.bde_state)),''),
+                         NULLIF(TRIM(MIN(t.state)),''), 'COMMON') AS region,
+                COALESCE(NULLIF(TRIM(MIN(tcus.salesman_name)),''),
+                         NULLIF(TRIM(MIN(t.bde)),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(MIN(tcus.sold_to_group)),''), '') AS sold_to_group,
+                COALESCE(NULLIF(TRIM(MIN(tcus.sold_to_name)),''), t.sold_to) AS sold_to_name,
+                COALESCE(NULLIF(TRIM(MIN(tcus.ship_to_name)),''), t.ship_to) AS ship_to_name,
                 t.sold_to AS sold_to_code,
                 t.ship_to AS ship_to_code,
                 {target_pivot}
             FROM target_26 t
             {' '.join(t_joins)}
             {t_where_sql}
-            GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, t.sold_to, t.ship_to
+            GROUP BY t.sold_to, t.ship_to
         """, tuple(t_params))
         target_rows = cur.fetchall()
         cur.close(); conn.close()
