@@ -5680,9 +5680,11 @@ def sales_map():
     wh.append("c.latitude IS NOT NULL")
     wh.append("c.longitude IS NOT NULL")
 
-    # 2026 cumulative only
-    wh.append("s.year = %s")
-    params.append(2026)
+    # 2026 cumulative only — filter on billing_date (the base column
+    # that ships with sales_2526; no s.year on this schema).  Range
+    # form so the billing_date index prunes instead of scanning.
+    wh.append("s.billing_date >= %s AND s.billing_date < %s")
+    params.extend(["2026-01-01", "2027-01-01"])
 
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
@@ -5719,7 +5721,7 @@ def sales_map():
                 MAX(c.bde_state)      AS region,
                 MAX(c.salesman_name)  AS bde,
                 SUM(s.{value})        AS total_value,
-                SUM(CASE WHEN s.year = 2026 THEN s.{value} ELSE 0 END) AS total_2026
+                SUM(CASE WHEN YEAR(s.billing_date) = 2026 THEN s.{value} ELSE 0 END) AS total_2026
             FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql2}
