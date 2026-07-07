@@ -4237,7 +4237,11 @@ def _build_export_common_filters(f, joins, wh, params, alias="s"):
 
 @app.get("/api/export_excel/sales2526")
 def export_excel_sales2526():
-    """Export 25/26 monthly sales pivoted by YYMM (2501..2512, 2601..2612)."""
+    """Export 25/26 monthly sales pivoted by YYMM (2501..2512, 2601..2612)
+    with matching Target columns for the 2026 months (T2601..T2612).
+    Sales come from sales_2526, targets from target_26; the two pivots
+    are merged in Python on (sold_to, ship_to) so a ship_to that only
+    has target (no sales yet) still shows up on its own row."""
     try:
         f = parse_filters(request)
         metric = f.get("metric", "qty")
@@ -4246,6 +4250,7 @@ def export_excel_sales2526():
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
 
+        # ------ 1. Sales pivot (sales_2526) ------
         joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
         _ensure_customer_join("s", joins)
         _build_export_common_filters(f, joins, wh, params)
@@ -4278,14 +4283,101 @@ def export_excel_sales2526():
         """
         cur.execute(sql, params)
         rows = cur.fetchall()
+
+        # ------ 2. Target pivot (target_26) ------
+        # Same filter set the daily/monthly target endpoints use so the
+        # exported Target columns match what's on the dashboard.
+        t_joins, t_wh, t_params = build_target_filters("t", f)
+        t_cj, t_cw = category_target_filters("t", f["category"])
+        t_joins += t_cj; t_wh += t_cw
+
+        # Product filters via carrying_26 on target_26.material.
+        carrying_join_t = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
+        needs_carrying_t = False
+        if f["product_group"] != "ALL":
+            needs_carrying_t = True
+            t_wh.append("mat.product_group = %s"); t_params.append(f["product_group"])
+        if f["brand"] != "ALL":
+            needs_carrying_t = True
+            t_wh.append("mat.brand = %s"); t_params.append(f["brand"])
+        if f["pattern"] != "ALL":
+            needs_carrying_t = True
+            t_wh.append("mat.pattern = %s"); t_params.append(f["pattern"])
+        if f["material"] != "ALL":
+            needs_carrying_t = True
+            t_wh.append("mat.size = %s"); t_params.append(f["material"])
+        if needs_carrying_t and carrying_join_t not in t_joins:
+            t_joins.append(carrying_join_t)
+
+        target_pivot = ",\n".join([
+            f"SUM(CASE WHEN t.month={m} THEN t.{value_col} ELSE 0 END) AS `T26{m:02d}`"
+            for m in range(1, 13)
+        ])
+        target_labels = [f"T26{m:02d}" for m in range(1, 13)]
+
+        # customer LEFT JOIN so a target-only row (no matching sales yet
+        # for this ship_to) can still surface a readable name.
+        cust_join_t = "LEFT JOIN customer tcus ON tcus.ship_to = t.ship_to"
+        if cust_join_t not in t_joins:
+            t_joins.append(cust_join_t)
+
+        t_where_sql = ("WHERE " + " AND ".join(t_wh)) if t_wh else ""
+        cur.execute(f"""
+            SELECT
+                COALESCE(NULLIF(TRIM(tcus.bde_state),''),
+                         NULLIF(TRIM(t.state),''), 'COMMON') AS region,
+                COALESCE(NULLIF(TRIM(tcus.salesman_name),''),
+                         NULLIF(TRIM(t.bde),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(tcus.sold_to_group),''), '') AS sold_to_group,
+                COALESCE(NULLIF(TRIM(tcus.sold_to_name),''), t.sold_to) AS sold_to_name,
+                COALESCE(NULLIF(TRIM(tcus.ship_to_name),''), t.ship_to) AS ship_to_name,
+                t.sold_to AS sold_to_code,
+                t.ship_to AS ship_to_code,
+                {target_pivot}
+            FROM target_26 t
+            {' '.join(t_joins)}
+            {t_where_sql}
+            GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, t.sold_to, t.ship_to
+        """, tuple(t_params))
+        target_rows = cur.fetchall()
         cur.close(); conn.close()
 
-        # add Total column
+        # ------ 3. Merge sales + target on (sold_to, ship_to) ------
+        target_map = {
+            (r.get("sold_to_code") or "", r.get("ship_to_code") or ""): r
+            for r in target_rows
+        }
         for r in rows:
-            r["Total"] = sum(float(r.get(c) or 0) for c in col_labels)
+            key = (r.get("sold_to_code") or "", r.get("ship_to_code") or "")
+            t = target_map.pop(key, None)
+            for lbl in target_labels:
+                r[lbl] = float((t or {}).get(lbl) or 0)
+            r["Total"]        = sum(float(r.get(c) or 0) for c in col_labels)
+            r["Target_Total"] = sum(float(r.get(l) or 0) for l in target_labels)
+        # Target-only ship_tos (no sales row yet) — append with sales
+        # months as zero so they still show up on the sheet.
+        for key, t in target_map.items():
+            new_row = {
+                "region":         t.get("region")        or "",
+                "bde":            t.get("bde")           or "",
+                "sold_to_group":  t.get("sold_to_group") or "",
+                "sold_to_name":   t.get("sold_to_name")  or "",
+                "ship_to_name":   t.get("ship_to_name")  or "",
+                "sold_to_code":   key[0],
+                "ship_to_code":   key[1],
+            }
+            for lbl in col_labels:
+                new_row[lbl] = 0
+            for lbl in target_labels:
+                new_row[lbl] = float(t.get(lbl) or 0)
+            new_row["Total"]        = 0
+            new_row["Target_Total"] = sum(float(t.get(l) or 0) for l in target_labels)
+            rows.append(new_row)
 
-        header_order = ["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
-                        "sold_to_code", "ship_to_code"] + col_labels + ["Total"]
+        header_order = (["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
+                         "sold_to_code", "ship_to_code"]
+                        + col_labels + ["Total"]
+                        + target_labels + ["Target_Total"])
 
         meta_lines = [
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
