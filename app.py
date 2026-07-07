@@ -1275,7 +1275,12 @@ def api_orders_material_suggest():
         cols = _list_columns(cur, "carrying_26")
         c_desc  = "description" if "description" in cols else ("size" if "size" in cols else None)
         c_brand = "brand" if "brand" in cols else None
-        c_prod  = "product_name" if "product_name" in cols else None
+        # carrying_26 doesn't ship a dedicated product_name column;
+        # product_group is what the BDE reads as the product family
+        # (e.g. "VENTUS S1 EVO3"), so alias it into the response as
+        # product_name and keep the real product_name column as a
+        # deployment-specific fallback for schemas that have it.
+        c_prod  = next((c for c in ("product_name", "product_group") if c in cols), None)
         c_pat   = "pattern" if "pattern" in cols else None
         if "m_code" not in cols:
             return jsonify({"error": "m_code column missing"}), 500
@@ -1283,7 +1288,7 @@ def api_orders_material_suggest():
         select_parts = ["m_code"]
         if c_desc:  select_parts.append(f"{c_desc} AS description")
         if c_brand: select_parts.append("brand")
-        if c_prod:  select_parts.append("product_name")
+        if c_prod:  select_parts.append(f"{c_prod} AS product_name")
         if c_pat:   select_parts.append("pattern")
 
         # Punctuation-agnostic multi-token match — see
@@ -1357,7 +1362,11 @@ def api_orders_material():
         c_m_code       = pick("m_code")
         c_description  = pick("description", "size", "material_desc")
         c_brand        = pick("brand")
-        c_product_name = pick("product_name", "product", "pattern_name")
+        # product_group is what carrying_26 actually carries as the
+        # readable product-family label ("VENTUS S1 EVO3", "KINERGY
+        # ECO2"…), so use it as the product_name source when a real
+        # product_name column isn't present.
+        c_product_name = pick("product_name", "product", "product_group", "pattern_name")
         c_pattern      = pick("pattern")
         c_load         = pick("load_speed", "load", "load_index")
         c_speed        = pick("speed", "speed_rating")
