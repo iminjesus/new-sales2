@@ -4356,12 +4356,19 @@ def export_excel_sales2526():
             (r.get("sold_to_code") or "", r.get("ship_to_code") or ""): r
             for r in target_rows
         }
+        # Per-year sales totals rather than a single combined Total —
+        # 25 Total sits right after the 2025 columns, 26 Total right
+        # after 2026 columns, and Target_Total after the T26MM block.
+        labels_25 = [c for c in col_labels if c.startswith("25")]
+        labels_26 = [c for c in col_labels if c.startswith("26")]
+
         for r in rows:
             key = (r.get("sold_to_code") or "", r.get("ship_to_code") or "")
             t = target_map.pop(key, None)
             for lbl in target_labels:
                 r[lbl] = as_int((t or {}).get(lbl))
-            r["Total"]        = sum(float(r.get(c) or 0) for c in col_labels)
+            r["25 Total"]     = sum(float(r.get(c) or 0) for c in labels_25)
+            r["26 Total"]     = sum(float(r.get(c) or 0) for c in labels_26)
             r["Target_Total"] = sum(r.get(l) or 0 for l in target_labels)
         # Target-only ship_tos (no sales row yet) — append with sales
         # months as zero so they still show up on the sheet.
@@ -4379,13 +4386,15 @@ def export_excel_sales2526():
                 new_row[lbl] = 0
             for lbl in target_labels:
                 new_row[lbl] = as_int(t.get(lbl))
-            new_row["Total"]        = 0
+            new_row["25 Total"]     = 0
+            new_row["26 Total"]     = 0
             new_row["Target_Total"] = sum(new_row.get(l) or 0 for l in target_labels)
             rows.append(new_row)
 
         header_order = (["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
                          "sold_to_code", "ship_to_code"]
-                        + col_labels + ["Total"]
+                        + labels_25 + ["25 Total"]
+                        + labels_26 + ["26 Total"]
                         + target_labels + ["Target_Total"])
 
         meta_lines = [
