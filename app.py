@@ -921,11 +921,11 @@ def debug_salesman():
 
         # 4. Sample sales_2526 rows for a WA ship_to (check sold_to presence)
         cur.execute(
-            f"SELECT s.ship_to, s.sold_to, s.year, SUM(s.amt) AS amt"
+            f"SELECT s.ship_to, s.sold_to, YEAR(s.billing_date) AS year, SUM(s.amt) AS amt"
             f" FROM {_sales_2526_from('s', year=2025)}"
             f" WHERE s.ship_to IN (SELECT DISTINCT ship_to FROM customer WHERE bde_state IN ({ph}))"
-            f" AND s.year = 2025"
-            f" GROUP BY s.ship_to, s.sold_to, s.year"
+            f" AND s.billing_date >= '2025-01-01' AND s.billing_date < '2026-01-01'"
+            f" GROUP BY s.ship_to, s.sold_to, YEAR(s.billing_date)"
             f" LIMIT 20",
             tuple(states))
         sales_sample = cur.fetchall()
@@ -3206,14 +3206,19 @@ def v2_dashboard():
             wh_m.append("mat.pattern = %s"); params_m.append(f["pattern"])
         if f["material"] != "ALL":
             wh_m.append("mat.size = %s"); params_m.append(f["material"])
-        wh_m.append("s.year IN (2025, 2026)")
+        # 2025/2026 window on billing_date (no s.year column on this
+        # sales_2526 schema — everything is derived from billing_date).
+        wh_m.append("s.billing_date >= '2025-01-01' AND s.billing_date < '2027-01-01'")
         # Suppress future-month rows.  The nightly import puts each
         # day's sales_thismonth batch into sales_2526 tagged with the
         # CURRENT calendar month — so on July 1 (before the first
         # business day) the June-30 batch shows up as a phantom July
         # bar.  Cap year*100+month to today's effective month.
         _eff_y, _eff_m = _business_effective_ym()
-        wh_m.append(f"(s.year * 100 + s.month) <= {_eff_y * 100 + _eff_m}")
+        wh_m.append(
+            f"(YEAR(s.billing_date) * 100 + MONTH(s.billing_date)) <= "
+            f"{_eff_y * 100 + _eff_m}"
+        )
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_m.append(f"s.sold_to IN ({placeholders})")
@@ -3222,12 +3227,13 @@ def v2_dashboard():
         where_m = ("WHERE " + " AND ".join(wh_m)) if wh_m else ""
 
         cur.execute(f"""
-            SELECT s.year AS year, s.month AS month, SUM(s.{value}) AS value
+            SELECT YEAR(s.billing_date) AS year, MONTH(s.billing_date) AS month,
+                   SUM(s.{value}) AS value
             FROM {_sales_2526_from("s")}
             {' '.join(joins_m)}
             {where_m}
-            GROUP BY s.year, s.month
-            ORDER BY s.year, s.month
+            GROUP BY YEAR(s.billing_date), MONTH(s.billing_date)
+            ORDER BY YEAR(s.billing_date), MONTH(s.billing_date)
         """, tuple(params_m))
         m_tot_rows = cur.fetchall()
         m25 = {int(r["month"]): float(r["value"] or 0) for r in m_tot_rows if int(r["year"]) == 2025}
@@ -3240,12 +3246,13 @@ def v2_dashboard():
         # monthly breakdown stacks (both years)
         group_col_m = group_cols_sales[group_by]
         cur.execute(f"""
-            SELECT s.year AS year, s.month AS month, {label_col_sales} AS group_label, SUM(s.{value}) AS value
+            SELECT YEAR(s.billing_date) AS year, MONTH(s.billing_date) AS month,
+                   {label_col_sales} AS group_label, SUM(s.{value}) AS value
             FROM {_sales_2526_from("s")}
             {' '.join(joins_m_break)}
             {where_m}
-            GROUP BY s.year, s.month, {group_col_m}
-            ORDER BY s.year, s.month
+            GROUP BY YEAR(s.billing_date), MONTH(s.billing_date), {group_col_m}
+            ORDER BY YEAR(s.billing_date), MONTH(s.billing_date)
         """, tuple(params_m))
         m_break = cur.fetchall()
 
@@ -4243,9 +4250,10 @@ def export_excel_sales2526():
         _ensure_customer_join("s", joins)
         _build_export_common_filters(f, joins, wh, params)
 
-        # pivot columns: year*100+month ??label YYMM e.g. 2501
+        # pivot columns: YEAR*100+MONTH from billing_date → label YYMM (2501…)
         pivot_cols = ",\n".join([
-            f"SUM(CASE WHEN s.year={y} AND s.month={m} THEN s.{value_col} ELSE 0 END) AS `{y % 100:02d}{m:02d}`"
+            f"SUM(CASE WHEN YEAR(s.billing_date)={y} AND MONTH(s.billing_date)={m} "
+            f"THEN s.{value_col} ELSE 0 END) AS `{y % 100:02d}{m:02d}`"
             for y in [2025, 2026]
             for m in range(1, 13)
         ])
@@ -7535,8 +7543,13 @@ def _highlights_src_for(cur, year, month):
         except Exception:
             pass
         return (None, "", ())
-    # 2025 (and parts of 2026 FY) live in sales_2526.
-    return ("sales_2526", "WHERE s.year = %s AND s.month = %s", (year, month))
+    # 2025 (and parts of 2026 FY) live in sales_2526 — this schema
+    # only carries billing_date, so gate on YEAR/MONTH of that.
+    return (
+        "sales_2526",
+        "WHERE YEAR(s.billing_date) = %s AND MONTH(s.billing_date) = %s",
+        (year, month),
+    )
 
 def _highlights_pct(this_v, prev_v):
     """% change from prev → this, or None when prev is zero/missing
