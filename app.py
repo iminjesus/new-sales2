@@ -1368,6 +1368,7 @@ def api_orders_material():
         # product_name column isn't present.
         c_product_name = pick("product_name", "product", "product_group", "pattern_name")
         c_pattern      = pick("pattern")
+        c_line         = pick("line")
         c_load         = pick("load_speed", "load", "load_index")
         c_speed        = pick("speed", "speed_rating")
         c_list_price   = pick("list_price", "price")
@@ -1379,6 +1380,7 @@ def api_orders_material():
         if c_brand:        parts.append(f"{c_brand} AS brand")
         if c_product_name: parts.append(f"{c_product_name} AS product_name")
         if c_pattern:      parts.append(f"{c_pattern} AS pattern")
+        if c_line:         parts.append(f"{c_line} AS line")
         # Combine load + speed into a single string like "88H" when
         # split — the source form always displays it joined.
         if c_load and c_speed and c_load != c_speed:
