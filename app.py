@@ -1556,12 +1556,16 @@ def api_orders_base_dc():
     Returns
       { "HK_PCLT": 52.00, "LF_PCLT": 50.00, "TBR_HKLF": 56.00 }
 
-    - HK / LF pick the most recent still-valid row per brand (max
-      valid_from where CURDATE() is between valid_from and valid_to).
+    - HK / LF PCLT cells look for a brand-specific row first (brand =
+      'HK' or 'LF') and, when none exists for that customer, fall back
+      to the brand-blank row for the same customer.  So a customer
+      that only has an "empty-brand" DC on the feed still gets a
+      figure in both cells.
+    - The picked row is always the most recent still-valid one
+      (max valid_from where CURDATE() is between valid_from and
+      valid_to).
     - Amount is stored as a negative percent on the feed (-52.00 =
       52% discount); we flip the sign so the form shows +XX.XX%.
-    - Brands other than HK / LF (KS etc.) are ignored per current
-      product rule.
     - TBR (HK&LF) is a fixed constant (see _ORDERS_TBR_HKLF_PCT)
       until the feed splits PCLT vs TBR.
     - If the table doesn't exist yet, the endpoint still returns
@@ -1586,31 +1590,56 @@ def api_orders_base_dc():
         except Exception:
             return jsonify(out)
 
-        # ROW_NUMBER() partition per brand picks the row with the
-        # latest valid_from that's still current (CURDATE() covered).
-        # KS and any other brand are excluded by the outer IN filter.
+        # Pick the most-recent valid row per (brand-bucket).  Bucket
+        # is "HK" / "LF" for a branded row and "_BLANK_" for a
+        # blank-brand row.  ORDER BY inside the CTE is by valid_from
+        # DESC so ROW_NUMBER() = 1 is the current one.  KS and any
+        # other non-blank/non-HK/non-LF brand is ignored.
         cur.execute(
             """
-            SELECT brand, ABS(amount) AS pct
+            SELECT bucket, ABS(amount) AS pct
             FROM (
-                SELECT brand, amount, valid_from,
-                       ROW_NUMBER() OVER (PARTITION BY brand
-                                          ORDER BY valid_from DESC) AS rn
+                SELECT
+                    CASE
+                        WHEN brand = 'HK' THEN 'HK'
+                        WHEN brand = 'LF' THEN 'LF'
+                        WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
+                    END AS bucket,
+                    amount,
+                    valid_from,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CASE
+                            WHEN brand = 'HK' THEN 'HK'
+                            WHEN brand = 'LF' THEN 'LF'
+                            WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
+                        END
+                        ORDER BY valid_from DESC
+                    ) AS rn
                 FROM dc_basic_customer
                 WHERE bill_to_partner = %s
-                  AND brand IN ('HK', 'LF')
+                  AND (
+                        brand IN ('HK', 'LF')
+                        OR brand IS NULL
+                        OR TRIM(brand) = ''
+                  )
                   AND CURDATE() BETWEEN valid_from AND valid_to
             ) t
-            WHERE t.rn = 1
+            WHERE t.rn = 1 AND t.bucket IS NOT NULL
             """,
             (sold_to,),
         )
+        picks = {}
         for r in cur.fetchall() or []:
-            key = "HK_PCLT" if r["brand"] == "HK" else "LF_PCLT"
             try:
-                out[key] = float(r["pct"])
+                picks[r["bucket"]] = float(r["pct"])
             except Exception:
                 pass
+        # Brand-specific first, blank as fallback so an empty-brand
+        # row fills both cells for customers who don't have HK/LF
+        # entries at all.
+        blank = picks.get("_BLANK_")
+        out["HK_PCLT"] = picks.get("HK", blank)
+        out["LF_PCLT"] = picks.get("LF", blank)
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
