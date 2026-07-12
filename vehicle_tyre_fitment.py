@@ -47,8 +47,12 @@ from bs4 import BeautifulSoup
 
 # ─────────────────────────── config ────────────────────────────────────
 BASE_DIR       = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_INPUT  = os.path.join(BASE_DIR, "vehicle_postcode_make_model.csv")
-DEFAULT_OUTPUT = os.path.join(BASE_DIR, "vehicle_tyre_fitment.csv")
+# vehicle_rego.py writes its normalized CSVs under out/rego/ next to the
+# script, so default the fitment crawler to read + write there too.
+# --input / --output CLI flags still override this if the layout differs.
+REGO_DIR       = os.path.join(BASE_DIR, "out", "rego")
+DEFAULT_INPUT  = os.path.join(REGO_DIR, "vehicle_postcode_make_model.csv")
+DEFAULT_OUTPUT = os.path.join(REGO_DIR, "vehicle_tyre_fitment.csv")
 BASE_URL       = "https://www.wheel-size.com"
 DEFAULT_DELAY  = 2.0     # seconds between requests
 MAX_RETRIES    = 4
@@ -309,6 +313,11 @@ def main():
         print(f"[info] limit={args.limit} — will stop after {len(todo)} pairs")
 
     # Open output in append mode; write header on first create only.
+    # Make sure the directory exists so a fresh --output path works
+    # without the user having to mkdir it first.
+    out_dir = os.path.dirname(os.path.abspath(args.output))
+    if out_dir and not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
     write_header = not os.path.exists(args.output) or os.path.getsize(args.output) == 0
     fh = open(args.output, "a", newline="", encoding="utf-8")
     writer = csv.DictWriter(fh, fieldnames=FIELD_NAMES)
