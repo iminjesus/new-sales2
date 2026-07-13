@@ -336,8 +336,10 @@ def process_package(
         else:
             plain.append(p)
 
-    # classify each and collect the best-matching frames
-    buckets: dict[str, list[pd.DataFrame]] = {
+    # classify each and collect the best-matching frames.
+    # Each entry is (filename, renamed_df) so we can log and pick the
+    # best file per bucket further down.
+    buckets: dict[str, list[tuple[str, pd.DataFrame]]] = {
         "postcode_make_model_year": [],   # richest: every dimension
         "make_model_year":          [],   # year present but no postcode
         "postcode_make_model":      [],
@@ -403,14 +405,42 @@ def process_package(
             print(f"      dropped {before - len(renamed):,} TOTAL / summary rows "
                   f"({', '.join(drop_notes)})")
 
-        buckets[kind].append(renamed)
+        buckets[kind].append((path.name, renamed))
         print(f"    ✓ {path.name}  →  {kind}  ({len(renamed):,} rows)")
 
     # write one normalised CSV per non-empty bucket
     written: dict[str, Path] = {}
     aggregated: dict[str, pd.DataFrame] = {}
-    for kind, frames in buckets.items():
-        if not frames: continue
+    # Dimension columns that make one file a strict superset of
+    # another when a bucket receives multiple resources.
+    CANON_DIMS = ("state", "postcode", "vehicle_type", "motive_power",
+                  "year_of_manufacture", "make", "model")
+    for kind, entries in buckets.items():
+        if not entries: continue
+        # Multiple resources land in the same bucket when BITRE
+        # publishes the same universe cut several ways (e.g., three
+        # postcode-only slices split by vehicle_type / motive_power /
+        # year of manufacture).  Summing them multiplies the total by
+        # the number of cuts — the 3x / 2x blow-up we were seeing.
+        # Pick the ONE file with the most canonical dimensions (most
+        # detailed breakdown); rollup will collapse it back to the
+        # bucket's nominal grain with the correct total.
+        if len(entries) > 1:
+            def _score(entry):
+                fname, df = entry
+                return (
+                    sum(1 for c in CANON_DIMS if c in df.columns),
+                    len(df),
+                )
+            entries_sorted = sorted(entries, key=_score, reverse=True)
+            picked_name, picked_df = entries_sorted[0]
+            skipped = [n for n, _ in entries_sorted[1:]]
+            print(f"  [dedupe] {kind}: {len(entries)} resources match this bucket. "
+                  f"Keeping {picked_name}; skipping {len(skipped)} redundant "
+                  f"cut(s): {', '.join(skipped)}")
+            frames = [picked_df]
+        else:
+            frames = [entries[0][1]]
         merged = pd.concat(frames, ignore_index=True)
         # aggregate — duplicate rows across resource splits collapse to one
         group_cols = [c for c in (
