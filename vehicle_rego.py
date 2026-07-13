@@ -492,7 +492,21 @@ def process_package(
         if group_cols:
             merged.sort_values(group_cols, inplace=True, ignore_index=True)
         out_path = out_dir / f"vehicle_{kind}.csv"
-        merged.to_csv(out_path, index=False)
+        try:
+            merged.to_csv(out_path, index=False)
+        except PermissionError:
+            # Common Windows failure mode — the CSV is open in Notepad
+            # / Excel / another viewer, so pandas can't overwrite it.
+            # Fall back to a timestamped filename so the run doesn't
+            # abort, and tell the user how to fix it cleanly.
+            from datetime import datetime as _dt
+            stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+            alt = out_path.with_name(f"vehicle_{kind}_{stamp}.csv")
+            print(f"  [warn] {out_path.name} is locked (open in Notepad/Excel?). "
+                  f"Writing to {alt.name} instead — close the other viewer "
+                  f"and re-run to overwrite the canonical file.")
+            merged.to_csv(alt, index=False)
+            out_path = alt
         total_qty = int(merged["qty"].sum()) if "qty" in merged.columns else 0
         print(f"  wrote {out_path.name}  ({len(merged):,} rows · Σ qty {total_qty:,})")
         # State-coverage sanity report — a common failure mode is that
