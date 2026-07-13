@@ -369,19 +369,31 @@ def process_package(
                     group_cols = keep_dims
 
         # Threshold: BITRE random-rounds small cells to base-3, so the
-        # bulk of rows below ~6 are just noise (real value 0-4).  Drop
-        # them when --min-qty is set so the exports stay analysable.
-        if min_qty > 0 and "qty" in merged.columns:
+        # bulk of rows at 0 and 3 are just noise (real value 0-4).
+        # Drop them per --min-qty so the exports stay analysable.  We
+        # ALSO always drop qty == 0 (with min_qty=0 override still
+        # skipping this) — those rows carry no information regardless
+        # of RR3 policy.
+        if "qty" in merged.columns:
             before = len(merged)
-            merged = merged[merged["qty"] >= min_qty]
+            threshold = max(min_qty, 1)
+            merged = merged[merged["qty"] >= threshold]
             if before != len(merged):
-                print(f"      {kind}: dropped {before - len(merged):,} rows below qty {min_qty}")
+                print(f"      {kind}: dropped {before - len(merged):,} rows below qty {threshold}")
 
         if group_cols:
             merged.sort_values(group_cols, inplace=True, ignore_index=True)
         out_path = out_dir / f"vehicle_{kind}.csv"
         merged.to_csv(out_path, index=False)
         print(f"  wrote {out_path.name}  ({len(merged):,} rows)")
+        # State-coverage sanity report — a common failure mode is that
+        # BITRE ships some releases as per-state ZIPs and the download
+        # only picked up 1-2 states; the coverage line makes that
+        # obvious at a glance.
+        if "state" in merged.columns:
+            state_counts = merged["state"].value_counts()
+            state_line = ", ".join(f"{s}:{n:,}" for s, n in state_counts.items())
+            print(f"      states covered ({len(state_counts)}): {state_line}")
         written[kind] = out_path
         aggregated[kind] = merged
 
@@ -466,20 +478,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="out/rego", help="output directory")
     ap.add_argument("--keep-raw", action="store_true",
                     help="keep the raw downloads under out/_raw/")
-    ap.add_argument("--min-qty", type=int, default=0,
-                    help="Drop rows with qty below this threshold.  BITRE "
-                         "random-rounds every tiny (postcode × make × model × "
-                         "fuel) slice to base-3, so millions of rows end up "
-                         "with qty=3 that really means 1-4 vehicles.  Try "
-                         "--min-qty 6 to skip the RR3 noise floor and keep "
-                         "only cells where the real count is definitely "
-                         "meaningful.")
-    ap.add_argument("--rollup", action="store_true",
-                    help="Collapse over vehicle_type + motive_power so the "
-                         "output is one row per (state, postcode, make, "
-                         "model[, year]) with qty summed.  Coarser cells "
-                         "cancel out most of the RR3 rounding error and give "
-                         "cleaner totals for territory / demand analysis.")
+    ap.add_argument("--min-qty", type=int, default=6,
+                    help="Drop rows with qty below this threshold (default: "
+                         "%(default)s).  BITRE random-rounds every tiny "
+                         "(postcode × make × model × fuel) slice to base-3, "
+                         "so cells at 0 and 3 are mostly RR3 noise (real "
+                         "count 0-4).  Threshold 6 keeps cells where the "
+                         "real count is definitely meaningful; pass "
+                         "--min-qty 0 to disable.")
+    ap.add_argument("--no-rollup", dest="rollup", action="store_false",
+                    help="Keep vehicle_type + motive_power dimensions "
+                         "separate.  The default is to roll those up so "
+                         "each (state, postcode, make, model[, year]) row "
+                         "shows a single summed qty — coarser cells "
+                         "cancel out most of the RR3 rounding error.")
+    ap.set_defaults(rollup=True)
     args = ap.parse_args(argv)
 
     sess = _session()
