@@ -194,6 +194,17 @@ def fetch(session: requests.Session, url: str, delay: float) -> str | None:
 
 TYRE_RX = re.compile(r"(\d{3})/(\d{2})\s*[RZ]\s*(\d{2})", re.IGNORECASE)
 
+# Generation / year links off a wheel-size model page.  The site's
+# schema is /size/<make>/<model>/<year>[-suffix]/ — e.g.
+# /size/hyundai/i30/2024/, /2020-mk3/, /2015/, …  Only /size/… paths
+# under the same (make, model) are considered so we don't wander off
+# into other brands via cross-links.
+def _gen_link_rx(m_slug: str, d_slug: str) -> re.Pattern:
+    return re.compile(
+        rf'/size/{re.escape(m_slug)}/{re.escape(d_slug)}/([^/"\s#?]+)/',
+        re.IGNORECASE,
+    )
+
 
 def _norm_size(raw: str) -> str:
     """Normalise scraped sizes to "215/70R14" form so the same tyre from
@@ -202,6 +213,22 @@ def _norm_size(raw: str) -> str:
     if not m:
         return ""
     return f"{m.group(1)}/{m.group(2)}R{m.group(3)}"
+
+
+def parse_generation_links(html: str, m_slug: str, d_slug: str) -> list[str]:
+    """Return the unique generation / year slugs that link out of the
+    model landing page.  Slugs look like '2024', '2020-mk3', '2015',
+    '2000-alfa-tempo', etc. — anything past the /model/ segment."""
+    if not html:
+        return []
+    seen: dict[str, None] = {}
+    for m in _gen_link_rx(m_slug, d_slug).finditer(html):
+        slug = m.group(1).strip("/")
+        if not slug or slug.lower() in {"specifications", "wheels", "tires", "tyres"}:
+            continue
+        if slug not in seen:
+            seen[slug] = None
+    return list(seen.keys())
 
 
 def parse_model_page(html: str) -> list[dict]:
@@ -331,6 +358,11 @@ def main():
                     help="Skip (make, model) rows already in the output.")
     ap.add_argument("--limit",  type=int, default=0,
                     help="Stop after N pairs (0 = no limit — useful for a smoke test).")
+    ap.add_argument("--max-gens", type=int, default=6,
+                    help="Per model, visit at most this many generation/year sub-pages "
+                         "(default: %(default)s).  wheel-size.com lists each i30 "
+                         "generation/year separately; drilling all of them can add "
+                         "10-15 requests per model.")
     ap.add_argument("--dump-html", action="store_true",
                     help="Also save each fetched HTML as debug/<make>_<model>.html so "
                          "the parser can be inspected against the real page structure.")
@@ -369,26 +401,61 @@ def main():
         if not m_slug or not d_slug:
             print(f"  [skip] {mk} · {md} (no slug)")
             continue
-        url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/"
-        print(f"[{i}/{len(todo)}] {mk} · {md}  →  {url}")
-        html = fetch(session, url, args.delay)
-        # Optional debug dump — inspect the served page to figure out
-        # why the parser missed sizes.  Saved as debug/<make>_<model>.html
-        # next to the output CSV.
-        if args.dump_html and html:
+        model_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/"
+        print(f"[{i}/{len(todo)}] {mk} · {md}  →  {model_url}")
+        model_html = fetch(session, model_url, args.delay)
+        if args.dump_html and model_html:
             dump_dir = os.path.join(os.path.dirname(os.path.abspath(args.output)), "debug")
             os.makedirs(dump_dir, exist_ok=True)
             slug = f"{make_slug(mk)}__{model_slug(mk, md)}".replace("/", "-")[:120] or "page"
             with open(os.path.join(dump_dir, slug + ".html"), "w", encoding="utf-8") as df:
-                df.write(html)
+                df.write(model_html)
             print(f"    [dump] debug/{slug}.html", file=sys.stderr)
-        rows = parse_model_page(html) if html else []
+
+        # Two-level crawl: the model landing lists generation/year
+        # links, and the fitment sizes live on THOSE pages (the model
+        # landing itself just shows a timeline).  Grab the generation
+        # slugs, visit up to --max-gens of them, and pool the sizes.
+        rows: list[dict] = []
+        seen_triples: set[tuple[str, str, str]] = set()
+        # Also pick up any sizes exposed on the model landing itself —
+        # some pages carry a "quick facts" block with the current-gen
+        # size.
+        for r in (parse_model_page(model_html) if model_html else []):
+            key = (r["year"], r["trim"], r["size"])
+            if r["size"] and key not in seen_triples:
+                seen_triples.add(key); rows.append(r)
+
+        gen_slugs = parse_generation_links(model_html, m_slug, d_slug) if model_html else []
+        if gen_slugs:
+            print(f"    [gens] {len(gen_slugs)} generations found; "
+                  f"visiting {min(len(gen_slugs), args.max_gens)}", file=sys.stderr)
+        for gen_slug in gen_slugs[:args.max_gens]:
+            gen_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/{quote(gen_slug)}/"
+            print(f"    [gen] {gen_slug}  →  {gen_url}", file=sys.stderr)
+            gen_html = fetch(session, gen_url, args.delay)
+            for r in (parse_model_page(gen_html) if gen_html else []):
+                if not r["size"]:
+                    continue
+                # Prefer the gen slug as the year label when the row
+                # itself doesn't carry a year — makes the CSV a bit
+                # easier to slice later.
+                if not r["year"]:
+                    r["year"] = gen_slug
+                key = (r["year"], r["trim"], r["size"])
+                if key in seen_triples:
+                    continue
+                seen_triples.add(key)
+                # Track which URL surfaced the size so a later re-run
+                # can retrace the origin.
+                r["source_url"] = gen_url
+                rows.append(r)
+
         if not rows:
             empty_pairs += 1
-            # Still stamp a row so --resume doesn't retry every run.
             writer.writerow({
                 "make": mk, "model": md, "year": "", "trim": "", "size": "",
-                "source_url": url,
+                "source_url": model_url,
                 "fetched_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
             })
         else:
@@ -397,7 +464,7 @@ def main():
                 writer.writerow({
                     "make": mk, "model": md,
                     "year": r["year"], "trim": r["trim"], "size": r["size"],
-                    "source_url": url,
+                    "source_url": r.get("source_url") or model_url,
                     "fetched_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
                 })
         fh.flush()
