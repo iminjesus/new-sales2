@@ -997,6 +997,112 @@ def orders_page():
     return app.send_static_file("orders.html")
 
 
+@app.route("/fleet")
+def fleet_chart_page():
+    """Fleet-by-rim bar chart.  Reads postcode_rim_demand.csv produced
+    by postcode_rim_demand.py and shows total fleet units by rim
+    family, with an optional state filter."""
+    return app.send_static_file("fleet_chart.html")
+
+
+# In-memory cache for postcode_rim_demand.csv so the /api endpoint
+# doesn't re-read the file on every request.  Rebuild on mtime change.
+_POSTCODE_RIM_CACHE: dict = {"mtime": 0.0, "rows": []}
+
+def _load_postcode_rim_demand():
+    """Load postcode_rim_demand.csv rows from disk (once, cached).
+    Looks in out/rego/ next to app.py first, falls back to CWD."""
+    import csv as _csv, os as _os, time as _time
+    candidates = [
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                      "out", "rego", "postcode_rim_demand.csv"),
+        _os.path.join(_os.getcwd(), "out", "rego", "postcode_rim_demand.csv"),
+        _os.path.join(_os.getcwd(), "postcode_rim_demand.csv"),
+    ]
+    path = next((p for p in candidates if _os.path.exists(p)), None)
+    if not path:
+        return []
+    try:
+        mtime = _os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    if _POSTCODE_RIM_CACHE.get("path") == path \
+       and _POSTCODE_RIM_CACHE.get("mtime") == mtime:
+        return _POSTCODE_RIM_CACHE["rows"]
+    rows = []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for r in _csv.DictReader(f):
+                try:
+                    units = int(r.get("fleet_units") or 0)
+                except ValueError:
+                    units = 0
+                if units <= 0:
+                    continue
+                rows.append({
+                    "state":       (r.get("state") or "").strip().upper(),
+                    "postcode":    (r.get("postcode") or "").strip(),
+                    "rim_family":  (r.get("rim_family") or "").strip(),
+                    "fleet_units": units,
+                })
+    except Exception as _e:
+        print(f"[fleet] failed to read {path}: {_e}")
+        return []
+    _POSTCODE_RIM_CACHE.update({"path": path, "mtime": mtime, "rows": rows})
+    return rows
+
+
+@app.get("/api/fleet_by_rim")
+def api_fleet_by_rim():
+    """Return fleet_units aggregated by rim_family, optionally
+    filtered / grouped by state.
+
+      ?state=NSW          — one state; returns [{rim_family, fleet}, ...]
+      ?state=ALL          — national totals (default)
+      ?breakdown=state    — one series per state (used by the bar-chart
+                            legend to show per-state stacks)
+    """
+    state    = (request.args.get("state") or "ALL").strip().upper()
+    breakdown = (request.args.get("breakdown") or "").strip().lower()
+
+    rows = _load_postcode_rim_demand()
+    if not rows:
+        return jsonify({
+            "rim_order": [], "series": [],
+            "warning": "postcode_rim_demand.csv not found — run "
+                       "postcode_rim_demand.py first.",
+        })
+
+    # Canonical rim ordering — R13 → R14 → … → R22+ / MOTORCYCLE last.
+    rim_order = ["R13", "R14", "R15", "R16", "R17", "R18",
+                 "R19", "R20", "R21", "R22+ (truck)", "MOTORCYCLE", "UNKNOWN"]
+
+    if breakdown == "state":
+        # One series per state so a stacked / grouped bar chart can
+        # render distribution across states side-by-side.
+        agg: dict = {}
+        for r in rows:
+            agg.setdefault(r["state"], {})
+            agg[r["state"]][r["rim_family"]] = agg[r["state"]].get(r["rim_family"], 0) + r["fleet_units"]
+        series = []
+        for st in sorted(agg.keys()):
+            values = [agg[st].get(f, 0) for f in rim_order]
+            series.append({"state": st, "values": values})
+        return jsonify({"rim_order": rim_order, "series": series})
+
+    # Single series (national or one-state)
+    totals: dict = {}
+    for r in rows:
+        if state != "ALL" and r["state"] != state:
+            continue
+        totals[r["rim_family"]] = totals.get(r["rim_family"], 0) + r["fleet_units"]
+    values = [totals.get(f, 0) for f in rim_order]
+    return jsonify({
+        "rim_order": rim_order,
+        "series": [{"state": state, "values": values}],
+    })
+
+
 def _list_columns(cur, table):
     """Return the lower-cased set of columns on `table`, or empty set
     if the table can't be introspected (permissions, wrong schema, etc.).

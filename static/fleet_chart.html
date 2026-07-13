@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Fleet by Rim Family</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+<style>
+  :root{--border:#c8c8c8;--bg:#f6f7f9;--muted:#6c757d;--accent:#2563eb;}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#222;background:var(--bg);}
+  .wrap{max-width:1400px;margin:16px auto;padding:0 16px 32px}
+
+  /* page-nav strip (mirrors other pages) */
+  .pagenav{
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+    padding:8px 12px;background:#fff;border:1px solid var(--border);
+    font-size:12.5px;border-radius:6px;margin-bottom:14px;
+  }
+  .pagenav button{
+    padding:5px 12px;font:inherit;border:1px solid #8f8f8f;
+    background:#fafafa;border-radius:4px;cursor:pointer;color:#333;
+  }
+  .pagenav button.here{background:#1e3a5f;color:#fff;border-color:#1e3a5f;font-weight:700}
+  .pagenav button:hover:not(.here){background:#f0f2f5}
+
+  h1{font-size:20px;margin:0 0 10px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+
+  /* toolbar */
+  .toolbar{
+    display:flex;gap:10px;flex-wrap:wrap;align-items:center;
+    padding:10px 12px;background:#fff;border:1px solid var(--border);
+    border-radius:6px;margin-bottom:14px;
+  }
+  .toolbar label{font-size:12px;color:var(--muted);margin-right:2px}
+  .toolbar select, .toolbar button{
+    padding:6px 10px;font:inherit;border:1px solid #8f8f8f;
+    border-radius:4px;background:#fff;
+  }
+  .toolbar button.primary{background:var(--accent);color:#fff;border-color:#1d4ed8;cursor:pointer}
+  .toolbar button.primary:hover{filter:brightness(0.95)}
+
+  /* chart card */
+  .card{
+    background:#fff;border:1px solid var(--border);border-radius:6px;
+    padding:16px;margin-bottom:14px;
+  }
+  .card h2{font-size:15px;margin:0 0 10px}
+
+  /* summary table */
+  table.mix{border-collapse:collapse;width:100%;font-size:13px}
+  table.mix th, table.mix td{
+    border:1px solid #e0e0e0;padding:6px 10px;text-align:right;
+  }
+  table.mix th{background:#eef1f4;font-weight:600;text-align:center}
+  table.mix td.rim{text-align:center;font-weight:600;background:#f7f9fb}
+  table.mix tr:last-child td{background:#fff8e6;font-weight:700}
+
+  .warn{color:#c26400;font-size:13px;padding:10px;background:#fff8d5;
+        border:1px solid #f0d878;border-radius:4px;margin-bottom:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="pagenav">
+    <button onclick="location.href='/'">Graph View</button>
+    <button onclick="location.href='/map'">Map View</button>
+    <button onclick="location.href='/stock'">Stock</button>
+    <button onclick="location.href='/rebate'">Rebate</button>
+    <button onclick="location.href='/price'">Price</button>
+    <button onclick="location.href='/meeting'">Meeting</button>
+    <button onclick="location.href='/claims'">Claims</button>
+    <button onclick="location.href='/order'">📝 Order</button>
+    <button class="here">📊 Fleet</button>
+    <button onclick="location.href='/highlights'">📊 Highlights</button>
+  </div>
+
+  <h1>Fleet by rim family</h1>
+  <div class="sub">
+    Derived from BITRE Motor Vehicle Census — postcode_rim_demand.csv.
+    Bars show total registered vehicles that ride on each rim size.
+  </div>
+
+  <div id="warnBox" class="warn" style="display:none"></div>
+
+  <div class="toolbar">
+    <label for="stateSel">State</label>
+    <select id="stateSel">
+      <option value="ALL">All Australia</option>
+      <option value="NSW">NSW</option>
+      <option value="VIC">VIC</option>
+      <option value="QLD">QLD</option>
+      <option value="WA">WA</option>
+      <option value="SA">SA</option>
+      <option value="TAS">TAS</option>
+      <option value="ACT">ACT</option>
+      <option value="NT">NT</option>
+    </select>
+    <label for="modeSel">Mode</label>
+    <select id="modeSel">
+      <option value="single">Single state</option>
+      <option value="breakdown">Compare all states (stacked)</option>
+    </select>
+    <button class="primary" id="btnRefresh">Refresh</button>
+    <span style="flex:1"></span>
+    <span id="statusMsg" style="font-size:12px;color:var(--muted)"></span>
+  </div>
+
+  <div class="card">
+    <h2 id="chartTitle">National fleet by rim family</h2>
+    <div style="position:relative;height:440px">
+      <canvas id="rimChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Summary</h2>
+    <table class="mix" id="mixTable">
+      <thead>
+        <tr><th>Rim family</th><th>Fleet units</th><th>Share %</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const fmtN = n => Number(n||0).toLocaleString();
+
+// A pleasant, low-clash palette that scales up to 12 series
+// (one per rim family in stacked mode; not all used in single mode).
+const RIM_COLORS = {
+  "R13":            "#a3a3a3",
+  "R14":            "#94a3b8",
+  "R15":            "#60a5fa",
+  "R16":            "#38bdf8",
+  "R17":            "#22c55e",
+  "R18":            "#eab308",
+  "R19":            "#f97316",
+  "R20":            "#ef4444",
+  "R21":            "#a855f7",
+  "R22+ (truck)":   "#6b7280",
+  "MOTORCYCLE":     "#78716c",
+  "UNKNOWN":        "#d1d5db",
+};
+
+let chart = null;
+async function fetchAndDraw(){
+  const state = document.getElementById("stateSel").value;
+  const mode  = document.getElementById("modeSel").value;
+  const status = document.getElementById("statusMsg");
+  status.textContent = "loading…";
+
+  const qs = new URLSearchParams();
+  if (mode === "breakdown") qs.set("breakdown", "state");
+  else                       qs.set("state", state);
+
+  let data;
+  try {
+    const r = await fetch("/api/fleet_by_rim?" + qs.toString(), {credentials:"same-origin"});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    data = await r.json();
+  } catch (e) {
+    status.textContent = "load failed: " + e;
+    return;
+  }
+
+  const warn = document.getElementById("warnBox");
+  if (data.warning) { warn.style.display=""; warn.textContent = data.warning; }
+  else              { warn.style.display="none"; }
+
+  const rimOrder = (data.rim_order || []).filter(f =>
+    f !== "MOTORCYCLE" && f !== "UNKNOWN");  // hide non-tyre buckets by default
+
+  let datasets = [];
+  if (mode === "breakdown") {
+    for (const s of (data.series || [])) {
+      datasets.push({
+        label: s.state,
+        data:  rimOrder.map((_, i) => s.values[data.rim_order.indexOf(rimOrder[i])] || 0),
+        backgroundColor: stateColor(s.state),
+        borderWidth: 0,
+      });
+    }
+    document.getElementById("chartTitle").textContent =
+      "Fleet by rim family — all states (stacked)";
+  } else {
+    const s = (data.series || [])[0] || {values: []};
+    datasets = [{
+      label: state === "ALL" ? "Australia" : state,
+      data:  rimOrder.map((_, i) => s.values[data.rim_order.indexOf(rimOrder[i])] || 0),
+      backgroundColor: rimOrder.map(f => RIM_COLORS[f] || "#94a3b8"),
+      borderWidth: 0,
+    }];
+    document.getElementById("chartTitle").textContent =
+      state === "ALL" ? "National fleet by rim family"
+                      : `${state} — fleet by rim family`;
+  }
+
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById("rimChart"), {
+    type: "bar",
+    data: {labels: rimOrder, datasets},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: mode === "breakdown", position: "top" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => `${ctx.dataset.label}: ${fmtN(ctx.parsed.y)}`
+          }
+        },
+        datalabels: {
+          anchor: "end", align: "top", offset: 2,
+          font: { size: 11, weight: "600" },
+          color: "#333",
+          formatter: (v) => v > 0 ? fmtN(v) : "",
+          display: mode !== "breakdown",   // too cluttered in stacked mode
+        },
+      },
+      scales: {
+        x: { stacked: mode === "breakdown" },
+        y: { stacked: mode === "breakdown",
+             beginAtZero: true,
+             ticks: { callback: v => fmtN(v) } },
+      },
+    },
+    plugins: [ChartDataLabels],
+  });
+
+  // Also fill the summary table (single-state mode only)
+  const tbody = document.querySelector("#mixTable tbody");
+  tbody.innerHTML = "";
+  if (mode !== "breakdown") {
+    const s = (data.series || [])[0] || {values: []};
+    let total = 0;
+    for (let i = 0; i < rimOrder.length; i++) total += s.values[data.rim_order.indexOf(rimOrder[i])] || 0;
+    for (let i = 0; i < rimOrder.length; i++) {
+      const v = s.values[data.rim_order.indexOf(rimOrder[i])] || 0;
+      const pct = total ? (v/total*100).toFixed(1) : "0.0";
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="rim">${rimOrder[i]}</td><td>${fmtN(v)}</td><td>${pct} %</td>`;
+      tbody.appendChild(tr);
+    }
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="rim">TOTAL</td><td>${fmtN(total)}</td><td>100.0 %</td>`;
+    tbody.appendChild(tr);
+  }
+  status.textContent = "";
+}
+
+function stateColor(st){
+  return ({
+    "NSW":"#3b82f6","VIC":"#a855f7","QLD":"#f97316","WA":"#10b981",
+    "SA":"#eab308","TAS":"#14b8a6","ACT":"#ef4444","NT":"#6366f1",
+  })[st] || "#94a3b8";
+}
+
+document.getElementById("btnRefresh").addEventListener("click", fetchAndDraw);
+document.getElementById("stateSel").addEventListener("change", fetchAndDraw);
+document.getElementById("modeSel") .addEventListener("change", fetchAndDraw);
+
+fetchAndDraw();
+</script>
+</body>
+</html>

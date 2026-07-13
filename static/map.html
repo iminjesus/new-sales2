@@ -336,6 +336,152 @@
     </div>
   </div>
 
+  <!-- ────── Fleet-by-rim panel (BITRE-derived) ────── -->
+  <div id="fleetRimBox" class="box" style="margin-top:8px;padding:10px 14px;">
+    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+      <strong style="font-size:14px;">Fleet by rim family</strong>
+      <span style="font-size:11.5px;color:#666;">(BITRE Motor Vehicle Census, rolled up via postcode_rim_demand.csv)</span>
+      <span style="flex:1"></span>
+      <label style="font-size:12px;color:#666;">State</label>
+      <select id="fleetRimState" style="padding:3px 6px;font:inherit;">
+        <option value="ALL">All Australia</option>
+        <option value="NSW">NSW</option>
+        <option value="VIC">VIC</option>
+        <option value="QLD">QLD</option>
+        <option value="WA">WA</option>
+        <option value="SA">SA</option>
+        <option value="TAS">TAS</option>
+        <option value="ACT">ACT</option>
+        <option value="NT">NT</option>
+      </select>
+      <label style="font-size:12px;color:#666;">Mode</label>
+      <select id="fleetRimMode" style="padding:3px 6px;font:inherit;">
+        <option value="single">Single</option>
+        <option value="breakdown">All states stacked</option>
+      </select>
+      <button id="fleetRimToggle" style="padding:3px 10px;font:inherit;border:1px solid #8f8f8f;background:#fafafa;border-radius:4px;cursor:pointer">Hide</button>
+    </div>
+    <div id="fleetRimWarn" style="display:none;color:#c26400;background:#fff8d5;border:1px solid #f0d878;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:6px;"></div>
+    <div id="fleetRimBody">
+      <div style="position:relative;height:260px">
+        <canvas id="fleetRimChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // Fleet-by-rim bar chart panel — reads /api/fleet_by_rim which parses
+  // out/rego/postcode_rim_demand.csv on the server side.  Kept self-
+  // contained so a missing dataset doesn't break map view.
+  (function(){
+    const RIM_COLORS = {
+      "R13":"#a3a3a3","R14":"#94a3b8","R15":"#60a5fa","R16":"#38bdf8",
+      "R17":"#22c55e","R18":"#eab308","R19":"#f97316","R20":"#ef4444",
+      "R21":"#a855f7","R22+ (truck)":"#6b7280",
+      "MOTORCYCLE":"#78716c","UNKNOWN":"#d1d5db",
+    };
+    const STATE_COLORS = {
+      "NSW":"#3b82f6","VIC":"#a855f7","QLD":"#f97316","WA":"#10b981",
+      "SA":"#eab308","TAS":"#14b8a6","ACT":"#ef4444","NT":"#6366f1",
+    };
+    const fmt = n => Number(n||0).toLocaleString();
+    let chart = null;
+
+    async function refresh(){
+      const state = document.getElementById("fleetRimState").value;
+      const mode  = document.getElementById("fleetRimMode").value;
+      const qs = new URLSearchParams();
+      if (mode === "breakdown") qs.set("breakdown", "state");
+      else                       qs.set("state", state);
+      let data;
+      try {
+        const r = await fetch("/api/fleet_by_rim?" + qs, {credentials:"same-origin"});
+        data = await r.json();
+      } catch(e){
+        document.getElementById("fleetRimWarn").style.display = "";
+        document.getElementById("fleetRimWarn").textContent = "load failed: " + e;
+        return;
+      }
+      const warn = document.getElementById("fleetRimWarn");
+      if (data.warning){ warn.style.display=""; warn.textContent = data.warning; }
+      else              { warn.style.display="none"; }
+
+      // Hide MOTORCYCLE / UNKNOWN buckets from the chart — they're
+      // not tyre fitments, keeping them muddies the visual.
+      const rimOrder = (data.rim_order||[]).filter(f =>
+        f !== "MOTORCYCLE" && f !== "UNKNOWN");
+      const idxOf = f => (data.rim_order||[]).indexOf(f);
+
+      let datasets = [];
+      if (mode === "breakdown"){
+        for (const s of (data.series||[])){
+          datasets.push({
+            label: s.state,
+            data:  rimOrder.map(f => s.values[idxOf(f)] || 0),
+            backgroundColor: STATE_COLORS[s.state] || "#94a3b8",
+            borderWidth: 0,
+          });
+        }
+      } else {
+        const s = (data.series||[])[0] || {values:[]};
+        datasets = [{
+          label: state === "ALL" ? "Australia" : state,
+          data:  rimOrder.map(f => s.values[idxOf(f)] || 0),
+          backgroundColor: rimOrder.map(f => RIM_COLORS[f] || "#94a3b8"),
+          borderWidth: 0,
+        }];
+      }
+      if (chart) chart.destroy();
+      const ctx = document.getElementById("fleetRimChart");
+      chart = new Chart(ctx, {
+        type: "bar",
+        data: {labels: rimOrder, datasets},
+        options: {
+          responsive:true, maintainAspectRatio:false,
+          plugins: {
+            legend: { display: mode === "breakdown", position: "top",
+                      labels: { boxWidth: 12, font: { size: 11 } } },
+            tooltip: { callbacks: {
+              label: c => `${c.dataset.label}: ${fmt(c.parsed.y)}`
+            }},
+            datalabels: {
+              anchor: "end", align: "top", offset: 2,
+              font: { size: 10, weight: "600" },
+              color: "#333",
+              formatter: v => v > 0 ? fmt(v) : "",
+              display: mode !== "breakdown",
+            },
+          },
+          scales: {
+            x: { stacked: mode === "breakdown" },
+            y: { stacked: mode === "breakdown",
+                 beginAtZero: true,
+                 ticks: { callback: v => fmt(v) } },
+          },
+        },
+        plugins: [ChartDataLabels],
+      });
+    }
+
+    // Wire up controls
+    document.getElementById("fleetRimState").addEventListener("change", refresh);
+    document.getElementById("fleetRimMode") .addEventListener("change", refresh);
+    document.getElementById("fleetRimToggle").addEventListener("click", (e) => {
+      const body = document.getElementById("fleetRimBody");
+      const shown = body.style.display !== "none";
+      body.style.display = shown ? "none" : "";
+      e.target.textContent = shown ? "Show" : "Hide";
+    });
+
+    // Chart.js may still be loading when this script runs — defer.
+    function boot(){
+      if (typeof Chart === "undefined") { setTimeout(boot, 100); return; }
+      refresh();
+    }
+    boot();
+  })();
+  </script>
+
   <div id="errbar" class="errbar" hidden></div>
 
   <script
