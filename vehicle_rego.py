@@ -220,6 +220,21 @@ def _extract_zip(zip_path: Path, dest_dir: Path) -> list[Path]:
 
 
 # ── main pipeline ────────────────────────────────────────────────────
+_YEAR_RX = re.compile(r"(?<!\d)(20\d{2})(?!\d)")
+
+def _detect_census_year(*strs: str) -> int | None:
+    """Return the newest 4-digit 20YY year token seen in any of the
+    passed strings (resource name, URL, filename), or None if there
+    isn't one.  Used to filter out older-census resources on datasets
+    that ship multiple years side by side."""
+    years = []
+    for s in strs:
+        if not s: continue
+        for m in _YEAR_RX.finditer(str(s)):
+            years.append(int(m.group(1)))
+    return max(years) if years else None
+
+
 def process_package(
     sess: requests.Session,
     pkg: dict,
@@ -228,15 +243,47 @@ def process_package(
     min_qty: int = 0,
     rollup: bool = False,
     keep_noise: bool = False,
+    census_year: int | None = None,
+    all_years: bool = False,
 ) -> dict[str, Path]:
     """Download every relevant resource in pkg, classify, and write
     normalised outputs.  Returns a dict of {kind: path_written}."""
     raw_dir = out_dir / "_raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
+    # First pass over resources: detect each one's census year so we
+    # can filter the pool to a single reporting cycle.  BITRE packages
+    # sometimes carry 4-5 years' worth of files side by side; without
+    # this filter every year gets pooled and the postcode totals blow
+    # up to 2-3× the real vehicle count.
+    all_resources = pkg.get("resources") or []
+    resource_years: dict[int, list[dict]] = {}
+    for res in all_resources:
+        yr = _detect_census_year(res.get("name"), res.get("url"),
+                                 res.get("description"))
+        resource_years.setdefault(yr or 0, []).append(res)
+    detected = sorted([y for y in resource_years if y], reverse=True)
+    if detected:
+        print(f"  census years detected in pkg: {detected}")
+
+    if all_years or not detected:
+        pick_years = set(resource_years.keys())
+    elif census_year is not None:
+        if census_year not in detected:
+            print(f"  [warn] --census-year {census_year} not on this package "
+                  f"(available: {detected}); nothing to download")
+            return {}
+        pick_years = {census_year, 0}
+    else:
+        pick_years = {detected[0], 0}
+        print(f"  → keeping census year {detected[0]} only "
+              f"(pass --all-years to pool every year, or --census-year YYYY to force)")
+    pick_resources = [r for yr, rs in resource_years.items()
+                      if yr in pick_years for r in rs]
+
     downloaded: list[Path] = []
     used_names: set[str] = set()
-    for res in (pkg.get("resources") or []):
+    for res in pick_resources:
         url  = res.get("url") or ""
         name = res.get("name") or Path(url).name or "resource"
         fmt  = (res.get("format") or "").lower()
@@ -501,6 +548,17 @@ def main(argv: list[str] | None = None) -> int:
                          "pass --keep-noise to override.")
     ap.add_argument("--keep-noise", action="store_true",
                     help="Skip the always-on drop of qty ∈ {0, 3} rows.")
+    ap.add_argument("--census-year", type=int, default=None,
+                    help="Only download / process resources for this census "
+                         "year (default: newest year found in the package).  "
+                         "BITRE packages sometimes carry several years' worth "
+                         "of CSVs side by side; pooling all of them multiplies "
+                         "the postcode totals by however many years are on "
+                         "the package, so we pick one year by default.")
+    ap.add_argument("--all-years", action="store_true",
+                    help="Pool every year found on the package (the old "
+                         "behaviour).  Only sensible for a longitudinal "
+                         "study that keeps year_of_manufacture separate.")
     ap.add_argument("--no-rollup", dest="rollup", action="store_false",
                     help="Keep vehicle_type + motive_power dimensions "
                          "separate.  The default is to roll those up so "
@@ -531,7 +589,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         process_package(sess, pkg, out, keep_raw=args.keep_raw,
                         min_qty=args.min_qty, rollup=args.rollup,
-                        keep_noise=args.keep_noise)
+                        keep_noise=args.keep_noise,
+                        census_year=args.census_year,
+                        all_years=args.all_years)
         return 0
 
     hits = search_packages(sess, args.query)
