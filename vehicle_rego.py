@@ -370,21 +370,38 @@ def process_package(
                   .astype("Int64")
             )
 
-        # BITRE ships TOTAL summary rows (state='-' or make='-' etc.)
-        # inside the same CSV — they double-count everything when we
-        # aggregate later.  Drop them.
+        # BITRE ships TOTAL summary rows inside the same CSV — e.g.
+        # a row with motive_power='TOTAL' (or blank) that already sums
+        # the fuel types below it, or vehicle_type='TOTAL' that sums
+        # passenger + LCV + HCV + buses + motorcycles.  Leaving them
+        # in doubles everything when we later aggregate.
+        #
+        # Trick: apply the summary drop per-column only when THAT
+        # column has at least one non-summary value.  Otherwise a file
+        # that's intentionally aggregated at (say) fuel-type level
+        # would have every row wiped.
+        SUMMARY_TOKENS = ("-", "—", "TOTAL", "ALL", "nan", "NAN", "")
         summary_mask = None
-        for c in ("state", "make", "model", "postcode"):
-            if c in renamed.columns:
-                col_is_dash = renamed[c].astype(str).str.strip().isin(
-                    ("-", "—", "TOTAL", "ALL", "nan", "NAN", "")
-                )
-                summary_mask = col_is_dash if summary_mask is None else (summary_mask | col_is_dash)
-        if summary_mask is not None:
+        summary_cols = ("state", "make", "model", "postcode",
+                        "vehicle_type", "motive_power")
+        drop_notes = []
+        for c in summary_cols:
+            if c not in renamed.columns:
+                continue
+            col_str = renamed[c].astype(str).str.strip()
+            is_summary = col_str.isin(SUMMARY_TOKENS)
+            # Only drop when this column carries real detail elsewhere.
+            if not (~is_summary).any():
+                continue
+            summary_mask = is_summary if summary_mask is None else (summary_mask | is_summary)
+            n_sum = int(is_summary.sum())
+            if n_sum:
+                drop_notes.append(f"{c}={n_sum:,}")
+        if summary_mask is not None and summary_mask.any():
             before = len(renamed)
             renamed = renamed[~summary_mask].copy()
-            if before != len(renamed):
-                print(f"      dropped {before - len(renamed):,} TOTAL / summary rows")
+            print(f"      dropped {before - len(renamed):,} TOTAL / summary rows "
+                  f"({', '.join(drop_notes)})")
 
         buckets[kind].append(renamed)
         print(f"    ✓ {path.name}  →  {kind}  ({len(renamed):,} rows)")
