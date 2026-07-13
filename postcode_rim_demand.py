@@ -310,6 +310,75 @@ RIM_MAP: dict[tuple[str, str], int] = {
     # ── Ram / heavy pickup ────────────────────────────────────
     ("RAM", "1500"): 20,
     ("RAM", "2500"): 18,
+    # ── Legacy / less-common models from top-20 uncovered ─────
+    # (BITRE keeps a lot of pre-2010 fleet on the road; these
+    # were the biggest uncovered buckets on the first coverage
+    # run and drop the UNKNOWN bucket by ~1 M rows once mapped.)
+    ("TOYOTA", "LANDCRUISER PRADO"): 17,   # separate from PRADO
+    ("TOYOTA", "COMMUTER"):          15,   # HiAce Commuter van
+    ("TOYOTA", "TARAGO"):            15,   # MPV
+    ("TOYOTA", "PRIUS"):             15,
+    ("HOLDEN", "HOLDEN UTILITY"):    15,   # old HR/HZ/VN utes
+    ("HOLDEN", "UTILITY"):           15,
+    ("HOLDEN", "CALAIS"):            17,   # top-trim Commodore
+    ("HOLDEN", "BERLINA"):           16,   # mid-trim Commodore
+    ("HOLDEN", "STATESMAN"):         17,
+    ("HOLDEN", "MONARO"):            17,
+    ("HYUNDAI", "GETZ"):             14,   # small hatch
+    ("HYUNDAI", "EXCEL"):            13,
+    ("MAZDA", "B3200"):              16,   # old ute (BT-50 predecessor)
+    ("MAZDA", "B3000"):              16,
+    ("MAZDA", "B2600"):              15,
+    ("MAZDA", "B2500"):              15,
+    ("MAZDA", "323"):                14,   # small hatch
+    ("MAZDA", "121"):                13,
+    ("MAZDA", "626"):                15,
+    ("MAZDA", "CX-7"):               17,   # mid SUV (2007-2012)
+    ("MAZDA", "TRIBUTE"):            16,
+    ("MERCEDES-BENZ", "C200"):       16,   # C-Class engine variant
+    ("MERCEDES-BENZ", "C250"):       16,
+    ("MERCEDES-BENZ", "C300"):       17,
+    ("MERCEDES-BENZ", "C350"):       17,
+    ("MERCEDES-BENZ", "E200"):       17,
+    ("MERCEDES-BENZ", "E250"):       17,
+    ("MERCEDES-BENZ", "E300"):       17,
+    ("MERCEDES-BENZ", "E350"):       18,
+    ("MERCEDES-BENZ", "A180"):       16,
+    ("MERCEDES-BENZ", "A200"):       16,
+    ("MERCEDES-BENZ", "A250"):       17,
+    ("BMW", "320"):                  17,   # 3-Series engine variant
+    ("BMW", "318"):                  16,
+    ("BMW", "323"):                  16,
+    ("BMW", "325"):                  17,
+    ("BMW", "328"):                  17,
+    ("BMW", "330"):                  17,
+    ("BMW", "335"):                  18,
+    ("BMW", "520"):                  17,
+    ("BMW", "525"):                  17,
+    ("BMW", "528"):                  18,
+    ("BMW", "530"):                  18,
+    ("BMW", "535"):                  18,
+    ("BMW", "540"):                  18,
+    ("BMW", "740"):                  19,
+    ("BMW", "116"):                  16,
+    ("BMW", "118"):                  16,
+    ("BMW", "120"):                  16,
+    ("BMW", "125"):                  17,
+    ("BMW", "135"):                  18,
+    ("SUZUKI", "GRAND VITARA"):      16,
+    ("SUZUKI", "SX4"):               16,
+    ("MINI", "HATCH"):               15,
+    ("MINI", "COOPER"):              15,
+    ("MINI", "CLUBMAN"):             16,
+    ("MINI", "COUNTRYMAN"):          17,
+    ("FORD", "MONDEO"):              16,
+    ("FORD", "COURIER"):             15,   # old ute
+    ("FORD", "TERRITORY"):           17,
+    ("FORD", "TAURUS"):              15,
+    ("FORD", "LASER"):               13,
+    # Motorcycles — completely different tyre market; bucket
+    # under 'MOTORCYCLE' so they don't skew the rim distribution.
+    ("HARLEY-DAVIDSON", "UNKNOWN"): 0,     # 0 → maps to MOTORCYCLE below
     # ── Light commercial (LCV) / trucks (TBR) ─────────────────
     ("FUSO", "CANTER"):     16,
     ("FUSO", "FIGHTER"):    22,
@@ -338,7 +407,9 @@ def rim_family(inches: int | None) -> str:
     """Bucket a rim size into a coarse family label."""
     if inches is None:
         return "UNKNOWN"
-    if inches <= 14: return "R14"
+    if inches == 0:  return "MOTORCYCLE"   # sentinel for two-wheeled
+    if inches <= 13: return "R13"
+    if inches == 14: return "R14"
     if inches == 15: return "R15"
     if inches == 16: return "R16"
     if inches == 17: return "R17"
