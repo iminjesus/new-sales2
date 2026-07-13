@@ -369,17 +369,22 @@ def process_package(
                     merged = merged.groupby(keep_dims, dropna=False, as_index=False)["qty"].sum()
                     group_cols = keep_dims
 
-        # RR3 noise floor drop.  BITRE random-rounds every tiny
-        # (postcode × make × model × fuel) slice to a multiple of 3,
-        # so the raw outputs are {0, 3, 6, 9, …}.  Cells at 0 or 3
-        # represent 0-4 actual vehicles — the signal-to-noise is too
-        # low to be useful, so we drop them by default.  --keep-noise
-        # is the escape hatch.
+        # BITRE noise-floor drop.  For (postcode × make × model × fuel)
+        # slices at very small counts (0-3 actual vehicles) BITRE
+        # publishes the count as either 0 or 3 to protect privacy;
+        # counts of 4+ are published as the real integer (so 4, 5, 7,
+        # 8 etc. all appear in the raw file — it is NOT strict RR3
+        # rounding across the whole range).  We drop the two ambiguous
+        # buckets by default:
+        #   qty == 0  → real value 0, 1, or 2 — no signal.
+        #   qty == 3  → real value 1, 2, or 3 — signal too thin.
+        # Everything from qty ≥ 4 is trusted as the true count.
+        # --keep-noise is the escape hatch.
         if "qty" in merged.columns and not keep_noise:
             before = len(merged)
             merged = merged[~merged["qty"].isin([0, 3])]
             if before != len(merged):
-                print(f"      {kind}: dropped {before - len(merged):,} RR3-noise rows (qty ∈ 0,3)")
+                print(f"      {kind}: dropped {before - len(merged):,} confidentialised rows (qty ∈ 0,3)")
 
         # Optional stricter floor on top of the RR3-noise drop.
         if min_qty > 0 and "qty" in merged.columns:
