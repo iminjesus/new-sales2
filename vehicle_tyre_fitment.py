@@ -206,8 +206,18 @@ def _norm_size(raw: str) -> str:
 
 def parse_model_page(html: str) -> list[dict]:
     """Extract (year, trim, size) triples from a wheel-size.com model /
-    year page.  The page structure varies a bit between years — pull
-    every tyre-shaped token near a trim label and pair them up."""
+    year page.
+
+    Strategy (in order):
+      1) Try structured tables — most precise (year + trim + size).
+      2) Scan the RAW HTML body with the tyre regex.  This catches
+         sizes stashed inside JSON blobs / data attributes / script
+         tags that wheel-size.com uses for its JS-rendered widgets,
+         which soup.get_text() would otherwise skip.
+
+    Step 2 is coarse (no year / trim) but reliable — every model
+    landing page carries at least a handful of size tokens in the
+    served HTML text or JSON."""
     if not html:
         return []
     soup = BeautifulSoup(html, "lxml")
@@ -248,13 +258,16 @@ def parse_model_page(html: str) -> list[dict]:
                 seen.add(key)
                 rows.append({"year": year, "trim": trim, "size": sz})
 
-    # 2) Fallback — pull every size-shaped token from the visible text
-    # if the structured pass found nothing.  Coarse but at least gives
-    # a list of candidate fitments per model.
+    # 2) Fallback — scan the RAW served HTML for size-shaped tokens.
+    # wheel-size.com renders most of its fitment via JS off JSON in
+    # script tags, so soup.get_text() skips the sizes; the regex has
+    # to walk the original bytes.  Coarse (no year/trim) but reliable.
     if not rows:
-        for m in TYRE_RX.finditer(soup.get_text(" ", strip=True)):
+        seen_sz = set()
+        for m in TYRE_RX.finditer(html):
             sz = _norm_size(m.group(0))
-            if sz and sz not in {r["size"] for r in rows}:
+            if sz and sz not in seen_sz:
+                seen_sz.add(sz)
                 rows.append({"year": "", "trim": "", "size": sz})
 
     return rows
@@ -318,6 +331,9 @@ def main():
                     help="Skip (make, model) rows already in the output.")
     ap.add_argument("--limit",  type=int, default=0,
                     help="Stop after N pairs (0 = no limit — useful for a smoke test).")
+    ap.add_argument("--dump-html", action="store_true",
+                    help="Also save each fetched HTML as debug/<make>_<model>.html so "
+                         "the parser can be inspected against the real page structure.")
     args = ap.parse_args()
 
     if not os.path.exists(args.input):
@@ -356,6 +372,16 @@ def main():
         url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/"
         print(f"[{i}/{len(todo)}] {mk} · {md}  →  {url}")
         html = fetch(session, url, args.delay)
+        # Optional debug dump — inspect the served page to figure out
+        # why the parser missed sizes.  Saved as debug/<make>_<model>.html
+        # next to the output CSV.
+        if args.dump_html and html:
+            dump_dir = os.path.join(os.path.dirname(os.path.abspath(args.output)), "debug")
+            os.makedirs(dump_dir, exist_ok=True)
+            slug = f"{make_slug(mk)}__{model_slug(mk, md)}".replace("/", "-")[:120] or "page"
+            with open(os.path.join(dump_dir, slug + ".html"), "w", encoding="utf-8") as df:
+                df.write(html)
+            print(f"    [dump] debug/{slug}.html", file=sys.stderr)
         rows = parse_model_page(html) if html else []
         if not rows:
             empty_pairs += 1
