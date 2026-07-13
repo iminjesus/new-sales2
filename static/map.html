@@ -340,7 +340,7 @@
   <div id="fleetRimBox" class="box" style="margin-top:8px;padding:10px 14px;">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
       <strong style="font-size:14px;">Fleet by rim family</strong>
-      <span style="font-size:11.5px;color:#666;">(BITRE Motor Vehicle Census, rolled up via postcode_rim_demand.csv)</span>
+      <span id="fleetRimScope" style="font-size:11.5px;color:#666;">(BITRE Motor Vehicle Census)</span>
       <span style="flex:1"></span>
       <label style="font-size:12px;color:#666;">State</label>
       <select id="fleetRimState" style="padding:3px 6px;font:inherit;">
@@ -359,6 +359,8 @@
         <option value="single">Single</option>
         <option value="breakdown">All states stacked</option>
       </select>
+      <button id="fleetPostcodeBtn" style="padding:3px 10px;font:inherit;border:1px solid #8f8f8f;background:#fafafa;border-radius:4px;cursor:pointer">Show postcode boundaries</button>
+      <button id="fleetClearPc" style="padding:3px 10px;font:inherit;border:1px solid #8f8f8f;background:#fafafa;border-radius:4px;cursor:pointer;display:none">Clear postcode</button>
       <button id="fleetRimToggle" style="padding:3px 10px;font:inherit;border:1px solid #8f8f8f;background:#fafafa;border-radius:4px;cursor:pointer">Hide</button>
     </div>
     <div id="fleetRimWarn" style="display:none;color:#c26400;background:#fff8d5;border:1px solid #f0d878;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:6px;"></div>
@@ -386,13 +388,28 @@
     };
     const fmt = n => Number(n||0).toLocaleString();
     let chart = null;
+    let selectedPostcode = "";     // set when a postcode boundary is clicked
+    let postcodeLayer    = null;   // L.geoJSON of postcode boundaries
 
     async function refresh(){
       const state = document.getElementById("fleetRimState").value;
       const mode  = document.getElementById("fleetRimMode").value;
       const qs = new URLSearchParams();
-      if (mode === "breakdown") qs.set("breakdown", "state");
-      else                       qs.set("state", state);
+      if (mode === "breakdown") {
+        qs.set("breakdown", "state");
+      } else if (selectedPostcode) {
+        qs.set("postcode", selectedPostcode);
+      } else {
+        qs.set("state", state);
+      }
+      const scope = document.getElementById("fleetRimScope");
+      if (selectedPostcode) {
+        scope.innerHTML = `<b>Postcode ${selectedPostcode}</b> — click another boundary to change, or Clear postcode to reset.`;
+        document.getElementById("fleetClearPc").style.display = "";
+      } else {
+        scope.textContent = "(BITRE Motor Vehicle Census)";
+        document.getElementById("fleetClearPc").style.display = "none";
+      }
       let data;
       try {
         const r = await fetch("/api/fleet_by_rim?" + qs, {credentials:"same-origin"});
@@ -464,7 +481,11 @@
     }
 
     // Wire up controls
-    document.getElementById("fleetRimState").addEventListener("change", refresh);
+    document.getElementById("fleetRimState").addEventListener("change", () => {
+      // Choosing a state manually breaks the postcode selection
+      selectedPostcode = "";
+      refresh();
+    });
     document.getElementById("fleetRimMode") .addEventListener("change", refresh);
     document.getElementById("fleetRimToggle").addEventListener("click", (e) => {
       const body = document.getElementById("fleetRimBody");
@@ -472,6 +493,96 @@
       body.style.display = shown ? "none" : "";
       e.target.textContent = shown ? "Show" : "Hide";
     });
+    document.getElementById("fleetClearPc").addEventListener("click", () => {
+      selectedPostcode = "";
+      // Un-highlight the previously selected polygon
+      if (postcodeLayer && postcodeLayer._selectedLayer) {
+        postcodeLayer.resetStyle(postcodeLayer._selectedLayer);
+        postcodeLayer._selectedLayer = null;
+      }
+      refresh();
+    });
+
+    // Boundary layer — fetches /static/postcode_boundaries.geojson,
+    // renders as a light-grey polygon layer over the base map, and
+    // wires each polygon's click to refresh the bar chart scoped to
+    // that postcode.  Only loaded on first click (~5-30 MB file).
+    async function togglePostcodeBoundaries(){
+      const btn = document.getElementById("fleetPostcodeBtn");
+      // Access the map instance created in map.js.  Poll briefly if
+      // that script hasn't finished initialising yet.
+      const map = (typeof salesMap !== "undefined") ? salesMap : window.salesMap;
+      if (!map) {
+        alert("Map not ready yet — try again in a moment.");
+        return;
+      }
+      if (postcodeLayer) {
+        // Toggle off — remove and free memory
+        map.removeLayer(postcodeLayer);
+        postcodeLayer = null;
+        btn.textContent = "Show postcode boundaries";
+        return;
+      }
+      btn.textContent = "Loading boundaries…";
+      btn.disabled = true;
+      try {
+        const r = await fetch("/static/postcode_boundaries.geojson", {credentials:"same-origin"});
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const gj = await r.json();
+        const baseStyle = {color:"#333", weight:0.5, fillOpacity:0.02, fillColor:"#3388ff"};
+        const selStyle  = {color:"#c62828", weight:2.5, fillOpacity:0.25, fillColor:"#ff6b6b"};
+        postcodeLayer = L.geoJSON(gj, {
+          style: baseStyle,
+          onEachFeature: (feature, layer) => {
+            const p = feature.properties || {};
+            // ABS POA uses POA_CODE21 / POA_CODE; community datasets
+            // sometimes use 'postcode' or 'code'.  Take whichever's
+            // there.
+            const pc = String(
+              p.POA_CODE21 || p.POA_CODE || p.postcode ||
+              p.POA_NAME21 || p.code || ""
+            ).trim();
+            layer.on({
+              click: () => {
+                if (!pc) return;
+                if (postcodeLayer._selectedLayer && postcodeLayer._selectedLayer !== layer)
+                  postcodeLayer.resetStyle(postcodeLayer._selectedLayer);
+                layer.setStyle(selStyle);
+                postcodeLayer._selectedLayer = layer;
+                selectedPostcode = pc;
+                refresh();
+              },
+              mouseover: e => {
+                if (layer !== postcodeLayer._selectedLayer)
+                  e.target.setStyle({fillOpacity:0.2, weight:1.5});
+              },
+              mouseout:  e => {
+                if (layer !== postcodeLayer._selectedLayer)
+                  postcodeLayer.resetStyle(e.target);
+              },
+            });
+            if (pc) layer.bindTooltip(pc, {sticky:true, direction:"top"});
+          },
+        });
+        postcodeLayer.addTo(map);
+        btn.textContent = "Hide postcode boundaries";
+      } catch(e){
+        const warn = document.getElementById("fleetRimWarn");
+        warn.style.display = "";
+        warn.innerHTML =
+          `Couldn't load postcode boundaries (${e}). ` +
+          `Place an Australian postcode GeoJSON at ` +
+          `<code>static/postcode_boundaries.geojson</code>. ` +
+          `Sources: ABS POA 2021 (official, ~200 MB) or a simplified ` +
+          `community dataset. Feature properties must include either ` +
+          `<code>POA_CODE21</code>, <code>POA_CODE</code>, or ` +
+          `<code>postcode</code>.`;
+        btn.textContent = "Show postcode boundaries";
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    document.getElementById("fleetPostcodeBtn").addEventListener("click", togglePostcodeBoundaries);
 
     // Chart.js may still be loading when this script runs — defer.
     function boot(){

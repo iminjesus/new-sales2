@@ -1055,14 +1055,16 @@ def _load_postcode_rim_demand():
 @app.get("/api/fleet_by_rim")
 def api_fleet_by_rim():
     """Return fleet_units aggregated by rim_family, optionally
-    filtered / grouped by state.
+    filtered / grouped by state or a single postcode.
 
       ?state=NSW          — one state; returns [{rim_family, fleet}, ...]
       ?state=ALL          — national totals (default)
+      ?postcode=2000      — one postcode only; overrides state
       ?breakdown=state    — one series per state (used by the bar-chart
                             legend to show per-state stacks)
     """
-    state    = (request.args.get("state") or "ALL").strip().upper()
+    state     = (request.args.get("state") or "ALL").strip().upper()
+    postcode  = (request.args.get("postcode") or "").strip()
     breakdown = (request.args.get("breakdown") or "").strip().lower()
 
     rows = _load_postcode_rim_demand()
@@ -1090,16 +1092,20 @@ def api_fleet_by_rim():
             series.append({"state": st, "values": values})
         return jsonify({"rim_order": rim_order, "series": series})
 
-    # Single series (national or one-state)
+    # Single series — national, one-state, or one-postcode
     totals: dict = {}
     for r in rows:
-        if state != "ALL" and r["state"] != state:
+        if postcode:
+            if r["postcode"] != postcode:
+                continue
+        elif state != "ALL" and r["state"] != state:
             continue
         totals[r["rim_family"]] = totals.get(r["rim_family"], 0) + r["fleet_units"]
     values = [totals.get(f, 0) for f in rim_order]
+    label  = f"Postcode {postcode}" if postcode else state
     return jsonify({
         "rim_order": rim_order,
-        "series": [{"state": state, "values": values}],
+        "series": [{"state": label, "values": values}],
     })
 
 
