@@ -463,7 +463,8 @@ def process_package(
             merged.sort_values(group_cols, inplace=True, ignore_index=True)
         out_path = out_dir / f"vehicle_{kind}.csv"
         merged.to_csv(out_path, index=False)
-        print(f"  wrote {out_path.name}  ({len(merged):,} rows)")
+        total_qty = int(merged["qty"].sum()) if "qty" in merged.columns else 0
+        print(f"  wrote {out_path.name}  ({len(merged):,} rows · Σ qty {total_qty:,})")
         # State-coverage sanity report — a common failure mode is that
         # BITRE ships some releases as per-state ZIPs and the download
         # only picked up 1-2 states; the coverage line makes that
