@@ -227,6 +227,7 @@ def process_package(
     keep_raw: bool,
     min_qty: int = 0,
     rollup: bool = False,
+    keep_noise: bool = False,
 ) -> dict[str, Path]:
     """Download every relevant resource in pkg, classify, and write
     normalised outputs.  Returns a dict of {kind: path_written}."""
@@ -368,18 +369,24 @@ def process_package(
                     merged = merged.groupby(keep_dims, dropna=False, as_index=False)["qty"].sum()
                     group_cols = keep_dims
 
-        # Threshold: BITRE random-rounds small cells to base-3, so the
-        # bulk of rows at 0 and 3 are just noise (real value 0-4).
-        # Drop them per --min-qty so the exports stay analysable.  We
-        # ALSO always drop qty == 0 (with min_qty=0 override still
-        # skipping this) — those rows carry no information regardless
-        # of RR3 policy.
-        if "qty" in merged.columns:
+        # RR3 noise floor drop.  BITRE random-rounds every tiny
+        # (postcode × make × model × fuel) slice to a multiple of 3,
+        # so the raw outputs are {0, 3, 6, 9, …}.  Cells at 0 or 3
+        # represent 0-4 actual vehicles — the signal-to-noise is too
+        # low to be useful, so we drop them by default.  --keep-noise
+        # is the escape hatch.
+        if "qty" in merged.columns and not keep_noise:
             before = len(merged)
-            threshold = max(min_qty, 1)
-            merged = merged[merged["qty"] >= threshold]
+            merged = merged[~merged["qty"].isin([0, 3])]
             if before != len(merged):
-                print(f"      {kind}: dropped {before - len(merged):,} rows below qty {threshold}")
+                print(f"      {kind}: dropped {before - len(merged):,} RR3-noise rows (qty ∈ 0,3)")
+
+        # Optional stricter floor on top of the RR3-noise drop.
+        if min_qty > 0 and "qty" in merged.columns:
+            before = len(merged)
+            merged = merged[merged["qty"] >= min_qty]
+            if before != len(merged):
+                print(f"      {kind}: dropped {before - len(merged):,} rows below qty {min_qty}")
 
         if group_cols:
             merged.sort_values(group_cols, inplace=True, ignore_index=True)
@@ -478,14 +485,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default="out/rego", help="output directory")
     ap.add_argument("--keep-raw", action="store_true",
                     help="keep the raw downloads under out/_raw/")
-    ap.add_argument("--min-qty", type=int, default=6,
-                    help="Drop rows with qty below this threshold (default: "
-                         "%(default)s).  BITRE random-rounds every tiny "
-                         "(postcode × make × model × fuel) slice to base-3, "
-                         "so cells at 0 and 3 are mostly RR3 noise (real "
-                         "count 0-4).  Threshold 6 keeps cells where the "
-                         "real count is definitely meaningful; pass "
-                         "--min-qty 0 to disable.")
+    ap.add_argument("--min-qty", type=int, default=0,
+                    help="Optional stricter floor on qty (default: %(default)s, "
+                         "disabled).  Regardless of this flag, BITRE's RR3 "
+                         "noise floor rows (qty ∈ {0, 3}) are always dropped "
+                         "because they represent 0-4 actual vehicles and "
+                         "carry too little signal to be worth keeping — "
+                         "pass --keep-noise to override.")
+    ap.add_argument("--keep-noise", action="store_true",
+                    help="Skip the always-on drop of qty ∈ {0, 3} rows.")
     ap.add_argument("--no-rollup", dest="rollup", action="store_false",
                     help="Keep vehicle_type + motive_power dimensions "
                          "separate.  The default is to roll those up so "
@@ -515,7 +523,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"       {url}")
             return 0
         process_package(sess, pkg, out, keep_raw=args.keep_raw,
-                        min_qty=args.min_qty, rollup=args.rollup)
+                        min_qty=args.min_qty, rollup=args.rollup,
+                        keep_noise=args.keep_noise)
         return 0
 
     hits = search_packages(sess, args.query)
