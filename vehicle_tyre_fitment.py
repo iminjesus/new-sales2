@@ -417,6 +417,37 @@ def main():
     out_dir = os.path.dirname(os.path.abspath(args.output))
     if out_dir and not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
+
+    # Schema migration — earlier versions of this script wrote 7
+    # columns (make, model, year, trim, size, source_url, fetched_at).
+    # If the existing file uses that shape we rewrite it in place with
+    # just (make, model, size), deduped, so the run stays append-safe
+    # and the resulting file is clean.
+    if os.path.exists(args.output) and os.path.getsize(args.output) > 0:
+        with open(args.output, newline="", encoding="utf-8") as f_in:
+            probe = csv.DictReader(f_in)
+            existing_cols = probe.fieldnames or []
+            extras = [c for c in existing_cols if c not in FIELD_NAMES]
+            if extras:
+                print(f"[info] rewriting {os.path.basename(args.output)} to drop "
+                      f"legacy columns: {extras}", file=sys.stderr)
+                seen_rows: set[tuple[str, str, str]] = set()
+                kept: list[dict] = []
+                for r in probe:
+                    mk = (r.get("make")  or "").strip()
+                    md = (r.get("model") or "").strip()
+                    sz = (r.get("size")  or "").strip()
+                    key = (mk, md, sz)
+                    if key in seen_rows:
+                        continue
+                    seen_rows.add(key)
+                    kept.append({"make": mk, "model": md, "size": sz})
+                with open(args.output, "w", newline="", encoding="utf-8") as f_out:
+                    w = csv.DictWriter(f_out, fieldnames=FIELD_NAMES)
+                    w.writeheader()
+                    w.writerows(kept)
+                print(f"[info] kept {len(kept):,} unique rows", file=sys.stderr)
+
     write_header = not os.path.exists(args.output) or os.path.getsize(args.output) == 0
     fh = open(args.output, "a", newline="", encoding="utf-8")
     writer = csv.DictWriter(fh, fieldnames=FIELD_NAMES)
