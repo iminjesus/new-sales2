@@ -39,7 +39,6 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
 from urllib.parse import quote
 
 import requests
@@ -130,7 +129,44 @@ MODEL_ALIASES = {
     ("VOLKSWAGEN", "TIGUAN"): "tiguan",
 }
 
-FIELD_NAMES = ["make", "model", "year", "trim", "size", "source_url", "fetched_at"]
+FIELD_NAMES = ["make", "model", "size"]
+
+
+def _slug_start_year(slug: str) -> int | None:
+    """Pull the earliest 4-digit year token out of a wheel-size gen slug
+    (e.g. 'pd-2020-2025' → 2020, 'c519-2022-now' → 2022, '2024' → 2024).
+    That's the START year of the generation, which is the natural key
+    for ranking 'which gen is the latest'."""
+    years = [int(m.group(1))
+             for m in re.finditer(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)", slug)]
+    return min(years) if years else None
+
+
+def _pick_latest_gen(slugs: list[str]) -> str | None:
+    """From every generation slug the model landing offered, pick the
+    one that represents the most-recent generation.  Sort key:
+      1) highest start year (latest gen wins)
+      2) prefer generation-style slugs ('pd-2024-now', 'c519-2022-now')
+         over bare year-only slugs ('2024', '2025') on ties — the gen
+         page carries every trim's fitment; the year page is a subset.
+      3) prefer slugs whose end marker is 'now' (i.e. still in production)."""
+    if not slugs:
+        return None
+    ranked = []
+    for s in slugs:
+        yr = _slug_start_year(s) or 0
+        has_letters   = bool(re.search(r"[a-z]", s.lower()))
+        ends_with_now = s.lower().endswith("-now") or s.lower() == "now"
+        # Sort ascending so lower is better; negate year so "higher"
+        # actually wins the sort.
+        ranked.append((
+            -yr,
+            0 if ends_with_now else 1,
+            0 if has_letters   else 1,
+            s,
+        ))
+    ranked.sort()
+    return ranked[0][3]
 
 
 # ─────────────────────────── helpers ───────────────────────────────────
@@ -358,11 +394,6 @@ def main():
                     help="Skip (make, model) rows already in the output.")
     ap.add_argument("--limit",  type=int, default=0,
                     help="Stop after N pairs (0 = no limit — useful for a smoke test).")
-    ap.add_argument("--max-gens", type=int, default=6,
-                    help="Per model, visit at most this many generation/year sub-pages "
-                         "(default: %(default)s).  wheel-size.com lists each i30 "
-                         "generation/year separately; drilling all of them can add "
-                         "10-15 requests per model.")
     ap.add_argument("--dump-html", action="store_true",
                     help="Also save each fetched HTML as debug/<make>_<model>.html so "
                          "the parser can be inspected against the real page structure.")
@@ -412,61 +443,35 @@ def main():
                 df.write(model_html)
             print(f"    [dump] debug/{slug}.html", file=sys.stderr)
 
-        # Two-level crawl: the model landing lists generation/year
-        # links, and the fitment sizes live on THOSE pages (the model
-        # landing itself just shows a timeline).  Grab the generation
-        # slugs, visit up to --max-gens of them, and pool the sizes.
-        rows: list[dict] = []
-        seen_triples: set[tuple[str, str, str]] = set()
-        # Also pick up any sizes exposed on the model landing itself —
-        # some pages carry a "quick facts" block with the current-gen
-        # size.
+        # Simplified two-level crawl.  Model landing shows the
+        # generation timeline; pick THE latest generation and only
+        # fetch that one page — we don't need historic fitments here,
+        # just the currently-produced sizes.  Output shrinks to
+        # (make, model, size) with duplicates collapsed.
+        sizes: set[str] = set()
+        # A tiny "quick facts" block on the model landing sometimes
+        # already carries the current-gen size(s).
         for r in (parse_model_page(model_html) if model_html else []):
-            key = (r["year"], r["trim"], r["size"])
-            if r["size"] and key not in seen_triples:
-                seen_triples.add(key); rows.append(r)
+            if r["size"]:
+                sizes.add(r["size"])
 
         gen_slugs = parse_generation_links(model_html, m_slug, d_slug) if model_html else []
-        if gen_slugs:
-            print(f"    [gens] {len(gen_slugs)} generations found; "
-                  f"visiting {min(len(gen_slugs), args.max_gens)}", file=sys.stderr)
-        for gen_slug in gen_slugs[:args.max_gens]:
-            gen_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/{quote(gen_slug)}/"
-            print(f"    [gen] {gen_slug}  →  {gen_url}", file=sys.stderr)
+        picked   = _pick_latest_gen(gen_slugs) if gen_slugs else None
+        if picked:
+            gen_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/{quote(picked)}/"
+            print(f"    [latest] {picked}  →  {gen_url}", file=sys.stderr)
             gen_html = fetch(session, gen_url, args.delay)
             for r in (parse_model_page(gen_html) if gen_html else []):
-                if not r["size"]:
-                    continue
-                # Prefer the gen slug as the year label when the row
-                # itself doesn't carry a year — makes the CSV a bit
-                # easier to slice later.
-                if not r["year"]:
-                    r["year"] = gen_slug
-                key = (r["year"], r["trim"], r["size"])
-                if key in seen_triples:
-                    continue
-                seen_triples.add(key)
-                # Track which URL surfaced the size so a later re-run
-                # can retrace the origin.
-                r["source_url"] = gen_url
-                rows.append(r)
+                if r["size"]:
+                    sizes.add(r["size"])
 
-        if not rows:
+        if not sizes:
             empty_pairs += 1
-            writer.writerow({
-                "make": mk, "model": md, "year": "", "trim": "", "size": "",
-                "source_url": model_url,
-                "fetched_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            })
+            writer.writerow({"make": mk, "model": md, "size": ""})
         else:
             ok_pairs += 1
-            for r in rows:
-                writer.writerow({
-                    "make": mk, "model": md,
-                    "year": r["year"], "trim": r["trim"], "size": r["size"],
-                    "source_url": r.get("source_url") or model_url,
-                    "fetched_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                })
+            for sz in sorted(sizes):
+                writer.writerow({"make": mk, "model": md, "size": sz})
         fh.flush()
     fh.close()
     print(f"[done] {ok_pairs} with fitment · {empty_pairs} empty · output: {args.output}")
