@@ -157,7 +157,10 @@ def model_slug(make: str, model: str) -> str:
 
 
 def fetch(session: requests.Session, url: str, delay: float) -> str | None:
-    """GET with a polite delay + exponential backoff on 429 / 503."""
+    """GET with a polite delay + exponential backoff on 429 / 503.  Logs
+    HTTP status + response length so we can tell a genuine 404 from a
+    bot-block (which typically returns 200 with a tiny challenge body)
+    without the caller having to re-run with verbose."""
     for attempt in range(MAX_RETRIES):
         try:
             r = session.get(url, headers=HEADERS, timeout=30)
@@ -165,18 +168,25 @@ def fetch(session: requests.Session, url: str, delay: float) -> str | None:
             print(f"    [warn] {url}: {e}", file=sys.stderr)
             time.sleep(delay * (2 ** attempt))
             continue
+        sz = len(r.text or "")
         if r.status_code == 200:
+            # A real fitment page is 40-200 KB.  Anything under ~2 KB
+            # is almost always a bot-challenge / redirect body, so
+            # flag it for the caller.
+            tag = " (tiny — check for bot-block)" if sz < 2000 else ""
+            print(f"    [http] 200 · {sz:>6} bytes{tag}", file=sys.stderr)
             time.sleep(delay)
             return r.text
         if r.status_code == 404:
+            print(f"    [http] 404 · not on wheel-size.com", file=sys.stderr)
             time.sleep(delay)
             return None
         if r.status_code in (429, 503):
             wait = delay * (2 ** (attempt + 2))
-            print(f"    [warn] {r.status_code} — backing off {wait:.1f}s", file=sys.stderr)
+            print(f"    [http] {r.status_code} — backing off {wait:.1f}s", file=sys.stderr)
             time.sleep(wait)
             continue
-        print(f"    [warn] {url}: HTTP {r.status_code}", file=sys.stderr)
+        print(f"    [http] {r.status_code} · {sz} bytes", file=sys.stderr)
         time.sleep(delay)
         return None
     return None
@@ -252,8 +262,13 @@ def parse_model_page(html: str) -> list[dict]:
 
 # ────────────────────── input / output plumbing ────────────────────────
 def load_unique_make_model(input_csv: str) -> list[tuple[str, str]]:
-    """Read make + model columns off the BITRE CSV and dedup."""
-    seen = set()
+    """Read make + model columns off the BITRE CSV and dedup, PRESERVING
+    the CSV row order.  BITRE is sorted by state → postcode, so the
+    first (make, model) pairs to appear are the popular Aussie
+    mainstreams (HYUNDAI I30, FORD FOCUS, TOYOTA HILUX…), not the
+    alphabetically-first obscure brands (AC Cobra, ACE trailers…).
+    Using a dict as an ordered set preserves first-appearance order."""
+    seen: dict[tuple[str, str], None] = {}
     with open(input_csv, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames or "make" not in reader.fieldnames or "model" not in reader.fieldnames:
@@ -264,13 +279,18 @@ def load_unique_make_model(input_csv: str) -> list[tuple[str, str]]:
         for r in reader:
             mk = (r.get("make") or "").strip()
             md = (r.get("model") or "").strip()
-            if not mk or not md or mk in {"-", "TOTAL"} or md in {"-", "TOTAL"}:
+            if not mk or not md:
                 continue
-            key = (mk.upper(), md.upper())
-            if key in seen:
+            up_mk, up_md = mk.upper(), md.upper()
+            # Filter obvious placeholders — BITRE stamps these when the
+            # per-postcode counts are too small to disclose or the model
+            # field couldn't be resolved.
+            if up_mk in {"-", "TOTAL"} or up_md in {"-", "TOTAL", "UNKNOWN", "OTHER"}:
                 continue
-            seen.add(key)
-    return sorted(seen)
+            key = (up_mk, up_md)
+            if key not in seen:
+                seen[key] = None
+    return list(seen.keys())
 
 
 def load_already_done(output_csv: str) -> set[tuple[str, str]]:
