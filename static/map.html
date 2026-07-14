@@ -25,6 +25,10 @@
 
   <style>
     #salesMap{ height: 580px; min-height: 580px; }
+    /* Widen the Leaflet popup used by the fleet-by-rim chart so the
+       three-axis bar chart has room to breathe. */
+    .fleet-popup .leaflet-popup-content{ margin: 10px 12px; }
+    .fleet-popup .leaflet-popup-content-wrapper{ border-radius: 6px; }
   </style>
 </head>
 <body>
@@ -348,37 +352,16 @@
     </div>
   </div>
 
-  <!-- ────── Fleet-by-rim panel (BITRE-derived) ────── -->
-  <!-- Deliberately NOT using class="box" — that class carries
-       flex:1 1 calc(25%…) from style.css, which upstream propagates a
-       flex context onto this element and squeezes the panel into a
-       narrow column next to the map instead of a full-width block
-       below it. -->
-  <div id="fleetRimBox" style="
-         display:block; clear:both; width:100%; box-sizing:border-box;
-         margin-top:12px; padding:10px 14px;
-         background:#fff; border-radius:8px;
-         box-shadow:0 1px 3px rgba(0,0,0,.06);
-       ">
-    <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-      <strong style="font-size:14px;">Fleet by rim family</strong>
-      <span id="fleetRimScope" style="font-size:11.5px;color:#666;">(BITRE Motor Vehicle Census)</span>
-      <span style="flex:1"></span>
-      <button id="fleetClearPc" style="padding:3px 10px;font:inherit;border:1px solid #8f8f8f;background:#fafafa;border-radius:4px;cursor:pointer;display:none">Clear postcode</button>
-      <button id="fleetRimToggle" style="padding:3px 10px;font:inherit;border:1px solid #8f8f8f;background:#fafafa;border-radius:4px;cursor:pointer">Hide</button>
-    </div>
-    <div id="fleetRimWarn" style="display:none;color:#c26400;background:#fff8d5;border:1px solid #f0d878;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:6px;"></div>
-    <div id="fleetRimBody">
-      <div style="position:relative;height:260px">
-        <canvas id="fleetRimChart"></canvas>
-      </div>
-    </div>
-  </div>
+  <!-- Fleet-by-rim panel removed — the chart now renders as a
+       Leaflet popup on the postcode that gets clicked, small enough
+       to sit on top of the map without stealing screen space.  See
+       the click handler further down. -->
 
   <script>
-  // Fleet-by-rim bar chart panel — reads /api/fleet_by_rim which parses
-  // out/rego/postcode_rim_demand.csv on the server side.  Kept self-
-  // contained so a missing dataset doesn't break map view.
+  // Fleet-by-rim popup chart — on postcode-boundary click, fetch
+  // /api/fleet_by_rim for that postcode and render a compact bar
+  // chart (Fleet + HK + Penetration %) inside a Leaflet popup at the
+  // clicked location.
   (function(){
     const RIM_COLORS = {
       "R13":"#a3a3a3","R14":"#94a3b8","R15":"#60a5fa","R16":"#38bdf8",
@@ -386,23 +369,114 @@
       "R21":"#a855f7","R22+ (truck)":"#6b7280",
       "MOTORCYCLE":"#78716c","UNKNOWN":"#d1d5db",
     };
-    const STATE_COLORS = {
-      "NSW":"#3b82f6","VIC":"#a855f7","QLD":"#f97316","WA":"#10b981",
-      "SA":"#eab308","TAS":"#14b8a6","ACT":"#ef4444","NT":"#6366f1",
-    };
     const fmt = n => Number(n||0).toLocaleString();
-    let chart = null;
-    let selectedPostcode = "";     // set when a postcode boundary is clicked
-    let postcodeLayer    = null;   // L.geoJSON of postcode boundaries
+    let postcodeLayer = null;
 
-    // Read the region currently active in the top-nav #regionBtns
-    // strip.  Falls back to ALL if the strip isn't rendered yet.
-    function currentRegion(){
-      const active = document.querySelector("#regionBtns .btn.active");
-      return (active && active.getAttribute("data-val")) || "ALL";
+    // Build a Chart.js config for the compact popup chart (~380 px
+     // wide).  Keeps three axes — Fleet (left), HK sold (right), and
+     // Penetration % (far right) — matching the previous panel chart.
+    function buildPopupConfig(data, postcode){
+      const rimOrder = (data.rim_order||[]).filter(f =>
+        f !== "MOTORCYCLE" && f !== "UNKNOWN");
+      const idxOf = f => (data.rim_order||[]).indexOf(f);
+      const s = (data.series||[])[0] || {values:[], hk_sold:[], penetration:[]};
+
+      let fleetMax = 0, hkMax = 0;
+      for (const v of rimOrder.map(f => s.values[idxOf(f)] || 0))
+        if (v > fleetMax) fleetMax = v;
+      for (const v of rimOrder.map(f => (s.hk_sold||[])[idxOf(f)] || 0))
+        if (v > hkMax) hkMax = v;
+      const yMax   = fleetMax > 0 ? Math.ceil(fleetMax * 1.20) : undefined;
+      const yHKMax = hkMax    > 0 ? Math.ceil(hkMax    * 1.30) : undefined;
+
+      const datasets = [{
+        type: "bar",
+        label: "Fleet",
+        data:  rimOrder.map(f => s.values[idxOf(f)] || 0),
+        backgroundColor: rimOrder.map(f => RIM_COLORS[f] || "#94a3b8"),
+        borderWidth: 0,
+        yAxisID: "y",
+        order: 2,
+      }];
+      if ((s.hk_sold || []).length) {
+        datasets.push({
+          type: "bar",
+          label: "HK sold",
+          data:  rimOrder.map(f => s.hk_sold[idxOf(f)] || 0),
+          backgroundColor: "#e11d48",
+          borderWidth: 0,
+          yAxisID: "yHK",
+          order: 2,
+        });
+        datasets.push({
+          type: "line",
+          label: "Penetration %",
+          data:  rimOrder.map(f => {
+            const p = s.penetration ? s.penetration[idxOf(f)] : null;
+            return (p == null) ? null : p;
+          }),
+          borderColor: "#0f766e",
+          backgroundColor: "#0f766e",
+          borderWidth: 2,
+          pointRadius: 3,
+          tension: 0.25,
+          yAxisID: "yPct",
+          order: 1,
+          spanGaps: true,
+        });
+      }
+      const hasHK = datasets.length > 1;
+      return {
+        type: "bar",
+        data: {labels: rimOrder, datasets},
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          layout: { padding: { top: 18 } },
+          plugins: {
+            legend: { display: hasHK, position: "top",
+                      labels: { boxWidth: 10, font: { size: 10 } } },
+            tooltip: { callbacks: {
+              label: c => {
+                const v = c.parsed.y;
+                if (c.dataset.yAxisID === "yPct")
+                  return `${c.dataset.label}: ${v == null ? "—" : v.toFixed(1) + " %"}`;
+                return `${c.dataset.label}: ${fmt(v)}`;
+              }
+            }},
+            datalabels: {
+              anchor: "end", align: "top", offset: 1,
+              font: { size: 9, weight: "600" },
+              color: (ctx) => ctx.dataset.yAxisID === "yPct" ? "#0f766e"
+                          : ctx.dataset.yAxisID === "yHK"  ? "#e11d48" : "#333",
+              formatter: (v, ctx) => {
+                if (v == null || v === 0) return "";
+                if (ctx.dataset.yAxisID === "yPct") return v.toFixed(0) + "%";
+                return fmt(v);
+              },
+              clip: false,
+            },
+          },
+          scales: {
+            x: { ticks: { font: { size: 10 } } },
+            y: { beginAtZero: true, max: yMax,
+                 ticks: { callback: v => fmt(v), color: "#334155", font: { size: 9 } } },
+            yHK: hasHK ? {
+              position: "right", beginAtZero: true, max: yHKMax,
+              ticks: { callback: v => fmt(v), color: "#e11d48", font: { size: 9 } },
+              grid: { drawOnChartArea: false },
+            } : undefined,
+            yPct: hasHK ? {
+              position: "right", beginAtZero: true, suggestedMax: 100,
+              ticks: { callback: v => v + "%", color: "#0f766e", font: { size: 9 } },
+              grid: { drawOnChartArea: false },
+            } : undefined,
+          },
+        },
+        plugins: [ChartDataLabels],
+      };
     }
 
-    async function refresh(){
+    async function _unused_refresh(){
       // Mode selector was removed — chart always renders the single
       // fleet + HK + penetration overlay for the current region /
       // postcode.  The stacked breakdown lives on /fleet if needed.
@@ -615,36 +689,10 @@
       });
     }
 
-    // Wire up controls
-    // Region change from the top-nav strip clears any postcode focus
-    // and re-fetches for the new region.  Delegated so it also picks
-    // up clicks handled by map.js's own region-button code.
-    document.getElementById("regionBtns").addEventListener("click", (e) => {
-      const b = e.target.closest(".btn");
-      if (!b) return;
-      selectedPostcode = "";
-      if (postcodeLayer && postcodeLayer._selectedLayer) {
-        postcodeLayer.resetStyle(postcodeLayer._selectedLayer);
-        postcodeLayer._selectedLayer = null;
-      }
-      // Give map.js a beat to toggle the .active class before we read it
-      setTimeout(refresh, 0);
-    });
-    document.getElementById("fleetRimToggle").addEventListener("click", (e) => {
-      const body = document.getElementById("fleetRimBody");
-      const shown = body.style.display !== "none";
-      body.style.display = shown ? "none" : "";
-      e.target.textContent = shown ? "Show" : "Hide";
-    });
-    document.getElementById("fleetClearPc").addEventListener("click", () => {
-      selectedPostcode = "";
-      // Un-highlight the previously selected polygon
-      if (postcodeLayer && postcodeLayer._selectedLayer) {
-        postcodeLayer.resetStyle(postcodeLayer._selectedLayer);
-        postcodeLayer._selectedLayer = null;
-      }
-      refresh();
-    });
+    // Region-strip / panel controls used to live here — now that the
+    // chart lives inside a Leaflet popup keyed to the clicked postcode,
+    // there's no persistent panel to refresh on state change and no
+    // Hide / Clear buttons to wire up.
 
     // Boundary layer — fetches /static/postcode_boundaries.geojson,
     // renders as a light-grey polygon layer over the base map, and
@@ -680,14 +728,13 @@
               p.POA_NAME21 || p.code || ""
             ).trim();
             layer.on({
-              click: () => {
+              click: async (ev) => {
                 if (!pc) return;
                 if (postcodeLayer._selectedLayer && postcodeLayer._selectedLayer !== layer)
                   postcodeLayer.resetStyle(postcodeLayer._selectedLayer);
                 layer.setStyle(selStyle);
                 postcodeLayer._selectedLayer = layer;
-                selectedPostcode = pc;
-                refresh();
+                await openFleetPopup(layer, pc, ev.latlng);
               },
               mouseover: e => {
                 if (layer !== postcodeLayer._selectedLayer)
@@ -719,12 +766,54 @@
     document.getElementById("mapBoundaryBtn")
             .addEventListener("click", togglePostcodeBoundaries);
 
-    // Chart.js may still be loading when this script runs — defer.
-    function boot(){
-      if (typeof Chart === "undefined") { setTimeout(boot, 100); return; }
-      refresh();
+    // Open a compact fleet-by-rim popup for the clicked postcode.
+    // Renders a small Chart.js bar chart inside a Leaflet popup that's
+    // bound to the clicked polygon.  Chart.js may still be loading —
+    // poll briefly before drawing.
+    async function openFleetPopup(layer, pc, latlng){
+      const container = document.createElement("div");
+      container.style.width = "420px";
+      container.innerHTML = `
+        <div style="font-weight:700;font-size:13px;margin-bottom:2px;">
+          Postcode ${pc}
+        </div>
+        <div id="_fpMsg" style="font-size:11.5px;color:#666;margin-bottom:4px;">
+          Loading fleet mix…
+        </div>
+        <div style="position:relative;height:210px;">
+          <canvas></canvas>
+        </div>`;
+      layer.unbindPopup();
+      layer.bindPopup(container, {
+        maxWidth: 460, minWidth: 420, className: "fleet-popup",
+      }).openPopup(latlng);
+
+      let data;
+      try {
+        const r = await fetch("/api/fleet_by_rim?postcode=" + encodeURIComponent(pc),
+                              {credentials: "same-origin"});
+        data = await r.json();
+      } catch(e){
+        container.querySelector("#_fpMsg").textContent = "Load failed: " + e;
+        return;
+      }
+      if (data.matched_rows === 0) {
+        container.querySelector("#_fpMsg").innerHTML =
+          `<b>No BITRE data for this postcode.</b> ` +
+          `Sample values available: <code>` +
+          ((data.sample_postcodes||[]).slice(0,6).join(", ") || "—") + "</code>";
+        return;
+      }
+      container.querySelector("#_fpMsg").textContent =
+        `Fleet ${fmt(data.total_units||0)}  ·  HK sold ${fmt(data.hk_total||0)}`;
+
+      function draw(){
+        if (typeof Chart === "undefined") { setTimeout(draw, 80); return; }
+        const canvas = container.querySelector("canvas");
+        new Chart(canvas, buildPopupConfig(data, pc));
+      }
+      draw();
     }
-    boot();
   })();
   </script>
 
