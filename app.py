@@ -12067,17 +12067,21 @@ def _claim_save_photos(files, prefix, categories=None):
         saved.append(f"/static/claim_photos/{now.year:04d}/{now.month:02d}/{fname}")
     return saved
 
+# Fixed distribution list for claim notifications.  Every incoming
+# claim + every customer reply on an open thread pings these three
+# users.  Kept separate from ALWAYS_TO (meeting-log distribution) so
+# a change on one channel doesn't leak into the other.  Order doesn't
+# matter — the mail transport de-dupes.
+CLAIM_NOTIFY_TO = [
+    "elias@hankooktyre.com.au",
+    "minku.lee@hankooktyre.com.au",
+    "jayden.bhang@hankooktyre.com.au",
+]
+
+
 def _claim_notify_new(claim_id, shop, contact_name, claim_type, description):
-    """Email BDE/SM/leadership when a new claim is submitted."""
-    state = shop.get("bde_state") if shop else None
-    state = STATE_REMAP.get(state, state) if state else None
-    sm_email = STATE_MANAGER_EMAIL.get(state) if state else None
-    bde_email = _lookup_bde_email(shop.get("salesman_name") if shop else "")
-    to_list = list(ALWAYS_TO)
-    if sm_email and sm_email.lower() not in [x.lower() for x in to_list]:
-        to_list.append(sm_email)
-    if bde_email and bde_email.lower() not in [x.lower() for x in to_list]:
-        to_list.append(bde_email)
+    """Email the claim-handler team when a new claim is submitted."""
+    to_list = list(CLAIM_NOTIFY_TO)
     subject = f"[Claim #{claim_id}] {shop.get('ship_to_name') if shop else ''} — {claim_type or 'New claim'}"
     link = f"{DASHBOARD_URL.rstrip('/')}/claims#{claim_id}"
     safe_desc = _esc_html((description or "")[:600])
@@ -12110,16 +12114,11 @@ def _claim_notify_reply(claim_id, author_type, author_name, text):
         cust_link = f"{CLAIM_PORTAL_URL.rstrip('/')}/claim/{row['ship_to']}"
         safe_text = _esc_html((text or "")[:600])
         if author_type == "customer":
-            shop = _claim_lookup_shop(row["ship_to"])
-            state = shop.get("bde_state") if shop else None
-            state = STATE_REMAP.get(state, state) if state else None
-            sm_email  = STATE_MANAGER_EMAIL.get(state) if state else None
-            bde_email = _lookup_bde_email(shop.get("salesman_name") if shop else "")
-            to_list = list(ALWAYS_TO)
-            if sm_email and sm_email.lower() not in [x.lower() for x in to_list]:
-                to_list.append(sm_email)
-            if bde_email and bde_email.lower() not in [x.lower() for x in to_list]:
-                to_list.append(bde_email)
+            # Customer replied — ping the fixed handler team so someone
+            # picks it up.  Same list the new-claim notification uses,
+            # so a claim's whole life-cycle stays with the same three
+            # people regardless of the shop's territory.
+            to_list = list(CLAIM_NOTIFY_TO)
             subject = f"[Claim #{claim_id}] Customer replied — {row['ship_to_name']}"
             html = (f"<p><b>{_esc_html(author_name or row['contact_name'] or 'Customer')}</b> "
                     f"replied on claim #{claim_id} ({_esc_html(row['ship_to_name'])}):</p>"
