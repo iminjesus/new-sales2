@@ -475,6 +475,10 @@
         data: {labels: rimOrder, datasets},
         options: {
           responsive:true, maintainAspectRatio:false,
+          // Reserve some space above the tallest bar so the datalabel
+          // (anchored at "end top") has room to render — without this
+          // the largest bar's label clips against the chart edge.
+          layout: { padding: { top: 22 } },
           plugins: {
             legend: { display: mode === "breakdown", position: "top",
                       labels: { boxWidth: 12, font: { size: 11 } } },
@@ -487,12 +491,17 @@
               color: "#333",
               formatter: v => v > 0 ? fmt(v) : "",
               display: mode !== "breakdown",
+              clip: false,     // let a label paint outside the plot area
             },
           },
           scales: {
             x: { stacked: mode === "breakdown" },
             y: { stacked: mode === "breakdown",
                  beginAtZero: true,
+                 // grace adds ~8 % headroom above the tallest bar so
+                 // its label fits without pushing the axis tick past a
+                 // round number.
+                 grace: "8%",
                  ticks: { callback: v => fmt(v) } },
           },
         },
