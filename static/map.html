@@ -463,11 +463,14 @@
             // at their actual proportion of fleet volume.
             y: { beginAtZero: true, max: yMax,
                  ticks: { callback: v => fmt(v), color: "#334155", font: { size: 9 } } },
-            // Penetration axis capped at 50 % — realistic Hankook
-            // share never exceeds that, so we get more vertical
-            // real estate for the line (upper half of the chart).
+            // Penetration axis anchored at 50 % — realistic Hankook
+            // share never approaches that, so the line uses the
+            // upper half of the chart.  suggestedMax (not max) lets
+            // the axis grow past 50 % on the rare postcode where
+            // penetration actually overshoots, so we don't silently
+            // clip an outlier.
             yPct: hasHK ? {
-              position: "right", beginAtZero: true, max: 50,
+              position: "right", beginAtZero: true, suggestedMax: 50,
               ticks: { callback: v => v + "%", color: "#0f766e", font: { size: 9 } },
               grid: { drawOnChartArea: false },
             } : undefined,
