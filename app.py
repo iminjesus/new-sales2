@@ -1052,6 +1052,106 @@ def _load_postcode_rim_demand():
     return rows
 
 
+_HK_RIM_CACHE: dict = {"year": None, "ts": 0.0, "rows": []}
+
+# Rim-diameter parser (regex + bucket) — same shape as
+# postcode_penetration.py so the two stay in sync.
+_FLEET_RIM_RX = re.compile(r"R\s*(\d{2}(?:\.\d)?)", re.IGNORECASE) if 're' in globals() else None
+if _FLEET_RIM_RX is None:
+    import re as _re
+    _FLEET_RIM_RX = _re.compile(r"R\s*(\d{2}(?:\.\d)?)", _re.IGNORECASE)
+
+def _fleet_rim_from_size(s: str):
+    if not s: return None
+    m = _FLEET_RIM_RX.search(str(s))
+    if not m: return None
+    try: return int(float(m.group(1)))
+    except: return None
+
+def _fleet_rim_family(inches):
+    if inches is None: return "UNKNOWN"
+    if inches <= 13: return "R13"
+    if inches == 14: return "R14"
+    if inches == 15: return "R15"
+    if inches == 16: return "R16"
+    if inches == 17: return "R17"
+    if inches == 18: return "R18"
+    if inches == 19: return "R19"
+    if inches == 20: return "R20"
+    if inches == 21: return "R21"
+    if inches >= 22: return "R22+ (truck)"
+    return f"R{inches}"
+
+def _load_hk_rim_sales(year: int = 2026, ttl: int = 300):
+    """Aggregate Hankook sales (sales_2526) by (state, postcode,
+    rim_family) so /api/fleet_by_rim can put HK volume next to BITRE
+    fleet units.  Cached for `ttl` seconds; returns [] on any DB
+    failure so the fleet chart still renders BITRE-only."""
+    import time as _t
+    now = _t.monotonic()
+    if _HK_RIM_CACHE["year"] == year and (now - _HK_RIM_CACHE["ts"]) < ttl:
+        return _HK_RIM_CACHE["rows"]
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
+    except Exception as _e:
+        print(f"[hk_rim] DB connect failed: {_e}")
+        return []
+    try:
+        cur.execute("SHOW COLUMNS FROM customer")
+        cust_cols = {r["Field"] for r in cur.fetchall()}
+        has_pc     = "postcode" in cust_cols
+        state_col  = "ship_to_state" if "ship_to_state" in cust_cols else "bde_state"
+        pc_field   = "c.postcode AS postcode" if has_pc else "c.address_1 AS address_1"
+        pc_group   = "c.postcode" if has_pc else "c.address_1"
+
+        cur.execute(f"""
+            SELECT c.{state_col} AS state, {pc_field},
+                   cr.size AS size, SUM(s.qty) AS qty
+            FROM sales_2526 s
+            JOIN customer c    ON c.ship_to = s.ship_to
+            JOIN carrying_26 cr ON cr.m_code = s.material
+            WHERE s.billing_date >= '{year}-01-01'
+              AND s.billing_date <  '{year + 1}-01-01'
+              AND s.qty > 0
+            GROUP BY c.{state_col}, {pc_group}, cr.size
+        """)
+        raw = cur.fetchall()
+    except Exception as _e:
+        print(f"[hk_rim] SQL failed: {_e}")
+        try: cur.close(); conn.close()
+        except: pass
+        return []
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    import re as _re_pc
+    _PC_RX = _re_pc.compile(r"\b(\d{4})\b")
+    rows = []
+    for r in raw:
+        state = (r.get("state") or "").strip().upper()
+        if has_pc:
+            pc = (r.get("postcode") or "").strip()
+        else:
+            addr = r.get("address_1") or ""
+            m = _PC_RX.findall(addr)
+            pc = m[-1] if m else ""
+        if pc.isdigit(): pc = pc.zfill(4)
+        rim = _fleet_rim_from_size(r.get("size"))
+        if rim is None: continue
+        rows.append({
+            "state":      state,
+            "postcode":   pc,
+            "rim_family": _fleet_rim_family(rim),
+            "qty":        int(r.get("qty") or 0),
+        })
+    _HK_RIM_CACHE.update({"year": year, "ts": now, "rows": rows})
+    return rows
+
+
 @app.get("/api/fleet_by_rim")
 def api_fleet_by_rim():
     """Return fleet_units aggregated by rim_family, optionally
@@ -1115,12 +1215,41 @@ def api_fleet_by_rim():
         totals[r["rim_family"]] = totals.get(r["rim_family"], 0) + r["fleet_units"]
         matched += 1
     values = [totals.get(f, 0) for f in rim_order]
-    label  = f"Postcode {postcode}" if postcode else state
+
+    # Overlay HK sales on the same rim buckets so the chart can put a
+    # second bar (HK sold) and a line (penetration %) next to each
+    # fleet bar.  Silent zero if the HK dataset isn't available on
+    # this deployment — chart just shows BITRE bars.
+    hk_totals: dict = {}
+    for h in _load_hk_rim_sales():
+        if postcode:
+            hpc = h["postcode"]
+            if hpc.isdigit(): hpc = hpc.zfill(4)
+            if hpc != postcode: continue
+        elif state != "ALL" and h["state"] != state:
+            continue
+        hk_totals[h["rim_family"]] = hk_totals.get(h["rim_family"], 0) + h["qty"]
+    hk_sold = [hk_totals.get(f, 0) for f in rim_order]
+    # Penetration % per rim family — HK sold ÷ fleet × 100.  Guard
+    # against zero-fleet buckets (division-by-zero) with None so the
+    # chart can render "no line point" instead of a spike to Infinity.
+    penetration = [
+        round(hk_sold[i] / values[i] * 100, 2) if values[i] > 0 else None
+        for i in range(len(rim_order))
+    ]
+
+    label = f"Postcode {postcode}" if postcode else state
     return jsonify({
         "rim_order":    rim_order,
-        "series":       [{"state": label, "values": values}],
+        "series":       [{
+            "state":       label,
+            "values":      values,
+            "hk_sold":     hk_sold,
+            "penetration": penetration,
+        }],
         "matched_rows": matched,
         "total_units":  sum(values),
+        "hk_total":     sum(hk_sold),
         "sample_postcodes": sorted(
             {r["postcode"] for r in rows[:200] if r["postcode"]})[:10],
     })
