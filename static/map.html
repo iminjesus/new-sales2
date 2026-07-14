@@ -337,7 +337,17 @@
   </div>
 
   <!-- ────── Fleet-by-rim panel (BITRE-derived) ────── -->
-  <div id="fleetRimBox" class="box" style="margin-top:8px;padding:10px 14px;">
+  <!-- Deliberately NOT using class="box" — that class carries
+       flex:1 1 calc(25%…) from style.css, which upstream propagates a
+       flex context onto this element and squeezes the panel into a
+       narrow column next to the map instead of a full-width block
+       below it. -->
+  <div id="fleetRimBox" style="
+         display:block; clear:both; width:100%; box-sizing:border-box;
+         margin-top:12px; padding:10px 14px;
+         background:#fff; border-radius:8px;
+         box-shadow:0 1px 3px rgba(0,0,0,.06);
+       ">
     <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
       <strong style="font-size:14px;">Fleet by rim family</strong>
       <span id="fleetRimScope" style="font-size:11.5px;color:#666;">(BITRE Motor Vehicle Census)</span>
