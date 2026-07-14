@@ -1100,6 +1100,7 @@ def api_fleet_by_rim():
 
     # Single series — national, one-state, or one-postcode
     totals: dict = {}
+    matched = 0
     for r in rows:
         if postcode:
             # Compare on zero-padded 4-digit form so "0800" from a
@@ -1112,11 +1113,16 @@ def api_fleet_by_rim():
         elif state != "ALL" and r["state"] != state:
             continue
         totals[r["rim_family"]] = totals.get(r["rim_family"], 0) + r["fleet_units"]
+        matched += 1
     values = [totals.get(f, 0) for f in rim_order]
     label  = f"Postcode {postcode}" if postcode else state
     return jsonify({
-        "rim_order": rim_order,
-        "series": [{"state": label, "values": values}],
+        "rim_order":    rim_order,
+        "series":       [{"state": label, "values": values}],
+        "matched_rows": matched,
+        "total_units":  sum(values),
+        "sample_postcodes": sorted(
+            {r["postcode"] for r in rows[:200] if r["postcode"]})[:10],
     })
 
 

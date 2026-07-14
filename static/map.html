@@ -421,6 +421,16 @@
       }
       const warn = document.getElementById("fleetRimWarn");
       if (data.warning){ warn.style.display=""; warn.textContent = data.warning; }
+      else if (selectedPostcode && data.matched_rows === 0) {
+        warn.style.display = "";
+        const samples = (data.sample_postcodes || []).join(", ") || "(none)";
+        warn.innerHTML =
+          `<b>No BITRE fleet data for postcode "${selectedPostcode}".</b> ` +
+          `The CSV probably stores this postcode differently — sample values ` +
+          `it does have: <code>${samples}</code>. ` +
+          `Check that vehicle_postcode_make_model.csv actually covers this ` +
+          `postcode and that leading zeros weren't stripped.`;
+      }
       else              { warn.style.display="none"; }
 
       // Hide MOTORCYCLE / UNKNOWN buckets from the chart — they're
