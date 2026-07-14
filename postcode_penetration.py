@@ -144,14 +144,31 @@ def fetch_hankook_sales_from_db(year: int) -> list[dict]:
     }
     conn = mysql.connector.connect(**cfg)
     cur  = conn.cursor(dictionary=True)
-    # Group at ship_to level so we don't return one row per line-item.
-    # Postcode extraction happens in Python off address_1 because the
-    # customer table doesn't carry a dedicated postcode column.
+
+    # Probe the customer schema so we can pick the postcode column
+    # directly if it's there (added July 2026) and fall back to
+    # address_1 extraction on legacy schemas that don't have it yet.
+    cur.execute("SHOW COLUMNS FROM customer")
+    cust_cols = {r["Field"] for r in cur.fetchall()}
+    has_postcode = "postcode" in cust_cols
+    # ship_to_state (actual shop geography) beats bde_state (sales
+    # territory) for penetration analysis when both are present,
+    # since BITRE splits its fleet by ship_to state.
+    state_col = "ship_to_state" if "ship_to_state" in cust_cols else "bde_state"
+
+    if has_postcode:
+        select_extra = f"c.postcode AS postcode, c.{state_col} AS bde_state"
+        group_extra  = f"c.postcode, c.{state_col}"
+    else:
+        # Legacy fallback — the Python-side aggregator will regex the
+        # postcode out of address_1.
+        select_extra = f"c.address_1 AS address_1, c.{state_col} AS bde_state"
+        group_extra  = f"c.address_1, c.{state_col}"
+
     sql = f"""
         SELECT
             c.ship_to,
-            c.bde_state,
-            c.address_1,
+            {select_extra},
             cr.size,
             SUM(s.qty) AS qty
         FROM sales_2526 s
@@ -160,7 +177,7 @@ def fetch_hankook_sales_from_db(year: int) -> list[dict]:
         WHERE s.billing_date >= '{year}-01-01'
           AND s.billing_date <  '{year + 1}-01-01'
           AND s.qty > 0
-        GROUP BY c.ship_to, c.bde_state, c.address_1, cr.size
+        GROUP BY c.ship_to, {group_extra}, cr.size
     """
     cur.execute(sql)
     rows = cur.fetchall()
@@ -173,13 +190,25 @@ def fetch_hankook_sales_from_db(year: int) -> list[dict]:
 def aggregate_hankook(rows: list[dict], level: str) -> tuple[dict, dict]:
     """Roll raw sales rows to the requested granularity.  Returns the
     aggregated dict AND diagnostic counters so the run can report how
-    much data was lost to missing fields."""
+    much data was lost to missing fields.
+
+    Postcode source order:
+      1) customer.postcode (direct column, added July 2026) — trusted.
+      2) extract_postcode(address_1) — legacy fallback.
+    Both are zero-padded to 4 digits so a Sydney "2000" and a Darwin
+    "0800" line up cleanly with BITRE's postcode strings on join."""
     agg: dict = defaultdict(int)
     diag = {"total_qty": 0, "no_state": 0, "no_postcode": 0,
             "no_rim": 0, "kept_qty": 0}
     for r in rows:
         state = (r.get("bde_state") or "").strip().upper()
-        pc    = extract_postcode(r.get("address_1") or "")
+        pc    = (r.get("postcode") or "").strip()
+        if not pc:
+            # Fallback for old-schema rows that didn't ship a postcode
+            # column — pull it out of address_1.
+            pc = extract_postcode(r.get("address_1") or "")
+        if pc.isdigit():
+            pc = pc.zfill(4)
         rim   = rim_from_size(r.get("size") or "")
         try:
             qty = int(float(r.get("qty") or 0))
@@ -295,8 +324,9 @@ def main():
     ap.add_argument("--year",    type=int, default=2026,
                     help="Hankook sales year (billing_date; default 2026).")
     ap.add_argument("--sales-csv", default=None,
-                    help="Skip DB — read pre-exported sales CSV with columns "
-                         "(bde_state, address_1, size, qty).")
+                    help="Skip DB — read pre-exported sales CSV.  Recognises "
+                         "either (bde_state, postcode, size, qty) or the older "
+                         "(bde_state, address_1, size, qty) column set.")
     args = ap.parse_args()
 
     bitre_path = Path(args.bitre)
