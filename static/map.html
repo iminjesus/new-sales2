@@ -470,14 +470,27 @@
       }
       if (chart) chart.destroy();
       const ctx = document.getElementById("fleetRimChart");
+      // Compute the effective max across datasets so we can bump the
+      // Y-axis manually — Chart.js's `grace` option isn't reliably
+      // honoured across versions and left the tallest bar clipping.
+      let dataMax = 0;
+      if (mode === "breakdown") {
+        // Stacked bars — sum by category.
+        for (let i = 0; i < rimOrder.length; i++) {
+          let s = 0;
+          for (const ds of datasets) s += (ds.data[i] || 0);
+          if (s > dataMax) dataMax = s;
+        }
+      } else {
+        for (const ds of datasets)
+          for (const v of ds.data) if (v > dataMax) dataMax = v;
+      }
+      const yMax = dataMax > 0 ? Math.ceil(dataMax * 1.18) : undefined;
       chart = new Chart(ctx, {
         type: "bar",
         data: {labels: rimOrder, datasets},
         options: {
           responsive:true, maintainAspectRatio:false,
-          // Reserve some space above the tallest bar so the datalabel
-          // (anchored at "end top") has room to render — without this
-          // the largest bar's label clips against the chart edge.
           layout: { padding: { top: 22 } },
           plugins: {
             legend: { display: mode === "breakdown", position: "top",
@@ -491,17 +504,16 @@
               color: "#333",
               formatter: v => v > 0 ? fmt(v) : "",
               display: mode !== "breakdown",
-              clip: false,     // let a label paint outside the plot area
+              clip: false,
             },
           },
           scales: {
             x: { stacked: mode === "breakdown" },
             y: { stacked: mode === "breakdown",
                  beginAtZero: true,
-                 // grace adds ~8 % headroom above the tallest bar so
-                 // its label fits without pushing the axis tick past a
-                 // round number.
-                 grace: "8%",
+                 // Manual max = 118 % of the tallest bar so the
+                 // datalabel above it always has clear headroom.
+                 max: yMax,
                  ticks: { callback: v => fmt(v) } },
           },
         },
