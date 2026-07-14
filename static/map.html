@@ -301,7 +301,19 @@
           <span style="width:10px;height:10px;border-radius:50%;background:#f59e0b;display:inline-block;margin-right:4px;"></span>visited outside territory
         </span>
       </div>
-      <div id="salesMap"></div>
+      <div style="position:relative;">
+        <div id="salesMap"></div>
+        <!-- Boundary toggle button floated on top of the map, at the
+             top-right corner so it doesn't collide with Leaflet's
+             built-in zoom control on the top-left. -->
+        <button id="mapBoundaryBtn"
+                style="position:absolute; top:10px; right:10px; z-index:500;
+                       padding:6px 12px; font:600 12px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Arial;
+                       background:#fff; border:1px solid #8f8f8f; border-radius:4px;
+                       box-shadow:0 1px 3px rgba(0,0,0,.25); cursor:pointer;">
+          Show postcode boundaries
+        </button>
+      </div>
     </div>
 
     <div id="mapSidePanel" class="box" style="flex:1;">
@@ -638,15 +650,14 @@
     // renders as a light-grey polygon layer over the base map, and
     // wires each polygon's click to refresh the bar chart scoped to
     // that postcode.  Only loaded on first click (~5-30 MB file).
-    // Boundary loader — now driven by an in-map Leaflet control
-    // instead of a button on the fleet panel.  The control lives at
-    // the top-left corner of the map and mounts once the map instance
-    // is available.
-    let boundaryCtrlBtn = null;   // <a> inside the L.control
+    // Boundary loader — driven by the #mapBoundaryBtn button floated
+    // over the top-right of the map.  Kept as a plain HTML element
+    // (not a Leaflet L.control) so it renders regardless of whether
+    // salesMap has finished initialising when this script runs.
     async function togglePostcodeBoundaries(){
       const map = (typeof salesMap !== "undefined") ? salesMap : window.salesMap;
-      if (!map) return;
-      const btn = boundaryCtrlBtn;
+      if (!map) { alert("Map not ready yet — try again in a moment."); return; }
+      const btn = document.getElementById("mapBoundaryBtn");
       if (postcodeLayer) {
         map.removeLayer(postcodeLayer);
         postcodeLayer = null;
@@ -705,31 +716,8 @@
       }
     }
 
-    // Mount the Leaflet control once the map object exists.  Polls a
-    // few times; map.js sets up salesMap on its own boot cycle.
-    function mountBoundaryControl(){
-      const map = (typeof salesMap !== "undefined") ? salesMap : window.salesMap;
-      if (!map || !L) { setTimeout(mountBoundaryControl, 200); return; }
-      const Ctrl = L.Control.extend({
-        onAdd: function(){
-          const el = L.DomUtil.create("div", "leaflet-bar leaflet-control fleet-boundary-ctrl");
-          el.style.background = "#fff";
-          el.style.padding = "4px 8px";
-          el.style.font = "12px/1.3 -apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif";
-          el.style.borderRadius = "4px";
-          el.style.boxShadow = "0 1px 3px rgba(0,0,0,.25)";
-          el.style.cursor = "pointer";
-          el.style.userSelect = "none";
-          el.textContent = "Show postcode boundaries";
-          L.DomEvent.disableClickPropagation(el);
-          el.addEventListener("click", togglePostcodeBoundaries);
-          boundaryCtrlBtn = el;
-          return el;
-        },
-      });
-      new Ctrl({position: "topleft"}).addTo(map);
-    }
-    mountBoundaryControl();
+    document.getElementById("mapBoundaryBtn")
+            .addEventListener("click", togglePostcodeBoundaries);
 
     // Chart.js may still be loading when this script runs — defer.
     function boot(){
