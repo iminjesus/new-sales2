@@ -1075,6 +1075,12 @@ def api_fleet_by_rim():
                        "postcode_rim_demand.py first.",
         })
 
+    # Zero-pad the incoming postcode to 4 digits so a boundary GeoJSON
+    # ("0800", "2000") matches CSV rows that Excel may have re-saved as
+    # bare ints ("800", "2000").  Applied to BOTH sides of the compare.
+    if postcode:
+        postcode = postcode.zfill(4) if postcode.isdigit() else postcode
+
     # Canonical rim ordering — R13 → R14 → … → R22+ / MOTORCYCLE last.
     rim_order = ["R13", "R14", "R15", "R16", "R17", "R18",
                  "R19", "R20", "R21", "R22+ (truck)", "MOTORCYCLE", "UNKNOWN"]
@@ -1096,7 +1102,12 @@ def api_fleet_by_rim():
     totals: dict = {}
     for r in rows:
         if postcode:
-            if r["postcode"] != postcode:
+            # Compare on zero-padded 4-digit form so "0800" from a
+            # boundary GeoJSON matches an Excel-mangled "800" in the CSV.
+            row_pc = r["postcode"]
+            if row_pc.isdigit():
+                row_pc = row_pc.zfill(4)
+            if row_pc != postcode:
                 continue
         elif state != "ALL" and r["state"] != state:
             continue
