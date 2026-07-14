@@ -381,13 +381,14 @@
       const idxOf = f => (data.rim_order||[]).indexOf(f);
       const s = (data.series||[])[0] || {values:[], hk_sold:[], penetration:[]};
 
-      let fleetMax = 0, hkMax = 0;
+      // Fleet AND HK share the same left axis now so the HK bars
+      // render at their actual proportion (a few % of fleet) — the
+      // old two-axis version made HK look larger than fleet because
+      // each bar was scaled to its own max.
+      let fleetMax = 0;
       for (const v of rimOrder.map(f => s.values[idxOf(f)] || 0))
         if (v > fleetMax) fleetMax = v;
-      for (const v of rimOrder.map(f => (s.hk_sold||[])[idxOf(f)] || 0))
-        if (v > hkMax) hkMax = v;
-      const yMax   = fleetMax > 0 ? Math.ceil(fleetMax * 1.20) : undefined;
-      const yHKMax = hkMax    > 0 ? Math.ceil(hkMax    * 1.30) : undefined;
+      const yMax = fleetMax > 0 ? Math.ceil(fleetMax * 1.20) : undefined;
 
       const datasets = [{
         type: "bar",
@@ -405,7 +406,7 @@
           data:  rimOrder.map(f => s.hk_sold[idxOf(f)] || 0),
           backgroundColor: "#e11d48",
           borderWidth: 0,
-          yAxisID: "yHK",
+          yAxisID: "y",       // ← shared with Fleet on purpose
           order: 2,
         });
         datasets.push({
@@ -458,15 +459,15 @@
           },
           scales: {
             x: { ticks: { font: { size: 10 } } },
+            // Fleet and HK share this axis — HK bars therefore render
+            // at their actual proportion of fleet volume.
             y: { beginAtZero: true, max: yMax,
                  ticks: { callback: v => fmt(v), color: "#334155", font: { size: 9 } } },
-            yHK: hasHK ? {
-              position: "right", beginAtZero: true, max: yHKMax,
-              ticks: { callback: v => fmt(v), color: "#e11d48", font: { size: 9 } },
-              grid: { drawOnChartArea: false },
-            } : undefined,
+            // Penetration axis capped at 50 % — realistic Hankook
+            // share never exceeds that, so we get more vertical
+            // real estate for the line (upper half of the chart).
             yPct: hasHK ? {
-              position: "right", beginAtZero: true, suggestedMax: 100,
+              position: "right", beginAtZero: true, max: 50,
               ticks: { callback: v => v + "%", color: "#0f766e", font: { size: 9 } },
               grid: { drawOnChartArea: false },
             } : undefined,
