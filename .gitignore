@@ -17,3 +17,12 @@ BobJane_*.csv
 
 # User-uploaded photos from /meeting (kept on disk, not tracked)
 static/meeting_photos/
+
+# Large GeoJSON boundary files (downloaded from ABS, ~15-200 MB —
+# too big for git; each dev / deploy places their own copy at this
+# path).  See /map "Show postcode boundaries" for the loader.
+static/postcode_boundaries.geojson
+static/*.geojson
+
+# Vehicle registration / rego processing output
+out/rego/
