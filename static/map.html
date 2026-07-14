@@ -467,6 +467,18 @@
           // 1-pixel HK bar or a line point directly on top of a bar
           // both still surface their values.
           interaction: { mode: "index", intersect: false },
+          // Click on an HK bar → drill down into (size × pattern ×
+          // sold-to) for that rim family.  Passed the postcode via
+          // closure from openFleetPopup().
+          onClick: (evt, elements, chart) => {
+            if (!elements.length) return;
+            const e = elements[0];
+            const ds = chart.data.datasets[e.datasetIndex];
+            if (ds.label !== "HK sold") return;
+            const rim = chart.data.labels[e.index];
+            if (typeof window._fleetPopupHKDrill === "function")
+              window._fleetPopupHKDrill(rim);
+          },
           scales: {
             x: { ticks: { font: { size: 10 } } },
             y: { beginAtZero: true, max: yMax,
@@ -801,10 +813,14 @@
         </div>
         <div style="position:relative;height:210px;">
           <canvas></canvas>
-        </div>`;
+        </div>
+        <div id="_fpDrillHint" style="font-size:11px;color:#94a3b8;margin-top:4px;">
+          Click an HK bar for a size / pattern / sold-to breakdown.
+        </div>
+        <div id="_fpDrill" style="margin-top:6px;"></div>`;
       layer.unbindPopup();
       layer.bindPopup(container, {
-        maxWidth: 460, minWidth: 420, className: "fleet-popup",
+        maxWidth: 520, minWidth: 420, className: "fleet-popup",
       }).openPopup(latlng);
 
       let data;
@@ -826,12 +842,81 @@
       container.querySelector("#_fpMsg").textContent =
         `Fleet ${fmt(data.total_units||0)}  ·  HK sold ${fmt(data.hk_total||0)}`;
 
+      // Wire the drill-down handler that the chart's onClick calls.
+      // Kept on `window._fleetPopupHKDrill` so a click inside Chart.js's
+      // canvas can reach back into this popup's DOM without needing
+      // access to the outer closure's variables.
+      window._fleetPopupHKDrill = async (rim) => {
+        const drillDiv = container.querySelector("#_fpDrill");
+        const hint     = container.querySelector("#_fpDrillHint");
+        if (hint) hint.style.display = "none";
+        drillDiv.innerHTML = `<div style="font-size:11.5px;color:#666;">
+          Loading <b>${rim}</b> HK sales…</div>`;
+        let detail;
+        try {
+          const r = await fetch("/api/fleet_by_rim/hk_detail?postcode="
+                                + encodeURIComponent(pc)
+                                + "&rim=" + encodeURIComponent(rim),
+                                {credentials: "same-origin"});
+          detail = await r.json();
+        } catch(e){
+          drillDiv.textContent = "Load failed: " + e;
+          return;
+        }
+        const rows = (detail.rows || []);
+        if (!rows.length){
+          drillDiv.innerHTML =
+            `<div style="font-size:11.5px;color:#666;">
+               No HK sales in ${rim} for this postcode in 2026.
+             </div>`;
+          return;
+        }
+        // Table, ranked by qty descending.  Cap at ~20 rows for
+        // readability; a small footer notes how many more exist if any.
+        const capped = rows.slice(0, 20);
+        const rest   = rows.length - capped.length;
+        const rowHtml = capped.map(r => `
+          <tr>
+            <td style="padding:2px 6px;">${_escape(r.size)}</td>
+            <td style="padding:2px 6px;">${_escape(r.pattern)}</td>
+            <td style="padding:2px 6px;">${_escape(r.sold_to_name || r.sold_to)}</td>
+            <td style="padding:2px 6px;text-align:right;font-variant-numeric:tabular-nums;">
+              ${fmt(r.qty)}
+            </td>
+          </tr>`).join("");
+        drillDiv.innerHTML = `
+          <div style="font-size:12px;font-weight:600;margin-bottom:2px;">
+            ${rim} HK sales · Total ${fmt(detail.total || 0)}
+          </div>
+          <div style="max-height:220px;overflow:auto;border:1px solid #e5e7eb;border-radius:4px;">
+            <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
+              <thead>
+                <tr style="background:#f1f5f9;position:sticky;top:0;">
+                  <th style="padding:4px 6px;text-align:left;">Size</th>
+                  <th style="padding:4px 6px;text-align:left;">Pattern</th>
+                  <th style="padding:4px 6px;text-align:left;">Sold-to</th>
+                  <th style="padding:4px 6px;text-align:right;">Qty</th>
+                </tr>
+              </thead>
+              <tbody>${rowHtml}</tbody>
+            </table>
+          </div>
+          ${rest > 0 ? `<div style="font-size:11px;color:#94a3b8;margin-top:3px;">
+                          + ${rest} more rows (cap 20)
+                        </div>` : ""}`;
+      };
+
       function draw(){
         if (typeof Chart === "undefined") { setTimeout(draw, 80); return; }
         const canvas = container.querySelector("canvas");
         new Chart(canvas, buildPopupConfig(data, pc));
       }
       draw();
+    }
+    // Tiny HTML escaper for the drill-down table cells.
+    function _escape(s){
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
   })();
   </script>

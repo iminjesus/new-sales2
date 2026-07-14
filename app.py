@@ -1277,6 +1277,124 @@ def api_fleet_by_rim():
     })
 
 
+@app.get("/api/fleet_by_rim/hk_detail")
+def api_fleet_hk_detail():
+    """Drill-down behind an HK Sold bar on the popup chart.
+
+      ?postcode=NNNN     one postcode  (usual case — a boundary was clicked)
+      ?region=NSW|VIC|…  when the popup is scoped to a region instead
+      ?state=XX          fallback single-state filter
+      ?rim=R17           bucket to break down (matches rim_family label)
+      ?year=2026         defaults to 2026 (matches the popup chart)
+
+    Returns rows for that (scope, rim) combo, one per
+    (size × pattern × sold_to), sorted by 2026 qty descending — the
+    table the user sees expanded under the chart."""
+    postcode = (request.args.get("postcode") or "").strip()
+    region   = (request.args.get("region") or "").strip().upper()
+    state    = (request.args.get("state") or "").strip().upper()
+    rim_want = (request.args.get("rim") or "").strip()
+    year     = int(request.args.get("year", 2026) or 2026)
+    if postcode and postcode.isdigit():
+        postcode = postcode.zfill(4)
+
+    _REGION_TO_STATES = {
+        "NSW": {"NSW", "ACT"},
+        "VIC": {"VIC", "TAS", "NT", "SA"},
+        "QLD": {"QLD"},
+        "WA":  {"WA"},
+    }
+    region_states = _REGION_TO_STATES.get(region)
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cust_cols  = _list_columns(cur, "customer")
+        has_pc     = "postcode" in cust_cols
+        state_col  = "ship_to_state" if "ship_to_state" in cust_cols else "bde_state"
+        pc_field   = "c.postcode AS postcode" if has_pc else "c.address_1 AS address_1"
+
+        wh, params = [], []
+        wh.append(f"s.billing_date >= '{year}-01-01'")
+        wh.append(f"s.billing_date <  '{year + 1}-01-01'")
+        wh.append("s.qty > 0")
+        if not postcode:
+            # Region / state filter only used when no postcode gate
+            if region_states is not None:
+                ph = ",".join(["%s"] * len(region_states))
+                wh.append(f"c.{state_col} IN ({ph})")
+                params.extend(sorted(region_states))
+            elif state and state != "ALL":
+                wh.append(f"c.{state_col} = %s")
+                params.append(state)
+
+        # If we have a real postcode column, gate in SQL — otherwise
+        # pull address_1 and filter in Python.
+        if postcode and has_pc:
+            wh.append("c.postcode = %s")
+            params.append(postcode)
+
+        cur.execute(f"""
+            SELECT
+                cr.size    AS size,
+                cr.pattern AS pattern,
+                COALESCE(cus.sold_to_name, s.sold_to) AS sold_to_name,
+                s.sold_to  AS sold_to,
+                {pc_field},
+                SUM(s.qty) AS qty
+            FROM sales_2526 s
+            JOIN customer c    ON c.ship_to = s.ship_to
+            JOIN carrying_26 cr ON cr.m_code = s.material
+            LEFT JOIN (
+                SELECT sold_to, MIN(sold_to_name) AS sold_to_name
+                FROM customer
+                WHERE sold_to_name IS NOT NULL AND TRIM(sold_to_name) <> ''
+                GROUP BY sold_to
+            ) cus ON cus.sold_to = s.sold_to
+            WHERE {' AND '.join(wh)}
+            GROUP BY cr.size, cr.pattern, s.sold_to, sold_to_name
+                     {', c.postcode' if has_pc else ', c.address_1'}
+        """, tuple(params))
+        raw = cur.fetchall()
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    import re as _re_pc
+    _PC_RX = _re_pc.compile(r"\b(\d{4})\b")
+
+    # Filter by postcode (address_1 path) and by rim family in Python.
+    out = []
+    for r in raw:
+        if postcode and not has_pc:
+            addr = r.get("address_1") or ""
+            m = _PC_RX.findall(addr)
+            row_pc = m[-1] if m else ""
+            if row_pc.isdigit(): row_pc = row_pc.zfill(4)
+            if row_pc != postcode:
+                continue
+        rim = _fleet_rim_from_size(r.get("size"))
+        if rim_want:
+            fam = _fleet_rim_family(rim)
+            if fam != rim_want:
+                continue
+        out.append({
+            "size":         (r.get("size") or "").strip(),
+            "pattern":      (r.get("pattern") or "").strip(),
+            "sold_to":      (r.get("sold_to") or "").strip(),
+            "sold_to_name": (r.get("sold_to_name") or "").strip(),
+            "qty":          int(r.get("qty") or 0),
+        })
+    out.sort(key=lambda r: r["qty"], reverse=True)
+    return jsonify({
+        "rim":     rim_want,
+        "rows":    out,
+        "total":   sum(r["qty"] for r in out),
+    })
+
+
 def _list_columns(cur, table):
     """Return the lower-cased set of columns on `table`, or empty set
     if the table can't be introspected (permissions, wrong schema, etc.).
