@@ -381,14 +381,19 @@
       const idxOf = f => (data.rim_order||[]).indexOf(f);
       const s = (data.series||[])[0] || {values:[], hk_sold:[], penetration:[]};
 
-      // Fleet AND HK share the same left axis now so the HK bars
-      // render at their actual proportion (a few % of fleet) — the
-      // old two-axis version made HK look larger than fleet because
-      // each bar was scaled to its own max.
-      let fleetMax = 0;
+      // Fleet has its own left axis.  HK gets a right-hand axis but
+      // capped so the two aren't wildly out of proportion — otherwise
+      // a postcode with 1-2 HK units renders the red bar as a
+      // sub-pixel and hover breaks.  Cap: max(hkMax × 3, 10) — always
+      // leaves enough vertical range for single-digit HK values to
+      // paint as a visible bar without dwarfing the fleet bars.
+      let fleetMax = 0, hkMax = 0;
       for (const v of rimOrder.map(f => s.values[idxOf(f)] || 0))
         if (v > fleetMax) fleetMax = v;
-      const yMax = fleetMax > 0 ? Math.ceil(fleetMax * 1.20) : undefined;
+      for (const v of rimOrder.map(f => (s.hk_sold||[])[idxOf(f)] || 0))
+        if (v > hkMax) hkMax = v;
+      const yMax   = fleetMax > 0 ? Math.ceil(fleetMax * 1.20) : undefined;
+      const yHKMax = hkMax    > 0 ? Math.max(Math.ceil(hkMax * 3), 10) : 10;
 
       const datasets = [{
         type: "bar",
@@ -406,7 +411,7 @@
           data:  rimOrder.map(f => s.hk_sold[idxOf(f)] || 0),
           backgroundColor: "#e11d48",
           borderWidth: 0,
-          yAxisID: "y",       // ← shared with Fleet on purpose
+          yAxisID: "yHK",     // own axis so 1-unit bars stay visible
           order: 2,
         });
         datasets.push({
@@ -457,18 +462,28 @@
               clip: false,
             },
           },
+          // Tooltip on hover shows ALL datasets at the hovered x
+          // column, not just the element under the cursor — so a
+          // 1-pixel HK bar or a line point directly on top of a bar
+          // both still surface their values.
+          interaction: { mode: "index", intersect: false },
           scales: {
             x: { ticks: { font: { size: 10 } } },
-            // Fleet and HK share this axis — HK bars therefore render
-            // at their actual proportion of fleet volume.
             y: { beginAtZero: true, max: yMax,
                  ticks: { callback: v => fmt(v), color: "#334155", font: { size: 9 } } },
+            // HK axis — capped small (see yHKMax calc) so 1-2 unit
+            // sales still show up as a real bar instead of a sub-
+            // pixel line at the baseline.
+            yHK: hasHK ? {
+              position: "right", beginAtZero: true, max: yHKMax,
+              ticks: { callback: v => fmt(v), color: "#e11d48", font: { size: 9 } },
+              grid: { drawOnChartArea: false },
+            } : undefined,
             // Penetration axis anchored at 50 % — realistic Hankook
             // share never approaches that, so the line uses the
             // upper half of the chart.  suggestedMax (not max) lets
             // the axis grow past 50 % on the rare postcode where
-            // penetration actually overshoots, so we don't silently
-            // clip an outlier.
+            // penetration actually overshoots.
             yPct: hasHK ? {
               position: "right", beginAtZero: true, suggestedMax: 50,
               ticks: { callback: v => v + "%", color: "#0f766e", font: { size: 9 } },
