@@ -1166,6 +1166,18 @@ def api_fleet_by_rim():
     state     = (request.args.get("state") or "ALL").strip().upper()
     postcode  = (request.args.get("postcode") or "").strip()
     breakdown = (request.args.get("breakdown") or "").strip().lower()
+    # region expands the 4 top-nav regions into their contiguous
+    # states so the fleet chart follows the same grouping the rest of
+    # the app uses.  ACT is treated as part of NSW; TAS/NT/SA fold
+    # into VIC.  Explicit ?state= wins if provided.
+    region   = (request.args.get("region") or "").strip().upper()
+    _REGION_TO_STATES = {
+        "NSW": {"NSW", "ACT"},
+        "VIC": {"VIC", "TAS", "NT", "SA"},
+        "QLD": {"QLD"},
+        "WA":  {"WA"},
+    }
+    region_states = _REGION_TO_STATES.get(region)  # None → no expansion
 
     rows = _load_postcode_rim_demand()
     if not rows:
@@ -1198,7 +1210,12 @@ def api_fleet_by_rim():
             series.append({"state": st, "values": values})
         return jsonify({"rim_order": rim_order, "series": series})
 
-    # Single series — national, one-state, or one-postcode
+    # Single series — national, one-state / region, or one-postcode
+    def _row_in_region(row_state: str) -> bool:
+        if region_states is not None:
+            return row_state in region_states
+        return state == "ALL" or row_state == state
+
     totals: dict = {}
     matched = 0
     for r in rows:
@@ -1210,7 +1227,7 @@ def api_fleet_by_rim():
                 row_pc = row_pc.zfill(4)
             if row_pc != postcode:
                 continue
-        elif state != "ALL" and r["state"] != state:
+        elif not _row_in_region(r["state"]):
             continue
         totals[r["rim_family"]] = totals.get(r["rim_family"], 0) + r["fleet_units"]
         matched += 1
@@ -1226,7 +1243,7 @@ def api_fleet_by_rim():
             hpc = h["postcode"]
             if hpc.isdigit(): hpc = hpc.zfill(4)
             if hpc != postcode: continue
-        elif state != "ALL" and h["state"] != state:
+        elif not _row_in_region(h["state"]):
             continue
         hk_totals[h["rim_family"]] = hk_totals.get(h["rim_family"], 0) + h["qty"]
     hk_sold = [hk_totals.get(f, 0) for f in rim_order]
@@ -1238,7 +1255,12 @@ def api_fleet_by_rim():
         for i in range(len(rim_order))
     ]
 
-    label = f"Postcode {postcode}" if postcode else state
+    if postcode:
+        label = f"Postcode {postcode}"
+    elif region_states is not None:
+        label = region  # e.g. "NSW" — visible states are the group
+    else:
+        label = state
     return jsonify({
         "rim_order":    rim_order,
         "series":       [{
