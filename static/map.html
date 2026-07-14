@@ -467,15 +467,19 @@
           // 1-pixel HK bar or a line point directly on top of a bar
           // both still surface their values.
           interaction: { mode: "index", intersect: false },
-          // Click on an HK bar → drill down into (size × pattern ×
-          // sold-to) for that rim family.  Passed the postcode via
-          // closure from openFleetPopup().
+          // Click anywhere in a column → drill down into
+          // (size × pattern × sold-to) for that rim family.
+          // interaction.mode='index' returns EVERY dataset at that x,
+          // so elements[0] would usually be the Fleet bar and the old
+          // "elements[0] must be HK" check silently no-op'd.  Search
+          // the array for the HK entry instead so a click anywhere in
+          // the R17 column triggers the R17 breakdown.
           onClick: (evt, elements, chart) => {
             if (!elements.length) return;
-            const e = elements[0];
-            const ds = chart.data.datasets[e.datasetIndex];
-            if (ds.label !== "HK sold") return;
-            const rim = chart.data.labels[e.index];
+            const hk = elements.find(el =>
+              chart.data.datasets[el.datasetIndex].label === "HK sold");
+            if (!hk) return;
+            const rim = chart.data.labels[hk.index];
             if (typeof window._fleetPopupHKDrill === "function")
               window._fleetPopupHKDrill(rim);
           },
@@ -815,7 +819,7 @@
           <canvas></canvas>
         </div>
         <div id="_fpDrillHint" style="font-size:11px;color:#94a3b8;margin-top:4px;">
-          Click an HK bar for a size / pattern / sold-to breakdown.
+          Click a rim column for its size / pattern / sold-to HK sales breakdown.
         </div>
         <div id="_fpDrill" style="margin-top:6px;"></div>`;
       layer.unbindPopup();
