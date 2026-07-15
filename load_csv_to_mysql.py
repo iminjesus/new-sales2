@@ -11,7 +11,9 @@ load_dotenv()  # .env 파일에서 환경변수 읽기
 # Resolve relative to this script so the same code runs on every checkout
 # regardless of the absolute path the repo was cloned to.
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH  = os.path.join(BASE_DIR, "rawdata", "unlock", "mb52_42.csv")
+# ZSDM64300 output — dot_stock.csv is written by sapcrawling.py after
+# looping the four plants and keeping only the yellow columns.
+CSV_PATH  = os.path.join(BASE_DIR, "rawdata", "unlock", "dot_stock.csv")
 
 DB_HOST     = os.getenv("DB_HOST", "100.127.139.79")  # 집 PC Tailscale IP
 DB_PORT     = int(os.getenv("DB_PORT", "3306"))
@@ -19,7 +21,7 @@ DB_USER     = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASS", "")
 DB_NAME     = os.getenv("DB_NAME", "my_new_database")
 
-TABLE_NAME = "stock"   # 원하면 바꿔도 됨
+TABLE_NAME = "stock"   # rebuilt from scratch every load
 TRUNCATE_BEFORE_LOAD = True
 
 # Windows CSV 줄바꿈은 보통 \r\n
@@ -164,24 +166,31 @@ def parse_billing_date_day(val: str) -> str:
 
 
 # ---------------- STOCK LOAD ----------------
+# Fixed 5-column schema for the ZSDM64300-derived stock table.
+# Interface date arrives as DD.MM.YYYY (SAP screen format); the LOAD
+# uses STR_TO_DATE to normalise it to a real DATE.  DOT No. is kept as
+# VARCHAR — it's a WWYY code (e.g. "4022" = week 40 of 2022), and the
+# leading zero on weeks 01-09 matters ("0326" ≠ "326").
 def load_stock(conn):
-    raw_cols = read_header(CSV_PATH)
-    cols = [sanitize_col(c) for c in raw_cols]
-    cols = ensure_unique(cols)
-
-    col_defs = ",\n  ".join([f"`{c}` TEXT" for c in cols])
-
-    # SAP MB52 export columns can change between versions (e.g. new
-    # 'material_description_local' field).  Recreate the table from the
-    # current CSV header instead of relying on the existing schema —
-    # stock is fully reloaded each run anyway (TRUNCATE_BEFORE_LOAD).
     drop_sql   = f"DROP TABLE IF EXISTS `{TABLE_NAME}`;"
     create_sql = f"""
     CREATE TABLE `{TABLE_NAME}` (
-      {col_defs}
+      interface_date DATE,
+      plant          VARCHAR(10),
+      material       VARCHAR(20),
+      dot_no         VARCHAR(6),
+      stock_qty      INT,
+      INDEX idx_stock_plant_mat (plant, material),
+      INDEX idx_stock_dot       (dot_no)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
 
+    # STR_TO_DATE handles the DD.MM.YYYY that comes out of SAP, and the
+    # numeric qty is REPLACE'd to strip thousand separators before the
+    # cast — SAP sometimes writes "1,234" instead of "1234" depending on
+    # user locale.  Any row with an unparseable date is skipped by the
+    # NULLIF chain (NULL isn't allowed in interface_date after we cast
+    # so we let it in as NULL; downstream code filters those out).
     load_sql = f"""
     LOAD DATA LOCAL INFILE '{mysql_path(CSV_PATH)}'
     INTO TABLE `{TABLE_NAME}`
@@ -190,7 +199,13 @@ def load_stock(conn):
     OPTIONALLY ENCLOSED BY '"'
     LINES TERMINATED BY '{LINES_TERMINATED_BY}'
     IGNORE 1 LINES
-    ({", ".join([f"`{c}`" for c in cols])});
+    (@interface_date, @plant, @material, @dot_no, @stock_qty)
+    SET
+      interface_date = STR_TO_DATE(TRIM(@interface_date), '%d.%m.%Y'),
+      plant          = TRIM(@plant),
+      material       = TRIM(@material),
+      dot_no         = TRIM(@dot_no),
+      stock_qty      = CAST(REPLACE(REPLACE(TRIM(@stock_qty), ',', ''), '"', '') AS SIGNED);
     """
 
     cur = conn.cursor()
@@ -202,7 +217,11 @@ def load_stock(conn):
 
         cur.execute(f"SELECT COUNT(*) FROM `{TABLE_NAME}`;")
         cnt = cur.fetchone()[0]
+        cur.execute(f"SELECT plant, COUNT(*) FROM `{TABLE_NAME}` GROUP BY plant ORDER BY plant;")
+        by_plant = cur.fetchall()
         print(f"[stock] Loaded rows: {cnt}")
+        for p, n in by_plant:
+            print(f"        {p or '(none)':<6} {n:>10,}")
     finally:
         cur.close()
 

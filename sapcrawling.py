@@ -2,49 +2,91 @@ import os
 import time
 import glob
 import csv
+import shutil
 import win32com.client
-from datetime import datetime
+from datetime import datetime, timedelta
 from openpyxl import load_workbook
 
 """
-MB52 Auto Export -> detects SAP-created EXPORT_*.xlsx -> converts to CSV.
+ZSDM64300 "Daily stock from 3PL" auto-export.
 
-Fix for your current error:
-- Your SAP GUI does NOT have the menu id: wnd[0]/mbar/menu[0]/menu[3]/menu[1]
-  (List -> Export -> Spreadsheet)
-- This version uses multiple fallback strategies:
-  1) Try ALV Grid toolbar export (most stable across layouts)
-  2) Try menu selection by text (List/Export/Spreadsheet), not by index
-  3) Try a few common menu index paths
+Replaces the old MB52 crawl.  ZSDM64300 exposes DOT No. per pallet so
+downstream code can compute stock aging.  This script:
+
+  1. Loops over every plant in PLANTS (one call to ZSDM64300 each)
+  2. Sets Interface Date to yesterday (SAP stamps the file overnight,
+     so today's file usually isn't there yet in the morning)
+  3. Selects "Display 3PL Interface Data" radio
+  4. Executes → exports the ALV grid → SAP writes EXPORT_*.xlsx to C:\\temp
+  5. Renames the per-plant XLSX to rawdata/unlock/dot_stock_<PLANT>.xlsx
+  6. After the loop finishes, combines all four XLSXs into one CSV at
+     rawdata/unlock/dot_stock.csv  (columns: Interface Date, Plant,
+     Material, DOT No., Stock Qty — the yellow columns only, everything
+     else in the SAP grid is ignored)
+
+load_csv_to_mysql.py picks up rawdata/unlock/dot_stock.csv and loads
+into the `stock` table.
 
 Pre-req:
-- SAP GUI must be OPEN and LOGGED IN
-- Packages: pywin32, openpyxl
+  - SAP GUI open AND logged in
+  - pywin32, openpyxl
+
+If the SAP field IDs on the ZSDM64300 selection screen differ from what
+this script assumes, edit the ZSDM_FIELDS block below.  Get the correct
+IDs by opening the selection screen and pressing F1 on each field →
+Technical Info → "Screen Field".
 """
 
 # ================= CONFIG =================
-PLANT_LOW  = "42R0"
-PLANT_HIGH = "42R4"
+PLANTS = ["42R0", "42R1", "42R2", "42R4"]           # order run in
+TRANSACTION_CODE = "ZSDM64300"
 
-SAP_EXPORT_DIR  = r"C:\temp"         # where EXPORT_*.xlsx appears
+SAP_EXPORT_DIR  = r"C:\temp"                        # where EXPORT_*.xlsx appears
 SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 
-# Resolve relative to this script so any checkout writes into its own
-# rawdata\unlock\ directory (same pattern as sapcrawling_sales.py).
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-OUT_CSV  = os.path.join(BASE_DIR, "rawdata", "unlock", "mb52_42.csv")
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+UNLOCK_DIR = os.path.join(BASE_DIR, "rawdata", "unlock")
+COMBINED_CSV = os.path.join(UNLOCK_DIR, "dot_stock.csv")
 
-DELETE_XLSX_AFTER_CONVERT = False
-MIN_CSV_SIZE = 200  # bytes
+DELETE_XLSX_AFTER_COMBINE = False                   # keep per-plant XLSX
+MIN_CSV_SIZE = 200
+
+# SAP GUI field IDs for the ZSDM64300 selection screen.  Adjust here if
+# your SAP renders different names.  Every field is tried with .Text
+# assignment — if the ID doesn't exist we skip it.
+ZSDM_FIELDS = {
+    "plant":              ["wnd[0]/usr/ctxtP_WERKS",
+                            "wnd[0]/usr/ctxtS_WERKS-LOW",
+                            "wnd[0]/usr/ctxtWERKS-LOW"],
+    "interface_date":     ["wnd[0]/usr/ctxtS_DATE-LOW",
+                            "wnd[0]/usr/ctxtP_DATE",
+                            "wnd[0]/usr/ctxtS_INTFDT-LOW"],
+    # Radio "Display 3PL Interface Data" — usually a P_RADIO field.
+    # Selection screen might already default to it; we still click.
+    "display_interface":  ["wnd[0]/usr/radP_DISP",
+                            "wnd[0]/usr/radP_INT"],
+}
+
+# Yellow columns from the ZSDM64300 ALV that we actually keep.  Header
+# text is matched case-insensitively; if the SAP layout renames these
+# in a future release, update here.
+KEEP_COLUMNS = {
+    "interface date": "interface_date",
+    "plant":          "plant",
+    "material":       "material",
+    "dot no":         "dot_no",
+    "dot no.":        "dot_no",
+    "stock qty":      "stock_qty",
+}
+OUTPUT_HEADER = ["interface_date", "plant", "material", "dot_no", "stock_qty"]
 
 
 # ================= HELPERS =================
 def wait(sec=0.3):
     time.sleep(sec)
 
-def ensure_out_dir(path):
-    d = os.path.dirname(path)
-    if d:
+def ensure_dir(d):
+    if d and not os.path.isdir(d):
         os.makedirs(d, exist_ok=True)
 
 def exists(session, wid):
@@ -60,46 +102,57 @@ def close_popups(session, max_steps=6):
             return
         try:
             session.findById("wnd[1]/tbar[0]/btn[0]").press()
-            wait(0.25)
-            continue
-        except:
-            pass
+            wait(0.25); continue
+        except: pass
         try:
             session.findById("wnd[1]/usr/btnSPOP-OPTION1").press()
-            wait(0.25)
-            continue
-        except:
-            pass
+            wait(0.25); continue
+        except: pass
         try:
             session.findById("wnd[1]").sendVKey(0)
-            wait(0.25)
-            continue
-        except:
-            pass
+            wait(0.25); continue
+        except: pass
         return
 
-def start_mb52_fresh(session):
-    session.findById("wnd[0]/tbar[0]/okcd").Text = "/nMB52"
+
+def _try_set_text(session, id_candidates, value):
+    """Set .Text on the first field ID in the list that exists."""
+    for wid in id_candidates:
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = value
+                return True
+            except: pass
+    return False
+
+
+def _try_set_radio(session, id_candidates):
+    """Turn on the first radio button that exists."""
+    for wid in id_candidates:
+        if exists(session, wid):
+            try:
+                session.findById(wid).select()
+                return True
+            except: pass
+    return False
+
+
+# ================= SAP driving =================
+def start_transaction_fresh(session):
+    session.findById("wnd[0]/tbar[0]/okcd").Text = "/n" + TRANSACTION_CODE
     session.findById("wnd[0]").sendVKey(0)
     wait(1.0)
     close_popups(session, 4)
 
-def set_plant(session):
-    # LOW = 42R0
-    try:
-        session.findById("wnd[0]/usr/ctxtWERKS-LOW").Text = PLANT_LOW
-    except:
-        session.findById("wnd[0]/usr/ctxtWERKS").Text = PLANT_LOW
 
-    # HIGH = 42R4
-    try:
-        session.findById("wnd[0]/usr/ctxtWERKS-HIGH").Text = PLANT_HIGH
-    except:
-        pass
-
+def set_selection_screen(session, plant, interface_date_ddmmyyyy):
+    _try_set_text(session, ZSDM_FIELDS["plant"], plant)
+    _try_set_text(session, ZSDM_FIELDS["interface_date"], interface_date_ddmmyyyy)
+    _try_set_radio(session, ZSDM_FIELDS["display_interface"])
     session.findById("wnd[0]").sendVKey(0)
-    wait(0.5)
+    wait(0.4)
     close_popups(session, 3)
+
 
 def newest_export_xlsx(after_ts: float) -> str:
     pattern = os.path.join(SAP_EXPORT_DIR, SAP_EXPORT_GLOB)
@@ -109,78 +162,14 @@ def newest_export_xlsx(after_ts: float) -> str:
             mtime = os.path.getmtime(p)
             if mtime >= after_ts:
                 candidates.append((mtime, p))
-        except:
-            pass
+        except: pass
     if not candidates:
         return ""
     candidates.sort(reverse=True)
     return candidates[0][1]
 
-def xlsx_to_csv(xlsx_path: str, csv_path: str):
-    wb = load_workbook(xlsx_path, data_only=True)
-    ws = wb.active
-    ensure_out_dir(csv_path)
 
-    def norm(v):
-        if v is None:
-            return ""
-        s = str(v).strip()
-        return s
-
-    def is_number_like(s: str) -> bool:
-        # "234,252" / "1234.56" / "-10" 같은 걸 숫자로 판단
-        if not s:
-            return False
-        t = s.replace(",", "")
-        try:
-            float(t)
-            return True
-        except:
-            return False
-
-    def is_trailing_summary_row(values) -> bool:
-        # 규칙:
-        # - 비어있지 않은 셀이 1~2개 정도로 매우 적고
-        # - 그 값들이 숫자처럼 보이면 "요약 줄"로 간주
-        non_empty = [v for v in values if v != ""]
-        if len(non_empty) == 0:
-            return True  # 완전 빈 줄은 제거
-        if len(non_empty) <= 2 and all(is_number_like(v) for v in non_empty):
-            return True
-        return False
-
-    # 1) 엑셀 전체를 리스트로 읽기
-    rows = []
-    for row in ws.iter_rows(values_only=True):
-        rows.append([norm(v) for v in row])
-
-    # 2) 뒤쪽의 빈 줄 제거
-    while rows and all(v == "" for v in rows[-1]):
-        rows.pop()
-
-    # 3) 마지막 줄이 "요약 줄" 패턴이면 제거 (필요하면 연속으로 여러 줄도 제거)
-    while rows and is_trailing_summary_row(rows[-1]):
-        rows.pop()
-
-    # 4) CSV로 저장
-    with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        for r in rows:
-            w.writerow(r)
-
-def file_ok(path, min_size):
-    try:
-        return os.path.exists(path) and os.path.getsize(path) >= min_size
-    except:
-        return False
-
-
-# ---------- Export trigger strategies ----------
 def try_export_via_alv_toolbar(session) -> bool:
-    """
-    ALV grid export is usually the most stable method.
-    Typical grid IDs vary; we try several common ones.
-    """
     grid_ids = [
         "wnd[0]/usr/cntlGRID1/shellcont/shell",
         "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
@@ -192,193 +181,202 @@ def try_export_via_alv_toolbar(session) -> bool:
             continue
         try:
             grid = session.findById(gid)
-
-            # open export context
             opened = False
             for export_btn in ("&MB_EXPORT", "EXPORT", "&EXPORT"):
                 try:
                     grid.pressToolbarContextButton(export_btn)
-                    wait(0.4)
-                    opened = True
-                    break
-                except:
-                    continue
+                    wait(0.4); opened = True; break
+                except: continue
             if not opened:
                 continue
-
-            # choose spreadsheet/xxl
             for item in ("&XXL", "XXL", "&SPREADSHEET", "SPREADSHEET", "&PC", "PC"):
                 try:
                     grid.selectContextMenuItem(item)
-                    wait(0.8)
-                    close_popups(session, 4)
+                    wait(0.8); close_popups(session, 4)
                     return True
-                except:
-                    continue
-        except:
-            continue
+                except: continue
+        except: continue
     return False
-
-
-def find_menu_path_by_text(session, texts):
-    """
-    Finds nested menu path by visible text, e.g. ["List","Export","Spreadsheet"].
-    Returns the final menu item object or None.
-    """
-    try:
-        mbar = session.findById("wnd[0]/mbar")
-    except:
-        return None
-
-    level = []
-    try:
-        for i in range(mbar.Children.Count):
-            level.append(mbar.Children(i))
-    except:
-        return None
-
-    last_hit = None
-    for t in texts:
-        hit = None
-        for it in level:
-            try:
-                txt = (getattr(it, "Text", "") or "").replace("&", "").strip().lower()
-                if txt == t.lower():
-                    hit = it
-                    break
-            except:
-                continue
-        if hit is None:
-            return None
-        last_hit = hit
-        # next level
-        nxt = []
-        try:
-            for i in range(hit.Children.Count):
-                nxt.append(hit.Children(i))
-        except:
-            nxt = []
-        level = nxt
-
-    return last_hit
 
 
 def try_export_via_menu(session) -> bool:
-    # by text
-    for path in (["List", "Export", "Spreadsheet"],
-                 ["List", "Export", "Local File"],
-                 ["List", "Export", "Spreadsheet..."]):
-        item = find_menu_path_by_text(session, path)
-        if item is not None:
+    """Fallback: List → Export → Spreadsheet (menu text lookup)."""
+    try:
+        mbar = session.findById("wnd[0]/mbar")
+    except:
+        return False
+    target_path = ["List", "Export", "Spreadsheet"]
+    level = [mbar.Children(i) for i in range(mbar.Children.Count)]
+    for wanted in target_path:
+        found = None
+        for m in level:
             try:
-                item.select()
-                wait(0.8)
-                close_popups(session, 6)
+                if m.Text.strip().lower() == wanted.lower():
+                    found = m; break
+            except: pass
+        if not found: return False
+        try:
+            level = [found.Children(i) for i in range(found.Children.Count)]
+        except:
+            try:
+                found.select(); wait(0.6); close_popups(session, 4)
                 return True
             except:
-                pass
+                return False
+    try:
+        level[0].select(); wait(0.6); close_popups(session, 4)
+        return True
+    except:
+        return False
 
-    # by common indexes
-    fallbacks = [
-        "wnd[0]/mbar/menu[0]/menu[3]/menu[1]",
-        "wnd[0]/mbar/menu[0]/menu[11]/menu[1]",
-        "wnd[0]/mbar/menu[0]/menu[4]/menu[1]",
-        "wnd[0]/mbar/menu[0]/menu[3]/menu[2]",
-    ]
-    for wid in fallbacks:
-        if exists(session, wid):
-            try:
-                session.findById(wid).select()
-                wait(0.8)
-                close_popups(session, 6)
-                return True
-            except:
-                pass
+
+def trigger_export(session) -> bool:
+    if try_export_via_alv_toolbar(session): return True
+    if try_export_via_menu(session): return True
     return False
 
 
-def trigger_export(session):
-    if try_export_via_alv_toolbar(session):
-        return True
-    if try_export_via_menu(session):
-        return True
-    return False
+def go_back_to_selection(session):
+    """F3 twice tends to land back on the selection screen from anywhere."""
+    for _ in range(3):
+        try:
+            session.findById("wnd[0]/tbar[0]/btn[3]").press()
+            wait(0.3); close_popups(session, 3)
+        except:
+            break
+
+
+# ================= XLSX → row extract =================
+def read_xlsx_rows(xlsx_path: str):
+    wb = load_workbook(xlsx_path, data_only=True)
+    ws = wb.active
+    rows = []
+    for row in ws.iter_rows(values_only=True):
+        rows.append(["" if v is None else str(v).strip() for v in row])
+    # drop trailing blank rows
+    while rows and all(v == "" for v in rows[-1]):
+        rows.pop()
+    return rows
+
+
+def _norm_hdr(s):
+    s = (s or "").strip().lower().replace("_", " ").replace(".", "")
+    return " ".join(s.split())
+
+
+def extract_keep_rows(xlsx_path: str):
+    """From the raw ZSDM64300 grid, keep only the 5 output columns and
+    return them in OUTPUT_HEADER order.  Skips summary rows (blank
+    Material) and header repeats."""
+    all_rows = read_xlsx_rows(xlsx_path)
+    if not all_rows:
+        return []
+    header = all_rows[0]
+    # Locate each keep-column index by header text
+    col_idx = {}
+    for i, h in enumerate(header):
+        key = KEEP_COLUMNS.get(_norm_hdr(h))
+        if key and key not in col_idx:
+            col_idx[key] = i
+    missing = [k for k in OUTPUT_HEADER if k not in col_idx]
+    if missing:
+        print(f"  [WARN] {os.path.basename(xlsx_path)}: missing columns {missing}. "
+              f"Available headers: {[_norm_hdr(h) for h in header]}")
+    out = []
+    for r in all_rows[1:]:
+        row = []
+        keep = True
+        for k in OUTPUT_HEADER:
+            i = col_idx.get(k, -1)
+            val = r[i].strip() if 0 <= i < len(r) else ""
+            row.append(val)
+        # Drop rows without a material or stock qty (totals / blanks)
+        if not row[OUTPUT_HEADER.index("material")]:
+            keep = False
+        if keep:
+            out.append(row)
+    return out
+
+
+def combine_to_csv(xlsx_paths, csv_path):
+    ensure_dir(os.path.dirname(csv_path))
+    total = 0
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(OUTPUT_HEADER)
+        for p in xlsx_paths:
+            if not p or not os.path.exists(p):
+                continue
+            rows = extract_keep_rows(p)
+            for r in rows:
+                w.writerow(r)
+            total += len(rows)
+            print(f"  {os.path.basename(p)} → {len(rows):,} rows")
+    print(f"  Combined CSV: {csv_path}  ({total:,} rows)")
 
 
 # ================= MAIN =================
+def yesterday_ddmmyyyy():
+    return (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
+
+
 def main():
-    ensure_out_dir(OUT_CSV)
+    ensure_dir(UNLOCK_DIR)
+    interface_date = yesterday_ddmmyyyy()
+    print(f"ZSDM64300 crawl · plants={PLANTS} · interface date={interface_date}")
 
-    if os.path.exists(OUT_CSV):
-        try:
-            os.remove(OUT_CSV)
-        except:
-            pass
-
-    export_start_ts = time.time()
-
-    SapGuiAuto = win32com.client.GetObject("SAPGUI")
-    app = SapGuiAuto.GetScriptingEngine
-
-    if app.Children.Count == 0:
-        raise RuntimeError("No SAP connection found. Open SAP GUI and log in first.")
-
-    conn = app.Children(0)
-    if conn.Children.Count == 0:
-        raise RuntimeError("No SAP session found.")
-
+    sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
+    conn = sap.Children(0)
     session = conn.Children(0)
-
     try:
         session.findById("wnd[0]").maximize()
-    except:
-        pass
+    except: pass
 
-    start_mb52_fresh(session)
-    set_plant(session)
+    xlsx_files = []
+    for plant in PLANTS:
+        print(f"\n── {plant} ──")
+        start_transaction_fresh(session)
+        set_selection_screen(session, plant, interface_date)
 
-    # Execute (F8)
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()
-    wait(2.0)
-    close_popups(session, 4)
+        export_start_ts = time.time()
+        session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 execute
+        wait(2.0); close_popups(session, 4)
 
-    ok = trigger_export(session)
-    if not ok:
-        raise RuntimeError("Could not trigger export (menu/ALV export controls not found).")
+        if not trigger_export(session):
+            print(f"  [ERROR] {plant}: could not trigger export"); continue
 
-    # wait for XLSX to appear
-    xlsx_path = ""
-    for _ in range(40):
-        xlsx_path = newest_export_xlsx(export_start_ts)
-        if xlsx_path and os.path.exists(xlsx_path):
-            s1 = os.path.getsize(xlsx_path)
-            wait(0.8)
-            s2 = os.path.getsize(xlsx_path)
-            if s2 >= s1 and s2 > 500:
-                break
-        wait(0.6)
+        xlsx_path = ""
+        for _ in range(50):
+            xlsx_path = newest_export_xlsx(export_start_ts)
+            if xlsx_path and os.path.exists(xlsx_path):
+                s1 = os.path.getsize(xlsx_path); wait(0.8)
+                s2 = os.path.getsize(xlsx_path)
+                if s2 >= s1 and s2 > 500:
+                    break
+            wait(0.6)
+        if not xlsx_path:
+            print(f"  [ERROR] {plant}: SAP export XLSX not found in {SAP_EXPORT_DIR}")
+            go_back_to_selection(session); continue
 
-    if not xlsx_path:
-        raise RuntimeError(
-            f"Could not find SAP auto-export XLSX in {SAP_EXPORT_DIR} "
-            f"(pattern {SAP_EXPORT_GLOB}) after {datetime.fromtimestamp(export_start_ts)}"
-        )
+        dest = os.path.join(UNLOCK_DIR, f"dot_stock_{plant}.xlsx")
+        shutil.copy2(xlsx_path, dest)
+        print(f"  {plant} XLSX → {dest}")
+        xlsx_files.append(dest)
 
-    print("Detected XLSX:", xlsx_path)
+        go_back_to_selection(session)
 
-    xlsx_to_csv(xlsx_path, OUT_CSV)
+    print("\n── Combine to CSV ──")
+    combine_to_csv(xlsx_files, COMBINED_CSV)
 
-    if not file_ok(OUT_CSV, MIN_CSV_SIZE):
-        raise RuntimeError("CSV conversion failed or CSV is too small.")
+    if not os.path.exists(COMBINED_CSV) or os.path.getsize(COMBINED_CSV) < MIN_CSV_SIZE:
+        raise RuntimeError("Combined CSV empty or too small.")
+    print(f"\nDone.  Run load_csv_to_mysql.py next to push into MySQL.")
 
-    print("CSV saved:", OUT_CSV)
+    if DELETE_XLSX_AFTER_COMBINE:
+        for p in xlsx_files:
+            try: os.remove(p)
+            except: pass
 
-    if DELETE_XLSX_AFTER_CONVERT:
-        try:
-            os.remove(xlsx_path)
-            print("Deleted XLSX:", xlsx_path)
-        except Exception as e:
-            print("[WARN] Could not delete XLSX:", e)
 
 if __name__ == "__main__":
     main()
