@@ -177,6 +177,10 @@ def newest_export_xlsx(after_ts: float) -> str:
 
 def try_export_via_alv_toolbar(session) -> bool:
     grid_ids = [
+        # ZSDM64300 uses this specific container name — captured from
+        # the on-screen dump.  Kept first so we hit it before probing
+        # the generic MB52-style IDs below.
+        "wnd[0]/usr/cntlG_CONTAINER/shellcont/shell",
         "wnd[0]/usr/cntlGRID1/shellcont/shell",
         "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
         "wnd[0]/usr/cntlALV_CONTAINER/shellcont/shell",
@@ -310,12 +314,70 @@ def dump_screen(session):
     print("  ==== END DUMP ====")
 
 
+def try_export_via_system_menu(session) -> bool:
+    """SAP's universal 'System → List → Save → Local File' path.  On
+    ZSDM64300 the dump proved this is at wnd[0]/mbar/menu[0]/menu[5]/
+    menu[2]/menu[2] — hard-coded so we don't rely on Text-lookup that
+    can fail if the label is translated or spaced differently."""
+    for path in (
+        "wnd[0]/mbar/menu[0]/menu[5]/menu[2]/menu[2]",  # ZSDM64300 layout
+        "wnd[0]/mbar/menu[0]/menu[3]/menu[2]/menu[2]",  # slight variation
+    ):
+        if not exists(session, path):
+            continue
+        try:
+            session.findById(path).select()
+            wait(0.6)
+        except:
+            continue
+        # Format popup — pick "Spreadsheet" (radio index 1).
+        for rid in (
+            "wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]",
+            "wnd[1]/usr/radRB_SPRE",
+            "wnd[1]/usr/radR_XLS",
+        ):
+            if exists(session, rid):
+                try: session.findById(rid).select()
+                except: pass
+                break
+        # Confirm the format dialog (green tick / Enter)
+        try:
+            session.findById("wnd[1]/tbar[0]/btn[0]").press()
+            wait(0.6)
+        except: pass
+        # Now the Save-As dialog.  Fill the path + filename so the file
+        # lands where the poller looks (C:\temp\EXPORT_ZSDM.xlsx).
+        if exists(session, "wnd[1]"):
+            try:
+                if exists(session, "wnd[1]/usr/ctxtDY_PATH"):
+                    session.findById("wnd[1]/usr/ctxtDY_PATH").Text = SAP_EXPORT_DIR + "\\"
+                if exists(session, "wnd[1]/usr/ctxtDY_FILENAME"):
+                    session.findById("wnd[1]/usr/ctxtDY_FILENAME").Text = "EXPORT_ZSDM.xlsx"
+            except: pass
+            # 'Replace' if a same-named file already exists — the poller
+            # picks by mtime so the newest wins.
+            for sid in ("wnd[1]/tbar[0]/btn[11]",   # Save
+                        "wnd[1]/tbar[0]/btn[0]"):    # Continue / OK
+                try:
+                    session.findById(sid).press()
+                    wait(0.8)
+                    break
+                except: pass
+            close_popups(session, 4)
+        return True
+    return False
+
+
 _DEBUG_DUMPED = False   # dump once per script run
 def trigger_export(session) -> bool:
     global _DEBUG_DUMPED
-    if try_export_via_alv_toolbar(session): return True
-    if try_export_via_menu(session):        return True
-    if try_export_via_okcd(session):        return True
+    # Order: try the hard-coded ZSDM64300 System-menu path first (we
+    # know it works from the dump), then fall back to the generic
+    # strategies for other transactions.
+    if try_export_via_system_menu(session):    return True
+    if try_export_via_alv_toolbar(session):    return True
+    if try_export_via_menu(session):           return True
+    if try_export_via_okcd(session):           return True
     if try_export_via_toolbar_button(session): return True
     if DEBUG_DUMP_ON_EXPORT_FAIL and not _DEBUG_DUMPED:
         _DEBUG_DUMPED = True
