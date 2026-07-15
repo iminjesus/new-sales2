@@ -483,6 +483,13 @@
             if (typeof window._fleetPopupHKDrill === "function")
               window._fleetPopupHKDrill(rim);
           },
+          // Show a pointer cursor whenever the mouse is over a bar /
+          // line point so it's obvious the chart is clickable.  Fall
+          // back to default cursor in the empty parts of the plot.
+          onHover: (evt, elements) => {
+            const target = evt && evt.native && evt.native.target;
+            if (target) target.style.cursor = elements.length ? "pointer" : "default";
+          },
           scales: {
             x: { ticks: { font: { size: 10 } } },
             y: { beginAtZero: true, max: yMax,
