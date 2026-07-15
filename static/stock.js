@@ -18,6 +18,7 @@
   let __PRODUCT_GROUP_OPTIONS = [];
   let __PATTERN_OPTIONS  = [];
   let __MATERIAL_OPTIONS = [];
+  let __CODE_OPTIONS     = [];
 
   // custom dropdown helpers
   function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
@@ -137,6 +138,7 @@
     product_group: "ALL",
     pattern: "ALL",
     material: "ALL",
+    code: "ALL",   // carrying_26.m_code
     orders_metric: "po" // "po" | "confirm"
   };
 
@@ -201,6 +203,7 @@
     p.set("product_group", state.product_group);
     if (state.pattern && state.pattern !== "ALL")  p.set("pattern", state.pattern);
     if (state.material && state.material !== "ALL") p.set("material", state.material);
+    if (state.code && state.code !== "ALL")         p.set("code", state.code);
     Object.entries(extra).forEach(([k,v]) => { if (v != null) p.set(k, String(v)); });
     return p.toString();
   }
@@ -873,8 +876,11 @@
 
   function _clearMaterialFilter(){
     state.material = "ALL";
+    state.code     = "ALL";
     const matEl = document.getElementById("material");
     if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
+    const cdEl  = document.getElementById("code");
+    if (cdEl)  { cdEl.value  = ""; ddUpdateActive(cdEl); }
   }
 
   async function _cascadeAdvance(bucket){
@@ -1061,26 +1067,45 @@
     __MATERIAL_OPTIONS = rows.map(x => String(x)).filter(Boolean);
   }
 
+  async function refreshCodes(){
+    const pg  = state.product_group;
+    const pat = ($("#pattern")?.value  || "").trim();
+    const mat = ($("#material")?.value || "").trim();
+    const qs  = new URLSearchParams({
+      product_group: pg,
+      ...(pat ? { pattern:  pat } : {}),
+      ...(mat ? { material: mat } : {}),
+    }).toString();
+    const res = await fetchJSON(`/api/codes?${qs}`);
+    const rows = Array.isArray(res) ? res : (res?.rows || []);
+    __CODE_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+  }
+
   function readUIToState(){
     const pgVal = ($("#product_group")?.value || "").trim();
     state.product_group = pgVal || "ALL";
-    const pat = ($("#pattern")?.value || "").trim();
-    const mat = ($("#material")?.value || "").trim();
-    state.pattern = pat ? pat : "ALL";
+    const pat  = ($("#pattern")?.value  || "").trim();
+    const mat  = ($("#material")?.value || "").trim();
+    const cd   = ($("#code")?.value     || "").trim();
+    state.pattern  = pat ? pat : "ALL";
     state.material = mat ? mat : "ALL";
+    state.code     = cd  ? cd  : "ALL";
   }
 
   function clearUI(){
     const pg  = document.getElementById("product_group");
     const pat = document.getElementById("pattern");
     const mat = document.getElementById("material");
+    const cd  = document.getElementById("code");
     if (pg)  { pg.value  = ""; ddUpdateActive(pg); }
     if (pat) { pat.value = ""; ddUpdateActive(pat); }
     if (mat) { mat.value = ""; ddUpdateActive(mat); }
+    if (cd)  { cd.value  = ""; ddUpdateActive(cd); }
     state.category     = "ALL";
     state.product_group = "ALL";
     state.pattern      = "ALL";
     state.material     = "ALL";
+    state.code         = "ALL";
     state.orders_metric = "po";
 
     setActiveButtons("catBtns", "val", "ALL");
@@ -1112,6 +1137,7 @@
     await refreshProductGroups();
     await refreshPatterns();
     await refreshMaterials();
+    await refreshCodes();
 
     bindDropdown({
       inputId: "product_group",
@@ -1126,12 +1152,16 @@
         state.product_group = v || "ALL";
         const patEl = document.getElementById("pattern");
         const matEl = document.getElementById("material");
+        const cdEl  = document.getElementById("code");
         if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
         if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
-        state.pattern = "ALL";
+        if (cdEl)  { cdEl.value  = ""; ddUpdateActive(cdEl); }
+        state.pattern  = "ALL";
         state.material = "ALL";
+        state.code     = "ALL";
         await refreshPatterns();
         await refreshMaterials();
+        await refreshCodes();
         // Auto-jump the cascade to product_group level so the user
         // sees the picked group's patterns instead of starting back at
         // PCLT / TBR.
@@ -1152,6 +1182,7 @@
         patEl.value = v; ddUpdateActive(patEl);
         state.pattern = v || "ALL";
         await refreshMaterials();
+        await refreshCodes();
         // Auto-jump cascade to pattern level (resolves the ancestor
         // line / product_group from carrying_26 even when the user
         // skipped picking those filters).
@@ -1176,7 +1207,23 @@
         // Look up its ancestors and jump the cascade straight to size
         // level so the user sees which category / pattern that size
         // belongs to alongside the per-state stock.
+        await refreshCodes();
         await _syncCascadeFromFilters();
+        await fetchAndRender();
+      }
+    });
+
+    bindDropdown({
+      inputId: "code",
+      btnId: "codeBtn",
+      clearId: "codeClear",
+      menuId: "codeMenu",
+      getOptions: () => __CODE_OPTIONS,
+      onPick: async (val) => {
+        const v = (val === "ALL") ? "" : val;
+        const cdEl = document.getElementById("code");
+        if (cdEl) { cdEl.value = v; ddUpdateActive(cdEl); }
+        state.code = v || "ALL";
         await fetchAndRender();
       }
     });

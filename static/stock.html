@@ -87,6 +87,17 @@
         <div class="dd-menu" id="materialMenu"></div>
       </div>
 
+      <!-- Code (custom dropdown — carrying_26.m_code) -->
+      <div class="dd" id="ddCode">
+        <label for="code">Code</label>
+        <div class="dd-wrap">
+          <input id="code" type="text" placeholder="Search Code" autocomplete="off">
+          <button type="button" class="dd-btn" id="codeBtn">▼</button>
+          <button type="button" class="dd-btn dd-clear-btn" id="codeClear">✕</button>
+        </div>
+        <div class="dd-menu" id="codeMenu"></div>
+      </div>
+
       <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
         <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
         <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>
@@ -199,6 +210,6 @@
   })();
   </script>
 
-  <script src="/static/stock.js?v=20260715b" defer></script>
+  <script src="/static/stock.js?v=20260715c" defer></script>
 </body>
 </html>
