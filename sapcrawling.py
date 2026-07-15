@@ -51,6 +51,12 @@ COMBINED_CSV = os.path.join(UNLOCK_DIR, "dot_stock.csv")
 DELETE_XLSX_AFTER_COMBINE = False                   # keep per-plant XLSX
 MIN_CSV_SIZE = 200
 
+# When True, dumps everything we can see on the result screen the first
+# time export fails so it's clear which grid ID / menu path / okcd works
+# on THIS SAP layout.  Log lands in the console; paste it here and we
+# can pin the right IDs into the config permanently.
+DEBUG_DUMP_ON_EXPORT_FAIL = True
+
 # SAP GUI field IDs for the ZSDM64300 selection screen.  Adjust here if
 # your SAP renders different names.  Every field is tried with .Text
 # assignment — if the ID doesn't exist we skip it.
@@ -230,9 +236,90 @@ def try_export_via_menu(session) -> bool:
         return False
 
 
+def try_export_via_okcd(session) -> bool:
+    """SAP has a hidden command '%pc' that opens the Local File save
+    dialog on any ALV list.  Works even when the grid has no toolbar."""
+    for cmd in ("%pc", "%%pc"):
+        try:
+            session.findById("wnd[0]/tbar[0]/okcd").Text = cmd
+            session.findById("wnd[0]").sendVKey(0)
+            wait(0.8)
+            # Popup should ask for format; pick Spreadsheet
+            if exists(session, "wnd[1]"):
+                # Try radio "Spreadsheet"
+                for rid in ("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]",
+                            "wnd[1]/usr/radRB_SPRE",
+                            "wnd[1]/usr/radR_XLS",
+                            "wnd[1]/usr/radSPRE",
+                            "wnd[1]/usr/radR_SPRE"):
+                    if exists(session, rid):
+                        try: session.findById(rid).select(); break
+                        except: pass
+                # Confirm
+                try:
+                    session.findById("wnd[1]/tbar[0]/btn[0]").press()
+                    wait(0.6)
+                except: pass
+                # Save-file dialog will appear next (SAP will still
+                # write the EXPORT_*.xlsx to C:\temp for our poller).
+                close_popups(session, 4)
+                return True
+        except: pass
+    return False
+
+
+def try_export_via_toolbar_button(session) -> bool:
+    """Some Z-transactions expose 'Local File' as a top-toolbar button
+    with id btn[43], btn[45], or via a Shift+F9 key combo."""
+    for vk in (45,):   # Ctrl+Shift+F9 → SAP standard "Local File" list menu
+        try:
+            session.findById("wnd[0]").sendVKey(vk)
+            wait(0.6)
+            if exists(session, "wnd[1]"):
+                close_popups(session, 4)
+                return True
+        except: pass
+    return False
+
+
+def dump_screen(session):
+    """Print everything we can see on the current SAP window.  Used
+    once when export fails so the operator can share the output back
+    to figure out the right IDs for this SAP layout."""
+    print("  ==== SCREEN DUMP ====")
+    def _walk(elem, depth=0):
+        try:
+            eid = elem.Id
+        except: eid = "?"
+        try:
+            etype = elem.Type
+        except: etype = "?"
+        try:
+            etext = (elem.Text or "").strip()[:40]
+        except: etext = ""
+        indent = "  " * depth
+        print(f"    {indent}[{etype}] {eid}  {etext!r}")
+        try:
+            for i in range(elem.Children.Count):
+                _walk(elem.Children(i), depth + 1)
+        except: pass
+    try:
+        _walk(session.findById("wnd[0]"))
+    except Exception as e:
+        print(f"    dump failed: {e}")
+    print("  ==== END DUMP ====")
+
+
+_DEBUG_DUMPED = False   # dump once per script run
 def trigger_export(session) -> bool:
+    global _DEBUG_DUMPED
     if try_export_via_alv_toolbar(session): return True
-    if try_export_via_menu(session): return True
+    if try_export_via_menu(session):        return True
+    if try_export_via_okcd(session):        return True
+    if try_export_via_toolbar_button(session): return True
+    if DEBUG_DUMP_ON_EXPORT_FAIL and not _DEBUG_DUMPED:
+        _DEBUG_DUMPED = True
+        dump_screen(session)
     return False
 
 
