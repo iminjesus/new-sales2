@@ -61,7 +61,8 @@ async function loadSalesMap() {
     product_group: filters.product_group,
     pattern:       filters.pattern,
     material:      filters.material,
-    top_limit:     filters.top_limit || 0 
+    code:          filters.code,
+    top_limit:     filters.top_limit || 0
   }).toString();
 
   const [data, summary] = await Promise.all([
@@ -778,6 +779,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setInput("product_group", filters.product_group);
   setInput("pattern",       filters.pattern);
   setInput("material",      filters.material);
+  setInput("code",          filters.code);
 
   // Native <select> dropdowns (sold_to_group, salesman_name)
   const stgSel = document.getElementById("sold_to_group");

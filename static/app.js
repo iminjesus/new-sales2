@@ -82,6 +82,7 @@ const filters={
   product_group:"ALL",
   pattern:"ALL",
   material:"ALL",
+  code:"ALL",    // carrying_26.m_code — exact-match search
   category:"ALL",
   category_target:"ALL",
   brand:"ALL",   // HK / LF — Product cascade sub-layer between line and product_group
@@ -915,7 +916,7 @@ async function fetchDailySales(){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, top_limit:filters.top_limit ||0
   });
   // sales_thismonth is current month (2026) — promos apply unconditionally.
   window.appendPromos && window.appendPromos(qs);
@@ -926,7 +927,7 @@ async function fetchDailyKPIActual(region,BDE){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON_DIRECT(`/api/daily_sales?${qs}`);
 }
@@ -935,7 +936,7 @@ async function fetchDailyKPITarget(region,BDE){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON_DIRECT(`/api/daily_target?${qs}`);
 }
@@ -945,7 +946,7 @@ async function fetchDailyBreakdownWithGroup(groupBy){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: effective, top_limit:filters.top_limit ||0
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, group_by: effective, top_limit:filters.top_limit ||0
   });
   // sales_thismonth is current month (2026) — promos apply unconditionally.
   window.appendPromos && window.appendPromos(qs);
@@ -968,20 +969,20 @@ async function drawDailyTotals(){
     _hasPromo ? Promise.resolve(_zeroDay31) : fetchJSON(`/api/daily_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code,
       top_limit:filters.top_limit||0, month: effectiveMonth()
     }).toString()}`),
     fetchDailyBreakdownWithGroup("region"),
     fetchJSON(`/api/daily_breakdown?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:"ALL", salesman:"ALL",
       channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code,
       group_by:"region", top_limit:filters.top_limit||0
     }).toString()}`),
     _hasPromo ? Promise.resolve(_zeroMonth12) : fetchJSON_DIRECT(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code,
       top_limit:filters.top_limit||0, year:2026
     }).toString()}`)
   ]);
@@ -1424,7 +1425,7 @@ async function fetchMonthlySales(year=2025){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0,
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, top_limit:filters.top_limit ||0,
     year: year
   });
   window.appendPromos && window.appendPromos(qs);
@@ -1537,7 +1538,7 @@ async function fetchMonthlyKPIActual(region,BDE, year=2026){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year: year
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, top_limit:filters.top_limit ||0, year: year
   }).toString();
   return fetchJSON_DIRECT(`/api/monthly_sales?${qs}`);
 }
@@ -1545,7 +1546,7 @@ async function fetchMonthlyKPITarget(region,BDE, year=2026){
   const qs=new URLSearchParams({
     metric:filters.metric, category:filters.category, region:region, salesman:BDE,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, top_limit:filters.top_limit ||0, year: year 
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, top_limit:filters.top_limit ||0, year: year 
   }).toString();
   return fetchJSON_DIRECT(`/api/monthly_target?${qs}`);
 }
@@ -1564,7 +1565,7 @@ async function drawMonthlyKPI(){
     region: "ALL", salesman: "ALL",
     channel: filters.channel,
     sold_to_group: filters.sold_to_group, sold_to: filters.sold_to, ship_to: filters.ship_to,
-    product_group: filters.product_group, pattern: filters.pattern, material: filters.material,
+    product_group: filters.product_group, pattern: filters.pattern, material: filters.material, code: filters.code,
     top_limit: filters.top_limit || 0,
     ...extra,
   }).toString();
@@ -1721,7 +1722,7 @@ async function fetchMonthlyBreakdownWithGroup(groupBy, year=2025){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, group_by: effective, top_limit:filters.top_limit ||0,
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code, group_by: effective, top_limit:filters.top_limit ||0,
     year: year
   });
   // Promo is only meaningful for 2026; the backend silently ignores
@@ -1735,7 +1736,7 @@ async function fetchMonthlyTargetBreakdownWithGroup(groupBy, year=2026){
   const qs = new URLSearchParams({
     metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
     channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-    product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+    product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code,
     group_by: groupBy, top_limit:filters.top_limit || 0,
     year: year
   }).toString();
@@ -1762,7 +1763,7 @@ async function drawMonthlyTotals(){
     _hasPromo ? Promise.resolve(_zeroMonths) : fetchJSON(`/api/monthly_target?${new URLSearchParams({
       metric:filters.metric, category:filters.category, region:filters.region, salesman:filters.salesman,
       channel:filters.channel, sold_to_group:filters.sold_to_group, sold_to:filters.sold_to, ship_to:filters.ship_to,
-      product_group:filters.product_group, pattern:filters.pattern, material:filters.material,
+      product_group:filters.product_group, pattern:filters.pattern, material:filters.material, code:filters.code,
       top_limit:filters.top_limit ||0,
       year: 2026
     }).toString()}`)
@@ -2552,7 +2553,9 @@ async function fetchYearlySales() {
     product_group: filters.product_group,
     pattern:       filters.pattern,
     material:      filters.material,
+    code:         filters.code,
     material:      filters.material,
+    code:         filters.code,
     top_limit:filters.top_limit ||0
   }).toString();
   return fetchJSON(`/api/yearly_sales?${qs}`);
@@ -2570,6 +2573,7 @@ async function fetchYearlyBreakdownWithGroup(groupBy) {
     product_group: filters.product_group,
     pattern:       filters.pattern,
     material:      filters.material,
+    code:         filters.code,
     top_limit:filters.top_limit ||0,
     group_by:      groupBy
   }).toString();
@@ -2957,6 +2961,7 @@ async function loadProfit() {
     product_group: filters.product_group,
     pattern:       filters.pattern,
     material:      filters.material,
+    code:         filters.code,
     top_limit:filters.top_limit ||0
   }).toString();
 
@@ -3086,6 +3091,7 @@ window.appendPromos = function(qs){
 let __PRODUCT_GROUP_OPTIONS = [];
 let __PATTERN_OPTIONS = [];
 let __MATERIAL_OPTIONS = [];
+let __CODE_OPTIONS = [];
 
 
 let __SOLD_TO_OPTIONS = [];
@@ -3104,7 +3110,7 @@ async function refreshSoldToCustom(){
     salesman: filters.salesman || "ALL",
     product_group: filters.product_group || "ALL",
     pattern: filters.pattern || "ALL",
-    material: filters.material || "ALL",
+    material: filters.material || "ALL", code: filters.code || "ALL",
   }).toString();
   const res = await fetchJSON(`/api/sold_to_names?${qs}`);
   const rows = Array.isArray(res) ? res : (res?.rows || []);
@@ -3138,7 +3144,7 @@ async function refreshShipToCustom(){
     salesman: filters.salesman || "ALL",
     product_group: filters.product_group || "ALL",
     pattern: filters.pattern || "ALL",
-    material: filters.material || "ALL",
+    material: filters.material || "ALL", code: filters.code || "ALL",
   }).toString();
 
   const res = await fetchJSON(`/api/ship_to_names?${qs}`);
@@ -3310,6 +3316,23 @@ async function refreshMaterialsCustom(){
   __MATERIAL_OPTIONS = rows.map(x => String(x)).filter(Boolean);
 }
 
+// Codes = carrying_26.m_code narrowed by the same ancestor filters
+// (product_group / pattern / size).  Same shape as materials so the
+// dropdown behaves identically.
+async function refreshCodesCustom(){
+  const pg  = document.getElementById("product_group")?.value || "ALL";
+  const pat = (document.getElementById("pattern")?.value || "").trim();
+  const mat = (document.getElementById("material")?.value || "").trim();
+  const qs  = new URLSearchParams({
+    product_group: pg,
+    ...(pat ? { pattern:  pat } : {}),
+    ...(mat ? { material: mat } : {}),
+  }).toString();
+  const res = await fetchJSON(`/api/codes?${qs}`);
+  const rows = Array.isArray(res) ? res : (res?.rows || []);
+  __CODE_OPTIONS = rows.map(x => String(x)).filter(Boolean);
+}
+
 // bind once on load
 // Role-based scope — call whoami once, then force / lock the right
 // filter values + show a small "Logged in as: …" badge.  Idempotent;
@@ -3384,6 +3407,7 @@ window.addEventListener("load", async () => {
   // initial load
   await refreshPatternsCustom();
   await refreshMaterialsCustom();
+  await refreshCodesCustom();
 
   bindDropdown({
     inputId: "product_group",
@@ -3402,8 +3426,12 @@ window.addEventListener("load", async () => {
       if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
       filters.pattern = "ALL";
       filters.material = "ALL";
+      filters.code = "ALL";
+      const codeEl = document.getElementById('code');
+      if (codeEl) { codeEl.value = ""; ddUpdateActive(codeEl); }
       await refreshPatternsCustom();
       await refreshMaterialsCustom();
+      await refreshCodesCustom();
       await refreshSoldToCustom();
       await refreshShipToCustom();
       refreshAllDebounced();
@@ -3459,6 +3487,7 @@ window.addEventListener("load", async () => {
       patEl.value = v; ddUpdateActive(patEl);
       filters.pattern = v || "ALL";
       await refreshMaterialsCustom();
+      await refreshCodesCustom();
       refreshAllDebounced();
     }
   });
@@ -3469,11 +3498,27 @@ window.addEventListener("load", async () => {
     clearId: "materialClear",
     menuId: "materialMenu",
     getOptions: () => __MATERIAL_OPTIONS,
-    onPick: (val) => {
+    onPick: async (val) => {
       const v = (val === "ALL") ? "" : val;
       const matEl = document.getElementById("material");
       matEl.value = v; ddUpdateActive(matEl);
       filters.material = v || "ALL";
+      await refreshCodesCustom();
+      refreshAllDebounced();
+    }
+  });
+
+  bindDropdown({
+    inputId: "code",
+    btnId: "codeBtn",
+    clearId: "codeClear",
+    menuId: "codeMenu",
+    getOptions: () => __CODE_OPTIONS,
+    onPick: (val) => {
+      const v = (val === "ALL") ? "" : val;
+      const codeEl = document.getElementById("code");
+      if (codeEl) { codeEl.value = v; ddUpdateActive(codeEl); }
+      filters.code = v || "ALL";
       refreshAllDebounced();
     }
   });
