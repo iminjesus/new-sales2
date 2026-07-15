@@ -817,6 +817,13 @@
   // actually moved.
   async function _syncCascadeFromFilters(){
     const params = new URLSearchParams();
+    // Code is the most specific — resolves to a single m_code, so the
+    // backend can hand back the full line/pg/pattern/size chain in one
+    // shot.  Send it first (and alone if set) so upstream filters get
+    // reset to the code's real ancestors instead of whatever stale
+    // combination was in place.
+    if (state.code && state.code !== "ALL")
+      params.set("code", state.code);
     if (state.material && state.material !== "ALL")
       params.set("material", state.material);
     if (state.pattern && state.pattern !== "ALL")
@@ -837,6 +844,24 @@
       cascadeState = { level: "size",
                        line: d.line || "", pg: d.product_group || "",
                        pat: d.pattern || "" };
+      // When resolved via `code`, also lock the sibling dropdowns to
+      // the code's ancestors so the whole filter row visually agrees
+      // with the picked code.
+      if (state.code && state.code !== "ALL" && d.size) {
+        state.material = d.size;
+        const matEl = document.getElementById("material");
+        if (matEl) { matEl.value = d.size; ddUpdateActive(matEl); }
+      }
+      if (state.code && state.code !== "ALL" && d.pattern) {
+        state.pattern = d.pattern;
+        const patEl = document.getElementById("pattern");
+        if (patEl) { patEl.value = d.pattern; ddUpdateActive(patEl); }
+      }
+      if (state.code && state.code !== "ALL" && d.product_group) {
+        state.product_group = d.product_group;
+        const pgEl = document.getElementById("product_group");
+        if (pgEl) { pgEl.value = d.product_group; ddUpdateActive(pgEl); }
+      }
     } else if (d.level === "pattern") {
       cascadeState = { level: "pattern",
                        line: d.line || "", pg: d.product_group || "",
@@ -1224,6 +1249,11 @@
         const cdEl = document.getElementById("code");
         if (cdEl) { cdEl.value = v; ddUpdateActive(cdEl); }
         state.code = v || "ALL";
+        // Code is the leaf dimension — resolve its full ancestor chain
+        // (line / pg / pattern / size) so the sibling dropdowns show
+        // what this code actually belongs to, and drop the cascade
+        // table straight onto the corresponding size row.
+        await _syncCascadeFromFilters();
         await fetchAndRender();
       }
     });

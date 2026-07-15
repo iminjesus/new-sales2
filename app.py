@@ -2709,9 +2709,35 @@ def api_cascade_ancestors():
     material = (request.args.get("material")      or "").strip()
     pattern  = (request.args.get("pattern")       or "").strip()
     pg       = (request.args.get("product_group") or "").strip()
+    code     = (request.args.get("code")          or "").strip()
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
+        # Code is the most specific dimension — resolves to at most one
+        # carrying_26 row.  Return the full ancestor chain so the /stock
+        # UI can lock the Product Group / Pattern / Size dropdowns to
+        # this code's parents in one round-trip.
+        if code and code != "ALL":
+            cur.execute(
+                "SELECT line, product_group, pattern, size "
+                "FROM carrying_26 "
+                "WHERE line IN ('PCLT','TBR') AND m_code = %s "
+                "LIMIT 1",
+                (code,),
+            )
+            r = cur.fetchone()
+            if r:
+                return jsonify({
+                    "level":         "size",
+                    "line":          r["line"]          or "",
+                    "product_group": r["product_group"] or "",
+                    "pattern":       r["pattern"]       or "",
+                    "size":          r["size"]          or "",
+                    "code":          code,
+                })
+            # Code not in the PCLT/TBR universe — fall through to line
+            # root and let the user re-narrow from scratch.
+            return jsonify({"level": "line"})
         if material:
             # Narrow by every filter the user already set.  Picking
             # Pattern = RA18 AND Size = 185R14 should pin both —
