@@ -2233,24 +2233,61 @@ def api_stock_aging():
     if not plant:
         return jsonify({"error": "plant required"}), 400
 
+    # Same filter set as the cascade table — so clicking a Size-filtered
+    # marker gives an aging popup that matches the map circle instead of
+    # showing the whole plant's DOT population.
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+
+    car_wh = []
+    car_p  = []
+    if prod_group and prod_group != "ALL":
+        car_wh.append("c.product_group = %s"); car_p.append(prod_group)
+    if pattern:
+        car_wh.append("c.pattern LIKE %s"); car_p.append(f"%{pattern}%")
+    if material:
+        car_wh.append("c.size = %s"); car_p.append(material)
+    if category == "PCLT":
+        car_wh.append("c.line = 'PCLT'")
+    elif category == "TBR":
+        car_wh.append("c.line = 'TBR'")
+    elif category == "18PLUS":
+        car_wh.append("c.line = 'PCLT'")
+        car_wh.append("CAST(SUBSTRING_INDEX(c.size,'R',-1) AS DECIMAL(5,2)) >= 18.0")
+
+    has_filter = bool(car_wh)  # controls whether "top aged materials" is returned
+    # When we have a filter, narrow via INNER JOIN to a dedup'd carrying
+    # subquery so multi-row m_codes don't multiply stock quantities.
+    if has_filter:
+        inner_wh = " AND ".join(w.replace("c.", "") for w in car_wh)
+        join_sql = (
+            "JOIN (SELECT m_code,"
+            "             MIN(size)          AS size,"
+            "             MIN(pattern)       AS pattern,"
+            "             MIN(brand)         AS brand"
+            f"      FROM carrying_26 WHERE {inner_wh}"
+            "      GROUP BY m_code) c ON c.m_code = s.material"
+        )
+    else:
+        join_sql = "LEFT JOIN carrying_26 c ON c.m_code = s.material"
+
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        cur.execute(
-            """
-            SELECT s.material,
-                   s.dot_no,
-                   SUM(s.stock_qty) AS qty,
-                   MAX(c.size)      AS size,
-                   MAX(c.pattern)   AS pattern,
-                   MAX(c.brand)     AS brand
-            FROM stock s
-            LEFT JOIN carrying_26 c ON c.m_code = s.material
-            WHERE s.plant = %s AND s.stock_qty > 0
-            GROUP BY s.material, s.dot_no
-            """,
-            (plant,),
+        sql = (
+            "SELECT s.material,"
+            "       s.dot_no,"
+            "       SUM(s.stock_qty) AS qty,"
+            "       MAX(c.size)      AS size,"
+            "       MAX(c.pattern)   AS pattern,"
+            "       MAX(c.brand)     AS brand "
+            f"FROM stock s {join_sql} "
+            "WHERE s.plant = %s AND s.stock_qty > 0 "
+            "GROUP BY s.material, s.dot_no"
         )
+        cur.execute(sql, tuple(car_p) + (plant,))
         rows = cur.fetchall() or []
     finally:
         try: cur.close()
@@ -2295,14 +2332,21 @@ def api_stock_aging():
                 -m["total"])
     mat_list = sorted(materials.values(), key=_sort_key)[:30]
 
-    return jsonify({
+    # Top-aged materials list is only informative when we're looking at
+    # the whole plant — once the user has picked a size / pattern the
+    # per-material rows collapse into one and add nothing.  User asked
+    # explicitly for it to disappear the moment any filter is applied.
+    resp = {
         "plant":         plant,
         "state":         _ORDER_PLANT_STATE.get(plant, ""),
         "total":         sum(plant_buckets.values()),
         "buckets":       plant_buckets,
         "bucket_order":  _AGING_BUCKETS + ["unknown"],
-        "materials":     mat_list,
-    })
+        "has_filter":    has_filter,
+    }
+    if not has_filter:
+        resp["materials"] = mat_list
+    return jsonify(resp)
 
 
 @app.route("/api/sales_stats")

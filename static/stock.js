@@ -297,7 +297,7 @@
     container.style.maxWidth = "540px";
     container.innerHTML =
       `<div style="font-weight:700;font-size:13px;">${plant} — stock aging</div>
-       <div style="font-size:11.5px;color:#666;margin-top:2px;">
+       <div style="font-size:11.5px;color:#666;margin-top:2px;" id="_agTotal">
          Total: ${fmt(headlineTotal)}
        </div>
        <div id="_agBody" style="margin-top:6px;font-size:12px;color:#666;">
@@ -306,9 +306,13 @@
     marker.unbindPopup();
     marker.bindPopup(container, {maxWidth: 560, minWidth: 420}).openPopup();
 
+    // Send the same filters as the cascade table.  Without this the
+    // aging bars would show the full-plant DOT population even when
+    // the map circle has already been narrowed to a size / pattern.
+    const qs = buildQueryParams({plant: plant});
     let data;
     try {
-      const r = await fetch(`/api/stock_aging?plant=${encodeURIComponent(plant)}`,
+      const r = await fetch(`/api/stock_aging?${qs}`,
                              {credentials: "same-origin"});
       data = await r.json();
     } catch(e){
@@ -324,6 +328,9 @@
     const order   = (data.bucket_order || []).filter(b =>
        (buckets[b] || 0) > 0 || b !== "unknown");   // hide empty 'unknown'
     const total   = data.total || 1;
+    // Use the filtered total from the API so it matches the aging bars.
+    const totalEl = container.querySelector("#_agTotal");
+    if (totalEl) totalEl.textContent = `Total: ${fmt(data.total || 0)}`;
 
     // Bucket summary bar
     const summary = order.map(b => {
@@ -345,45 +352,52 @@
         </div>`;
     }).join("");
 
-    // Top-materials table.  Sort came from server: 37M+ heavy first.
-    const mats = data.materials || [];
-    const matRows = mats.slice(0, 15).map(m => {
-      const cells = order.map(b => {
-        const v = m.buckets[b] || 0;
-        const col = _AGING_COLORS[b] || "#94a3b8";
-        return `<td style="padding:2px 4px;text-align:right;background:${v ? col + "22" : "transparent"};">
-                  ${v ? fmt(v) : ""}
-                </td>`;
+    // Top-materials table — only rendered when no filter is active.
+    // With a filter (size / pattern / etc.) the per-material breakdown
+    // collapses to essentially one row and adds nothing over the
+    // bucket bars, so we skip it entirely.
+    let matSection = "";
+    if (!data.has_filter) {
+      const mats = data.materials || [];
+      const matRows = mats.slice(0, 15).map(m => {
+        const cells = order.map(b => {
+          const v = m.buckets[b] || 0;
+          const col = _AGING_COLORS[b] || "#94a3b8";
+          return `<td style="padding:2px 4px;text-align:right;background:${v ? col + "22" : "transparent"};">
+                    ${v ? fmt(v) : ""}
+                  </td>`;
+        }).join("");
+        return `
+          <tr>
+            <td style="padding:2px 4px;">${_esc(m.material)}</td>
+            <td style="padding:2px 4px;">${_esc(m.size)}</td>
+            <td style="padding:2px 4px;">${_esc(m.pattern)}</td>
+            ${cells}
+            <td style="padding:2px 4px;text-align:right;font-weight:600;">${fmt(m.total)}</td>
+          </tr>`;
       }).join("");
-      return `
-        <tr>
-          <td style="padding:2px 4px;">${_esc(m.material)}</td>
-          <td style="padding:2px 4px;">${_esc(m.size)}</td>
-          <td style="padding:2px 4px;">${_esc(m.pattern)}</td>
-          ${cells}
-          <td style="padding:2px 4px;text-align:right;font-weight:600;">${fmt(m.total)}</td>
-        </tr>`;
-    }).join("");
+      matSection = `
+        <div style="font-size:11.5px;font-weight:600;margin:8px 0 2px;">
+          Top aged materials (biggest 37M+ / 25-36M first)
+        </div>
+        <div style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:4px;">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;">
+            <thead>
+              <tr style="background:#f1f5f9;position:sticky;top:0;">
+                <th style="padding:4px;text-align:left;">Material</th>
+                <th style="padding:4px;text-align:left;">Size</th>
+                <th style="padding:4px;text-align:left;">Pattern</th>
+                ${order.map(b => `<th style="padding:4px;text-align:right;">${b}</th>`).join("")}
+                <th style="padding:4px;text-align:right;">Total</th>
+              </tr>
+            </thead>
+            <tbody>${matRows}</tbody>
+          </table>
+        </div>`;
+    }
 
     container.querySelector("#_agBody").innerHTML =
-      `<div style="margin-bottom:8px;">${summary}</div>
-       <div style="font-size:11.5px;font-weight:600;margin:8px 0 2px;">
-         Top aged materials (biggest 37M+ / 25-36M first)
-       </div>
-       <div style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:4px;">
-         <table style="width:100%;border-collapse:collapse;font-size:11px;">
-           <thead>
-             <tr style="background:#f1f5f9;position:sticky;top:0;">
-               <th style="padding:4px;text-align:left;">Material</th>
-               <th style="padding:4px;text-align:left;">Size</th>
-               <th style="padding:4px;text-align:left;">Pattern</th>
-               ${order.map(b => `<th style="padding:4px;text-align:right;">${b}</th>`).join("")}
-               <th style="padding:4px;text-align:right;">Total</th>
-             </tr>
-           </thead>
-           <tbody>${matRows}</tbody>
-         </table>
-       </div>`;
+      `<div style="margin-bottom:8px;">${summary}</div>${matSection}`;
   }
 
   function _esc(s){
