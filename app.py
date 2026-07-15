@@ -1898,10 +1898,9 @@ def api_orders_stock_by_material():
     """Return {NSW, QLD, VIC, WA, TOTAL} stock for one or more materials.
     Batches multiple m_codes when ?m_code=... appears more than once so
     the form only pays for one round trip when a whole page of rows
-    resolves at once.  Uses the same `unrestricted` column the Stock
-    page shows, aggregated per (material, plant) and folded to state.
-    Missing (material, plant) pairs come back as 0 so the form can
-    render clean zeros instead of blanks."""
+    resolves at once.  Reads the same `stock_qty` column the Stock page
+    shows (ZSDM64300-derived), aggregated per (material, plant) and
+    folded to state.  Missing (material, plant) pairs come back as 0."""
     codes = [c.strip() for c in request.args.getlist("m_code") if c.strip()]
     if not codes:
         return jsonify({})
@@ -1911,7 +1910,7 @@ def api_orders_stock_by_material():
     cur  = conn.cursor(dictionary=True)
     try:
         cur.execute(
-            f"SELECT material, plant, SUM(unrestricted) AS qty "
+            f"SELECT material, plant, SUM(stock_qty) AS qty "
             f"FROM stock "
             f"WHERE material IN ({ph}) "
             f"  AND plant IN ({','.join(['%s']*len(_ORDER_PLANT_STATE))}) "
@@ -2074,7 +2073,9 @@ def api_stock():
     prod_group = (request.args.get("product_group") or "ALL").strip()
     pattern = (request.args.get("pattern") or "").strip()
     material = (request.args.get("material") or "").strip()
-    metric_col = "unrestricted"
+    # New stock table (ZSDM64300 daily 3PL feed) stores qty as
+    # `stock_qty` — the old MB52 `unrestricted` column is gone.
+    metric_col = "stock_qty"
 
     plants_param = (request.args.get("plants") or "").strip()
     if plants_param:
@@ -2172,7 +2173,7 @@ def api_stock():
         return jsonify({
             "rows": rows_out,
             "meta": {
-                "metric": "unrestricted",
+                "metric": "stock_qty",
                 "category": category,
                 "product_group": prod_group,
                 "pattern": pattern,
@@ -2400,7 +2401,7 @@ def api_sales_stats_by_state():
         ]
 
         # ?? stock / water (incoming) / factory (orders) per plant ???
-        stock_by_plant   = _plant_totals("stock",    "unrestricted")
+        stock_by_plant   = _plant_totals("stock",    "stock_qty")
         water_by_plant   = _plant_totals("incoming", "po_qty")
         factory_by_plant = _plant_totals("orders",   "po_qty", extra_wh=_orders_extra)
         # CY = Ready-to-Ship factory confirmations.  Mirrors the PO-
@@ -2763,7 +2764,7 @@ def api_sales_stats_by_product_level():
                 out[b][st] = out[b].get(st, 0.0) + float(r['val'] or 0)
             return out
 
-        stock_by   = _agg("stock",    "unrestricted")
+        stock_by   = _agg("stock",    "stock_qty")
         water_by   = _agg("incoming", "po_qty")
         factory_by = _agg(
             "orders", "po_qty",
