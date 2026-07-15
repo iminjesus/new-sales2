@@ -2794,7 +2794,12 @@ def api_sales_stats_by_product_level():
     if pattern:
         extra_wh.append("c.pattern LIKE %s"); extra_p.append(f"%{pattern}%")
     if material:
-        extra_wh.append("c.size LIKE %s"); extra_p.append(f"%{material}%")
+        # Exact match — the Size dropdown / cascade always emits a
+        # DISTINCT carrying_26.size value, so LIKE %material% would
+        # leak load-rating variants ("205/55R16 91V" alongside
+        # "205/55R16") into the picked bucket.  User wants ONLY the
+        # picked size to remain, so bind tightly.
+        extra_wh.append("c.size = %s"); extra_p.append(material)
     if category == "PCLT":
         extra_wh.append("c.line = 'PCLT'")
     elif category == "TBR":
@@ -2886,6 +2891,33 @@ def api_sales_stats_by_product_level():
 
         stock_by   = _agg("stock",    "stock_qty")
         water_by   = _agg("incoming", "po_qty")
+
+        # Aging breakdown — DOT-level pass over `stock`, then Python
+        # bucketise on WWYY.  Keyed as {bucket: {state: {ab: qty}}}
+        # so the frontend can render 5 aging sub-columns for the Stock
+        # column when the user expands the header toggle.
+        aging_by = {}
+        cur.execute(
+            f"SELECT {bucket_col} AS bucket, t.plant AS plant, "
+            f"       t.dot_no AS dot_no, SUM(t.stock_qty) AS val "
+            f"FROM stock t "
+            f"JOIN {DEDUP_C} ON c.m_code = t.material "
+            f"WHERE t.stock_qty > 0 "
+            f"GROUP BY {bucket_col}, t.plant, t.dot_no",
+            inner_params,
+        )
+        for r in cur.fetchall():
+            st = PLANT_STATE.get(r['plant'])
+            if not st:
+                continue
+            b   = r['bucket'] or ''
+            age = _dot_age_months(r['dot_no'])
+            ab  = _age_bucket(age)
+            v   = int(float(r['val'] or 0))
+            d   = aging_by.setdefault(b, {}).setdefault(
+                st, {name: 0 for name in _AGING_BUCKETS + ["unknown"]}
+            )
+            d[ab] += v
         factory_by = _agg(
             "orders", "po_qty",
             extra_clause=(
@@ -2989,9 +3021,11 @@ def api_sales_stats_by_product_level():
             by_state_water   = water_by.get(b, {})
             by_state_cy      = cy_by.get(b, {})
             by_state_factory = factory_by.get(b, {})
+            by_state_aging   = aging_by.get(b, {})
             states_out = []
             tQ3 = tQ6 = tQ12 = 0.0
             tStk = tWtr = tCy = tFac = 0.0
+            tot_aging = {name: 0 for name in _AGING_BUCKETS + ["unknown"]}
             for st in STATE_ORDER:
                 sd  = by_state_sales.get(st, {})
                 q3  = sd.get('3m',  0) or 0
@@ -3001,6 +3035,11 @@ def api_sales_stats_by_product_level():
                 wtr = by_state_water.get(st, 0)
                 cy  = by_state_cy.get(st, 0)
                 fac = by_state_factory.get(st, 0)
+                ag  = by_state_aging.get(
+                    st, {name: 0 for name in _AGING_BUCKETS + ["unknown"]}
+                )
+                for k, v in ag.items():
+                    tot_aging[k] = tot_aging.get(k, 0) + int(v)
                 tQ3  += q3;  tQ6  += q6;  tQ12 += q12
                 tStk += stk; tWtr += wtr; tCy  += cy; tFac += fac
                 states_out.append({
@@ -3013,6 +3052,7 @@ def api_sales_stats_by_product_level():
                     "water_qty":   int(round(wtr)),
                     "cy_qty":      int(round(cy)),
                     "factory_qty": int(round(fac)),
+                    "aging":       {k: int(v) for k, v in ag.items()},
                 })
             if (tQ3 == 0 and tQ6 == 0 and tQ12 == 0
                 and tStk == 0 and tWtr == 0
@@ -3029,6 +3069,7 @@ def api_sales_stats_by_product_level():
                 "cy_qty":      int(round(tCy)),
                 "factory_qty": int(round(tFac)),
                 "by_state":    states_out,
+                "aging":       tot_aging,
             })
         resp = {"rows": rows_out, "level": level}
         if debug_mode:

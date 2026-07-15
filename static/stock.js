@@ -289,6 +289,8 @@
     "37M+":    "#dc2626",
     "unknown": "#94a3b8",
   };
+  // Same ordered list the backend sends back in row.aging keys.
+  const _AGING_BUCKETS = ["≤12M", "13-18M", "19-24M", "25-36M", "37M+"];
   async function openStockAgingPopup(marker, plant, headlineTotal){
     const container = document.createElement("div");
     container.style.minWidth = "420px";
@@ -582,6 +584,51 @@
     size:          "Size",
   };
   let cascadeState = { level: "line", line: "", pg: "", pat: "" };
+  // When true, the Stock column is expanded into 5 aging-bucket
+  // sub-columns.  Toggled by the ▸ chip in the Stock header cell.
+  let _agingExpanded = false;
+
+  function _renderCascadeHeader(){
+    const thead = document.querySelector("#cascadeTable thead");
+    if (!thead) return;
+    const bucketLbl = CASCADE_LABEL[cascadeState.level];
+    const stockCells = _agingExpanded
+      ? _AGING_BUCKETS.map((b, i) => {
+          const col = _AGING_COLORS[b];
+          const toggle = (i === 0)
+            ? `<button type="button" class="ag-toggle" data-ag-toggle="1" title="Collapse aging">◂</button> `
+            : "";
+          return `<th class="st-qty-hdr aging-hdr" data-ag="${b}"
+                       style="background:${col}22;">
+                    ${toggle}${b}
+                  </th>`;
+        }).join("")
+      : `<th class="st-qty-hdr">
+           Stock
+           <button type="button" class="ag-toggle" data-ag-toggle="1"
+                   title="Expand by DOT age">▸</button>
+         </th>`;
+    thead.innerHTML = `<tr>
+      <th id="cascadeBucketTh">${bucketLbl}</th>
+      <th>State</th>
+      <th>3M</th>
+      <th>6M</th>
+      <th>12M</th>
+      <th>Base Sales</th>
+      ${stockCells}
+      <th class="st-qty-hdr">Water</th>
+      <th class="st-qty-hdr">CY</th>
+      <th class="st-qty-hdr">Factory</th>
+      <th>Stock.idx</th>
+      <th>+Water.idx</th>
+      <th>+Factory.idx</th>
+    </tr>`;
+  }
+
+  function _cascadeColspan(){
+    // 13 base columns + 4 extra when Stock is expanded to 5 aging cells.
+    return _agingExpanded ? 17 : 13;
+  }
 
   function _renderCascadeCrumb(){
     const crumb = document.getElementById("cascadeCrumb");
@@ -600,6 +647,7 @@
 
   async function fetchAndRenderCascadeTable(){
     _renderCascadeCrumb();
+    _renderCascadeHeader();
     const tbody = document.getElementById("cascadeTableBody");
     const tfoot = document.getElementById("cascadeTableFoot");
     if (!tbody || !tfoot) return;
@@ -611,11 +659,22 @@
       pattern_anc:        cascadeState.pat,
     });
     const data = await fetchJSON(`/api/sales_stats_by_product_level?${qs}`);
+    const _colspan = _cascadeColspan();
     if (!data || !data.rows || data.rows.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="13" class="st-loading">No data</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="${_colspan}" class="st-loading">No data</td></tr>`;
       tfoot.innerHTML = "";
       return;
     }
+    // Helper — one Stock cell OR five aging bucket cells (in _AGING_BUCKETS order).
+    const stockCells = (aging, plainQty) => (
+      _agingExpanded
+        ? _AGING_BUCKETS.map(b => {
+            const v = (aging || {})[b] || 0;
+            const col = _AGING_COLORS[b];
+            return `<td class="st-qty aging-cell" style="background:${v ? col + "22" : "transparent"};">${v ? fmtQty(v) : ""}</td>`;
+          }).join("")
+        : `<td class="st-qty">${fmtQty(plainQty)}</td>`
+    );
     // Above-size rows drill the cascade.  Size rows are still
     // clickable but they don't drill — they set state.material so the
     // map + charts narrow to that exact size.  Both paths share the
@@ -625,6 +684,7 @@
     const terminalCls = (cascadeState.level === "size") ? " cas-terminal" : "";
     let totQ3=0, totQ6=0, totQ12=0,
         totStock=0, totWater=0, totCy=0, totFactory=0;
+    const totAging = _AGING_BUCKETS.reduce((acc, b) => (acc[b] = 0, acc), {});
 
     // Each bucket row emits 4 NSW/QLD/VIC/WA sub-rows followed by a
     // per-bucket subtotal row.  The bucket label sits in a rowSpan'd
@@ -658,7 +718,7 @@
           <td>${fmtQty(s.qty_6m)}</td>
           <td>${fmtQty(s.qty_12m)}</td>
           <td class="st-base">${fmtQty(bs)}</td>
-          <td class="st-qty">${fmtQty(sq)}</td>
+          ${stockCells(s.aging, sq)}
           <td class="st-qty">${fmtQty(wq)}</td>
           <td class="st-qty">${fmtQty(cy)}</td>
           <td class="st-qty">${fmtQty(fqMinus)}</td>
@@ -680,6 +740,8 @@
       totQ6      += r.qty_6m;
       totQ12     += r.qty_12m;
       totStock   += sq; totWater += wq; totCy += cy; totFactory += fqMinus;
+      const rAg = r.aging || {};
+      _AGING_BUCKETS.forEach(bk => { totAging[bk] += (rAg[bk] || 0); });
       const pipeS   = bs ? (sq                       / bs) : 0;
       const pipeSW  = bs ? ((sq + wq)                / bs) : 0;
       const pipeSWF = bs ? ((sq + wq + cy + fqMinus) / bs) : 0;
@@ -695,7 +757,7 @@
         <td>${fmtQty(r.qty_6m)}</td>
         <td>${fmtQty(r.qty_12m)}</td>
         <td class="st-base">${fmtQty(bs)}</td>
-        <td class="st-qty">${fmtQty(sq)}</td>
+        ${stockCells(r.aging, sq)}
         <td class="st-qty">${fmtQty(wq)}</td>
         <td class="st-qty">${fmtQty(cy)}</td>
         <td class="st-qty">${fmtQty(fqMinus)}</td>
@@ -719,7 +781,7 @@
       <td>${fmtQty(totQ6)}</td>
       <td>${fmtQty(totQ12)}</td>
       <td class="st-base">${fmtQty(totBase)}</td>
-      <td class="st-qty">${fmtQty(totStock)}</td>
+      ${stockCells(totAging, totStock)}
       <td class="st-qty">${fmtQty(totWater)}</td>
       <td class="st-qty">${fmtQty(totCy)}</td>
       <td class="st-qty">${fmtQty(totFactory)}</td>
@@ -868,6 +930,14 @@
   }
 
   document.addEventListener("click", function(e){
+    // Stock header ▸/◂ chip → toggle 5-bucket aging expansion.
+    const agBtn = e.target.closest && e.target.closest('[data-ag-toggle="1"]');
+    if (agBtn) {
+      _agingExpanded = !_agingExpanded;
+      fetchAndRenderCascadeTable();
+      e.stopPropagation();
+      return;
+    }
     const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
     if (row && row.dataset.bucket != null) {
       _cascadeAdvance(row.dataset.bucket);

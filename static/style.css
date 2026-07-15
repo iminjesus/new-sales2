@@ -1221,3 +1221,28 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #cascadeTable tfoot tr.st-total td:first-child {
   text-align: left; color: #1e3a8a;
 }
+
+/* Aging expand toggle sitting on the Stock <th>.  Small chevron chip
+   so it doesn't compete with the column label text.  Colour lifts on
+   hover to hint clickability. */
+#cascadeTable thead th .ag-toggle {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 10px; line-height: 14px;
+  background: #dbeafe; color: #1d4ed8;
+  border: 1px solid #93c5fd; border-radius: 3px;
+  cursor: pointer;
+}
+#cascadeTable thead th .ag-toggle:hover {
+  background: #bfdbfe; border-color: #60a5fa;
+}
+/* Aging sub-column headers keep the qty look but tint the background so
+   the 5-bucket group visually reads as one span. */
+#cascadeTable thead th.aging-hdr {
+  font-size: 11px; padding: 6px 6px;
+}
+#cascadeTable tbody td.aging-cell,
+#cascadeTable tfoot td.aging-cell {
+  padding-left: 6px; padding-right: 6px;
+}
