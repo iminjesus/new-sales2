@@ -610,16 +610,23 @@
     if (!thead) return;
     const bucketLbl = CASCADE_LABEL[cascadeState.level];
     const stockCells = _agingExpanded
-      ? _AGING_BUCKETS.map((b, i) => {
-          const col = _AGING_COLORS[b];
-          const toggle = (i === 0)
-            ? `<button type="button" class="ag-toggle" data-ag-toggle="1" title="Collapse aging">◂</button> `
-            : "";
-          return `<th class="st-qty-hdr aging-hdr" data-ag="${b}"
-                       style="background:${col}22;">
-                    ${toggle}${b}
-                  </th>`;
-        }).join("")
+      ? (
+          _AGING_BUCKETS.map((b, i) => {
+            const col = _AGING_COLORS[b];
+            const toggle = (i === 0)
+              ? `<button type="button" class="ag-toggle" data-ag-toggle="1" title="Collapse aging">◂</button> `
+              : "";
+            return `<th class="st-qty-hdr aging-hdr" data-ag="${b}"
+                         style="background:${col}22;">
+                      ${toggle}${b}
+                    </th>`;
+          }).join("")
+          // Keep the aggregate Stock total visible even when the column
+          // is expanded — so the user doesn't have to eyeball-sum five
+          // aging cells to see how much stock a state actually holds.
+          + `<th class="st-qty-hdr aging-hdr" title="Sum of the 5 aging buckets"
+                  style="background:#e0e7ff;">Total</th>`
+        )
       : `<th class="st-qty-hdr">
            Stock
            <button type="button" class="ag-toggle" data-ag-toggle="1"
@@ -643,8 +650,9 @@
   }
 
   function _cascadeColspan(){
-    // 13 base columns + 4 extra when Stock is expanded to 5 aging cells.
-    return _agingExpanded ? 17 : 13;
+    // 13 base columns + 5 extra when Stock is expanded to 5 aging cells
+    // plus a Total cell.
+    return _agingExpanded ? 18 : 13;
   }
 
   function _renderCascadeCrumb(){
@@ -682,14 +690,19 @@
       tfoot.innerHTML = "";
       return;
     }
-    // Helper — one Stock cell OR five aging bucket cells (in _AGING_BUCKETS order).
+    // Helper — one Stock cell OR (five aging bucket cells + one Total).
+    // The Total cell always shows the aggregate stock so the user can
+    // still see it at a glance when the column is expanded.
     const stockCells = (aging, plainQty) => (
       _agingExpanded
-        ? _AGING_BUCKETS.map(b => {
-            const v = (aging || {})[b] || 0;
-            const col = _AGING_COLORS[b];
-            return `<td class="st-qty aging-cell" style="background:${v ? col + "22" : "transparent"};">${v ? fmtQty(v) : ""}</td>`;
-          }).join("")
+        ? (
+            _AGING_BUCKETS.map(b => {
+              const v = (aging || {})[b] || 0;
+              const col = _AGING_COLORS[b];
+              return `<td class="st-qty aging-cell" style="background:${v ? col + "22" : "transparent"};">${v ? fmtQty(v) : ""}</td>`;
+            }).join("")
+            + `<td class="st-qty aging-cell" style="background:#e0e7ff;font-weight:600;">${fmtQty(plainQty)}</td>`
+          )
         : `<td class="st-qty">${fmtQty(plainQty)}</td>`
     );
     // Above-size rows drill the cascade.  Size rows are still
