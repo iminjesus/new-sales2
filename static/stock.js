@@ -269,9 +269,124 @@
         fillOpacity: 0.55,
         color: "#1e78ff"
       });
-      m.bindPopup(`Plant: ${plant}<br>Unrestricted stock: ${fmt(val)}`);
+      // Click → open aging popup (loading state first, then filled in
+      // once /api/stock_aging returns).  Kept lazy so the /stock page
+      // load doesn't fire 4 aging queries up-front.
+      m.on("click", () => openStockAgingPopup(m, plant, val));
       m.addTo(layerStock);
     });
+  }
+
+  // Stock aging popup — shows per-bucket totals for the clicked plant
+  // and the top 30 aged materials.  Bucket cells are colour-coded from
+  // green (fresh ≤12M) to deep red (37M+) so a glance already tells
+  // the operator "there's a lot of red here" without reading numbers.
+  const _AGING_COLORS = {
+    "≤12M":    "#22c55e",
+    "13-18M":  "#84cc16",
+    "19-24M":  "#eab308",
+    "25-36M":  "#f97316",
+    "37M+":    "#dc2626",
+    "unknown": "#94a3b8",
+  };
+  async function openStockAgingPopup(marker, plant, headlineTotal){
+    const container = document.createElement("div");
+    container.style.minWidth = "420px";
+    container.style.maxWidth = "540px";
+    container.innerHTML =
+      `<div style="font-weight:700;font-size:13px;">${plant} — stock aging</div>
+       <div style="font-size:11.5px;color:#666;margin-top:2px;">
+         Total: ${fmt(headlineTotal)}
+       </div>
+       <div id="_agBody" style="margin-top:6px;font-size:12px;color:#666;">
+         Loading aging breakdown…
+       </div>`;
+    marker.unbindPopup();
+    marker.bindPopup(container, {maxWidth: 560, minWidth: 420}).openPopup();
+
+    let data;
+    try {
+      const r = await fetch(`/api/stock_aging?plant=${encodeURIComponent(plant)}`,
+                             {credentials: "same-origin"});
+      data = await r.json();
+    } catch(e){
+      container.querySelector("#_agBody").textContent = "Load failed: " + e;
+      return;
+    }
+    if (data.error){
+      container.querySelector("#_agBody").textContent = "Error: " + data.error;
+      return;
+    }
+
+    const buckets = data.buckets || {};
+    const order   = (data.bucket_order || []).filter(b =>
+       (buckets[b] || 0) > 0 || b !== "unknown");   // hide empty 'unknown'
+    const total   = data.total || 1;
+
+    // Bucket summary bar
+    const summary = order.map(b => {
+      const v = buckets[b] || 0;
+      const pct = (v / total * 100).toFixed(1);
+      const col = _AGING_COLORS[b] || "#94a3b8";
+      return `
+        <div style="display:flex;align-items:center;gap:6px;margin:2px 0;font-size:11.5px;">
+          <div style="width:64px;">${b}</div>
+          <div style="flex:1;background:#e5e7eb;height:10px;border-radius:3px;overflow:hidden;">
+            <div style="width:${pct}%;background:${col};height:100%;"></div>
+          </div>
+          <div style="width:70px;text-align:right;font-variant-numeric:tabular-nums;">
+            ${fmt(v)}
+          </div>
+          <div style="width:44px;text-align:right;color:#666;">
+            ${pct}%
+          </div>
+        </div>`;
+    }).join("");
+
+    // Top-materials table.  Sort came from server: 37M+ heavy first.
+    const mats = data.materials || [];
+    const matRows = mats.slice(0, 15).map(m => {
+      const cells = order.map(b => {
+        const v = m.buckets[b] || 0;
+        const col = _AGING_COLORS[b] || "#94a3b8";
+        return `<td style="padding:2px 4px;text-align:right;background:${v ? col + "22" : "transparent"};">
+                  ${v ? fmt(v) : ""}
+                </td>`;
+      }).join("");
+      return `
+        <tr>
+          <td style="padding:2px 4px;">${_esc(m.material)}</td>
+          <td style="padding:2px 4px;">${_esc(m.size)}</td>
+          <td style="padding:2px 4px;">${_esc(m.pattern)}</td>
+          ${cells}
+          <td style="padding:2px 4px;text-align:right;font-weight:600;">${fmt(m.total)}</td>
+        </tr>`;
+    }).join("");
+
+    container.querySelector("#_agBody").innerHTML =
+      `<div style="margin-bottom:8px;">${summary}</div>
+       <div style="font-size:11.5px;font-weight:600;margin:8px 0 2px;">
+         Top aged materials (biggest 37M+ / 25-36M first)
+       </div>
+       <div style="max-height:260px;overflow:auto;border:1px solid #e5e7eb;border-radius:4px;">
+         <table style="width:100%;border-collapse:collapse;font-size:11px;">
+           <thead>
+             <tr style="background:#f1f5f9;position:sticky;top:0;">
+               <th style="padding:4px;text-align:left;">Material</th>
+               <th style="padding:4px;text-align:left;">Size</th>
+               <th style="padding:4px;text-align:left;">Pattern</th>
+               ${order.map(b => `<th style="padding:4px;text-align:right;">${b}</th>`).join("")}
+               <th style="padding:4px;text-align:right;">Total</th>
+             </tr>
+           </thead>
+           <tbody>${matRows}</tbody>
+         </table>
+       </div>`;
+  }
+
+  function _esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   function drawOrders(rows){

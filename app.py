@@ -2185,6 +2185,126 @@ def api_stock():
         cur.close()
         conn.close()
 
+
+# ─── Aging bucket helpers (shared with /api/stock_aging) ──────────────
+_AGING_BUCKETS = ["≤12M", "13-18M", "19-24M", "25-36M", "37M+"]
+
+def _dot_age_months(dot_str: str):
+    """Convert a WWYY DOT string to age in months from today.  Returns
+    None for unparsable / malformed DOTs so the caller can bucket them
+    under 'unknown' instead of falsely-aging."""
+    if not dot_str or len(dot_str) != 4 or not dot_str.isdigit():
+        return None
+    try:
+        week = int(dot_str[:2])
+        year = 2000 + int(dot_str[2:])
+        if week < 1 or week > 53:
+            return None
+        from datetime import date, datetime
+        d = datetime.fromisocalendar(year, week, 1).date()
+        today = date.today()
+        return (today.year - d.year) * 12 + (today.month - d.month)
+    except Exception:
+        return None
+
+def _age_bucket(age_months):
+    if age_months is None: return "unknown"
+    if age_months <= 12:   return "≤12M"
+    if age_months <= 18:   return "13-18M"
+    if age_months <= 24:   return "19-24M"
+    if age_months <= 36:   return "25-36M"
+    return "37M+"
+
+
+@app.get("/api/stock_aging")
+def api_stock_aging():
+    """Stock aging breakdown for one plant.  Called when a stock circle
+    on /stock is clicked.  Groups every (material, dot_no) row by the
+    5 aging buckets (≤12M, 13-18M, 19-24M, 25-36M, 37M+) plus an
+    'unknown' bucket for malformed DOTs.
+
+    Returns:
+      plant, state, total, buckets{}, materials[]  — materials list is
+      the top 30 by total qty with per-bucket breakdown so the popup
+      can also show which sizes/patterns are contributing to which
+      aging bucket.
+    """
+    plant = (request.args.get("plant") or "").strip()
+    if not plant:
+        return jsonify({"error": "plant required"}), 400
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            """
+            SELECT s.material,
+                   s.dot_no,
+                   SUM(s.stock_qty) AS qty,
+                   MAX(c.size)      AS size,
+                   MAX(c.pattern)   AS pattern,
+                   MAX(c.brand)     AS brand
+            FROM stock s
+            LEFT JOIN carrying_26 c ON c.m_code = s.material
+            WHERE s.plant = %s AND s.stock_qty > 0
+            GROUP BY s.material, s.dot_no
+            """,
+            (plant,),
+        )
+        rows = cur.fetchall() or []
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    # Roll up per bucket (plant total) and per (material, bucket)
+    plant_buckets = {b: 0 for b in _AGING_BUCKETS}
+    plant_buckets["unknown"] = 0
+    materials: dict = {}
+    for r in rows:
+        age = _dot_age_months(r["dot_no"])
+        bucket = _age_bucket(age)
+        qty = int(r["qty"] or 0)
+        plant_buckets[bucket] += qty
+        mat = str(r["material"] or "").strip()
+        if mat not in materials:
+            materials[mat] = {
+                "material": mat,
+                "size":     (r.get("size") or "").strip(),
+                "pattern":  (r.get("pattern") or "").strip(),
+                "brand":    (r.get("brand") or "").strip(),
+                "buckets":  {b: 0 for b in _AGING_BUCKETS + ["unknown"]},
+                "total":    0,
+                "oldest_dot": r["dot_no"] if age is not None else "",
+                "oldest_age_months": age if age is not None else -1,
+            }
+        m = materials[mat]
+        m["buckets"][bucket] += qty
+        m["total"] += qty
+        if age is not None and age > m["oldest_age_months"]:
+            m["oldest_age_months"] = age
+            m["oldest_dot"] = r["dot_no"]
+
+    # Sort materials by "aged first" — biggest 37M+ bucket wins, then
+    # 25-36M, then total.  So the top of the list surfaces the most
+    # concerning stock, not just the biggest-volume SKU.
+    def _sort_key(m):
+        return (-m["buckets"].get("37M+", 0),
+                -m["buckets"].get("25-36M", 0),
+                -m["total"])
+    mat_list = sorted(materials.values(), key=_sort_key)[:30]
+
+    return jsonify({
+        "plant":         plant,
+        "state":         _ORDER_PLANT_STATE.get(plant, ""),
+        "total":         sum(plant_buckets.values()),
+        "buckets":       plant_buckets,
+        "bucket_order":  _AGING_BUCKETS + ["unknown"],
+        "materials":     mat_list,
+    })
+
+
 @app.route("/api/sales_stats")
 def api_sales_stats():
     """Return 3M / 6M / 12M sales totals (qty) and their average (Base Sales)
