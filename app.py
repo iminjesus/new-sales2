@@ -1063,14 +1063,26 @@ if _FLEET_RIM_RX is None:
     _FLEET_RIM_RX = _re.compile(r"R\s*(\d{2}(?:\.\d)?)", _re.IGNORECASE)
 
 def _fleet_rim_from_size(s: str):
+    """Rim diameter in inches — keeps the .5 for TBR sizes so the
+    fleet chart's bucketing can separate truck from passenger."""
     if not s: return None
     m = _FLEET_RIM_RX.search(str(s))
     if not m: return None
-    try: return int(float(m.group(1)))
-    except: return None
+    try:
+        v = float(m.group(1))
+        return v if v == int(v) + 0.5 else int(v)
+    except:
+        return None
 
 def _fleet_rim_family(inches):
     if inches is None: return "UNKNOWN"
+    # TBR half-inch sizes (Hino 300 R17.5, Isuzu FRR R19.5, prime
+    # movers R22.5) get their own buckets so passenger R17/R19/R22
+    # aren't polluted by truck volume.
+    if inches == 17.5: return "R17.5 (TBR)"
+    if inches == 19.5: return "R19.5 (TBR)"
+    if inches == 22.5: return "R22.5 (TBR)"
+    inches = int(inches)
     if inches <= 13: return "R13"
     if inches == 14: return "R14"
     if inches == 15: return "R15"
@@ -1080,7 +1092,7 @@ def _fleet_rim_family(inches):
     if inches == 19: return "R19"
     if inches == 20: return "R20"
     if inches == 21: return "R21"
-    if inches >= 22: return "R22+ (truck)"
+    if inches >= 22: return "R22+"
     return f"R{inches}"
 
 def _load_hk_rim_sales(year: int = 2026, ttl: int = 300):
@@ -1194,9 +1206,13 @@ def api_fleet_by_rim():
     if postcode:
         postcode = postcode.zfill(4) if postcode.isdigit() else postcode
 
-    # Canonical rim ordering — R13 → R14 → … → R22+ / MOTORCYCLE last.
+    # Canonical rim ordering — passenger whole-inch first, then TBR
+    # half-inch sizes grouped at the end so the chart visually reads
+    # "cars … then trucks".
     rim_order = ["R13", "R14", "R15", "R16", "R17", "R18",
-                 "R19", "R20", "R21", "R22+ (truck)", "MOTORCYCLE", "UNKNOWN"]
+                 "R19", "R20", "R21", "R22+",
+                 "R17.5 (TBR)", "R19.5 (TBR)", "R22.5 (TBR)",
+                 "MOTORCYCLE", "UNKNOWN"]
 
     if breakdown == "state":
         # One series per state so a stacked / grouped bar chart can

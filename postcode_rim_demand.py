@@ -44,7 +44,13 @@ OUTPUT   = BASE_DIR / "out" / "rego" / "postcode_rim_demand.csv"
 # (MAKE, MODEL) — normalised: uppercase, single-space, hyphens kept.
 # BITRE ships some names as MERCEDES-BENZ / MERCEDES BENZ / MERCEDES_BENZ
 # depending on the release, so the normalizer strips the connectors.
-RIM_MAP: dict[tuple[str, str], int] = {
+#
+# Rim value is a *float* — passenger cars use whole-inch sizes (14,
+# 15, 16, …), but trucks use half-inch (17.5, 19.5, 22.5).  Half-inch
+# sizes are TBR (truck & bus radial); the rim_family() bucketing keeps
+# them in their own labels so the Fleet chart doesn't mix truck stock
+# into passenger R17/R19/R22 buckets.
+RIM_MAP: dict[tuple[str, str], float] = {
     # ── Hyundai ───────────────────────────────────────────────
     ("HYUNDAI", "I30"):        15,
     ("HYUNDAI", "I20"):        16,
@@ -523,48 +529,65 @@ RIM_MAP: dict[tuple[str, str], int] = {
     ("BYD", "SHARK"):      18,
     ("GWM", "TANK"):       18,
     ("GWM", "ORA"):        18,
-    # Van/commercial extras
+    # Van/commercial extras — vans (Crafter, H-1, Daily) still ride
+    # on passenger-style whole-inch rims; only the heavy prime movers
+    # / medium-heavy trucks below use TBR half-inch sizes.
     ("HYUNDAI", "H-1"):      15,
     ("VOLKSWAGEN", "CRAFTER"): 16,
-    ("IVECO", "STRALIS"):    22,
-    ("IVECO", "ACCO"):       22,
-    ("MACK", "TRIDENT"):     22,
-    ("MACK", "METRO-LINER"): 22,
-    ("KENWORTH", "T410"):    22,
-    ("KENWORTH", "T650"):    22,
-    ("KENWORTH", "T909"):    22,
-    ("KENWORTH", "K200"):    22,
-    ("VOLVO", "FM"):         22,
-    ("VOLVO", "FE"):         22,
+    ("IVECO", "STRALIS"):    22.5,
+    ("IVECO", "ACCO"):       22.5,
+    ("MACK", "TRIDENT"):     22.5,
+    ("MACK", "METRO-LINER"): 22.5,
+    ("KENWORTH", "T410"):    22.5,
+    ("KENWORTH", "T650"):    22.5,
+    ("KENWORTH", "T909"):    22.5,
+    ("KENWORTH", "K200"):    22.5,
+    ("VOLVO", "FM"):         22.5,
+    ("VOLVO", "FE"):         22.5,
     # ── Light commercial (LCV) / trucks (TBR) ─────────────────
-    ("FUSO", "CANTER"):     16,
-    ("FUSO", "FIGHTER"):    22,
-    ("HINO", "300 SERIES"): 16,
-    ("HINO", "500 SERIES"): 22,
-    ("HINO", "700 SERIES"): 22,
-    ("ISUZU", "NPR"):       16,
-    ("ISUZU", "NLR"):       16,
-    ("ISUZU", "FRR"):       19,
-    ("ISUZU", "FSR"):       22,
-    ("ISUZU", "FVR"):       22,
-    ("ISUZU", "GIGA"):      22,
-    ("IVECO", "DAILY"):     16,
-    ("IVECO", "EUROCARGO"): 22,
-    ("KENWORTH", "T610"):   22,
-    ("SCANIA", "R500"):     22,
-    ("VOLVO", "FH"):        22,
-    ("MAN", "TGX"):         22,
-    ("MERCEDES-BENZ", "ACTROS"): 22,
-    ("MERCEDES-BENZ", "ATEGO"):  22,
-    ("DAF", "CF"):          22,
+    # Small Japanese cab-overs use R17.5; medium-duty use R19.5;
+    # heavy prime movers use R22.5.  Sources: FUSO/HINO/ISUZU
+    # Australia spec sheets, base-trim OE fitment.
+    ("FUSO", "CANTER"):     17.5,
+    ("FUSO", "FIGHTER"):    22.5,
+    ("HINO", "300 SERIES"): 17.5,
+    ("HINO", "500 SERIES"): 22.5,
+    ("HINO", "700 SERIES"): 22.5,
+    ("ISUZU", "NPR"):       17.5,
+    ("ISUZU", "NLR"):       17.5,
+    ("ISUZU", "FRR"):       19.5,
+    ("ISUZU", "FSR"):       22.5,
+    ("ISUZU", "FVR"):       22.5,
+    ("ISUZU", "GIGA"):      22.5,
+    ("IVECO", "DAILY"):     16,      # van, still passenger rim
+    ("IVECO", "EUROCARGO"): 22.5,
+    ("KENWORTH", "T610"):   22.5,
+    ("SCANIA", "R500"):     22.5,
+    ("VOLVO", "FH"):        22.5,
+    ("MAN", "TGX"):         22.5,
+    ("MERCEDES-BENZ", "ACTROS"): 22.5,
+    ("MERCEDES-BENZ", "ATEGO"):  22.5,
+    ("DAF", "CF"):          22.5,
 }
 
 
-def rim_family(inches: int | None) -> str:
-    """Bucket a rim size into a coarse family label."""
+def rim_family(inches: float | int | None) -> str:
+    """Bucket a rim size into a coarse family label.
+
+    Whole-inch → PCLT passenger buckets (R13 … R22+).
+    Half-inch  → separate TBR truck buckets (R17.5 / R19.5 / R22.5).
+    Sizes like R17.5 come off small Japanese cab-over trucks (FUSO
+    Canter, Hino 300, Isuzu NPR); mixing them into the R17 passenger
+    bucket would double-count fleet against passenger tyres."""
     if inches is None:
         return "UNKNOWN"
     if inches == 0:  return "MOTORCYCLE"   # sentinel for two-wheeled
+    # TBR half-inch sizes get their own labels so passenger R17/R19/R22
+    # buckets aren't polluted.
+    if inches == 17.5: return "R17.5 (TBR)"
+    if inches == 19.5: return "R19.5 (TBR)"
+    if inches == 22.5: return "R22.5 (TBR)"
+    inches = int(inches)  # discard any other fractional (shouldn't happen)
     if inches <= 13: return "R13"
     if inches == 14: return "R14"
     if inches == 15: return "R15"
@@ -574,7 +597,7 @@ def rim_family(inches: int | None) -> str:
     if inches == 19: return "R19"
     if inches == 20: return "R20"
     if inches == 21: return "R21"
-    if inches >= 22: return "R22+ (truck)"
+    if inches >= 22: return "R22+"
     return f"R{inches}"
 
 

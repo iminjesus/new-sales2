@@ -71,26 +71,35 @@ def extract_postcode(address_1: str) -> str:
 #   215/70R14       → 14
 #   185/60R15       → 15
 #   195R15C         → 15
-#   11R22.5         → 22
-#   275/70R22.5     → 22
+#   11R22.5         → 22.5  (TBR — kept as float so rim_family can
+#                            route it to its own truck bucket)
+#   275/70R22.5     → 22.5
 _RIM_RX = re.compile(r"R\s*(\d{2}(?:\.\d)?)", re.IGNORECASE)
 
-def rim_from_size(size_str: str) -> int | None:
+def rim_from_size(size_str: str) -> float | None:
+    """Return the rim diameter in inches; keeps the .5 for TBR sizes
+    so downstream bucketing can separate truck from passenger."""
     if not size_str:
         return None
     m = _RIM_RX.search(str(size_str))
     if not m:
         return None
-    val = m.group(1)
     try:
-        return int(float(val))
+        v = float(m.group(1))
+        return v if v == int(v) + 0.5 else int(v)
     except (ValueError, TypeError):
         return None
 
 
-def rim_family(inches: int | None) -> str:
+def rim_family(inches: float | int | None) -> str:
     if inches is None:
         return "UNKNOWN"
+    # TBR half-inch sizes get their own labels so the R17/R19/R22
+    # passenger buckets aren't polluted by truck volume.
+    if inches == 17.5: return "R17.5 (TBR)"
+    if inches == 19.5: return "R19.5 (TBR)"
+    if inches == 22.5: return "R22.5 (TBR)"
+    inches = int(inches)
     if inches <= 13: return "R13"
     if inches == 14: return "R14"
     if inches == 15: return "R15"
@@ -100,7 +109,7 @@ def rim_family(inches: int | None) -> str:
     if inches == 19: return "R19"
     if inches == 20: return "R20"
     if inches == 21: return "R21"
-    if inches >= 22: return "R22+ (truck)"
+    if inches >= 22: return "R22+"
     return f"R{inches}"
 
 
