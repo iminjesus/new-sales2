@@ -418,30 +418,40 @@ def main():
     if out_dir and not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    # Schema migration — earlier versions of this script wrote 7
-    # columns (make, model, year, trim, size, source_url, fetched_at).
-    # If the existing file uses that shape we rewrite it in place with
-    # just (make, model, size), deduped, so the run stays append-safe
-    # and the resulting file is clean.
+    # Startup cleanup — always dedup the output CSV, and drop any
+    # legacy columns from earlier versions of this script (7 cols:
+    # make, model, year, trim, size, source_url, fetched_at).
+    # The append-mode writer means a crash + rerun without --resume
+    # would otherwise double-write the prefix; deduping on startup
+    # guarantees the file is clean regardless of how the crawler
+    # was invoked previously.
     if os.path.exists(args.output) and os.path.getsize(args.output) > 0:
         with open(args.output, newline="", encoding="utf-8") as f_in:
             probe = csv.DictReader(f_in)
             existing_cols = probe.fieldnames or []
             extras = [c for c in existing_cols if c not in FIELD_NAMES]
-            if extras:
-                print(f"[info] rewriting {os.path.basename(args.output)} to drop "
-                      f"legacy columns: {extras}", file=sys.stderr)
-                seen_rows: set[tuple[str, str, str]] = set()
-                kept: list[dict] = []
-                for r in probe:
-                    mk = (r.get("make")  or "").strip()
-                    md = (r.get("model") or "").strip()
-                    sz = (r.get("size")  or "").strip()
-                    key = (mk, md, sz)
-                    if key in seen_rows:
-                        continue
-                    seen_rows.add(key)
-                    kept.append({"make": mk, "model": md, "size": sz})
+            seen_rows: set[tuple[str, str, str]] = set()
+            kept: list[dict] = []
+            for r in probe:
+                mk = (r.get("make")  or "").strip()
+                md = (r.get("model") or "").strip()
+                sz = (r.get("size")  or "").strip()
+                key = (mk, md, sz)
+                if key in seen_rows:
+                    continue
+                seen_rows.add(key)
+                kept.append({"make": mk, "model": md, "size": sz})
+            # Only rewrite if we actually dropped rows or columns —
+            # avoids touching mtime on clean files.
+            dropped = 0
+            with open(args.output, newline="", encoding="utf-8") as f_count:
+                dropped = sum(1 for _ in csv.DictReader(f_count)) - len(kept)
+            if extras or dropped > 0:
+                if extras:
+                    print(f"[info] dropping legacy columns: {extras}", file=sys.stderr)
+                if dropped > 0:
+                    print(f"[info] deduping {dropped:,} duplicate rows "
+                          "(append-mode restart residue)", file=sys.stderr)
                 with open(args.output, "w", newline="", encoding="utf-8") as f_out:
                     w = csv.DictWriter(f_out, fieldnames=FIELD_NAMES)
                     w.writeheader()
