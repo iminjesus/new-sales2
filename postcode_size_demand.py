@@ -112,49 +112,58 @@ def _read_fitment_file(path: Path,
                     pass
 
 
-def load_fitment_base_oe() -> dict[tuple[str, str], tuple[str, int | None]]:
-    """Return {(make, model) → (base_oe_size, gen_start_year_or_None)}.
+def _read_gen_rows(path: Path,
+                   per_pair: dict[tuple[str, str], dict[int | None, list[str]]]):
+    """Load one fitment CSV into a {(make, model): {gen_start_year: [size, ...]}}
+    accumulator.  Multiple rows for the same (make, model, gen_start_year)
+    stack their sizes in the list; the per-gen base-OE is then sorted[0]
+    of that list (narrowest width first = entry-trim base)."""
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            mk = (r.get("make")  or "").strip()
+            md = (r.get("model") or "").strip()
+            sz = (r.get("size")  or "").strip()
+            gy = (r.get("gen_start_year") or "").strip()
+            if not mk or not md or not sz:
+                continue
+            key = normalize_key(mk, md)
+            gy_int: int | None = None
+            if gy:
+                try: gy_int = int(gy)
+                except ValueError: pass
+            per_pair.setdefault(key, {}).setdefault(gy_int, []).append(sz)
+
+
+def load_fitment_gens() -> dict[tuple[str, str], list[tuple[int | None, str]]]:
+    """Return {(make, model) → [(gen_start_year, base_oe_size), ...]}
+    sorted DESCENDING by gen_start_year (newest gen first).
 
     Sources — MANUAL first (definitive; wins on collision), then the
-    wheel-size crawl.  Base-OE = the first entry when the model's
-    non-empty sizes are sorted as strings — narrowest width first,
-    which matches entry-trim OE spec for most models.  For MANUAL
-    rows we curate one row per model so sorted[0] is exactly what
-    we picked; for wheel-size rows we get whatever the crawler saw."""
-    sizes_by_key: dict[tuple[str, str], set[str]] = defaultdict(set)
-    gen_by_key:   dict[tuple[str, str], int]     = {}
-    # MANUAL wins on collision because a bare model key already
-    # tagged in gen_by_key won't be overwritten by the crawl.
+    wheel-size crawl.  Manual rows can carry one row per generation
+    for models whose base-OE changed between gens (Ford Ranger:
+    R15 → R16 → R17 as PJ → PX → T6.2), and each gen's base is
+    picked as sorted[0] of that gen's sizes (narrowest width first,
+    matching entry-trim spec).  Models with a single unchanged base
+    across gens just get one row with the OLDEST relevant year."""
+    per_pair: dict[tuple[str, str], dict[int | None, list[str]]] = {}
     manual_loaded = False
     if FIT_MANUAL.exists():
-        _read_fitment_file(FIT_MANUAL, sizes_by_key, gen_by_key)
+        _read_gen_rows(FIT_MANUAL, per_pair)
         manual_loaded = True
 
-    # For crawl entries: only fill sizes where MANUAL didn't already
-    # cover them — otherwise the crawl's wider fitment list would
-    # displace our curated base-OE via sorted[0].
     crawl_loaded = False
     if FIT_CSV.exists():
-        manual_keys = set(sizes_by_key.keys())
-        with open(FIT_CSV, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for r in reader:
-                mk = (r.get("make")  or "").strip()
-                md = (r.get("model") or "").strip()
-                sz = (r.get("size")  or "").strip()
-                gy = (r.get("gen_start_year") or "").strip()
-                if not mk or not md:
-                    continue
-                key = normalize_key(mk, md)
-                if key in manual_keys:
-                    continue  # curated already — skip crawl noise
-                if sz:
-                    sizes_by_key[key].add(sz)
-                if gy and key not in gen_by_key:
-                    try:
-                        gen_by_key[key] = int(gy)
-                    except ValueError:
-                        pass
+        manual_keys = set(per_pair.keys())
+        # Sniff crawl into a scratch dict, then only fold in pairs
+        # the manual CSV didn't cover — a curated (make, model) shouldn't
+        # be diluted by the crawler's wider list.
+        scratch: dict[tuple[str, str], dict[int | None, list[str]]] = {}
+        _read_gen_rows(FIT_CSV, scratch)
+        for key, gen_map in scratch.items():
+            if key in manual_keys:
+                continue
+            per_pair[key] = gen_map
         crawl_loaded = True
 
     if not (manual_loaded or crawl_loaded):
@@ -165,9 +174,13 @@ def load_fitment_base_oe() -> dict[tuple[str, str], tuple[str, int | None]]:
           f"manual={'yes' if manual_loaded else 'no'} · "
           f"crawl={'yes' if crawl_loaded else 'no'}")
 
-    out: dict[tuple[str, str], tuple[str, int | None]] = {}
-    for key, sizes in sizes_by_key.items():
-        out[key] = (sorted(sizes)[0], gen_by_key.get(key))
+    out: dict[tuple[str, str], list[tuple[int | None, str]]] = {}
+    for key, gen_map in per_pair.items():
+        gens = [(gy, sorted(sizes)[0]) for gy, sizes in gen_map.items() if sizes]
+        # Sort newest-first so _pick_gen can walk it top-down.  None
+        # gens go last so we prefer year-tagged rows when available.
+        gens.sort(key=lambda g: (g[0] if g[0] is not None else -1), reverse=True)
+        out[key] = gens
     return out
 
 
@@ -181,15 +194,41 @@ def pick_input_csv() -> tuple[Path, bool]:
     return BITRE_NOYEAR, False   # caller checks exists()
 
 
-def _gen_tier(year: int | None, gen_start: int | None) -> str:
-    """Classify a fleet row as 'current' or 'legacy' relative to the
-    fitment we have on file.  Missing year → 'unknown' (treated as
-    current so we don't strand rows in a coverage limbo when the
-    input CSV isn't year-aware)."""
+def _pick_gen(year: int | None,
+              gens: list[tuple[int | None, str]]
+              ) -> tuple[str | None, str]:
+    """Pick the best matching fitment for a fleet row.
+
+    Returns (size, tier):
+      * ("215/70R16", "current") — matched to newest gen the vehicle
+        qualifies for (year >= gen_start - buffer)
+      * ("215/70R16", "prev-gen") — matched to an older-than-newest
+        gen (year fell into an older gen's window)
+      * (size,       "unknown")  — no year info; falls back to newest
+        gen so the fleet unit isn't stranded
+      * (None,       "legacy")   — vehicle year is older than the
+        oldest gen we've curated → LEGACY bucket, no size predicted
+      * (None,       "unknown")  — no gens on file at all
+
+    gens is sorted DESC by gen_start_year (newest first), None-year
+    entries last.  For a single-gen model, gens has one entry — a
+    vehicle year >= its gen_start_year matches, older → legacy."""
+    if not gens:
+        return (None, "unknown")
     if year is None:
-        return "unknown"
-    cutoff = (gen_start - GEN_START_BUFFER) if gen_start else GEN_CUTOFF_YEAR
-    return "current" if year >= cutoff else "legacy"
+        # No MY info → default to the newest gen (best guess for
+        # unlabelled fleet rows in year-less BITRE releases).
+        return (gens[0][1], "unknown")
+    newest_gy = gens[0][0]
+    for gy, sz in gens:
+        if gy is None:
+            # None-year entries act as an "any year" catch-all.
+            return (sz, "unknown")
+        if year >= gy - GEN_START_BUFFER:
+            tier = "current" if gy == newest_gy else "prev-gen"
+            return (sz, tier)
+    # Fleet year is older than any curated gen — dump into LEGACY.
+    return (None, "legacy")
 
 
 def main():
@@ -200,15 +239,19 @@ def main():
         return
     print(f"[info] input : {src.name} (year-aware={'yes' if has_year else 'no'})")
 
-    fit_map = load_fitment_base_oe()
+    fit_map = load_fitment_gens()
     if not fit_map:
         return
-    n_with_gen = sum(1 for _, g in fit_map.values() if g is not None)
-    print(f"[info] fitment: {len(fit_map):,} models  "
-          f"({n_with_gen:,} with gen_start_year, "
-          f"{len(fit_map) - n_with_gen:,} using cutoff={GEN_CUTOFF_YEAR})")
+    multi_gen = sum(1 for gs in fit_map.values() if len(gs) > 1)
+    total_rows = sum(len(gs) for gs in fit_map.values())
+    print(f"[info] fitment: {len(fit_map):,} models "
+          f"({multi_gen:,} multi-gen, {total_rows:,} total gen entries)")
 
-    # Aggregation keyed by (state, postcode, size, gen).
+    # Aggregation keyed by (state, postcode, size, gen).  `gen` values:
+    #   "current" — matched to newest gen for that model
+    #   "prev-gen" — matched to an older-than-newest gen
+    #   "legacy"  — vehicle older than any curated gen (no size predicted)
+    #   "unknown" — no year info, defaulted to newest gen
     agg: dict[tuple[str, str, str, str], int] = defaultdict(int)
     per_postcode_total:   dict[tuple[str, str], int] = defaultdict(int)
     per_postcode_matched: dict[tuple[str, str], int] = defaultdict(int)
@@ -240,20 +283,16 @@ def main():
             per_postcode_total[(state, pc)] += qty
 
             key = normalize_key(mk, md)
-            hit = fit_map.get(key)
-            if not hit:
+            gens = fit_map.get(key)
+            if not gens:
                 agg[(state, pc, "UNKNOWN", "unknown")] += qty
                 unmatched_top_qty[(mk, md)] += qty
                 continue
 
-            size, gen_start = hit
-            tier = _gen_tier(year, gen_start)
-            if tier == "legacy":
-                # We only crawled the latest gen — matching an older
-                # vehicle to it would over-claim.  Keep it as a
-                # LEGACY bucket at the model level so the fleet total
-                # still balances and users can see the size of the
-                # pre-gen tail per postcode.
+            size, tier = _pick_gen(year, gens)
+            if size is None:
+                # Vehicle year is older than the oldest curated gen —
+                # LEGACY.  Fleet total still balances via the bucket.
                 agg[(state, pc, "LEGACY", "legacy")] += qty
                 legacy_fleet += qty
                 continue
@@ -264,7 +303,7 @@ def main():
 
     cov = (matched_fleet / total_fleet * 100.0) if total_fleet else 0.0
     print(f"[info] total fleet loaded  : {total_fleet:,}")
-    print(f"[info] matched (current-gen): {matched_fleet:,} ({cov:.1f} %)")
+    print(f"[info] matched to fitment  : {matched_fleet:,} ({cov:.1f} %)")
     print(f"[info] legacy (pre-gen)    : {legacy_fleet:,}")
     print(f"[info] unmatched (no map)  : {total_fleet - matched_fleet - legacy_fleet:,}")
 
@@ -290,16 +329,16 @@ def main():
 
     print(f"\n[done] wrote {OUTPUT}  ({len(agg):,} rows)")
 
-    # National top-20 sizes — current-gen only, so the shape reflects
-    # what wheel-size actually mapped.  Compares directly against what
-    # Hankook sells today.
+    # National top-20 sizes — every matched row (current, prev-gen,
+    # unknown-year) contributes; UNKNOWN / LEGACY buckets excluded so
+    # the distribution reflects tyre sizes we can actually name.
     dist: dict[str, int] = defaultdict(int)
     for (_, _, size, gen), q in agg.items():
-        if gen != "current" or size in ("UNKNOWN", "LEGACY"):
+        if size in ("UNKNOWN", "LEGACY"):
             continue
         dist[size] += q
     total = sum(dist.values()) or 1
-    print("\n[national top 20 current-gen sizes]")
+    print("\n[national top 20 sizes (matched fleet, all gens)]")
     top = sorted(dist.items(), key=lambda kv: kv[1], reverse=True)[:20]
     for size, q in top:
         pct = q / total * 100.0
