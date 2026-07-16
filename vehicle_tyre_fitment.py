@@ -53,13 +53,41 @@ REGO_DIR       = os.path.join(BASE_DIR, "out", "rego")
 DEFAULT_INPUT  = os.path.join(REGO_DIR, "vehicle_postcode_make_model.csv")
 DEFAULT_OUTPUT = os.path.join(REGO_DIR, "vehicle_tyre_fitment.csv")
 BASE_URL       = "https://www.wheel-size.com"
-DEFAULT_DELAY  = 2.0     # seconds between requests
+DEFAULT_DELAY  = 4.0     # seconds between requests — wheel-size.com
+                         # trips its Cloudflare challenge after ~20
+                         # rapid requests, so we go slower up-front to
+                         # avoid getting flagged in the first place.
 MAX_RETRIES    = 4
-USER_AGENT     = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-)
-HEADERS = {"User-Agent": USER_AGENT, "Accept-Language": "en-AU,en;q=0.9"}
+# Rotate a small pool of realistic desktop User-Agents so a session
+# doesn't hammer wheel-size.com with a single fingerprint (a common
+# trivial bot-detection signal).
+UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+]
+
+def _headers(idx: int) -> dict:
+    return {
+        "User-Agent":       UA_POOL[idx % len(UA_POOL)],
+        "Accept-Language":  "en-AU,en;q=0.9",
+        "Accept":           "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding":  "gzip, deflate, br",
+        "DNT":              "1",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
+# Anything shorter than this is treated as a bot-challenge page, not a
+# real fitment page.  Real wheel-size.com model pages are 40-200 KB.
+TINY_BODY_BYTES = 5000
+# When we hit N consecutive tiny responses, sleep for a much longer
+# stretch to let Cloudflare's rate limiter cool down.
+TINY_STREAK_LIMIT = 3
+LONG_COOLDOWN_SECS = 300  # 5 min
 
 # Some BITRE names use spellings wheel-size.com doesn't.  Map here once
 # and the crawler transparently rewrites the URL slug.
@@ -192,27 +220,45 @@ def model_slug(make: str, model: str) -> str:
     return slugify(model)
 
 
-def fetch(session: requests.Session, url: str, delay: float) -> str | None:
-    """GET with a polite delay + exponential backoff on 429 / 503.  Logs
-    HTTP status + response length so we can tell a genuine 404 from a
-    bot-block (which typically returns 200 with a tiny challenge body)
-    without the caller having to re-run with verbose."""
+# Sentinels so the caller can distinguish "confirmed absent" (404) from
+# "we got bot-blocked, DON'T record as done — retry on next --resume".
+FETCH_BLOCKED = object()
+
+def fetch(session: requests.Session, url: str, delay: float,
+          ua_idx: int = 0) -> str | None | object:
+    """GET with polite delay + exponential backoff.
+
+    Return values:
+      * str      — real page body (parse it)
+      * None     — 404 or hard failure (record model as empty; don't retry)
+      * FETCH_BLOCKED — tiny/challenge response after all retries
+                        (do NOT record a row so --resume picks it back up)
+
+    Tiny 200 responses (< TINY_BODY_BYTES) are treated as bot-challenge
+    pages and trigger the same exponential backoff as 429 / 503.  A real
+    wheel-size fitment page is 40-200 KB; a Cloudflare challenge body
+    is a few hundred bytes."""
     for attempt in range(MAX_RETRIES):
+        hdr = _headers(ua_idx + attempt)   # rotate UA on each retry
         try:
-            r = session.get(url, headers=HEADERS, timeout=30)
+            r = session.get(url, headers=hdr, timeout=30)
         except requests.RequestException as e:
             print(f"    [warn] {url}: {e}", file=sys.stderr)
             time.sleep(delay * (2 ** attempt))
             continue
         sz = len(r.text or "")
-        if r.status_code == 200:
-            # A real fitment page is 40-200 KB.  Anything under ~2 KB
-            # is almost always a bot-challenge / redirect body, so
-            # flag it for the caller.
-            tag = " (tiny — check for bot-block)" if sz < 2000 else ""
-            print(f"    [http] 200 · {sz:>6} bytes{tag}", file=sys.stderr)
+        if r.status_code == 200 and sz >= TINY_BODY_BYTES:
+            print(f"    [http] 200 · {sz:>6} bytes", file=sys.stderr)
             time.sleep(delay)
             return r.text
+        if r.status_code == 200:
+            # Tiny 200 = Cloudflare challenge (server keeps status 200
+            # but returns a JS-challenge stub).  Back off exponentially.
+            wait = delay * (2 ** (attempt + 2))
+            print(f"    [http] 200 · {sz:>6} bytes (tiny — bot-block); "
+                  f"backing off {wait:.1f}s", file=sys.stderr)
+            time.sleep(wait)
+            continue
         if r.status_code == 404:
             print(f"    [http] 404 · not on wheel-size.com", file=sys.stderr)
             time.sleep(delay)
@@ -225,7 +271,8 @@ def fetch(session: requests.Session, url: str, delay: float) -> str | None:
         print(f"    [http] {r.status_code} · {sz} bytes", file=sys.stderr)
         time.sleep(delay)
         return None
-    return None
+    # All retries exhausted — signal "blocked, retry later".
+    return FETCH_BLOCKED
 
 
 TYRE_RX = re.compile(r"(\d{3})/(\d{2})\s*[RZ]\s*(\d{2})", re.IGNORECASE)
@@ -369,15 +416,42 @@ def load_unique_make_model(input_csv: str) -> list[tuple[str, str]]:
     return list(seen.keys())
 
 
-def load_already_done(output_csv: str) -> set[tuple[str, str]]:
+def load_already_done(output_csv: str, retry_empty: bool = False) -> set[tuple[str, str]]:
     """(make, model) pairs already present in the output — used to skip
-    on --resume so the crawler picks up where it stopped."""
+    on --resume so the crawler picks up where it stopped.
+
+    When retry_empty=True, rows whose size is blank AND gen_start_year
+    is blank are treated as NOT done — probably bot-blocked pages from a
+    previous run that recorded empty rows before the block-detection
+    logic existed.  Retrying them costs another crawl but recovers
+    coverage."""
     done = set()
     if not os.path.exists(output_csv):
         return done
+    # First pass — group rows per (make, model) so we can decide whether
+    # ANY size was ever recovered for the pair before deciding to skip.
+    per_pair: dict[tuple[str, str], dict] = {}
     with open(output_csv, newline="", encoding="utf-8") as f:
         for r in csv.DictReader(f):
-            done.add(((r.get("make") or "").upper(), (r.get("model") or "").upper()))
+            key = ((r.get("make") or "").upper(), (r.get("model") or "").upper())
+            sz  = (r.get("size") or "").strip()
+            gy  = (r.get("gen_start_year") or "").strip()
+            slot = per_pair.setdefault(key, {"any_size": False, "any_gen": False})
+            if sz:
+                slot["any_size"] = True
+            if gy:
+                slot["any_gen"] = True
+    for key, slot in per_pair.items():
+        # With --retry-empty, ANY pair whose recorded rows never captured
+        # a size is retried.  This catches both fully-blocked landings
+        # (no gen, no size) and gen-page-blocks (gen captured on the
+        # landing page, but the gen-page fetch bounced so no sizes).
+        # A model wheel-size.com genuinely lists 0 fitments for is very
+        # rare — better to burn one extra fetch than to leave the row
+        # permanently empty.
+        if retry_empty and not slot["any_size"]:
+            continue
+        done.add(key)
     return done
 
 
@@ -392,6 +466,10 @@ def main():
                     help="Seconds between requests (default: %(default)s).")
     ap.add_argument("--resume", action="store_true",
                     help="Skip (make, model) rows already in the output.")
+    ap.add_argument("--retry-empty", action="store_true",
+                    help="With --resume, also retry pairs whose recorded rows "
+                         "have no size AND no gen_start_year (likely bot-blocked "
+                         "on the earlier run).")
     ap.add_argument("--limit",  type=int, default=0,
                     help="Stop after N pairs (0 = no limit — useful for a smoke test).")
     ap.add_argument("--dump-html", action="store_true",
@@ -404,7 +482,8 @@ def main():
         sys.exit(1)
 
     pairs = load_unique_make_model(args.input)
-    done  = load_already_done(args.output) if args.resume else set()
+    done  = (load_already_done(args.output, retry_empty=args.retry_empty)
+             if args.resume else set())
     todo  = [(mk, md) for (mk, md) in pairs if (mk, md) not in done]
     print(f"[info] unique pairs: {len(pairs)}  · already done: {len(done)}  · todo: {len(todo)}")
     if args.limit:
@@ -432,20 +511,33 @@ def main():
             missing = [c for c in FIELD_NAMES if c not in existing_cols]
             seen_rows: set[tuple[str, str, str]] = set()
             kept: list[dict] = []
+            # First pass — collect every row per pair so we can decide
+            # which pairs are "empty" (no size recovered) and drop those
+            # entirely when --retry-empty is set.
+            rows_by_pair: dict[tuple[str, str], list[dict]] = {}
+            any_size_by_pair: dict[tuple[str, str], bool] = {}
             for r in probe:
                 mk = (r.get("make")  or "").strip()
                 md = (r.get("model") or "").strip()
                 sz = (r.get("size")  or "").strip()
-                # Preserve gen_start_year if the older schema had it,
-                # else leave blank — the crawler will backfill it next
-                # time this (make, model) is refetched.
                 gy = (r.get("gen_start_year") or "").strip()
-                key = (mk, md, sz)
-                if key in seen_rows:
+                pair = (mk, md)
+                rows_by_pair.setdefault(pair, []).append(
+                    {"make": mk, "model": md, "gen_start_year": gy, "size": sz}
+                )
+                if sz:
+                    any_size_by_pair[pair] = True
+            for pair, rows in rows_by_pair.items():
+                # Drop empty-only pairs on --retry-empty so the next
+                # crawl actually re-fetches them.
+                if args.retry_empty and not any_size_by_pair.get(pair):
                     continue
-                seen_rows.add(key)
-                kept.append({"make": mk, "model": md,
-                             "gen_start_year": gy, "size": sz})
+                for r in rows:
+                    key = (r["make"], r["model"], r["size"])
+                    if key in seen_rows:
+                        continue
+                    seen_rows.add(key)
+                    kept.append(r)
             with open(args.output, newline="", encoding="utf-8") as f_count:
                 dropped = sum(1 for _ in csv.DictReader(f_count)) - len(kept)
             if extras or missing or dropped > 0:
@@ -472,6 +564,8 @@ def main():
     session = requests.Session()
     ok_pairs = 0
     empty_pairs = 0
+    blocked_pairs = 0
+    tiny_streak = 0
     for i, (mk, md) in enumerate(todo, 1):
         m_slug = make_slug(mk)
         d_slug = model_slug(mk, md)
@@ -480,7 +574,23 @@ def main():
             continue
         model_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/"
         print(f"[{i}/{len(todo)}] {mk} · {md}  →  {model_url}")
-        model_html = fetch(session, model_url, args.delay)
+        model_html = fetch(session, model_url, args.delay, ua_idx=i)
+        # Long cooldown after too many consecutive blocks so Cloudflare's
+        # rate limiter has a chance to reset before we keep hammering.
+        if model_html is FETCH_BLOCKED:
+            tiny_streak += 1
+            blocked_pairs += 1
+            print(f"  [blocked] {mk} · {md} — not recorded, will retry with --resume",
+                  file=sys.stderr)
+            if tiny_streak >= TINY_STREAK_LIMIT:
+                print(f"  [cooldown] {TINY_STREAK_LIMIT} consecutive blocks — "
+                      f"sleeping {LONG_COOLDOWN_SECS}s", file=sys.stderr)
+                time.sleep(LONG_COOLDOWN_SECS)
+                session = requests.Session()   # fresh cookies / TLS session
+                tiny_streak = 0
+            continue
+        # Real response (or None) — reset the streak.
+        tiny_streak = 0
         if args.dump_html and model_html:
             dump_dir = os.path.join(os.path.dirname(os.path.abspath(args.output)), "debug")
             os.makedirs(dump_dir, exist_ok=True)
@@ -507,7 +617,12 @@ def main():
         if picked:
             gen_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/{quote(picked)}/"
             print(f"    [latest] {picked}  →  {gen_url}", file=sys.stderr)
-            gen_html = fetch(session, gen_url, args.delay)
+            gen_html = fetch(session, gen_url, args.delay, ua_idx=i + 1)
+            if gen_html is FETCH_BLOCKED:
+                # Landing succeeded but gen page bounced — record what
+                # we already have from the landing rather than lose the
+                # whole model to bot-block.
+                gen_html = None
             for r in (parse_model_page(gen_html) if gen_html else []):
                 if r["size"]:
                     sizes.add(r["size"])
@@ -524,7 +639,9 @@ def main():
                                  "gen_start_year": gy_out, "size": sz})
         fh.flush()
     fh.close()
-    print(f"[done] {ok_pairs} with fitment · {empty_pairs} empty · output: {args.output}")
+    print(f"[done] {ok_pairs} with fitment · {empty_pairs} empty · "
+          f"{blocked_pairs} bot-blocked (not recorded — rerun with --resume) · "
+          f"output: {args.output}")
 
 
 if __name__ == "__main__":
