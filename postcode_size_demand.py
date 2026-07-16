@@ -285,15 +285,19 @@ def main():
             key = normalize_key(mk, md)
             gens = fit_map.get(key)
             if not gens:
-                agg[(state, pc, "UNKNOWN", "unknown")] += qty
+                # Model not in our fitment map at all — no size known.
+                agg[(state, pc, "", "unknown")] += qty
                 unmatched_top_qty[(mk, md)] += qty
                 continue
 
             size, tier = _pick_gen(year, gens)
             if size is None:
                 # Vehicle year is older than the oldest curated gen —
-                # LEGACY.  Fleet total still balances via the bucket.
-                agg[(state, pc, "LEGACY", "legacy")] += qty
+                # LEGACY.  Fleet total still balances via the bucket
+                # but no size is predicted, so leave the size column
+                # empty (the tier column distinguishes 'legacy' from
+                # 'unknown' for downstream analysis).
+                agg[(state, pc, "", "legacy")] += qty
                 legacy_fleet += qty
                 continue
 
@@ -334,7 +338,7 @@ def main():
     # the distribution reflects tyre sizes we can actually name.
     dist: dict[str, int] = defaultdict(int)
     for (_, _, size, gen), q in agg.items():
-        if size in ("UNKNOWN", "LEGACY"):
+        if not size:
             continue
         dist[size] += q
     total = sum(dist.values()) or 1
