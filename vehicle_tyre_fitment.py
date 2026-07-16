@@ -129,7 +129,7 @@ MODEL_ALIASES = {
     ("VOLKSWAGEN", "TIGUAN"): "tiguan",
 }
 
-FIELD_NAMES = ["make", "model", "size"]
+FIELD_NAMES = ["make", "model", "gen_start_year", "size"]
 
 
 def _slug_start_year(slug: str) -> int | None:
@@ -418,37 +418,42 @@ def main():
     if out_dir and not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    # Startup cleanup — always dedup the output CSV, and drop any
-    # legacy columns from earlier versions of this script (7 cols:
-    # make, model, year, trim, size, source_url, fetched_at).
-    # The append-mode writer means a crash + rerun without --resume
-    # would otherwise double-write the prefix; deduping on startup
-    # guarantees the file is clean regardless of how the crawler
-    # was invoked previously.
+    # Startup cleanup — always dedup the output CSV, drop legacy
+    # columns from older schemas (7-col: year/trim/source_url/... or
+    # 3-col: no gen_start_year), and migrate to the current 4-col
+    # (make, model, gen_start_year, size) shape.  Append-mode writes +
+    # crash/rerun without --resume can double-write the prefix; the
+    # dedup here keeps the file honest regardless of invocation history.
     if os.path.exists(args.output) and os.path.getsize(args.output) > 0:
         with open(args.output, newline="", encoding="utf-8") as f_in:
             probe = csv.DictReader(f_in)
             existing_cols = probe.fieldnames or []
             extras = [c for c in existing_cols if c not in FIELD_NAMES]
+            missing = [c for c in FIELD_NAMES if c not in existing_cols]
             seen_rows: set[tuple[str, str, str]] = set()
             kept: list[dict] = []
             for r in probe:
                 mk = (r.get("make")  or "").strip()
                 md = (r.get("model") or "").strip()
                 sz = (r.get("size")  or "").strip()
+                # Preserve gen_start_year if the older schema had it,
+                # else leave blank — the crawler will backfill it next
+                # time this (make, model) is refetched.
+                gy = (r.get("gen_start_year") or "").strip()
                 key = (mk, md, sz)
                 if key in seen_rows:
                     continue
                 seen_rows.add(key)
-                kept.append({"make": mk, "model": md, "size": sz})
-            # Only rewrite if we actually dropped rows or columns —
-            # avoids touching mtime on clean files.
-            dropped = 0
+                kept.append({"make": mk, "model": md,
+                             "gen_start_year": gy, "size": sz})
             with open(args.output, newline="", encoding="utf-8") as f_count:
                 dropped = sum(1 for _ in csv.DictReader(f_count)) - len(kept)
-            if extras or dropped > 0:
+            if extras or missing or dropped > 0:
                 if extras:
                     print(f"[info] dropping legacy columns: {extras}", file=sys.stderr)
+                if missing:
+                    print(f"[info] migrating to new schema (adding: {missing})",
+                          file=sys.stderr)
                 if dropped > 0:
                     print(f"[info] deduping {dropped:,} duplicate rows "
                           "(append-mode restart residue)", file=sys.stderr)
@@ -498,6 +503,7 @@ def main():
 
         gen_slugs = parse_generation_links(model_html, m_slug, d_slug) if model_html else []
         picked   = _pick_latest_gen(gen_slugs) if gen_slugs else None
+        gen_year = _slug_start_year(picked) if picked else None
         if picked:
             gen_url = f"{BASE_URL}/size/{quote(m_slug)}/{quote(d_slug)}/{quote(picked)}/"
             print(f"    [latest] {picked}  →  {gen_url}", file=sys.stderr)
@@ -506,13 +512,16 @@ def main():
                 if r["size"]:
                     sizes.add(r["size"])
 
+        gy_out = str(gen_year) if gen_year else ""
         if not sizes:
             empty_pairs += 1
-            writer.writerow({"make": mk, "model": md, "size": ""})
+            writer.writerow({"make": mk, "model": md,
+                             "gen_start_year": gy_out, "size": ""})
         else:
             ok_pairs += 1
             for sz in sorted(sizes):
-                writer.writerow({"make": mk, "model": md, "size": sz})
+                writer.writerow({"make": mk, "model": md,
+                                 "gen_start_year": gy_out, "size": sz})
         fh.flush()
     fh.close()
     print(f"[done] {ok_pairs} with fitment · {empty_pairs} empty · output: {args.output}")
