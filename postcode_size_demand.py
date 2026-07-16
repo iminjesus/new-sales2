@@ -57,6 +57,12 @@ BASE_DIR      = Path(__file__).resolve().parent
 BITRE_YEAR    = BASE_DIR / "out" / "rego" / "vehicle_postcode_make_model_year_estimate.csv"
 BITRE_NOYEAR  = BASE_DIR / "out" / "rego" / "vehicle_postcode_make_model.csv"
 FIT_CSV       = BASE_DIR / "out" / "rego" / "vehicle_tyre_fitment.csv"
+# Hand-curated OE fitments for ~150 top Australian models — used as
+# the primary source when present, with the wheel-size crawl output
+# filling in anything not covered.  Committed to git alongside the
+# script; safe to hand-edit.  Same schema (make, model,
+# gen_start_year, size) so both files pipe into the same parser.
+FIT_MANUAL    = BASE_DIR / "out" / "rego" / "vehicle_tyre_fitment_manual.csv"
 OUTPUT        = BASE_DIR / "out" / "rego" / "postcode_size_demand.csv"
 
 # Fallback cutoff when a fitment row doesn't carry gen_start_year
@@ -82,22 +88,12 @@ def normalize_key(make: str, model: str) -> tuple[str, str]:
     return (n(make), n(model))
 
 
-def load_fitment_base_oe() -> dict[tuple[str, str], tuple[str, int | None]]:
-    """Return {(make, model) → (base_oe_size, gen_start_year_or_None)}.
-
-    Base-OE = the first entry when the model's non-empty sizes are
-    sorted as strings — narrowest width first, which matches entry-trim
-    OE spec for most models.  gen_start_year comes from whichever fitment
-    row for that (make, model) carries it (all rows for one pair should
-    share the same value since the crawler only scrapes latest-gen)."""
-    if not FIT_CSV.exists():
-        print(f"[fatal] fitment CSV not found: {FIT_CSV}")
-        print("        run vehicle_tyre_fitment.py first to produce it.")
-        return {}
-
-    sizes_by_key: dict[tuple[str, str], set[str]] = defaultdict(set)
-    gen_by_key:   dict[tuple[str, str], int]     = {}
-    with open(FIT_CSV, newline="", encoding="utf-8") as f:
+def _read_fitment_file(path: Path,
+                       sizes_by_key: dict[tuple[str, str], set[str]],
+                       gen_by_key:   dict[tuple[str, str], int]):
+    """Absorb one fitment CSV into the two accumulator dicts.  Later
+    calls layer on top of earlier ones, so priority = call order."""
+    with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for r in reader:
             mk = (r.get("make")  or "").strip()
@@ -114,6 +110,60 @@ def load_fitment_base_oe() -> dict[tuple[str, str], tuple[str, int | None]]:
                     gen_by_key[key] = int(gy)
                 except ValueError:
                     pass
+
+
+def load_fitment_base_oe() -> dict[tuple[str, str], tuple[str, int | None]]:
+    """Return {(make, model) → (base_oe_size, gen_start_year_or_None)}.
+
+    Sources — MANUAL first (definitive; wins on collision), then the
+    wheel-size crawl.  Base-OE = the first entry when the model's
+    non-empty sizes are sorted as strings — narrowest width first,
+    which matches entry-trim OE spec for most models.  For MANUAL
+    rows we curate one row per model so sorted[0] is exactly what
+    we picked; for wheel-size rows we get whatever the crawler saw."""
+    sizes_by_key: dict[tuple[str, str], set[str]] = defaultdict(set)
+    gen_by_key:   dict[tuple[str, str], int]     = {}
+    # MANUAL wins on collision because a bare model key already
+    # tagged in gen_by_key won't be overwritten by the crawl.
+    manual_loaded = False
+    if FIT_MANUAL.exists():
+        _read_fitment_file(FIT_MANUAL, sizes_by_key, gen_by_key)
+        manual_loaded = True
+
+    # For crawl entries: only fill sizes where MANUAL didn't already
+    # cover them — otherwise the crawl's wider fitment list would
+    # displace our curated base-OE via sorted[0].
+    crawl_loaded = False
+    if FIT_CSV.exists():
+        manual_keys = set(sizes_by_key.keys())
+        with open(FIT_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                mk = (r.get("make")  or "").strip()
+                md = (r.get("model") or "").strip()
+                sz = (r.get("size")  or "").strip()
+                gy = (r.get("gen_start_year") or "").strip()
+                if not mk or not md:
+                    continue
+                key = normalize_key(mk, md)
+                if key in manual_keys:
+                    continue  # curated already — skip crawl noise
+                if sz:
+                    sizes_by_key[key].add(sz)
+                if gy and key not in gen_by_key:
+                    try:
+                        gen_by_key[key] = int(gy)
+                    except ValueError:
+                        pass
+        crawl_loaded = True
+
+    if not (manual_loaded or crawl_loaded):
+        print(f"[fatal] neither fitment CSV found:\n"
+              f"        {FIT_MANUAL}\n        {FIT_CSV}")
+        return {}
+    print(f"[info] fitment sources: "
+          f"manual={'yes' if manual_loaded else 'no'} · "
+          f"crawl={'yes' if crawl_loaded else 'no'}")
 
     out: dict[tuple[str, str], tuple[str, int | None]] = {}
     for key, sizes in sizes_by_key.items():
