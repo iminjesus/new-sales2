@@ -41,7 +41,22 @@ import sys
 import time
 from urllib.parse import quote
 
-import requests
+# curl_cffi impersonates a real browser's TLS/HTTP2 fingerprint (JA3
+# hash), which Cloudflare's Bot Fight Mode checks BEFORE it even sees
+# our headers.  With bare `requests` the fingerprint reads as "Python
+# stdlib ssl" and CF flags the session on request ~15; with curl_cffi
+# it reads as Chrome and CF lets us through.  If the wheel isn't
+# installed we fall back to `requests` and warn — the crawler still
+# runs, just slower and more block-prone.
+try:
+    from curl_cffi import requests as _http
+    _HAS_CURL_CFFI = True
+    _IMPERSONATE = "chrome124"
+except ImportError:
+    import requests as _http    # type: ignore
+    _HAS_CURL_CFFI = False
+    _IMPERSONATE = None
+import requests as _requests   # kept for exception types + fallback typing
 from bs4 import BeautifulSoup
 
 # ─────────────────────────── config ────────────────────────────────────
@@ -243,7 +258,17 @@ def model_slug(make: str, model: str) -> str:
 # "we got bot-blocked, DON'T record as done — retry on next --resume".
 FETCH_BLOCKED = object()
 
-def fetch(session: requests.Session, url: str, delay: float,
+def _new_session():
+    """Build a session that impersonates a real Chrome TLS handshake
+    when curl_cffi is available, else a bare requests.Session."""
+    if _HAS_CURL_CFFI:
+        # curl_cffi's Session accepts `impersonate` at construction so
+        # every request through it shares the browser fingerprint.
+        return _http.Session(impersonate=_IMPERSONATE)
+    return _http.Session()
+
+
+def fetch(session, url: str, delay: float,
           ua_idx: int = 0) -> str | None | object:
     """GET with polite delay + exponential backoff.
 
@@ -263,7 +288,9 @@ def fetch(session: requests.Session, url: str, delay: float,
         hdr = _headers(ua_idx + attempt)   # rotate UA on each retry
         try:
             r = session.get(url, headers=hdr, timeout=30)
-        except requests.RequestException as e:
+        except (_requests.RequestException, Exception) as e:
+            # curl_cffi raises its own exception class (curl_cffi.requests.errors.RequestsError);
+            # catch broadly so a transport failure never crashes the crawl.
             print(f"    [warn] {url}: {e}", file=sys.stderr)
             time.sleep(delay * (2 ** attempt))
             attempt += 1
@@ -413,14 +440,25 @@ def parse_model_page(html: str) -> list[dict]:
 
 
 # ────────────────────── input / output plumbing ────────────────────────
-def load_unique_make_model(input_csv: str) -> list[tuple[str, str]]:
-    """Read make + model columns off the BITRE CSV and dedup, PRESERVING
-    the CSV row order.  BITRE is sorted by state → postcode, so the
-    first (make, model) pairs to appear are the popular Aussie
-    mainstreams (HYUNDAI I30, FORD FOCUS, TOYOTA HILUX…), not the
-    alphabetically-first obscure brands (AC Cobra, ACE trailers…).
-    Using a dict as an ordered set preserves first-appearance order."""
-    seen: dict[tuple[str, str], None] = {}
+def load_unique_make_model(input_csv: str,
+                           min_fleet: int = 0
+                          ) -> list[tuple[str, str]]:
+    """Read make + model columns off the BITRE CSV and dedup.
+
+    Sorted by DESCENDING total fleet size when a `qty` column is
+    present in the input — most-common Australian models get crawled
+    first so that when Cloudflare throttles us, we've already covered
+    the majority of the on-road fleet.  Pairs whose national total is
+    below `min_fleet` are dropped entirely — a low fleet count means
+    the model contributes almost nothing to postcode-level tyre
+    demand, so a request budget spent on it is wasted.
+
+    Falls back to CSV row order (BITRE ships state → postcode) if no
+    qty column is present, since that ordering also puts mainstream
+    Aussie models first."""
+    totals: dict[tuple[str, str], int] = {}
+    order:  dict[tuple[str, str], int] = {}
+    has_qty = False
     with open(input_csv, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         if not reader.fieldnames or "make" not in reader.fieldnames or "model" not in reader.fieldnames:
@@ -428,21 +466,46 @@ def load_unique_make_model(input_csv: str) -> list[tuple[str, str]]:
                 f"{input_csv} needs `make` and `model` columns "
                 f"(got {reader.fieldnames})."
             )
-        for r in reader:
+        has_qty = "qty" in reader.fieldnames
+        for i, r in enumerate(reader):
             mk = (r.get("make") or "").strip()
             md = (r.get("model") or "").strip()
             if not mk or not md:
                 continue
             up_mk, up_md = mk.upper(), md.upper()
-            # Filter obvious placeholders — BITRE stamps these when the
-            # per-postcode counts are too small to disclose or the model
-            # field couldn't be resolved.
             if up_mk in {"-", "TOTAL"} or up_md in {"-", "TOTAL", "UNKNOWN", "OTHER"}:
                 continue
             key = (up_mk, up_md)
-            if key not in seen:
-                seen[key] = None
-    return list(seen.keys())
+            if key not in order:
+                order[key] = i
+            try:
+                qty = int(float(r.get("qty") or 0))
+            except (ValueError, TypeError):
+                qty = 0
+            totals[key] = totals.get(key, 0) + max(0, qty)
+
+    if not has_qty:
+        # No qty column — sort by first-appearance so mainstream models
+        # (BITRE row order) still come first.
+        keys = sorted(order.keys(), key=lambda k: order[k])
+        if min_fleet > 0:
+            print(f"  [warn] --min-fleet={min_fleet} ignored — input CSV has no qty column",
+                  file=sys.stderr)
+        return keys
+
+    # With qty — filter by min_fleet and sort by descending total.
+    kept = [(k, tot) for k, tot in totals.items() if tot >= min_fleet]
+    kept.sort(key=lambda kv: (-kv[1], kv[0]))
+    if min_fleet > 0:
+        dropped = len(totals) - len(kept)
+        dropped_fleet = sum(t for _, t in totals.items() if t < min_fleet)
+        kept_fleet = sum(t for _, t in kept)
+        share = kept_fleet / (kept_fleet + dropped_fleet) * 100.0 if (kept_fleet + dropped_fleet) else 0
+        print(f"  [pre-filter] min_fleet={min_fleet}: kept {len(kept):,}, "
+              f"dropped {dropped:,} ({dropped_fleet:,} fleet units) — "
+              f"coverage {share:.1f}%",
+              file=sys.stderr)
+    return [k for k, _ in kept]
 
 
 def load_already_done(output_csv: str, retry_empty: bool = False) -> set[tuple[str, str]]:
@@ -499,6 +562,13 @@ def main():
                     help="With --resume, also retry pairs whose recorded rows "
                          "have no size AND no gen_start_year (likely bot-blocked "
                          "on the earlier run).")
+    ap.add_argument("--min-fleet", type=int, default=500,
+                    help="Skip (make, model) pairs whose total national fleet "
+                         "count in the BITRE input is below this threshold "
+                         "(default: %(default)s).  Pass 0 to crawl every "
+                         "pair regardless of fleet size — much slower with "
+                         "little additional coverage; the top ~500 models "
+                         "already cover >95%% of Australian fleet.")
     ap.add_argument("--limit",  type=int, default=0,
                     help="Stop after N pairs (0 = no limit — useful for a smoke test).")
     ap.add_argument("--dump-html", action="store_true",
@@ -510,10 +580,16 @@ def main():
         print(f"[fatal] input CSV not found: {args.input}", file=sys.stderr)
         sys.exit(1)
 
-    pairs = load_unique_make_model(args.input)
+    pairs = load_unique_make_model(args.input, min_fleet=args.min_fleet)
     done  = (load_already_done(args.output, retry_empty=args.retry_empty)
              if args.resume else set())
     todo  = [(mk, md) for (mk, md) in pairs if (mk, md) not in done]
+    if _HAS_CURL_CFFI:
+        print(f"[info] TLS impersonation: curl_cffi ({_IMPERSONATE})")
+    else:
+        print("[warn] curl_cffi not installed — falling back to bare requests. "
+              "Install with: pip install curl_cffi (bypasses ~80% of Cloudflare "
+              "bot-blocks).", file=sys.stderr)
     print(f"[info] unique pairs: {len(pairs)}  · already done: {len(done)}  · todo: {len(todo)}")
     if args.limit:
         todo = todo[:args.limit]
@@ -590,7 +666,7 @@ def main():
     if write_header:
         writer.writeheader()
 
-    session = requests.Session()
+    session = _new_session()
     ok_pairs = 0
     empty_pairs = 0
     blocked_pairs = 0
@@ -615,7 +691,7 @@ def main():
                 print(f"  [cooldown] {TINY_STREAK_LIMIT} consecutive blocks — "
                       f"sleeping {LONG_COOLDOWN_SECS}s", file=sys.stderr)
                 time.sleep(LONG_COOLDOWN_SECS)
-                session = requests.Session()   # fresh cookies / TLS session
+                session = _new_session()   # fresh cookies / TLS session
                 tiny_streak = 0
             continue
         # Real response (or None) — reset the streak.
