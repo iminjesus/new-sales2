@@ -1054,6 +1054,134 @@ def _load_postcode_rim_demand():
 
 
 _HK_RIM_CACHE: dict = {"year": None, "ts": 0.0, "rows": []}
+_HK_SIZE_CACHE: dict = {"year": None, "ts": 0.0, "rows": []}
+
+# In-memory cache for postcode_size_demand.csv — same lazy-reload
+# behaviour as _POSTCODE_RIM_CACHE above.  Read once per file mtime.
+_POSTCODE_SIZE_CACHE: dict = {"mtime": 0.0, "rows": []}
+
+def _load_postcode_size_demand():
+    """Load postcode_size_demand.csv (state, postcode, size, gen,
+    fleet_units, ...) once, cached until the file's mtime changes.
+    Legacy / unknown rows (empty size) are kept in the raw list so
+    callers can report coverage — the API endpoint filters them out
+    before charting."""
+    import csv as _csv, os as _os
+    candidates = [
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                      "out", "rego", "postcode_size_demand.csv"),
+        _os.path.join(_os.getcwd(), "out", "rego", "postcode_size_demand.csv"),
+        _os.path.join(_os.getcwd(), "postcode_size_demand.csv"),
+    ]
+    path = next((p for p in candidates if _os.path.exists(p)), None)
+    if not path:
+        return []
+    try:
+        mtime = _os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    if _POSTCODE_SIZE_CACHE.get("path") == path \
+       and _POSTCODE_SIZE_CACHE.get("mtime") == mtime:
+        return _POSTCODE_SIZE_CACHE["rows"]
+    rows = []
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for r in _csv.DictReader(f):
+                try:
+                    units = int(r.get("fleet_units") or 0)
+                except ValueError:
+                    units = 0
+                if units <= 0:
+                    continue
+                rows.append({
+                    "state":       (r.get("state") or "").strip().upper(),
+                    "postcode":    (r.get("postcode") or "").strip(),
+                    "size":        (r.get("size") or "").strip(),
+                    "gen":         (r.get("gen")  or "").strip(),
+                    "fleet_units": units,
+                })
+    except Exception as _e:
+        print(f"[fleet-size] failed to read {path}: {_e}")
+        return []
+    _POSTCODE_SIZE_CACHE.update({"path": path, "mtime": mtime, "rows": rows})
+    return rows
+
+
+def _load_hk_size_sales(year: int = 2026, ttl: int = 300):
+    """Same shape as _load_hk_rim_sales but keys HK sales by the FULL
+    tyre size string (from carrying_26.size) instead of rim_family, so
+    the size-level fleet chart can align HK bars to the same size
+    buckets as the BITRE fleet."""
+    import time as _t
+    now = _t.monotonic()
+    if _HK_SIZE_CACHE["year"] == year and (now - _HK_SIZE_CACHE["ts"]) < ttl:
+        return _HK_SIZE_CACHE["rows"]
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
+    except Exception as _e:
+        print(f"[hk_size] DB connect failed: {_e}")
+        return []
+    try:
+        cur.execute("SHOW COLUMNS FROM customer")
+        cust_cols = {r["Field"] for r in cur.fetchall()}
+        has_pc    = "postcode" in cust_cols
+        state_col = "ship_to_state" if "ship_to_state" in cust_cols else "bde_state"
+        pc_field  = "c.postcode AS postcode" if has_pc else "c.address_1 AS address_1"
+        pc_group  = "c.postcode" if has_pc else "c.address_1"
+        cur.execute(f"""
+            SELECT c.{state_col} AS state, {pc_field},
+                   cr.size AS size, SUM(s.qty) AS qty
+            FROM sales_2526 s
+            JOIN customer c    ON c.ship_to = s.ship_to
+            JOIN carrying_26 cr ON cr.m_code = s.material
+            WHERE s.billing_date >= '{year}-01-01'
+              AND s.billing_date <  '{year + 1}-01-01'
+              AND s.qty > 0
+            GROUP BY c.{state_col}, {pc_group}, cr.size
+        """)
+        raw = cur.fetchall()
+    except Exception as _e:
+        print(f"[hk_size] SQL failed: {_e}")
+        try: cur.close(); conn.close()
+        except: pass
+        return []
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    import re as _re_pc
+    _PC_RX = _re_pc.compile(r"\b(\d{4})\b")
+    rows = []
+    for r in raw:
+        state = (r.get("state") or "").strip().upper()
+        if has_pc:
+            pc = (r.get("postcode") or "").strip()
+        else:
+            addr = r.get("address_1") or ""
+            m = _PC_RX.findall(addr)
+            pc = m[-1] if m else ""
+        if pc.isdigit(): pc = pc.zfill(4)
+        # Normalise size to the same form the BITRE side emits — strip
+        # load / speed ratings so "205/55R16 91V XL" collapses onto
+        # "205/55R16".
+        size_raw = (r.get("size") or "").strip()
+        m = _re_pc.search(r"(\d{3}/\d{2}R\d{2}(?:\.\d)?)", size_raw)
+        if not m:
+            # Fall back to LT/C sizes like "205R16C"
+            m = _re_pc.search(r"(\d{3}R\d{2}(?:\.\d)?C?)", size_raw)
+        size = m.group(1) if m else size_raw
+        rows.append({
+            "state":    state,
+            "postcode": pc,
+            "size":     size,
+            "qty":      int(r.get("qty") or 0),
+        })
+    _HK_SIZE_CACHE.update({"year": year, "ts": now, "rows": rows})
+    return rows
+
 
 # Rim-diameter parser (regex + bucket) — same shape as
 # postcode_penetration.py so the two stay in sync.
@@ -1291,6 +1419,112 @@ def api_fleet_by_rim():
         "hk_total":     sum(hk_sold),
         "sample_postcodes": sorted(
             {r["postcode"] for r in rows[:200] if r["postcode"]})[:10],
+    })
+
+
+@app.get("/api/fleet_by_size")
+def api_fleet_by_size():
+    """Fleet-by-size version of /api/fleet_by_rim.  Same shape of
+    request/response, but the bucket dimension is the full tyre size
+    string (e.g. '215/60R16') instead of the coarse rim family (R16).
+
+    Sizes with zero fleet in the current filter are dropped.  Result
+    is sorted by fleet DESC so the chart's x-axis reads high → low
+    naturally; the frontend can slice to a top-N view when the tail
+    of ~20+ sizes doesn't fit."""
+    state     = (request.args.get("state") or "ALL").strip().upper()
+    postcode  = (request.args.get("postcode") or "").strip()
+    region    = (request.args.get("region") or "").strip().upper()
+    limit     = request.args.get("limit", type=int) or 0   # 0 = all
+    _REGION_TO_STATES = {
+        "NSW": {"NSW", "ACT"},
+        "VIC": {"VIC", "TAS", "NT", "SA"},
+        "QLD": {"QLD"},
+        "WA":  {"WA"},
+    }
+    region_states = _REGION_TO_STATES.get(region)
+
+    rows = _load_postcode_size_demand()
+    if not rows:
+        return jsonify({
+            "size_order": [], "series": [],
+            "warning": "postcode_size_demand.csv not found — run "
+                       "postcode_size_demand.py first.",
+        })
+
+    if postcode:
+        postcode = postcode.zfill(4) if postcode.isdigit() else postcode
+
+    def _row_in_scope(row) -> bool:
+        if postcode:
+            row_pc = row["postcode"]
+            if row_pc.isdigit():
+                row_pc = row_pc.zfill(4)
+            return row_pc == postcode
+        if region_states is not None:
+            return row["state"] in region_states
+        return state == "ALL" or row["state"] == state
+
+    # Aggregate fleet by size — skip empty-size rows (legacy /
+    # unknown) so the chart only shows sizes we actually predicted.
+    fleet_totals: dict[str, int] = {}
+    unpredicted = 0
+    matched = 0
+    for r in rows:
+        if not _row_in_scope(r):
+            continue
+        if not r["size"]:
+            unpredicted += r["fleet_units"]
+            continue
+        fleet_totals[r["size"]] = fleet_totals.get(r["size"], 0) + r["fleet_units"]
+        matched += 1
+
+    # HK sales side — same scope filter, aggregate by full size.
+    hk_totals: dict[str, int] = {}
+    for h in _load_hk_size_sales():
+        if not _row_in_scope(h):
+            continue
+        if not h["size"]:
+            continue
+        hk_totals[h["size"]] = hk_totals.get(h["size"], 0) + h["qty"]
+
+    # Union of sizes seen on either side, sorted by fleet DESC (so the
+    # x-axis lines up with tyre-demand priority).  Sizes only present
+    # in HK sales but not fleet still surface — they read as
+    # "penetration only", useful for cross-fleet opportunities.
+    all_sizes = set(fleet_totals) | set(hk_totals)
+    size_order = sorted(
+        all_sizes,
+        key=lambda s: (-fleet_totals.get(s, 0), -hk_totals.get(s, 0), s),
+    )
+    if limit > 0:
+        size_order = size_order[:limit]
+
+    values      = [fleet_totals.get(s, 0) for s in size_order]
+    hk_sold     = [hk_totals.get(s, 0)    for s in size_order]
+    penetration = [
+        round(hk_sold[i] / values[i] * 100, 2) if values[i] > 0 else None
+        for i in range(len(size_order))
+    ]
+
+    if postcode:
+        label = f"Postcode {postcode}"
+    elif region_states is not None:
+        label = region
+    else:
+        label = state
+    return jsonify({
+        "size_order": size_order,
+        "series": [{
+            "state":       label,
+            "values":      values,
+            "hk_sold":     hk_sold,
+            "penetration": penetration,
+        }],
+        "matched_rows":       matched,
+        "total_units":        sum(values),
+        "unpredicted_units":  unpredicted,   # LEGACY + UNKNOWN fleet
+        "hk_total":           sum(hk_sold),
     })
 
 

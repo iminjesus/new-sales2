@@ -390,31 +390,41 @@
     // Build a Chart.js config for the compact popup chart (~380 px
      // wide).  Keeps three axes — Fleet (left), HK sold (right), and
      // Penetration % (far right) — matching the previous panel chart.
+    // Map a tyre size back to its rim-family colour so the chart still
+    // reads visually as "R16 block · R17 block · R18 block" even
+    // though every column is now a distinct full size string.
+    function _sizeColor(size){
+      const m = /R\s*(\d{2}(?:\.\d)?)/i.exec(size);
+      if (!m) return "#94a3b8";
+      const n = parseFloat(m[1]);
+      if (n === 17.5) return RIM_COLORS["R17.5 (TBR)"];
+      if (n === 19.5) return RIM_COLORS["R19.5 (TBR)"];
+      if (n === 22.5) return RIM_COLORS["R22.5 (TBR)"];
+      if (n >= 22)    return RIM_COLORS["R22+"];
+      return RIM_COLORS["R" + Math.floor(n)] || "#94a3b8";
+    }
+
+    // Popup chart config — takes the /api/fleet_by_size response shape
+    // (size_order + series with values/hk_sold/penetration parallel to
+    // it) and renders three-axis bars/line just like the old rim
+    // version, but with individual sizes as x-axis labels.
     function buildPopupConfig(data, postcode){
-      const rimOrder = (data.rim_order||[]).filter(f =>
-        f !== "MOTORCYCLE" && f !== "UNKNOWN");
-      const idxOf = f => (data.rim_order||[]).indexOf(f);
+      const sizeOrder = (data.size_order||[]);
       const s = (data.series||[])[0] || {values:[], hk_sold:[], penetration:[]};
 
-      // Fleet has its own left axis.  HK gets a right-hand axis but
-      // capped so the two aren't wildly out of proportion — otherwise
-      // a postcode with 1-2 HK units renders the red bar as a
-      // sub-pixel and hover breaks.  Cap: max(hkMax × 3, 10) — always
-      // leaves enough vertical range for single-digit HK values to
-      // paint as a visible bar without dwarfing the fleet bars.
+      // Same yHK cap logic as the rim version — small HK volumes stay
+      // visible as real bars instead of sub-pixel lines.
       let fleetMax = 0, hkMax = 0;
-      for (const v of rimOrder.map(f => s.values[idxOf(f)] || 0))
-        if (v > fleetMax) fleetMax = v;
-      for (const v of rimOrder.map(f => (s.hk_sold||[])[idxOf(f)] || 0))
-        if (v > hkMax) hkMax = v;
+      for (const v of (s.values || []))  if (v > fleetMax) fleetMax = v;
+      for (const v of (s.hk_sold || [])) if (v > hkMax)    hkMax    = v;
       const yMax   = fleetMax > 0 ? Math.ceil(fleetMax * 1.20) : undefined;
       const yHKMax = hkMax    > 0 ? Math.max(Math.ceil(hkMax * 3), 10) : 10;
 
       const datasets = [{
         type: "bar",
         label: "Fleet",
-        data:  rimOrder.map(f => s.values[idxOf(f)] || 0),
-        backgroundColor: rimOrder.map(f => RIM_COLORS[f] || "#94a3b8"),
+        data:  s.values || [],
+        backgroundColor: sizeOrder.map(_sizeColor),
         borderWidth: 0,
         yAxisID: "y",
         order: 2,
@@ -423,19 +433,16 @@
         datasets.push({
           type: "bar",
           label: "HK sold",
-          data:  rimOrder.map(f => s.hk_sold[idxOf(f)] || 0),
+          data:  s.hk_sold || [],
           backgroundColor: "#e11d48",
           borderWidth: 0,
-          yAxisID: "yHK",     // own axis so 1-unit bars stay visible
+          yAxisID: "yHK",
           order: 2,
         });
         datasets.push({
           type: "line",
           label: "Penetration %",
-          data:  rimOrder.map(f => {
-            const p = s.penetration ? s.penetration[idxOf(f)] : null;
-            return (p == null) ? null : p;
-          }),
+          data:  (s.penetration || []).map(p => (p == null) ? null : p),
           borderColor: "#0f766e",
           backgroundColor: "#0f766e",
           borderWidth: 2,
@@ -449,7 +456,7 @@
       const hasHK = datasets.length > 1;
       return {
         type: "bar",
-        data: {labels: rimOrder, datasets},
+        data: {labels: sizeOrder, datasets},
         options: {
           responsive: true, maintainAspectRatio: false,
           layout: { padding: { top: 18 } },
@@ -494,9 +501,11 @@
             const hk = elements.find(el =>
               chart.data.datasets[el.datasetIndex].label === "HK sold");
             if (!hk) return;
-            const rim = chart.data.labels[hk.index];
+            // Label is the full tyre size (e.g. "215/60R16"); drill
+            // handler pulls the rim out and filters HK sales to it.
+            const size = chart.data.labels[hk.index];
             if (typeof window._fleetPopupHKDrill === "function")
-              window._fleetPopupHKDrill(rim);
+              window._fleetPopupHKDrill(size);
           },
           // Show a pointer cursor whenever the mouse is over a bar /
           // line point so it's obvious the chart is clickable.  Fall
@@ -506,7 +515,14 @@
             if (target) target.style.cursor = elements.length ? "pointer" : "default";
           },
           scales: {
-            x: { ticks: { font: { size: 10 } } },
+            // Auto-rotate labels — full tyre sizes (215/60R16) are
+            // wider than rim families (R16), so at 30+ columns
+            // horizontal labels overlap.  Rotation kicks in
+            // automatically past a threshold; maxRotation cap keeps
+            // them readable rather than fully vertical.
+            x: { ticks: { font: { size: 9 },
+                          autoSkip: false,
+                          maxRotation: 60, minRotation: 45 } },
             y: { beginAtZero: true, max: yMax,
                  ticks: { callback: v => fmt(v), color: "#334155", font: { size: 9 } } },
             // HK axis — capped small (see yHKMax calc) so 1-2 unit
@@ -829,7 +845,11 @@
     // poll briefly before drawing.
     async function openFleetPopup(layer, pc, latlng){
       const container = document.createElement("div");
-      container.style.width = "420px";
+      // Wider than the rim-family popup because the size-level chart
+      // has ~30-50 columns (every distinct 205/55R16 / 195/65R15 / …
+      // combo instead of ~10 rim families).  Chart itself scrolls
+      // horizontally inside a fixed viewport.
+      container.style.width = "560px";
       container.innerHTML = `
         <div style="font-weight:700;font-size:13px;margin-bottom:2px;">
           Postcode ${pc}
@@ -837,47 +857,82 @@
         <div id="_fpMsg" style="font-size:11.5px;color:#666;margin-bottom:4px;">
           Loading fleet mix…
         </div>
-        <div style="position:relative;height:210px;">
-          <canvas></canvas>
+        <div style="position:relative;height:230px;overflow-x:auto;overflow-y:hidden;
+                    border:1px solid #f1f5f9;border-radius:4px;">
+          <div id="_fpCanvasBox" style="position:relative;height:100%;min-width:100%;">
+            <canvas></canvas>
+          </div>
         </div>
         <div id="_fpDrillHint" style="font-size:11px;color:#94a3b8;margin-top:4px;">
-          Click a rim column for its size / pattern / sold-to HK sales breakdown.
+          Sizes sorted by fleet demand · scroll horizontally to see the tail ·
+          click a red HK bar for its pattern / sold-to breakdown.
         </div>
         <div id="_fpDrill" style="margin-top:6px;"></div>`;
       layer.unbindPopup();
       layer.bindPopup(container, {
-        maxWidth: 520, minWidth: 420, className: "fleet-popup",
+        maxWidth: 640, minWidth: 560, className: "fleet-popup",
       }).openPopup(latlng);
 
       let data;
       try {
-        const r = await fetch("/api/fleet_by_rim?postcode=" + encodeURIComponent(pc),
+        const r = await fetch("/api/fleet_by_size?postcode=" + encodeURIComponent(pc),
                               {credentials: "same-origin"});
         data = await r.json();
       } catch(e){
         container.querySelector("#_fpMsg").textContent = "Load failed: " + e;
         return;
       }
-      if (data.matched_rows === 0) {
+      if (!data.total_units && !data.hk_total) {
         container.querySelector("#_fpMsg").innerHTML =
-          `<b>No BITRE data for this postcode.</b> ` +
-          `Sample values available: <code>` +
-          ((data.sample_postcodes||[]).slice(0,6).join(", ") || "—") + "</code>";
+          `<b>No fleet-by-size data for this postcode.</b> ` +
+          `Verify postcode_size_demand.csv actually covers it.`;
         return;
       }
+      // Header line — shows matched fleet + how much was legacy /
+      // unknown so the user knows the size-level number understates
+      // the true fleet in that postcode.
+      const unpred = data.unpredicted_units || 0;
       container.querySelector("#_fpMsg").textContent =
-        `Fleet ${fmt(data.total_units||0)}  ·  HK sold ${fmt(data.hk_total||0)}`;
+        `Fleet ${fmt(data.total_units||0)}  ·  HK sold ${fmt(data.hk_total||0)}`
+        + (unpred ? `  ·  ${fmt(unpred)} legacy/unknown (no size)` : "");
+      // Set canvas box width so ~26px per bar keeps individual columns
+      // legible; smaller than that and the labels overlap.  Long tails
+      // scroll horizontally inside the fixed 560-px viewport.
+      const sizes = (data.size_order || []);
+      const box = container.querySelector("#_fpCanvasBox");
+      const per = 30;
+      box.style.width = Math.max(sizes.length * per, 520) + "px";
 
       // Wire the drill-down handler that the chart's onClick calls.
       // Kept on `window._fleetPopupHKDrill` so a click inside Chart.js's
       // canvas can reach back into this popup's DOM without needing
       // access to the outer closure's variables.
-      window._fleetPopupHKDrill = async (rim) => {
+      // Drill-down key is now the full SIZE (e.g. "215/60R16") not the
+      // rim family.  We derive the rim from the size and reuse the
+      // existing /api/fleet_by_rim/hk_detail endpoint (which returns
+      // every size · pattern · sold-to combo within the rim family) —
+      // then filter client-side to the exact size the user clicked.
+      // Cheaper than a size-specific server endpoint for a first cut,
+      // and the rim endpoint already exists.
+      window._fleetPopupHKDrill = async (size) => {
         const drillDiv = container.querySelector("#_fpDrill");
         const hint     = container.querySelector("#_fpDrillHint");
         if (hint) hint.style.display = "none";
         drillDiv.innerHTML = `<div style="font-size:11.5px;color:#666;">
-          Loading <b>${rim}</b> HK sales…</div>`;
+          Loading <b>${size}</b> HK sales…</div>`;
+        // Extract the rim family the size belongs to — same regex the
+        // Python side uses for its bucketing.  "215/60R16" → "R16",
+        // "11R22.5" → "R22+" (roughly), etc.  Half-inch TBR keeps its
+        // own bucket per the backend's rim_order.
+        const rimM = /R\s*(\d{2}(?:\.\d)?)/i.exec(size);
+        if (!rimM) return;
+        const inches = parseFloat(rimM[1]);
+        let rim;
+        if (inches === 17.5)      rim = "R17.5 (TBR)";
+        else if (inches === 19.5) rim = "R19.5 (TBR)";
+        else if (inches === 22.5) rim = "R22.5 (TBR)";
+        else if (inches >= 22)    rim = "R22+";
+        else                      rim = "R" + Math.floor(inches);
         let detail;
         try {
           const r = await fetch("/api/fleet_by_rim/hk_detail?postcode="
@@ -889,11 +944,14 @@
           drillDiv.textContent = "Load failed: " + e;
           return;
         }
-        const rows = (detail.rows || []);
+        // Filter to exactly the clicked size (rim endpoint returns
+        // every size in the rim family; we want the one column).
+        const rowsRaw = (detail.rows || []);
+        const rows = rowsRaw.filter(r => (r.size || "").startsWith(size));
         if (!rows.length){
           drillDiv.innerHTML =
             `<div style="font-size:11.5px;color:#666;">
-               No HK sales in ${rim} for this postcode in 2026.
+               No HK sales in ${size} for this postcode in 2026.
              </div>`;
           return;
         }
@@ -910,9 +968,10 @@
               ${fmt(r.qty)}
             </td>
           </tr>`).join("");
+        const totalFiltered = rows.reduce((a, r) => a + (r.qty || 0), 0);
         drillDiv.innerHTML = `
           <div style="font-size:12px;font-weight:600;margin-bottom:2px;">
-            ${rim} HK sales · Total ${fmt(detail.total || 0)}
+            ${size} HK sales · Total ${fmt(totalFiltered)}
           </div>
           <div style="max-height:220px;overflow:auto;border:1px solid #e5e7eb;border-radius:4px;">
             <table style="width:100%;border-collapse:collapse;font-size:11.5px;">
