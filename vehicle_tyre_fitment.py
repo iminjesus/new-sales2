@@ -58,6 +58,13 @@ DEFAULT_DELAY  = 4.0     # seconds between requests — wheel-size.com
                          # rapid requests, so we go slower up-front to
                          # avoid getting flagged in the first place.
 MAX_RETRIES    = 4
+# When Cloudflare is actively challenging us, per-URL retries just
+# burn wall-clock without recovering — 4-min-per-model × thousands
+# of models is untenable.  Bot-block (tiny/405/403) uses a smaller
+# retry budget with a shorter cap so we fall through to FETCH_BLOCKED
+# quickly and let the outer long-cooldown handle the WAF flag instead.
+BOTBLOCK_MAX_RETRIES = 2
+BOTBLOCK_MAX_WAIT    = 30.0   # cap per-attempt backoff (seconds)
 # Rotate a small pool of realistic desktop User-Agents so a session
 # doesn't hammer wheel-size.com with a single fingerprint (a common
 # trivial bot-detection signal).
@@ -94,10 +101,12 @@ def _headers(idx: int) -> dict:
 # Anything shorter than this is treated as a bot-challenge page, not a
 # real fitment page.  Real wheel-size.com model pages are 40-200 KB.
 TINY_BODY_BYTES = 5000
-# When we hit N consecutive tiny responses, sleep for a much longer
-# stretch to let Cloudflare's rate limiter cool down.
-TINY_STREAK_LIMIT = 3
-LONG_COOLDOWN_SECS = 300  # 5 min
+# When we hit N consecutive bot-blocked responses, sleep for a much
+# longer stretch to let Cloudflare's rate limiter cool down.  Trigger
+# on the 2nd consecutive block so we don't waste 3× per-URL retries
+# before recognising the WAF is active.
+TINY_STREAK_LIMIT = 2
+LONG_COOLDOWN_SECS = 180  # 3 min for the first cooldown
 
 # Some BITRE names use spellings wheel-size.com doesn't.  Map here once
 # and the crawler transparently rewrites the URL slug.
@@ -248,42 +257,46 @@ def fetch(session: requests.Session, url: str, delay: float,
     pages and trigger the same exponential backoff as 429 / 503.  A real
     wheel-size fitment page is 40-200 KB; a Cloudflare challenge body
     is a few hundred bytes."""
-    for attempt in range(MAX_RETRIES):
+    botblock_attempts = 0
+    attempt = 0
+    while attempt < MAX_RETRIES:
         hdr = _headers(ua_idx + attempt)   # rotate UA on each retry
         try:
             r = session.get(url, headers=hdr, timeout=30)
         except requests.RequestException as e:
             print(f"    [warn] {url}: {e}", file=sys.stderr)
             time.sleep(delay * (2 ** attempt))
+            attempt += 1
             continue
         sz = len(r.text or "")
         if r.status_code == 200 and sz >= TINY_BODY_BYTES:
             print(f"    [http] 200 · {sz:>6} bytes", file=sys.stderr)
             time.sleep(delay)
             return r.text
-        if r.status_code == 200:
-            # Tiny 200 = Cloudflare challenge (server keeps status 200
-            # but returns a JS-challenge stub).  Back off exponentially.
-            wait = delay * (2 ** (attempt + 2))
-            print(f"    [http] 200 · {sz:>6} bytes (tiny — bot-block); "
+        is_botblock = (
+            (r.status_code == 200 and sz < TINY_BODY_BYTES)
+            or (r.status_code in (403, 405) and sz < TINY_BODY_BYTES)
+            or r.status_code in (429, 503)
+        )
+        if is_botblock:
+            botblock_attempts += 1
+            if botblock_attempts > BOTBLOCK_MAX_RETRIES:
+                # Give up fast — the outer main loop's long cooldown
+                # is the right place to recover, not per-URL retries.
+                print(f"    [http] {r.status_code} · {sz} bytes (bot-block, "
+                      f"giving up after {botblock_attempts} tries)",
+                      file=sys.stderr)
+                break
+            wait = min(BOTBLOCK_MAX_WAIT, delay * (2 ** (botblock_attempts + 1)))
+            print(f"    [http] {r.status_code} · {sz} bytes (bot-block) — "
                   f"backing off {wait:.1f}s", file=sys.stderr)
             time.sleep(wait)
+            attempt += 1
             continue
         if r.status_code == 404:
             print(f"    [http] 404 · not on wheel-size.com", file=sys.stderr)
             time.sleep(delay)
             return None
-        # 405 / 403 with tiny bodies are Cloudflare's "Bot Fight Mode"
-        # response — not a real 405.  Treat those AND explicit rate-limit
-        # codes (429 / 503) as retry-worthy with exponential backoff.
-        if r.status_code in (429, 503) or (
-            r.status_code in (403, 405) and sz < TINY_BODY_BYTES
-        ):
-            wait = delay * (2 ** (attempt + 2))
-            print(f"    [http] {r.status_code} · {sz} bytes (bot-block) — "
-                  f"backing off {wait:.1f}s", file=sys.stderr)
-            time.sleep(wait)
-            continue
         print(f"    [http] {r.status_code} · {sz} bytes", file=sys.stderr)
         time.sleep(delay)
         return None
