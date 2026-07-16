@@ -72,13 +72,23 @@ UA_POOL = [
 ]
 
 def _headers(idx: int) -> dict:
+    # Send a full desktop-browser header set — Cloudflare Bot Fight
+    # Mode checks header presence + order.  Sec-Fetch-* alone kicks a
+    # meaningful share of naive requests to a 405 challenge.
     return {
         "User-Agent":       UA_POOL[idx % len(UA_POOL)],
+        "Accept":           "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language":  "en-AU,en;q=0.9",
-        "Accept":           "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding":  "gzip, deflate, br",
+        "Referer":          BASE_URL + "/",
         "DNT":              "1",
-        "Upgrade-Insecure-Requests": "1",
+        "Connection":       "keep-alive",
+        "Upgrade-Insecure-Requests":  "1",
+        "Sec-Fetch-Dest":   "document",
+        "Sec-Fetch-Mode":   "navigate",
+        "Sec-Fetch-Site":   "same-origin",
+        "Sec-Fetch-User":   "?1",
+        "Cache-Control":    "max-age=0",
     }
 
 # Anything shorter than this is treated as a bot-challenge page, not a
@@ -263,9 +273,15 @@ def fetch(session: requests.Session, url: str, delay: float,
             print(f"    [http] 404 · not on wheel-size.com", file=sys.stderr)
             time.sleep(delay)
             return None
-        if r.status_code in (429, 503):
+        # 405 / 403 with tiny bodies are Cloudflare's "Bot Fight Mode"
+        # response — not a real 405.  Treat those AND explicit rate-limit
+        # codes (429 / 503) as retry-worthy with exponential backoff.
+        if r.status_code in (429, 503) or (
+            r.status_code in (403, 405) and sz < TINY_BODY_BYTES
+        ):
             wait = delay * (2 ** (attempt + 2))
-            print(f"    [http] {r.status_code} — backing off {wait:.1f}s", file=sys.stderr)
+            print(f"    [http] {r.status_code} · {sz} bytes (bot-block) — "
+                  f"backing off {wait:.1f}s", file=sys.stderr)
             time.sleep(wait)
             continue
         print(f"    [http] {r.status_code} · {sz} bytes", file=sys.stderr)
