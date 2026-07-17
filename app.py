@@ -1576,12 +1576,17 @@ def api_fleet_by_size():
     # in HK sales but not fleet still surface — they read as
     # "penetration only", useful for cross-fleet opportunities.
     all_sizes = set(fleet_totals) | set(hk_totals)
-    size_order = sorted(
+    size_order_full = sorted(
         all_sizes,
         key=lambda s: (-fleet_totals.get(s, 0), -hk_totals.get(s, 0), s),
     )
-    if limit > 0:
-        size_order = size_order[:limit]
+    # Aggregate totals span the FULL scope (matched + unpredicted) so
+    # the fleet card doesn't understate reality when the caller asked
+    # for a top-N chart via ?limit.  chart_size_order is the sliced
+    # view; totals stay whole.
+    matched_total = sum(fleet_totals.values())
+    hk_total_full = sum(hk_totals.values())
+    size_order = size_order_full[:limit] if limit > 0 else size_order_full
 
     values      = [fleet_totals.get(s, 0) for s in size_order]
     hk_sold     = [hk_totals.get(s, 0)    for s in size_order]
@@ -1596,6 +1601,11 @@ def api_fleet_by_size():
         label = region
     else:
         label = state
+    # total_units = every registered vehicle in scope (matched sizes +
+    # legacy + unknown) — matches the raw BITRE fleet number the reader
+    # expects.  matched_units = subset with a predicted size (what the
+    # chart shows on the x-axis when everything is expanded).
+    total_all = matched_total + unpredicted
     return jsonify({
         "size_order": size_order,
         "series": [{
@@ -1605,9 +1615,10 @@ def api_fleet_by_size():
             "penetration": penetration,
         }],
         "matched_rows":       matched,
-        "total_units":        sum(values),
-        "unpredicted_units":  unpredicted,   # LEGACY + UNKNOWN fleet
-        "hk_total":           sum(hk_sold),
+        "matched_units":      matched_total,  # matched to a real size
+        "unpredicted_units":  unpredicted,    # LEGACY + UNKNOWN fleet
+        "total_units":        total_all,      # everything registered
+        "hk_total":           hk_total_full,  # full HK volume in scope
     })
 
 
