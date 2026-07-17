@@ -1209,8 +1209,18 @@
     // Refreshes on region-button clicks so the reader sees the tyre
     // demand shape without needing to open a postcode-specific popup.
     let _foChart = null;
+    // Read the region directly off #regionBtns .active data-val — the
+    // app.js click handler updates that class synchronously with its
+    // filters.region assignment, so the DOM is a more reliable source
+    // than trying to reach into app.js's private `const filters` from
+    // this IIFE (bare identifier reference from a different script
+    // block is brittle across module boundaries).
+    function _foRegion(){
+      const el = document.querySelector("#regionBtns .btn.active");
+      return (el && el.dataset && el.dataset.val) || "ALL";
+    }
     async function refreshFleetOverview() {
-      const region = (window.filters && filters.region) || "ALL";
+      const region = _foRegion();
       const scopeEl  = document.getElementById("foScope");
       const statusEl = document.getElementById("foStatus");
       if (!scopeEl) return;
