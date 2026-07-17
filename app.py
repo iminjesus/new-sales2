@@ -8929,17 +8929,23 @@ def api_monthly_highlights():
             if not tbl:
                 return {"qty": 0.0, "amt": 0.0, "days": 0}
             # Probe for a `day` column — per-month tables (sales_2601…)
-            # carry one, so we count distinct days the same way we
-            # already do for sales_thismonth.  Tables without a day
-            # column (e.g. some legacy sales_2526 layouts) still get a
-            # plain 0 so the SELECT stays valid.
-            has_day = False
+            # carry one; sales_2526 doesn't but has `billing_date` we
+            # can DATE() on for the same distinct-day count.  Without
+            # this second branch the daily_avg for any month served
+            # from sales_2526 was 0 → None → dash in the UI.
+            day_expr = None
             try:
                 cur.execute(f"SHOW COLUMNS FROM {tbl} LIKE 'day'")
-                has_day = cur.fetchone() is not None
+                if cur.fetchone():
+                    day_expr = "s.day"
+                else:
+                    cur.execute(f"SHOW COLUMNS FROM {tbl} LIKE 'billing_date'")
+                    if cur.fetchone():
+                        day_expr = "DATE(s.billing_date)"
             except Exception:
                 pass
-            day_col = ", COUNT(DISTINCT s.day) AS days" if has_day else ", 0 AS days"
+            day_col = (f", COUNT(DISTINCT {day_expr}) AS days"
+                       if day_expr else ", 0 AS days")
             cur.execute(
                 f"SELECT COALESCE(SUM(s.qty),0) AS qty, "
                 f"       COALESCE(SUM(s.amt),0) AS amt {day_col} "
