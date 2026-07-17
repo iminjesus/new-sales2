@@ -95,6 +95,28 @@ body[data-loading="1"] #wrap { opacity: 0.55; transition: opacity 120ms ease; po
    panel slides in with a soft background so the "what's behind
    this fact" feels like a drill rather than a wall of numbers. */
 .card.remarkable h2 { color: #b45309; }
+/* Decline analysis card — always renders after Remarkable so the
+   reader can see WHICH slices fell (and how much), even when the
+   monthly total actually rose. */
+.decl-headline { padding:8px 12px; background:#fef2f2; border-radius:5px;
+  margin-bottom:10px; font-size:13px; color:#1f2937; }
+.decl-block { margin-top:10px; }
+.decl-block h4 { margin:0 0 4px 0; font-size:11px; color:#64748b;
+  font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.decl-row { display:grid; grid-template-columns: 1fr auto auto;
+  gap:8px; padding:4px 8px; font-size:12.5px;
+  border-bottom:1px solid #f1f5f9; align-items:baseline; }
+.decl-row:last-child { border-bottom:none; }
+.decl-key { color:#334155; font-weight:500; }
+.decl-change { color:#dc2626; font-weight:700;
+  font-variant-numeric:tabular-nums; text-align:right; }
+.decl-pct { color:#f87171; font-weight:500; margin-left:2px; }
+.decl-sub { color:#94a3b8; font-size:11px;
+  font-variant-numeric:tabular-nums; text-align:right; }
+.decl-cross { padding:6px 10px; background:#fafafa;
+  border-left:3px solid #dc2626; border-radius:3px;
+  margin-bottom:4px; font-size:12.5px; color:#334155; }
+.decl-cross .decl-inline b { color:#dc2626; font-variant-numeric:tabular-nums; }
 .rem-list { display:flex; flex-direction:column; gap:6px; }
 .rem-item { border:1px solid #fef3c7; border-radius:6px;
   background:#fffbeb; }
@@ -519,6 +541,83 @@ function renderRemarkableCard(j){
   </div>`;
 }
 
+function renderDeclinesCard(j){
+  const d = j.declines || {};
+  const ov = d.overall || {};
+  const regs = d.regions || [];
+  const pgs  = d.product_groups || [];
+  const cus  = d.customers || [];
+  const cross = d.cross || [];
+  const anyDecline = regs.length || pgs.length || cus.length;
+  if (!anyDecline && ov.direction !== "down") {
+    return `<div class="card">
+      <h2>🔻 Decline analysis</h2>
+      <div class="notes">Every region, product group, and top customer grew this month.  Nothing fell worth flagging.</div>
+    </div>`;
+  }
+  const arrow = ov.direction === "down" ? "▼"
+               : ov.direction === "up" ? "▲" : "—";
+  const arrowClr = ov.direction === "down" ? "#dc2626"
+                  : ov.direction === "up" ? "#16a34a" : "#64748b";
+  const headline = ov.direction === "down"
+    ? `Overall <b style="color:#dc2626;">down ${fmtPct(ov.pct)}</b> (${unitVal(ov.change)} vs prev)`
+    : ov.direction === "up"
+      ? `Overall up <b style="color:#16a34a;">${fmtPct(ov.pct)}</b> — but the below segments still fell:`
+      : `Overall flat this month; individual segments below still moved.`;
+
+  const regHtml = regs.length ? `
+    <div class="decl-block">
+      <h4>Regions that fell</h4>
+      ${regs.map(r => `
+        <div class="decl-row">
+          <span class="decl-key">${esc(r.region)}</span>
+          <span class="decl-change">${unitVal(r.change)} <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
+          <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>
+        </div>`).join("")}
+    </div>` : "";
+  const pgHtml = pgs.length ? `
+    <div class="decl-block">
+      <h4>Product groups that fell</h4>
+      ${pgs.map(r => `
+        <div class="decl-row">
+          <span class="decl-key">${esc(r.product_group)}</span>
+          <span class="decl-change">${unitVal(r.change)} <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
+          <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>
+        </div>`).join("")}
+    </div>` : "";
+  const cusHtml = cus.length ? `
+    <div class="decl-block">
+      <h4>Top customer losses (top 5)</h4>
+      ${cus.map(r => `
+        <div class="decl-row">
+          <span class="decl-key">${esc(r.name || r.sold_to)}</span>
+          <span class="decl-change">${unitVal(r.change)} <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
+          <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>
+        </div>`).join("")}
+    </div>` : "";
+  const crossHtml = cross.length ? `
+    <div class="decl-block">
+      <h4>Where the top-declining regions lost ground</h4>
+      ${cross.map(c => `
+        <div class="decl-cross">
+          <b>${esc(c.region)}</b> fell ${unitVal(c.region_change)} —
+          concentrated in
+          ${(c.product_declines || []).slice(0, 4).map(p =>
+            `<span class="decl-inline">${esc(p.pg)} <b>${unitVal(p.change)}</b></span>`
+          ).join(", ") || "no single product group"}.
+        </div>`).join("")}
+    </div>` : "";
+
+  return `<div class="card">
+    <h2>🔻 Decline analysis</h2>
+    <div class="decl-headline" style="border-left:3px solid ${arrowClr};">
+      <span style="color:${arrowClr};font-weight:700;">${arrow}</span>
+      ${headline}
+    </div>
+    ${regHtml}${pgHtml}${cusHtml}${crossHtml}
+  </div>`;
+}
+
 function render(j){
   const wrap = document.getElementById("wrap");
   const status = document.getElementById("status");
@@ -540,6 +639,10 @@ function render(j){
 
   // 🌟 Remarkable — sits above ① Summary; each line expands inline.
   html.push(renderRemarkableCard(j));
+
+  // 🔻 Decline analysis — always renders, even when the total rose,
+  // because the reader wants to see which segments still fell.
+  html.push(renderDeclinesCard(j));
 
   // ① Summary
   const avg3_v = (sum.avg3 || {})[metric];

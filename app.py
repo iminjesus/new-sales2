@@ -9464,6 +9464,115 @@ def api_monthly_highlights():
         except Exception:
             pass
 
+        # ── ⑥ Decline analysis ───────────────────────────────────────
+        # Even when the total ROSE this month, the reader still wants
+        # to see which slices fell — and when the total fell, which
+        # slices drove the drop.  This section synthesises the region
+        # / product-group / customer breakdowns we already computed,
+        # ranks negative contributors by absolute change, and pushes
+        # a cross-attribution (top-declining region × product groups
+        # that fell inside it) so a "VIC dropped 8%" line can be
+        # followed by "concentrated in Ventus (-800) and Kinergy
+        # (-400)".  Uses the same metric (qty | amt) the rest of the
+        # page runs on.
+        def _decl(items, key):
+            """From a list of dicts with `this` and `prev`, return the
+            negative ones sorted by most-negative delta."""
+            out = []
+            for r in items:
+                d = (r.get("this") or 0) - (r.get("prev") or 0)
+                if d < 0:
+                    out.append({key: r.get(key), "this": r.get("this"),
+                                "prev": r.get("prev"), "change": round(d, 2),
+                                "pct": r.get("mom_pct")})
+            out.sort(key=lambda x: x["change"])   # most negative first
+            return out
+        region_declines = _decl(regions, "region")
+        pg_declines     = _decl(pg_rows, "product_group")   # full pg list, not the top-10 slice
+        # Customer losses: reuse `losers` (already sorted by most-negative
+        # delta) — trim to 5 for the narrative and expose the delta
+        # under a common `change` key so the frontend can use one
+        # renderer for every declines row.
+        customer_losses = [
+            {"sold_to": r["sold_to"], "name": r["name"],
+             "this": r["this"], "prev": r["prev"],
+             "change": r["delta"], "pct": r["delta_pct"]}
+            for r in losers[:5]
+        ]
+        # Cross-attribution: for the top-3 declining regions, pull the
+        # product groups that fell WITHIN that region so the user can
+        # see WHY the region dropped, not just that it did.  Uses the
+        # per-region-per-pg cross-table we build lazily here.
+        cross = []
+        try:
+            def per_pg_by_region(y, m):
+                tbl, where, ps = _src_with_state(y, m)
+                if not tbl: return {}
+                cur.execute(
+                    f"SELECT COALESCE(cus.bde_state,'COMMON') AS state, "
+                    f"       IFNULL(cr.product_group,'(none)') AS pg, "
+                    f"       SUM(s.qty) AS qty, SUM(s.amt) AS amt "
+                    f"FROM {tbl} s "
+                    f"LEFT JOIN customer cus ON cus.ship_to = s.ship_to "
+                    f"LEFT JOIN carrying_26 cr ON cr.m_code = s.material "
+                    f"{where} "
+                    f"GROUP BY state, pg",
+                    ps,
+                )
+                out = {}
+                for r in cur.fetchall():
+                    st = (r["state"] or "COMMON").upper()
+                    # Fold state → region same as the Region section
+                    reg = ({"SA":"VIC","TAS":"VIC","NT":"WA","ACT":"NSW"}
+                           .get(st, st))
+                    out.setdefault(reg, {})[r["pg"] or "(none)"] = (
+                        float(r["qty"] or 0) if metric == "qty"
+                        else float(r["amt"] or 0)
+                    )
+                return out
+            this_pg_by_reg = {}
+            prev_pg_by_reg = {}
+            for (y, m) in this_months:
+                for reg, pgs in per_pg_by_region(y, m).items():
+                    for pg, v in pgs.items():
+                        this_pg_by_reg.setdefault(reg, {})
+                        this_pg_by_reg[reg][pg] = this_pg_by_reg[reg].get(pg, 0) + v
+            for (y, m) in prev_months:
+                for reg, pgs in per_pg_by_region(y, m).items():
+                    for pg, v in pgs.items():
+                        prev_pg_by_reg.setdefault(reg, {})
+                        prev_pg_by_reg[reg][pg] = prev_pg_by_reg[reg].get(pg, 0) + v
+            for r in region_declines[:3]:
+                reg = r["region"]
+                pg_deltas = []
+                seen = set(this_pg_by_reg.get(reg, {}).keys()) | set(prev_pg_by_reg.get(reg, {}).keys())
+                for pg in seen:
+                    tv = this_pg_by_reg.get(reg, {}).get(pg, 0)
+                    pv = prev_pg_by_reg.get(reg, {}).get(pg, 0)
+                    if tv - pv < 0:
+                        pg_deltas.append({"pg": pg, "change": round(tv - pv, 2)})
+                pg_deltas.sort(key=lambda x: x["change"])
+                cross.append({"region": reg, "region_change": r["change"],
+                              "product_declines": pg_deltas[:5]})
+        except Exception:
+            pass   # cross-attribution is a nice-to-have; skip on failure
+
+        overall_change = (this_v or 0) - (prev_v or 0)
+        declines = {
+            "overall": {
+                "direction": "down" if overall_change < 0
+                             else ("up" if overall_change > 0 else "flat"),
+                "change":    round(overall_change, 2),
+                "pct":       summary["mom_pct"],
+                "this":      round(this_v or 0, 2),
+                "prev":      round(prev_v or 0, 2),
+            },
+            "regions":         region_declines,
+            "product_groups":  pg_declines[:10],
+            "customers":       customer_losses,
+            "cross":           cross,
+        }
+
         cur.close(); conn.close()
         return jsonify({
             "month":          period_label,
@@ -9475,6 +9584,7 @@ def api_monthly_highlights():
             "product_groups": product_groups,
             "promotions":     promotions,
             "promo_aggregate": promo_aggregate,
+            "declines":       declines,
             "sold_to": {
                 "gainers":          gainers,
                 "losers":           losers,
