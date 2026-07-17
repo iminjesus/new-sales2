@@ -57,7 +57,7 @@ function withAlpha(hex, alphaHex){
 const REGION_SALESMEN={
   NSW:["Makris George","Borghese Alessio","Buckley Paul"],
   QLD:["Maclure Adam","Spires Steven","Bovey Craig","Marsh Aaron"],
-  VIC:["Bellotto Nicola","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
+  VIC:["Ducie Robert","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
   WA:["DAIS Jim","Asim Qureshi"]
 };
 const fmt = (n) => (+n || 0).toLocaleString();

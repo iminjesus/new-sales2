@@ -10694,7 +10694,8 @@ _BDE_DIRECTORY = [
     # groups SA/TAS shops under VIC)
     ("Hobkirk Calvin",   "calvin.hobkirk@hankooktyre.com.au",   "VIC", "SM"),
     ("Bilston Kelley",   "kelley.bilston@hankooktyre.com.au",   "VIC", "BDE"),
-    ("Bellotto Nicola",  "nicola.bellotto@hankooktyre.com.au",  "VIC", "BDE"),
+    # Nicola Bellotto retired; Robert Ducie took over the VIC BDE seat.
+    ("Ducie Robert",     "robert.ducie@hankooktyre.com.au",     "VIC", "BDE"),
     ("Gultjaeff Jason",  "jason.gultjaeff@hankooktyre.com.au",  "SA",  "BDE"),
     # WA
     ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA",  "SM"),
