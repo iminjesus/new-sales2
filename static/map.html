@@ -193,6 +193,52 @@
 
   <div id="mapLayout" class="chart-row" style="margin-top:4px;">
     <div id="mapWrapper" class="box" style="flex:2;">
+      <!-- Fleet-by-size overview at the current scope (national or one
+           region), sitting above the map so the reader sees the tyre
+           demand shape BEFORE they click a specific postcode.  Chart
+           re-renders when the region buttons flip.  Popup on postcode
+           click still gives the same view scoped to that postcode. -->
+      <div id="fleetOverview"
+           style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;
+                  padding:8px 12px;margin-bottom:6px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;
+                    margin-bottom:6px;">
+          <div style="font-weight:700;font-size:13px;color:#0f172a;">
+            Fleet mix — <span id="foScope" style="color:#2563eb;">National</span>
+          </div>
+          <span id="foStatus" style="font-size:11px;color:#94a3b8;">Loading…</span>
+        </div>
+        <div id="foStats" style="display:none;grid-template-columns:repeat(4, 1fr);
+                    gap:6px;margin-bottom:6px;">
+          <div style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:5px 8px;">
+            <div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Fleet</div>
+            <div style="font-size:15px;color:#0f172a;font-weight:700;font-variant-numeric:tabular-nums;" id="foFleet">—</div>
+          </div>
+          <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:5px;padding:5px 8px;">
+            <div style="font-size:10px;color:#4338ca;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Tyre / yr</div>
+            <div style="font-size:15px;color:#3730a3;font-weight:700;font-variant-numeric:tabular-nums;" id="foTyre">—</div>
+          </div>
+          <div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:5px;padding:5px 8px;">
+            <div style="font-size:10px;color:#be123c;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">HK sold</div>
+            <div style="font-size:15px;color:#9f1239;font-weight:700;font-variant-numeric:tabular-nums;" id="foHK">—</div>
+          </div>
+          <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:5px;padding:5px 8px;">
+            <div style="font-size:10px;color:#047857;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Penetration</div>
+            <div style="font-size:15px;color:#065f46;font-weight:700;font-variant-numeric:tabular-nums;" id="foPen">—</div>
+          </div>
+        </div>
+        <div id="foTopModels" style="display:none;font-size:11px;color:#334155;
+                    margin-bottom:6px;line-height:1.6;">
+          <span style="color:#64748b;font-weight:600;text-transform:uppercase;
+                       letter-spacing:.4px;font-size:10px;margin-right:4px;">
+            Top vehicles:
+          </span>
+          <span id="foTopModelsList"></span>
+        </div>
+        <div style="position:relative;height:170px;">
+          <canvas id="foChart"></canvas>
+        </div>
+      </div>
       <!-- Shop-status filter directly above the map for quick toggling -->
       <div id="shopStatusBtns"
            style="display:flex;gap:6px;align-items:center;margin-bottom:6px;
@@ -845,41 +891,96 @@
     // poll briefly before drawing.
     async function openFleetPopup(layer, pc, latlng){
       const container = document.createElement("div");
-      // Wider than the rim-family popup because the size-level chart
-      // has ~30-50 columns (every distinct 205/55R16 / 195/65R15 / …
-      // combo instead of ~10 rim families).  Chart itself scrolls
-      // horizontally inside a fixed viewport.
-      container.style.width = "560px";
+      // Wider popup so the top-20 chart has ~30 px per bar without
+      // scroll, and the stat-card row can breathe.
+      container.style.width = "640px";
       container.innerHTML = `
-        <div style="font-weight:700;font-size:13px;margin-bottom:2px;">
-          Postcode ${pc}
+        <div style="display:flex;align-items:center;justify-content:space-between;
+                    margin-bottom:6px;">
+          <div style="font-weight:700;font-size:14px;color:#0f172a;">
+            Postcode <span style="color:#2563eb;">${pc}</span>
+          </div>
+          <div id="_fpMsgEmpty" style="font-size:11px;color:#94a3b8;">
+            Loading fleet mix…
+          </div>
         </div>
-        <div id="_fpMsg" style="font-size:11.5px;color:#666;margin-bottom:2px;">
-          Loading fleet mix…
+        <!-- Four stat cards up top so the numbers are scannable at a
+             glance without reading a comma-separated run of text.  Each
+             card colour-coded to match its meaning:
+               Fleet         — slate (neutral vehicles)
+               Tyre demand   — indigo (derived / opportunity)
+               HK sold       — rose  (actual Hankook volume)
+               No-size fleet — amber (data-quality gap)     -->
+        <div id="_fpStats" style="display:none;grid-template-columns:repeat(4, 1fr);
+                    gap:6px;margin-bottom:8px;">
+          <div style="background:#f1f5f9;border:1px solid #e2e8f0;border-radius:5px;padding:6px 8px;">
+            <div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Fleet</div>
+            <div style="font-size:16px;color:#0f172a;font-weight:700;font-variant-numeric:tabular-nums;"
+                 id="_fpStatFleet">—</div>
+            <div style="font-size:10px;color:#94a3b8;">vehicles</div>
+          </div>
+          <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:5px;padding:6px 8px;">
+            <div style="font-size:10px;color:#4338ca;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">Tyre demand</div>
+            <div style="font-size:16px;color:#3730a3;font-weight:700;font-variant-numeric:tabular-nums;"
+                 id="_fpStatTyre">—</div>
+            <div style="font-size:10px;color:#818cf8;">per year</div>
+          </div>
+          <div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:5px;padding:6px 8px;">
+            <div style="font-size:10px;color:#be123c;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">HK sold</div>
+            <div style="font-size:16px;color:#9f1239;font-weight:700;font-variant-numeric:tabular-nums;"
+                 id="_fpStatHK">—</div>
+            <div style="font-size:10px;color:#fb7185;">
+              <span id="_fpStatPen">—</span> penetration
+            </div>
+          </div>
+          <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:5px;padding:6px 8px;">
+            <div style="font-size:10px;color:#92400e;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">No-size fleet</div>
+            <div style="font-size:16px;color:#78350f;font-weight:700;font-variant-numeric:tabular-nums;"
+                 id="_fpStatGap">—</div>
+            <div style="font-size:10px;color:#d97706;">legacy / unknown</div>
+          </div>
+        </div>
+        <!-- Top vehicles strip — shows the 5 most common (make, model)
+             pairs in this postcode.  Fills once /api/postcode_top_models
+             returns; hidden until then. -->
+        <div id="_fpTopModels" style="display:none;background:#f8fafc;
+                    border:1px solid #e2e8f0;border-radius:5px;
+                    padding:6px 10px;margin-bottom:8px;font-size:11.5px;">
+          <div style="font-weight:600;color:#475569;font-size:10px;
+                      text-transform:uppercase;letter-spacing:.4px;
+                      margin-bottom:2px;">Top vehicles</div>
+          <div id="_fpTopModelsList" style="color:#334155;line-height:1.5;"></div>
         </div>
         <div id="_fpToggleBar"
              style="display:flex;justify-content:space-between;align-items:center;
                     font-size:11px;color:#64748b;margin-bottom:4px;">
           <span id="_fpScope"></span>
           <button id="_fpToggle" type="button"
-                  style="border:1px solid #cbd5e1;background:#f1f5f9;
-                         padding:2px 8px;border-radius:3px;font-size:11px;
-                         cursor:pointer;">Show all</button>
+                  style="border:1px solid #cbd5e1;background:#f8fafc;
+                         padding:3px 10px;border-radius:4px;font-size:11px;
+                         color:#334155;font-weight:600;cursor:pointer;">
+            Show all
+          </button>
         </div>
-        <div style="position:relative;height:230px;overflow-x:auto;overflow-y:hidden;
-                    border:1px solid #f1f5f9;border-radius:4px;">
+        <div style="position:relative;height:270px;overflow-x:auto;overflow-y:hidden;
+                    border:1px solid #e2e8f0;border-radius:5px;background:#fafbfc;">
           <div id="_fpCanvasBox" style="position:relative;height:100%;min-width:100%;">
             <canvas></canvas>
           </div>
         </div>
-        <div id="_fpDrillHint" style="font-size:11px;color:#94a3b8;margin-top:4px;">
-          Sizes sorted by fleet demand · scroll horizontally · click a red HK bar
-          for its pattern / sold-to breakdown.
+        <!-- Small rim-family colour legend under the chart so the eye
+             can decode why bars change colour along the x-axis.  Only
+             renders the rim families present in the visible slice. -->
+        <div id="_fpLegend"
+             style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;
+                    font-size:10px;color:#64748b;"></div>
+        <div id="_fpDrillHint" style="font-size:11px;color:#94a3b8;margin-top:6px;">
+          Click a red <b style="color:#e11d48;">HK bar</b> for its pattern / sold-to breakdown.
         </div>
         <div id="_fpDrill" style="margin-top:6px;"></div>`;
       layer.unbindPopup();
       layer.bindPopup(container, {
-        maxWidth: 640, minWidth: 560, className: "fleet-popup",
+        maxWidth: 720, minWidth: 640, className: "fleet-popup",
       }).openPopup(latlng);
 
       let data;
@@ -888,28 +989,51 @@
                               {credentials: "same-origin"});
         data = await r.json();
       } catch(e){
-        container.querySelector("#_fpMsg").textContent = "Load failed: " + e;
+        container.querySelector("#_fpMsgEmpty").textContent = "Load failed: " + e;
         return;
       }
       if (!data.total_units && !data.hk_total) {
-        container.querySelector("#_fpMsg").innerHTML =
-          `<b>No fleet-by-size data for this postcode.</b> ` +
-          `Verify postcode_size_demand.csv actually covers it.`;
+        container.querySelector("#_fpMsgEmpty").innerHTML =
+          `<b style="color:#dc2626;">No fleet-by-size data.</b> ` +
+          `Verify postcode_size_demand.csv covers this postcode.`;
         return;
       }
-      // Header — show both "Fleet" (vehicle count) and "Tyre" (annual
-      // tyre demand) explicitly.  The two numbers ARE the same by the
-      // 4-tyre-set × 25%-per-year-wear model (fleet × 4 × 0.25 = fleet),
-      // but calling out both makes it clear that "17,000" means
-      // 17,000 vehicles AND 17,000 tyre-units of annual demand.
+      // Populate stat cards + reveal the row.  All four cards share
+      // the same fetch — no additional round-trip.
       const unpred = data.unpredicted_units || 0;
       const fleetN = data.total_units || 0;
-      const tyreN  = fleetN;      // 1 tyre-unit / vehicle / year (see above)
-      container.querySelector("#_fpMsg").innerHTML =
-        `<b>Fleet</b> ${fmt(fleetN)} vehicles  ·  ` +
-        `<b>Tyre demand</b> ${fmt(tyreN)}/yr (~1 set / 4 yrs)  ·  ` +
-        `<b>HK sold</b> ${fmt(data.hk_total||0)}`
-        + (unpred ? `  ·  ${fmt(unpred)} legacy/unknown (no size)` : "");
+      const hkN    = data.hk_total    || 0;
+      const tyreN  = fleetN;      // 1 tyre-unit / vehicle / year model
+      const penPct = fleetN > 0 ? (hkN / fleetN * 100) : 0;
+      container.querySelector("#_fpStatFleet").textContent = fmt(fleetN);
+      container.querySelector("#_fpStatTyre").textContent  = fmt(tyreN);
+      container.querySelector("#_fpStatHK").textContent    = fmt(hkN);
+      container.querySelector("#_fpStatPen").textContent   = penPct.toFixed(2) + "%";
+      container.querySelector("#_fpStatGap").textContent   = fmt(unpred);
+      container.querySelector("#_fpStats").style.display   = "grid";
+      container.querySelector("#_fpMsgEmpty").style.display = "none";
+
+      // Fetch top-5 (make, model) for this postcode in parallel with
+      // the chart render.  Failure is non-fatal — chart still renders.
+      (async () => {
+        try {
+          const r = await fetch("/api/postcode_top_models?postcode="
+                                + encodeURIComponent(pc) + "&limit=5",
+                                {credentials: "same-origin"});
+          const j = await r.json();
+          const rows = (j.rows || []);
+          if (!rows.length) return;
+          const listEl = container.querySelector("#_fpTopModelsList");
+          listEl.innerHTML = rows.map(m => `
+            <span style="display:inline-block;margin-right:12px;
+                         padding:2px 8px;background:#fff;border:1px solid #e2e8f0;
+                         border-radius:12px;">
+              <b>${_escape(m.make)} ${_escape(m.model)}</b>
+              <span style="color:#94a3b8;margin-left:4px;">${fmt(m.fleet)}</span>
+            </span>`).join("");
+          container.querySelector("#_fpTopModels").style.display = "block";
+        } catch(_e) { /* silent — top-models is a nice-to-have */ }
+      })();
 
       // View-mode state.  Default: top-20 sizes by fleet.  Toggle
       // button flips to the full tail (30-50 sizes, scrollable).
@@ -931,9 +1055,6 @@
         const n = showAll ? fullSizeOrder.length
                           : Math.min(TOP_N, fullSizeOrder.length);
         const s = (data.series || [])[0] || {};
-        // Backend guarantees size_order and the three parallel arrays
-        // (values / hk_sold / penetration) share their indexing, so a
-        // single .slice(0, n) on all four keeps them consistent.
         const scoped = {
           size_order: fullSizeOrder.slice(0, n),
           series: [{
@@ -944,11 +1065,36 @@
           }],
         };
         const per = 30;
-        box.style.width = Math.max(n * per, 520) + "px";
+        box.style.width = Math.max(n * per, 620) + "px";
         scopeEl.textContent = showAll
           ? `Showing all ${fullSizeOrder.length} sizes`
           : `Showing top ${n} of ${fullSizeOrder.length} sizes`;
         toggleEl.textContent = showAll ? "Show top 20" : `Show all (${fullSizeOrder.length})`;
+        // Rim-family colour legend — only render the families actually
+        // present in the visible slice so users don't see irrelevant
+        // R21 / R22.5 chips when the postcode is all R14-R17 cars.
+        const rimsInView = new Set();
+        for (const sz of scoped.size_order) {
+          const m = /R\s*(\d{2}(?:\.\d)?)/i.exec(sz);
+          if (!m) continue;
+          const n2 = parseFloat(m[1]);
+          if (n2 === 17.5)      rimsInView.add("R17.5 (TBR)");
+          else if (n2 === 19.5) rimsInView.add("R19.5 (TBR)");
+          else if (n2 === 22.5) rimsInView.add("R22.5 (TBR)");
+          else if (n2 >= 22)    rimsInView.add("R22+");
+          else                  rimsInView.add("R" + Math.floor(n2));
+        }
+        // Preserve canonical rim order (R14 → R22+, then TBR at end).
+        const RIM_CANONICAL = ["R13","R14","R15","R16","R17","R18","R19","R20",
+                               "R21","R22+","R17.5 (TBR)","R19.5 (TBR)","R22.5 (TBR)"];
+        const legendEl = container.querySelector("#_fpLegend");
+        legendEl.innerHTML = RIM_CANONICAL
+          .filter(r => rimsInView.has(r))
+          .map(r => `<span style="display:inline-flex;align-items:center;gap:3px;">
+                       <span style="display:inline-block;width:10px;height:10px;
+                                    background:${RIM_COLORS[r]||"#94a3b8"};
+                                    border-radius:2px;"></span>${r}
+                     </span>`).join("");
         if (chart) { try { chart.destroy(); } catch(_e){} chart = null; }
         const canvas = container.querySelector("canvas");
         if (typeof Chart === "undefined") {
@@ -1058,6 +1204,75 @@
       return String(s == null ? "" : s)
         .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
+
+    // ── Fleet-overview panel (national / by-state, above the map) ──
+    // Refreshes on region-button clicks so the reader sees the tyre
+    // demand shape without needing to open a postcode-specific popup.
+    let _foChart = null;
+    async function refreshFleetOverview() {
+      const region = (window.filters && filters.region) || "ALL";
+      const scopeEl  = document.getElementById("foScope");
+      const statusEl = document.getElementById("foStatus");
+      if (!scopeEl) return;
+      scopeEl.textContent = (region === "ALL") ? "National" : region;
+      statusEl.textContent = "Loading…";
+      const qs = new URLSearchParams();
+      if (region !== "ALL") qs.set("region", region);
+      qs.set("limit", 15);   // top-15 sizes for the overview strip
+      let data, models;
+      try {
+        [data, models] = await Promise.all([
+          fetch("/api/fleet_by_size?" + qs, {credentials:"same-origin"}).then(r => r.json()),
+          fetch("/api/postcode_top_models?limit=5"
+                + (region !== "ALL" ? "&state=" + encodeURIComponent(region) : ""),
+                {credentials:"same-origin"}).then(r => r.json()),
+        ]);
+      } catch(_e) {
+        statusEl.textContent = "load failed";
+        return;
+      }
+      statusEl.textContent = "";
+      const fleetN = data.total_units || 0;
+      const hkN    = data.hk_total    || 0;
+      document.getElementById("foFleet").textContent = fmt(fleetN);
+      document.getElementById("foTyre").textContent  = fmt(fleetN);   // 1 tyre / yr / vehicle
+      document.getElementById("foHK").textContent    = fmt(hkN);
+      document.getElementById("foPen").textContent   =
+        fleetN > 0 ? (hkN / fleetN * 100).toFixed(2) + "%" : "—";
+      document.getElementById("foStats").style.display = "grid";
+      // Top vehicles chips
+      const rows = (models && models.rows) || [];
+      if (rows.length) {
+        document.getElementById("foTopModelsList").innerHTML =
+          rows.map(m => `<span style="display:inline-block;margin-right:10px;
+                                     padding:2px 8px;background:#f8fafc;
+                                     border:1px solid #e2e8f0;border-radius:12px;">
+                          <b>${_escape(m.make)} ${_escape(m.model)}</b>
+                          <span style="color:#94a3b8;margin-left:4px;">${fmt(m.fleet)}</span>
+                         </span>`).join("");
+        document.getElementById("foTopModels").style.display = "block";
+      } else {
+        document.getElementById("foTopModels").style.display = "none";
+      }
+      // Chart — reuse buildPopupConfig but scoped to the overview data.
+      const canvas = document.getElementById("foChart");
+      if (!canvas) return;
+      if (_foChart) { try { _foChart.destroy(); } catch(_e){} _foChart = null; }
+      if (typeof Chart === "undefined") { setTimeout(refreshFleetOverview, 200); return; }
+      _foChart = new Chart(canvas, buildPopupConfig(data, region));
+    }
+
+    // Wire refresh into region-button clicks — those buttons already
+    // live in #regionBtns and app.js flips filters.region on click.
+    // We piggyback on a global click listener with a small debounce so
+    // the overview updates once per selection instead of thrashing.
+    let _foDebounce = 0;
+    document.getElementById("regionBtns")?.addEventListener("click", () => {
+      clearTimeout(_foDebounce);
+      _foDebounce = setTimeout(refreshFleetOverview, 250);
+    });
+    // Initial render after Chart.js has loaded.
+    setTimeout(refreshFleetOverview, 400);
   })();
   </script>
 

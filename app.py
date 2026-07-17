@@ -1107,6 +1107,89 @@ def _load_postcode_size_demand():
     return rows
 
 
+# Per-postcode top-N (make, model) cache — the source is the same
+# BITRE file postcode_size_demand.py reads, aggregated by
+# (state, postcode, make, model) so /api/postcode_top_models can hand
+# back the top-5 vehicles at a postcode without re-scanning 200 MB per
+# request.  Loaded on first hit, invalidated on file mtime change.
+_POSTCODE_MODELS_CACHE: dict = {"mtime": 0.0, "path": None,
+                                "by_postcode": {}, "by_state": {}, "national": []}
+
+def _load_postcode_top_models():
+    """Return three keyed views over the BITRE fleet:
+      by_postcode : {postcode → [(make, model, fleet), ...] DESC}
+      by_state    : {state    → [(make, model, fleet), ...] DESC}
+      national    : [(make, model, fleet), ...]              DESC
+    Sorted DESC; caller slices to whatever top-N it needs.  Loaded
+    once per BITRE file mtime — file is ~200MB so we cache aggressively.
+    """
+    import csv as _csv, os as _os
+    candidates = [
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                      "out", "rego", "vehicle_postcode_make_model_year_estimate.csv"),
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                      "out", "rego", "vehicle_postcode_make_model.csv"),
+    ]
+    path = next((p for p in candidates if _os.path.exists(p)), None)
+    if not path:
+        return _POSTCODE_MODELS_CACHE
+    try:
+        mtime = _os.path.getmtime(path)
+    except OSError:
+        mtime = 0.0
+    if _POSTCODE_MODELS_CACHE.get("path") == path \
+       and _POSTCODE_MODELS_CACHE.get("mtime") == mtime:
+        return _POSTCODE_MODELS_CACHE
+
+    # Aggregate {(state, pc, make, model) → fleet} first, then flatten
+    # to the two secondary views.  ~20 M rows in the input; this scan
+    # takes 10-20 s once but the result is <5 MB so it fits in RAM
+    # easily and every subsequent request is O(1).
+    print(f"[top_models] first-load scan of {path}", flush=True)
+    from collections import defaultdict
+    agg = defaultdict(int)
+    natl = defaultdict(int)
+    per_state = defaultdict(lambda: defaultdict(int))
+    per_pc    = defaultdict(lambda: defaultdict(int))
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            for r in _csv.DictReader(f):
+                mk = (r.get("make")  or "").strip().upper()
+                md = (r.get("model") or "").strip().upper()
+                st = (r.get("state") or "").strip().upper()
+                pc = (r.get("postcode") or "").strip()
+                if not mk or not md or not pc: continue
+                if mk in {"-", "TOTAL"} or md in {"-", "TOTAL", "UNKNOWN", "OTHER"}:
+                    continue
+                try:    qty = int(float(r.get("qty") or 0))
+                except: qty = 0
+                if qty <= 0: continue
+                if pc.isdigit(): pc = pc.zfill(4)
+                key = (mk, md)
+                natl[key]           += qty
+                per_state[st][key]  += qty
+                per_pc[pc][key]     += qty
+    except Exception as _e:
+        print(f"[top_models] read failed: {_e}")
+        return _POSTCODE_MODELS_CACHE
+
+    def _sorted(d): return sorted(
+        [(mk, md, q) for (mk, md), q in d.items()],
+        key=lambda t: -t[2],
+    )
+    _POSTCODE_MODELS_CACHE.update({
+        "path":        path,
+        "mtime":       mtime,
+        "by_postcode": {pc: _sorted(d) for pc, d in per_pc.items()},
+        "by_state":    {st: _sorted(d) for st, d in per_state.items()},
+        "national":    _sorted(natl),
+    })
+    print(f"[top_models] cached: {len(per_pc)} postcodes, "
+          f"{len(per_state)} states, {len(natl)} national (make, model) pairs",
+          flush=True)
+    return _POSTCODE_MODELS_CACHE
+
+
 def _load_hk_size_sales(year: int = 2026, ttl: int = 300):
     """Same shape as _load_hk_rim_sales but keys HK sales by the FULL
     tyre size string (from carrying_26.size) instead of rim_family, so
@@ -1526,6 +1609,34 @@ def api_fleet_by_size():
         "unpredicted_units":  unpredicted,   # LEGACY + UNKNOWN fleet
         "hk_total":           sum(hk_sold),
     })
+
+
+@app.get("/api/postcode_top_models")
+def api_postcode_top_models():
+    """Return the top-N (make, model) pairs by fleet count.
+
+      ?postcode=2000   → top-N for that postcode
+      ?state=NSW       → top-N for that state
+      (neither)        → top-N nationally
+
+    ?limit=N (default 5).  Response: {rows: [{make, model, fleet}, ...]}.
+    """
+    postcode = (request.args.get("postcode") or "").strip()
+    state    = (request.args.get("state") or "").strip().upper()
+    limit    = request.args.get("limit", type=int) or 5
+    if postcode.isdigit():
+        postcode = postcode.zfill(4)
+
+    cache = _load_postcode_top_models()
+    if postcode:
+        seq = cache.get("by_postcode", {}).get(postcode, [])
+    elif state and state != "ALL":
+        seq = cache.get("by_state", {}).get(state, [])
+    else:
+        seq = cache.get("national", [])
+    rows = [{"make": mk, "model": md, "fleet": q}
+            for (mk, md, q) in seq[:limit]]
+    return jsonify({"rows": rows})
 
 
 @app.get("/api/fleet_by_rim/hk_detail")
