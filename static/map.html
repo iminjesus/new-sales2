@@ -854,8 +854,17 @@
         <div style="font-weight:700;font-size:13px;margin-bottom:2px;">
           Postcode ${pc}
         </div>
-        <div id="_fpMsg" style="font-size:11.5px;color:#666;margin-bottom:4px;">
+        <div id="_fpMsg" style="font-size:11.5px;color:#666;margin-bottom:2px;">
           Loading fleet mix…
+        </div>
+        <div id="_fpToggleBar"
+             style="display:flex;justify-content:space-between;align-items:center;
+                    font-size:11px;color:#64748b;margin-bottom:4px;">
+          <span id="_fpScope"></span>
+          <button id="_fpToggle" type="button"
+                  style="border:1px solid #cbd5e1;background:#f1f5f9;
+                         padding:2px 8px;border-radius:3px;font-size:11px;
+                         cursor:pointer;">Show all</button>
         </div>
         <div style="position:relative;height:230px;overflow-x:auto;overflow-y:hidden;
                     border:1px solid #f1f5f9;border-radius:4px;">
@@ -864,8 +873,8 @@
           </div>
         </div>
         <div id="_fpDrillHint" style="font-size:11px;color:#94a3b8;margin-top:4px;">
-          Sizes sorted by fleet demand · scroll horizontally to see the tail ·
-          click a red HK bar for its pattern / sold-to breakdown.
+          Sizes sorted by fleet demand · scroll horizontally · click a red HK bar
+          for its pattern / sold-to breakdown.
         </div>
         <div id="_fpDrill" style="margin-top:6px;"></div>`;
       layer.unbindPopup();
@@ -888,20 +897,71 @@
           `Verify postcode_size_demand.csv actually covers it.`;
         return;
       }
-      // Header line — shows matched fleet + how much was legacy /
-      // unknown so the user knows the size-level number understates
-      // the true fleet in that postcode.
+      // Header — show both "Fleet" (vehicle count) and "Tyre" (annual
+      // tyre demand) explicitly.  The two numbers ARE the same by the
+      // 4-tyre-set × 25%-per-year-wear model (fleet × 4 × 0.25 = fleet),
+      // but calling out both makes it clear that "17,000" means
+      // 17,000 vehicles AND 17,000 tyre-units of annual demand.
       const unpred = data.unpredicted_units || 0;
-      container.querySelector("#_fpMsg").textContent =
-        `Fleet ${fmt(data.total_units||0)}  ·  HK sold ${fmt(data.hk_total||0)}`
+      const fleetN = data.total_units || 0;
+      const tyreN  = fleetN;      // 1 tyre-unit / vehicle / year (see above)
+      container.querySelector("#_fpMsg").innerHTML =
+        `<b>Fleet</b> ${fmt(fleetN)} vehicles  ·  ` +
+        `<b>Tyre demand</b> ${fmt(tyreN)}/yr (~1 set / 4 yrs)  ·  ` +
+        `<b>HK sold</b> ${fmt(data.hk_total||0)}`
         + (unpred ? `  ·  ${fmt(unpred)} legacy/unknown (no size)` : "");
-      // Set canvas box width so ~26px per bar keeps individual columns
-      // legible; smaller than that and the labels overlap.  Long tails
-      // scroll horizontally inside the fixed 560-px viewport.
-      const sizes = (data.size_order || []);
+
+      // View-mode state.  Default: top-20 sizes by fleet.  Toggle
+      // button flips to the full tail (30-50 sizes, scrollable).
+      const fullSizeOrder = (data.size_order || []);
+      const TOP_N = 20;
+      let showAll = false;
+
+      const scopeEl  = container.querySelector("#_fpScope");
+      const toggleEl = container.querySelector("#_fpToggle");
+      // Hide toggle entirely when the postcode has ≤ TOP_N sizes —
+      // no benefit to a "show all" button that changes nothing.
+      if (fullSizeOrder.length <= TOP_N) {
+        toggleEl.style.display = "none";
+      }
       const box = container.querySelector("#_fpCanvasBox");
-      const per = 30;
-      box.style.width = Math.max(sizes.length * per, 520) + "px";
+      let chart = null;
+
+      function renderChart() {
+        const n = showAll ? fullSizeOrder.length
+                          : Math.min(TOP_N, fullSizeOrder.length);
+        const s = (data.series || [])[0] || {};
+        // Backend guarantees size_order and the three parallel arrays
+        // (values / hk_sold / penetration) share their indexing, so a
+        // single .slice(0, n) on all four keeps them consistent.
+        const scoped = {
+          size_order: fullSizeOrder.slice(0, n),
+          series: [{
+            state:       s.state,
+            values:      (s.values      || []).slice(0, n),
+            hk_sold:     (s.hk_sold     || []).slice(0, n),
+            penetration: (s.penetration || []).slice(0, n),
+          }],
+        };
+        const per = 30;
+        box.style.width = Math.max(n * per, 520) + "px";
+        scopeEl.textContent = showAll
+          ? `Showing all ${fullSizeOrder.length} sizes`
+          : `Showing top ${n} of ${fullSizeOrder.length} sizes`;
+        toggleEl.textContent = showAll ? "Show top 20" : `Show all (${fullSizeOrder.length})`;
+        if (chart) { try { chart.destroy(); } catch(_e){} chart = null; }
+        const canvas = container.querySelector("canvas");
+        if (typeof Chart === "undefined") {
+          setTimeout(renderChart, 80);
+          return;
+        }
+        chart = new Chart(canvas, buildPopupConfig(scoped, pc));
+      }
+
+      toggleEl.addEventListener("click", () => {
+        showAll = !showAll;
+        renderChart();
+      });
 
       // Wire the drill-down handler that the chart's onClick calls.
       // Kept on `window._fleetPopupHKDrill` so a click inside Chart.js's
@@ -991,12 +1051,7 @@
                         </div>` : ""}`;
       };
 
-      function draw(){
-        if (typeof Chart === "undefined") { setTimeout(draw, 80); return; }
-        const canvas = container.querySelector("canvas");
-        new Chart(canvas, buildPopupConfig(data, pc));
-      }
-      draw();
+      renderChart();
     }
     // Tiny HTML escaper for the drill-down table cells.
     function _escape(s){
