@@ -24,7 +24,15 @@
   </script>
 
   <style>
-    #salesMap{ height: 580px; min-height: 580px; }
+    /* Taller map — user wanted the vertical space to grow so the
+       Australian outline fills the viewport instead of dropping off at
+       Melbourne / Hobart.  Uses viewport-relative height (clamped so
+       small laptops still show something reasonable) and grows toward
+       the BDE table on the right without overlapping it. */
+    #salesMap{
+      height: min(880px, calc(100vh - 380px));
+      min-height: 580px;
+    }
     /* Widen the Leaflet popup used by the fleet-by-rim chart so the
        three-axis bar chart has room to breathe. */
     .fleet-popup .leaflet-popup-content{ margin: 10px 12px; }
