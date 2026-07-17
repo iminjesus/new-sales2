@@ -8798,9 +8798,10 @@ def _highlights_src_for(cur, year, month):
                 return (candidate, "", ())
         except Exception:
             pass
-        return (None, "", ())
-    # 2025 (and parts of 2026 FY) live in sales_2526 — this schema
-    # only carries billing_date, so gate on YEAR/MONTH of that.
+        # Archive isn't split out yet — fall through to sales_2526 with
+        # a YEAR/MONTH gate.  Without this the page rendered as all
+        # -100% because the resolver returned (None, ...) and the
+        # caller silently skipped the query.
     return (
         "sales_2526",
         "WHERE YEAR(s.billing_date) = %s AND MONTH(s.billing_date) = %s",
