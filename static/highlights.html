@@ -117,6 +117,69 @@ body[data-loading="1"] #wrap { opacity: 0.55; transition: opacity 120ms ease; po
   border-left:3px solid #dc2626; border-radius:3px;
   margin-bottom:4px; font-size:12.5px; color:#334155; }
 .decl-cross .decl-inline b { color:#dc2626; font-variant-numeric:tabular-nums; }
+
+/* 📖 Narrative card — 3 sentences at the very top of the report.
+   Larger type + soft indigo panel so the story reads like a lead
+   paragraph, not another data row. */
+.card.narrative h2 { color:#1e40af; }
+.card.narrative .story p {
+  margin:0 0 8px; font-size:14px; line-height:1.55;
+  color:#1e293b;
+}
+.card.narrative .story p:last-child { margin-bottom:0; }
+.card.narrative .story p:first-child { font-weight:600; }
+
+/* 🚀 Trajectory card */
+.tr-headline { padding:8px 12px; background:#f8fafc; border-radius:5px;
+  margin-bottom:10px; font-size:13px; color:#334155; }
+.tr-chart { display:flex; align-items:flex-end; gap:6px;
+  height:120px; padding:6px 4px; border-bottom:1px solid #e5e7eb; }
+.tr-bar { flex:1 1 0; display:flex; flex-direction:column;
+  align-items:center; gap:2px; min-width:0; }
+.tr-fill { width:60%; min-height:2px; border-radius:2px 2px 0 0; }
+.tr-label { font-size:10px; color:#64748b; margin-top:4px; }
+.tr-value { font-size:10px; color:#334155;
+  font-variant-numeric:tabular-nums; }
+.tr-run { display:flex; align-items:center; gap:6px; margin-top:8px;
+  font-size:11px; }
+.tr-step { display:inline-block; width:18px; height:18px;
+  border-radius:3px; text-align:center; line-height:18px;
+  font-weight:700; font-size:12px; }
+.tr-step.up { background:#dcfce7; color:#166534; }
+.tr-step.dn { background:#fee2e2; color:#991b1b; }
+.tr-step.fl { background:#f1f5f9; color:#64748b; }
+.tr-flag { display:inline-block; margin-left:12px; padding:1px 8px;
+  border-radius:10px; font-size:11px; font-weight:600; }
+.tr-flag.good { background:#dcfce7; color:#166534; }
+.tr-flag.bad  { background:#fee2e2; color:#991b1b; }
+
+/* 🎯 Watch list */
+.wl-block { margin-top:8px; }
+.wl-block h4 { margin:0 0 4px 0; font-size:11px; color:#64748b;
+  font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+.wl-row { display:grid; grid-template-columns: minmax(0,auto) 1fr;
+  gap:12px; padding:5px 8px; font-size:12.5px;
+  border-bottom:1px solid #f1f5f9; align-items:baseline; }
+.wl-row:last-child { border-bottom:none; }
+.wl-row.wl-esc { background:#fef2f2; border-left:3px solid #dc2626;
+  border-radius:3px; margin-bottom:2px; }
+.wl-reason { color:#334155; font-weight:600; }
+.wl-name { color:#1e40af; font-weight:500; }
+.wl-detail { color:#64748b; font-size:12px; }
+
+/* 📊 Mix shift */
+.mx-note { color:#94a3b8; font-weight:400; font-size:11px;
+  text-transform:none; letter-spacing:0; margin-left:6px; }
+.mx-lead { font-size:11px; color:#64748b; font-weight:600;
+  text-transform:uppercase; letter-spacing:.05em; margin-bottom:4px; }
+.mx-tbl { font-size:12px; }
+.mx-tbl th { padding:4px 8px; }
+.mx-tbl td { padding:3px 8px; }
+.mx-up { color:#16a34a; font-weight:700;
+  font-variant-numeric:tabular-nums; }
+.mx-dn { color:#dc2626; font-weight:700;
+  font-variant-numeric:tabular-nums; }
+.mx-fl { color:#94a3b8; font-variant-numeric:tabular-nums; }
 .rem-list { display:flex; flex-direction:column; gap:6px; }
 .rem-item { border:1px solid #fef3c7; border-radius:6px;
   background:#fffbeb; }
@@ -541,6 +604,139 @@ function renderRemarkableCard(j){
   </div>`;
 }
 
+// ── 📖 Narrative: 3-sentence auto story ──────────────────────
+function renderNarrativeCard(j){
+  const lines = j.narrative || [];
+  if (!lines.length) return "";
+  return `<div class="card narrative">
+    <h2>📖 This month's story</h2>
+    <div class="story">
+      ${lines.map(l => `<p>${esc(l)}</p>`).join("")}
+    </div>
+  </div>`;
+}
+
+// ── 🚀 Trajectory: 6-month slope + run pattern ──────────────
+function renderTrajectoryCard(j){
+  const t = j.trajectory;
+  if (!t) return "";
+  const s = t.series || [];
+  const dirColor = /decline/i.test(t.direction) ? "#dc2626"
+                : /accel|growth/i.test(t.direction) ? "#16a34a"
+                : "#64748b";
+  const maxV = Math.max(...s.map(x => x.value)) || 1;
+  const bars = s.map(x => {
+    const h = Math.round(x.value / maxV * 100);
+    return `<div class="tr-bar">
+      <div class="tr-fill" style="height:${h}%;background:${dirColor};"></div>
+      <div class="tr-label">${x.month.slice(5)}</div>
+      <div class="tr-value">${unitVal(x.value)}</div>
+    </div>`;
+  }).join("");
+  const runIcons = (t.run_pattern || []).map(step =>
+    step === "up" ? '<span class="tr-step up">↑</span>'
+    : step === "down" ? '<span class="tr-step dn">↓</span>'
+    : '<span class="tr-step fl">→</span>'
+  ).join("");
+  const runNote = t.consecutive_up >= 3 ? `<span class="tr-flag good">${t.consecutive_up} months up in a row</span>`
+                 : t.consecutive_down >= 3 ? `<span class="tr-flag bad">${t.consecutive_down} months down in a row</span>`
+                 : "";
+  const slopeLabel = t.slope_pct > 0 ? `+${t.slope_pct}% / month`
+                   : `${t.slope_pct}% / month`;
+  return `<div class="card">
+    <h2>🚀 Trajectory (last 6 months + this)</h2>
+    <div class="tr-headline" style="border-left:3px solid ${dirColor};">
+      <b style="color:${dirColor};text-transform:capitalize;">${esc(t.direction)}</b>
+      · slope <b>${slopeLabel}</b>
+      ${runNote}
+    </div>
+    <div class="tr-chart">${bars}</div>
+    <div class="tr-run">
+      <span class="ctx-lbl">MoM steps</span>${runIcons}
+    </div>
+  </div>`;
+}
+
+// ── 🎯 Watch list: call + escalate ─────────────────────────
+function renderWatchListCard(j){
+  const w = j.watch_list;
+  if (!w) return "";
+  const call = w.call || [];
+  const esc_ = w.escalate || [];
+  if (!call.length && !esc_.length) {
+    return `<div class="card">
+      <h2>🎯 Watch list</h2>
+      <div class="notes">Nothing on the watch list this month — customers steady and no escalations.</div>
+    </div>`;
+  }
+  const callHtml = call.length ? `
+    <div class="wl-block">
+      <h4>📞 Call this week</h4>
+      ${call.map(c => `
+        <div class="wl-row">
+          <span class="wl-reason">${esc(c.reason)}</span>
+          <span class="wl-name">${esc(c.name || c.sold_to)}</span>
+        </div>`).join("")}
+    </div>` : "";
+  const escHtml = esc_.length ? `
+    <div class="wl-block">
+      <h4>🚨 Escalate to SM</h4>
+      ${esc_.map(e => `
+        <div class="wl-row wl-esc">
+          <span class="wl-reason">${esc(e.reason)}</span>
+          <span class="wl-detail">${esc(e.detail)}</span>
+        </div>`).join("")}
+    </div>` : "";
+  return `<div class="card">
+    <h2>🎯 Watch list</h2>
+    ${callHtml}${escHtml}
+  </div>`;
+}
+
+// ── 📊 Mix shift: share vs 6 months ago ──────────────────────
+function renderMixShiftCard(j){
+  const m = j.mix_shift;
+  if (!m) return "";
+  const pgs = m.product_groups || [];
+  const rims = m.rim_family || [];
+  if (!pgs.length && !rims.length) return "";
+  const anchorNote = `<span class="mx-note">${esc(m.anchor_now)} vs ${esc(m.anchor_prev)}</span>`;
+  const rowsHtml = (rows, keyName, keyLabel) => rows.length ? `
+    <table class="mx-tbl">
+      <thead><tr>
+        <th>${keyLabel}</th>
+        <th class="num">Share now</th>
+        <th class="num">6mo ago</th>
+        <th class="num">Δpt</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => {
+          const chg = r.share_change;
+          const cls = chg > 0.5 ? "mx-up" : chg < -0.5 ? "mx-dn" : "mx-fl";
+          return `<tr>
+            <td>${esc(r[keyName])}</td>
+            <td class="num">${r.share_now.toFixed(1)}%</td>
+            <td class="num" style="color:#94a3b8;">${r.share_prev.toFixed(1)}%</td>
+            <td class="num ${cls}">${chg > 0 ? "+" : ""}${chg.toFixed(1)}</td>
+          </tr>`;
+        }).join("")}
+      </tbody>
+    </table>` : "";
+  return `<div class="card">
+    <h2>📊 Mix shift ${anchorNote}</h2>
+    <div class="section-grid2">
+      <div>
+        <div class="mx-lead">Product-group share</div>
+        ${rowsHtml(pgs, "product_group", "Product group")}
+      </div>
+      <div>
+        <div class="mx-lead">Rim-family share</div>
+        ${rowsHtml(rims, "rim", "Rim family")}
+      </div>
+    </div>
+  </div>`;
+}
+
 function renderDeclinesCard(j){
   const d = j.declines || {};
   const ov = d.overall || {};
@@ -637,8 +833,23 @@ function render(j){
 
   const html = [];
 
+  // 📖 3-sentence story — the executive-summary lead sits before
+  // Remarkable so a reader who only reads the top card walks away
+  // with the month's narrative.
+  html.push(renderNarrativeCard(j));
+
   // 🌟 Remarkable — sits above ① Summary; each line expands inline.
   html.push(renderRemarkableCard(j));
+
+  // 🚀 Trajectory — 6-month slope + run pattern so MoM isn't read
+  // in isolation.
+  html.push(renderTrajectoryCard(j));
+
+  // 🎯 Watch list — actionable "call this week" + "escalate to SM".
+  html.push(renderWatchListCard(j));
+
+  // 📊 Mix shift — product-group + rim-family share vs 6 months ago.
+  html.push(renderMixShiftCard(j));
 
   // 🔻 Decline analysis — always renders, even when the total rose,
   // because the reader wants to see which segments still fell.

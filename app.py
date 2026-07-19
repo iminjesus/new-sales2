@@ -8815,6 +8815,20 @@ def _highlights_pct(this_v, prev_v):
         return None
     return round((this_v - prev_v) / prev_v * 100, 1)
 
+def _narrate_change(pct):
+    """Turn a raw MoM percentage into a phrase the narrative generator
+    can splice into a sentence.  None (missing baseline) reads as
+    'from a zero base' so the reader knows the % is meaningless there."""
+    if pct is None:
+        return "up from a zero base"
+    if pct >= 15:      return f"up {pct:+.1f}%"
+    if pct >= 5:       return f"up a solid {pct:+.1f}%"
+    if pct >= 1:       return f"up {pct:+.1f}%"
+    if pct >= -1:      return "essentially flat"
+    if pct >= -5:      return f"down {abs(pct):.1f}%"
+    if pct >= -15:     return f"down a meaningful {abs(pct):.1f}%"
+    return f"down sharply {abs(pct):.1f}%"
+
 @app.get("/api/monthly_highlights")
 def api_monthly_highlights():
     """Per-month KPI snapshot.  Body: ?month=YYYY-MM&metric=qty|amt.
@@ -9573,6 +9587,282 @@ def api_monthly_highlights():
             "cross":           cross,
         }
 
+        # ═══════════════════════════════════════════════════════════════
+        #  Strategic insights layer (trajectory / mix shift / narrative /
+        #  watch list).  Single-month mode only — the range view already
+        #  aggregates half-years so a trailing 6-month regression on top
+        #  of that would be meaningless.  Every block is wrapped so a
+        #  failure never breaks the KPI page.
+        # ═══════════════════════════════════════════════════════════════
+        trajectory = None
+        mix_shift  = None
+        narrative  = []
+        watch_list = None
+        if not is_range:
+            # ── ⑦ Trajectory: 6-month series + linear-fit slope ────────
+            try:
+                back6 = list(reversed(_months_back(6, year, month)))  # oldest → newest
+                series_months = back6 + [(year, month)]
+                series = []
+                for (y, m) in series_months:
+                    t = totals(y, m)
+                    series.append({
+                        "month": f"{y}-{m:02d}",
+                        "value": round(t[metric], 2),
+                    })
+                vals = [s["value"] for s in series]
+                # Simple linear regression: y = a·x + b where x is 0..n-1.
+                # slope in "units per month" is `a`; intercept isn't
+                # interesting.  Handles zero-variance rows gracefully.
+                n = len(vals)
+                if n >= 3 and sum(vals) > 0:
+                    xs = list(range(n))
+                    mean_x = sum(xs) / n
+                    mean_y = sum(vals) / n
+                    num = sum((xs[i] - mean_x) * (vals[i] - mean_y) for i in range(n))
+                    den = sum((xs[i] - mean_x) ** 2 for i in range(n))
+                    slope = num / den if den else 0
+                    # Slope-to-latest-value ratio gives a normalised
+                    # % / month growth trajectory the narrative can
+                    # quote instead of raw units.
+                    slope_pct = (slope / mean_y * 100) if mean_y else 0
+                else:
+                    slope = 0
+                    slope_pct = 0
+                # Run pattern — direction of each MoM step, then longest
+                # consecutive run at the tail (positive or negative).
+                run_pattern = []
+                for i in range(1, n):
+                    d = vals[i] - vals[i-1]
+                    run_pattern.append("up" if d > 0 else "down" if d < 0 else "flat")
+                # Consecutive-from-end tally
+                cons_up = cons_down = 0
+                for step in reversed(run_pattern):
+                    if step == "up" and cons_down == 0:
+                        cons_up += 1
+                    elif step == "down" and cons_up == 0:
+                        cons_down += 1
+                    else:
+                        break
+                # Direction verdict — is the trajectory accelerating or
+                # decelerating?  Compare the last-3-months mean to the
+                # first-3-months mean; positive gap = accelerating.
+                if n >= 6:
+                    first_avg = sum(vals[:3]) / 3.0
+                    last_avg  = sum(vals[-3:]) / 3.0
+                    momentum  = last_avg - first_avg
+                else:
+                    momentum = 0
+                if abs(slope_pct) < 1.0:
+                    direction = "stable"
+                elif slope > 0 and momentum > 0:
+                    direction = "accelerating growth"
+                elif slope > 0 and momentum <= 0:
+                    direction = "growing but slowing"
+                elif slope < 0 and momentum < 0:
+                    direction = "accelerating decline"
+                else:
+                    direction = "declining but stabilising"
+                trajectory = {
+                    "series":            series,
+                    "slope_units":       round(slope, 1),
+                    "slope_pct":         round(slope_pct, 2),
+                    "direction":         direction,
+                    "run_pattern":       run_pattern,
+                    "consecutive_up":    cons_up,
+                    "consecutive_down":  cons_down,
+                }
+            except Exception:
+                trajectory = None
+
+            # ── ⑧ Mix shift: product-group + rim-family + brand share ──
+            # Compare this month's shares against 6 months ago so
+            # slow-moving mix drift becomes visible.
+            try:
+                anchor6 = _months_back(6, year, month)[-1]   # T-6 point
+                anchor6_pg = per_pg_period([anchor6])
+                # Shares now
+                total_now  = sum(d.get(metric, 0) for d in this_pg.values())
+                total_prev = sum(d.get(metric, 0) for d in anchor6_pg.values())
+                pg_mix = []
+                all_pgs = set(this_pg) | set(anchor6_pg)
+                for pg in all_pgs:
+                    now_v  = this_pg.get(pg, {}).get(metric, 0)
+                    prev_v_pg = anchor6_pg.get(pg, {}).get(metric, 0)
+                    if total_now == 0 and total_prev == 0:
+                        continue
+                    sh_now  = (now_v / total_now * 100)  if total_now  else 0
+                    sh_prev = (prev_v_pg / total_prev * 100) if total_prev else 0
+                    pg_mix.append({
+                        "product_group": pg,
+                        "share_now":     round(sh_now, 1),
+                        "share_prev":    round(sh_prev, 1),
+                        "share_change":  round(sh_now - sh_prev, 1),
+                    })
+                pg_mix.sort(key=lambda r: -abs(r["share_change"]))
+                pg_mix = pg_mix[:6]
+                # Rim family mix — quick-and-dirty regex on carrying size
+                import re as _re_r
+                def _rim_shares(months):
+                    """Group units by rim family for the given month list.
+                    Runs one query per month to keep the join simple."""
+                    agg = {}
+                    for (yy, mm) in months:
+                        tbl, where, ps = _src_with_state(yy, mm)
+                        if not tbl: continue
+                        cur.execute(
+                            f"SELECT c.size AS sz, "
+                            f"       SUM(s.{metric}) AS q "
+                            f"FROM {tbl} s "
+                            f"JOIN carrying_26 c ON c.m_code = s.material "
+                            f"{where} "
+                            f"GROUP BY c.size", ps,
+                        )
+                        for r in cur.fetchall():
+                            sz = r.get("sz") or ""
+                            mm2 = _re_r.search(r"R\s*(\d{2}(?:\.\d)?)", sz, _re_r.I)
+                            if not mm2: continue
+                            inch = float(mm2.group(1))
+                            if inch == 17.5: fam = "R17.5(TBR)"
+                            elif inch == 19.5: fam = "R19.5(TBR)"
+                            elif inch == 22.5: fam = "R22.5(TBR)"
+                            elif inch >= 22:   fam = "R22+"
+                            else:              fam = f"R{int(inch)}"
+                            agg[fam] = agg.get(fam, 0) + float(r.get("q") or 0)
+                    return agg
+                rim_now  = _rim_shares(this_months)
+                rim_prev = _rim_shares([anchor6])
+                rim_total_now  = sum(rim_now.values())
+                rim_total_prev = sum(rim_prev.values())
+                rim_mix = []
+                for rim in set(rim_now) | set(rim_prev):
+                    sh_n = (rim_now.get(rim, 0)  / rim_total_now  * 100) if rim_total_now  else 0
+                    sh_p = (rim_prev.get(rim, 0) / rim_total_prev * 100) if rim_total_prev else 0
+                    rim_mix.append({
+                        "rim":          rim,
+                        "share_now":    round(sh_n, 1),
+                        "share_prev":   round(sh_p, 1),
+                        "share_change": round(sh_n - sh_p, 1),
+                    })
+                rim_mix.sort(key=lambda r: -abs(r["share_change"]))
+                rim_mix = rim_mix[:6]
+                mix_shift = {
+                    "anchor_prev":    f"{anchor6[0]}-{anchor6[1]:02d}",
+                    "anchor_now":     f"{year}-{month:02d}",
+                    "product_groups": pg_mix,
+                    "rim_family":     rim_mix,
+                }
+            except Exception:
+                mix_shift = None
+
+            # ── ⑨ Narrative: 3-sentence auto-generated summary ─────────
+            try:
+                lines = []
+                # Sentence 1 — overall movement, framed against trajectory
+                if trajectory and trajectory["direction"]:
+                    lines.append(
+                        f"This month totalled {int(this_v):,} units, "
+                        f"{_narrate_change(summary['mom_pct'])} MoM — "
+                        f"{trajectory['direction']} on a 6-month view "
+                        f"(slope {trajectory['slope_pct']:+.1f}%/month)."
+                    )
+                else:
+                    lines.append(
+                        f"This month totalled {int(this_v):,} units, "
+                        f"{_narrate_change(summary['mom_pct'])} MoM."
+                    )
+                # Sentence 2 — dominant driver (product + biggest region)
+                bits = []
+                if product_groups:
+                    top_pg_up = next((p for p in product_groups if (p.get("vs_avg3_pct") or 0) > 0), None)
+                    top_pg_dn = next((p for p in product_groups if (p.get("vs_avg3_pct") or 0) < 0), None)
+                    if top_pg_up and abs(top_pg_up.get("vs_avg3_pct") or 0) >= 10:
+                        bits.append(
+                            f"{top_pg_up['product_group']} surged "
+                            f"{top_pg_up['vs_avg3_pct']:+.1f}% vs 3M avg "
+                            f"({top_pg_up['share']:.1f}% share)"
+                        )
+                    if top_pg_dn and abs(top_pg_dn.get("vs_avg3_pct") or 0) >= 10:
+                        bits.append(
+                            f"{top_pg_dn['product_group']} pulled back "
+                            f"{top_pg_dn['vs_avg3_pct']:+.1f}%"
+                        )
+                if bits:
+                    lines.append(f"Driver: {'; '.join(bits)}.")
+                # Sentence 3 — mix-shift or regional counter-movement
+                if mix_shift and mix_shift.get("product_groups"):
+                    top_mix = mix_shift["product_groups"][0]
+                    if abs(top_mix["share_change"]) >= 1.5:
+                        arrow = "up" if top_mix["share_change"] > 0 else "down"
+                        lines.append(
+                            f"Mix is shifting: {top_mix['product_group']} share "
+                            f"{arrow} {abs(top_mix['share_change']):.1f} points "
+                            f"vs six months ago ({top_mix['share_prev']:.1f}% → "
+                            f"{top_mix['share_now']:.1f}%)."
+                        )
+                narrative = lines
+            except Exception:
+                narrative = []
+
+            # ── ⑩ Watch list: actionable to-dos ─────────────────────────
+            try:
+                call = []
+                escalate = []
+                # Newly silent big customers — already computed; pick
+                # the top-5 by trailing-3-avg (most valuable to recover).
+                for n_r in (newly_silent or [])[:5]:
+                    call.append({
+                        "reason": f"Newly silent — avg {int(n_r.get('avg3') or 0):,}/mo",
+                        "sold_to": n_r.get("sold_to"),
+                        "name":    n_r.get("name"),
+                    })
+                # Concentration escalation — top-10 share this month
+                # vs 6 months ago.  Watch >3pt jumps.
+                if trajectory:
+                    try:
+                        # Top-10 share this month
+                        top10_this = sorted(
+                            [(k, v.get(metric, 0)) for k, v in tm.items()],
+                            key=lambda kv: -kv[1])[:10]
+                        top10_share_this = (sum(v for _, v in top10_this) / (this_v or 1) * 100)
+                        # 6 months ago
+                        anchor_tm = per_sold_to(anchor6[0], anchor6[1])
+                        anchor_total = sum(v.get(metric, 0) for v in anchor_tm.values())
+                        top10_anchor = sorted(
+                            [(k, v.get(metric, 0)) for k, v in anchor_tm.items()],
+                            key=lambda kv: -kv[1])[:10]
+                        top10_share_prev = (sum(v for _, v in top10_anchor)
+                                            / (anchor_total or 1) * 100)
+                        share_jump = top10_share_this - top10_share_prev
+                        if share_jump >= 3.0:
+                            escalate.append({
+                                "reason": "Concentration risk",
+                                "detail": f"Top-10 customers = {top10_share_this:.1f}% "
+                                          f"(was {top10_share_prev:.1f}% six months ago, "
+                                          f"+{share_jump:.1f}pt)",
+                            })
+                    except Exception:
+                        pass
+                # Region-level escalation — regions that dropped >5% MoM
+                for r in region_declines[:2]:
+                    if r.get("pct") is not None and r["pct"] <= -5:
+                        escalate.append({
+                            "reason": f"{r['region']} pulled back",
+                            "detail": f"MoM {r['pct']:+.1f}% ({int(r['change']):,}) — "
+                                      f"tour with the state manager",
+                        })
+                # Product-level escalation — top-line pg dropping vs 3M avg
+                for p in product_groups[:5]:
+                    if (p.get("vs_avg3_pct") or 0) <= -15:
+                        escalate.append({
+                            "reason": f"{p['product_group']} weakening",
+                            "detail": f"{p['vs_avg3_pct']:+.1f}% vs 3M avg — "
+                                      f"check inventory & promo alignment",
+                        })
+                watch_list = {"call": call, "escalate": escalate}
+            except Exception:
+                watch_list = None
+
         cur.close(); conn.close()
         return jsonify({
             "month":          period_label,
@@ -9585,6 +9875,10 @@ def api_monthly_highlights():
             "promotions":     promotions,
             "promo_aggregate": promo_aggregate,
             "declines":       declines,
+            "trajectory":     trajectory,
+            "mix_shift":      mix_shift,
+            "narrative":      narrative,
+            "watch_list":     watch_list,
             "sold_to": {
                 "gainers":          gainers,
                 "losers":           losers,
