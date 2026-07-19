@@ -117,43 +117,6 @@ body[data-loading="1"] #wrap { opacity: 0.55; transition: opacity 120ms ease; po
   border-left:3px solid #dc2626; border-radius:3px;
   margin-bottom:4px; font-size:12.5px; color:#334155; }
 .decl-cross .decl-inline b { color:#dc2626; font-variant-numeric:tabular-nums; }
-/* Expandable decline rows — click ▸ to open the context body.
-   Same details/summary pattern the Remarkable card uses. */
-.decl-item { border:1px solid #f1f5f9; border-radius:5px;
-  background:#fff; margin-bottom:4px; }
-.decl-item[open] { border-color:#e2e8f0; background:#fafafa; }
-.decl-item summary {
-  list-style:none; cursor:pointer;
-  display:grid; grid-template-columns: 20px 1fr auto auto;
-  gap:8px; padding:6px 10px; align-items:baseline;
-  font-size:12.5px; color:#1f2937;
-}
-.decl-item summary::-webkit-details-marker { display:none; }
-.decl-item summary::before {
-  content:"▸"; color:#94a3b8; font-size:11px;
-  transition:transform 120ms ease; grid-column:1;
-}
-.decl-item[open] summary::before { transform:rotate(90deg); color:#dc2626; }
-.decl-item summary .decl-key { grid-column:2; }
-.decl-item summary .decl-change { grid-column:3; }
-.decl-item summary .decl-sub { grid-column:4; }
-.ctx-body { padding:8px 12px 10px 30px; border-top:1px solid #eef2f7;
-  background:#fff; }
-.ctx-line { display:grid; grid-template-columns: 200px 1fr;
-  gap:8px; padding:3px 0; font-size:12px; color:#334155; }
-.ctx-lbl { color:#64748b; font-weight:600; font-size:10.5px;
-  text-transform:uppercase; letter-spacing:.03em; }
-.ctx-chip { display:inline-block; padding:2px 8px; margin:0 4px 2px 0;
-  background:#f1f5f9; border:1px solid #e2e8f0; border-radius:12px;
-  font-size:11px; font-variant-numeric:tabular-nums; }
-.ctx-chip b { color:#0f172a; margin-right:2px; }
-.ctx-warn { color:#dc2626; font-weight:600; }
-.ctx-ok   { color:#16a34a; font-weight:600; }
-.ctx-none { color:#94a3b8; font-style:italic; }
-.ctx-dim  { color:#94a3b8; margin:0 8px; }
-.ctx-sizes { padding:4px 0 0 12px; }
-.ctx-size-row { display:flex; align-items:center; gap:8px;
-  padding:2px 0; font-size:12px; }
 .rem-list { display:flex; flex-direction:column; gap:6px; }
 .rem-item { border:1px solid #fef3c7; border-radius:6px;
   background:#fffbeb; }
@@ -578,86 +541,6 @@ function renderRemarkableCard(j){
   </div>`;
 }
 
-/* ── Decline analysis: per-item context renderers ─────────────
-   Each dimension has its own signals we display when the row is
-   expanded.  Signals come pre-baked from the backend so the
-   frontend just formats them; graceful "—" when nothing came back
-   (missing table, no history, etc). */
-function _pgContextHtml(ctx){
-  if (!ctx) return "";
-  const stockRows = (ctx.stock_by_plant || []).map(p =>
-    `<span class="ctx-chip"><b>${esc(p.plant)}</b> ${unitVal(p.qty)}</span>`
-  ).join(" ") || `<span class="ctx-none">no stock data</span>`;
-  const is443 = ctx.is_443 == null ? "—"
-              : ctx.is_443 ? `<b style="color:#0369a1;">Yes</b> · top-tier` : "No";
-  return `
-    <div class="ctx-body">
-      <div class="ctx-line"><span class="ctx-lbl">Stock by plant</span>${stockRows}</div>
-      <div class="ctx-line"><span class="ctx-lbl">443 status</span>${is443}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Incoming (in transit)</span>
-        ${ctx.incoming_qty != null ? unitVal(ctx.incoming_qty) : "—"}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Factory PO (open, non-42%)</span>
-        ${ctx.factory_po_qty != null ? unitVal(ctx.factory_po_qty) : "—"}</div>
-    </div>`;
-}
-function _customerContextHtml(ctx){
-  if (!ctx) return "";
-  const lastVisit = ctx.last_visit
-    ? `${ctx.last_visit}${ctx.days_since_visit != null ? ` <span class="ctx-warn">(${ctx.days_since_visit} days ago${ctx.days_since_visit > 45 ? " ⚠ overdue" : ""})</span>` : ""}`
-    : `<span class="ctx-warn">no visit on record ⚠</span>`;
-  const claims = ctx.open_claims == null ? "—"
-                : ctx.open_claims > 0
-                  ? `<b style="color:#dc2626;">${ctx.open_claims}</b> open`
-                  : "0 open";
-  const sizes = (ctx.top_sizes_prev || []).map(s => {
-    const stockWarn = s.stock_natl != null && s.stock_natl < s.prev_qty
-      ? `<span class="ctx-warn">stock ${unitVal(s.stock_natl)} ⚠ LOW</span>`
-      : `<span class="ctx-ok">stock ${s.stock_natl != null ? unitVal(s.stock_natl) : "—"}</span>`;
-    return `<div class="ctx-size-row">
-      <b>${esc(s.size)}</b>
-      <span class="ctx-dim">prev bought ${unitVal(s.prev_qty)}</span>
-      ${stockWarn}
-    </div>`;
-  }).join("") || `<span class="ctx-none">no prior sizes captured</span>`;
-  return `
-    <div class="ctx-body">
-      <div class="ctx-line"><span class="ctx-lbl">Last visit</span>${lastVisit}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Visits (90 days)</span>
-        ${ctx.visits_90d != null ? ctx.visits_90d : "—"}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Claims (180 days)</span>${claims}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Prev top sizes · current stock</span></div>
-      <div class="ctx-sizes">${sizes}</div>
-    </div>`;
-}
-function _regionContextHtml(ctx){
-  if (!ctx) return "";
-  const visitDelta = (ctx.visits_this != null && ctx.visits_prev != null)
-    ? `${ctx.visits_prev} → <b>${ctx.visits_this}</b> `
-      + `<span class="${ctx.visits_this < ctx.visits_prev ? "ctx-warn" : "ctx-ok"}">`
-      + `(${ctx.visits_this - ctx.visits_prev >= 0 ? "+" : ""}${ctx.visits_this - ctx.visits_prev})</span>`
-    : "—";
-  const custDelta = (ctx.active_customers_this != null && ctx.active_customers_prev != null)
-    ? `${ctx.active_customers_prev} → <b>${ctx.active_customers_this}</b> `
-      + `<span class="${ctx.active_customers_this < ctx.active_customers_prev ? "ctx-warn" : "ctx-ok"}">`
-      + `(${ctx.active_customers_this - ctx.active_customers_prev >= 0 ? "+" : ""}${ctx.active_customers_this - ctx.active_customers_prev})</span>`
-    : "—";
-  return `
-    <div class="ctx-body">
-      <div class="ctx-line"><span class="ctx-lbl">BDE visits (this vs prev)</span>${visitDelta}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Active customers</span>${custDelta}</div>
-      <div class="ctx-line"><span class="ctx-lbl">Plant ${ctx.plant || "—"} stock</span>
-        ${ctx.plant_stock != null ? unitVal(ctx.plant_stock) : "—"}</div>
-    </div>`;
-}
-
-function _declRow(rowHead, ctxHtml){
-  // Expandable row — closed by default, ▸ icon rotates on open.
-  return `<details class="decl-item">
-    <summary>${rowHead}</summary>
-    ${ctxHtml}
-  </details>`;
-}
-
 function renderDeclinesCard(j){
   const d = j.declines || {};
   const ov = d.overall || {};
@@ -682,29 +565,35 @@ function renderDeclinesCard(j){
       ? `Overall up <b style="color:#16a34a;">${fmtPct(ov.pct)}</b> — but the below segments still fell:`
       : `Overall flat this month; individual segments below still moved.`;
 
-  const _rowInner = (label, r) => `
-    <span class="decl-key">${esc(label)}</span>
-    <span class="decl-change">${unitVal(r.change)}
-      <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
-    <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>`;
-
   const regHtml = regs.length ? `
     <div class="decl-block">
       <h4>Regions that fell</h4>
-      ${regs.map(r => _declRow(_rowInner(r.region, r),
-                               _regionContextHtml(r.context))).join("")}
+      ${regs.map(r => `
+        <div class="decl-row">
+          <span class="decl-key">${esc(r.region)}</span>
+          <span class="decl-change">${unitVal(r.change)} <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
+          <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>
+        </div>`).join("")}
     </div>` : "";
   const pgHtml = pgs.length ? `
     <div class="decl-block">
       <h4>Product groups that fell</h4>
-      ${pgs.map(r => _declRow(_rowInner(r.product_group, r),
-                              _pgContextHtml(r.context))).join("")}
+      ${pgs.map(r => `
+        <div class="decl-row">
+          <span class="decl-key">${esc(r.product_group)}</span>
+          <span class="decl-change">${unitVal(r.change)} <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
+          <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>
+        </div>`).join("")}
     </div>` : "";
   const cusHtml = cus.length ? `
     <div class="decl-block">
-      <h4>Top customer losses</h4>
-      ${cus.map(r => _declRow(_rowInner(r.name || r.sold_to, r),
-                              _customerContextHtml(r.context))).join("")}
+      <h4>Top customer losses (top 5)</h4>
+      ${cus.map(r => `
+        <div class="decl-row">
+          <span class="decl-key">${esc(r.name || r.sold_to)}</span>
+          <span class="decl-change">${unitVal(r.change)} <span class="decl-pct">(${fmtPct(r.pct)})</span></span>
+          <span class="decl-sub">prev ${unitVal(r.prev)} → ${unitVal(r.this)}</span>
+        </div>`).join("")}
     </div>` : "";
   const crossHtml = cross.length ? `
     <div class="decl-block">
@@ -726,9 +615,6 @@ function renderDeclinesCard(j){
       ${headline}
     </div>
     ${regHtml}${pgHtml}${cusHtml}${crossHtml}
-    <div class="notes" style="margin-top:8px;font-size:11px;color:#94a3b8;">
-      ▸ Click a row to see context: stock, visits, claims, prior top sizes …
-    </div>
   </div>`;
 }
 
