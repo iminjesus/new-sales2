@@ -9114,8 +9114,12 @@ def api_monthly_highlights():
         all_regions = set(this_reg) | set(prev_reg) | set(py_reg)
         for d in trailing3_reg:
             all_regions |= set(d)
-        # Stable order: standard 4 first, COMMON last.
-        order = ["NSW", "QLD", "VIC", "WA", "COMMON"]
+        # COMMON is a placeholder bucket (customers with no state
+        # assignment); exclude it from the region breakdown so it
+        # doesn't show up in the analysis as a real geography.
+        all_regions.discard("COMMON")
+        # Stable order: standard 4 first, then anything unexpected.
+        order = ["NSW", "QLD", "VIC", "WA"]
         ordered = [r for r in order if r in all_regions] + [r for r in all_regions if r not in order]
         regions = []
         total_metric = sum(this_reg.get(r, {}).get(metric, 0) for r in ordered) or 1
@@ -9501,7 +9505,13 @@ def api_monthly_highlights():
                                 "pct": r.get("mom_pct")})
             out.sort(key=lambda x: x["change"])   # most negative first
             return out
-        region_declines = _decl(regions, "region")
+        # COMMON isn't a real BDE region — it's the catch-all for
+        # customers without a state assignment (HQ / cross-border /
+        # unresolved).  Excluding it from every analysis path so
+        # reports never call out "COMMON dropped 60%" as if it were
+        # actionable.
+        region_declines = [r for r in _decl(regions, "region")
+                           if r.get("region") != "COMMON"]
         pg_declines     = _decl(pg_rows, "product_group")   # full pg list, not the top-10 slice
         # Customer losses: reuse `losers` (already sorted by most-negative
         # delta) — trim to 5 for the narrative and expose the delta
