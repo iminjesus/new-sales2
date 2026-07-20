@@ -729,8 +729,132 @@ function newRow(){
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`).addEventListener("input", () => recalcRow(tr));
   });
+  // Click any state-stock cell → aging bucket popover for that
+  // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
+  // number to be worth expanding; otherwise the click is a no-op.
+  const _stockPlantByCol = {
+    stock_nsw: "42R1", stock_qld: "42R0",
+    stock_vic: "42R2", stock_wa:  "42R4",
+  };
+  for (const col of Object.keys(_stockPlantByCol)) {
+    const cell = tr.querySelector(`[data-col="${col}"]`);
+    if (!cell) continue;
+    cell.style.cursor = "pointer";
+    cell.title = "Click to see aging (DOT age) breakdown for this plant";
+    cell.addEventListener("click", () => {
+      const mcode = tr.querySelector('[data-col="m_code"]')?.value?.trim();
+      if (!mcode) return;
+      openStockAgingPopover(cell, mcode, _stockPlantByCol[col],
+                            col.replace("stock_", "").toUpperCase());
+    });
+  }
   return tr;
 }
+/* ─── Aging popover for state-stock cells ──────────────────────
+   Same colour scheme as the /stock aging popup (green ≤12M →
+   deep red 37M+) so the two views read consistently.  Popover is
+   a single floating <div> positioned next to the clicked cell;
+   Esc / outside-click closes it.  Only one popover exists at a
+   time — clicking a second stock cell reuses the same DOM node. */
+const _AGING_COLORS_ORDER = {
+  "≤12M":    "#22c55e",
+  "13-18M":  "#84cc16",
+  "19-24M":  "#eab308",
+  "25-36M":  "#f97316",
+  "37M+":    "#dc2626",
+  "unknown": "#94a3b8",
+};
+let _stockAgeEl = null;
+function _closeStockAging(){
+  if (_stockAgeEl) { _stockAgeEl.remove(); _stockAgeEl = null; }
+  document.removeEventListener("keydown", _stockAgingKey);
+  document.removeEventListener("mousedown", _stockAgingClickAway, true);
+}
+function _stockAgingKey(e){ if (e.key === "Escape") _closeStockAging(); }
+function _stockAgingClickAway(e){
+  if (_stockAgeEl && !_stockAgeEl.contains(e.target)) _closeStockAging();
+}
+async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
+  _closeStockAging();
+  const rect = anchorCell.getBoundingClientRect();
+  const pop  = document.createElement("div");
+  pop.style.cssText = `
+    position:fixed; z-index:9999;
+    top:${Math.round(rect.bottom + 4)}px;
+    left:${Math.round(Math.min(rect.left, window.innerWidth - 320))}px;
+    width:300px; padding:10px 12px;
+    background:#fff; border:1px solid #cbd5e1;
+    border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.12);
+    font-size:12px; color:#1e293b;
+  `;
+  pop.innerHTML = `
+    <div style="font-weight:700;font-size:12.5px;margin-bottom:4px;">
+      ${mcode} · Plant ${plant} <span style="color:#64748b;">(${stateLabel})</span>
+    </div>
+    <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">
+      Loading DOT aging…
+    </div>`;
+  document.body.appendChild(pop);
+  _stockAgeEl = pop;
+  document.addEventListener("keydown", _stockAgingKey);
+  // Defer the outside-click listener a tick so the current click
+  // that opened the popover doesn't immediately close it.
+  setTimeout(() => document.addEventListener("mousedown", _stockAgingClickAway, true), 0);
+  let data;
+  try {
+    const r = await fetch(
+      `/api/orders/stock_aging_by_material`
+      + `?m_code=${encodeURIComponent(mcode)}`
+      + `&plant=${encodeURIComponent(plant)}`,
+      {credentials: "same-origin"},
+    );
+    data = await r.json();
+  } catch(e){
+    pop.querySelector("div:nth-child(2)").textContent = "Load failed: " + e;
+    return;
+  }
+  if (!data || data.error){
+    pop.querySelector("div:nth-child(2)").textContent = "Error: " + (data && data.error || "no data");
+    return;
+  }
+  const buckets = data.buckets || {};
+  const order   = (data.bucket_order || []).filter(b =>
+    (buckets[b] || 0) > 0 || b !== "unknown");
+  const total   = data.total || 1;
+  const summary = order.map(b => {
+    const v = buckets[b] || 0;
+    const pct = (v / total * 100).toFixed(1);
+    const col = _AGING_COLORS_ORDER[b] || "#94a3b8";
+    return `
+      <div style="display:flex;align-items:center;gap:6px;margin:2px 0;font-size:11.5px;">
+        <div style="width:56px;">${b}</div>
+        <div style="flex:1;background:#e5e7eb;height:10px;border-radius:3px;overflow:hidden;">
+          <div style="width:${pct}%;background:${col};height:100%;"></div>
+        </div>
+        <div style="width:60px;text-align:right;font-variant-numeric:tabular-nums;">
+          ${fmtQty(v)}
+        </div>
+        <div style="width:40px;text-align:right;color:#666;">
+          ${pct}%
+        </div>
+      </div>`;
+  }).join("");
+  pop.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                margin-bottom:6px;">
+      <div style="font-weight:700;font-size:12.5px;">
+        ${mcode} · Plant ${plant} <span style="color:#64748b;">(${stateLabel})</span>
+      </div>
+      <button type="button" onclick="_closeStockAging()"
+              style="border:none;background:transparent;font-size:14px;
+                     color:#94a3b8;cursor:pointer;line-height:1;">×</button>
+    </div>
+    <div style="font-size:11px;color:#666;margin-bottom:6px;">
+      Total: <b>${fmtQty(data.total || 0)}</b>
+    </div>
+    ${summary || `<div style="color:#94a3b8;font-size:11.5px;">No stock at this plant.</div>`}`;
+}
+
 function addRow(){
   $("#linesBody").appendChild(newRow());
 }

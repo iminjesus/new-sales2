@@ -2301,6 +2301,67 @@ def api_orders_material():
 _ORDER_PLANT_STATE = {"42R1": "NSW", "42R0": "QLD", "42R2": "VIC", "42R4": "WA"}
 
 
+@app.get("/api/orders/stock_aging_by_material")
+def api_orders_stock_aging_by_material():
+    """Aging bucket breakdown for one (material, plant).  Called when
+    a state stock cell on the Special Price Request form is clicked so
+    the BDE can see how fresh / aged the on-hand stock is before
+    quoting a discount.
+
+    Groups every (material, plant, dot_no) row by the same 5 aging
+    buckets the /stock aging popup uses (≤12M … 37M+, plus 'unknown'
+    for malformed DOTs).  If plant isn't given, aggregates across all
+    plants (NSW/QLD/VIC/WA) so the caller can also drive a nation-
+    wide view from the same endpoint."""
+    m_code = (request.args.get("m_code") or "").strip()
+    plant  = (request.args.get("plant")  or "").strip()
+    if not m_code:
+        return jsonify({"error": "m_code required"}), 400
+
+    where = ["s.material = %s", "s.stock_qty > 0"]
+    ps    = [m_code]
+    if plant:
+        where.append("s.plant = %s")
+        ps.append(plant)
+    else:
+        # Constrain to the four real plants so leaked test data
+        # (fake 4-char plants) doesn't skew the totals.
+        where.append(
+            f"s.plant IN ({','.join(['%s'] * len(_ORDER_PLANT_STATE))})"
+        )
+        ps.extend(_ORDER_PLANT_STATE.keys())
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            f"SELECT s.dot_no, SUM(s.stock_qty) AS qty "
+            f"FROM stock s "
+            f"WHERE {' AND '.join(where)} "
+            f"GROUP BY s.dot_no",
+            tuple(ps),
+        )
+        rows = cur.fetchall() or []
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+    buckets = {b: 0 for b in _AGING_BUCKETS}
+    buckets["unknown"] = 0
+    for r in rows:
+        age = _dot_age_months(r["dot_no"])
+        b   = _age_bucket(age)
+        buckets[b] += int(r["qty"] or 0)
+    return jsonify({
+        "m_code":       m_code,
+        "plant":        plant or None,
+        "state":        _ORDER_PLANT_STATE.get(plant, "") if plant else "",
+        "buckets":      buckets,
+        "bucket_order": _AGING_BUCKETS + ["unknown"],
+        "total":        sum(buckets.values()),
+    })
+
+
 @app.get("/api/orders/stock_by_material")
 def api_orders_stock_by_material():
     """Return {NSW, QLD, VIC, WA, TOTAL} stock for one or more materials.
