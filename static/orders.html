@@ -70,6 +70,16 @@
   #agedStockPanel .as-empty {
     color: #94a3b8; font-style: italic; padding: 20px 4px; text-align: center;
   }
+  #agedStockPanel tr.as-clickable { cursor: pointer; transition: background .1s; }
+  #agedStockPanel tr.as-clickable:hover td {
+    background: #eff6ff; box-shadow: inset 0 0 0 1px #93c5fd;
+  }
+  /* Order-form row that came from the aged-stock panel — small
+     amber left border so the BDE can spot which rows are aged-DC
+     rows (fixed target DC per tier, not customer-driven). */
+  #linesBody tr.aged-row td:first-child {
+    box-shadow: inset 3px 0 0 #f59e0b;
+  }
   @media (max-width: 1780px) {
     /* Narrow viewport — the fixed sidebar would overlap the form,
        so tuck it away behind a toggle chip instead of showing it
@@ -606,6 +616,60 @@ function applyCustomer(row){
   if (state) fillAgedStockPanel(state);
 }
 
+// Aged-stock discount ladder — total proposed DC for aged rows,
+// customer-independent (spec: Ageing1 64%, Ageing2 70%, Ageing3 88%).
+// Applied by bumping `add_dc` so `proposed_dc` lands on the target
+// regardless of what the row's base/mth/sp/vol DC add up to.
+const AGING_TARGET_DC = {
+  "19-24M": 64,
+  "25-36M": 70,
+  "37M+":   88,
+};
+const AGING_TIER_LABEL = {
+  "19-24M": "Ageing1",
+  "25-36M": "Ageing2",
+  "37M+":   "Ageing3",
+};
+
+async function pushAgedStockRow(mcode, tier) {
+  // Prefer the first blank row so a BDE building an order doesn't
+  // accumulate empty rows above; only add_row() when none exist.
+  let row = [...document.querySelectorAll('#linesBody tr')].find(tr => {
+    const mc = tr.querySelector('[data-col="m_code"]');
+    return mc && !mc.value.trim();
+  });
+  if (!row) {
+    addRow();
+    row = document.querySelector('#linesBody tr:last-child');
+  }
+  row.dataset.agingTier = tier;
+  row.classList.add("aged-row");
+  const mcEl = row.querySelector('[data-col="m_code"]');
+  if (mcEl) mcEl.value = mcode;
+  // fillMaterialFromCode also drops in Base DC via applyBaseDCToRow,
+  // which triggers recalcRow — so we apply the aging DC AFTER await
+  // to make sure add_dc lands on top of a settled state.
+  await fillMaterialFromCode(row, mcode);
+  applyAgingDC(row);
+  setStatus(`Aged (${AGING_TIER_LABEL[tier] || tier}) row added · target DC ${AGING_TARGET_DC[tier]}%`, "ok");
+}
+
+function applyAgingDC(row) {
+  const tier = row.dataset.agingTier;
+  if (!tier) return;
+  const target = AGING_TARGET_DC[tier];
+  if (target == null) return;
+  const baseDC = toNum(row.querySelector('[data-col="base_dc"]')?.value);
+  const mthDC  = toNum(row.querySelector('[data-col="mth_dc"]')?.value);
+  const spDC   = toNum(row.querySelector('[data-col="sp_dc"]')?.value);
+  const volDC  = toNum(row.querySelector('[data-col="vol_dc"]')?.value);
+  // Additional DC = target - (currentDC), so proposed = target.
+  const needed = Math.max(0, target - (baseDC + mthDC + spDC + volDC));
+  const addEl = row.querySelector('[data-col="add_dc"]');
+  if (addEl) addEl.value = needed.toFixed(2);
+  recalcRow(row);
+}
+
 async function fillAgedStockPanel(state){
   const panel = document.getElementById("agedStockPanel");
   const body  = document.getElementById("asBody");
@@ -653,7 +717,9 @@ async function fillAgedStockPanel(state){
       </thead>
       <tbody>
         ${rows.map(r => `
-          <tr>
+          <tr class="as-clickable"
+              data-mcode="${r.m_code}" data-tier="${r.tier}"
+              title="Click to add this row to the order (auto-DC ${AGING_TARGET_DC[r.tier] || "—"}%)">
             <td>${r.m_code}</td>
             <td>${r.pattern || "—"}</td>
             <td>${r.size || "—"}</td>
@@ -662,6 +728,14 @@ async function fillAgedStockPanel(state){
           </tr>`).join("")}
       </tbody>
     </table>`;
+  // Delegate clicks — one listener for every row in the panel.
+  body.querySelectorAll("tr.as-clickable").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const mc   = tr.dataset.mcode;
+      const tier = tr.dataset.tier;
+      if (mc && tier) pushAgedStockRow(mc, tier);
+    });
+  });
 }
 
 async function fillBaseDC(soldTo){
