@@ -2301,6 +2301,75 @@ def api_orders_material():
 _ORDER_PLANT_STATE = {"42R1": "NSW", "42R0": "QLD", "42R2": "VIC", "42R4": "WA"}
 
 
+@app.get("/api/orders/aged_stock_at_state")
+def api_orders_aged_stock_at_state():
+    """Aged-stock list for one state — used by the /order form's right
+    side panel to surface stock the BDE could push during a customer
+    visit.  Only returns 19-24M / 25-36M / 37M+ tiers (fresh stock
+    isn't a talking point).  Ordered by tier (oldest first within
+    each tier)."""
+    state = (request.args.get("state") or "").strip().upper()
+    _STATE_TO_PLANT = {"NSW": "42R1", "QLD": "42R0",
+                       "VIC": "42R2", "WA":  "42R4",
+                       # SA/TAS fold into VIC territory; NT into WA;
+                       # ACT into NSW — matches the rest of the app.
+                       "SA":  "42R2", "TAS": "42R2",
+                       "NT":  "42R4", "ACT": "42R1"}
+    plant = _STATE_TO_PLANT.get(state)
+    if not plant:
+        return jsonify({"error": "unknown state", "rows": []}), 400
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT s.material, s.dot_no, "
+            "       SUM(s.stock_qty) AS qty, "
+            "       MAX(c.size)    AS size, "
+            "       MAX(c.pattern) AS pattern "
+            "FROM stock s "
+            "LEFT JOIN carrying_26 c ON c.m_code = s.material "
+            "WHERE s.plant = %s AND s.stock_qty > 0 "
+            "GROUP BY s.material, s.dot_no",
+            (plant,),
+        )
+        raw = cur.fetchall() or []
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+
+    # Only the three aged tiers surface — fresh (≤12M / 13-18M) is
+    # ignored per BDE workflow: BDEs push OLD stock, not new.
+    AGED_TIERS = {"19-24M", "25-36M", "37M+"}
+    TIER_RANK  = {"19-24M": 0, "25-36M": 1, "37M+": 2}
+    # Roll up per (material, dot_no) → (material, tier) so a material
+    # with several old DOTs collapses to one row per tier.
+    by_key: dict = {}
+    for r in raw:
+        age  = _dot_age_months(r["dot_no"])
+        tier = _age_bucket(age)
+        if tier not in AGED_TIERS: continue
+        key = (str(r["material"] or "").strip(), tier)
+        d = by_key.setdefault(key, {
+            "m_code":  str(r["material"] or "").strip(),
+            "size":    (r.get("size")    or "").strip(),
+            "pattern": (r.get("pattern") or "").strip(),
+            "tier":    tier,
+            "qty":     0,
+        })
+        d["qty"] += int(r["qty"] or 0)
+    rows = list(by_key.values())
+    # Sort: 19-24M first, then 25-36M, then 37M+; within each tier
+    # oldest / biggest wins.
+    rows.sort(key=lambda r: (TIER_RANK[r["tier"]], -r["qty"]))
+    return jsonify({
+        "state":  state,
+        "plant":  plant,
+        "rows":   rows,
+        "total":  sum(r["qty"] for r in rows),
+    })
+
+
 @app.get("/api/orders/stock_aging_by_material")
 def api_orders_stock_aging_by_material():
     """Aging bucket breakdown for one (material, plant).  Called when

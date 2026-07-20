@@ -25,6 +25,58 @@
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#222;background:var(--bg);}
   .wrap{max-width:1500px;margin:16px auto;padding:0 12px 40px;}
+  /* Right-side aged-stock panel — sits outside the form's max-width
+     column, only visible when the viewport is wide enough (>= 1780 px)
+     so it doesn't overlap the form on narrower screens. */
+  #agedStockPanel {
+    position: fixed;
+    top: 80px; right: 12px;
+    width: 340px; max-height: calc(100vh - 100px);
+    overflow: auto;
+    background: #fff; border: 1px solid #e5e7eb;
+    border-radius: 8px; padding: 10px 12px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.05);
+    font-size: 11.5px; color: #1e293b;
+    z-index: 500;
+    display: none;
+  }
+  #agedStockPanel.visible { display: block; }
+  #agedStockPanel h3 {
+    margin: 0 0 6px; font-size: 12.5px; color: #0f172a;
+    padding-bottom: 6px; border-bottom: 1px solid #e5e7eb;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  #agedStockPanel h3 .as-scope {
+    color: #2563eb; font-weight: 700;
+  }
+  #agedStockPanel .as-total {
+    color: #64748b; font-size: 11px; margin-bottom: 6px;
+  }
+  #agedStockPanel table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  #agedStockPanel th, #agedStockPanel td {
+    padding: 3px 5px; text-align: left; border-bottom: 1px solid #f1f5f9;
+    white-space: nowrap;
+  }
+  #agedStockPanel th {
+    background: #f8fafc; color: #64748b; font-weight: 600;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .3px;
+    position: sticky; top: 0;
+  }
+  #agedStockPanel td.num { text-align: right;
+    font-variant-numeric: tabular-nums; }
+  #agedStockPanel .tier-19 { color: #ca8a04; font-weight: 600; }
+  #agedStockPanel .tier-25 { color: #ea580c; font-weight: 600; }
+  #agedStockPanel .tier-37 { color: #dc2626; font-weight: 700; }
+  #agedStockPanel .as-empty {
+    color: #94a3b8; font-style: italic; padding: 20px 4px; text-align: center;
+  }
+  @media (max-width: 1780px) {
+    /* Narrow viewport — the fixed sidebar would overlap the form,
+       so tuck it away behind a toggle chip instead of showing it
+       automatically.  Keeps the layout usable on 15" laptops. */
+    #agedStockPanel { top: auto; bottom: 12px; right: 12px;
+      max-height: 60vh; width: 320px; }
+  }
 
   /* header */
   .hdr{
@@ -201,6 +253,15 @@
 </style>
 </head>
 <body>
+<!-- Aged-stock side panel — filled when a customer is loaded so the
+     BDE sees old stock at their own state's plant that they could
+     work into the conversation.  Only 19-24M / 25-36M / 37M+ tiers
+     surface (fresh stock isn't a talking point). -->
+<aside id="agedStockPanel">
+  <h3>Aged stock <span class="as-scope" id="asScope">—</span></h3>
+  <div class="as-total" id="asTotal">Load a customer to see aged stock at their state plant.</div>
+  <div id="asBody"></div>
+</aside>
 <div class="wrap">
 
   <!-- ═══════════════ Page nav (jump to other views) ═══════════════ -->
@@ -538,6 +599,69 @@ function applyCustomer(row){
   // out of the main /customer response so a deployment that hasn't
   // loaded dc_basic_customer yet still returns customer instantly.
   if (row.sold_to) fillBaseDC(row.sold_to);
+  // Aged-stock side panel — populated from the customer's state so
+  // the BDE can see 19M+ stock at their own plant right when they
+  // pull up the shop.
+  const state = (row.state || row.bde_state || "").toUpperCase();
+  if (state) fillAgedStockPanel(state);
+}
+
+async function fillAgedStockPanel(state){
+  const panel = document.getElementById("agedStockPanel");
+  const body  = document.getElementById("asBody");
+  const total = document.getElementById("asTotal");
+  const scope = document.getElementById("asScope");
+  if (!panel) return;
+  panel.classList.add("visible");
+  scope.textContent = state;
+  total.textContent = "Loading aged stock…";
+  body.innerHTML = "";
+  let data;
+  try {
+    const r = await fetch(
+      `/api/orders/aged_stock_at_state?state=${encodeURIComponent(state)}`,
+      {credentials: "same-origin"});
+    data = await r.json();
+  } catch(e){
+    total.textContent = "Load failed: " + e;
+    return;
+  }
+  if (!data || data.error) {
+    total.textContent = "Error: " + (data && data.error || "no data");
+    return;
+  }
+  const rows = data.rows || [];
+  if (!rows.length) {
+    total.textContent = "";
+    body.innerHTML = `<div class="as-empty">No aged (19M+) stock at plant ${data.plant || "?"}.</div>`;
+    return;
+  }
+  total.innerHTML = `Plant <b>${data.plant}</b> · ${rows.length} SKU-tier rows · ${fmtQty(data.total)} units aged 19M+.`;
+  const tierClass = t => t === "19-24M" ? "tier-19"
+                       : t === "25-36M" ? "tier-25"
+                       : "tier-37";
+  body.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>M-Code</th>
+          <th>Pattern</th>
+          <th>Size</th>
+          <th class="num">Qty</th>
+          <th>Aging</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr>
+            <td>${r.m_code}</td>
+            <td>${r.pattern || "—"}</td>
+            <td>${r.size || "—"}</td>
+            <td class="num">${fmtQty(r.qty)}</td>
+            <td class="${tierClass(r.tier)}">${r.tier}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>`;
 }
 
 async function fillBaseDC(soldTo){
