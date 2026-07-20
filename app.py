@@ -2248,6 +2248,22 @@ def api_orders_material():
                 row["list_price"] = float(row["list_price"])
             except Exception:
                 row["list_price"] = None
+
+        # Load/speed fallback — carrying_26 usually doesn't carry a
+        # dedicated load_speed column, but the description string
+        # embeds it right after the size ("205/55R16 91V",
+        # "265/70R16 112T", "205R16C 110/108T", "11R22.5 148/145L").
+        # Regex-lift it out when the dedicated column came back empty
+        # so the Special Price form still displays it.
+        if not row.get("load_speed"):
+            src = row.get("description") or ""
+            import re as _re_ls
+            m = _re_ls.search(
+                r"R\s*\d{1,2}(?:\.\d)?C?\s+(\d{2,3}(?:/\d{2,3})?[A-Z]{1,2})",
+                src,
+            )
+            if m:
+                row["load_speed"] = m.group(1)
         return jsonify(row)
     except Exception as e:
         import traceback; traceback.print_exc()
