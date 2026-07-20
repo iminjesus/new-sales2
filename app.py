@@ -2249,18 +2249,37 @@ def api_orders_material():
             except Exception:
                 row["list_price"] = None
 
-        # Load/speed fallback — carrying_26 usually doesn't carry a
-        # dedicated load_speed column, but the description string
-        # embeds it right after the size ("205/55R16 91V",
-        # "265/70R16 112T", "205R16C 110/108T", "11R22.5 148/145L").
-        # Regex-lift it out when the dedicated column came back empty
-        # so the Special Price form still displays it.
+        # Load/speed fallback — carrying_26 on this deployment doesn't
+        # have a dedicated load_speed column, so hunt for the token in
+        # any text column we already know about (description, size,
+        # product_name) AND take a wide net across every other text-
+        # like column in the row we already fetched.  Formats we've
+        # seen: "205/55R16 91V", "265/70R16 112T", "205R16C 110/108T",
+        # "11R22.5 148/145L", "205/55R16, 91V", "205/55R16-91V".
         if not row.get("load_speed"):
-            src = row.get("description") or ""
             import re as _re_ls
+            # Fetch every text column for this m_code so a load-speed
+            # stashed in, say, a `description_full` or `spec` we didn't
+            # explicitly probe still gets found.
+            wide_src = " ".join(str(v) for v in row.values() if v is not None)
+            try:
+                if c_m_code:
+                    cur.execute(
+                        f"SELECT * FROM carrying_26 WHERE {c_m_code} = %s LIMIT 1",
+                        (row.get("m_code"),),
+                    )
+                    full = cur.fetchone() or {}
+                    wide_src += " " + " ".join(str(v) for v in full.values() if v is not None)
+            except Exception:
+                pass
+            # Loosen separator: any non-alphanumeric (space, comma,
+            # dash, tab, punctuation) between the R-size and the
+            # load/speed token.  Also accept load/speed WITHOUT a
+            # trailing space (some datasets glue them together).
             m = _re_ls.search(
-                r"R\s*\d{1,2}(?:\.\d)?C?\s+(\d{2,3}(?:/\d{2,3})?[A-Z]{1,2})",
-                src,
+                r"R\s*\d{1,2}(?:\.\d)?C?[^A-Za-z0-9/]*"
+                r"(\d{2,3}(?:/\d{2,3})?[A-Z]{1,2})\b",
+                wide_src,
             )
             if m:
                 row["load_speed"] = m.group(1)
