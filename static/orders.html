@@ -192,6 +192,12 @@
   }
   table.lines thead th.pink{background:#c8548a;color:#fff;}
   table.lines thead th.olive{background:#a08b3c;color:#fff;}
+  table.lines thead th.amber{background:#d97706;color:#fff;}
+  /* Aging-DC cell — amber tint so it visually pairs with its column
+     header, plus a light background when populated so the reader
+     spots "this row uses the aging price ladder" instantly. */
+  table.lines td.aging-cell input{background:#fef3c7;font-weight:700;color:#78350f;}
+  table.lines td.aging-cell input:placeholder-shown{background:#fff;font-weight:400;color:#1f2937;}
   table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
   table.lines thead th.narrow{width:60px}
   table.lines thead th.mid{width:90px}
@@ -415,6 +421,7 @@
           <th class="narrow">Current DC %</th>
           <th class="mid">Current Price</th>
           <th class="olive narrow">Additional<br>Special DC %</th>
+          <th class="amber narrow" title="Aging-stock DC — customer-independent; overrides every other DC on this row when set.">Aging<br>DC %</th>
           <th class="mid">Proposed Price</th>
           <th class="mid">Total Amount</th>
           <th class="narrow">Proposed DC %</th>
@@ -429,7 +436,7 @@
       </tbody>
       <tfoot>
         <tr class="total-row">
-          <td class="label" colspan="16">Total</td>
+          <td class="label" colspan="17">Total</td>
           <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
           <td></td>
           <td colspan="4"></td>
@@ -659,14 +666,14 @@ function applyAgingDC(row) {
   if (!tier) return;
   const target = AGING_TARGET_DC[tier];
   if (target == null) return;
-  const baseDC = toNum(row.querySelector('[data-col="base_dc"]')?.value);
-  const mthDC  = toNum(row.querySelector('[data-col="mth_dc"]')?.value);
-  const spDC   = toNum(row.querySelector('[data-col="sp_dc"]')?.value);
-  const volDC  = toNum(row.querySelector('[data-col="vol_dc"]')?.value);
-  // Additional DC = target - (currentDC), so proposed = target.
-  const needed = Math.max(0, target - (baseDC + mthDC + spDC + volDC));
+  // Aging DC lives in its own column now — writes straight to
+  // `aging_dc`, which recalcRow treats as a full override for the
+  // customer-side DC stack.  Clear any leftover add_dc so a re-drop
+  // on the same row doesn't stack surprises.
+  const agingEl = row.querySelector('[data-col="aging_dc"]');
+  if (agingEl) agingEl.value = target.toFixed(2);
   const addEl = row.querySelector('[data-col="add_dc"]');
-  if (addEl) addEl.value = needed.toFixed(2);
+  if (addEl) addEl.value = "";
   recalcRow(row);
 }
 
@@ -852,12 +859,19 @@ function recalcRow(row){
   const spDC    = toNum(row.querySelector('[data-col="sp_dc"]').value);
   const volDC   = toNum(row.querySelector('[data-col="vol_dc"]').value);
   const addDC   = toNum(row.querySelector('[data-col="add_dc"]').value);
+  const agingDC = toNum(row.querySelector('[data-col="aging_dc"]')?.value);
 
-  // Current DC is the sum of the input DCs (excluding additional).
-  // Later on the real formula will come from HK's DC ladder — for now
-  // just add them so the layout works and the numbers move.
+  // Current DC is the sum of the customer-side inputs — represents
+  // the discount they would normally get on this row (base + mth +
+  // sp + vol); we always compute it so Current Price still shows the
+  // "before-aging-override" baseline for comparison.
   const currentDC = baseDC + mthDC + spDC + volDC;
-  const proposedDC = currentDC + addDC;
+
+  // Aging DC completely REPLACES the discount stack when set —
+  // customer-independent tier ladder (Ageing1 64% / Ageing2 70% /
+  // Ageing3 88%).  All other components (base / mth / sp / vol /
+  // add) are ignored for the proposed price / DC calculation.
+  const proposedDC = agingDC > 0 ? agingDC : currentDC + addDC;
 
   const currentPrice  = list * (1 - currentDC/100);
   const proposedPrice = list * (1 - proposedDC/100);
@@ -899,6 +913,7 @@ function newRow(){
     {c:"current_dc",     cls:"num readonly", ro:true},
     {c:"current_price",  cls:"num red-num readonly", ro:true},
     {c:"add_dc",         cls:"pct-cell"},
+    {c:"aging_dc",       cls:"pct-cell aging-cell"},
     {c:"proposed_price", cls:"num red-num readonly", ro:true},
     {c:"total_amount",   cls:"total-cell num readonly", ro:true},
     {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
@@ -924,8 +939,8 @@ function newRow(){
   mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
   descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
-  ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc"].forEach(c => {
-    tr.querySelector(`[data-col="${c}"]`).addEventListener("input", () => recalcRow(tr));
+  ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {
+    tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => recalcRow(tr));
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
