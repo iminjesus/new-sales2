@@ -471,8 +471,14 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
         Ship-to <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(shop-level — search by code or name)</span>
       </label>
-      <input id="shipSearch" class="palette-input" type="text"
-             placeholder="Search ship-to by name or code…" autocomplete="off">
+      <div class="dd" id="shipSearchDd" style="width:100%;">
+        <div class="dd-wrap">
+          <input id="shipSearch" type="text"
+                 placeholder="Search ship-to by name or code…" autocomplete="off">
+          <button class="dd-btn dd-clear-btn dd-last" type="button" id="shipSearchClear"
+                  title="Clear" tabindex="-1">×</button>
+        </div>
+      </div>
     </div>
     <div class="palette-count" id="shipCount"></div>
     <div id="shipList" class="palette-list">
@@ -2426,6 +2432,16 @@ document.getElementById("calToday").addEventListener("click", async () => {
   await loadPlansForMonth(); renderCalendar();
 });
 document.getElementById("shipSearch").addEventListener("input", renderShipList);
+// Ship-to × clear — wipes the search box, re-renders the list, and
+// focuses the input again so the user can immediately type a new
+// query.  Matches the Sold-to picker's clear-button behaviour.
+document.getElementById("shipSearchClear")?.addEventListener("click", () => {
+  const inp = document.getElementById("shipSearch");
+  if (!inp) return;
+  inp.value = "";
+  renderShipList();
+  inp.focus();
+});
 // Re-render the chip list when the viewport crosses the mobile
 // breakpoint (rotation, window resize) — the default chip count
 // differs on mobile vs desktop.
