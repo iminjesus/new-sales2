@@ -2495,9 +2495,10 @@ def api_orders_base_dc():
 
     Lookup tiers (first hit per brand bucket wins):
       1. Row keyed to this exact bill_to_partner (customer-specific).
-      2. Row with bill_to_partner blank and customer = this sold-to's
-         sold_to_group (customer-group fallback for customers who don't
-         have their own row on the feed).
+      2. Any row whose customer_grp matches this sold-to's
+         sold_to_group (customer-group fallback for customers who
+         don't have their own row on the feed — the group row's
+         bill_to_partner belongs to a representative member).
     Within each tier, HK/LF-branded rows win over blank-brand rows,
     and the most-recent still-valid row wins on ties.  Amount is
     stored as a negative percent on the feed (-52.00 = 52% discount);
@@ -2528,6 +2529,23 @@ def api_orders_base_dc():
         except Exception:
             return jsonify(out)
 
+        # Introspect the table's columns — deployments differ on which
+        # column carries the customer-group code (customer_group /
+        # sold_to_group / customer / group_code / …).  Pick the first
+        # one that exists; if none does, the group fallback is skipped
+        # but tier-1 (bill_to_partner) still works.
+        cols = _list_columns(cur, "dc_basic_customer")
+        if debug:
+            out["_debug"]["cols"] = sorted(cols)
+        group_col_candidates = [
+            "customer_group", "sold_to_group", "bill_to_group",
+            "customer", "customer_code", "group_code", "grouping",
+            "customer_grp", "cust_group", "cust_grp",
+        ]
+        group_col = next((c for c in group_col_candidates if c in cols), None)
+        if debug:
+            out["_debug"]["group_col"] = group_col
+
         # Resolve customer group so we can fall back to Brand + Group
         # rows when the sold-to has no row of its own.
         group_code = ""
@@ -2546,28 +2564,28 @@ def api_orders_base_dc():
 
         # Pick the most-recent valid row per (brand-bucket) with tier
         # priority: tier 1 = this bill_to_partner exactly (customer-
-        # specific), tier 2 = blank bill_to_partner + customer group
-        # match (group fallback for sold-tos with no own row).  Bucket
-        # is "HK" / "LF" for a branded row and "_BLANK_" for a
+        # specific), tier 2 = any row whose customer_grp matches this
+        # sold-to's group (fallback for sold-tos with no own row).
+        # Bucket is "HK" / "LF" for a branded row and "_BLANK_" for a
         # blank-brand row.  ROW_NUMBER partitions by bucket and orders
         # by tier ASC then valid_from DESC so tier-1 always wins over
         # tier-2 and, within a tier, the current row wins.
-        # Validity bounds treat NULL as open-ended — the manually added
-        # group rows often have blank valid_from/valid_to.  Customer
-        # code compare is upper-cased + trimmed on both sides so case
-        # / whitespace drift on either the master or the feed doesn't
-        # sink the join.
+        # Validity bounds treat NULL as open-ended — manually added
+        # group rows often have blank valid_from/valid_to.  Brand /
+        # bill_to_partner comparisons are upper-cased + trimmed so
+        # case/whitespace drift on the feed doesn't sink the join.
         params = [sold_to]
         group_join = ""
-        if group_code:
-            group_join = (
-                " OR ((bill_to_partner IS NULL OR TRIM(bill_to_partner) = '')"
-                "     AND UPPER(TRIM(customer)) = UPPER(%s))"
-            )
+        group_select = "NULL AS grp"
+        if group_col and group_code:
+            group_join = f" OR UPPER(TRIM({group_col})) = UPPER(%s)"
             params.append(group_code)
+            group_select = f"{group_col} AS grp"
+        elif group_col:
+            group_select = f"{group_col} AS grp"
 
         sql = f"""
-            SELECT bucket, ABS(amount) AS pct, tier, brand, customer, bill_to_partner,
+            SELECT bucket, ABS(amount) AS pct, tier, brand, grp, bill_to_partner,
                    valid_from, valid_to
             FROM (
                 SELECT
@@ -2578,7 +2596,7 @@ def api_orders_base_dc():
                     END AS bucket,
                     amount,
                     brand,
-                    customer,
+                    {group_select},
                     bill_to_partner,
                     valid_from,
                     valid_to,
