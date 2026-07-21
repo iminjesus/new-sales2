@@ -2861,6 +2861,375 @@ def api_orders_additional_dc():
         except: pass
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Submitted-orders workflow — BDE fills the Special Price Request Form,
+# hits Submit, and the whole thing (header + lines + totals) lands in
+# submitted_orders.  Harry (CS) then flips the SAP-entered flag to Y
+# once he's keyed it in on the SAP side.  All state lives here — the
+# order form and the list page both read/write via /api/orders/* below.
+# ══════════════════════════════════════════════════════════════════════
+HARRY_CS_EMAIL = "harry.jallis@hankooktyre.com.au"
+
+def _ensure_submitted_orders_table():
+    try:
+        conn = get_connection(); cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS submitted_orders (
+                id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                submitted_at       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                submitted_by_bde   VARCHAR(120) NOT NULL DEFAULT '',
+                submitted_by_email VARCHAR(255) NOT NULL DEFAULT '',
+                sold_to            VARCHAR(40)  NOT NULL DEFAULT '',
+                sold_to_name       VARCHAR(255) NOT NULL DEFAULT '',
+                ship_to            VARCHAR(40)  NOT NULL DEFAULT '',
+                ship_to_name       VARCHAR(255) NOT NULL DEFAULT '',
+                state              VARCHAR(20)  NOT NULL DEFAULT '',
+                po_number          VARCHAR(100) NOT NULL DEFAULT '',
+                order_date         VARCHAR(20)  NOT NULL DEFAULT '',
+                subtotal           DECIMAL(14,2) NOT NULL DEFAULT 0,
+                total_inc_gst      DECIMAL(14,2) NOT NULL DEFAULT 0,
+                freight_amount     DECIMAL(14,2) NOT NULL DEFAULT 0,
+                grand_total        DECIMAL(14,2) NOT NULL DEFAULT 0,
+                total_qty          INT          NOT NULL DEFAULT 0,
+                sovd_qty           INT          NOT NULL DEFAULT 0,
+                avg_dc_pct         DECIMAL(6,2) NOT NULL DEFAULT 0,
+                status_sap         CHAR(1)      NOT NULL DEFAULT 'N',
+                status_changed_at  DATETIME     NULL,
+                status_changed_by  VARCHAR(255) NOT NULL DEFAULT '',
+                payload_json       LONGTEXT     NOT NULL,
+                INDEX idx_so_submitted (submitted_at),
+                INDEX idx_so_status    (status_sap, submitted_at),
+                INDEX idx_so_bde       (submitted_by_bde),
+                INDEX idx_so_sold_to   (sold_to)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.commit(); cur.close(); conn.close()
+    except Exception as e:
+        print(f"[submitted_orders] schema init failed: {e}")
+
+
+def _submitted_order_email_html(oid, order, base_url):
+    """HTML body of the notification email — mirrors the compact
+    header + lines summary in the form.  Link lands on the Orders
+    list page (harry can click through to the detail from there)."""
+    header = order.get("header") or {}
+    totals = order.get("totals") or {}
+    lines  = order.get("lines")  or []
+    def _row(lbl, val):
+        return (f'<tr><td style="padding:4px 10px;color:#6b7280;font-size:11px;'
+                f'text-transform:uppercase;letter-spacing:.4px;width:140px;">{_esc_html(lbl)}</td>'
+                f'<td style="padding:4px 10px;color:#111;font-size:13px;">{_esc_html(val)}</td></tr>')
+    line_rows = []
+    for ln in lines:
+        line_rows.append(
+            f'<tr>'
+            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;font-family:monospace">{_esc_html(ln.get("m_code",""))}</td>'
+            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("qty",""))}</td>'
+            f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{_esc_html(ln.get("description","") or ln.get("product_name",""))}</td>'
+            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("list_price",""))}</td>'
+            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("proposed_dc",""))}</td>'
+            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("total_amount",""))}</td>'
+            f'</tr>'
+        )
+    list_url   = f"{base_url}/orders_list"
+    detail_url = f"{base_url}/order?id={oid}"
+    return f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:820px">
+      <div style="background:#f5c518;padding:12px 16px;font-weight:800;color:#000">
+        Special Price Request Form &nbsp; #{oid}
+      </div>
+      <div style="padding:14px 16px;background:#fff;border:1px solid #e5e7eb">
+        <table style="border-collapse:collapse;width:100%;margin-bottom:14px">
+          {_row("Submitted",      order.get("submitted_at") or "")}
+          {_row("BDE",            header.get("bde_name") or "")}
+          {_row("Sold-to",        f'{header.get("sold_to","")} — {header.get("sold_to_name","")}')}
+          {_row("Ship-to",        f'{header.get("ship_to","")} — {header.get("ship_to_name","")}')}
+          {_row("State",          header.get("state") or "")}
+          {_row("PO #",           header.get("po_number") or "—")}
+          {_row("Order date",     header.get("order_date") or "")}
+          {_row("Total qty",      totals.get("total_qty") or 0)}
+          {_row("SOVD qty",       totals.get("sovd_qty") or 0)}
+          {_row("Subtotal",       totals.get("subtotal") or "0.00")}
+          {_row("Total inc GST",  totals.get("total_inc_gst") or "0.00")}
+          {_row("Freight",        totals.get("freight_amount") or "0.00")}
+          {_row("Grand total",    totals.get("grand_total") or "0.00")}
+          {_row("Avg proposed DC", (str(totals.get("avg_dc_pct") or 0) + "%"))}
+        </table>
+        <table style="border-collapse:collapse;width:100%;font-size:12px">
+          <thead>
+            <tr style="background:#374151;color:#fff">
+              <th style="padding:6px 8px;border:1px solid #374151;text-align:left">M-Code</th>
+              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">Qty</th>
+              <th style="padding:6px 8px;border:1px solid #374151;text-align:left">Description</th>
+              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">List</th>
+              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">Proposed DC</th>
+              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">Total</th>
+            </tr>
+          </thead>
+          <tbody>{"".join(line_rows) or '<tr><td colspan="6" style="padding:10px;color:#6b7280">No lines.</td></tr>'}</tbody>
+        </table>
+        <p style="margin:16px 0 4px;font-size:12px;color:#374151">
+          Once this order is keyed into SAP, please flip the status flag
+          to <b>Y</b> on the Orders page.
+        </p>
+        <p style="margin:2px 0;font-size:12px">
+          <a href="{detail_url}" style="background:#2563eb;color:#fff;padding:8px 14px;border-radius:4px;text-decoration:none;font-weight:700">Open this order</a>
+          &nbsp;
+          <a href="{list_url}" style="color:#2563eb">View all orders</a>
+        </p>
+      </div>
+    </div>
+    """
+
+
+@app.post("/api/orders/submit")
+def api_orders_submit():
+    """Persist a filled Special Price Request Form as a
+    submitted_orders row and fire the notification email to Harry
+    (CS).  Body is JSON:
+      {
+        header:  {bde_name, sold_to, sold_to_name, ship_to, ship_to_name,
+                  state, po_number, order_date, ...},
+        lines:   [{m_code, qty, description, product_name, brand, ...}],
+        totals:  {total_qty, sovd_qty, subtotal, total_inc_gst,
+                  freight_amount, grand_total, avg_dc_pct}
+      }
+    Returns { ok: true, id: 123 } on success."""
+    import json as _json
+    payload = request.get_json(silent=True) or {}
+    header  = payload.get("header")  or {}
+    totals  = payload.get("totals")  or {}
+    lines   = payload.get("lines")   or []
+    if not header.get("sold_to"):
+        return jsonify({"error": "sold_to required"}), 400
+    if not lines:
+        return jsonify({"error": "at least one order line required"}), 400
+
+    # Best-effort BDE identification — trust the header value the form
+    # sends (the BDE picks their own name / it's auto-filled from the
+    # customer master), fall back to the Cloudflare-injected email.
+    submitted_by_bde   = (header.get("bde_name") or "").strip()
+    submitted_by_email = (_bde_from_request() or "").strip().lower()
+
+    def _num(v):
+        try:
+            s = str(v or "0").replace(",", "").replace("$", "").replace("%", "").strip()
+            return float(s or 0)
+        except Exception:
+            return 0.0
+
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO submitted_orders "
+            "(submitted_by_bde, submitted_by_email, sold_to, sold_to_name, "
+            " ship_to, ship_to_name, state, po_number, order_date, "
+            " subtotal, total_inc_gst, freight_amount, grand_total, "
+            " total_qty, sovd_qty, avg_dc_pct, status_sap, payload_json) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'N',%s)",
+            (
+                submitted_by_bde[:120],
+                submitted_by_email[:255],
+                (header.get("sold_to")      or "")[:40],
+                (header.get("sold_to_name") or "")[:255],
+                (header.get("ship_to")      or "")[:40],
+                (header.get("ship_to_name") or "")[:255],
+                (header.get("state")        or "")[:20],
+                (header.get("po_number")    or "")[:100],
+                (header.get("order_date")   or "")[:20],
+                _num(totals.get("subtotal")),
+                _num(totals.get("total_inc_gst")),
+                _num(totals.get("freight_amount")),
+                _num(totals.get("grand_total")),
+                int(_num(totals.get("total_qty"))),
+                int(_num(totals.get("sovd_qty"))),
+                _num(totals.get("avg_dc_pct")),
+                _json.dumps(payload, ensure_ascii=False, default=str),
+            ),
+        )
+        oid = cur.lastrowid
+        conn.commit()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    # Send Harry the email (async — API returns immediately regardless
+    # of SMTP / Graph outcome).  Base URL comes from DASHBOARD_URL for
+    # production deploys and falls back to the request host in dev.
+    try:
+        base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+    except Exception:
+        base_url = ""
+    subject = (f"[SPRF #{oid}] {submitted_by_bde or 'BDE'} → "
+               f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
+    payload_for_mail = dict(payload)
+    payload_for_mail["submitted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cc = [submitted_by_email] if submitted_by_email else []
+    try:
+        _send_mail_async([HARRY_CS_EMAIL], cc, subject,
+                         _submitted_order_email_html(oid, payload_for_mail, base_url))
+    except Exception as e:
+        print(f"[submit] mail queue failed: {e}")
+
+    return jsonify({"ok": True, "id": oid})
+
+
+@app.get("/api/orders/list")
+def api_orders_list():
+    """List submitted orders, most recent first.
+      ?status=Y|N       filter by SAP-entered flag (default: all)
+      ?limit=…          default 200
+    Returns list of small rows suited for the /orders page table."""
+    status = (request.args.get("status") or "").strip().upper()
+    try:
+        limit = min(int(request.args.get("limit") or 200), 1000)
+    except Exception:
+        limit = 200
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        wh, p = [], []
+        if status in ("Y", "N"):
+            wh.append("status_sap = %s"); p.append(status)
+        where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+        cur.execute(
+            f"SELECT id, submitted_at, submitted_by_bde, submitted_by_email, "
+            f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
+            f"       total_qty, grand_total, status_sap, status_changed_at, "
+            f"       status_changed_by "
+            f"FROM submitted_orders {where_sql} "
+            f"ORDER BY submitted_at DESC LIMIT %s",
+            tuple(p + [limit])
+        )
+        rows = cur.fetchall() or []
+        # Normalise datetime -> string so JSON serialises cleanly.
+        for r in rows:
+            for k in ("submitted_at", "status_changed_at"):
+                v = r.get(k)
+                if v is not None:
+                    try: r[k] = v.strftime("%Y-%m-%d %H:%M")
+                    except Exception: r[k] = str(v)
+            try: r["grand_total"] = float(r.get("grand_total") or 0)
+            except Exception: r["grand_total"] = 0
+        return jsonify({"rows": rows, "count": len(rows)})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e), "rows": []}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/orders/detail/<int:oid>")
+def api_orders_detail(oid):
+    """Return one submitted order's full payload_json plus the
+    status metadata."""
+    import json as _json
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT id, submitted_at, submitted_by_bde, submitted_by_email, "
+            "       sold_to, sold_to_name, ship_to, ship_to_name, state, "
+            "       total_qty, sovd_qty, subtotal, total_inc_gst, "
+            "       freight_amount, grand_total, avg_dc_pct, "
+            "       status_sap, status_changed_at, status_changed_by, "
+            "       payload_json "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        for k in ("submitted_at", "status_changed_at"):
+            v = row.get(k)
+            if v is not None:
+                try: row[k] = v.strftime("%Y-%m-%d %H:%M")
+                except Exception: row[k] = str(v)
+        # Decimals to plain floats for JSON.
+        for k in ("subtotal", "total_inc_gst", "freight_amount",
+                  "grand_total", "avg_dc_pct"):
+            try: row[k] = float(row.get(k) or 0)
+            except Exception: row[k] = 0
+        # Explode payload_json so the front-end can re-hydrate the form
+        # from a single object instead of parsing an inline JSON string.
+        try:
+            row["payload"] = _json.loads(row.pop("payload_json") or "{}")
+        except Exception:
+            row["payload"] = {}
+        return jsonify(row)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.post("/api/orders/detail/<int:oid>/status")
+def api_orders_status(oid):
+    """Toggle status_sap.  Only Harry (or an admin ALL-role user) can
+    write.  Body: {status: 'Y' | 'N'}."""
+    payload  = request.get_json(silent=True) or {}
+    new_stat = (payload.get("status") or "").strip().upper()
+    if new_stat not in ("Y", "N"):
+        return jsonify({"error": "status must be Y or N"}), 400
+    who = (_bde_from_request() or "").strip().lower()
+    # Harry has flip rights; leadership (role=ALL) can also flip if
+    # they're covering.  Everyone else gets a 403.
+    role = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
+    if who != HARRY_CS_EMAIL and role != "ALL":
+        return jsonify({"error": "only CS (Harry) can change SAP status"}), 403
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE submitted_orders SET status_sap = %s, "
+            "  status_changed_at = NOW(), status_changed_by = %s "
+            "WHERE id = %s",
+            (new_stat, who[:255], oid))
+        if cur.rowcount == 0:
+            return jsonify({"error": "not found"}), 404
+        conn.commit()
+        return jsonify({"ok": True, "status": new_stat, "by": who})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/orders/whoami")
+def api_orders_whoami():
+    """Front-end reads this to decide whether to show the status
+    toggle (Harry / ALL) and to auto-fill submitted_by."""
+    who = (_bde_from_request() or "").strip().lower()
+    name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
+    return jsonify({
+        "email":     who,
+        "name":      name or "",
+        "state":     state or "",
+        "role":      role or "",
+        "is_cs":     (who == HARRY_CS_EMAIL) or (role == "ALL"),
+        "is_harry":  who == HARRY_CS_EMAIL,
+    })
+
+
+@app.route("/orders_list")
+def orders_list_page():
+    """Submitted-orders list — small table with BDE / sold-to / ship-to
+    / status; row click opens the detail view (reuses /order form)."""
+    return app.send_static_file("orders_list.html")
+
+
 PLANT_GEO = {
     "42R0": {"lat": -27.8688, "lon": 153.2093},
     "42R1": {"lat": -33.86,   "lon": 150.20},
@@ -12117,6 +12486,7 @@ def _ensure_meeting_plan_table():
 
 _ensure_meeting_plan_table()
 _ensure_request_log_table()
+_ensure_submitted_orders_table()
 
 def _bde_from_request():
     """Best-effort 'who is logged in'.  Cloudflare Access (if it's in

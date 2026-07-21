@@ -287,6 +287,26 @@
   .toolbar button.primary{background:#1976d2;color:#fff;border-color:#155a9c}
   .toolbar button.ghost{background:#f5f5f5}
   .toolbar button:hover{filter:brightness(0.97)}
+  .toolbar button.submit-btn{background:#16a34a;border-color:#15803d}
+  .toolbar button.submit-btn:disabled{background:#94a3b8;border-color:#94a3b8;cursor:not-allowed}
+  /* CS status panel (only visible to Harry / ALL when viewing a
+     submitted order). */
+  .cs-panel{
+    display:flex;align-items:center;gap:10px;justify-content:flex-end;
+    padding:8px 12px;margin:0 0 10px;background:#fef3c7;border:1px solid #f59e0b;
+    border-radius:4px;font-size:13px;
+  }
+  .cs-panel .cs-lbl{font-weight:700;color:#92400e}
+  .cs-panel .cs-flag{
+    font-weight:800;padding:2px 10px;border-radius:3px;color:#fff;background:#dc2626;
+    font-family:monospace;font-size:14px;min-width:24px;text-align:center;
+  }
+  .cs-panel .cs-flag.ok{background:#16a34a}
+  .cs-panel .cs-meta{color:#78350f;font-size:11px;font-style:italic}
+  .cs-panel button{padding:5px 12px;background:#059669;color:#fff;
+                   border:1px solid #047857;border-radius:4px;cursor:pointer;font-weight:600}
+  .cs-panel button:hover{filter:brightness(0.95)}
+  .cs-panel button.mark-n{background:#dc2626;border-color:#991b1b}
 
   /* Top page-nav strip (mirrors other pages like /highlights, /claims) */
   .pagenav{
@@ -338,6 +358,7 @@
     <button onclick="location.href='/meeting'">Meeting</button>
     <button onclick="location.href='/claims'">Claims</button>
     <button class="here">📝 Order</button>
+    <button onclick="location.href='/orders_list'">📋 Orders</button>
     <button onclick="location.href='/highlights'">📊 Highlights</button>
   </div>
 
@@ -530,6 +551,15 @@
     <button class="ghost" id="btnAddRow">+ Add row</button>
     <button class="ghost" id="btnClear">Clear form</button>
     <button class="primary" id="btnPrint" onclick="window.print()">Print / PDF</button>
+    <button class="primary submit-btn" id="btnSubmit">Submit</button>
+  </div>
+  <!-- CS toggle: only visible when Harry (or an ALL-role user) is
+       viewing a submitted order.  Flips submitted_orders.status_sap. -->
+  <div id="csPanel" class="cs-panel" hidden>
+    <span class="cs-lbl">SAP order entered?</span>
+    <span class="cs-flag" id="csFlag">N</span>
+    <button id="btnFlipStatus" class="primary">Mark as Y</button>
+    <span id="csMeta" class="cs-meta"></span>
   </div>
 </div>
 
@@ -1343,12 +1373,222 @@ function seedDate(){
   $("#hdrPeriod").textContent = `${months[now.getMonth()]} ${now.getFullYear()}`;
 }
 
+/* ────────────────────────── submit / persist ────────────────────────── */
+// Header field IDs that make it into the persisted payload.  Order
+// matters for readability only — the backend serialises whatever
+// arrives.
+const HEADER_FIELDS = [
+  "sold_to", "ship_to", "customer_group",
+  "sold_to_name", "ship_to_name", "ship_to_address",
+  "phone_email", "mobile",
+  "po_number", "doc_date", "bde_name",
+  "special_instruction", "mgmt_reason", "ship_to_state",
+];
+// Base DC readonly cells sit outside HEADER_FIELDS because they're
+// derived — captured separately so the printed copy still shows them.
+const BASE_DC_FIELDS = ["basedc_hkpclt", "basedc_tbr", "basedc_lfpclt"];
+
+// Order line cells that make sense to persist.  add_dc / aging_dc /
+// sp_dc go along even when auto-filled — the snapshot has to reproduce
+// the exact numbers the BDE submitted.
+const LINE_FIELDS = [
+  "m_code", "qty", "description", "brand", "product_name",
+  "pattern", "load_speed", "list_price",
+  "base_dc", "mth_dc", "sp_dc", "vol_dc",
+  "current_dc", "current_price",
+  "add_dc", "aging_dc",
+  "proposed_price", "total_amount", "proposed_dc",
+  "stock_nsw", "stock_qld", "stock_vic", "stock_wa",
+];
+
+function serializeOrder(){
+  const header = {};
+  HEADER_FIELDS.forEach(id => { header[id] = $("#"+id)?.value || ""; });
+  // Alias state / order_date to a friendlier name for the list page.
+  header.state      = header.ship_to_state || "";
+  header.order_date = header.doc_date      || "";
+  const base_dc = {};
+  BASE_DC_FIELDS.forEach(id => { base_dc[id] = $("#"+id)?.value || ""; });
+
+  const lines = [];
+  $$("#linesBody tr").forEach(tr => {
+    const row = {};
+    let hasAny = false;
+    LINE_FIELDS.forEach(c => {
+      const v = tr.querySelector(`[data-col="${c}"]`)?.value || "";
+      if (v && String(v).trim()) hasAny = true;
+      row[c] = v;
+    });
+    // Stash the auto-DC / SOVD promo tag so the snapshot re-hydrates.
+    if (tr.dataset.line)         row._line          = tr.dataset.line;
+    if (tr.dataset.productGroup) row._product_group = tr.dataset.productGroup;
+    if (tr.dataset.promo)        row._promo         = tr.dataset.promo;
+    if (hasAny) lines.push(row);
+  });
+
+  const totals = {
+    total_qty:      $("#ttlQty")?.textContent      || "0",
+    sovd_qty:       $("#sovd_ttl")?.value          || "0",
+    subtotal:       $("#grandTotal")?.textContent  || "0.00",
+    total_inc_gst:  $("#totalIncGst")?.textContent || "0.00",
+    freight_amount: $("#freightChg")?.textContent  || "0.00",
+    grand_total:    $("#finalTotal")?.textContent  || "0.00",
+    avg_dc_pct:     ($("#avgDC")?.textContent      || "0").replace("%",""),
+    freight_flag:   $("#freightFlag")?.value       || "",
+  };
+  return {header, base_dc, totals, lines};
+}
+
+$("#btnSubmit").addEventListener("click", async () => {
+  const payload = serializeOrder();
+  if (!payload.header.sold_to){
+    setStatus("Enter a Sold-to before submitting.", "warn"); return;
+  }
+  if (!payload.lines.length){
+    setStatus("Add at least one order line before submitting.", "warn"); return;
+  }
+  const btn = $("#btnSubmit");
+  btn.disabled = true; btn.textContent = "Submitting…";
+  try {
+    const r = await fetch("/api/orders/submit", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Submit failed: ${j.error || r.statusText}`, "warn");
+      btn.disabled = false; btn.textContent = "Submit"; return;
+    }
+    btn.textContent = `Submitted #${j.id}`;
+    setStatus(`Order <b>#${j.id}</b> submitted — Harry has been notified.`, "ok");
+    // Bounce over to the list page after a beat so the BDE can see
+    // their submission alongside everyone else's.
+    setTimeout(() => { location.href = "/orders_list"; }, 1200);
+  } catch(e){
+    setStatus("Submit failed: " + e, "warn");
+    btn.disabled = false; btn.textContent = "Submit";
+  }
+});
+
+/* ────────────────────────── view submitted order ────────────────────── */
+// When /order?id=<n>, hydrate the form from the saved payload and
+// lock the inputs (readonly) so history stays intact.  Harry / ALL
+// see the status-toggle panel at the top.
+async function hydrateSubmittedOrder(oid){
+  let data;
+  try {
+    const r = await fetch(`/api/orders/detail/${oid}`, {credentials: "same-origin"});
+    data = await r.json();
+  } catch(e){ setStatus("Load failed: "+e, "warn"); return; }
+  if (!data || data.error){
+    setStatus("Order not found.", "warn"); return;
+  }
+  const p = data.payload || {};
+  // 1. Header
+  Object.entries(p.header || {}).forEach(([k,v]) => {
+    const el = $("#"+k); if (el) el.value = v || "";
+  });
+  // Base DC display
+  Object.entries(p.base_dc || {}).forEach(([k,v]) => {
+    const el = $("#"+k); if (el) el.value = v || "";
+  });
+  // 2. Lines — clear seeded blanks, then rebuild.
+  $("#linesBody").innerHTML = "";
+  (p.lines || []).forEach(ln => {
+    addRow();
+    const tr = $("#linesBody").lastElementChild;
+    LINE_FIELDS.forEach(c => {
+      const el = tr.querySelector(`[data-col="${c}"]`);
+      if (el) el.value = ln[c] ?? "";
+    });
+    if (ln._line)          tr.dataset.line         = ln._line;
+    if (ln._product_group) tr.dataset.productGroup = ln._product_group;
+    if (ln._promo)         tr.dataset.promo        = ln._promo;
+  });
+  // 3. Totals — trust the persisted snapshot rather than recomputing.
+  const t = p.totals || {};
+  $("#ttlQty").textContent      = t.total_qty      || "0";
+  $("#sovd_ttl").value          = t.sovd_qty       || "0";
+  $("#grandTotal").textContent  = t.subtotal       || "0.00";
+  $("#totalIncGst").textContent = t.total_inc_gst  || "0.00";
+  $("#freightChg").textContent  = t.freight_amount || "";
+  $("#finalTotal").textContent  = t.grand_total    || "0.00";
+  $("#avgDC").textContent       = t.avg_dc_pct ? t.avg_dc_pct + "%" : "";
+  if (t.freight_flag) $("#freightFlag").value = t.freight_flag;
+  // 4. Lock the form so a submitted order can't be silently edited.
+  $$("input, textarea").forEach(el => {
+    if (el.closest(".cs-panel")) return;
+    el.readOnly = true;
+    el.tabIndex = -1;
+  });
+  $("#btnAddRow").disabled = true;
+  $("#btnClear").disabled  = true;
+  $("#btnSubmit").hidden   = true;
+  $("#status").innerHTML = `Viewing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b>`;
+  // 5. Status toggle for CS / ALL-role users.
+  wireStatusPanel(data);
+}
+
+async function wireStatusPanel(order){
+  let who;
+  try {
+    const r = await fetch("/api/orders/whoami", {credentials: "same-origin"});
+    who = await r.json();
+  } catch { who = {}; }
+  if (!who || !who.is_cs) return;
+  const panel = $("#csPanel");
+  const flag  = $("#csFlag");
+  const btn   = $("#btnFlipStatus");
+  const meta  = $("#csMeta");
+  const paint = (st, byLine) => {
+    flag.textContent   = st;
+    flag.classList.toggle("ok", st === "Y");
+    btn.textContent    = st === "Y" ? "Mark as N" : "Mark as Y";
+    btn.classList.toggle("mark-n", st === "Y");
+    meta.textContent   = byLine || "";
+  };
+  paint(order.status_sap,
+        order.status_changed_at
+          ? `Last changed ${order.status_changed_at} by ${order.status_changed_by || "?"}`
+          : "");
+  panel.hidden = false;
+  btn.addEventListener("click", async () => {
+    const next = flag.textContent === "Y" ? "N" : "Y";
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/orders/detail/${order.id}/status`, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({status: next}),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok){
+        setStatus(`Status change failed: ${j.error || r.statusText}`, "warn");
+        btn.disabled = false; return;
+      }
+      const now = new Date().toISOString().slice(0,16).replace("T"," ");
+      paint(next, `Last changed ${now} by ${j.by || "you"}`);
+      setStatus(`SAP order flag set to <b>${next}</b>.`, "ok");
+    } catch(e){
+      setStatus("Status change failed: "+e, "warn");
+    } finally { btn.disabled = false; }
+  });
+}
+
 /* ────────────────────────── boot ────────────────────────── */
 (function boot(){
   seedDate();
-  // Seed with 5 empty lines so the layout looks like the source form.
-  for(let i=0;i<5;i++) addRow();
-  updateTotals();
+  const oid = new URLSearchParams(location.search).get("id");
+  if (oid){
+    // Viewing a previously submitted order — no seeded blanks needed.
+    hydrateSubmittedOrder(oid);
+  } else {
+    // Fresh entry — seed 5 empty lines so the layout looks like the form.
+    for(let i=0;i<5;i++) addRow();
+    updateTotals();
+  }
 })();
 </script>
 </body>

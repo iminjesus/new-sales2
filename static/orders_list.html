@@ -1,0 +1,183 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Submitted Orders · HKAU Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{--bg:#f5f5f7;--panel:#fff;--border:#e5e7eb;--muted:#6b7280;}
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#111;background:var(--bg);}
+  .wrap{max-width:1400px;margin:16px auto;padding:0 12px 40px;}
+  .pagenav{
+    display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+    padding:8px 12px;background:#fff;border:1px solid var(--border);
+    font-size:12.5px;border-radius:4px 4px 0 0;
+  }
+  .pagenav button{
+    padding:5px 10px;background:#fff;border:1px solid var(--border);
+    border-radius:3px;font:inherit;cursor:pointer;color:#374151;
+  }
+  .pagenav button:hover{background:#f3f4f6}
+  .pagenav button.here{background:#1e293b;color:#fff;border-color:#1e293b}
+  .panel{background:#fff;border:1px solid var(--border);padding:18px;border-radius:0 0 6px 6px}
+  h1{margin:0 0 4px;font-size:20px}
+  .sub{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+  .filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px}
+  .filters input, .filters select{
+    padding:5px 8px;border:1px solid var(--border);border-radius:3px;font:inherit;
+  }
+  .filters .lbl{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.3px}
+  .status-chip{
+    display:inline-block;padding:2px 8px;border-radius:3px;font-weight:700;
+    font-family:monospace;font-size:12px;min-width:22px;text-align:center;color:#fff;
+  }
+  .status-chip.n{background:#dc2626}
+  .status-chip.y{background:#16a34a}
+  table.list{
+    width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;
+  }
+  table.list thead th{
+    background:#1e293b;color:#fff;padding:8px 10px;text-align:left;font-weight:600;
+    position:sticky;top:0;font-size:11.5px;letter-spacing:.3px;text-transform:uppercase;
+  }
+  table.list tbody td{padding:8px 10px;border-bottom:1px solid #eef2f7;vertical-align:top}
+  table.list tbody tr{cursor:pointer;transition:background .1s}
+  table.list tbody tr:hover td{background:#eff6ff}
+  table.list td.num{text-align:right;font-variant-numeric:tabular-nums}
+  table.list td.center{text-align:center}
+  .id-col{font-family:monospace;color:#374151}
+  .name-cell b{color:#111}
+  .name-cell small{color:var(--muted);display:block;font-size:11px;margin-top:2px}
+  .empty{
+    padding:32px;text-align:center;color:var(--muted);font-style:italic;
+    background:#f9fafb;border-radius:4px;margin-top:8px;
+  }
+  .totals-line{display:flex;gap:20px;font-size:12px;color:var(--muted);margin-top:10px}
+  .totals-line b{color:#111}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="pagenav">
+    <button onclick="location.href='/'">Graph View</button>
+    <button onclick="location.href='/map'">Map View</button>
+    <button onclick="location.href='/stock'">Stock</button>
+    <button onclick="location.href='/rebate'">Rebate</button>
+    <button onclick="location.href='/price'">Price</button>
+    <button onclick="location.href='/meeting'">Meeting</button>
+    <button onclick="location.href='/claims'">Claims</button>
+    <button onclick="location.href='/order'">📝 Order</button>
+    <button class="here">📋 Orders</button>
+    <button onclick="location.href='/highlights'">📊 Highlights</button>
+  </div>
+  <div class="panel">
+    <h1>Submitted Orders</h1>
+    <div class="sub">Special Price Request Forms submitted by BDEs. Click a row to open the full order. CS (Harry) can flip the SAP-entered flag from the detail view.</div>
+    <div class="filters">
+      <span class="lbl">Status:</span>
+      <select id="fStatus">
+        <option value="">All</option>
+        <option value="N">Pending (N)</option>
+        <option value="Y">SAP entered (Y)</option>
+      </select>
+      <span class="lbl">Search:</span>
+      <input id="fSearch" type="text" placeholder="BDE, sold-to, ship-to, code…" style="min-width:260px">
+      <span class="totals-line">
+        <span><b id="cntTotal">0</b> orders</span>
+        <span>Pending: <b id="cntPending">0</b></span>
+        <span>SAP entered: <b id="cntDone">0</b></span>
+      </span>
+    </div>
+    <div id="listWrap">
+      <table class="list">
+        <thead>
+          <tr>
+            <th style="width:70px">#</th>
+            <th style="width:130px">Submitted</th>
+            <th>BDE</th>
+            <th>Sold-to</th>
+            <th>Ship-to</th>
+            <th style="width:60px" class="center">State</th>
+            <th style="width:70px" class="num">Qty</th>
+            <th style="width:110px" class="num">Grand Total</th>
+            <th style="width:80px" class="center">SAP</th>
+          </tr>
+        </thead>
+        <tbody id="listBody">
+          <tr><td colspan="9" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+const fmtMoney = v => (Number(v)||0).toLocaleString("en-AU",{style:"currency",currency:"AUD"});
+const fmtQty   = v => (Number(v)||0).toLocaleString("en-AU");
+
+let _rowsCache = [];
+
+async function loadOrders(){
+  const status = $("#fStatus").value;
+  const qs = new URLSearchParams();
+  if (status) qs.set("status", status);
+  const body = $("#listBody");
+  body.innerHTML = `<tr><td colspan="9" class="empty">Loading…</td></tr>`;
+  try {
+    const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
+    const j = await r.json();
+    if (!r.ok || j.error){
+      body.innerHTML = `<tr><td colspan="9" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      return;
+    }
+    _rowsCache = j.rows || [];
+    renderRows();
+  } catch(e){
+    body.innerHTML = `<tr><td colspan="9" class="empty">Load failed: ${e}</td></tr>`;
+  }
+}
+
+function renderRows(){
+  const q = ($("#fSearch").value || "").toLowerCase().trim();
+  const filtered = q ? _rowsCache.filter(r => {
+    return [r.submitted_by_bde, r.sold_to, r.sold_to_name, r.ship_to, r.ship_to_name, r.state, String(r.id)]
+      .some(v => String(v || "").toLowerCase().includes(q));
+  }) : _rowsCache;
+  const body = $("#listBody");
+  if (!filtered.length){
+    body.innerHTML = `<tr><td colspan="9" class="empty">No orders match.</td></tr>`;
+  } else {
+    body.innerHTML = filtered.map(r => `
+      <tr onclick="location.href='/order?id=${r.id}'">
+        <td class="id-col">#${r.id}</td>
+        <td>${r.submitted_at || ""}</td>
+        <td>${escapeHtml(r.submitted_by_bde || "—")}</td>
+        <td class="name-cell"><b>${escapeHtml(r.sold_to_name || "—")}</b><small>${escapeHtml(r.sold_to || "")}</small></td>
+        <td class="name-cell"><b>${escapeHtml(r.ship_to_name || "—")}</b><small>${escapeHtml(r.ship_to || "")}</small></td>
+        <td class="center">${escapeHtml(r.state || "")}</td>
+        <td class="num">${fmtQty(r.total_qty)}</td>
+        <td class="num">${fmtMoney(r.grand_total)}</td>
+        <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
+      </tr>
+    `).join("");
+  }
+  $("#cntTotal").textContent   = _rowsCache.length;
+  $("#cntPending").textContent = _rowsCache.filter(r => r.status_sap !== "Y").length;
+  $("#cntDone").textContent    = _rowsCache.filter(r => r.status_sap === "Y").length;
+}
+
+function escapeHtml(s){
+  return String(s || "").replace(/[&<>"']/g, ch => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[ch]));
+}
+
+$("#fStatus").addEventListener("change", loadOrders);
+$("#fSearch").addEventListener("input",  renderRows);
+loadOrders();
+</script>
+</body>
+</html>
