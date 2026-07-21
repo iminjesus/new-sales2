@@ -2507,7 +2507,10 @@ def api_orders_base_dc():
     returns {TBR_HKLF: 56.00, HK_PCLT: None, LF_PCLT: None} so the
     form just leaves the two brand cells blank instead of erroring."""
     sold_to = (request.args.get("sold_to") or "").strip()
+    debug   = request.args.get("debug") in ("1", "true", "yes")
     out = {"HK_PCLT": None, "LF_PCLT": None, "TBR_HKLF": _ORDERS_TBR_HKLF_PCT}
+    if debug:
+        out["_debug"] = {"sold_to": sold_to}
     if not sold_to:
         return jsonify(out)
 
@@ -2538,60 +2541,73 @@ def api_orders_base_dc():
                 group_code = (gr.get("sold_to_group") or "").strip()
         except Exception:
             pass
+        if debug:
+            out["_debug"]["group_code"] = group_code
 
         # Pick the most-recent valid row per (brand-bucket) with tier
         # priority: tier 1 = this bill_to_partner exactly (customer-
         # specific), tier 2 = blank bill_to_partner + customer group
         # match (group fallback for sold-tos with no own row).  Bucket
         # is "HK" / "LF" for a branded row and "_BLANK_" for a
-        # blank-brand row.  ROW_NUMBER inside partitions by bucket and
-        # orders by tier ASC then valid_from DESC so tier-1 always wins
-        # over tier-2 and, within a tier, the current row wins.
+        # blank-brand row.  ROW_NUMBER partitions by bucket and orders
+        # by tier ASC then valid_from DESC so tier-1 always wins over
+        # tier-2 and, within a tier, the current row wins.
+        # Validity bounds treat NULL as open-ended — the manually added
+        # group rows often have blank valid_from/valid_to.  Customer
+        # code compare is upper-cased + trimmed on both sides so case
+        # / whitespace drift on either the master or the feed doesn't
+        # sink the join.
         params = [sold_to]
         group_join = ""
         if group_code:
             group_join = (
                 " OR ((bill_to_partner IS NULL OR TRIM(bill_to_partner) = '')"
-                "     AND TRIM(customer) = %s)"
+                "     AND UPPER(TRIM(customer)) = UPPER(%s))"
             )
             params.append(group_code)
 
         sql = f"""
-            SELECT bucket, ABS(amount) AS pct
+            SELECT bucket, ABS(amount) AS pct, tier, brand, customer, bill_to_partner,
+                   valid_from, valid_to
             FROM (
                 SELECT
                     CASE
-                        WHEN brand = 'HK' THEN 'HK'
-                        WHEN brand = 'LF' THEN 'LF'
+                        WHEN UPPER(TRIM(brand)) = 'HK' THEN 'HK'
+                        WHEN UPPER(TRIM(brand)) = 'LF' THEN 'LF'
                         WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
                     END AS bucket,
                     amount,
+                    brand,
+                    customer,
+                    bill_to_partner,
                     valid_from,
+                    valid_to,
                     CASE
-                        WHEN bill_to_partner = %s THEN 1
+                        WHEN TRIM(bill_to_partner) = %s THEN 1
                         ELSE 2
                     END AS tier,
                     ROW_NUMBER() OVER (
                         PARTITION BY CASE
-                            WHEN brand = 'HK' THEN 'HK'
-                            WHEN brand = 'LF' THEN 'LF'
+                            WHEN UPPER(TRIM(brand)) = 'HK' THEN 'HK'
+                            WHEN UPPER(TRIM(brand)) = 'LF' THEN 'LF'
                             WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
                         END
                         ORDER BY
-                            CASE WHEN bill_to_partner = %s THEN 1 ELSE 2 END ASC,
-                            valid_from DESC
+                            CASE WHEN TRIM(bill_to_partner) = %s THEN 1 ELSE 2 END ASC,
+                            COALESCE(valid_from, '1900-01-01') DESC
                     ) AS rn
                 FROM dc_basic_customer
                 WHERE (
-                        bill_to_partner = %s
+                        TRIM(bill_to_partner) = %s
                         {group_join}
                       )
                   AND (
-                        brand IN ('HK', 'LF')
+                        UPPER(TRIM(brand)) IN ('HK', 'LF')
                         OR brand IS NULL
                         OR TRIM(brand) = ''
                   )
-                  AND CURDATE() BETWEEN valid_from AND valid_to
+                  AND (valid_from IS NULL OR valid_from <= CURDATE())
+                  AND (valid_to   IS NULL OR valid_to   >= CURDATE())
             ) t
             WHERE t.rn = 1 AND t.bucket IS NOT NULL
         """
@@ -2600,7 +2616,9 @@ def api_orders_base_dc():
         exec_params = [sold_to, sold_to] + params
         cur.execute(sql, tuple(exec_params))
         picks = {}
+        raw_rows = []
         for r in cur.fetchall() or []:
+            raw_rows.append(r)
             try:
                 picks[r["bucket"]] = float(r["pct"])
             except Exception:
@@ -2611,6 +2629,15 @@ def api_orders_base_dc():
         blank = picks.get("_BLANK_")
         out["HK_PCLT"] = picks.get("HK", blank)
         out["LF_PCLT"] = picks.get("LF", blank)
+        if debug:
+            def _s(v):
+                try: return v.isoformat()
+                except Exception: return v
+            out["_debug"]["picks"] = picks
+            out["_debug"]["rows"]  = [
+                {k: _s(v) for k, v in r.items()} for r in raw_rows
+            ]
+            out["_debug"]["sql_params"] = exec_params
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
