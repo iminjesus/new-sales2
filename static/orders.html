@@ -853,18 +853,20 @@ async function fillBaseDC(soldTo){
   });
 }
 
-// Fetch the applicable Additional Special DC for this row (based on
-// customer + brand + product_group + qty) and stamp it into add_dc.
-// Only auto-fills when the cell is empty or previously auto-filled;
-// leaves a manually keyed value alone so the BDE can override.
+// Fetch the applicable 443 / promo-based DC for this row (based on
+// customer + brand + product_group + qty) and stamp it into sp_dc —
+// the pink "443DC or TBR Special% or PCLT-SOVD%" cell.  The olive
+// add_dc column is left alone; it's a manual freeform additional.
+// Only auto-fills sp_dc when it's empty or previously auto-filled,
+// so a manually keyed value survives every refresh.
 async function applyAdditionalDCToRow(rowEl){
   const soldTo = window._orderSoldTo || "";
   if (!soldTo) return;
   const brand = (rowEl.querySelector('[data-col="brand"]')?.value || "").trim();
   const pg    = rowEl.dataset.productGroup || "";
   const qtyEl = rowEl.querySelector('[data-col="qty"]');
-  const addEl = rowEl.querySelector('[data-col="add_dc"]');
-  if (!brand || !addEl) return;
+  const spEl  = rowEl.querySelector('[data-col="sp_dc"]');
+  if (!brand || !spEl) return;
   const qty = toNum(qtyEl?.value || 0);
   const q = new URLSearchParams({
     sold_to: soldTo, brand, qty: String(qty),
@@ -876,21 +878,21 @@ async function applyAdditionalDCToRow(rowEl){
     data = await r.json();
   } catch(e){ return; }
   // Only stamp when there's no user override.  If the cell was empty
-  // OR previously auto-filled by us (data-auto-add-dc), rewrite it.
-  const currentlyManual = addEl.value && addEl.dataset.autoAddDc !== "1";
+  // OR previously auto-filled by us (data-auto-sp-dc), rewrite it.
+  const currentlyManual = spEl.value && spEl.dataset.autoSpDc !== "1";
   if (currentlyManual) return;
   if (data && data.matched && data.additional_dc != null){
-    addEl.value = (+data.additional_dc).toFixed(2);
-    addEl.dataset.autoAddDc = "1";
-    addEl.title = `Auto-filled from ${data.source || "customer"} promo ${data.promo || ""} (min qty ${data.min_qty ?? "—"})`;
+    spEl.value = (+data.additional_dc).toFixed(2);
+    spEl.dataset.autoSpDc = "1";
+    spEl.title = `Auto-filled from ${data.source || "customer"} promo ${data.promo || ""} (min qty ${data.min_qty ?? "—"})`;
   } else {
     // No match — clear the auto-value so a previously-eligible row
     // that no longer qualifies (qty dropped below threshold, e.g.)
     // doesn't keep an old %.
-    if (addEl.dataset.autoAddDc === "1"){
-      addEl.value = "";
-      addEl.title = "";
-      delete addEl.dataset.autoAddDc;
+    if (spEl.dataset.autoSpDc === "1"){
+      spEl.value = "";
+      spEl.title = "";
+      delete spEl.dataset.autoSpDc;
     }
   }
   recalcRow(rowEl);
@@ -1080,10 +1082,10 @@ function newRow(){
   tr.querySelector('[data-col="qty"]')?.addEventListener("change", () => {
     if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
   });
-  // Any manual keystroke on add_dc cancels the auto-fill flag so a
+  // Any manual keystroke on sp_dc cancels the auto-fill flag so a
   // subsequent qty/material change doesn't clobber the BDE's override.
-  tr.querySelector('[data-col="add_dc"]')?.addEventListener("input", (e) => {
-    if (e.target.dataset.autoAddDc === "1") delete e.target.dataset.autoAddDc;
+  tr.querySelector('[data-col="sp_dc"]')?.addEventListener("input", (e) => {
+    if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
