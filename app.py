@@ -2564,21 +2564,25 @@ def api_orders_base_dc():
 
         # Pick the most-recent valid row per (brand-bucket) with tier
         # priority: tier 1 = this bill_to_partner exactly (customer-
-        # specific), tier 2 = any row whose customer_grp matches this
-        # sold-to's group (fallback for sold-tos with no own row).
-        # Bucket is "HK" / "LF" for a branded row and "_BLANK_" for a
-        # blank-brand row.  ROW_NUMBER partitions by bucket and orders
-        # by tier ASC then valid_from DESC so tier-1 always wins over
-        # tier-2 and, within a tier, the current row wins.
-        # Validity bounds treat NULL as open-ended — manually added
-        # group rows often have blank valid_from/valid_to.  Brand /
-        # bill_to_partner comparisons are upper-cased + trimmed so
-        # case/whitespace drift on the feed doesn't sink the join.
+        # specific), tier 2 = rows whose bill_to_partner is BLANK and
+        # customer_grp matches this sold-to's group (dedicated group-
+        # default rows).  We intentionally do NOT pull rows keyed to
+        # other customers in the same group — those apply only to
+        # their own bill_to_partner.  Bucket is "HK" / "LF" for a
+        # branded row and "_BLANK_" for a blank-brand row.  ROW_NUMBER
+        # partitions by bucket and orders by tier ASC then valid_from
+        # DESC so tier-1 always wins over tier-2, and within a tier
+        # the current row wins.  Validity bounds treat NULL as open-
+        # ended.  Brand / bill_to_partner compares are trim+upper so
+        # case / whitespace drift on the feed doesn't sink the join.
         params = [sold_to]
         group_join = ""
         group_select = "NULL AS grp"
         if group_col and group_code:
-            group_join = f" OR UPPER(TRIM({group_col})) = UPPER(%s)"
+            group_join = (
+                f" OR ((bill_to_partner IS NULL OR TRIM(bill_to_partner) = '')"
+                f"     AND UPPER(TRIM({group_col})) = UPPER(%s))"
+            )
             params.append(group_code)
             group_select = f"{group_col} AS grp"
         elif group_col:
