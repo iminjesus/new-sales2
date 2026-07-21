@@ -5511,17 +5511,14 @@ def fetch_table_rows(top_limit: int):
     # ---------- STEP 2: build filters (same as daily_sales) ----------
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
     _ensure_customer_join("s", joins)  # always needed: SELECT uses cus.* columns
+    # Always join carrying_26 — the daily export splits rows by line.
+    _ensure_carrying_join("s", joins)
 
     # category (same rule: skip 443) ??use normalised version
     if f.get("category", "ALL") != "443":
         cat_joins, cat_where = category_filters_sales("s", f.get("category", "ALL"), has_brand=True)
         joins += cat_joins
         wh    += cat_where
-
-    if (f.get("product_group", "ALL") != "ALL" or
-        f.get("pattern", "ALL") != "ALL" or
-        f.get("material", "ALL") != "ALL"):
-        _ensure_carrying_join("s", joins)
     if f.get("product_group", "ALL") != "ALL":
         wh.append("mat.product_group = %s"); params.append(f["product_group"])
     if f["brand"] != "ALL":
@@ -5551,11 +5548,12 @@ def fetch_table_rows(top_limit: int):
             COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
             s.sold_to AS sold_to_code,
             s.ship_to AS ship_to_code,
+            COALESCE(NULLIF(TRIM(mat.line),''), '') AS line,
             {day_cols}
         FROM sales_thismonth s
         {' '.join(joins)}
         {where_sql}
-        GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+        GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to, line
         ORDER BY region DESC, bde DESC
     """
 
@@ -5669,7 +5667,7 @@ def export_excel():
 
         # Header row: Total/Target/Ach% sit between ship_to_code and day columns
         HDR = (["region","bde","channel","sold_to_group","sold_to_name","ship_to_name",
-                "sold_to_code","ship_to_code","Total","Target","Ach%"]
+                "sold_to_code","ship_to_code","line","Total","Target","Ach%"]
                + day_labels)
         ws.append(HDR)
         hdr_row = ws.max_row
@@ -5689,7 +5687,7 @@ def export_excel():
             tgt  = g.get("Target", 0.0)
             ach  = round(tot / tgt * 100, 1) if tgt > 0 else None
             vals = ([region, "", "", "", f"?? {region} TOTAL ??", "", "",
-                     "", round(tot,1), round(tgt,1),
+                     "", "", round(tot,1), round(tgt,1),
                      (f"{ach:.1f}%" if ach is not None else "-")]
                     + [""] * 31)
             ws.append(vals)
@@ -5778,6 +5776,9 @@ def export_excel_sales2526():
         joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
         _ensure_customer_join("s", joins)
         _build_export_common_filters(f, joins, wh, params)
+        # Force the carrying_26 join in even when no product filter is
+        # active — we need mat.line to split rows into PCLT / TBR.
+        _ensure_carrying_join("s", joins)
 
         # pivot columns: YEAR*100+MONTH from billing_date → label YYMM (2501…)
         pivot_cols = ",\n".join([
@@ -5799,11 +5800,12 @@ def export_excel_sales2526():
                 COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
                 s.sold_to AS sold_to_code,
                 s.ship_to AS ship_to_code,
+                COALESCE(NULLIF(TRIM(mat.line),''), '') AS line,
                 {pivot_cols}
             FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql}
-            GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+            GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to, line
             ORDER BY region DESC, bde DESC
         """
         cur.execute(sql, params)
@@ -5816,25 +5818,21 @@ def export_excel_sales2526():
         t_cj, t_cw = category_target_filters("t", f["category"])
         t_joins += t_cj; t_wh += t_cw
 
-        # Product filters via carrying_26 on target_26.material.
+        # Product filters via carrying_26 on target_26.material.  We
+        # always need this join now because the export splits rows by
+        # mat.line (PCLT / TBR).
         carrying_join_t = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
-        needs_carrying_t = False
         if f["product_group"] != "ALL":
-            needs_carrying_t = True
             t_wh.append("mat.product_group = %s"); t_params.append(f["product_group"])
         if f["brand"] != "ALL":
-            needs_carrying_t = True
             t_wh.append("mat.brand = %s"); t_params.append(f["brand"])
         if f["pattern"] != "ALL":
-            needs_carrying_t = True
             t_wh.append("mat.pattern = %s"); t_params.append(f["pattern"])
         if f["material"] != "ALL":
-            needs_carrying_t = True
             t_wh.append("mat.size = %s"); t_params.append(f["material"])
         if f["code"] != "ALL":
-            needs_carrying_t = True
             t_wh.append("mat.m_code = %s"); t_params.append(f["code"])
-        if needs_carrying_t and carrying_join_t not in t_joins:
+        if carrying_join_t not in t_joins:
             t_joins.append(carrying_join_t)
 
         target_pivot = ",\n".join([
@@ -5867,11 +5865,12 @@ def export_excel_sales2526():
                 COALESCE(NULLIF(TRIM(MIN(tcus.ship_to_name)),''), t.ship_to) AS ship_to_name,
                 t.sold_to AS sold_to_code,
                 t.ship_to AS ship_to_code,
+                COALESCE(NULLIF(TRIM(mat.line),''), '') AS line,
                 {target_pivot}
             FROM target_26 t
             {' '.join(t_joins)}
             {t_where_sql}
-            GROUP BY t.sold_to, t.ship_to
+            GROUP BY t.sold_to, t.ship_to, line
         """, tuple(t_params))
         target_rows = cur.fetchall()
         cur.close(); conn.close()
@@ -5881,8 +5880,11 @@ def export_excel_sales2526():
         # a fractional tyre — so round each pivot cell and the total to
         # int before they land on the sheet.
         as_int = lambda v: int(round(float(v or 0)))
+        # Merge key includes line so PCLT sales match PCLT targets and
+        # TBR sales match TBR targets — targets aren't cross-line.
         target_map = {
-            (r.get("sold_to_code") or "", r.get("ship_to_code") or ""): r
+            (r.get("sold_to_code") or "", r.get("ship_to_code") or "",
+             (r.get("line") or "").upper()): r
             for r in target_rows
         }
         # Per-year sales totals rather than a single combined Total —
@@ -5892,7 +5894,9 @@ def export_excel_sales2526():
         labels_26 = [c for c in col_labels if c.startswith("26")]
 
         for r in rows:
-            key = (r.get("sold_to_code") or "", r.get("ship_to_code") or "")
+            key = ((r.get("sold_to_code") or ""),
+                   (r.get("ship_to_code") or ""),
+                   (r.get("line") or "").upper())
             t = target_map.pop(key, None)
             for lbl in target_labels:
                 r[lbl] = as_int((t or {}).get(lbl))
@@ -5911,6 +5915,7 @@ def export_excel_sales2526():
                 "ship_to_name":   t.get("ship_to_name")  or "",
                 "sold_to_code":   key[0],
                 "ship_to_code":   key[1],
+                "line":           t.get("line") or "",
             }
             for lbl in col_labels:
                 new_row[lbl] = 0
@@ -5922,7 +5927,7 @@ def export_excel_sales2526():
             rows.append(new_row)
 
         header_order = (["region", "bde", "channel", "sold_to_group", "sold_to_name", "ship_to_name",
-                         "sold_to_code", "ship_to_code"]
+                         "sold_to_code", "ship_to_code", "line"]
                         + labels_25 + ["25 Total"]
                         + labels_26 + ["26 Total"]
                         + target_labels + ["Target_Total"])
@@ -5960,6 +5965,8 @@ def export_excel_yearly():
         joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
         _ensure_customer_join("s", joins)
         _build_export_common_filters(f, joins, wh, params)
+        # Force carrying_26 join to surface mat.line (PCLT / TBR).
+        _ensure_carrying_join("s", joins)
 
         years = [2021, 2022, 2023, 2024, 2025]
         col_labels = [str(y % 100) for y in years]
@@ -5979,11 +5986,12 @@ def export_excel_yearly():
                 COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
                 s.sold_to AS sold_to_code,
                 s.ship_to AS ship_to_code,
+                COALESCE(NULLIF(TRIM(mat.line),''), '') AS line,
                 {pivot_cols}
             FROM sales_21_25 s
             {' '.join(joins)}
             {where_sql}
-            GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+            GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to, line
             ORDER BY region DESC, bde DESC
         """
         cur.execute(sql, params)
@@ -5994,7 +6002,7 @@ def export_excel_yearly():
             r["Total"] = sum(float(r.get(c) or 0) for c in col_labels)
 
         header_order = ["region", "bde", "channel", "sold_to_group", "sold_to_name", "ship_to_name",
-                        "sold_to_code", "ship_to_code"] + col_labels + ["Total"]
+                        "sold_to_code", "ship_to_code", "line"] + col_labels + ["Total"]
 
         meta_lines = [
             f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
