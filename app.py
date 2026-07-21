@@ -2138,6 +2138,11 @@ def api_orders_material():
         # ECO2"…), so use it as the product_name source when a real
         # product_name column isn't present.
         c_product_name = pick("product_name", "product", "product_group", "pattern_name")
+        # product_group is a separate, structured product family label
+        # (Dynapro, Kinergy, Ventus…) — the additional-DC lookup joins
+        # against promo_plan on it, so surface it independently even
+        # when it's also the product_name source.
+        c_product_group = pick("product_group")
         c_pattern      = pick("pattern")
         c_line         = pick("line")
         c_load         = pick("load_speed", "load", "load_index")
@@ -2147,11 +2152,12 @@ def api_orders_material():
             return jsonify({"error": "carrying_26 has no m_code column"}), 500
 
         parts = [f"{c_m_code} AS m_code"]
-        if c_description:  parts.append(f"{c_description} AS description")
-        if c_brand:        parts.append(f"{c_brand} AS brand")
-        if c_product_name: parts.append(f"{c_product_name} AS product_name")
-        if c_pattern:      parts.append(f"{c_pattern} AS pattern")
-        if c_line:         parts.append(f"{c_line} AS line")
+        if c_description:   parts.append(f"{c_description} AS description")
+        if c_brand:         parts.append(f"{c_brand} AS brand")
+        if c_product_name:  parts.append(f"{c_product_name} AS product_name")
+        if c_product_group: parts.append(f"{c_product_group} AS product_group")
+        if c_pattern:       parts.append(f"{c_pattern} AS pattern")
+        if c_line:          parts.append(f"{c_line} AS line")
         # Combine load + speed into a single string like "88H" when
         # split — the source form always displays it joined.
         if c_load and c_speed and c_load != c_speed:
@@ -2664,6 +2670,190 @@ def api_orders_base_dc():
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/orders/additional_dc")
+def api_orders_additional_dc():
+    """Look up an Additional Special DC % for one order line.
+
+      ?sold_to=…        bill-to code on the customer master
+      ?brand=…          HK | LF (row's brand from carrying_26)
+      ?product_group=…  Dynapro | Kinergy | … (row's product_group)
+      ?qty=…            row qty (min_qty threshold gate)
+
+    Returns
+      { "additional_dc": 30.00, "promo": "443", "min_qty": 4,
+        "source": "sold_to" | "customer_grp", "matched": true }
+      or { "additional_dc": null, "matched": false } when nothing
+      qualifies (form leaves the add_dc cell alone).
+
+    Lookup joins dc_additional_customer × promo_plan:
+      1. Row keyed to this bill-to exactly beats a group row.
+      2. Brand must match.
+      3. min_qty must be <= this line's qty.
+      4. The row's promo (443, iON, …) must have at least one
+         promo_plan entry where the product_group matches (or is
+         blank = all groups) AND CURDATE() falls in the plan's
+         start_date / end_date window.
+    If several rows still qualify, the highest additional_dc wins
+    (best discount for the customer).  Missing table / missing
+    plan / no match all return matched:false; the endpoint never
+    500s under normal misses."""
+    sold_to       = (request.args.get("sold_to") or "").strip()
+    brand         = (request.args.get("brand") or "").strip()
+    product_group = (request.args.get("product_group") or "").strip()
+    try:
+        qty = float((request.args.get("qty") or "0").replace(",", "").strip())
+    except Exception:
+        qty = 0.0
+    debug = request.args.get("debug") in ("1", "true", "yes")
+
+    out = {"additional_dc": None, "matched": False}
+    if debug:
+        out["_debug"] = {"sold_to": sold_to, "brand": brand,
+                         "product_group": product_group, "qty": qty}
+    if not sold_to or not brand:
+        return jsonify(out)
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        # Silently no-op when the table isn't loaded — the form still
+        # functions with the cell blank.
+        try:
+            cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
+            if not cur.fetchone():
+                return jsonify(out)
+        except Exception:
+            return jsonify(out)
+
+        # Resolve customer group for the group-fallback tier.
+        group_code = ""
+        try:
+            cur.execute(
+                "SELECT sold_to_group FROM customer WHERE sold_to = %s LIMIT 1",
+                (sold_to,),
+            )
+            gr = cur.fetchone()
+            if gr:
+                group_code = (gr.get("sold_to_group") or "").strip()
+        except Exception:
+            pass
+        if debug:
+            out["_debug"]["group_code"] = group_code
+
+        # Column names are pinned to what the CSV shipped with
+        # (customer_grp / sold_to / promo / brand / min_qty /
+        # additional_dc).  If a deployment renames one, this endpoint
+        # will silently miss — small enough surface that a rename is
+        # a code change here.
+        ac_cols = _list_columns(cur, "dc_additional_customer")
+        needed = {"customer_grp", "sold_to", "promo", "brand",
+                  "min_qty", "additional_dc"}
+        if not needed.issubset(ac_cols):
+            if debug:
+                out["_debug"]["missing_cols"] = sorted(needed - ac_cols)
+                out["_debug"]["cols"] = sorted(ac_cols)
+            return jsonify(out)
+
+        # Also check promo_plan exists — the endpoint only makes sense
+        # with the join.  If missing, ignore the promo gate (treat as
+        # always in-plan) so an early rollout still surfaces something.
+        pp_exists = False
+        try:
+            cur.execute("SHOW TABLES LIKE 'promo_plan'")
+            pp_exists = bool(cur.fetchone())
+        except Exception:
+            pp_exists = False
+        if debug:
+            out["_debug"]["promo_plan"] = pp_exists
+
+        # Build the promo gate — pp.product_group blank = "applies to
+        # every product group" (matches how the existing promo filter
+        # in _promo_filter_clauses treats blank).  Dates NULL/blank
+        # treated as open-ended.
+        promo_gate = ""
+        if pp_exists:
+            promo_gate = """
+              AND EXISTS (
+                SELECT 1 FROM promo_plan pp
+                WHERE pp.promo = ac.promo
+                  AND (pp.product_group IS NULL
+                       OR TRIM(pp.product_group) = ''
+                       OR UPPER(TRIM(pp.product_group)) = UPPER(%s))
+                  AND (pp.start_date IS NULL OR pp.start_date <= CURDATE())
+                  AND (pp.end_date   IS NULL OR pp.end_date   >= CURDATE())
+              )"""
+        # Group fallback fires only when we resolved a group code.
+        group_join = ""
+        params = [sold_to]
+        if group_code:
+            group_join = (
+                " OR ((ac.sold_to IS NULL OR TRIM(ac.sold_to) = '')"
+                "     AND UPPER(TRIM(ac.customer_grp)) = UPPER(%s))"
+            )
+            params.append(group_code)
+        params += [brand, qty]
+        if pp_exists:
+            params.append(product_group)
+
+        # Tier 1 (sold_to match) sorts ahead of tier 2 (group match).
+        # Within the same tier, the biggest discount wins — the user
+        # gets the best applicable rate.  min_qty DESC on ties so a
+        # tighter-threshold row is preferred over a loose one at the
+        # same %.
+        sql = f"""
+            SELECT ac.additional_dc, ac.min_qty, ac.promo,
+                   ac.customer_grp, ac.sold_to, ac.brand,
+                   CASE WHEN TRIM(ac.sold_to) = %s THEN 'sold_to'
+                        ELSE 'customer_grp' END AS source,
+                   CASE WHEN TRIM(ac.sold_to) = %s THEN 1 ELSE 2 END AS tier
+            FROM dc_additional_customer ac
+            WHERE (
+                    TRIM(ac.sold_to) = %s
+                    {group_join}
+                  )
+              AND UPPER(TRIM(ac.brand)) = UPPER(%s)
+              AND (ac.min_qty IS NULL OR ac.min_qty <= %s)
+              {promo_gate}
+            ORDER BY tier ASC,
+                     ABS(ac.additional_dc) DESC,
+                     ac.min_qty DESC
+            LIMIT 1
+        """
+        # Params order: source CASE, tier CASE, WHERE sold_to,
+        # [group_code], brand, qty, [product_group].
+        exec_params = [sold_to, sold_to] + params
+        cur.execute(sql, tuple(exec_params))
+        row = cur.fetchone()
+        if debug:
+            out["_debug"]["sql_params"] = exec_params
+            out["_debug"]["row"] = row
+        if not row:
+            return jsonify(out)
+        try:
+            add_dc = float(row["additional_dc"])
+        except Exception:
+            add_dc = None
+        if add_dc is None:
+            return jsonify(out)
+        # additional_dc is stored positive on the feed (30.00 = 30%
+        # discount); pass it through as-is so the form adds it to the
+        # DC stack directly.
+        out["additional_dc"] = abs(add_dc)
+        out["matched"]       = True
+        out["promo"]         = row.get("promo")
+        out["min_qty"]       = row.get("min_qty")
+        out["source"]        = row.get("source")
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e), "additional_dc": None, "matched": False}), 500
     finally:
         try: cur.close()
         except: pass

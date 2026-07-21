@@ -826,6 +826,9 @@ async function fillAgedStockPanel(state){
 })();
 
 async function fillBaseDC(soldTo){
+  // Cache the customer's sold_to so per-row additional-DC lookups
+  // can key off it without walking back up to the customer form.
+  window._orderSoldTo = soldTo || "";
   const data = await apiGet(`/api/orders/base_dc?sold_to=${encodeURIComponent(soldTo)}`);
   const fmtPct = v => (v == null) ? "" : `+${(+v).toFixed(2)}%`;
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
@@ -841,12 +844,56 @@ async function fillBaseDC(soldTo){
     TBR:     data && data.TBR_HKLF != null ? +data.TBR_HKLF : null,
   };
   // If any material rows are already filled, refresh their Base DC
-  // from the new customer's rates.
+  // and Additional DC from the new customer's rates.
   document.querySelectorAll("#linesBody tr").forEach(tr => {
     const b = tr.querySelector('[data-col="brand"]').value;
     const l = tr.dataset.line || "";
     if (b || l) applyBaseDCToRow(tr, b, l);
+    if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
   });
+}
+
+// Fetch the applicable Additional Special DC for this row (based on
+// customer + brand + product_group + qty) and stamp it into add_dc.
+// Only auto-fills when the cell is empty or previously auto-filled;
+// leaves a manually keyed value alone so the BDE can override.
+async function applyAdditionalDCToRow(rowEl){
+  const soldTo = window._orderSoldTo || "";
+  if (!soldTo) return;
+  const brand = (rowEl.querySelector('[data-col="brand"]')?.value || "").trim();
+  const pg    = rowEl.dataset.productGroup || "";
+  const qtyEl = rowEl.querySelector('[data-col="qty"]');
+  const addEl = rowEl.querySelector('[data-col="add_dc"]');
+  if (!brand || !addEl) return;
+  const qty = toNum(qtyEl?.value || 0);
+  const q = new URLSearchParams({
+    sold_to: soldTo, brand, qty: String(qty),
+  });
+  if (pg) q.set("product_group", pg);
+  let data;
+  try {
+    const r = await fetch(`/api/orders/additional_dc?${q}`, {credentials: "same-origin"});
+    data = await r.json();
+  } catch(e){ return; }
+  // Only stamp when there's no user override.  If the cell was empty
+  // OR previously auto-filled by us (data-auto-add-dc), rewrite it.
+  const currentlyManual = addEl.value && addEl.dataset.autoAddDc !== "1";
+  if (currentlyManual) return;
+  if (data && data.matched && data.additional_dc != null){
+    addEl.value = (+data.additional_dc).toFixed(2);
+    addEl.dataset.autoAddDc = "1";
+    addEl.title = `Auto-filled from ${data.source || "customer"} promo ${data.promo || ""} (min qty ${data.min_qty ?? "—"})`;
+  } else {
+    // No match — clear the auto-value so a previously-eligible row
+    // that no longer qualifies (qty dropped below threshold, e.g.)
+    // doesn't keep an old %.
+    if (addEl.dataset.autoAddDc === "1"){
+      addEl.value = "";
+      addEl.title = "";
+      delete addEl.dataset.autoAddDc;
+    }
+  }
+  recalcRow(rowEl);
 }
 
 // Given the row's brand + line, look up which of the three customer
@@ -891,15 +938,21 @@ function applyMaterial(rowEl, data){
   set("pattern",      data.pattern);
   set("load_speed",   data.load_speed);
   set("list_price",   data.list_price != null ? fmtMoney(data.list_price) : "");
-  // Stash line on the row so applyBaseDCToRow can read it later without
-  // going back to the API (line isn't a visible column on the form).
-  rowEl.dataset.line = data.line || "";
+  // Stash line + product_group on the row so applyBaseDCToRow /
+  // applyAdditionalDCToRow can read them without going back to the
+  // API (neither is a visible column on the form).
+  rowEl.dataset.line          = data.line || "";
+  rowEl.dataset.productGroup  = data.product_group || "";
   recalcRow(rowEl);
   // Now that brand + line are known, drop the correct customer Base DC
   // into this row's base_dc cell — Current Price then updates via
   // recalcRow.  Called AFTER recalcRow so the base_dc write is what
   // triggers the priced-out numbers, not the pre-DC state.
   applyBaseDCToRow(rowEl, data.brand, data.line);
+  // Fire the promo-based Additional DC lookup — uses brand +
+  // product_group + qty + customer to decide.  Auto-fills add_dc
+  // only when the cell hasn't been keyed manually.
+  applyAdditionalDCToRow(rowEl);
   setStatus(`Material linked: <b>${data.m_code} — ${data.description||""}</b>`, "ok");
   // Fire-and-forget stock lookup so the row's four state columns
   // populate as soon as the material is known.  Kept separate from
@@ -1021,6 +1074,16 @@ function newRow(){
   descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => recalcRow(tr));
+  });
+  // Qty change → re-run the Additional DC lookup so a row that crosses
+  // (or drops below) a min_qty threshold picks up (or loses) its %.
+  tr.querySelector('[data-col="qty"]')?.addEventListener("change", () => {
+    if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
+  });
+  // Any manual keystroke on add_dc cancels the auto-fill flag so a
+  // subsequent qty/material change doesn't clobber the BDE's override.
+  tr.querySelector('[data-col="add_dc"]')?.addEventListener("input", (e) => {
+    if (e.target.dataset.autoAddDc === "1") delete e.target.dataset.autoAddDc;
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
