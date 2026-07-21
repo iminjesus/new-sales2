@@ -98,12 +98,19 @@
   #linesBody tr.aged-row td:first-child {
     box-shadow: inset 3px 0 0 #f59e0b;
   }
+  /* When the aged-stock sidebar is visible on wide screens, reserve
+     a right-hand gutter so the fixed panel doesn't overlap the form.
+     The wrap keeps its centered look inside the remaining space. */
+  @media (min-width: 1781px) {
+    body:has(#agedStockPanel.visible) { padding-right: 360px; }
+  }
   @media (max-width: 1780px) {
     /* Narrow viewport — the fixed sidebar would overlap the form,
-       so tuck it away behind a toggle chip instead of showing it
-       automatically.  Keeps the layout usable on 15" laptops. */
+       so tuck it under the form instead of pinning it top-right.
+       Keeps the layout usable on 15" laptops. */
     #agedStockPanel { top: auto; bottom: 12px; right: 12px;
       max-height: 60vh; width: 320px; }
+    body:has(#agedStockPanel.visible) { padding-bottom: 62vh; }
   }
 
   /* header */
