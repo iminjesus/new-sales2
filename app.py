@@ -5793,6 +5793,7 @@ def export_excel_sales2526():
             SELECT
                 COALESCE(NULLIF(TRIM(cus.bde_state),''), 'COMMON') AS region,
                 COALESCE(NULLIF(TRIM(cus.salesman_name),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(cus.channels),''), '') AS channel,
                 COALESCE(NULLIF(TRIM(cus.sold_to_group),''), '') AS sold_to_group,
                 COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to) AS sold_to_name,
                 COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
@@ -5802,7 +5803,7 @@ def export_excel_sales2526():
             FROM {_sales_2526_from("s")}
             {' '.join(joins)}
             {where_sql}
-            GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+            GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
             ORDER BY region DESC, bde DESC
         """
         cur.execute(sql, params)
@@ -5860,6 +5861,7 @@ def export_excel_sales2526():
                          NULLIF(TRIM(MIN(t.state)),''), 'COMMON') AS region,
                 COALESCE(NULLIF(TRIM(MIN(tcus.salesman_name)),''),
                          NULLIF(TRIM(MIN(t.bde)),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(MIN(tcus.channels)),''), '') AS channel,
                 COALESCE(NULLIF(TRIM(MIN(tcus.sold_to_group)),''), '') AS sold_to_group,
                 COALESCE(NULLIF(TRIM(MIN(tcus.sold_to_name)),''), t.sold_to) AS sold_to_name,
                 COALESCE(NULLIF(TRIM(MIN(tcus.ship_to_name)),''), t.ship_to) AS ship_to_name,
@@ -5903,6 +5905,7 @@ def export_excel_sales2526():
             new_row = {
                 "region":         t.get("region")        or "",
                 "bde":            t.get("bde")           or "",
+                "channel":        t.get("channel")       or "",
                 "sold_to_group":  t.get("sold_to_group") or "",
                 "sold_to_name":   t.get("sold_to_name")  or "",
                 "ship_to_name":   t.get("ship_to_name")  or "",
@@ -5918,7 +5921,7 @@ def export_excel_sales2526():
             new_row["Target_Total"] = sum(new_row.get(l) or 0 for l in target_labels)
             rows.append(new_row)
 
-        header_order = (["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
+        header_order = (["region", "bde", "channel", "sold_to_group", "sold_to_name", "ship_to_name",
                          "sold_to_code", "ship_to_code"]
                         + labels_25 + ["25 Total"]
                         + labels_26 + ["26 Total"]
@@ -5970,6 +5973,7 @@ def export_excel_yearly():
             SELECT
                 COALESCE(NULLIF(TRIM(cus.bde_state),''), 'COMMON') AS region,
                 COALESCE(NULLIF(TRIM(cus.salesman_name),''), '') AS bde,
+                COALESCE(NULLIF(TRIM(cus.channels),''), '') AS channel,
                 COALESCE(NULLIF(TRIM(cus.sold_to_group),''), '') AS sold_to_group,
                 COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to) AS sold_to_name,
                 COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
@@ -5979,7 +5983,7 @@ def export_excel_yearly():
             FROM sales_21_25 s
             {' '.join(joins)}
             {where_sql}
-            GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+            GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
             ORDER BY region DESC, bde DESC
         """
         cur.execute(sql, params)
@@ -5989,7 +5993,7 @@ def export_excel_yearly():
         for r in rows:
             r["Total"] = sum(float(r.get(c) or 0) for c in col_labels)
 
-        header_order = ["region", "bde", "sold_to_group", "sold_to_name", "ship_to_name",
+        header_order = ["region", "bde", "channel", "sold_to_group", "sold_to_name", "ship_to_name",
                         "sold_to_code", "ship_to_code"] + col_labels + ["Total"]
 
         meta_lines = [
