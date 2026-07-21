@@ -246,9 +246,19 @@
   table.lines tbody td.red-num input{color:#c62828;font-weight:600}
   table.lines tbody td.pct-cell input{color:#b45309;background:#fff8e6;font-weight:700;text-align:right;}
   table.lines tbody td.total-cell input{background:#fff8e6;text-align:right;font-weight:700}
-  table.lines tbody tr.total-row td{background:#f0f0f0;font-weight:800;}
-  table.lines tbody tr.total-row td.label{text-align:center}
-  table.lines tbody tr.total-row td .totalv{padding:6px;font-size:13px;text-align:right;color:#111}
+  table.lines tfoot tr.total-row td{background:#f0f0f0;font-weight:800;}
+  table.lines tfoot tr.total-row td.label{text-align:center}
+  table.lines tfoot tr.total-row td.right-lbl{text-align:right;padding-right:8px;font-size:12px}
+  table.lines tfoot tr.total-row td .totalv{padding:6px;font-size:13px;text-align:right;color:#111}
+  /* Freight-flag input — small centred cell matching the Excel look. */
+  table.lines tfoot tr.total-row td #freightFlag{
+    width:36px;padding:3px;text-align:center;font-weight:700;
+    background:#fef3c7;border:1px solid #d1d5db;border-radius:2px;
+  }
+  /* Grand-total row gets a slightly stronger accent so it reads as
+     the final line, matching the workbook's bottom-row emphasis. */
+  table.lines tfoot tr.grand-row td{background:#e5e7eb}
+  table.lines tfoot tr.grand-row td .totalv{color:#111;font-size:14px;font-weight:800}
 
   .status{
     font-size:11.5px;color:var(--muted);padding:6px 4px;
@@ -464,11 +474,42 @@
         <!-- rows injected by JS -->
       </tbody>
       <tfoot>
+        <!-- Subtotal row — matches the Excel workbook's Total line:
+             label + total qty + subtotal (ex GST) + qty-weighted avg DC. -->
         <tr class="total-row">
-          <td class="label" colspan="17">Total</td>
+          <td class="label">Total</td>
+          <td class="num center" id="ttlQty">0</td>
+          <td colspan="15"></td>
           <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
-          <td></td>
+          <td class="num center" id="avgDC"></td>
           <td colspan="4"></td>
+        </tr>
+        <!-- Total inc GST (subtotal + 10%). -->
+        <tr class="total-row summary-row">
+          <td colspan="16"></td>
+          <td class="label right-lbl">Total inc GST</td>
+          <td class="total-cell"><div class="totalv" id="totalIncGst">0.00</div></td>
+          <td colspan="5"></td>
+        </tr>
+        <!-- Freight prompt + 10 % freight (fires only when "Y" typed).
+             Amount sits in the same column (Total Amount) as the inc-
+             GST and final-total lines so all three stack vertically. -->
+        <tr class="total-row summary-row">
+          <td colspan="13"></td>
+          <td class="label right-lbl">Input "Y" for Freight Charge? &rarr;</td>
+          <td class="center">
+            <input type="text" id="freightFlag" maxlength="1" placeholder="N">
+          </td>
+          <td class="label right-lbl" colspan="2">Freight Charge (10%)<br>if any</td>
+          <td class="total-cell"><div class="totalv" id="freightChg"></div></td>
+          <td colspan="5"></td>
+        </tr>
+        <!-- Final Total (Total inc GST + Freight, if any). -->
+        <tr class="total-row summary-row grand-row">
+          <td colspan="16"></td>
+          <td class="label right-lbl">Total</td>
+          <td class="total-cell"><div class="totalv" id="finalTotal">0.00</div></td>
+          <td colspan="5"></td>
         </tr>
       </tfoot>
     </table>
@@ -1037,14 +1078,33 @@ function recalcRow(row){
   updateTotals();
 }
 function updateTotals(){
-  let sumQty = 0, sumAmt = 0;
+  let sumQty = 0, sumAmt = 0, weightedDC = 0;
   $$("#linesBody tr").forEach(r => {
-    sumQty += toNum(r.querySelector('[data-col="qty"]').value);
-    sumAmt += toNum(r.querySelector('[data-col="total_amount"]').value);
+    const q   = toNum(r.querySelector('[data-col="qty"]').value);
+    const amt = toNum(r.querySelector('[data-col="total_amount"]').value);
+    const dc  = toNum(r.querySelector('[data-col="proposed_dc"]').value);
+    sumQty     += q;
+    sumAmt     += amt;
+    weightedDC += dc * q;   // qty-weighted so a big-qty line drives the avg
   });
-  $("#sovd_ttl").value    = fmtQty(sumQty);
-  $("#grandTotal").textContent = fmtMoney(sumAmt);
+  const avgDC        = sumQty > 0 ? weightedDC / sumQty : 0;
+  const totalIncGst  = sumAmt * 1.10;
+  const freightFlag  = ($("#freightFlag")?.value || "").trim().toUpperCase();
+  // Freight = 10 % of the ex-GST subtotal when the BDE types "Y" —
+  // matches the Excel workbook the Order form is derived from.
+  const freight      = freightFlag === "Y" ? sumAmt * 0.10 : 0;
+  const finalTotal   = totalIncGst + freight;
+
+  $("#sovd_ttl").value          = fmtQty(sumQty);
+  $("#ttlQty").textContent      = fmtQty(sumQty);
+  $("#grandTotal").textContent  = fmtMoney(sumAmt);
+  $("#avgDC").textContent       = sumAmt ? avgDC.toFixed(2) + "%" : "";
+  $("#totalIncGst").textContent = sumAmt ? fmtMoney(totalIncGst) : "0.00";
+  $("#freightChg").textContent  = freight ? fmtMoney(freight) : "";
+  $("#finalTotal").textContent  = sumAmt ? fmtMoney(finalTotal) : "0.00";
 }
+// Freight flag drives the last two rows — recompute on every keystroke.
+document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
 
 /* ────────────────────────── row template ────────────────────────── */
 function newRow(){
