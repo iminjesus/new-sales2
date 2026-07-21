@@ -248,8 +248,16 @@
   table.lines tbody td.total-cell input{background:#fff8e6;text-align:right;font-weight:700}
   table.lines tfoot tr.total-row td{background:#f0f0f0;font-weight:800;}
   table.lines tfoot tr.total-row td.label{text-align:center}
-  table.lines tfoot tr.total-row td.right-lbl{text-align:right;padding-right:8px;font-size:12px}
+  table.lines tfoot tr.total-row td.right-lbl{text-align:right;padding-right:8px;font-size:12px;white-space:nowrap}
   table.lines tfoot tr.total-row td .totalv{padding:6px;font-size:13px;text-align:right;color:#111}
+  /* Summary block on the right — label + amount cells get a clean
+     border so they read as a self-contained totals card, and the
+     blank cells around them stay unbordered / uncoloured so they
+     don't visually compete. */
+  table.lines tfoot tr.summary-row td.summary-blank{background:transparent;border:none}
+  table.lines tfoot tr.summary-row td.summary-lbl,
+  table.lines tfoot tr.summary-row td.summary-amt,
+  table.lines tfoot tr.summary-row td.summary-input{border:1px solid #cbd5e1}
   /* Freight-flag input — small centred cell matching the Excel look. */
   table.lines tfoot tr.total-row td #freightFlag{
     width:36px;padding:3px;text-align:center;font-weight:700;
@@ -257,7 +265,8 @@
   }
   /* Grand-total row gets a slightly stronger accent so it reads as
      the final line, matching the workbook's bottom-row emphasis. */
-  table.lines tfoot tr.grand-row td{background:#e5e7eb}
+  table.lines tfoot tr.grand-row td.summary-lbl,
+  table.lines tfoot tr.grand-row td.summary-amt{background:#e5e7eb}
   table.lines tfoot tr.grand-row td .totalv{color:#111;font-size:14px;font-weight:800}
 
   .status{
@@ -486,30 +495,30 @@
         </tr>
         <!-- Total inc GST (subtotal + 10%). -->
         <tr class="total-row summary-row">
-          <td colspan="16"></td>
-          <td class="label right-lbl">Total inc GST</td>
-          <td class="total-cell"><div class="totalv" id="totalIncGst">0.00</div></td>
-          <td colspan="5"></td>
+          <td colspan="14" class="summary-blank"></td>
+          <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
+          <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
+          <td colspan="5" class="summary-blank"></td>
         </tr>
         <!-- Freight prompt + 10 % freight (fires only when "Y" typed).
              Amount sits in the same column (Total Amount) as the inc-
              GST and final-total lines so all three stack vertically. -->
         <tr class="total-row summary-row">
-          <td colspan="13"></td>
-          <td class="label right-lbl">Input "Y" for Freight Charge? &rarr;</td>
-          <td class="center">
+          <td colspan="10" class="summary-blank"></td>
+          <td class="label right-lbl summary-lbl" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
+          <td class="center summary-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
           </td>
-          <td class="label right-lbl" colspan="2">Freight Charge (10%)<br>if any</td>
-          <td class="total-cell"><div class="totalv" id="freightChg"></div></td>
-          <td colspan="5"></td>
+          <td class="label right-lbl summary-lbl" colspan="3">Freight Charge (10%) if any</td>
+          <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
+          <td colspan="5" class="summary-blank"></td>
         </tr>
         <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="16"></td>
-          <td class="label right-lbl">Total</td>
-          <td class="total-cell"><div class="totalv" id="finalTotal">0.00</div></td>
-          <td colspan="5"></td>
+          <td colspan="14" class="summary-blank"></td>
+          <td class="label right-lbl summary-lbl" colspan="3">Total</td>
+          <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
+          <td colspan="5" class="summary-blank"></td>
         </tr>
       </tfoot>
     </table>
