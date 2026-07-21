@@ -996,21 +996,31 @@ function recalcRow(row){
   const addDC   = toNum(row.querySelector('[data-col="add_dc"]').value);
   const agingDC = toNum(row.querySelector('[data-col="aging_dc"]')?.value);
 
-  // Current DC is the sum of the customer-side inputs — represents
-  // the discount they would normally get on this row (base + mth +
-  // sp + vol); we always compute it so Current Price still shows the
-  // "before-aging-override" baseline for comparison.
-  const currentDC = baseDC + mthDC + spDC + volDC;
+  // Customer-side DC stack — Base + MTH + Volume are additive
+  // percentage-points against list price; represents the customer's
+  // normal discount before any promo.  sp_dc (the 443 / promo cell)
+  // is NOT included here because it's compound, not additive (see
+  // below).
+  const currentDC    = baseDC + mthDC + volDC;
+  const currentPrice = list * (1 - currentDC/100);
 
-  // Aging DC completely REPLACES the discount stack when set —
-  // customer-independent tier ladder (Ageing1 64% / Ageing2 70% /
-  // Ageing3 88%).  All other components (base / mth / sp / vol /
-  // add) are ignored for the proposed price / DC calculation.
-  const proposedDC = agingDC > 0 ? agingDC : currentDC + addDC;
-
-  const currentPrice  = list * (1 - currentDC/100);
-  const proposedPrice = list * (1 - proposedDC/100);
-  const totalAmount   = q * proposedPrice;
+  // Proposed = customer's Current Price after the 443 promo (sp_dc)
+  // and manual Additional (add_dc) are applied.  These two compound
+  // multiplicatively on top of Current Price — a 30% promo on top of
+  // a 56% Base DC means "44% of list × 0.70 = 30.8% of list", not
+  // "add 30 percentage-points".  Aging DC still overrides everything
+  // (customer-independent tier ladder).
+  let proposedPrice, proposedDC;
+  if (agingDC > 0){
+    proposedDC    = agingDC;
+    proposedPrice = list * (1 - agingDC/100);
+  } else {
+    proposedPrice = currentPrice * (1 - spDC/100) * (1 - addDC/100);
+    // Effective total DC shown for reference — the value the BDE
+    // reads to know "how deep did we go overall".
+    proposedDC    = list > 0 ? (100 * (1 - proposedPrice / list)) : currentDC;
+  }
+  const totalAmount = q * proposedPrice;
 
   row.querySelector('[data-col="current_dc"]').value    = currentDC ? currentDC.toFixed(2) : "";
   row.querySelector('[data-col="current_price"]').value = list ? fmtMoney(currentPrice) : "";
