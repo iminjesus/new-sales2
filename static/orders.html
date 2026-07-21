@@ -942,6 +942,9 @@ async function applyAdditionalDCToRow(rowEl){
     spEl.value = (+data.additional_dc).toFixed(2);
     spEl.dataset.autoSpDc = "1";
     spEl.title = `Auto-filled from ${data.source || "customer"} promo ${data.promo || ""} (min qty ${data.min_qty ?? "—"})`;
+    // Stash the matched promo bucket on the row so updateTotals can
+    // count SOVD-eligible qty (SOVD TTL box at the top of the form).
+    rowEl.dataset.promo = (data.promo || "").toUpperCase();
   } else {
     // No match — clear the auto-value so a previously-eligible row
     // that no longer qualifies (qty dropped below threshold, e.g.)
@@ -951,6 +954,7 @@ async function applyAdditionalDCToRow(rowEl){
       spEl.title = "";
       delete spEl.dataset.autoSpDc;
     }
+    delete rowEl.dataset.promo;
   }
   recalcRow(rowEl);
 }
@@ -1087,7 +1091,7 @@ function recalcRow(row){
   updateTotals();
 }
 function updateTotals(){
-  let sumQty = 0, sumAmt = 0, weightedDC = 0;
+  let sumQty = 0, sumAmt = 0, weightedDC = 0, sovdQty = 0;
   $$("#linesBody tr").forEach(r => {
     const q   = toNum(r.querySelector('[data-col="qty"]').value);
     const amt = toNum(r.querySelector('[data-col="total_amount"]').value);
@@ -1095,6 +1099,9 @@ function updateTotals(){
     sumQty     += q;
     sumAmt     += amt;
     weightedDC += dc * q;   // qty-weighted so a big-qty line drives the avg
+    // SOVD TTL: only rows whose auto-applied additional-DC promo
+    // matched dc_additional_customer.promo = 'SOVD' contribute.
+    if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
   });
   const avgDC        = sumQty > 0 ? weightedDC / sumQty : 0;
   const totalIncGst  = sumAmt * 1.10;
@@ -1104,7 +1111,7 @@ function updateTotals(){
   const freight      = freightFlag === "Y" ? sumAmt * 0.10 : 0;
   const finalTotal   = totalIncGst + freight;
 
-  $("#sovd_ttl").value          = fmtQty(sumQty);
+  $("#sovd_ttl").value          = fmtQty(sovdQty);
   $("#ttlQty").textContent      = fmtQty(sumQty);
   $("#grandTotal").textContent  = fmtMoney(sumAmt);
   $("#avgDC").textContent       = sumAmt ? avgDC.toFixed(2) + "%" : "";
