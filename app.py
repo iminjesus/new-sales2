@@ -5545,6 +5545,7 @@ def fetch_table_rows(top_limit: int):
         SELECT
             COALESCE(NULLIF(TRIM(cus.bde_state),''), 'COMMON') AS region,
             COALESCE(NULLIF(TRIM(cus.salesman_name),''), '') AS bde,
+            COALESCE(NULLIF(TRIM(cus.channels),''), '') AS channel,
             COALESCE(NULLIF(TRIM(cus.sold_to_group),''), '') AS sold_to_group,
             COALESCE(NULLIF(TRIM(cus.sold_to_name),''), s.sold_to) AS sold_to_name,
             COALESCE(NULLIF(TRIM(cus.ship_to_name),''), s.ship_to) AS ship_to_name,
@@ -5554,7 +5555,7 @@ def fetch_table_rows(top_limit: int):
         FROM sales_thismonth s
         {' '.join(joins)}
         {where_sql}
-        GROUP BY region, bde, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
+        GROUP BY region, bde, channel, sold_to_group, sold_to_name, ship_to_name, s.sold_to, s.ship_to
         ORDER BY region DESC, bde DESC
     """
 
@@ -5667,7 +5668,7 @@ def export_excel():
         ws.append([])
 
         # Header row: Total/Target/Ach% sit between ship_to_code and day columns
-        HDR = (["region","bde","sold_to_group","sold_to_name","ship_to_name",
+        HDR = (["region","bde","channel","sold_to_group","sold_to_name","ship_to_name",
                 "sold_to_code","ship_to_code","Total","Target","Ach%"]
                + day_labels)
         ws.append(HDR)
@@ -5687,7 +5688,7 @@ def export_excel():
             tot  = g.get("Total",  0.0)
             tgt  = g.get("Target", 0.0)
             ach  = round(tot / tgt * 100, 1) if tgt > 0 else None
-            vals = ([region, "", "", f"?? {region} TOTAL ??", "", "",
+            vals = ([region, "", "", "", f"?? {region} TOTAL ??", "", "",
                      "", round(tot,1), round(tgt,1),
                      (f"{ach:.1f}%" if ach is not None else "-")]
                     + [""] * 31)
