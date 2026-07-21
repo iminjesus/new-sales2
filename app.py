@@ -2493,21 +2493,19 @@ def api_orders_base_dc():
     Returns
       { "HK_PCLT": 52.00, "LF_PCLT": 50.00, "TBR_HKLF": 56.00 }
 
-    - HK / LF PCLT cells look for a brand-specific row first (brand =
-      'HK' or 'LF') and, when none exists for that customer, fall back
-      to the brand-blank row for the same customer.  So a customer
-      that only has an "empty-brand" DC on the feed still gets a
-      figure in both cells.
-    - The picked row is always the most recent still-valid one
-      (max valid_from where CURDATE() is between valid_from and
-      valid_to).
-    - Amount is stored as a negative percent on the feed (-52.00 =
-      52% discount); we flip the sign so the form shows +XX.XX%.
-    - TBR (HK&LF) is a fixed constant (see _ORDERS_TBR_HKLF_PCT)
-      until the feed splits PCLT vs TBR.
-    - If the table doesn't exist yet, the endpoint still returns
-      {TBR_HKLF: 56.00, HK_PCLT: None, LF_PCLT: None} so the form
-      just leaves the two brand cells blank instead of erroring."""
+    Lookup tiers (first hit per brand bucket wins):
+      1. Row keyed to this exact bill_to_partner (customer-specific).
+      2. Row with bill_to_partner blank and customer = this sold-to's
+         sold_to_group (customer-group fallback for customers who don't
+         have their own row on the feed).
+    Within each tier, HK/LF-branded rows win over blank-brand rows,
+    and the most-recent still-valid row wins on ties.  Amount is
+    stored as a negative percent on the feed (-52.00 = 52% discount);
+    we flip the sign so the form shows +XX.XX%.  TBR (HK&LF) is a
+    fixed constant (see _ORDERS_TBR_HKLF_PCT) until the feed splits
+    PCLT vs TBR.  If the table doesn't exist yet, the endpoint still
+    returns {TBR_HKLF: 56.00, HK_PCLT: None, LF_PCLT: None} so the
+    form just leaves the two brand cells blank instead of erroring."""
     sold_to = (request.args.get("sold_to") or "").strip()
     out = {"HK_PCLT": None, "LF_PCLT": None, "TBR_HKLF": _ORDERS_TBR_HKLF_PCT}
     if not sold_to:
@@ -2527,13 +2525,38 @@ def api_orders_base_dc():
         except Exception:
             return jsonify(out)
 
-        # Pick the most-recent valid row per (brand-bucket).  Bucket
+        # Resolve customer group so we can fall back to Brand + Group
+        # rows when the sold-to has no row of its own.
+        group_code = ""
+        try:
+            cur.execute(
+                "SELECT sold_to_group FROM customer WHERE sold_to = %s LIMIT 1",
+                (sold_to,),
+            )
+            gr = cur.fetchone()
+            if gr:
+                group_code = (gr.get("sold_to_group") or "").strip()
+        except Exception:
+            pass
+
+        # Pick the most-recent valid row per (brand-bucket) with tier
+        # priority: tier 1 = this bill_to_partner exactly (customer-
+        # specific), tier 2 = blank bill_to_partner + customer group
+        # match (group fallback for sold-tos with no own row).  Bucket
         # is "HK" / "LF" for a branded row and "_BLANK_" for a
-        # blank-brand row.  ORDER BY inside the CTE is by valid_from
-        # DESC so ROW_NUMBER() = 1 is the current one.  KS and any
-        # other non-blank/non-HK/non-LF brand is ignored.
-        cur.execute(
-            """
+        # blank-brand row.  ROW_NUMBER inside partitions by bucket and
+        # orders by tier ASC then valid_from DESC so tier-1 always wins
+        # over tier-2 and, within a tier, the current row wins.
+        params = [sold_to]
+        group_join = ""
+        if group_code:
+            group_join = (
+                " OR ((bill_to_partner IS NULL OR TRIM(bill_to_partner) = '')"
+                "     AND TRIM(customer) = %s)"
+            )
+            params.append(group_code)
+
+        sql = f"""
             SELECT bucket, ABS(amount) AS pct
             FROM (
                 SELECT
@@ -2544,16 +2567,25 @@ def api_orders_base_dc():
                     END AS bucket,
                     amount,
                     valid_from,
+                    CASE
+                        WHEN bill_to_partner = %s THEN 1
+                        ELSE 2
+                    END AS tier,
                     ROW_NUMBER() OVER (
                         PARTITION BY CASE
                             WHEN brand = 'HK' THEN 'HK'
                             WHEN brand = 'LF' THEN 'LF'
                             WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
                         END
-                        ORDER BY valid_from DESC
+                        ORDER BY
+                            CASE WHEN bill_to_partner = %s THEN 1 ELSE 2 END ASC,
+                            valid_from DESC
                     ) AS rn
                 FROM dc_basic_customer
-                WHERE bill_to_partner = %s
+                WHERE (
+                        bill_to_partner = %s
+                        {group_join}
+                      )
                   AND (
                         brand IN ('HK', 'LF')
                         OR brand IS NULL
@@ -2562,9 +2594,11 @@ def api_orders_base_dc():
                   AND CURDATE() BETWEEN valid_from AND valid_to
             ) t
             WHERE t.rn = 1 AND t.bucket IS NOT NULL
-            """,
-            (sold_to,),
-        )
+        """
+        # Params order: tier CASE (SELECT), tier CASE (ORDER BY), WHERE
+        # bill_to_partner, then optional group_code for the fallback OR.
+        exec_params = [sold_to, sold_to] + params
+        cur.execute(sql, tuple(exec_params))
         picks = {}
         for r in cur.fetchall() or []:
             try:
