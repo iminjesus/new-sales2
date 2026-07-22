@@ -3206,6 +3206,113 @@ def api_orders_status(oid):
         except: pass
 
 
+@app.post("/api/orders/detail/<int:oid>/update")
+def api_orders_update(oid):
+    """Update a previously-submitted order.  Only the BDE who
+    originally submitted it can update (compared on
+    submitted_by_email).  The content is refreshed, status_sap is
+    reset to 'N' so Harry knows the SAP-side needs a re-check, and
+    Harry gets a fresh notification email flagged as an update."""
+    import json as _json
+    payload = request.get_json(silent=True) or {}
+    header  = payload.get("header")  or {}
+    totals  = payload.get("totals")  or {}
+    lines   = payload.get("lines")   or []
+    if not header.get("sold_to"):
+        return jsonify({"error": "sold_to required"}), 400
+    if not lines:
+        return jsonify({"error": "at least one order line required"}), 400
+
+    who = (_bde_from_request() or "").strip().lower()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT submitted_by_email, submitted_by_bde, status_sap "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        # Ownership check — an ALL-role admin can edit on behalf of a
+        # BDE who's stuck (e.g., left the company); everyone else must
+        # be the original submitter.
+        original = (row.get("submitted_by_email") or "").strip().lower()
+        role     = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
+        if who != original and role != "ALL":
+            return jsonify({"error": "only the original submitter can edit this order"}), 403
+
+        def _num(v):
+            try:
+                s = str(v or "0").replace(",", "").replace("$", "").replace("%", "").strip()
+                return float(s or 0)
+            except Exception:
+                return 0.0
+
+        cur2 = conn.cursor()
+        try:
+            cur2.execute(
+                "UPDATE submitted_orders SET "
+                "  sold_to=%s, sold_to_name=%s, ship_to=%s, ship_to_name=%s, "
+                "  state=%s, po_number=%s, order_date=%s, "
+                "  subtotal=%s, total_inc_gst=%s, freight_amount=%s, grand_total=%s, "
+                "  total_qty=%s, sovd_qty=%s, avg_dc_pct=%s, "
+                "  status_sap='N', status_changed_at=NOW(), status_changed_by=%s, "
+                "  payload_json=%s "
+                "WHERE id=%s",
+                (
+                    (header.get("sold_to")      or "")[:40],
+                    (header.get("sold_to_name") or "")[:255],
+                    (header.get("ship_to")      or "")[:40],
+                    (header.get("ship_to_name") or "")[:255],
+                    (header.get("state")        or "")[:20],
+                    (header.get("po_number")    or "")[:100],
+                    (header.get("order_date")   or "")[:20],
+                    _num(totals.get("subtotal")),
+                    _num(totals.get("total_inc_gst")),
+                    _num(totals.get("freight_amount")),
+                    _num(totals.get("grand_total")),
+                    int(_num(totals.get("total_qty"))),
+                    int(_num(totals.get("sovd_qty"))),
+                    _num(totals.get("avg_dc_pct")),
+                    who[:255],
+                    _json.dumps(payload, ensure_ascii=False, default=str),
+                    oid,
+                ),
+            )
+            conn.commit()
+        finally:
+            cur2.close()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    # Notify Harry of the edit.  Subject prefixed with [UPDATE] so it's
+    # easy to distinguish from the original submission thread.
+    try:
+        base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+    except Exception:
+        base_url = ""
+    submitted_by_bde = (row.get("submitted_by_bde") or "")
+    subject = (f"[SPRF UPDATE #{oid}] {submitted_by_bde or 'BDE'} → "
+               f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
+    payload_for_mail = dict(payload)
+    payload_for_mail["submitted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    cc = [who] if who else []
+    try:
+        _send_mail_async([HARRY_CS_EMAIL], cc, subject,
+                         _submitted_order_email_html(oid, payload_for_mail, base_url))
+    except Exception as e:
+        print(f"[update] mail queue failed: {e}")
+
+    return jsonify({"ok": True, "id": oid, "status": "N",
+                    "note": "SAP flag reset to N after edit"})
+
+
 @app.get("/api/orders/whoami")
 def api_orders_whoami():
     """Front-end reads this to decide whether to show the status

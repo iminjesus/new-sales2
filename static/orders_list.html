@@ -46,6 +46,12 @@
   table.list tbody tr:hover td{background:#eff6ff}
   table.list td.num{text-align:right;font-variant-numeric:tabular-nums}
   table.list td.center{text-align:center}
+  table.list td .edit-link{
+    display:inline-block;padding:3px 10px;background:#f59e0b;color:#fff;
+    text-decoration:none;border-radius:3px;font-size:11px;font-weight:700;
+  }
+  table.list td .edit-link:hover{background:#d97706}
+  table.list td .edit-dash{color:#cbd5e1;font-size:14px}
   .id-col{font-family:monospace;color:#374151}
   .name-cell b{color:#111}
   .name-cell small{color:var(--muted);display:block;font-size:11px;margin-top:2px}
@@ -102,10 +108,11 @@
             <th style="width:70px" class="num">Qty</th>
             <th style="width:110px" class="num">Grand Total</th>
             <th style="width:80px" class="center">SAP</th>
+            <th style="width:70px" class="center">Edit</th>
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="9" class="empty">Loading…</td></tr>
+          <tr><td colspan="10" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -119,24 +126,32 @@ const fmtMoney = v => (Number(v)||0).toLocaleString("en-AU",{style:"currency",cu
 const fmtQty   = v => (Number(v)||0).toLocaleString("en-AU");
 
 let _rowsCache = [];
+let _me = {email: "", role: ""};
+
+async function loadWhoAmI(){
+  try {
+    const r = await fetch("/api/orders/whoami", {credentials:"same-origin"});
+    _me = await r.json();
+  } catch { _me = {email: "", role: ""}; }
+}
 
 async function loadOrders(){
   const status = $("#fStatus").value;
   const qs = new URLSearchParams();
   if (status) qs.set("status", status);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="9" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="10" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="9" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="10" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="9" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -148,9 +163,19 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="9" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" class="empty">No orders match.</td></tr>`;
   } else {
-    body.innerHTML = filtered.map(r => `
+    const meEmail = (_me.email || "").toLowerCase();
+    const isAll   = (_me.role  || "").toUpperCase() === "ALL";
+    body.innerHTML = filtered.map(r => {
+      // Edit cell — only the original submitter (or ALL-role) gets a
+      // clickable Edit link.  Everyone else sees a subtle dash.
+      const submitter = (r.submitted_by_email || "").toLowerCase();
+      const canEdit   = (meEmail && submitter && meEmail === submitter) || isAll;
+      const editCell  = canEdit
+        ? `<a class="edit-link" href="/order?id=${r.id}&edit=1" onclick="event.stopPropagation()">Edit</a>`
+        : `<span class="edit-dash">—</span>`;
+      return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col">#${r.id}</td>
         <td>${r.submitted_at || ""}</td>
@@ -161,8 +186,9 @@ function renderRows(){
         <td class="num">${fmtQty(r.total_qty)}</td>
         <td class="num">${fmtMoney(r.grand_total)}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
-      </tr>
-    `).join("");
+        <td class="center">${editCell}</td>
+      </tr>`;
+    }).join("");
   }
   $("#cntTotal").textContent   = _rowsCache.length;
   $("#cntPending").textContent = _rowsCache.filter(r => r.status_sap !== "Y").length;
@@ -177,7 +203,12 @@ function escapeHtml(s){
 
 $("#fStatus").addEventListener("change", loadOrders);
 $("#fSearch").addEventListener("input",  renderRows);
-loadOrders();
+// Load whoami first so the initial render knows which rows to
+// decorate with the Edit link.
+(async () => {
+  await loadWhoAmI();
+  loadOrders();
+})();
 </script>
 </body>
 </html>

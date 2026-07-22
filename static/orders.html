@@ -1501,6 +1501,12 @@ function serializeOrder(){
 }
 
 $("#btnSubmit").addEventListener("click", async () => {
+  // Edit mode routes to the update endpoint instead of creating a new
+  // row — driven by dataset.mode / dataset.oid set in hydrateSubmittedOrder.
+  const btn = $("#btnSubmit");
+  if (btn.dataset.mode === "edit" && btn.dataset.oid){
+    return saveEditedOrder(btn.dataset.oid);
+  }
   const payload = serializeOrder();
   if (!payload.header.sold_to){
     setStatus("Enter a Sold-to before submitting.", "warn"); return;
@@ -1508,7 +1514,6 @@ $("#btnSubmit").addEventListener("click", async () => {
   if (!payload.lines.length){
     setStatus("Add at least one order line before submitting.", "warn"); return;
   }
-  const btn = $("#btnSubmit");
   btn.disabled = true; btn.textContent = "Submitting…";
   try {
     const r = await fetch("/api/orders/submit", {
@@ -1533,11 +1538,14 @@ $("#btnSubmit").addEventListener("click", async () => {
   }
 });
 
-/* ────────────────────────── view submitted order ────────────────────── */
+/* ────────────────────────── view / edit submitted order ─────────────── */
 // When /order?id=<n>, hydrate the form from the saved payload and
-// lock the inputs (readonly) so history stays intact.  Harry / ALL
-// see the status-toggle panel at the top.
-async function hydrateSubmittedOrder(oid){
+// lock the inputs (readonly) so history stays intact.  With
+// ?id=<n>&edit=1 the form unlocks for the original submitter and
+// shows a "Save changes" button in place of Submit; anyone else
+// still gets the read-only view.  Harry sees the status-toggle
+// panel either way.
+async function hydrateSubmittedOrder(oid, editMode){
   let data;
   try {
     const r = await fetch(`/api/orders/detail/${oid}`, {credentials: "same-origin"});
@@ -1578,18 +1586,95 @@ async function hydrateSubmittedOrder(oid){
   $("#finalTotal").textContent  = t.grand_total    || "0.00";
   $("#avgDC").textContent       = t.avg_dc_pct ? t.avg_dc_pct + "%" : "";
   if (t.freight_flag) $("#freightFlag").value = t.freight_flag;
-  // 4. Lock the form so a submitted order can't be silently edited.
-  $$("input, textarea").forEach(el => {
-    if (el.closest(".cs-panel")) return;
-    el.readOnly = true;
-    el.tabIndex = -1;
-  });
-  $("#btnAddRow").disabled = true;
-  $("#btnClear").disabled  = true;
-  $("#btnSubmit").hidden   = true;
-  $("#status").innerHTML = `Viewing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b>`;
-  // 5. Status toggle for CS / ALL-role users.
+
+  // 4. Decide view vs edit mode.  Edit needs both the URL flag and
+  // the current user to be the original submitter (or ALL-role).
+  let who = {};
+  try {
+    who = await (await fetch("/api/orders/whoami", {credentials: "same-origin"})).json();
+  } catch {}
+  const canEdit = editMode && (
+    (who.email && data.submitted_by_email && who.email === data.submitted_by_email.toLowerCase()) ||
+    who.role === "ALL"
+  );
+
+  if (canEdit){
+    // Unlock inputs; swap Submit → Save changes; add a Cancel that
+    // routes back to the read-only view.
+    $("#btnAddRow").disabled = false;
+    $("#btnClear").disabled  = false;
+    const sBtn = $("#btnSubmit");
+    sBtn.hidden = false;
+    sBtn.textContent = "Save changes";
+    sBtn.dataset.mode = "edit";
+    sBtn.dataset.oid  = String(data.id);
+    // Trigger recalcRow so any user tweak updates totals live.
+    $$("#linesBody tr").forEach(tr => recalcRow(tr));
+    updateTotals();
+    $("#status").innerHTML = `Editing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b> (will reset to N on save)`;
+  } else {
+    // Read-only view — lock every input, hide Submit, and let Harry
+    // (via wireStatusPanel below) still flip the SAP flag.
+    $$("input, textarea").forEach(el => {
+      if (el.closest(".cs-panel")) return;
+      el.readOnly = true;
+      el.tabIndex = -1;
+    });
+    $("#btnAddRow").disabled = true;
+    $("#btnClear").disabled  = true;
+    $("#btnSubmit").hidden   = true;
+    // Offer an Edit chip when the viewer IS the submitter (or ALL) —
+    // one click flips into edit mode with the same order id.
+    const isSubmitter = (who.email && data.submitted_by_email &&
+                         who.email === data.submitted_by_email.toLowerCase());
+    if (isSubmitter || who.role === "ALL"){
+      const editBtn = document.createElement("button");
+      editBtn.className   = "primary";
+      editBtn.textContent = "Edit";
+      editBtn.style.background = "#f59e0b";
+      editBtn.style.borderColor = "#b45309";
+      editBtn.addEventListener("click", () => {
+        location.href = `/order?id=${data.id}&edit=1`;
+      });
+      $("#btnSubmit").parentElement.appendChild(editBtn);
+    }
+    $("#status").innerHTML = `Viewing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b>`;
+  }
+  // 5. Status toggle for Harry.
   wireStatusPanel(data);
+}
+
+// Update an existing submitted order — reuses serializeOrder().  Only
+// the original submitter (or ALL-role) can actually persist; a 403
+// bubbles up as a friendly status message.
+async function saveEditedOrder(oid){
+  const payload = serializeOrder();
+  if (!payload.header.sold_to){
+    setStatus("Sold-to is required.", "warn"); return;
+  }
+  if (!payload.lines.length){
+    setStatus("At least one order line required.", "warn"); return;
+  }
+  const btn = $("#btnSubmit");
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const r = await fetch(`/api/orders/detail/${oid}/update`, {
+      method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Save failed: ${j.error || r.statusText}`, "warn");
+      btn.disabled = false; btn.textContent = "Save changes"; return;
+    }
+    btn.textContent = "Saved";
+    setStatus(`Order <b>#${oid}</b> updated — Harry has been re-notified and SAP flag reset to N.`, "ok");
+    setTimeout(() => { location.href = "/orders_list"; }, 1400);
+  } catch(e){
+    setStatus("Save failed: " + e, "warn");
+    btn.disabled = false; btn.textContent = "Save changes";
+  }
 }
 
 async function wireStatusPanel(order){
@@ -1641,10 +1726,13 @@ async function wireStatusPanel(order){
 /* ────────────────────────── boot ────────────────────────── */
 (function boot(){
   seedDate();
-  const oid = new URLSearchParams(location.search).get("id");
+  const q   = new URLSearchParams(location.search);
+  const oid = q.get("id");
+  const editMode = q.get("edit") === "1";
   if (oid){
-    // Viewing a previously submitted order — no seeded blanks needed.
-    hydrateSubmittedOrder(oid);
+    // Viewing / editing a previously submitted order — no seeded
+    // blanks needed; hydrate rebuilds every row from the payload.
+    hydrateSubmittedOrder(oid, editMode);
   } else {
     // Fresh entry — seed 5 empty lines so the layout looks like the form.
     for(let i=0;i<5;i++) addRow();
