@@ -246,6 +246,22 @@
   table.lines tbody td.red-num input{color:#c62828;font-weight:600}
   table.lines tbody td.pct-cell input{color:#b45309;background:#fff8e6;font-weight:700;text-align:right;}
   table.lines tbody td.total-cell input{background:#fff8e6;text-align:right;font-weight:700}
+  /* Delete-row column — tiny leading gutter with an × button visible
+     on row hover (or always dim so the affordance is discoverable). */
+  table.lines th.row-del-th{width:22px;padding:0;background:#1e293b}
+  table.lines tbody td.row-del-cell{
+    width:22px;padding:0;text-align:center;background:#f9fafb;
+  }
+  table.lines tbody td.row-del-cell button.row-del{
+    width:18px;height:18px;line-height:16px;padding:0;
+    border:none;background:transparent;color:#cbd5e1;
+    font-size:16px;font-weight:700;cursor:pointer;border-radius:3px;
+    transition:background .1s, color .1s;
+  }
+  table.lines tbody tr:hover td.row-del-cell button.row-del{color:#94a3b8}
+  table.lines tbody td.row-del-cell button.row-del:hover{
+    background:#dc2626;color:#fff;
+  }
   table.lines tfoot tr.total-row td{background:#f0f0f0;font-weight:800;}
   table.lines tfoot tr.total-row td.label{text-align:center}
   table.lines tfoot tr.total-row td.right-lbl{text-align:right;padding-right:8px;font-size:12px;white-space:nowrap}
@@ -475,6 +491,7 @@
     <table class="lines" id="linesTable">
       <thead>
         <tr>
+          <th class="row-del-th" title="Delete row"></th>
           <th class="mcode">M-Code</th>
           <th class="narrow">Qty</th>
           <th class="wide">Size</th>
@@ -505,8 +522,10 @@
       </tbody>
       <tfoot>
         <!-- Subtotal row — matches the Excel workbook's Total line:
-             label + total qty + subtotal (ex GST) + qty-weighted avg DC. -->
+             label + total qty + subtotal (ex GST) + qty-weighted avg DC.
+             Leading empty td lines up under the delete-column header. -->
         <tr class="total-row">
+          <td></td>
           <td class="label">Total</td>
           <td class="num center" id="ttlQty">0</td>
           <td colspan="15"></td>
@@ -516,7 +535,7 @@
         </tr>
         <!-- Total inc GST (subtotal + 10%). -->
         <tr class="total-row summary-row">
-          <td colspan="14" class="summary-blank"></td>
+          <td colspan="15" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
           <td colspan="5" class="summary-blank"></td>
@@ -525,7 +544,7 @@
              Amount sits in the same column (Total Amount) as the inc-
              GST and final-total lines so all three stack vertically. -->
         <tr class="total-row summary-row">
-          <td colspan="10" class="summary-blank"></td>
+          <td colspan="11" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
           <td class="center summary-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
@@ -536,7 +555,7 @@
         </tr>
         <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="14" class="summary-blank"></td>
+          <td colspan="15" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
           <td colspan="5" class="summary-blank"></td>
@@ -1173,6 +1192,23 @@ document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
 /* ────────────────────────── row template ────────────────────────── */
 function newRow(){
   const tr = document.createElement("tr");
+  // Delete-row × button — first cell on every line.  Clicking removes
+  // the row and re-runs totals.  We seed at least one blank row after
+  // a delete so the form never collapses to zero lines.
+  const delTd = document.createElement("td");
+  delTd.className = "row-del-cell";
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "row-del";
+  delBtn.textContent = "×";
+  delBtn.title = "Delete this row";
+  delBtn.addEventListener("click", () => {
+    tr.remove();
+    if (!document.querySelector("#linesBody tr")) addRow();
+    updateTotals();
+  });
+  delTd.appendChild(delBtn);
+  tr.appendChild(delTd);
   const cells = [
     {c:"m_code",         cls:"", list:"mcode_list"},
     {c:"qty",            cls:"num center"},
