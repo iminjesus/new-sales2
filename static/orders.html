@@ -783,7 +783,9 @@ function applyAgingDC(row) {
   if (agingEl) agingEl.value = target.toFixed(2);
   const addEl = row.querySelector('[data-col="add_dc"]');
   if (addEl) addEl.value = "";
-  recalcRow(row);
+  // Aging overrides every other DC — kick the auto-DC lookup so it
+  // clears any promo % it previously stamped into sp_dc.
+  applyAdditionalDCToRow(row);
 }
 
 // Cache of the last-loaded aged-stock rows + plant so the search
@@ -953,7 +955,23 @@ async function applyAdditionalDCToRow(rowEl){
   const pg    = rowEl.dataset.productGroup || "";
   const qtyEl = rowEl.querySelector('[data-col="qty"]');
   const spEl  = rowEl.querySelector('[data-col="sp_dc"]');
+  const agEl  = rowEl.querySelector('[data-col="aging_dc"]');
   if (!brand || !spEl) return;
+  // Aging DC completely overrides every other DC on the row (customer-
+  // independent tier ladder).  When it's set, we don't fetch or stamp
+  // sp_dc — and we clear any prior auto-fill so the cell stops looking
+  // like the promo % is being applied on top of aging.
+  const agingDC = toNum(agEl?.value || 0);
+  if (agingDC > 0){
+    if (spEl.dataset.autoSpDc === "1"){
+      spEl.value = "";
+      spEl.title = "";
+      delete spEl.dataset.autoSpDc;
+    }
+    delete rowEl.dataset.promo;
+    recalcRow(rowEl);
+    return;
+  }
   const qty = toNum(qtyEl?.value || 0);
   const q = new URLSearchParams({
     sold_to: soldTo, brand, qty: String(qty),
@@ -1209,6 +1227,13 @@ function newRow(){
   // subsequent qty/material change doesn't clobber the BDE's override.
   tr.querySelector('[data-col="sp_dc"]')?.addEventListener("input", (e) => {
     if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
+  });
+  // Aging DC change → re-run the auto-DC lookup.  If aging is now
+  // set, applyAdditionalDCToRow clears sp_dc; if aging is cleared,
+  // it re-populates sp_dc from the promo lookup so the row snaps
+  // back to the customer's normal promo % automatically.
+  tr.querySelector('[data-col="aging_dc"]')?.addEventListener("change", () => {
+    if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
