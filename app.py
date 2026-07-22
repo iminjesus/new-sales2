@@ -3181,11 +3181,10 @@ def api_orders_status(oid):
     if new_stat not in ("Y", "N"):
         return jsonify({"error": "status must be Y or N"}), 400
     who = (_bde_from_request() or "").strip().lower()
-    # Harry has flip rights; leadership (role=ALL) can also flip if
-    # they're covering.  Everyone else gets a 403.
-    role = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
-    if who != HARRY_CS_EMAIL and role != "ALL":
-        return jsonify({"error": "only CS (Harry) can change SAP status"}), 403
+    # Only Harry (CS) can flip the SAP-entered flag.  Leadership /
+    # ALL-role users can view the panel but not write.
+    if who != HARRY_CS_EMAIL:
+        return jsonify({"error": "only Harry (CS) can change SAP status"}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute(
@@ -3210,7 +3209,7 @@ def api_orders_status(oid):
 @app.get("/api/orders/whoami")
 def api_orders_whoami():
     """Front-end reads this to decide whether to show the status
-    toggle (Harry / ALL) and to auto-fill submitted_by."""
+    toggle (Harry-only) and to auto-fill submitted_by."""
     who = (_bde_from_request() or "").strip().lower()
     name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
     return jsonify({
@@ -3218,7 +3217,9 @@ def api_orders_whoami():
         "name":      name or "",
         "state":     state or "",
         "role":      role or "",
-        "is_cs":     (who == HARRY_CS_EMAIL) or (role == "ALL"),
+        # Only Harry can flip Y/N — kept as a single field the front
+        # end can key off (no ALL-role fallback here).
+        "is_cs":     who == HARRY_CS_EMAIL,
         "is_harry":  who == HARRY_CS_EMAIL,
     })
 
