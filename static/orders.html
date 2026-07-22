@@ -471,9 +471,29 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
-        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:center">Management Approval / Reason Behind Pricing</div>
+        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:center;position:relative">
+          <span>Management Approval / Reason Behind Pricing</span>
+          <label id="needsApprovalWrap"
+                 style="position:absolute;right:12px;display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;color:#0f172a">
+            <input type="checkbox" id="needs_mgmt_approval" style="cursor:pointer;transform:translateY(1px)"/>
+            <span>Request approval</span>
+          </label>
+        </div>
 
-        <div class="val" style="grid-column: span 4;padding:0"><textarea id="mgmt_reason" rows="3" style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea></div>
+        <div class="val" style="grid-column: span 4;padding:0">
+          <textarea id="mgmt_reason" rows="3"
+                    placeholder="If Approval is requested, explain why (e.g. deep DC on aged stock, fleet retention, competitor match)."
+                    style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea>
+        </div>
+        <!-- Approval-status band — hidden until we know the order needs
+             approval; then rendered by JS with per-approver Y/N chips. -->
+        <div id="approvalPanel" hidden
+             style="grid-column: span 4;padding:8px 10px;background:#fffbeb;border:1px solid #f59e0b;border-radius:3px;margin-top:6px">
+          <div style="font-weight:700;color:#92400e;font-size:11.5px;margin-bottom:4px">
+            Management Approval &nbsp;·&nbsp; parallel — either approver can approve independently
+          </div>
+          <div id="approvalRow" style="display:flex;gap:14px;font-size:12px;color:#78350f;flex-wrap:wrap"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1445,6 +1465,9 @@ const HEADER_FIELDS = [
   "po_number", "doc_date", "bde_name",
   "special_instruction", "mgmt_reason", "ship_to_state",
 ];
+// Boolean-ish fields on the header that need special handling
+// (checkbox instead of .value).
+const HEADER_BOOL_FIELDS = ["needs_mgmt_approval"];
 // Base DC readonly cells sit outside HEADER_FIELDS because they're
 // derived — captured separately so the printed copy still shows them.
 const BASE_DC_FIELDS = ["basedc_hkpclt", "basedc_tbr", "basedc_lfpclt"];
@@ -1465,6 +1488,9 @@ const LINE_FIELDS = [
 function serializeOrder(){
   const header = {};
   HEADER_FIELDS.forEach(id => { header[id] = $("#"+id)?.value || ""; });
+  HEADER_BOOL_FIELDS.forEach(id => {
+    header[id] = $("#"+id)?.checked ? "Y" : "N";
+  });
   // Alias state / order_date to a friendlier name for the list page.
   header.state      = header.ship_to_state || "";
   header.order_date = header.doc_date      || "";
@@ -1555,9 +1581,11 @@ async function hydrateSubmittedOrder(oid, editMode){
     setStatus("Order not found.", "warn"); return;
   }
   const p = data.payload || {};
-  // 1. Header
+  // 1. Header — text fields via .value, boolean fields via .checked.
   Object.entries(p.header || {}).forEach(([k,v]) => {
-    const el = $("#"+k); if (el) el.value = v || "";
+    const el = $("#"+k); if (!el) return;
+    if (el.type === "checkbox") el.checked = (v === "Y" || v === true || v === "true");
+    else el.value = v || "";
   });
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
@@ -1642,6 +1670,67 @@ async function hydrateSubmittedOrder(oid, editMode){
   }
   // 5. Status toggle for Harry.
   wireStatusPanel(data);
+  // 6. Management-approval status band + Approve button.
+  wireApprovalPanel(data, who);
+}
+
+// Approval-band renderer.  Shows Y/N chips for the two named approvers
+// and offers an Approve button to whichever one is currently viewing.
+function wireApprovalPanel(order, who){
+  const panel = $("#approvalPanel");
+  const row   = $("#approvalRow");
+  if (!panel || !row) return;
+  if (order.needs_mgmt_approval !== "Y"){
+    panel.hidden = true;
+    return;
+  }
+  const chip = (nm, done, at) => {
+    const bg = done === "Y" ? "#16a34a" : "#94a3b8";
+    const lb = done === "Y" ? `✓ Approved ${at || ""}` : "⏳ Pending";
+    return `<span><b>${nm}:</b> <span style="background:${bg};color:#fff;padding:2px 8px;border-radius:3px;font-weight:700;font-size:11px">${lb}</span></span>`;
+  };
+  row.innerHTML = [
+    chip("Hayden",  order.approved_a, order.approved_a_at),
+    chip("JunJong", order.approved_b, order.approved_b_at),
+  ].join("");
+
+  // Approve button — only for the two named approvers, and only when
+  // their own slot is still Pending.  Adds inline so the click target
+  // sits next to their chip.
+  const myMissing = (who.is_approver_a && order.approved_a !== "Y")
+                  || (who.is_approver_b && order.approved_b !== "Y");
+  if (myMissing){
+    const btn = document.createElement("button");
+    btn.textContent = "Approve";
+    btn.style.cssText = "margin-left:12px;padding:4px 12px;background:#059669;color:#fff;border:1px solid #047857;border-radius:3px;font-weight:700;cursor:pointer";
+    btn.addEventListener("click", async () => {
+      btn.disabled = true; btn.textContent = "Approving…";
+      try {
+        const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
+          method: "POST", credentials: "same-origin",
+          headers: {"Content-Type": "application/json"}, body: "{}",
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok){
+          setStatus(`Approve failed: ${j.error || r.statusText}`, "warn");
+          btn.disabled = false; btn.textContent = "Approve"; return;
+        }
+        const now = new Date().toISOString().slice(0,16).replace("T"," ");
+        if (j.slot === "approved_a"){
+          order.approved_a = "Y"; order.approved_a_at = now;
+        } else {
+          order.approved_b = "Y"; order.approved_b_at = now;
+        }
+        setStatus("Approval recorded.", "ok");
+        wireApprovalPanel(order, who);
+      } catch(e){
+        setStatus("Approve failed: "+e, "warn");
+        btn.disabled = false; btn.textContent = "Approve";
+      }
+    });
+    row.appendChild(btn);
+  }
+  panel.hidden = false;
 }
 
 // Update an existing submitted order — reuses serializeOrder().  Only

@@ -2868,7 +2868,13 @@ def api_orders_additional_dc():
 # once he's keyed it in on the SAP side.  All state lives here — the
 # order form and the list page both read/write via /api/orders/* below.
 # ══════════════════════════════════════════════════════════════════════
-HARRY_CS_EMAIL = "harry.jallis@hankooktyre.com.au"
+HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
+# Parallel approvers — either can approve independently; the front-end
+# shows both statuses side-by-side.
+MGMT_APPROVER_EMAILS = [
+    "hayden.begbie@hankooktyre.com.au",
+    "junjong.cho@hankooktyre.com.au",
+]
 
 def _ensure_submitted_orders_table():
     try:
@@ -2903,6 +2909,26 @@ def _ensure_submitted_orders_table():
                 INDEX idx_so_sold_to   (sold_to)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # Parallel management-approval columns — added idempotently so
+        # older deployments upgrade without a separate migration.
+        # needs_mgmt_approval = 'Y' when the BDE ticked the box on the
+        # form.  approved_a / approved_b track the two named approvers
+        # independently (Hayden = approver A, JunJong = approver B).
+        # mgmt_reason is a copy of the yellow "reason behind pricing"
+        # textarea, surfaced as a column so it's queryable / visible in
+        # the list without unpacking payload_json.
+        _add_cols = [
+            ("needs_mgmt_approval", "CHAR(1) NOT NULL DEFAULT 'N'"),
+            ("mgmt_reason",         "TEXT NULL"),
+            ("approved_a",          "CHAR(1) NOT NULL DEFAULT 'N'"),
+            ("approved_a_at",       "DATETIME NULL"),
+            ("approved_b",          "CHAR(1) NOT NULL DEFAULT 'N'"),
+            ("approved_b_at",       "DATETIME NULL"),
+        ]
+        for col, ddl in _add_cols:
+            cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE submitted_orders ADD COLUMN {col} {ddl}")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         print(f"[submitted_orders] schema init failed: {e}")
@@ -2933,12 +2959,31 @@ def _submitted_order_email_html(oid, order, base_url):
         )
     list_url   = f"{base_url}/orders_list"
     detail_url = f"{base_url}/order?id={oid}"
+    # Approval-needed banner + reason block — only rendered when the
+    # BDE ticked "Management Approval needed" so the two approvers
+    # (Hayden + JunJong) immediately see WHAT they're being asked to
+    # approve and WHY.
+    approval_block = ""
+    if (order.get("needs_mgmt_approval") == "Y"):
+        reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
+        approval_block = f"""
+        <div style="background:#fef3c7;border:1px solid #f59e0b;padding:10px 14px;margin-bottom:14px;border-radius:4px">
+          <div style="font-weight:800;color:#92400e;margin-bottom:6px">⚑ Management Approval Requested</div>
+          <div style="color:#78350f;font-size:12.5px;margin-bottom:6px">
+            The BDE has flagged this order for parallel approval by Hayden Begbie and JunJong Cho.
+          </div>
+          <div style="background:#fff;border:1px solid #fbbf24;padding:8px 10px;border-radius:3px;font-size:12.5px;color:#111">
+            <b>Reason:</b><br>{reason_html}
+          </div>
+        </div>
+        """
     return f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:820px">
       <div style="background:#f5c518;padding:12px 16px;font-weight:800;color:#000">
         Special Price Request Form &nbsp; #{oid}
       </div>
       <div style="padding:14px 16px;background:#fff;border:1px solid #e5e7eb">
+        {approval_block}
         <table style="border-collapse:collapse;width:100%;margin-bottom:14px">
           {_row("Submitted",      order.get("submitted_at") or "")}
           {_row("BDE",            header.get("bde_name") or "")}
@@ -3018,6 +3063,13 @@ def api_orders_submit():
         except Exception:
             return 0.0
 
+    # Management-approval flag comes from the header block; the reason
+    # is a copy of the yellow textarea (mgmt_reason).  Both are stored
+    # as top-level columns so the list page and email templates can
+    # read them without unpacking payload_json.
+    needs_approval = "Y" if (header.get("needs_mgmt_approval") in ("Y", "y", True, "true", "1")) else "N"
+    mgmt_reason    = (header.get("mgmt_reason") or "").strip()
+
     conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute(
@@ -3025,8 +3077,9 @@ def api_orders_submit():
             "(submitted_by_bde, submitted_by_email, sold_to, sold_to_name, "
             " ship_to, ship_to_name, state, po_number, order_date, "
             " subtotal, total_inc_gst, freight_amount, grand_total, "
-            " total_qty, sovd_qty, avg_dc_pct, status_sap, payload_json) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'N',%s)",
+            " total_qty, sovd_qty, avg_dc_pct, status_sap, "
+            " needs_mgmt_approval, mgmt_reason, payload_json) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'N',%s,%s,%s)",
             (
                 submitted_by_bde[:120],
                 submitted_by_email[:255],
@@ -3044,6 +3097,8 @@ def api_orders_submit():
                 int(_num(totals.get("total_qty"))),
                 int(_num(totals.get("sovd_qty"))),
                 _num(totals.get("avg_dc_pct")),
+                needs_approval,
+                mgmt_reason,
                 _json.dumps(payload, ensure_ascii=False, default=str),
             ),
         )
@@ -3065,13 +3120,22 @@ def api_orders_submit():
         base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
     except Exception:
         base_url = ""
-    subject = (f"[SPRF #{oid}] {submitted_by_bde or 'BDE'} → "
+    subject_prefix = "[SPRF APPROVAL NEEDED" if needs_approval == "Y" else "[SPRF"
+    subject = (f"{subject_prefix} #{oid}] {submitted_by_bde or 'BDE'} → "
                f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
     payload_for_mail = dict(payload)
-    payload_for_mail["submitted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload_for_mail["needs_mgmt_approval"] = needs_approval
+    payload_for_mail["mgmt_reason"]         = mgmt_reason
+    # When approval is needed, put both approvers on To alongside
+    # Harry so everyone who has to act sees it in their inbox
+    # directly.  Otherwise it's Harry-only (BDE on Cc).
+    to_list = [HARRY_CS_EMAIL]
+    if needs_approval == "Y":
+        to_list += MGMT_APPROVER_EMAILS
     cc = [submitted_by_email] if submitted_by_email else []
     try:
-        _send_mail_async([HARRY_CS_EMAIL], cc, subject,
+        _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
     except Exception as e:
         print(f"[submit] mail queue failed: {e}")
@@ -3100,7 +3164,7 @@ def api_orders_list():
             f"SELECT id, submitted_at, submitted_by_bde, submitted_by_email, "
             f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
             f"       total_qty, grand_total, status_sap, status_changed_at, "
-            f"       status_changed_by "
+            f"       status_changed_by, needs_mgmt_approval, approved_a, approved_b "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -3139,13 +3203,16 @@ def api_orders_detail(oid):
             "       total_qty, sovd_qty, subtotal, total_inc_gst, "
             "       freight_amount, grand_total, avg_dc_pct, "
             "       status_sap, status_changed_at, status_changed_by, "
+            "       needs_mgmt_approval, mgmt_reason, "
+            "       approved_a, approved_a_at, approved_b, approved_b_at, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
-        for k in ("submitted_at", "status_changed_at"):
+        for k in ("submitted_at", "status_changed_at",
+                  "approved_a_at", "approved_b_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -3248,6 +3315,10 @@ def api_orders_update(oid):
             except Exception:
                 return 0.0
 
+        # Edited content invalidates any prior approvals — reset both
+        # sides so the approvers see the new version cleanly.
+        needs_approval = "Y" if (header.get("needs_mgmt_approval") in ("Y","y",True,"true","1")) else "N"
+        mgmt_reason    = (header.get("mgmt_reason") or "").strip()
         cur2 = conn.cursor()
         try:
             cur2.execute(
@@ -3257,6 +3328,9 @@ def api_orders_update(oid):
                 "  subtotal=%s, total_inc_gst=%s, freight_amount=%s, grand_total=%s, "
                 "  total_qty=%s, sovd_qty=%s, avg_dc_pct=%s, "
                 "  status_sap='N', status_changed_at=NOW(), status_changed_by=%s, "
+                "  needs_mgmt_approval=%s, mgmt_reason=%s, "
+                "  approved_a='N', approved_a_at=NULL, "
+                "  approved_b='N', approved_b_at=NULL, "
                 "  payload_json=%s "
                 "WHERE id=%s",
                 (
@@ -3275,6 +3349,8 @@ def api_orders_update(oid):
                     int(_num(totals.get("sovd_qty"))),
                     _num(totals.get("avg_dc_pct")),
                     who[:255],
+                    needs_approval,
+                    mgmt_reason,
                     _json.dumps(payload, ensure_ascii=False, default=str),
                     oid,
                 ),
@@ -3298,25 +3374,65 @@ def api_orders_update(oid):
     except Exception:
         base_url = ""
     submitted_by_bde = (row.get("submitted_by_bde") or "")
-    subject = (f"[SPRF UPDATE #{oid}] {submitted_by_bde or 'BDE'} → "
+    subject_prefix = "[SPRF UPDATE + APPROVAL NEEDED" if needs_approval == "Y" else "[SPRF UPDATE"
+    subject = (f"{subject_prefix} #{oid}] {submitted_by_bde or 'BDE'} → "
                f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
     payload_for_mail = dict(payload)
-    payload_for_mail["submitted_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload_for_mail["needs_mgmt_approval"] = needs_approval
+    payload_for_mail["mgmt_reason"]         = mgmt_reason
+    to_list = [HARRY_CS_EMAIL]
+    if needs_approval == "Y":
+        to_list += MGMT_APPROVER_EMAILS
     cc = [who] if who else []
     try:
-        _send_mail_async([HARRY_CS_EMAIL], cc, subject,
+        _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
     except Exception as e:
         print(f"[update] mail queue failed: {e}")
 
     return jsonify({"ok": True, "id": oid, "status": "N",
-                    "note": "SAP flag reset to N after edit"})
+                    "note": "SAP flag + approvals reset to N after edit"})
+
+
+@app.post("/api/orders/detail/<int:oid>/approve")
+def api_orders_approve(oid):
+    """Mark this order approved by the caller (Hayden or JunJong).
+    Parallel approval — each slot moves independently.  Body: {}
+    (approver is inferred from the request identity)."""
+    who = (_bde_from_request() or "").strip().lower()
+    approver_col = None
+    if   who == MGMT_APPROVER_EMAILS[0]: approver_col = "approved_a"   # Hayden
+    elif who == MGMT_APPROVER_EMAILS[1]: approver_col = "approved_b"   # JunJong
+    if not approver_col:
+        return jsonify({"error": "only the named approvers can approve"}), 403
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            f"UPDATE submitted_orders SET {approver_col} = 'Y', "
+            f"  {approver_col}_at = NOW() "
+            f"WHERE id = %s AND needs_mgmt_approval = 'Y'",
+            (oid,))
+        if cur.rowcount == 0:
+            return jsonify({"error": "not found or doesn't need approval"}), 404
+        conn.commit()
+        return jsonify({"ok": True, "slot": approver_col, "by": who})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
 
 
 @app.get("/api/orders/whoami")
 def api_orders_whoami():
     """Front-end reads this to decide whether to show the status
-    toggle (Harry-only) and to auto-fill submitted_by."""
+    toggle (Harry-only) and to auto-fill submitted_by.  Also
+    surfaces is_approver_a / is_approver_b so the detail page can
+    render the Approve button only for Hayden / JunJong."""
     who = (_bde_from_request() or "").strip().lower()
     name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
     return jsonify({
@@ -3326,8 +3442,10 @@ def api_orders_whoami():
         "role":      role or "",
         # Only Harry can flip Y/N — kept as a single field the front
         # end can key off (no ALL-role fallback here).
-        "is_cs":     who == HARRY_CS_EMAIL,
-        "is_harry":  who == HARRY_CS_EMAIL,
+        "is_cs":         who == HARRY_CS_EMAIL,
+        "is_harry":      who == HARRY_CS_EMAIL,
+        "is_approver_a": who == MGMT_APPROVER_EMAILS[0],   # Hayden
+        "is_approver_b": who == MGMT_APPROVER_EMAILS[1],   # JunJong
     })
 
 
