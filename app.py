@@ -1011,6 +1011,32 @@ def orders_page():
 # ══════════════════════════════════════════════════════════════════════
 _DEMO_COOKIE = "SPRF_DEMO"
 
+# Only these emails may enter demo mode (Cloudflare Access injects the
+# authenticated email on every request in production).  Local-dev
+# requests without any Cf-Access header are treated as allowed so a
+# developer can test /demo on 127.0.0.1 without spoofing headers.
+_DEMO_ALLOWED_EMAILS = {"jayden.bhang@hankooktyre.com.au"}
+
+
+def _demo_user_allowed():
+    """True when the caller may enter / stay in demo mode.
+    Whitelisted email → allowed everywhere.
+    No Cf-Access header at all → local dev, allowed too.
+    Anyone else in prod → denied."""
+    email = ""
+    try:
+        email = (request.headers.get("Cf-Access-Authenticated-User-Email")
+                 or request.headers.get("cf-access-authenticated-user-email")
+                 or "").strip().lower()
+    except Exception:
+        return False
+    if email in _DEMO_ALLOWED_EMAILS:
+        return True
+    if not email:
+        # Not behind Cloudflare Access — local / dev environment.
+        return True
+    return False
+
 # Column-name buckets — matched case-insensitively.  Anything not in
 # these sets passes through untouched.
 _DEMO_NAME_FIELDS = {
@@ -1039,8 +1065,14 @@ def _is_demo_mode():
     session cookie set by the /demo landing route, or a request-level
     flag stamped by the /demo route itself (needed for the very first
     request, whose cookie is only set BY the response — the request
-    coming in doesn't carry it yet)."""
+    coming in doesn't carry it yet).
+
+    Also gated by _demo_user_allowed() — an unauthorised viewer who
+    somehow forges the cookie or query param won't be anonymised
+    (their normal data flow just runs unchanged)."""
     try:
+        if not _demo_user_allowed():
+            return False
         if getattr(request, "_demo_mode_flag", False):
             return True
         if request.args.get("demo") == "1":
@@ -1270,6 +1302,13 @@ def demo_page(page):
     request-level flag so the injector sees demo mode on THIS request
     too — the cookie only reaches the browser on the response, so a
     cookie check against the incoming request would miss it."""
+    # Whitelist gate — only Jayden may enter demo mode in prod;
+    # local dev (no Cf-Access header) still passes through.
+    if not _demo_user_allowed():
+        return ("<h1 style='font-family:sans-serif;padding:30px;color:#374151'>"
+                "Demo mode is restricted.</h1>"
+                "<p style='font-family:sans-serif;padding:0 30px;color:#6b7280'>"
+                "Ask Jayden Bhang if you need access.</p>"), 403
     static_file = _DEMO_PAGES.get(page, "index.html")
     import os
     file_path = os.path.join(app.static_folder or "static", static_file)
