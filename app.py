@@ -2499,20 +2499,28 @@ def api_orders_base_dc():
     Returns
       { "HK_PCLT": 52.00, "LF_PCLT": 50.00, "TBR_HKLF": 56.00 }
 
-    Lookup tiers (first hit per brand bucket wins):
-      1. Row keyed to this exact bill_to_partner (customer-specific).
-      2. Any row whose customer_grp matches this sold-to's
-         sold_to_group (customer-group fallback for customers who
-         don't have their own row on the feed — the group row's
-         bill_to_partner belongs to a representative member).
-    Within each tier, HK/LF-branded rows win over blank-brand rows,
-    and the most-recent still-valid row wins on ties.  Amount is
-    stored as a negative percent on the feed (-52.00 = 52% discount);
-    we flip the sign so the form shows +XX.XX%.  TBR (HK&LF) is a
-    fixed constant (see _ORDERS_TBR_HKLF_PCT) until the feed splits
-    PCLT vs TBR.  If the table doesn't exist yet, the endpoint still
-    returns {TBR_HKLF: 56.00, HK_PCLT: None, LF_PCLT: None} so the
-    form just leaves the two brand cells blank instead of erroring."""
+    For each of the three output cells (HK-PCLT, LF-PCLT, TBR), we
+    walk the same 5-tier fallback chain and stamp the first hit:
+
+      1. Customer + brand + line      (bill_to = sold_to,
+                                       brand = target, line = target)
+      2. Customer + line only         (bill_to = sold_to,
+                                       brand blank, line = target)
+      3. Group + brand + line         (bill_to blank + customer_grp,
+                                       brand = target, line = target)
+      4. Group + line only            (bill_to blank + customer_grp,
+                                       brand blank, line = target)
+      5. Group Basic DC               (bill_to blank + customer_grp,
+                                       brand blank, line blank)
+
+    HK-PCLT uses target (HK, PCLT); LF-PCLT uses (LF, PCLT); TBR
+    uses ("", TBR) — for TBR the brand-specific priorities collapse
+    into the blank-brand ones, so only tiers 2/4/5 can match.
+
+    If no chain member matches, TBR falls back to _ORDERS_TBR_HKLF_PCT
+    and the PCLT cells stay blank on the form.  When the table isn't
+    loaded on this deployment the endpoint returns the same defaults
+    silently — no error toast."""
     sold_to = (request.args.get("sold_to") or "").strip()
     debug   = request.args.get("debug") in ("1", "true", "yes")
     out = {"HK_PCLT": None, "LF_PCLT": None, "TBR_HKLF": _ORDERS_TBR_HKLF_PCT}
@@ -2524,10 +2532,7 @@ def api_orders_base_dc():
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        # Silently no-op when the table isn't loaded on this deployment
-        # — the form still functions with TBR fixed and the PCLT cells
-        # blank, which is what "customer master hasn't been loaded yet"
-        # should look like.
+        # Silently no-op when the table isn't loaded on this deployment.
         try:
             cur.execute("SHOW TABLES LIKE 'dc_basic_customer'")
             if not cur.fetchone():
@@ -2535,31 +2540,27 @@ def api_orders_base_dc():
         except Exception:
             return jsonify(out)
 
-        # Introspect the table's columns — deployments differ on which
-        # column carries the customer-group code (customer_group /
-        # sold_to_group / customer / group_code / …).  Pick the first
-        # one that exists; if none does, the group fallback is skipped
-        # but tier-1 (bill_to_partner) still works.
+        # Column probes — deployments differ on the group column name;
+        # the line column was added in the most recent update.
         cols = _list_columns(cur, "dc_basic_customer")
         if debug:
             out["_debug"]["cols"] = sorted(cols)
-        group_col_candidates = [
-            "customer_group", "sold_to_group", "bill_to_group",
-            "customer", "customer_code", "group_code", "grouping",
-            "customer_grp", "cust_group", "cust_grp",
-        ]
-        group_col = next((c for c in group_col_candidates if c in cols), None)
+        group_col = next((c for c in [
+            "customer_grp", "customer_group", "sold_to_group",
+            "bill_to_group", "customer", "customer_code",
+            "group_code", "grouping", "cust_group", "cust_grp",
+        ] if c in cols), None)
+        has_line_col = "line" in cols
         if debug:
-            out["_debug"]["group_col"] = group_col
+            out["_debug"]["group_col"]    = group_col
+            out["_debug"]["has_line_col"] = has_line_col
 
-        # Resolve customer group so we can fall back to Brand + Group
-        # rows when the sold-to has no row of its own.
+        # Resolve customer group so tier 3/4/5 can match.
         group_code = ""
         try:
             cur.execute(
                 "SELECT sold_to_group FROM customer WHERE sold_to = %s LIMIT 1",
-                (sold_to,),
-            )
+                (sold_to,))
             gr = cur.fetchone()
             if gr:
                 group_code = (gr.get("sold_to_group") or "").strip()
@@ -2568,126 +2569,108 @@ def api_orders_base_dc():
         if debug:
             out["_debug"]["group_code"] = group_code
 
-        # Pick the most-recent valid row per (brand-bucket) with tier
-        # priority: tier 1 = this bill_to_partner exactly (customer-
-        # specific), tier 2 = rows whose bill_to_partner is BLANK and
-        # customer_grp matches this sold-to's group (dedicated group-
-        # default rows).  We intentionally do NOT pull rows keyed to
-        # other customers in the same group — those apply only to
-        # their own bill_to_partner.  Bucket is "HK" / "LF" for a
-        # branded row and "_BLANK_" for a blank-brand row.  ROW_NUMBER
-        # partitions by bucket and orders by tier ASC then valid_from
-        # DESC so tier-1 always wins over tier-2, and within a tier
-        # the current row wins.  Validity bounds treat NULL as open-
-        # ended.  Brand / bill_to_partner compares are trim+upper so
-        # case / whitespace drift on the feed doesn't sink the join.
+        # Pull every candidate row for this customer + their group in a
+        # single sweep, then rank in Python.  Cheap even without an
+        # index because dc_basic_customer is small and this query is
+        # scoped to one sold_to and one group_code.
+        select_cols = "bill_to_partner, brand, amount, valid_from, valid_to"
+        if group_col:    select_cols += f", {group_col} AS customer_grp"
+        else:            select_cols += ", NULL AS customer_grp"
+        if has_line_col: select_cols += ", line"
+        else:            select_cols += ", '' AS line"
         params = [sold_to]
-        group_join = ""
-        group_select = "NULL AS grp"
+        where_group = ""
         if group_col and group_code:
-            group_join = (
+            where_group = (
                 f" OR ((bill_to_partner IS NULL OR TRIM(bill_to_partner) = '')"
                 f"     AND UPPER(TRIM({group_col})) = UPPER(%s))"
             )
             params.append(group_code)
-            group_select = f"{group_col} AS grp"
-        elif group_col:
-            group_select = f"{group_col} AS grp"
+        cur.execute(
+            f"SELECT {select_cols} FROM dc_basic_customer "
+            f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
+            f"  AND (valid_from IS NULL OR valid_from <= CURDATE()) "
+            f"  AND (valid_to   IS NULL OR valid_to   >= CURDATE())",
+            tuple(params))
+        raw_rows = cur.fetchall() or []
 
-        sql = f"""
-            SELECT bucket, ABS(amount) AS pct, tier, brand, grp, bill_to_partner,
-                   valid_from, valid_to
-            FROM (
-                SELECT
-                    CASE
-                        WHEN UPPER(TRIM(brand)) = 'HK' THEN 'HK'
-                        WHEN UPPER(TRIM(brand)) = 'LF' THEN 'LF'
-                        WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
-                    END AS bucket,
-                    amount,
-                    brand,
-                    {group_select},
-                    bill_to_partner,
-                    valid_from,
-                    valid_to,
-                    CASE
-                        WHEN TRIM(bill_to_partner) = %s THEN 1
-                        ELSE 2
-                    END AS tier,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY CASE
-                            WHEN UPPER(TRIM(brand)) = 'HK' THEN 'HK'
-                            WHEN UPPER(TRIM(brand)) = 'LF' THEN 'LF'
-                            WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
-                        END
-                        ORDER BY
-                            -- Priority per bucket:
-                            --   blank-brand → group Basic DC (tier 2)
-                            --                 outranks the customer's
-                            --                 own legacy blank row.
-                            --   HK / LF     → customer's own row wins.
-                            CASE
-                                WHEN (brand IS NULL OR TRIM(brand) = '')
-                                     AND (bill_to_partner IS NULL
-                                          OR TRIM(bill_to_partner) = '')
-                                  THEN 1
-                                WHEN (brand IS NULL OR TRIM(brand) = '')
-                                     AND TRIM(bill_to_partner) = %s
-                                  THEN 2
-                                WHEN TRIM(bill_to_partner) = %s THEN 1
-                                ELSE 2
-                            END ASC,
-                            COALESCE(valid_from, '1900-01-01') DESC
-                    ) AS rn
-                FROM dc_basic_customer
-                WHERE (
-                        TRIM(bill_to_partner) = %s
-                        {group_join}
-                      )
-                  AND (
-                        UPPER(TRIM(brand)) IN ('HK', 'LF')
-                        OR brand IS NULL
-                        OR TRIM(brand) = ''
-                  )
-                  AND (valid_from IS NULL OR valid_from <= CURDATE())
-                  AND (valid_to   IS NULL OR valid_to   >= CURDATE())
-            ) t
-            WHERE t.rn = 1 AND t.bucket IS NOT NULL
-        """
-        # Params order: tier CASE (SELECT), ORDER BY blank+customer
-        # test, ORDER BY generic customer test, WHERE bill_to_partner,
-        # then optional group_code for the fallback OR.
-        exec_params = [sold_to, sold_to, sold_to] + params
-        cur.execute(sql, tuple(exec_params))
-        picks = {}
-        raw_rows = []
-        for r in cur.fetchall() or []:
-            raw_rows.append(r)
-            try:
-                picks[r["bucket"]] = float(r["pct"])
-            except Exception:
-                pass
-        # Brand-specific first, blank as fallback so an empty-brand
-        # row fills both cells for customers who don't have HK/LF
-        # entries at all.  The blank-brand row also feeds the TBR
-        # cell now — recent dc_basic_customer update ships a
-        # customer-group-level "Basic DC" row (bill_to_partner blank,
-        # brand blank, customer_grp populated) as the fallback for
-        # customers with no brand-specific OR TBR-specific entries.
-        blank = picks.get("_BLANK_")
-        out["HK_PCLT"] = picks.get("HK", blank)
-        out["LF_PCLT"] = picks.get("LF", blank)
-        if blank is not None:
-            out["TBR_HKLF"] = blank
+        # Normalise once, then apply the 5-tier priority for each cell.
+        s_sold  = sold_to
+        s_group = (group_code or "").upper()
+        norm = []
+        for r in raw_rows:
+            r_bill  = (r.get("bill_to_partner") or "").strip()
+            r_brand = (r.get("brand") or "").strip().upper()
+            r_line  = (r.get("line")  or "").strip().upper()
+            r_grp   = (r.get("customer_grp") or "").strip().upper()
+            try:    r_amt = float(r.get("amount") or 0)
+            except Exception: r_amt = 0.0
+            norm.append({
+                "bill": r_bill, "brand": r_brand, "line": r_line,
+                "grp": r_grp, "amount": r_amt,
+                "valid_from": r.get("valid_from"),
+            })
+
+        def _pick(target_brand, target_line):
+            """Return (tier, amount) for the best-matching row, or None.
+            target_brand='' means TBR-style: only blank-brand rows apply.
+            """
+            tb = (target_brand or "").upper()
+            tl = (target_line  or "").upper()
+            best = None   # (tier, sort_from_key, amount, row)
+            for r in norm:
+                is_customer = (r["bill"] == s_sold)
+                is_group    = (r["bill"] == ""    and r["grp"] == s_group and s_group)
+                tier = None
+                # Priorities 1 & 3 need a real brand target — TBR skips
+                # them entirely because tb is blank.
+                if tb:
+                    if is_customer and r["brand"] == tb and r["line"] == tl: tier = 1
+                    elif is_customer and r["brand"] == "" and r["line"] == tl: tier = 2
+                    elif is_group    and r["brand"] == tb and r["line"] == tl: tier = 3
+                    elif is_group    and r["brand"] == "" and r["line"] == tl: tier = 4
+                    elif is_group    and r["brand"] == "" and r["line"] == "": tier = 5
+                else:
+                    if is_customer and r["brand"] == "" and r["line"] == tl: tier = 2
+                    elif is_group    and r["brand"] == "" and r["line"] == tl: tier = 4
+                    elif is_group    and r["brand"] == "" and r["line"] == "": tier = 5
+                if tier is None: continue
+                # Most-recent valid_from wins on ties within a tier.
+                key = r["valid_from"] or datetime(1900, 1, 1).date()
+                # We want SMALLEST tier and LARGEST valid_from.  Store
+                # tier asc, then negate valid_from ordering via reverse
+                # comparison at the end.
+                cand = (tier, key, abs(r["amount"]), r)
+                if best is None: best = cand
+                else:
+                    if cand[0] < best[0]: best = cand
+                    elif cand[0] == best[0] and cand[1] > best[1]: best = cand
+            return best  # (tier, valid_from, amount, row) or None
+
+        hk_pick  = _pick("HK", "PCLT")
+        lf_pick  = _pick("LF", "PCLT")
+        tbr_pick = _pick("",   "TBR")
+
+        if hk_pick:  out["HK_PCLT"]  = hk_pick[2]
+        if lf_pick:  out["LF_PCLT"]  = lf_pick[2]
+        if tbr_pick: out["TBR_HKLF"] = tbr_pick[2]
+
         if debug:
             def _s(v):
                 try: return v.isoformat()
                 except Exception: return v
-            out["_debug"]["picks"] = picks
-            out["_debug"]["rows"]  = [
+            def _dump(pk):
+                if not pk: return None
+                return {"tier": pk[0], "valid_from": _s(pk[1]),
+                        "amount": pk[2], "row": {k: _s(v) for k,v in pk[3].items()}}
+            out["_debug"]["picks"] = {
+                "HK_PCLT": _dump(hk_pick),
+                "LF_PCLT": _dump(lf_pick),
+                "TBR":     _dump(tbr_pick),
+            }
+            out["_debug"]["rows"] = [
                 {k: _s(v) for k, v in r.items()} for r in raw_rows
             ]
-            out["_debug"]["sql_params"] = exec_params
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
