@@ -1035,9 +1035,14 @@ _DEMO_HIDE_FIELDS = {
 
 def _is_demo_mode():
     """True when the current request should be anonymised — either an
-    explicit ?demo=1 query param (handy for API smoke-tests) or the
-    session cookie set by the /demo landing route."""
+    explicit ?demo=1 query param (handy for API smoke-tests), the
+    session cookie set by the /demo landing route, or a request-level
+    flag stamped by the /demo route itself (needed for the very first
+    request, whose cookie is only set BY the response — the request
+    coming in doesn't carry it yet)."""
     try:
+        if getattr(request, "_demo_mode_flag", False):
+            return True
         if request.args.get("demo") == "1":
             return True
         if request.cookies.get(_DEMO_COOKIE) == "1":
@@ -1158,18 +1163,66 @@ _DEMO_PAGES = {
 }
 
 
+_DEMO_FETCH_PATCH = """
+<script>
+/* Demo mode — patch fetch/XHR so every API call carries ?demo=1 even
+   if the cookie somehow gets lost.  Belt-and-braces with the SPRF_DEMO
+   cookie the server also drops. */
+(function(){
+  const _addDemo = (url) => {
+    if (typeof url !== "string") return url;
+    if (url.startsWith("http") && !url.includes(location.host)) return url;
+    if (/[?&]demo=1(&|$)/.test(url)) return url;
+    return url + (url.includes("?") ? "&" : "?") + "demo=1";
+  };
+  const _f = window.fetch;
+  window.fetch = function(u, o){ return _f.call(this, _addDemo(u), o); };
+  const _o = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(m, u){
+    arguments[1] = _addDemo(u);
+    return _o.apply(this, arguments);
+  };
+  document.documentElement.dataset.demo = "1";
+})();
+</script>
+"""
+
+
 @app.route("/demo",           defaults={"page": ""})
 @app.route("/demo/",          defaults={"page": ""})
 @app.route("/demo/<path:page>")
 def demo_page(page):
     """Enter demo mode — sets the SPRF_DEMO session cookie and serves
-    the requested static page.  Once the cookie is set, every
-    subsequent request (nav, API, etc.) is anonymised until the user
-    hits /demo_exit or closes the browser."""
+    the requested static page.  Reads the file directly (rather than
+    going through send_static_file) so we always return a fresh 200
+    with a body the after_request injector can modify, and stamps a
+    request-level flag so the injector sees demo mode on THIS request
+    too — the cookie only reaches the browser on the response, so a
+    cookie check against the incoming request would miss it."""
     static_file = _DEMO_PAGES.get(page, "index.html")
-    resp = make_response(app.send_static_file(static_file))
-    # Session cookie: no Expires / Max-Age → dies with the browser.
+    import os
+    file_path = os.path.join(app.static_folder or "static", static_file)
+    try:
+        with open(file_path, "r", encoding="utf-8") as _fh:
+            html = _fh.read()
+    except Exception:
+        return "Demo page not found", 404
+    # Inject the fetch-patch script early so it applies before any
+    # in-page JS fires its first API call.  The after_request injector
+    # adds the orange banner on top of that.
+    if "</head>" in html and "SPRF_DEMO_FETCH" not in html:
+        html = html.replace("</head>",
+                            _DEMO_FETCH_PATCH.replace("<script>", '<script id="SPRF_DEMO_FETCH">', 1) + "\n</head>",
+                            1)
+    resp = make_response(html)
+    resp.headers["Content-Type"]  = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store"   # never let the browser stash a stale copy
     resp.set_cookie(_DEMO_COOKIE, "1", path="/", samesite="Lax")
+    # Mark THIS request as demo so the after_request injector still
+    # anonymises / banners the very first hit (cookie won't be in the
+    # request yet — it's on this outgoing response).
+    try: request._demo_mode_flag = True
+    except Exception: pass
     return resp
 
 
