@@ -1049,16 +1049,19 @@ async function applyAdditionalDCToRow(rowEl){
 // Given the row's brand + line, look up which of the three customer
 // Base DC values applies and stamp it into the row's base_dc cell.
 // TBR line → TBR (HK & LF fixed 56 %); PCLT line splits by brand.
+// Blank brand → treat the material as TBR-side and apply the TBR
+// Base DC (user rule: no-brand rows are TBR by convention).
 function applyBaseDCToRow(rowEl, brand, line){
   const rates = window._baseDCPct || {};
   const B = String(brand || "").toUpperCase();
   const L = String(line  || "").toUpperCase();
   let pct = null;
-  if (L === "TBR")               pct = rates.TBR;
+  if (!B)                              pct = rates.TBR;
+  else if (L === "TBR")                pct = rates.TBR;
   else if (L === "PCLT" && B === "HK") pct = rates.HK_PCLT;
   else if (L === "PCLT" && B === "LF") pct = rates.LF_PCLT;
-  // No line / non-PCLT-TBR / unknown brand → leave the cell alone
-  // so the BDE can key in a manual DC.
+  // Everything else (non-PCLT/TBR line, unknown brand) → leave the
+  // cell alone so the BDE can key in a manual DC.
   const el = rowEl.querySelector('[data-col="base_dc"]');
   if (!el) return;
   if (pct == null) { el.value = ""; }
