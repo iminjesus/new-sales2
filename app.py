@@ -2499,28 +2499,28 @@ def api_orders_base_dc():
     Returns
       { "HK_PCLT": 52.00, "LF_PCLT": 50.00, "TBR_HKLF": 56.00 }
 
-    For each of the three output cells (HK-PCLT, LF-PCLT, TBR), we
-    walk the same 5-tier fallback chain and stamp the first hit:
+    For each output cell (HK-PCLT, LF-PCLT, TBR) we score every
+    candidate row and pick the highest.  Score is:
+        customer_lvl * 100 + brand_match * 10 + line_match
+    where each component is 2 for a row that matches the target
+    exactly on that dimension and 1 for a blank-value fallback.
+    A row whose brand / line is populated but doesn't equal the
+    target is skipped (wrong bucket).
 
-      1. Customer + brand + line      (bill_to = sold_to,
-                                       brand = target, line = target)
-      2. Customer + line only         (bill_to = sold_to,
-                                       brand blank, line = target)
-      3. Group + brand + line         (bill_to blank + customer_grp,
-                                       brand = target, line = target)
-      4. Group + line only            (bill_to blank + customer_grp,
-                                       brand blank, line = target)
-      5. Group Basic DC               (bill_to blank + customer_grp,
-                                       brand blank, line blank)
+    This covers every combination in one pass:
+      customer+brand+line  (2·100 + 2·10 + 2 = 222)   most specific
+      customer+brand+blank (221) ▸ customer+blank+line (212)
+      customer+blank+blank (211) ▸ group+brand+line (122)
+      group+brand+blank    (121) ▸ group+blank+line  (112)
+      group+blank+blank    (111)                     Group Basic DC
 
-    HK-PCLT uses target (HK, PCLT); LF-PCLT uses (LF, PCLT); TBR
-    uses ("", TBR) — for TBR the brand-specific priorities collapse
-    into the blank-brand ones, so only tiers 2/4/5 can match.
+    HK-PCLT / LF-PCLT target (HK, PCLT) / (LF, PCLT); TBR targets
+    ("", TBR) — for TBR only blank-brand rows score at all, so a
+    branded row can't leak into the TBR cell.
 
-    If no chain member matches, TBR falls back to _ORDERS_TBR_HKLF_PCT
-    and the PCLT cells stay blank on the form.  When the table isn't
-    loaded on this deployment the endpoint returns the same defaults
-    silently — no error toast."""
+    If no candidate scores, TBR falls back to _ORDERS_TBR_HKLF_PCT
+    and the PCLT cells stay blank on the form.  When the table
+    isn't loaded, the endpoint returns those same defaults silently."""
     sold_to = (request.args.get("sold_to") or "").strip()
     debug   = request.args.get("debug") in ("1", "true", "yes")
     out = {"HK_PCLT": None, "LF_PCLT": None, "TBR_HKLF": _ORDERS_TBR_HKLF_PCT}
@@ -2612,40 +2612,51 @@ def api_orders_base_dc():
             })
 
         def _pick(target_brand, target_line):
-            """Return (tier, amount) for the best-matching row, or None.
-            target_brand='' means TBR-style: only blank-brand rows apply.
-            """
+            """Return (score, valid_from, amount, row) for the best row,
+            or None if nothing matches.  Score is customer_lvl * 100 +
+            brand_match * 10 + line_match, where each component is 2
+            for an exact match to the target and 1 for a blank-value
+            row that acts as fallback.  Higher score = more specific
+            = wins.  A row's brand / line either matches the target
+            exactly, is blank (fallback), or the row is skipped as
+            not applicable.  This covers every dc_basic_customer
+            combination (customer or group × brand-specific or blank
+            × line-specific or blank) without hard-coding tiers."""
             tb = (target_brand or "").upper()
             tl = (target_line  or "").upper()
-            best = None   # (tier, sort_from_key, amount, row)
+            best = None
             for r in norm:
                 is_customer = (r["bill"] == s_sold)
-                is_group    = (r["bill"] == ""    and r["grp"] == s_group and s_group)
-                tier = None
-                # Priorities 1 & 3 need a real brand target — TBR skips
-                # them entirely because tb is blank.
-                if tb:
-                    if is_customer and r["brand"] == tb and r["line"] == tl: tier = 1
-                    elif is_customer and r["brand"] == "" and r["line"] == tl: tier = 2
-                    elif is_group    and r["brand"] == tb and r["line"] == tl: tier = 3
-                    elif is_group    and r["brand"] == "" and r["line"] == tl: tier = 4
-                    elif is_group    and r["brand"] == "" and r["line"] == "": tier = 5
+                is_group    = (r["bill"] == "" and r["grp"] == s_group and s_group)
+                if not (is_customer or is_group):
+                    continue
+                # Brand gate.
+                if tb:  # HK or LF target — accept HK/LF exact OR blank
+                    if r["brand"] == tb:  brand_score = 2
+                    elif r["brand"] == "": brand_score = 1
+                    else: continue        # wrong brand
+                else:   # TBR target — only blank-brand rows apply
+                    if r["brand"] == "":  brand_score = 2
+                    else: continue        # branded row doesn't leak into TBR
+                # Line gate.
+                if tl:
+                    if r["line"] == tl:   line_score = 2
+                    elif r["line"] == "": line_score = 1
+                    else: continue        # wrong line
                 else:
-                    if is_customer and r["brand"] == "" and r["line"] == tl: tier = 2
-                    elif is_group    and r["brand"] == "" and r["line"] == tl: tier = 4
-                    elif is_group    and r["brand"] == "" and r["line"] == "": tier = 5
-                if tier is None: continue
-                # Most-recent valid_from wins on ties within a tier.
+                    if r["line"] == "":   line_score = 2
+                    else: continue
+                cust_score = 2 if is_customer else 1
+                score = cust_score * 100 + brand_score * 10 + line_score
                 key = r["valid_from"] or datetime(1900, 1, 1).date()
-                # We want SMALLEST tier and LARGEST valid_from.  Store
-                # tier asc, then negate valid_from ordering via reverse
-                # comparison at the end.
-                cand = (tier, key, abs(r["amount"]), r)
-                if best is None: best = cand
-                else:
-                    if cand[0] < best[0]: best = cand
-                    elif cand[0] == best[0] and cand[1] > best[1]: best = cand
-            return best  # (tier, valid_from, amount, row) or None
+                cand = (score, key, abs(r["amount"]), r)
+                if best is None:
+                    best = cand
+                elif cand[0] > best[0]:
+                    best = cand
+                elif cand[0] == best[0] and cand[1] > best[1]:
+                    best = cand
+            return best
 
         hk_pick  = _pick("HK", "PCLT")
         lf_pick  = _pick("LF", "PCLT")
@@ -2661,7 +2672,7 @@ def api_orders_base_dc():
                 except Exception: return v
             def _dump(pk):
                 if not pk: return None
-                return {"tier": pk[0], "valid_from": _s(pk[1]),
+                return {"score": pk[0], "valid_from": _s(pk[1]),
                         "amount": pk[2], "row": {k: _s(v) for k,v in pk[3].items()}}
             out["_debug"]["picks"] = {
                 "HK_PCLT": _dump(hk_pick),
