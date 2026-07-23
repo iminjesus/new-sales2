@@ -2651,20 +2651,12 @@ def api_orders_base_dc():
                 picks[r["bucket"]] = float(r["pct"])
             except Exception:
                 pass
-        # Per-cell fallback chain:
-        #   HK cell → HK-branded row → LF-branded row → blank-brand row
-        #   LF cell → LF-branded row → HK-branded row → blank-brand row
-        # The cross-brand step (HK falls back to LF, LF falls back to
-        # HK) is the user's rule: if there's no brand-specific row for
-        # this cell but the other brand does have one, inherit it
-        # instead of defaulting to the wider blank-brand row.
-        # Example — Jax (731942) has HK-PCLT missing and LF-PCLT 51 %;
-        # HK-PCLT now surfaces 51 % (was 56 % from the blank fallback).
+        # Brand-specific first, blank as fallback so an empty-brand
+        # row fills both cells for customers who don't have HK/LF
+        # entries at all.
         blank = picks.get("_BLANK_")
-        hk    = picks.get("HK")
-        lf    = picks.get("LF")
-        out["HK_PCLT"] = hk if hk is not None else (lf if lf is not None else blank)
-        out["LF_PCLT"] = lf if lf is not None else (hk if hk is not None else blank)
+        out["HK_PCLT"] = picks.get("HK", blank)
+        out["LF_PCLT"] = picks.get("LF", blank)
         if debug:
             def _s(v):
                 try: return v.isoformat()
