@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_file,send_from_directory
+from flask import Flask, request, jsonify, send_file, send_from_directory, make_response, redirect
 from werkzeug.middleware.proxy_fix import ProxyFix
 import sqlite3
 import mysql.connector
@@ -996,6 +996,190 @@ def orders_page():
     """Special Price Request Form — interactive layout.  Backing data
     comes from /api/orders/customer and /api/orders/material."""
     return app.send_static_file("orders.html")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Demo mode — anonymises customer names / BDE names / codes / PII on
+# every JSON response, and paints a fixed orange banner across the top
+# of every HTML page.  Turned on by visiting /demo (or /demo/<page>),
+# which drops a session cookie; every request that comes back carrying
+# that cookie (or an explicit ?demo=1) goes through the anonymiser in
+# _demo_after_request below.  /demo_exit clears the cookie.
+#
+# Amounts / qtys / dates / product info stay real so the dashboards
+# and charts still look meaningful — the demo just scrubs the "who".
+# ══════════════════════════════════════════════════════════════════════
+_DEMO_COOKIE = "SPRF_DEMO"
+
+# Column-name buckets — matched case-insensitively.  Anything not in
+# these sets passes through untouched.
+_DEMO_NAME_FIELDS = {
+    "sold_to_name", "ship_to_name", "customer_name", "shipname",
+}
+_DEMO_BDE_FIELDS = {
+    "bde", "bde_name", "salesman", "salesman_name",
+    "submitted_by_bde", "status_changed_by", "approved_by",
+}
+_DEMO_CODE_FIELDS = {
+    "sold_to", "ship_to", "sold_to_code", "ship_to_code",
+    "sold_to_group", "customer_group", "customer_grp",
+    "bill_to_partner", "sap_customer", "material", "m_code",
+}
+_DEMO_HIDE_FIELDS = {
+    "email", "contact_email", "submitted_by_email",
+    "phone", "mobile", "telephone", "contact_phone", "mobile_phone",
+    "phone_email", "address", "address_1", "ship_to_address",
+    "city", "postcode", "post_code",
+}
+
+
+def _is_demo_mode():
+    """True when the current request should be anonymised — either an
+    explicit ?demo=1 query param (handy for API smoke-tests) or the
+    session cookie set by the /demo landing route."""
+    try:
+        if request.args.get("demo") == "1":
+            return True
+        if request.cookies.get(_DEMO_COOKIE) == "1":
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _demo_short_hash(s, mod=10000):
+    """Stable numeric id for a value — same input → same output — so a
+    customer with three ship-tos consistently reads as the same
+    Customer-042 across every table."""
+    if s is None:
+        return 0
+    import hashlib as _h
+    h = _h.md5(str(s).encode("utf-8", "ignore")).hexdigest()
+    return int(h[:8], 16) % mod
+
+
+def _demo_anon_value(key_lower, val):
+    """Anonymise one field.  Names / BDE / codes / PII are rewritten
+    with a stable-hash suffix; amounts / dates / booleans / etc. pass
+    through so charts and rankings still look like real data."""
+    if val is None or val == "":
+        return val
+    s = str(val)
+    if key_lower in _DEMO_NAME_FIELDS:
+        return f"Customer-{_demo_short_hash(s, 1000):03d}"
+    if key_lower in _DEMO_BDE_FIELDS:
+        # BDE identifiers can be a full name or an email — mask both
+        # to the same "BDE-NN" label so the pool stays small.
+        return f"BDE-{_demo_short_hash(s, 100):02d}"
+    if key_lower in _DEMO_CODE_FIELDS:
+        return f"D{_demo_short_hash(s, 100000):05d}"
+    if key_lower in _DEMO_HIDE_FIELDS:
+        return "—"
+    return val
+
+
+def _demo_anon_walk(obj):
+    """Recursively rewrite dicts / lists in-place-safe style."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            k_lower = k.lower() if isinstance(k, str) else ""
+            if isinstance(v, (dict, list)):
+                out[k] = _demo_anon_walk(v)
+            else:
+                out[k] = _demo_anon_value(k_lower, v)
+        return out
+    if isinstance(obj, list):
+        return [_demo_anon_walk(x) for x in obj]
+    return obj
+
+
+_DEMO_BANNER_HTML = """
+<div id="SPRF_DEMO_BANNER" style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#f97316;color:#fff;padding:6px 14px;text-align:center;font-weight:700;font-size:12px;letter-spacing:.3px;box-shadow:0 2px 4px rgba(0,0,0,.2)">
+DEMO MODE &nbsp;·&nbsp; customer names, BDE names, codes and PII are anonymised
+&nbsp;·&nbsp; <a href="/demo_exit" style="color:#fff;text-decoration:underline">exit demo</a>
+</div>
+<style>body{padding-top:30px !important}</style>
+"""
+
+
+@app.after_request
+def _demo_after_request(response):
+    """When demo mode is active, walk JSON responses and swap out
+    identifying fields, and inject the orange banner into HTML pages.
+    No-op on binary / attachment responses and on non-JSON / non-HTML
+    content types."""
+    if not _is_demo_mode():
+        return response
+    ctype = (response.mimetype or "").lower()
+    if ctype == "application/json":
+        try:
+            import json as _json
+            data = response.get_json(silent=True)
+            if data is not None:
+                data = _demo_anon_walk(data)
+                response.set_data(_json.dumps(data, ensure_ascii=False, default=str))
+                response.content_length = None
+        except Exception:
+            pass
+    elif ctype in ("text/html", "text/html; charset=utf-8", "text/html;charset=utf-8"):
+        try:
+            # Skip file downloads, PDFs, etc. — only patch normal pages.
+            if response.headers.get("Content-Disposition", "").startswith("attachment"):
+                return response
+            html = response.get_data(as_text=True)
+            if "SPRF_DEMO_BANNER" not in html:
+                if "</body>" in html:
+                    html = html.replace("</body>", _DEMO_BANNER_HTML + "\n</body>", 1)
+                else:
+                    html += _DEMO_BANNER_HTML
+                response.set_data(html)
+                response.content_length = None
+        except Exception:
+            pass
+    return response
+
+
+# Mapping of /demo/<page> → static file.  Keys mirror the real routes
+# so /demo/order lands on the same form as /order, etc.  Unlisted
+# paths fall through to index.html.
+_DEMO_PAGES = {
+    "":            "index.html",
+    "map":         "map.html",
+    "stock":       "stock.html",
+    "rebate":      "rebate.html",
+    "price":       "price.html",
+    "meeting":     "meeting.html",
+    "claims":      "claims.html",
+    "order":       "orders.html",
+    "orders_list": "orders_list.html",
+    "highlights":  "highlights.html",
+    "fleet":       "fleet_chart.html",
+}
+
+
+@app.route("/demo",           defaults={"page": ""})
+@app.route("/demo/",          defaults={"page": ""})
+@app.route("/demo/<path:page>")
+def demo_page(page):
+    """Enter demo mode — sets the SPRF_DEMO session cookie and serves
+    the requested static page.  Once the cookie is set, every
+    subsequent request (nav, API, etc.) is anonymised until the user
+    hits /demo_exit or closes the browser."""
+    static_file = _DEMO_PAGES.get(page, "index.html")
+    resp = make_response(app.send_static_file(static_file))
+    # Session cookie: no Expires / Max-Age → dies with the browser.
+    resp.set_cookie(_DEMO_COOKIE, "1", path="/", samesite="Lax")
+    return resp
+
+
+@app.route("/demo_exit")
+def demo_exit_page():
+    """Turn off demo mode: clears the cookie and drops the user back
+    on the main dashboard."""
+    resp = make_response(redirect("/"))
+    resp.set_cookie(_DEMO_COOKIE, "", path="/", expires=0)
+    return resp
 
 
 @app.route("/fleet")
