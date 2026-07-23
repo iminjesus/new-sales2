@@ -2653,10 +2653,16 @@ def api_orders_base_dc():
                 pass
         # Brand-specific first, blank as fallback so an empty-brand
         # row fills both cells for customers who don't have HK/LF
-        # entries at all.
+        # entries at all.  The blank-brand row also feeds the TBR
+        # cell now — recent dc_basic_customer update ships a
+        # customer-group-level "Basic DC" row (bill_to_partner blank,
+        # brand blank, customer_grp populated) as the fallback for
+        # customers with no brand-specific OR TBR-specific entries.
         blank = picks.get("_BLANK_")
         out["HK_PCLT"] = picks.get("HK", blank)
         out["LF_PCLT"] = picks.get("LF", blank)
+        if blank is not None:
+            out["TBR_HKLF"] = blank
         if debug:
             def _s(v):
                 try: return v.isoformat()
