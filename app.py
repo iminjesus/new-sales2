@@ -1165,9 +1165,18 @@ _DEMO_PAGES = {
 
 _DEMO_FETCH_PATCH = """
 <script>
-/* Demo mode — patch fetch/XHR so every API call carries ?demo=1 even
-   if the cookie somehow gets lost.  Belt-and-braces with the SPRF_DEMO
-   cookie the server also drops. */
+/* Demo mode client-side patches:
+    1. Wrap fetch / XHR so every same-origin API call carries ?demo=1
+       — belt-and-braces with the SPRF_DEMO cookie so the server-side
+       anonymiser fires even if the cookie is stripped.
+    2. Override the REGION_SALESMEN constant in app.js with masked
+       "BDE-NN" labels — those names are hardcoded on the client and
+       leak straight into the KPI table's BDE column, so server-side
+       JSON scrubbing alone can't hide them.
+    3. Walk the DOM (existing + future via MutationObserver) and
+       swap any occurrence of a known real name for its masked twin
+       — catches names printed by app.js before the constant swap.
+*/
 (function(){
   const _addDemo = (url) => {
     if (typeof url !== "string") return url;
@@ -1183,6 +1192,68 @@ _DEMO_FETCH_PATCH = """
     return _o.apply(this, arguments);
   };
   document.documentElement.dataset.demo = "1";
+
+  // Stable hash — same input → same "BDE-42" label everywhere.
+  const _hash = (s, mod) => {
+    let h = 5381 >>> 0;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return h % mod;
+  };
+  const _maskBDE = (n) => "BDE-" + String(_hash(n, 100)).padStart(2, "0");
+
+  // Wait for REGION_SALESMEN, then rewrite it and every leaf name in
+  // the DOM.  50 ms poll is more than fast enough — app.js's first
+  // render usually lands ~100-200 ms after DOMContentLoaded.
+  const _nameMap = {};
+  const _apply = () => {
+    if (typeof REGION_SALESMEN === "undefined"
+        || !REGION_SALESMEN || typeof REGION_SALESMEN !== "object") {
+      return setTimeout(_apply, 50);
+    }
+    Object.entries(REGION_SALESMEN).forEach(([k, list]) => {
+      if (!Array.isArray(list)) return;
+      list.forEach(name => { if (name && !_nameMap[name]) _nameMap[name] = _maskBDE(name); });
+      REGION_SALESMEN[k] = list.map(n => _nameMap[n] || n);
+    });
+    _scrubDom(document.body);
+    new MutationObserver(muts => {
+      muts.forEach(m => {
+        m.addedNodes && m.addedNodes.forEach(_scrubDom);
+        if (m.type === "characterData" && m.target) _scrubDom(m.target);
+      });
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  };
+  const _scrubDom = (root) => {
+    if (!root) return;
+    if (root.nodeType === 3) {
+      let t = root.textContent;
+      let changed = false;
+      for (const real in _nameMap) {
+        if (t.indexOf(real) !== -1) {
+          t = t.split(real).join(_nameMap[real]);
+          changed = true;
+        }
+      }
+      if (changed) root.textContent = t;
+      return;
+    }
+    if (root.childNodes) root.childNodes.forEach(_scrubDom);
+    // Also cover option labels in <select> (their textContent is on a
+    // separate text node but the option itself carries .text too).
+    if (root.tagName === "OPTION" && root.text) {
+      let t = root.text;
+      let changed = false;
+      for (const real in _nameMap) {
+        if (t.indexOf(real) !== -1) { t = t.split(real).join(_nameMap[real]); changed = true; }
+      }
+      if (changed) { root.text = t; if (root.value && _nameMap[root.value]) root.value = _nameMap[root.value]; }
+    }
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _apply);
+  } else {
+    _apply();
+  }
 })();
 </script>
 """
