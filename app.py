@@ -2621,7 +2621,22 @@ def api_orders_base_dc():
                             WHEN brand IS NULL OR TRIM(brand) = '' THEN '_BLANK_'
                         END
                         ORDER BY
-                            CASE WHEN TRIM(bill_to_partner) = %s THEN 1 ELSE 2 END ASC,
+                            -- Priority per bucket:
+                            --   blank-brand → group Basic DC (tier 2)
+                            --                 outranks the customer's
+                            --                 own legacy blank row.
+                            --   HK / LF     → customer's own row wins.
+                            CASE
+                                WHEN (brand IS NULL OR TRIM(brand) = '')
+                                     AND (bill_to_partner IS NULL
+                                          OR TRIM(bill_to_partner) = '')
+                                  THEN 1
+                                WHEN (brand IS NULL OR TRIM(brand) = '')
+                                     AND TRIM(bill_to_partner) = %s
+                                  THEN 2
+                                WHEN TRIM(bill_to_partner) = %s THEN 1
+                                ELSE 2
+                            END ASC,
                             COALESCE(valid_from, '1900-01-01') DESC
                     ) AS rn
                 FROM dc_basic_customer
@@ -2639,9 +2654,10 @@ def api_orders_base_dc():
             ) t
             WHERE t.rn = 1 AND t.bucket IS NOT NULL
         """
-        # Params order: tier CASE (SELECT), tier CASE (ORDER BY), WHERE
-        # bill_to_partner, then optional group_code for the fallback OR.
-        exec_params = [sold_to, sold_to] + params
+        # Params order: tier CASE (SELECT), ORDER BY blank+customer
+        # test, ORDER BY generic customer test, WHERE bill_to_partner,
+        # then optional group_code for the fallback OR.
+        exec_params = [sold_to, sold_to, sold_to] + params
         cur.execute(sql, tuple(exec_params))
         picks = {}
         raw_rows = []
