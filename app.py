@@ -2555,17 +2555,23 @@ def api_orders_base_dc():
             out["_debug"]["group_col"]    = group_col
             out["_debug"]["has_line_col"] = has_line_col
 
-        # Resolve customer group so tier 3/4/5 can match.
+        # Resolve customer group so tier 3/4/5 can match.  A single
+        # sold_to can have several customer rows (one per ship_to);
+        # some ship-only rows may carry a blank sold_to_group.  Take
+        # the MAX of the non-blank values so a stray blank row doesn't
+        # sink the whole lookup with LIMIT 1.
         group_code = ""
         try:
             cur.execute(
-                "SELECT sold_to_group FROM customer WHERE sold_to = %s LIMIT 1",
+                "SELECT MAX(NULLIF(TRIM(sold_to_group), '')) AS grp "
+                "FROM customer WHERE sold_to = %s",
                 (sold_to,))
             gr = cur.fetchone()
             if gr:
-                group_code = (gr.get("sold_to_group") or "").strip()
-        except Exception:
-            pass
+                group_code = (gr.get("grp") or "").strip()
+        except Exception as _e:
+            if debug:
+                out["_debug"]["group_code_error"] = str(_e)
         if debug:
             out["_debug"]["group_code"] = group_code
 
