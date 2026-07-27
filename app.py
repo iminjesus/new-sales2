@@ -13830,14 +13830,41 @@ def meeting_plan_shop_options():
     row per (ship_to, sold_to_name) combination so a ship_to that
     sits under multiple parents in the customer master shows up under
     each parent's Sold-to filter.  The frontend dedupes by ship_to
-    for the unfiltered view."""
+    for the unfiltered view.
+
+    Also carries a postcode + region so the Region search can group
+    ship_tos into region cards.  Postcode comes from customer.postcode
+    when the column exists, otherwise the last 4-digit token in
+    address_1 (matches the same fallback the fleet-demand endpoint
+    uses).  Region falls back to bde_state → ship_to_state → 'COMMON'."""
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
-        cur.execute("""
+        cust_cols = _list_columns(cur, "customer")
+        has_pc      = "postcode" in cust_cols
+        has_addr1   = "address_1" in cust_cols
+        has_bde_st  = "bde_state" in cust_cols
+        has_ship_st = "ship_to_state" in cust_cols
+        pc_expr = "NULL"
+        if has_pc:
+            pc_expr = "NULLIF(TRIM(postcode),'')"
+        elif has_addr1:
+            # Grab the last 4-digit token from address_1 as postcode.
+            pc_expr = ("NULLIF(TRIM(REGEXP_SUBSTR(address_1, '[0-9]{4}(?![0-9])')),'')"
+                       if _mysql_supports_regexp(cur) else "NULL")
+        # region: prefer bde_state, then ship_to_state, else 'COMMON'.
+        region_expr = "'COMMON'"
+        parts = []
+        if has_bde_st:  parts.append("NULLIF(TRIM(bde_state),'')")
+        if has_ship_st: parts.append("NULLIF(TRIM(ship_to_state),'')")
+        if parts:
+            region_expr = "COALESCE(" + ", ".join(parts) + ", 'COMMON')"
+        cur.execute(f"""
             SELECT ship_to,
                    MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
                    sold_to,
-                   NULLIF(TRIM(sold_to_name),'')      AS sold_to_name
+                   NULLIF(TRIM(sold_to_name),'')      AS sold_to_name,
+                   MIN({pc_expr})                     AS postcode,
+                   MIN({region_expr})                 AS region
             FROM customer
             WHERE ship_to IS NOT NULL AND TRIM(ship_to_name) <> ''
             GROUP BY ship_to, sold_to, sold_to_name
@@ -13850,6 +13877,16 @@ def meeting_plan_shop_options():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+def _mysql_supports_regexp(cur):
+    """MySQL 8+ supports REGEXP_SUBSTR; 5.7 does not.  Probe once."""
+    try:
+        cur.execute("SELECT REGEXP_SUBSTR('abc1234', '[0-9]{4}')")
+        cur.fetchone()
+        return True
+    except Exception:
+        return False
 
 @app.get("/api/meeting/list")
 def meeting_list():

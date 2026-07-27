@@ -116,6 +116,51 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .ship-chip:hover{background:#eff6ff;border-color:#93c5fd}
 .ship-chip .sc-code{color:#6b7280;font-family:monospace;font-size:10px}
 .ship-chip.dragging{opacity:.5}
+/* Region card — top-level container that groups a set of ship_tos
+   by postcode or region.  Drag the header to schedule every child
+   ship_to on a date at once; click the ▸ to expand and see / prune
+   members. */
+.region-card{
+  border:1.5px solid #7c3aed;border-radius:6px;background:#faf5ff;
+  padding:6px 8px;font-size:11px;color:#1e293b;user-select:none;
+}
+.region-card.dragging{opacity:.5}
+.region-card .rc-head{
+  display:flex;align-items:center;gap:6px;cursor:grab;font-weight:700;
+  color:#6d28d9;
+}
+.region-card .rc-head:active{cursor:grabbing}
+.region-card .rc-toggle{
+  background:none;border:none;color:#7c3aed;font-size:12px;padding:0;
+  cursor:pointer;line-height:1;width:14px;font-family:monospace;
+}
+.region-card .rc-label{flex:1;letter-spacing:.3px}
+.region-card .rc-count{
+  color:#7c3aed;background:#ede9fe;padding:1px 6px;border-radius:10px;
+  font-size:10px;font-weight:700;
+}
+.region-card .rc-remove{
+  background:none;border:none;color:#94a3b8;font-size:14px;
+  cursor:pointer;padding:0 2px;line-height:1;
+}
+.region-card .rc-remove:hover{color:#dc2626}
+.region-card .rc-body{margin-top:6px;display:none;flex-direction:column;gap:3px;
+                     max-height:200px;overflow:auto;}
+.region-card.expanded .rc-body{display:flex}
+.region-card .rc-body .ship-chip{background:#fff;border-color:#d8b4fe}
+.region-card .rc-body .ship-chip .sc-remove{
+  color:#94a3b8;cursor:pointer;padding:0 4px;font-size:13px;
+}
+.region-card .rc-body .ship-chip .sc-remove:hover{color:#dc2626}
+/* Suggestion dropdown for the Region search */
+#palRegionSuggest .rs-item{
+  padding:5px 8px;cursor:pointer;display:flex;justify-content:space-between;
+  gap:8px;border-bottom:1px solid #f1f5f9;
+}
+#palRegionSuggest .rs-item:hover{background:#faf5ff}
+#palRegionSuggest .rs-item:last-child{border-bottom:none}
+#palRegionSuggest .rs-code{font-family:monospace;color:#6b7280;font-size:10px}
+#palRegionSuggest .rs-count{color:#7c3aed;font-weight:700}
 .pot-chip{padding:5px 8px;border:1px solid #fdba74;border-radius:5px;background:#fff7ed;font-size:11px;color:#9a3412;cursor:grab;user-select:none;display:flex;justify-content:space-between;gap:6px;align-items:center}
 .pot-chip:hover{background:#ffedd5;border-color:#fb923c}
 .pot-chip.dragging{opacity:.5}
@@ -453,6 +498,32 @@ header .nav{margin-left:auto;display:flex;gap:6px}
       </div>
     </div>
     <!-- === POTENTIAL CUSTOMER END === -->
+
+    <!-- ── Region / postcode search (top of the hierarchy) ──
+         Type a postcode (e.g. 2113) or a region (NSW / QLD / …) —
+         matching ship-tos gather into a Region Card below.  Drag
+         the whole card onto a date to schedule every ship-to in it
+         in one shot; expand to see / prune the members. -->
+    <div style="margin-bottom:6px;">
+      <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
+        Postcode / Region <span style="color:#9ca3af;font-weight:400;text-transform:none;letter-spacing:0;">(groups ship-tos into a drag-as-one card)</span>
+      </label>
+      <div style="position:relative;">
+        <input id="palRegion" type="text" placeholder="Type a postcode (2113) or region (NSW)…"
+               autocomplete="off"
+               style="width:100%;padding:6px 26px 6px 8px;font-size:12px;
+                      border:1px solid #cbd5e1;border-radius:4px;color:#1e293b;background:#fff;">
+        <button type="button" id="palRegionClear" hidden
+                style="position:absolute;right:4px;top:50%;transform:translateY(-50%);
+                       background:none;border:none;color:#94a3b8;font-size:14px;cursor:pointer;padding:0 4px;line-height:1;"
+                title="Clear region">×</button>
+      </div>
+      <div id="palRegionSuggest" hidden
+           style="border:1px solid #cbd5e1;border-radius:4px;background:#fff;
+                  max-height:180px;overflow:auto;font-size:11px;margin-top:3px;
+                  box-shadow:0 4px 10px rgba(0,0,0,.06);"></div>
+      <div id="regionCards" style="margin-top:6px;display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
 
     <div style="margin-bottom:6px;">
       <label style="font-size:10px;color:#6b7280;font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:3px;">
@@ -2190,10 +2261,33 @@ function renderCalendar(){
     cell.addEventListener("drop", async (e) => {
       e.preventDefault();
       cell.classList.remove("drag-over");
-      const ship = e.dataTransfer.getData("text/ship_to");
       const date = cell.dataset.date;
-      if (!ship || !date) return;
+      if (!date) return;
+      // Region card drop → schedule every ship_to in the bundle in one
+      // go.  Single ship_to drop keeps the existing single-post path.
+      const bundle = e.dataTransfer.getData("text/ship_to_bundle");
+      const ship   = e.dataTransfer.getData("text/ship_to");
+      if (!bundle && !ship) return;
       const bde = (window._me && window._me.lock_salesman) || document.getElementById("fBde").value || "";
+      if (bundle){
+        let ships = [];
+        try { ships = JSON.parse(bundle) || []; } catch { ships = []; }
+        if (!ships.length) return;
+        try {
+          const results = await Promise.all(ships.map(s =>
+            fetch("/api/meeting_plan", {
+              method:"POST", headers:{"Content-Type":"application/json"},
+              credentials:"include",
+              body: JSON.stringify({ date, ship_to: s, bde_name: bde }),
+            }).then(r => r.json()).catch(() => ({error:"network"}))
+          ));
+          const failed = results.filter(j => j && j.error).length;
+          if (failed) alert(`${failed} of ${ships.length} failed to schedule`);
+          await loadPlansForMonth();
+          renderCalendar();
+        } catch (err) { alert("Error: " + err.message); }
+        return;
+      }
       try {
         const r = await fetch("/api/meeting_plan", {
           method:"POST", headers:{"Content-Type":"application/json"},
@@ -2433,6 +2527,185 @@ document.getElementById("calToday").addEventListener("click", async () => {
   await loadPlansForMonth(); renderCalendar();
 });
 document.getElementById("shipSearch").addEventListener("input", renderShipList);
+
+/* ─── Region / Postcode search + Region Card ───────────────────
+   Type a postcode or region into #palRegion → we list matching
+   groups (e.g. "2113 · 12 shops" / "NSW · 214 shops") in a dropdown.
+   Click one → a Region Card lands under the input, containing every
+   ship-to in the group.  The card is draggable as a whole (drop on
+   a calendar date schedules every child) OR expandable to see /
+   prune individual members.  Multiple cards can coexist.          */
+const _regionState = { cards: [] };  // [{ id, kind, label, ships:[ship_to,...] }]
+
+function _regionCandidates(){
+  // Build unique (kind, key) → count from _shipOptions.  Kinds:
+  //   'postcode' — 4-digit code
+  //   'region'   — NSW / QLD / VIC / … (bde_state fallback)
+  const pcMap = new Map();       // postcode → Set(ship_to)
+  const regionMap = new Map();   // region   → Set(ship_to)
+  for (const r of _shipOptions){
+    const pc = (r.postcode || "").trim();
+    const rg = (r.region   || "").trim().toUpperCase();
+    if (pc){
+      if (!pcMap.has(pc)) pcMap.set(pc, new Set());
+      pcMap.get(pc).add(r.ship_to);
+    }
+    if (rg && rg !== "COMMON"){
+      if (!regionMap.has(rg)) regionMap.set(rg, new Set());
+      regionMap.get(rg).add(r.ship_to);
+    }
+  }
+  const out = [];
+  for (const [k, v] of pcMap)     out.push({ kind:"postcode", key:k, count:v.size });
+  for (const [k, v] of regionMap) out.push({ kind:"region",   key:k, count:v.size });
+  return out;
+}
+function _renderRegionSuggest(q){
+  const box = document.getElementById("palRegionSuggest");
+  const clr = document.getElementById("palRegionClear");
+  q = (q || "").trim().toLowerCase();
+  if (clr) clr.hidden = !q;
+  if (!q){ box.hidden = true; box.innerHTML = ""; return; }
+  const cands = _regionCandidates()
+    .filter(c => c.key.toLowerCase().includes(q))
+    .sort((a,b) => b.count - a.count)
+    .slice(0, 40);
+  if (!cands.length){
+    box.hidden = false;
+    box.innerHTML = `<div class="rs-item" style="color:#94a3b8;cursor:default">No matching postcode or region.</div>`;
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = cands.map(c => `
+    <div class="rs-item" data-kind="${c.kind}" data-key="${_attr(c.key)}">
+      <span>${c.kind === "postcode" ? "📮 Postcode" : "🗺 Region"}
+            <span class="rs-code">${escapeHtml(c.key)}</span></span>
+      <span class="rs-count">${c.count} shop${c.count===1?"":"s"}</span>
+    </div>
+  `).join("");
+  box.querySelectorAll(".rs-item[data-key]").forEach(it => {
+    it.addEventListener("click", () => {
+      _addRegionCard(it.dataset.kind, it.dataset.key);
+      document.getElementById("palRegion").value = "";
+      box.hidden = true; box.innerHTML = "";
+      if (clr) clr.hidden = true;
+    });
+  });
+}
+
+function _addRegionCard(kind, key){
+  // De-dupe — already added?
+  if (_regionState.cards.some(c => c.kind === kind && c.key === key)) return;
+  const ships = _shipOptions
+    .filter(r => (kind === "postcode"
+                  ? (r.postcode || "").trim() === key
+                  : (r.region || "").trim().toUpperCase() === key.toUpperCase()))
+    .map(r => r.ship_to);
+  const uniq = [...new Set(ships)];
+  const id = "rc-" + Date.now() + "-" + Math.floor(Math.random()*1000);
+  _regionState.cards.push({ id, kind, key, ships: uniq });
+  _renderRegionCards();
+}
+
+function _removeRegionCard(id){
+  _regionState.cards = _regionState.cards.filter(c => c.id !== id);
+  _renderRegionCards();
+}
+
+function _removeShipFromCard(cardId, ship){
+  const c = _regionState.cards.find(c => c.id === cardId);
+  if (!c) return;
+  c.ships = c.ships.filter(s => s !== ship);
+  if (!c.ships.length){ _removeRegionCard(cardId); return; }
+  _renderRegionCards();
+}
+
+function _renderRegionCards(){
+  const host = document.getElementById("regionCards");
+  if (!host) return;
+  if (!_regionState.cards.length){ host.innerHTML = ""; return; }
+  const byShip = new Map(_shipOptions.map(r => [r.ship_to, r]));
+  host.innerHTML = _regionState.cards.map(c => {
+    const label = (c.kind === "postcode" ? "📮 " : "🗺 ") + c.key;
+    const chips = c.ships.map(s => {
+      const r = byShip.get(s) || { ship_to:s, ship_to_name:s };
+      return `
+        <div class="ship-chip" draggable="true" data-ship="${_attr(r.ship_to)}"
+             title="Drag onto a date to schedule this shop only">
+          <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(r.ship_to_name || r.ship_to)}</span>
+          <span style="display:flex;gap:6px;align-items:center;">
+            <span class="sc-code">${escapeHtml(r.ship_to)}</span>
+            <span class="sc-remove" data-card="${c.id}" data-ship="${_attr(r.ship_to)}" title="Remove from this card">×</span>
+          </span>
+        </div>`;
+    }).join("");
+    return `
+      <div class="region-card" data-card="${c.id}" data-key="${_attr(c.key)}">
+        <div class="rc-head" draggable="true" title="Drag onto a date to schedule all ${c.ships.length} shop${c.ships.length===1?"":"s"}">
+          <button type="button" class="rc-toggle" title="Expand / collapse">▸</button>
+          <span class="rc-label">${escapeHtml(label)}</span>
+          <span class="rc-count">${c.ships.length}</span>
+          <button type="button" class="rc-remove" title="Remove card">×</button>
+        </div>
+        <div class="rc-body">${chips}</div>
+      </div>
+    `;
+  }).join("");
+  // Wire each card's controls.
+  host.querySelectorAll(".region-card").forEach(card => {
+    const id = card.dataset.card;
+    const cState = _regionState.cards.find(c => c.id === id);
+    const head = card.querySelector(".rc-head");
+    const toggle = card.querySelector(".rc-toggle");
+    const remove = card.querySelector(".rc-remove");
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = card.classList.toggle("expanded");
+      toggle.textContent = open ? "▾" : "▸";
+    });
+    remove.addEventListener("click", (e) => {
+      e.stopPropagation();
+      _removeRegionCard(id);
+    });
+    head.addEventListener("dragstart", (e) => {
+      if (!cState || !cState.ships.length) return;
+      e.dataTransfer.effectAllowed = "copy";
+      e.dataTransfer.setData("text/ship_to_bundle", JSON.stringify(cState.ships));
+      card.classList.add("dragging");
+    });
+    head.addEventListener("dragend", () => card.classList.remove("dragging"));
+    // Individual chip drag = single ship_to (uses the existing drop path)
+    card.querySelectorAll(".rc-body .ship-chip").forEach(chip => {
+      chip.addEventListener("dragstart", (e) => {
+        e.stopPropagation();
+        e.dataTransfer.effectAllowed = "copy";
+        e.dataTransfer.setData("text/ship_to", chip.dataset.ship);
+        chip.classList.add("dragging");
+      });
+      chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+    });
+    card.querySelectorAll(".sc-remove").forEach(x => {
+      x.addEventListener("click", (e) => {
+        e.stopPropagation();
+        _removeShipFromCard(x.dataset.card, x.dataset.ship);
+      });
+    });
+  });
+}
+
+document.getElementById("palRegion").addEventListener("input", (e) => _renderRegionSuggest(e.target.value));
+document.getElementById("palRegion").addEventListener("focus", (e) => { if (e.target.value) _renderRegionSuggest(e.target.value); });
+document.getElementById("palRegionClear").addEventListener("click", () => {
+  const inp = document.getElementById("palRegion");
+  inp.value = ""; _renderRegionSuggest(""); inp.focus();
+});
+// Click outside → close suggest dropdown
+document.addEventListener("click", (e) => {
+  const box = document.getElementById("palRegionSuggest");
+  if (!box || box.hidden) return;
+  if (e.target.closest("#palRegion") || e.target.closest("#palRegionSuggest")) return;
+  box.hidden = true;
+});
 // Ship-to × clear — wipes the search box, re-renders the list, and
 // focuses the input again so the user can immediately type a new
 // query.  Matches the Sold-to picker's clear-button behaviour.
