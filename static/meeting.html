@@ -112,6 +112,11 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .region-plan-chip .rpc-toggle{font-family:monospace;font-size:11px;color:#7c3aed;width:10px;flex:none}
 .region-plan-chip .rpc-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .region-plan-chip .rpc-count{background:#7c3aed;color:#fff;padding:0 5px;border-radius:8px;font-size:9px}
+.region-plan-chip .rpc-rm{
+  color:#7c3aed;font-weight:700;opacity:.6;padding:0 2px;cursor:pointer;
+  font-size:12px;line-height:1;
+}
+.region-plan-chip .rpc-rm:hover{opacity:1;color:#dc2626}
 .region-plan-chip .rpc-body{display:none;flex-direction:column;gap:2px;padding-left:8px}
 .region-plan-chip.expanded .rpc-body{display:flex}
 .region-plan-chip .rpc-body .plan-chip{background:#fff;border-color:#c4b5fd;color:#5b21b6}
@@ -2228,12 +2233,17 @@ function renderCalendar(){
         const key = iso + "|" + bde + "|" + g;
         const openCls = expandedGroups.has(key) ? " expanded" : "";
         const kindIcon = /^\d{4}$/.test(g) ? "📮" : "🗺";
+        // ID list is stashed on the card so the bulk-remove click can
+        // delete every child plan without re-scanning the DOM.
+        const idList = rs.map(r => r.id).join(",");
         grpChips.push(`
-          <div class="region-plan-chip${openCls}" data-grpkey="${_attr(key)}">
+          <div class="region-plan-chip${openCls}" data-grpkey="${_attr(key)}"
+               data-ids="${_attr(idList)}" data-label="${_attr(g)}">
             <div class="rpc-head">
               <span class="rpc-toggle">${expandedGroups.has(key) ? "▾" : "▸"}</span>
               <span class="rpc-label">${kindIcon} ${escapeHtml(g)}</span>
               <span class="rpc-count">${rs.length}</span>
+              <span class="rpc-rm" title="Remove all ${rs.length} planned visits in this region">×</span>
             </div>
             <div class="rpc-body">${rs.map(_chipHtml).join("")}</div>
           </div>`);
@@ -2368,6 +2378,9 @@ function renderCalendar(){
   // re-render (post-add / post-delete) preserves the user's view.
   root.querySelectorAll(".region-plan-chip .rpc-head").forEach(el => {
     el.addEventListener("click", (e) => {
+      // Guard so the × delete handler fires cleanly without also
+      // toggling expand/collapse under it.
+      if (e.target.closest(".rpc-rm")) return;
       e.stopPropagation();
       const card = el.closest(".region-plan-chip");
       const key  = card && card.dataset.grpkey;
@@ -2375,6 +2388,30 @@ function renderCalendar(){
       if (_expandedGroups.has(key)) _expandedGroups.delete(key);
       else _expandedGroups.add(key);
       renderCalendar();
+    });
+  });
+  // × on the region head — deletes every planned visit under this
+  // region on this date in one shot.  Bulk-fan-out DELETEs; a per-
+  // plan failure surfaces as an aggregate count in the alert.
+  root.querySelectorAll(".region-plan-chip .rpc-rm").forEach(el => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const card = el.closest(".region-plan-chip");
+      if (!card) return;
+      const ids   = (card.dataset.ids || "").split(",").map(s => s.trim()).filter(Boolean);
+      const label = card.dataset.label || "this region";
+      if (!ids.length) return;
+      if (!confirm(`Remove all ${ids.length} planned visits under ${label}?`)) return;
+      try {
+        const results = await Promise.all(ids.map(id =>
+          fetch(`/api/meeting_plan/${id}`, { method:"DELETE", credentials:"include" })
+            .then(r => r.json()).catch(() => ({error:"network"}))
+        ));
+        const failed = results.filter(j => j && j.error).length;
+        if (failed) alert(`${failed} of ${ids.length} deletes failed`);
+        await loadPlansForMonth();
+        renderCalendar();
+      } catch (err) { alert("Error: " + err.message); }
     });
   });
 
