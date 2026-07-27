@@ -92,6 +92,27 @@
   }
   #agedStockPanel .as-search .as-clear:hover { color: #dc2626; }
   #agedStockPanel .as-search .as-clear[hidden] { display: none; }
+  /* Close (×) button on the panel header — collapses the sidebar
+     out of view; the reopen chip on the right edge brings it back. */
+  #agedStockPanel .as-close {
+    background: none; border: 1px solid #cbd5e1; color: #64748b;
+    width: 22px; height: 22px; line-height: 18px; padding: 0;
+    font-size: 15px; font-weight: 700; cursor: pointer; border-radius: 4px;
+    transition: background .1s, color .1s;
+  }
+  #agedStockPanel .as-close:hover { background: #dc2626; color: #fff; border-color: #dc2626; }
+  /* Reopen chip — vertical tab pinned to the right edge, only shown
+     when the panel is collapsed AND there's aged data to reopen. */
+  #agedStockReopen {
+    position: fixed; top: 100px; right: 0; z-index: 490;
+    background: #f59e0b; color: #fff; border: none; border-radius: 4px 0 0 4px;
+    padding: 10px 6px; font: 700 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    letter-spacing: .5px; cursor: pointer; writing-mode: vertical-rl;
+    text-orientation: mixed; box-shadow: -2px 2px 6px rgba(0,0,0,.15);
+    display: none;
+  }
+  #agedStockReopen.visible { display: block; }
+  #agedStockReopen:hover { background: #d97706; }
   /* Order-form row that came from the aged-stock panel — small
      amber left border so the BDE can spot which rows are aged-DC
      rows (fixed target DC per tier, not customer-driven). */
@@ -354,7 +375,10 @@
      work into the conversation.  Only 19-24M / 25-36M / 37M+ tiers
      surface (fresh stock isn't a talking point). -->
 <aside id="agedStockPanel">
-  <h3>Aged stock <span class="as-scope" id="asScope">—</span></h3>
+  <h3>
+    <span>Aged stock <span class="as-scope" id="asScope">—</span></span>
+    <button type="button" id="asClose" class="as-close" title="Hide aged-stock panel">×</button>
+  </h3>
   <div class="as-total" id="asTotal">Load a customer to see aged stock at their state plant.</div>
   <div class="as-search" hidden id="asSearchWrap">
     <input id="asSearch" type="text" placeholder="Search M-code, pattern, size…" autocomplete="off">
@@ -362,6 +386,11 @@
   </div>
   <div id="asBody"></div>
 </aside>
+<!-- Vertical tab pinned to the right edge — appears when the panel
+     is collapsed, click reopens it (state persists in localStorage). -->
+<button type="button" id="agedStockReopen" title="Show aged-stock panel">
+  ↤ Aged stock
+</button>
 <div class="wrap">
 
   <!-- ═══════════════ Page nav (jump to other views) ═══════════════ -->
@@ -900,7 +929,20 @@ async function fillAgedStockPanel(state){
   const searchInp  = document.getElementById("asSearch");
   const searchClr  = document.getElementById("asSearchClear");
   if (!panel) return;
-  panel.classList.add("visible");
+  // Remember that there IS aged stock available for this customer so
+  // the reopen chip can appear even if the user has previously closed
+  // the panel.  A separate flag from the panel's visible class.
+  window._agedStockHasData = true;
+  // Restore the user's last visibility preference — closed via ×
+  // stays closed on reload; open by default otherwise.
+  const wasClosed = localStorage.getItem("agedStockClosed") === "1";
+  if (wasClosed) {
+    panel.classList.remove("visible");
+    const chip = document.getElementById("agedStockReopen");
+    if (chip) chip.classList.add("visible");
+  } else {
+    panel.classList.add("visible");
+  }
   scope.textContent = state;
   total.textContent = "Loading aged stock…";
   body.innerHTML = "";
@@ -951,6 +993,27 @@ async function fillAgedStockPanel(state){
       inp.focus();
     });
   }
+})();
+
+// Panel close / reopen wiring — remembers the user's choice in
+// localStorage so it survives navs and reloads.
+(function wireAgedStockToggle(){
+  const panel = document.getElementById("agedStockPanel");
+  const close = document.getElementById("asClose");
+  const chip  = document.getElementById("agedStockReopen");
+  if (!panel || !close || !chip) return;
+  close.addEventListener("click", () => {
+    panel.classList.remove("visible");
+    // Only show the reopen chip if there was actually aged stock to
+    // display — otherwise there's nothing to reopen.
+    if (window._agedStockHasData) chip.classList.add("visible");
+    localStorage.setItem("agedStockClosed", "1");
+  });
+  chip.addEventListener("click", () => {
+    panel.classList.add("visible");
+    chip.classList.remove("visible");
+    localStorage.removeItem("agedStockClosed");
+  });
 })();
 
 async function fillBaseDC(soldTo){
