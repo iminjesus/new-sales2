@@ -2327,6 +2327,22 @@ function renderCalendar(){
       const ship      = e.dataTransfer.getData("text/ship_to");
       if (!bundle && !ship) return;
       const bde = (window._me && window._me.lock_salesman) || document.getElementById("fBde").value || "";
+      // Pre-check: no BDE name = every POST will fail with 400 from
+      // the backend.  For a single ship drop that's one error; for
+      // a Region-Card bundle it's "14 of 14 failed to schedule" —
+      // catch the empty-BDE case up front and surface a helpful
+      // message instead of a wall of failures.
+      if (!bde.trim()){
+        alert(
+          "Can't schedule — no BDE name is set for this session.\n\n" +
+          "Either:\n" +
+          "  · pick a BDE in the 'New visit' form's BDE dropdown, or\n" +
+          "  · sign in via Cloudflare Access with a BDE account, or\n" +
+          "  · run in the browser console:\n" +
+          "      window._me = { lock_salesman: 'Bilston Kelley' };"
+        );
+        return;
+      }
       if (bundle){
         let ships = [];
         try { ships = JSON.parse(bundle) || []; } catch { ships = []; }
