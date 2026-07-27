@@ -2653,20 +2653,54 @@ document.getElementById("shipSearch").addEventListener("input", renderShipList);
    prune individual members.  Multiple cards can coexist.          */
 const _regionState = { cards: [] };  // [{ id, kind, label, ships:[ship_to,...] }]
 
+// Postcode → Australian state.  Backend's bde_state may be blank on
+// some deployments, so we derive the state from the postcode as a
+// primary signal and only prefer r.region when it's populated and
+// isn't the "COMMON" catch-all.  Ranges from Australia Post's
+// published mapping (numeric prefix rules).
+function _stateFromPostcode(pcRaw){
+  const pc = parseInt(String(pcRaw||"").trim(), 10);
+  if (!(pc >= 200 && pc <= 9999)) return "";
+  if (pc >= 200  && pc <= 299)  return "ACT";
+  if (pc >= 800  && pc <= 899)  return "NT";
+  if (pc >= 900  && pc <= 999)  return "NT";
+  if ((pc >= 1000 && pc <= 2599) ||
+      (pc >= 2620 && pc <= 2899) ||
+      (pc >= 2921 && pc <= 2999)) return "NSW";
+  if (pc >= 2600 && pc <= 2618) return "ACT";
+  if (pc >= 2900 && pc <= 2920) return "ACT";
+  if ((pc >= 3000 && pc <= 3999) || (pc >= 8000 && pc <= 8999)) return "VIC";
+  if ((pc >= 4000 && pc <= 4999) || (pc >= 9000 && pc <= 9999)) return "QLD";
+  if (pc >= 5000 && pc <= 5799) return "SA";
+  if (pc >= 5800 && pc <= 5999) return "SA";
+  if (pc >= 6000 && pc <= 6797) return "WA";
+  if (pc >= 6800 && pc <= 6999) return "WA";
+  if (pc >= 7000 && pc <= 7999) return "TAS";
+  return "";
+}
+
 function _regionCandidates(){
   // Build unique (kind, key) → count from _shipOptions.  Kinds:
   //   'postcode' — 4-digit code
-  //   'region'   — NSW / QLD / VIC / … (bde_state fallback)
+  //   'region'   — NSW / QLD / VIC / WA / SA / TAS / NT / ACT
+  //                (derived from postcode → state, with r.region as
+  //                 override when the API returns a real value)
   const pcMap = new Map();       // postcode → Set(ship_to)
   const regionMap = new Map();   // region   → Set(ship_to)
   for (const r of _shipOptions){
-    const pc = (r.postcode || "").trim();
-    const rg = (r.region   || "").trim().toUpperCase();
+    const pc  = (r.postcode || "").trim();
+    const rgApi = (r.region   || "").trim().toUpperCase();
+    // Prefer the API's region when it's a real state; otherwise fall
+    // back to the postcode-derived one.  This means the region
+    // dropdown works on deployments where customer.bde_state is
+    // blank as long as postcodes are populated.
+    const derived = _stateFromPostcode(pc);
+    const rg = (rgApi && rgApi !== "COMMON") ? rgApi : derived;
     if (pc){
       if (!pcMap.has(pc)) pcMap.set(pc, new Set());
       pcMap.get(pc).add(r.ship_to);
     }
-    if (rg && rg !== "COMMON"){
+    if (rg){
       if (!regionMap.has(rg)) regionMap.set(rg, new Set());
       regionMap.get(rg).add(r.ship_to);
     }
@@ -2712,10 +2746,18 @@ function _renderRegionSuggest(q){
 function _addRegionCard(kind, key){
   // De-dupe — already added?
   if (_regionState.cards.some(c => c.kind === kind && c.key === key)) return;
+  const upKey = String(key).toUpperCase();
   const ships = _shipOptions
-    .filter(r => (kind === "postcode"
-                  ? (r.postcode || "").trim() === key
-                  : (r.region || "").trim().toUpperCase() === key.toUpperCase()))
+    .filter(r => {
+      if (kind === "postcode") return (r.postcode || "").trim() === key;
+      // region: match either the API-provided region OR the
+      // postcode-derived state.  Same rule the suggest dropdown
+      // uses so what the user picked is what they get.
+      const rgApi = (r.region || "").trim().toUpperCase();
+      const derived = _stateFromPostcode((r.postcode || "").trim());
+      const rg = (rgApi && rgApi !== "COMMON") ? rgApi : derived;
+      return rg === upKey;
+    })
     .map(r => r.ship_to);
   const uniq = [...new Set(ships)];
   const id = "rc-" + Date.now() + "-" + Math.floor(Math.random()*1000);
