@@ -2239,15 +2239,21 @@ function renderCalendar(){
         const kindIcon = /^\d{4}$/.test(g)   ? "📮"
                        : g.includes("·")       ? "🏙"
                        :                          "🗺";
+        // Short label for the narrow calendar cell — drop the "· 2064"
+        // suffix on city groups so ARTARMON shows instead of being
+        // ellipsized.  Full label kept as the title attribute so the
+        // BDE can hover to see the postcode.
+        const shortLabel = g.includes("·") ? g.split("·")[0].trim() : g;
         // ID list is stashed on the card so the bulk-remove click can
         // delete every child plan without re-scanning the DOM.
         const idList = rs.map(r => r.id).join(",");
         grpChips.push(`
           <div class="region-plan-chip${openCls}" data-grpkey="${_attr(key)}"
-               data-ids="${_attr(idList)}" data-label="${_attr(g)}">
+               data-ids="${_attr(idList)}" data-label="${_attr(g)}"
+               title="${_attr(g)}">
             <div class="rpc-head">
               <span class="rpc-toggle">${expandedGroups.has(key) ? "▾" : "▸"}</span>
-              <span class="rpc-label">${kindIcon} ${escapeHtml(g)}</span>
+              <span class="rpc-label">${kindIcon} ${escapeHtml(shortLabel)}</span>
               <span class="rpc-count">${rs.length}</span>
               <span class="rpc-rm" title="Remove all ${rs.length} planned visits in this region">×</span>
             </div>
