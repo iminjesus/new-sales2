@@ -13075,6 +13075,15 @@ def _ensure_meeting_plan_table():
                 INDEX idx_plan_bde_nm  (bde_name)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # plan_group — label of the region/postcode card that dropped
+        # this ship_to.  Empty for solo drags.  Rendering side groups
+        # same-day, same-group, same-bde chips into one expandable
+        # region chip.  Added idempotently for older deployments.
+        cur.execute("SHOW COLUMNS FROM meeting_plan LIKE 'plan_group'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE meeting_plan "
+                        "ADD COLUMN plan_group VARCHAR(60) NOT NULL DEFAULT ''")
+            cur.execute("CREATE INDEX idx_plan_group ON meeting_plan (plan_date, plan_group)")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         print(f"[meeting_plan] schema init failed: {e}")
@@ -13678,7 +13687,7 @@ def meeting_plan_list():
         cur.execute(f"""
             SELECT p.id, p.plan_date, p.ship_to, p.sold_to,
                    p.ship_to_name, p.sold_to_name,
-                   p.bde_email, p.bde_name,
+                   p.bde_email, p.bde_name, p.plan_group,
                    EXISTS(
                      SELECT 1 FROM meeting_log m
                      WHERE m.ship_to = p.ship_to
@@ -13723,6 +13732,7 @@ def meeting_plan_create():
         date  = (body.get("date")     or request.form.get("date")     or "").strip()
         ship  = (body.get("ship_to")  or request.form.get("ship_to")  or "").strip()
         bdenm = (body.get("bde_name") or request.form.get("bde_name") or "").strip()
+        pgrp  = (body.get("plan_group") or request.form.get("plan_group") or "").strip()[:60]
         if not date or not ship:
             return jsonify({"error": "date and ship_to are required"}), 400
         try:
@@ -13784,10 +13794,10 @@ def meeting_plan_create():
         cur.execute("""
             INSERT INTO meeting_plan
                 (plan_date, ship_to, sold_to, ship_to_name, sold_to_name,
-                 bde_email, bde_name)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                 bde_email, bde_name, plan_group)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (plan_d, ship[:64], sold_to[:64], ship_to_name[:160], sold_to_name[:160],
-              bde_email[:120], bdenm[:120]))
+              bde_email[:120], bdenm[:120], pgrp))
         new_id = cur.lastrowid
         conn.commit(); cur.close(); conn.close()
         return jsonify({"ok": True, "id": new_id,
@@ -13797,7 +13807,8 @@ def meeting_plan_create():
                         "sold_to":     sold_to,
                         "sold_to_name": sold_to_name,
                         "bde_name":    bdenm,
-                        "bde_email":   bde_email})
+                        "bde_email":   bde_email,
+                        "plan_group":  pgrp})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

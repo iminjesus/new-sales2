@@ -99,6 +99,22 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 .plan-chip:hover{filter:brightness(.92)}
 .plan-chip .pc-rm{color:currentColor;font-weight:700;opacity:.65;margin-left:2px}
 .plan-chip:hover .pc-rm{opacity:1}
+/* Region-grouped chip in the calendar cell — one line collapsed,
+   expands to show every child plan chip when clicked. */
+.region-plan-chip{
+  background:#ede9fe;border:1.5px solid #7c3aed;border-radius:8px;
+  padding:1px 5px;font-size:10px;color:#5b21b6;
+  display:flex;flex-direction:column;gap:2px;overflow:hidden;line-height:1.4;
+}
+.region-plan-chip .rpc-head{
+  display:flex;align-items:center;gap:4px;cursor:pointer;font-weight:700;
+}
+.region-plan-chip .rpc-toggle{font-family:monospace;font-size:11px;color:#7c3aed;width:10px;flex:none}
+.region-plan-chip .rpc-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.region-plan-chip .rpc-count{background:#7c3aed;color:#fff;padding:0 5px;border-radius:8px;font-size:9px}
+.region-plan-chip .rpc-body{display:none;flex-direction:column;gap:2px;padding-left:8px}
+.region-plan-chip.expanded .rpc-body{display:flex}
+.region-plan-chip .rpc-body .plan-chip{background:#fff;border-color:#c4b5fd;color:#5b21b6}
 
 /* Ship-to palette — sits directly below the calendar in the same
    card.  Shorter than the calendar itself so the calendar dominates
@@ -2030,7 +2046,8 @@ let _shipOptions    = [];   // [{ship_to, ship_to_name, sold_to, sold_to_name}, 
 // Cells with more chips than this get a "+N more" pill until the user
 // clicks to expand that specific date.
 const MAX_CHIPS_PER_CELL = 3;
-const _expandedCells = new Set();   // ISO dates the user clicked to expand
+const _expandedCells  = new Set();   // ISO dates the user clicked to expand
+const _expandedGroups = new Set();   // "iso|bde|plan_group" region chips expanded
 
 // Stable per-BDE colour: hash the name → full 360° hue, fixed
 // saturation/lightness.  Sweeping the entire hue circle (instead of
@@ -2194,9 +2211,37 @@ function renderCalendar(){
       if (shown >= cap) break;
       const slice = items.slice(0, cap - shown);
       shown += slice.length;
+      // Inside a BDE group, further collapse chips sharing the same
+      // plan_group (region / postcode from a Region Card drop) into a
+      // single expandable region-plan-chip; solo chips render as-is.
+      const byGrp = new Map();     // plan_group → [rows]
+      const solos = [];
+      for (const r of slice){
+        const g = (r.plan_group || "").trim();
+        if (!g){ solos.push(r); continue; }
+        if (!byGrp.has(g)) byGrp.set(g, []);
+        byGrp.get(g).push(r);
+      }
+      const grpChips = [];
+      const expandedGroups = _expandedGroups;
+      for (const [g, rs] of byGrp){
+        const key = iso + "|" + bde + "|" + g;
+        const openCls = expandedGroups.has(key) ? " expanded" : "";
+        const kindIcon = /^\d{4}$/.test(g) ? "📮" : "🗺";
+        grpChips.push(`
+          <div class="region-plan-chip${openCls}" data-grpkey="${_attr(key)}">
+            <div class="rpc-head">
+              <span class="rpc-toggle">${expandedGroups.has(key) ? "▾" : "▸"}</span>
+              <span class="rpc-label">${kindIcon} ${escapeHtml(g)}</span>
+              <span class="rpc-count">${rs.length}</span>
+            </div>
+            <div class="rpc-body">${rs.map(_chipHtml).join("")}</div>
+          </div>`);
+      }
       html.push(`<div class="bde-group">
         <div class="bde-group-label">${escapeHtml(bde)}</div>
-        ${slice.map(_chipHtml).join("")}
+        ${grpChips.join("")}
+        ${solos.map(_chipHtml).join("")}
       </div>`);
     }
     const hidden = rows.length - shown;
@@ -2264,9 +2309,12 @@ function renderCalendar(){
       const date = cell.dataset.date;
       if (!date) return;
       // Region card drop → schedule every ship_to in the bundle in one
-      // go.  Single ship_to drop keeps the existing single-post path.
-      const bundle = e.dataTransfer.getData("text/ship_to_bundle");
-      const ship   = e.dataTransfer.getData("text/ship_to");
+      // go, tagging each row with the region label as plan_group so
+      // they render on the calendar as a single expandable region
+      // chip.  Single ship_to drop keeps the existing single-post path.
+      const bundle    = e.dataTransfer.getData("text/ship_to_bundle");
+      const bundleGrp = e.dataTransfer.getData("text/ship_to_group");
+      const ship      = e.dataTransfer.getData("text/ship_to");
       if (!bundle && !ship) return;
       const bde = (window._me && window._me.lock_salesman) || document.getElementById("fBde").value || "";
       if (bundle){
@@ -2278,7 +2326,8 @@ function renderCalendar(){
             fetch("/api/meeting_plan", {
               method:"POST", headers:{"Content-Type":"application/json"},
               credentials:"include",
-              body: JSON.stringify({ date, ship_to: s, bde_name: bde }),
+              body: JSON.stringify({ date, ship_to: s, bde_name: bde,
+                                     plan_group: bundleGrp || "" }),
             }).then(r => r.json()).catch(() => ({error:"network"}))
           ));
           const failed = results.filter(j => j && j.error).length;
@@ -2311,6 +2360,20 @@ function renderCalendar(){
       if (!iso) return;
       if (_expandedCells.has(iso)) _expandedCells.delete(iso);
       else _expandedCells.add(iso);
+      renderCalendar();
+    });
+  });
+  // Region-plan chip on the calendar cell — click the head row to
+  // toggle expand/collapse.  State persists in _expandedGroups so a
+  // re-render (post-add / post-delete) preserves the user's view.
+  root.querySelectorAll(".region-plan-chip .rpc-head").forEach(el => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const card = el.closest(".region-plan-chip");
+      const key  = card && card.dataset.grpkey;
+      if (!key) return;
+      if (_expandedGroups.has(key)) _expandedGroups.delete(key);
+      else _expandedGroups.add(key);
       renderCalendar();
     });
   });
@@ -2671,6 +2734,10 @@ function _renderRegionCards(){
       if (!cState || !cState.ships.length) return;
       e.dataTransfer.effectAllowed = "copy";
       e.dataTransfer.setData("text/ship_to_bundle", JSON.stringify(cState.ships));
+      // Carry the region/postcode label as the plan_group so calendar
+      // rendering can collapse the dropped chips back into a single
+      // expandable region chip on the target date.
+      e.dataTransfer.setData("text/ship_to_group", cState.key || "");
       card.classList.add("dragging");
     });
     head.addEventListener("dragend", () => card.classList.remove("dragging"));
