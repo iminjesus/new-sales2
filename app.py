@@ -13855,6 +13855,7 @@ def meeting_plan_shop_options():
         has_addr1   = "address_1" in cust_cols
         has_bde_st  = "bde_state" in cust_cols
         has_ship_st = "ship_to_state" in cust_cols
+        has_city    = "city" in cust_cols
         pc_expr = "NULL"
         if has_pc:
             pc_expr = "NULLIF(TRIM(postcode),'')"
@@ -13869,13 +13870,18 @@ def meeting_plan_shop_options():
         if has_ship_st: parts.append("NULLIF(TRIM(ship_to_state),'')")
         if parts:
             region_expr = "COALESCE(" + ", ".join(parts) + ", 'COMMON')"
+        # City fed straight through — the palette groups (city, postcode)
+        # pairs so a city that spans multiple postcodes shows up as
+        # multiple entries in the region-search suggest dropdown.
+        city_expr = "NULLIF(TRIM(city),'')" if has_city else "NULL"
         cur.execute(f"""
             SELECT ship_to,
                    MIN(NULLIF(TRIM(ship_to_name),'')) AS ship_to_name,
                    sold_to,
                    NULLIF(TRIM(sold_to_name),'')      AS sold_to_name,
                    MIN({pc_expr})                     AS postcode,
-                   MIN({region_expr})                 AS region
+                   MIN({region_expr})                 AS region,
+                   MIN({city_expr})                   AS city
             FROM customer
             WHERE ship_to IS NOT NULL AND TRIM(ship_to_name) <> ''
             GROUP BY ship_to, sold_to, sold_to_name

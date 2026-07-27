@@ -2232,7 +2232,13 @@ function renderCalendar(){
       for (const [g, rs] of byGrp){
         const key = iso + "|" + bde + "|" + g;
         const openCls = expandedGroups.has(key) ? " expanded" : "";
-        const kindIcon = /^\d{4}$/.test(g) ? "📮" : "🗺";
+        // Icon inferred from the group label:
+        //   4-digit → postcode 📮
+        //   contains "·" → city + postcode 🏙
+        //   else → state 🗺
+        const kindIcon = /^\d{4}$/.test(g)   ? "📮"
+                       : g.includes("·")       ? "🏙"
+                       :                          "🗺";
         // ID list is stashed on the card so the bulk-remove click can
         // delete every child plan without re-scanning the DOM.
         const idList = rs.map(r => r.id).join(",");
@@ -2685,11 +2691,16 @@ function _regionCandidates(){
   //   'region'   — NSW / QLD / VIC / WA / SA / TAS / NT / ACT
   //                (derived from postcode → state, with r.region as
   //                 override when the API returns a real value)
-  const pcMap = new Map();       // postcode → Set(ship_to)
-  const regionMap = new Map();   // region   → Set(ship_to)
+  //   'city'     — "<city> · <postcode>" — one entry per (city,
+  //                postcode) pair so a city that spans multiple
+  //                postcodes surfaces as multiple rows.
+  const pcMap = new Map();       // postcode         → Set(ship_to)
+  const regionMap = new Map();   // region           → Set(ship_to)
+  const cityMap = new Map();     // "CITY|POSTCODE"  → Set(ship_to)
   for (const r of _shipOptions){
     const pc  = (r.postcode || "").trim();
     const rgApi = (r.region   || "").trim().toUpperCase();
+    const city  = (r.city     || "").trim();
     // Prefer the API's region when it's a real state; otherwise fall
     // back to the postcode-derived one.  This means the region
     // dropdown works on deployments where customer.bde_state is
@@ -2704,10 +2715,23 @@ function _regionCandidates(){
       if (!regionMap.has(rg)) regionMap.set(rg, new Set());
       regionMap.get(rg).add(r.ship_to);
     }
+    if (city){
+      const key = city.toUpperCase() + "|" + pc;
+      if (!cityMap.has(key)) cityMap.set(key, { city, postcode: pc, ships: new Set() });
+      cityMap.get(key).ships.add(r.ship_to);
+    }
   }
   const out = [];
   for (const [k, v] of pcMap)     out.push({ kind:"postcode", key:k, count:v.size });
   for (const [k, v] of regionMap) out.push({ kind:"region",   key:k, count:v.size });
+  for (const [, v] of cityMap){
+    out.push({
+      kind: "city",
+      key: v.city + (v.postcode ? " · " + v.postcode : ""),
+      city: v.city, postcode: v.postcode,
+      count: v.ships.size,
+    });
+  }
   return out;
 }
 function _renderRegionSuggest(q){
@@ -2726,16 +2750,28 @@ function _renderRegionSuggest(q){
     return;
   }
   box.hidden = false;
-  box.innerHTML = cands.map(c => `
-    <div class="rs-item" data-kind="${c.kind}" data-key="${_attr(c.key)}">
-      <span>${c.kind === "postcode" ? "📮 Postcode" : "🗺 Region"}
-            <span class="rs-code">${escapeHtml(c.key)}</span></span>
-      <span class="rs-count">${c.count} shop${c.count===1?"":"s"}</span>
-    </div>
-  `).join("");
+  box.innerHTML = cands.map(c => {
+    const icon = c.kind === "postcode" ? "📮 Postcode"
+               : c.kind === "region"   ? "🗺 Region"
+               : "🏙 City";
+    // City rows stash both parts as data-attrs so _addRegionCard
+    // can filter on the (city, postcode) pair exactly.
+    const cityAttrs = c.kind === "city"
+      ? ` data-city="${_attr(c.city || '')}" data-pc="${_attr(c.postcode || '')}"`
+      : "";
+    return `
+      <div class="rs-item" data-kind="${c.kind}" data-key="${_attr(c.key)}"${cityAttrs}>
+        <span>${icon}
+              <span class="rs-code">${escapeHtml(c.key)}</span></span>
+        <span class="rs-count">${c.count} shop${c.count===1?"":"s"}</span>
+      </div>`;
+  }).join("");
   box.querySelectorAll(".rs-item[data-key]").forEach(it => {
     it.addEventListener("click", () => {
-      _addRegionCard(it.dataset.kind, it.dataset.key);
+      const extra = it.dataset.kind === "city"
+        ? { city: it.dataset.city, postcode: it.dataset.pc }
+        : null;
+      _addRegionCard(it.dataset.kind, it.dataset.key, extra);
       document.getElementById("palRegion").value = "";
       box.hidden = true; box.innerHTML = "";
       if (clr) clr.hidden = true;
@@ -2743,13 +2779,23 @@ function _renderRegionSuggest(q){
   });
 }
 
-function _addRegionCard(kind, key){
+function _addRegionCard(kind, key, extra){
   // De-dupe — already added?
   if (_regionState.cards.some(c => c.kind === kind && c.key === key)) return;
   const upKey = String(key).toUpperCase();
   const ships = _shipOptions
     .filter(r => {
       if (kind === "postcode") return (r.postcode || "").trim() === key;
+      if (kind === "city"){
+        // Match on (city, postcode) pair from the suggest row so a
+        // city with multiple postcodes gets its own card per pair.
+        const cityMatch = ((r.city || "").trim().toUpperCase()
+                          === (extra && extra.city || "").toUpperCase());
+        if (!cityMatch) return false;
+        const pcTarget = extra && extra.postcode;
+        if (!pcTarget) return true;   // city has one postcode
+        return (r.postcode || "").trim() === pcTarget;
+      }
       // region: match either the API-provided region OR the
       // postcode-derived state.  Same rule the suggest dropdown
       // uses so what the user picked is what they get.
@@ -2784,7 +2830,10 @@ function _renderRegionCards(){
   if (!_regionState.cards.length){ host.innerHTML = ""; return; }
   const byShip = new Map(_shipOptions.map(r => [r.ship_to, r]));
   host.innerHTML = _regionState.cards.map(c => {
-    const label = (c.kind === "postcode" ? "📮 " : "🗺 ") + c.key;
+    const iconOnly = c.kind === "postcode" ? "📮 "
+                   : c.kind === "city"     ? "🏙 "
+                   : "🗺 ";
+    const label = iconOnly + c.key;
     const chips = c.ships.map(s => {
       const r = byShip.get(s) || { ship_to:s, ship_to_name:s };
       return `
