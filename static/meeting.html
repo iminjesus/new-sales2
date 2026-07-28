@@ -790,7 +790,10 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         <a href="javascript:void(0)" id="filtShopBadgeClear"
            style="color:#dc2626;margin-left:6px;font-weight:700;">×</a>
       </span>
-      <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
+      <button class="btn" id="btnBdeImpact" style="margin-left:auto;background:#7c3aed;color:#fff;border-color:#6d28d9;">
+        📊 BDE Impact
+      </button>
+      <button class="btn" id="btnRefresh" style="margin-left:6px;">Refresh</button>
     </div>
     <div class="filt-row" style="margin-top:4px;">
       <span class="filt-tag">Purpose</span>
@@ -813,6 +816,72 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 </div><!-- /planner-right -->
 
 </div><!-- /planner-layout -->
+
+<!-- BDE Impact modal — visit-impact deltas rolled up per BDE across a
+     date range.  Reuses the per-entry impact calc from the Recent
+     list on the server side, aggregated so leadership can see who's
+     actually moving the needle. -->
+<div id="bdeImpactModal" hidden
+     style="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;
+            display:flex;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:#fff;border-radius:8px;max-width:1100px;width:100%;
+              max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.35);">
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;
+                border-bottom:1px solid #e5e7eb;background:#faf5ff;">
+      <div style="font-weight:800;color:#5b21b6;font-size:15px;flex:1;">
+        📊 BDE Visit Impact <span style="color:#9ca3af;font-weight:400;font-size:12px;">— pre/post sales delta per BDE</span>
+      </div>
+      <label style="font-size:11px;color:#6b7280;">
+        From <input type="date" id="bdeImpactFrom"
+                    style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 6px;font-size:12px;">
+      </label>
+      <label style="font-size:11px;color:#6b7280;">
+        To <input type="date" id="bdeImpactTo"
+                  style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 6px;font-size:12px;">
+      </label>
+      <button type="button" id="bdeImpactRun"
+              style="background:#7c3aed;color:#fff;border:none;border-radius:4px;
+                     padding:5px 12px;font-weight:700;cursor:pointer;">Run</button>
+      <button type="button" id="bdeImpactClose"
+              style="background:none;border:1px solid #d1d5db;border-radius:4px;
+                     padding:5px 10px;cursor:pointer;color:#374151;font-weight:700;">×</button>
+    </div>
+    <div id="bdeImpactBody" style="padding:14px 18px;">
+      <div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">
+        Pick a date range and click Run.  Default is the last 90 days.
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  #bdeImpactModal table.bdeImpactTbl{width:100%;border-collapse:collapse;font-size:12px;}
+  #bdeImpactModal table.bdeImpactTbl thead th{
+    background:#1e293b;color:#fff;padding:6px 8px;text-align:right;font-weight:700;
+    font-size:11px;letter-spacing:.3px;text-transform:uppercase;position:sticky;top:0;
+  }
+  #bdeImpactModal table.bdeImpactTbl thead th:first-child{text-align:left;}
+  #bdeImpactModal table.bdeImpactTbl tbody td{
+    padding:6px 8px;border-bottom:1px solid #f1f5f9;text-align:right;
+    font-variant-numeric:tabular-nums;vertical-align:top;
+  }
+  #bdeImpactModal table.bdeImpactTbl tbody td:first-child{text-align:left;font-weight:700;color:#111;}
+  #bdeImpactModal table.bdeImpactTbl tbody tr:hover td{background:#faf5ff;}
+  #bdeImpactModal .bi-chip{
+    display:inline-block;padding:1px 6px;border-radius:8px;font-weight:700;
+    font-size:11px;min-width:26px;text-align:center;
+  }
+  #bdeImpactModal .bi-up{background:#dcfce7;color:#166534;}
+  #bdeImpactModal .bi-flat{background:#f3f4f6;color:#4b5563;}
+  #bdeImpactModal .bi-down{background:#fee2e2;color:#991b1b;}
+  #bdeImpactModal .bi-delta-up{color:#15803d;font-weight:700;}
+  #bdeImpactModal .bi-delta-down{color:#b91c1c;font-weight:700;}
+  #bdeImpactModal .bi-detail{
+    color:#6b7280;font-size:10px;font-style:italic;font-weight:400;
+    display:block;margin-top:2px;
+  }
+  #bdeImpactModal .bi-detail b{color:#111;font-style:normal;}
+</style>
 
 </div>
 
@@ -1962,6 +2031,109 @@ fForm.addEventListener("submit", async (e) => {
 });
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
+
+/* ─── BDE Impact modal ────────────────────────────────────────
+   Aggregates per-shop pre/post sales delta up to the BDE level.
+   Default window = last 90 days; adjustable via the two date
+   inputs.  Same scope locks (BDE own / SM own state / ALL) as
+   the meeting list so people only see what they should. */
+(function wireBdeImpact(){
+  const btn    = document.getElementById("btnBdeImpact");
+  const modal  = document.getElementById("bdeImpactModal");
+  const close  = document.getElementById("bdeImpactClose");
+  const run    = document.getElementById("bdeImpactRun");
+  const fFrom  = document.getElementById("bdeImpactFrom");
+  const fTo    = document.getElementById("bdeImpactTo");
+  const body   = document.getElementById("bdeImpactBody");
+  if (!btn || !modal) return;
+  const _iso = d => d.toISOString().slice(0, 10);
+  const _seed = () => {
+    const now  = new Date();
+    const from = new Date(now); from.setDate(from.getDate() - 90);
+    if (!fFrom.value) fFrom.value = _iso(from);
+    if (!fTo.value)   fTo.value   = _iso(now);
+  };
+  btn.addEventListener("click", () => {
+    _seed();
+    modal.hidden = false;
+    load();
+  });
+  close.addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) modal.hidden = true;    // click outside → close
+  });
+  run.addEventListener("click", load);
+
+  async function load(){
+    body.innerHTML = `<div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">Loading…</div>`;
+    const q = new URLSearchParams({ from: fFrom.value, to: fTo.value });
+    let j;
+    try {
+      const r = await fetch(`/api/meeting/impact_summary?${q}`, {credentials:"include"});
+      j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || ("HTTP " + r.status));
+    } catch(e){
+      body.innerHTML = `<div style="color:#b91c1c;padding:20px;">Load failed: ${e.message}</div>`;
+      return;
+    }
+    const rows = j.bdes || [];
+    if (!rows.length){
+      body.innerHTML = `<div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">No visits in this window.</div>`;
+      return;
+    }
+    const fmtN  = n => (n == null ? "—" : Number(n).toLocaleString());
+    const fmt$  = n => (n == null ? "—" : "$" + Math.round(Number(n)).toLocaleString());
+    const fmtP  = p => (p == null ? "—" : (p > 0 ? "+" : "") + Number(p).toFixed(1) + "%");
+    const deltaCls = p => (p == null ? "" : (p >= 1 ? "bi-delta-up" : (p <= -1 ? "bi-delta-down" : "")));
+    const winList = arr => (!arr || !arr.length)
+      ? "" : `<span class="bi-detail">▲ ${arr.map(w =>
+                `<b>${_esc(w.ship_to_name)}</b> ${fmtP(w.delta_pct)}`).join(", ")}</span>`;
+    const lossList = arr => (!arr || !arr.length)
+      ? "" : `<span class="bi-detail">▼ ${arr.map(w =>
+                `<b>${_esc(w.ship_to_name)}</b> ${fmtP(w.delta_pct)}`).join(", ")}</span>`;
+    body.innerHTML = `
+      <div style="color:#6b7280;font-size:11px;margin-bottom:8px;">
+        Window: <b>${_esc(j.from)}</b> → <b>${_esc(j.to)}</b> · ${rows.length} BDE${rows.length===1?"":"s"}
+      </div>
+      <table class="bdeImpactTbl">
+        <thead>
+          <tr>
+            <th>BDE</th><th>Visits</th>
+            <th>↗ Up</th><th>↔ Flat</th><th>↘ Down</th>
+            <th>Pre Qty</th><th>Post Qty</th><th>Δ Qty</th><th>Δ %</th>
+            <th>Δ $</th>
+            <th style="text-align:left;">Winners / Losers</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr>
+              <td>${_esc(r.bde_name)}</td>
+              <td>${fmtN(r.visits)}</td>
+              <td><span class="bi-chip bi-up">${r.up}</span></td>
+              <td><span class="bi-chip bi-flat">${r.flat}</span></td>
+              <td><span class="bi-chip bi-down">${r.down}</span></td>
+              <td>${fmtN(r.pre_qty)}</td>
+              <td>${fmtN(r.post_qty)}</td>
+              <td class="${deltaCls(r.delta_pct)}">${fmtN(r.delta_qty)}</td>
+              <td class="${deltaCls(r.delta_pct)}">${fmtP(r.delta_pct)}</td>
+              <td class="${deltaCls(r.delta_pct)}">${fmt$(r.delta_amt)}</td>
+              <td style="text-align:left;color:#374151;">
+                ${winList(r.top_wins)}
+                ${lossList(r.top_losses)}
+              </td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    `;
+  }
+  function _esc(s){
+    return String(s == null ? "" : s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;");
+  }
+})();
 filtBde.addEventListener("change", () => {
   loadRecent(); renderCalendar();
   if (typeof renderPotentialList === "function") renderPotentialList();

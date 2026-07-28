@@ -14213,6 +14213,138 @@ def meeting_impact():
         return jsonify({"error": str(e)}), 500
 
 
+@app.get("/api/meeting/impact_summary")
+def meeting_impact_summary():
+    """Roll every meeting_log entry's pre/post sales delta up to the
+    BDE that logged it.
+
+      ?from=YYYY-MM-DD   default: 90 days ago
+      ?to=YYYY-MM-DD     default: today
+      ?bde=<name>        optional single-BDE drilldown
+
+    Returns per-BDE totals: visits, up/flat/down counts, pre/post
+    sums, delta $ and %, plus the top-3 winning and top-3 losing
+    shop names inside the window.  Scope respects the same
+    BDE / SM / ALL locks as /api/meeting_plan/list."""
+    from datetime import date as _date, timedelta as _timedelta
+    q_from = (request.args.get("from") or "").strip()
+    q_to   = (request.args.get("to")   or "").strip()
+    q_bde  = (request.args.get("bde")  or "").strip()
+    try:
+        d_from = datetime.strptime(q_from, "%Y-%m-%d").date() if q_from \
+                 else (_date.today() - _timedelta(days=90))
+        d_to   = datetime.strptime(q_to,   "%Y-%m-%d").date() if q_to   \
+                 else _date.today()
+    except Exception:
+        return jsonify({"error": "from/to must be YYYY-MM-DD"}), 400
+    if d_from > d_to:
+        return jsonify({"error": "from must be <= to"}), 400
+
+    # Scope — same as meeting_plan_list.
+    email = _bde_from_request()
+    me    = _EMAIL_TO_DIR.get(email.lower()) if email else None
+    role  = me[2] if me else "ALL"
+    scope_bde   = me[0] if me else None
+    scope_state = me[1] if me else None
+
+    wh = ["visit_date BETWEEN %s AND %s", "ship_to IS NOT NULL", "ship_to <> ''"]
+    params = [d_from, d_to]
+    if role == "BDE" and scope_bde:
+        wh.append("UPPER(bde_name) = %s"); params.append(scope_bde.upper())
+    elif role == "SM" and scope_state:
+        state_bdes = [n for (n, _e, s, _r) in _BDE_DIRECTORY if s == scope_state]
+        if state_bdes:
+            placeholders = ",".join(["%s"] * len(state_bdes))
+            wh.append(f"UPPER(bde_name) IN ({placeholders})")
+            params.extend([n.upper() for n in state_bdes])
+    if q_bde:
+        wh.append("UPPER(bde_name) = %s"); params.append(q_bde.upper())
+    where_sql = "WHERE " + " AND ".join(wh)
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        cur.execute(f"""
+            SELECT id, bde_name, ship_to, ship_to_name, visit_date
+            FROM meeting_log
+            {where_sql}
+            ORDER BY visit_date DESC
+        """, tuple(params))
+        visits = cur.fetchall()
+
+        # Aggregate per BDE — reuse _sales_for_month for consistency.
+        bdes = {}   # bde_name → dict
+        for v in visits:
+            bde = (v.get("bde_name") or "—").strip() or "—"
+            g = bdes.setdefault(bde, {
+                "bde_name": bde,
+                "visits": 0, "up": 0, "flat": 0, "down": 0,
+                "pre_qty": 0.0, "post_qty": 0.0,
+                "pre_amt": 0.0, "post_amt": 0.0,
+                "wins":   [],  # (delta_pct, ship_to_name)
+                "losses": [],
+                "pending": 0, "pre_missing": 0,
+            })
+            g["visits"] += 1
+            vd = v.get("visit_date")
+            if not vd: continue
+            year, month = vd.year, vd.month
+            py = year - 1 if month == 1 else year
+            pm = 12 if month == 1 else month - 1
+            ny = year + 1 if month == 12 else year
+            nm = 1 if month == 12 else month + 1
+            pre  = _sales_for_month(cur, v["ship_to"], py, pm)
+            post = _sales_for_month(cur, v["ship_to"], ny, nm)
+            if pre is None:
+                g["pre_missing"] += 1
+                continue
+            if post is None:
+                g["pending"] += 1
+                continue
+            g["pre_qty"]  += pre["qty"];  g["post_qty"] += post["qty"]
+            g["pre_amt"]  += pre["amt"];  g["post_amt"] += post["amt"]
+            dq  = post["qty"] - pre["qty"]
+            dpct = ((post["qty"] - pre["qty"]) / pre["qty"] * 100) if pre["qty"] > 0 else None
+            if dq > 0 and (dpct is None or dpct >= 1):
+                g["up"] += 1
+                if dpct is not None:
+                    g["wins"].append((dpct, v.get("ship_to_name") or v["ship_to"]))
+            elif dq < 0:
+                g["down"] += 1
+                if dpct is not None:
+                    g["losses"].append((dpct, v.get("ship_to_name") or v["ship_to"]))
+            else:
+                g["flat"] += 1
+        cur.close(); conn.close()
+
+        # Finalise: round + take top 3 wins / bottom 3 losses.
+        rows = []
+        for g in bdes.values():
+            g["delta_qty"] = round(g["post_qty"] - g["pre_qty"], 1)
+            g["delta_amt"] = round(g["post_amt"] - g["pre_amt"], 0)
+            g["delta_pct"] = round((g["post_qty"] - g["pre_qty"]) / g["pre_qty"] * 100, 1) \
+                             if g["pre_qty"] > 0 else None
+            g["wins"].sort(key=lambda t: -t[0])
+            g["losses"].sort(key=lambda t: t[0])
+            g["top_wins"]   = [{"ship_to_name": n, "delta_pct": round(p, 1)}
+                               for (p, n) in g["wins"][:3]]
+            g["top_losses"] = [{"ship_to_name": n, "delta_pct": round(p, 1)}
+                               for (p, n) in g["losses"][:3]]
+            del g["wins"]; del g["losses"]
+            for k in ("pre_qty", "post_qty"):  g[k] = round(g[k], 1)
+            for k in ("pre_amt", "post_amt"):  g[k] = round(g[k], 0)
+            rows.append(g)
+        # Order by total visits desc so the busiest BDE lands on top.
+        rows.sort(key=lambda r: -r["visits"])
+        return jsonify({
+            "from": d_from.strftime("%Y-%m-%d"),
+            "to":   d_to.strftime("%Y-%m-%d"),
+            "bdes": rows,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # ─── Shop Briefing Card ───────────────────────────────────────────────
 # Per-shop summary view a BDE pulls up on the phone right before walking
 # into a shop (or before calling its owner): last visit recap, recent
