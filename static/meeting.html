@@ -2087,9 +2087,69 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
     const lossList = arr => (!arr || !arr.length)
       ? "" : `<span class="bi-detail">▼ ${arr.map(w =>
                 `<b>${_esc(w.ship_to_name)}</b> ${fmtP(w.delta_pct)}`).join(", ")}</span>`;
+    const states = j.states || [];
+    const total  = j.total  || null;
+    // BDE row grouped by state so state summary rows can slot in
+    // right below their group.  Order matches the sorted state
+    // list from the backend so what the user reads top-to-bottom
+    // is consistent between the state-summary and per-BDE rows.
+    const byState = new Map();
+    for (const r of rows){
+      const s = r.state || "—";
+      if (!byState.has(s)) byState.set(s, []);
+      byState.get(s).push(r);
+    }
+    const stateHtml = (s) => {
+      const bdeGroup = byState.get(s.state) || [];
+      const stateHead = `
+        <tr style="background:#e0e7ff;">
+          <td colspan="11" style="padding:6px 8px;font-weight:800;color:#3730a3;text-align:left;">
+            🗺 ${_esc(s.state)} · ${s.bde_count} BDE${s.bde_count===1?"":"s"} ·
+            ${fmtN(s.visits)} visits · ${fmtN(s.up)} ↗ / ${fmtN(s.flat)} ↔ / ${fmtN(s.down)} ↘
+            &nbsp;·&nbsp; <span class="${deltaCls(s.delta_pct)}">Δ ${fmtN(s.delta_qty)}u · ${fmtP(s.delta_pct)} · ${fmt$(s.delta_amt)}</span>
+          </td>
+        </tr>
+      `;
+      const bdeRows = bdeGroup.map(r => `
+        <tr>
+          <td>${_esc(r.bde_name)}</td>
+          <td>${fmtN(r.visits)}</td>
+          <td><span class="bi-chip bi-up">${r.up}</span></td>
+          <td><span class="bi-chip bi-flat">${r.flat}</span></td>
+          <td><span class="bi-chip bi-down">${r.down}</span></td>
+          <td>${fmtN(r.pre_qty)}</td>
+          <td>${fmtN(r.post_qty)}</td>
+          <td class="${deltaCls(r.delta_pct)}">${fmtN(r.delta_qty)}</td>
+          <td class="${deltaCls(r.delta_pct)}">${fmtP(r.delta_pct)}</td>
+          <td class="${deltaCls(r.delta_pct)}">${fmt$(r.delta_amt)}</td>
+          <td style="text-align:left;color:#374151;">
+            ${winList(r.top_wins)}
+            ${lossList(r.top_losses)}
+          </td>
+        </tr>
+      `).join("");
+      return stateHead + bdeRows;
+    };
+    const totalRow = !total ? "" : `
+      <tr style="background:#111827;color:#fff;">
+        <td style="color:#fff;">🌏 TOTAL</td>
+        <td>${fmtN(total.visits)}</td>
+        <td><span class="bi-chip bi-up">${total.up}</span></td>
+        <td><span class="bi-chip bi-flat">${total.flat}</span></td>
+        <td><span class="bi-chip bi-down">${total.down}</span></td>
+        <td>${fmtN(total.pre_qty)}</td>
+        <td>${fmtN(total.post_qty)}</td>
+        <td>${fmtN(total.delta_qty)}</td>
+        <td>${fmtP(total.delta_pct)}</td>
+        <td>${fmt$(total.delta_amt)}</td>
+        <td style="text-align:left;color:#e5e7eb;">
+          ${total.bde_count} BDE${total.bde_count===1?"":"s"} across ${states.length} state${states.length===1?"":"s"}
+        </td>
+      </tr>`;
     body.innerHTML = `
       <div style="color:#6b7280;font-size:11px;margin-bottom:8px;">
-        Window: <b>${_esc(j.from)}</b> → <b>${_esc(j.to)}</b> · ${rows.length} BDE${rows.length===1?"":"s"}
+        Window: <b>${_esc(j.from)}</b> → <b>${_esc(j.to)}</b> ·
+        ${rows.length} BDE${rows.length===1?"":"s"} across ${states.length} state${states.length===1?"":"s"}
       </div>
       <table class="bdeImpactTbl">
         <thead>
@@ -2102,24 +2162,8 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
           </tr>
         </thead>
         <tbody>
-          ${rows.map(r => `
-            <tr>
-              <td>${_esc(r.bde_name)}</td>
-              <td>${fmtN(r.visits)}</td>
-              <td><span class="bi-chip bi-up">${r.up}</span></td>
-              <td><span class="bi-chip bi-flat">${r.flat}</span></td>
-              <td><span class="bi-chip bi-down">${r.down}</span></td>
-              <td>${fmtN(r.pre_qty)}</td>
-              <td>${fmtN(r.post_qty)}</td>
-              <td class="${deltaCls(r.delta_pct)}">${fmtN(r.delta_qty)}</td>
-              <td class="${deltaCls(r.delta_pct)}">${fmtP(r.delta_pct)}</td>
-              <td class="${deltaCls(r.delta_pct)}">${fmt$(r.delta_amt)}</td>
-              <td style="text-align:left;color:#374151;">
-                ${winList(r.top_wins)}
-                ${lossList(r.top_losses)}
-              </td>
-            </tr>
-          `).join("")}
+          ${states.map(stateHtml).join("")}
+          ${totalRow}
         </tbody>
       </table>
     `;

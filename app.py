@@ -14324,9 +14324,13 @@ def meeting_impact_summary():
                 g["flat"] += 1
         cur.close(); conn.close()
 
+        # BDE-name → state lookup so state and grand totals can be
+        # rolled up alongside the per-BDE rows.
+        _bde_state_lc = {n.upper(): s for (n, _e, s, _r) in _BDE_DIRECTORY}
         # Finalise: round + take top 3 wins / bottom 3 losses.
         rows = []
         for g in bdes.values():
+            g["state"] = _bde_state_lc.get(g["bde_name"].upper(), "")
             g["delta_qty"] = round(g["post_qty"] - g["pre_qty"], 1)
             g["delta_amt"] = round(g["post_amt"] - g["pre_amt"], 0)
             g["delta_pct"] = round((g["post_qty"] - g["pre_qty"]) / g["pre_qty"] * 100, 1) \
@@ -14343,10 +14347,58 @@ def meeting_impact_summary():
             rows.append(g)
         # Order by total visits desc so the busiest BDE lands on top.
         rows.sort(key=lambda r: -r["visits"])
+
+        # Roll up state totals and one grand total from the per-BDE
+        # rows.  Frontend renders these as separate table sections so
+        # the reader can eyeball state-level performance without
+        # having to sum in their head.
+        def _agg(pool):
+            if not pool:
+                return None
+            visits = sum(r["visits"] for r in pool)
+            up     = sum(r["up"]     for r in pool)
+            flat   = sum(r["flat"]   for r in pool)
+            down   = sum(r["down"]   for r in pool)
+            pending     = sum(r.get("pending", 0)     for r in pool)
+            pre_missing = sum(r.get("pre_missing", 0) for r in pool)
+            pre_qty  = round(sum(r["pre_qty"]  for r in pool), 1)
+            post_qty = round(sum(r["post_qty"] for r in pool), 1)
+            pre_amt  = round(sum(r["pre_amt"]  for r in pool), 0)
+            post_amt = round(sum(r["post_amt"] for r in pool), 0)
+            delta_qty = round(post_qty - pre_qty, 1)
+            delta_amt = round(post_amt - pre_amt, 0)
+            delta_pct = round((post_qty - pre_qty) / pre_qty * 100, 1) if pre_qty > 0 else None
+            return {
+                "visits": visits, "up": up, "flat": flat, "down": down,
+                "pending": pending, "pre_missing": pre_missing,
+                "pre_qty": pre_qty, "post_qty": post_qty,
+                "pre_amt": pre_amt, "post_amt": post_amt,
+                "delta_qty": delta_qty, "delta_amt": delta_amt,
+                "delta_pct": delta_pct,
+                "bde_count": len(pool),
+            }
+        by_state = {}
+        for r in rows:
+            s = r["state"] or "—"
+            by_state.setdefault(s, []).append(r)
+        states = []
+        # NSW → QLD → VIC → WA → SA → TAS → NT → ACT → 기타 순.
+        _STATE_ORDER = {"NSW":0,"QLD":1,"VIC":2,"WA":3,"SA":4,"TAS":5,"NT":6,"ACT":7}
+        for st in sorted(by_state.keys(),
+                         key=lambda k: (_STATE_ORDER.get(k, 99), k)):
+            agg = _agg(by_state[st])
+            if agg is not None:
+                agg["state"] = st
+                states.append(agg)
+        total = _agg(rows) or {}
+        if total:
+            total["state"] = "TOTAL"
         return jsonify({
             "from": d_from.strftime("%Y-%m-%d"),
             "to":   d_to.strftime("%Y-%m-%d"),
-            "bdes": rows,
+            "bdes":   rows,
+            "states": states,
+            "total":  total,
         })
     except Exception as e:
         traceback.print_exc()
