@@ -14247,27 +14247,35 @@ def meeting_impact_summary():
     scope_bde   = me[0] if me else None
     scope_state = me[1] if me else None
 
-    wh = ["visit_date BETWEEN %s AND %s", "ship_to IS NOT NULL", "ship_to <> ''"]
+    # Build the WHERE with the `m.` alias baked in from the start so
+    # the query below can reference the meeting_log fields safely.
+    wh = ["m.visit_date BETWEEN %s AND %s",
+          "m.ship_to IS NOT NULL", "m.ship_to <> ''"]
     params = [d_from, d_to]
     if role == "BDE" and scope_bde:
-        wh.append("UPPER(bde_name) = %s"); params.append(scope_bde.upper())
+        wh.append("UPPER(m.bde_name) = %s"); params.append(scope_bde.upper())
     elif role == "SM" and scope_state:
         state_bdes = [n for (n, _e, s, _r) in _BDE_DIRECTORY if s == scope_state]
         if state_bdes:
             placeholders = ",".join(["%s"] * len(state_bdes))
-            wh.append(f"UPPER(bde_name) IN ({placeholders})")
+            wh.append(f"UPPER(m.bde_name) IN ({placeholders})")
             params.extend([n.upper() for n in state_bdes])
     if q_bde:
-        wh.append("UPPER(bde_name) = %s"); params.append(q_bde.upper())
+        wh.append("UPPER(m.bde_name) = %s"); params.append(q_bde.upper())
     where_sql = "WHERE " + " AND ".join(wh)
 
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
+        # meeting_log carries ship_to code only; the readable name lives
+        # on customer master.  Correlated subquery keeps rows whose
+        # ship_to isn't in customer (potential customers, deleted rows).
         cur.execute(f"""
-            SELECT id, bde_name, ship_to, ship_to_name, visit_date
-            FROM meeting_log
+            SELECT m.id, m.bde_name, m.ship_to, m.visit_date,
+                   (SELECT MIN(NULLIF(TRIM(c.ship_to_name),''))
+                    FROM customer c WHERE c.ship_to = m.ship_to) AS ship_to_name
+            FROM meeting_log m
             {where_sql}
-            ORDER BY visit_date DESC
+            ORDER BY m.visit_date DESC
         """, tuple(params))
         visits = cur.fetchall()
 
