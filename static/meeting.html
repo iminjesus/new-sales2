@@ -790,10 +790,41 @@ header .nav{margin-left:auto;display:flex;gap:6px}
         <a href="javascript:void(0)" id="filtShopBadgeClear"
            style="color:#dc2626;margin-left:6px;font-weight:700;">×</a>
       </span>
-      <button class="btn" id="btnBdeImpact" style="margin-left:auto;background:#7c3aed;color:#fff;border-color:#6d28d9;">
-        📊 BDE Impact
-      </button>
-      <button class="btn" id="btnRefresh" style="margin-left:6px;">Refresh</button>
+      <button class="btn" id="btnRefresh" style="margin-left:auto;">Refresh</button>
+    </div>
+    <!-- Inline (non-modal) BDE Impact toggle — subtle text link that
+         expands a small in-place rollup panel below.  Kept minimal so
+         it doesn't compete with the main Recent list. -->
+    <div style="font-size:11px;color:#6b7280;margin-top:4px;">
+      <a href="javascript:void(0)" id="btnBdeImpact"
+         style="color:#7c3aed;text-decoration:underline;cursor:pointer;">
+        📊 Show BDE impact summary
+      </a>
+      <span id="bdeImpactHint" style="color:#9ca3af;font-style:italic;margin-left:6px;"></span>
+    </div>
+    <div id="bdeImpactInline" hidden style="margin-top:8px;
+         border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;background:#fafafa;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+        <label style="font-size:11px;color:#6b7280;">
+          From <input type="date" id="bdeImpactFrom"
+                      style="border:1px solid #cbd5e1;border-radius:4px;padding:2px 5px;font-size:11px;">
+        </label>
+        <label style="font-size:11px;color:#6b7280;">
+          To <input type="date" id="bdeImpactTo"
+                    style="border:1px solid #cbd5e1;border-radius:4px;padding:2px 5px;font-size:11px;">
+        </label>
+        <button type="button" id="bdeImpactRun"
+                style="background:#374151;color:#fff;border:none;border-radius:4px;
+                       padding:3px 10px;font-size:11px;cursor:pointer;">Run</button>
+        <span style="flex:1;"></span>
+        <a href="javascript:void(0)" id="bdeImpactHide"
+           style="color:#9ca3af;font-size:11px;text-decoration:underline;">Hide</a>
+      </div>
+      <div id="bdeImpactBody">
+        <div style="color:#94a3b8;font-style:italic;padding:10px 4px;text-align:center;font-size:11px;">
+          Click Run — default window is the last 90 days.
+        </div>
+      </div>
     </div>
     <div class="filt-row" style="margin-top:4px;">
       <span class="filt-tag">Purpose</span>
@@ -817,70 +848,34 @@ header .nav{margin-left:auto;display:flex;gap:6px}
 
 </div><!-- /planner-layout -->
 
-<!-- BDE Impact modal — visit-impact deltas rolled up per BDE across a
-     date range.  Reuses the per-entry impact calc from the Recent
-     list on the server side, aggregated so leadership can see who's
-     actually moving the needle. -->
-<div id="bdeImpactModal" hidden
-     style="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;
-            display:flex;align-items:center;justify-content:center;padding:20px;">
-  <div style="background:#fff;border-radius:8px;max-width:1100px;width:100%;
-              max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.35);">
-    <div style="display:flex;align-items:center;gap:10px;padding:14px 18px;
-                border-bottom:1px solid #e5e7eb;background:#faf5ff;">
-      <div style="font-weight:800;color:#5b21b6;font-size:15px;flex:1;">
-        📊 BDE Visit Impact <span style="color:#9ca3af;font-weight:400;font-size:12px;">— pre/post sales delta per BDE</span>
-      </div>
-      <label style="font-size:11px;color:#6b7280;">
-        From <input type="date" id="bdeImpactFrom"
-                    style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 6px;font-size:12px;">
-      </label>
-      <label style="font-size:11px;color:#6b7280;">
-        To <input type="date" id="bdeImpactTo"
-                  style="border:1px solid #cbd5e1;border-radius:4px;padding:3px 6px;font-size:12px;">
-      </label>
-      <button type="button" id="bdeImpactRun"
-              style="background:#7c3aed;color:#fff;border:none;border-radius:4px;
-                     padding:5px 12px;font-weight:700;cursor:pointer;">Run</button>
-      <button type="button" id="bdeImpactClose"
-              style="background:none;border:1px solid #d1d5db;border-radius:4px;
-                     padding:5px 10px;cursor:pointer;color:#374151;font-weight:700;">×</button>
-    </div>
-    <div id="bdeImpactBody" style="padding:14px 18px;">
-      <div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">
-        Pick a date range and click Run.  Default is the last 90 days.
-      </div>
-    </div>
-  </div>
-</div>
-
 <style>
-  #bdeImpactModal table.bdeImpactTbl{width:100%;border-collapse:collapse;font-size:12px;}
-  #bdeImpactModal table.bdeImpactTbl thead th{
-    background:#1e293b;color:#fff;padding:6px 8px;text-align:right;font-weight:700;
-    font-size:11px;letter-spacing:.3px;text-transform:uppercase;position:sticky;top:0;
+  #bdeImpactInline table.bdeImpactTbl{width:100%;border-collapse:collapse;font-size:11px;}
+  #bdeImpactInline table.bdeImpactTbl thead th{
+    background:#374151;color:#fff;padding:4px 6px;text-align:right;font-weight:700;
+    font-size:10px;letter-spacing:.3px;text-transform:uppercase;
   }
-  #bdeImpactModal table.bdeImpactTbl thead th:first-child{text-align:left;}
-  #bdeImpactModal table.bdeImpactTbl tbody td{
-    padding:6px 8px;border-bottom:1px solid #f1f5f9;text-align:right;
+  #bdeImpactInline table.bdeImpactTbl thead th:first-child,
+  #bdeImpactInline table.bdeImpactTbl thead th:last-child{text-align:left;}
+  #bdeImpactInline table.bdeImpactTbl tbody td{
+    padding:4px 6px;border-bottom:1px solid #f1f5f9;text-align:right;
     font-variant-numeric:tabular-nums;vertical-align:top;
   }
-  #bdeImpactModal table.bdeImpactTbl tbody td:first-child{text-align:left;font-weight:700;color:#111;}
-  #bdeImpactModal table.bdeImpactTbl tbody tr:hover td{background:#faf5ff;}
-  #bdeImpactModal .bi-chip{
-    display:inline-block;padding:1px 6px;border-radius:8px;font-weight:700;
-    font-size:11px;min-width:26px;text-align:center;
+  #bdeImpactInline table.bdeImpactTbl tbody td:first-child{text-align:left;font-weight:700;color:#111;}
+  #bdeImpactInline table.bdeImpactTbl tbody td:last-child{text-align:left;color:#374151;}
+  #bdeImpactInline .bi-chip{
+    display:inline-block;padding:0 5px;border-radius:8px;font-weight:700;
+    font-size:10px;min-width:20px;text-align:center;
   }
-  #bdeImpactModal .bi-up{background:#dcfce7;color:#166534;}
-  #bdeImpactModal .bi-flat{background:#f3f4f6;color:#4b5563;}
-  #bdeImpactModal .bi-down{background:#fee2e2;color:#991b1b;}
-  #bdeImpactModal .bi-delta-up{color:#15803d;font-weight:700;}
-  #bdeImpactModal .bi-delta-down{color:#b91c1c;font-weight:700;}
-  #bdeImpactModal .bi-detail{
-    color:#6b7280;font-size:10px;font-style:italic;font-weight:400;
-    display:block;margin-top:2px;
+  #bdeImpactInline .bi-up{background:#dcfce7;color:#166534;}
+  #bdeImpactInline .bi-flat{background:#f3f4f6;color:#4b5563;}
+  #bdeImpactInline .bi-down{background:#fee2e2;color:#991b1b;}
+  #bdeImpactInline .bi-delta-up{color:#15803d;font-weight:700;}
+  #bdeImpactInline .bi-delta-down{color:#b91c1c;font-weight:700;}
+  #bdeImpactInline .bi-detail{
+    color:#6b7280;font-size:9px;font-style:italic;font-weight:400;
+    display:block;margin-top:1px;
   }
-  #bdeImpactModal .bi-detail b{color:#111;font-style:normal;}
+  #bdeImpactInline .bi-detail b{color:#111;font-style:normal;}
 </style>
 
 </div>
@@ -2039,13 +2034,13 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
    the meeting list so people only see what they should. */
 (function wireBdeImpact(){
   const btn    = document.getElementById("btnBdeImpact");
-  const modal  = document.getElementById("bdeImpactModal");
-  const close  = document.getElementById("bdeImpactClose");
+  const inline = document.getElementById("bdeImpactInline");
+  const hide   = document.getElementById("bdeImpactHide");
   const run    = document.getElementById("bdeImpactRun");
   const fFrom  = document.getElementById("bdeImpactFrom");
   const fTo    = document.getElementById("bdeImpactTo");
   const body   = document.getElementById("bdeImpactBody");
-  if (!btn || !modal) return;
+  if (!btn || !inline) return;
   const _iso = d => d.toISOString().slice(0, 10);
   const _seed = () => {
     const now  = new Date();
@@ -2055,12 +2050,13 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
   };
   btn.addEventListener("click", () => {
     _seed();
-    modal.hidden = false;
+    inline.hidden = false;
+    btn.textContent = "📊 Refresh BDE impact summary";
     load();
   });
-  close.addEventListener("click", () => { modal.hidden = true; });
-  modal.addEventListener("click", (e) => {
-    if (e.target === modal) modal.hidden = true;    // click outside → close
+  hide.addEventListener("click", () => {
+    inline.hidden = true;
+    btn.textContent = "📊 Show BDE impact summary";
   });
   run.addEventListener("click", load);
 
