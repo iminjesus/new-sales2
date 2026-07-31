@@ -39,7 +39,7 @@ SEARCH_QUERIES = [
     ("2356516", "235/65R16"),
 ]
 
-OUTPUT_FILE = datetime.now().strftime("Tempe_%Y%m%d_%H%M.csv")
+OUTPUT_FILE = datetime.now().strftime("Tempeweborder_%Y%m%d_%H%M.csv")
 
 
 def clean(text):
