@@ -143,13 +143,34 @@ tr.ship-row td:first-child{padding-left:28px}
   <div>
     <label>Month</label>
     <div class="region-btns" id="month-btns">
+      <!-- Buttons injected by JS below so a completed month automatically
+           gets its own chip when the calendar rolls over — no manual
+           edit needed at the start of each month. -->
       <button class="rbtn m-btn active" data-month="thismonth" onclick="setMonth('thismonth')">This Month</button>
-      <button class="rbtn m-btn"         data-month="2601"      onclick="setMonth('2601')">Jan</button>
-      <button class="rbtn m-btn"         data-month="2602"      onclick="setMonth('2602')">Feb</button>
-      <button class="rbtn m-btn"         data-month="2603"      onclick="setMonth('2603')">Mar</button>
-      <button class="rbtn m-btn"         data-month="2604"      onclick="setMonth('2604')">Apr</button>
-      <button class="rbtn m-btn"         data-month="2605"      onclick="setMonth('2605')">May</button>
     </div>
+    <script>
+    /* Populate month buttons for every completed month of the current
+       year up to (but not including) the current one — "This Month"
+       already covers today.  The 4-digit key is YYMM (2601 = Jan
+       2026) which matches the value each button used to hard-code. */
+    (function seedMonthBtns(){
+      const box = document.getElementById("month-btns");
+      if (!box) return;
+      const NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const now = new Date();
+      const year = now.getFullYear() % 100;   // 26 for 2026
+      const cur  = now.getMonth() + 1;        // 1-12
+      for (let m = 1; m < cur; m++){
+        const key = `${String(year).padStart(2,"0")}${String(m).padStart(2,"0")}`;
+        const btn = document.createElement("button");
+        btn.className = "rbtn m-btn";
+        btn.dataset.month = key;
+        btn.textContent = NAMES[m-1];
+        btn.setAttribute("onclick", `setMonth('${key}')`);
+        box.appendChild(btn);
+      }
+    })();
+    </script>
   </div>
   <div>
     <label>Brand</label>
