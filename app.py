@@ -11328,16 +11328,43 @@ def api_monthly_highlights():
 # unknown month can never inject a table name.
 REBATE_SALES_TABLES = {
     "thismonth": "sales_thismonth",
-    "2601": "sales_2601",
-    "2602": "sales_2602",
-    "2603": "sales_2603",
-    "2604": "sales_2604",
-    "2605": "sales_2605",
 }
 
 def _rebate_sales_table(month_arg):
-    return REBATE_SALES_TABLES.get((month_arg or "thismonth").strip().lower(),
-                                   "sales_thismonth")
+    """Resolve a Month-button key to the physical sales table.
+    - "thismonth"            → sales_thismonth
+    - 4-digit YYMM (e.g.2606) → sales_2606 (if the table exists)
+    - unknown / missing       → sales_thismonth (last-resort fallback)
+
+    Existence check runs once per key and caches so the front-end
+    stays snappy across button clicks; a table that appears later
+    (end-of-month archive job) is picked up on the next process
+    restart."""
+    key = (month_arg or "thismonth").strip().lower()
+    hit = REBATE_SALES_TABLES.get(key)
+    if hit:
+        return hit
+    # YYMM pattern like "2606" → try sales_2606.  Verify the table
+    # exists so we don't blow up on an as-yet-unloaded month.
+    if len(key) == 4 and key.isdigit():
+        candidate = f"sales_{key}"
+        try:
+            conn = get_connection(); cur = conn.cursor()
+            cur.execute("SHOW TABLES LIKE %s", (candidate,))
+            exists = cur.fetchone() is not None
+            cur.close(); conn.close()
+        except Exception:
+            exists = False
+        if exists:
+            REBATE_SALES_TABLES[key] = candidate
+            return candidate
+        # Table not there yet — cache the miss so we don't re-probe
+        # every request in the same process.
+        REBATE_SALES_TABLES[key] = "__MISSING__"
+        return "__MISSING__"
+    if hit == "__MISSING__":
+        return "__MISSING__"
+    return "sales_thismonth"
 
 
 _REBATE_REGION_MAP = {"SA": "VIC", "TAS": "VIC", "NT": "VIC", "ACT": "NSW"}
@@ -11465,6 +11492,17 @@ def api_rebate_data():
     stg_filter    = request.args.get("sold_to_group", "ALL")
     region_filter = request.args.get("region",        "ALL").upper()
     sales_tbl     = _rebate_sales_table(request.args.get("month"))  # source table per month button
+    # Month table not present in the DB yet (e.g. Jun clicked before the
+    # end-of-month archive job runs) → return an empty payload with a
+    # friendly note so the UI just shows "no data for this month" rather
+    # than showing the same numbers as This Month.
+    if sales_tbl == "__MISSING__":
+        return jsonify({
+            "rows": [], "total": {}, "page": 0, "page_size": 0,
+            "note": ("Sales table for the requested month has not been "
+                     "archived yet.  It becomes available after the "
+                     "end-of-month archive job runs."),
+        })
     export_fmt    = (request.args.get("export") or "").strip().lower()  # 'xlsx' -> download
     # BDE filter — matches the role-scope lock used by graph/map views.
     # Comparison is case-insensitive on salesman_name so name casing in
