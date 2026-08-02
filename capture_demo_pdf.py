@@ -60,11 +60,11 @@ PAGES = [
      "% + units-needed-to-reach, and current rebate accrued.",
      "table tbody tr", 8000),
 
-    ("/demo/price", "Price",
-     "Competitor price scraping (retail + wholesale portals) merged with our "
-     "own list price so each SKU's market position is one glance away.  "
-     "Comparison rows show our-vs-Tempe/JAX/BJ delta in %.",
-     "table tbody tr", 8000),
+    ("/demo/fleet", "Fleet-demand Chart",
+     "Postcode-level tyre demand estimated from vehicle registrations × "
+     "base-OE fitment × ownership churn.  Bar chart is aggregate demand "
+     "by rim / size; drives which SKUs to stock in each state's plant.",
+     "canvas, svg, .chart", 10000),
 
     ("/demo/meeting", "Salesmen Visit Log",
      "Drag-and-drop calendar (planned visits per day / per salesman) with "
@@ -276,9 +276,16 @@ def main():
             print(f"[capture] {idx}/{total}  {title:34s}  "
                   f"wait {wait_ms/1000:.1f}s  {url}")
             try:
-                page.goto(url, wait_until="load", timeout=30_000)
+                resp = page.goto(url, wait_until="load", timeout=30_000)
             except Exception as e:
                 print(f"          skip — {e}")
+                continue
+            # Skip pages that 404 / 5xx — no point taking a screenshot
+            # of the error page.  A dead nav link (e.g. /price with
+            # no route) surfaces here instead of silently producing
+            # a blank slide in the PDF.
+            if resp is not None and resp.status >= 400:
+                print(f"          skip — server returned {resp.status}")
                 continue
             png = full_page_shot(page, wait_selector=sel, min_wait_ms=wait_ms)
             if png is None:
