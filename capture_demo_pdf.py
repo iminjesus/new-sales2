@@ -24,90 +24,130 @@ import sys
 
 BASE_URL = "http://127.0.0.1:5000"
 
-# (path, title, description, extra wait ms).  Description prints on
-# the strip above the screenshot in the PDF so each page has a
-# self-contained caption.  Highlights + Map get long waits because
-# their charts are the slowest to render.
+# (path, title, description, wait_selector, min_wait_ms).
+#   wait_selector — CSS selector to wait for before shooting; if the
+#                   page doesn't show it in `min_wait_ms`, the script
+#                   waits `min_wait_ms` anyway and captures whatever
+#                   rendered so a slow page doesn't kill the run.
+#   min_wait_ms   — floor wait after the selector fires (or full wait
+#                   if the selector never appears).  Charts / maps
+#                   need generous windows because Chart.js finishes
+#                   the animation frame AFTER the DOM node exists.
 PAGES = [
-    ("/demo",             "Sales Dashboard / graph view",
-     "Region × Salesmen roll-up with This-Month / Q1-Q4 achievement %, "
-     "monthly qty/$ KPIs, and drill-down into daily sales, promo membership, "
-     "product-line mix and customer-level detail.",
-     3500),
-    ("/demo/map",         "Map View",
-     "Geo-plotted shops coloured by state / performance.  Overlays for "
-     "aged stock, fleet-demand postcodes, and salesmen visit density.",
-     6000),
-    ("/demo/stock",       "Stock",
-     "SKU-level on-hand at every plant with DOT-age buckets (≤12M, 13-18M, "
-     "19-24M, 25-36M, 37M+).  Drives aging-DC promotions and the aged-stock "
-     "side panel on the Order form.",
-     3000),
-    ("/demo/rebate",      "Rebate Calculator",
+    ("/demo", "Sales Dashboard / graph view",
+     "The main landing page — Region × Salesmen achievement grid plus every "
+     "sales/target chart under it.  The screenshot below shows the filter "
+     "row (Product / Region / Salesmen / Channel), the achievement roll-up "
+     "table, the monthly Profit chart, daily sales bars, and the region-"
+     "stacked daily volume view — all drivable from the top-of-page filters.",
+     "table",        10000),
+
+    ("/demo/map", "Map View",
+     "Every customer plotted on an Australia map with pins coloured by "
+     "salesman territory.  Overlays for aged stock, fleet-demand postcodes, "
+     "and salesmen visit density can be toggled from the legend.",
+     "canvas, .leaflet-container, #map", 10000),
+
+    ("/demo/stock", "Stock",
+     "SKU-level on-hand at every plant (NSW/QLD/VIC/WA) with DOT-age buckets "
+     "(≤12M / 13-18M / 19-24M / 25-36M / 37M+).  The aged tiers here drive "
+     "the Aging-DC ladder on the Order form and the aged-stock side panel.",
+     "table tbody tr", 8000),
+
+    ("/demo/rebate", "Rebate Calculator",
      "Per ship-to rebate accrual against the codified rebate_structure "
-     "tiers.  Next-tier gap in units, projected rebate at current pace, "
-     "eligibility flag from customer master.",
-     3500),
-    ("/demo/price",       "Price",
-     "Competitor price scraping (retail + wholesale portals) merged with "
-     "our own list price so each SKU's market position is one glance away.",
-     2500),
-    ("/demo/meeting",     "Salesmen Visit Log",
-     "Drag-and-drop scheduling calendar plus post-visit memo with pre/post "
-     "sales-impact delta per visit.  Postcode / Region / City cards group "
-     "multiple ship-tos into one drag-as-one bundle.",
-     3500),
-    ("/demo/claims",      "Claims",
-     "Warranty claim intake + follow-up thread; per-shop history + status.",
-     2500),
-    ("/demo/order",       "Special Price Request Form",
-     "Line-by-line pricing with server-authoritative Base DC (5-tier "
-     "priority), 443 promo (multi-condition AND gate), aging DC override, "
-     "compound formula, and management-approval workflow.",
-     2500),
+     "tiers.  Every row shows YTD qty / $, current tier %, next-tier "
+     "% + units-needed-to-reach, and current rebate accrued.",
+     "table tbody tr", 8000),
+
+    ("/demo/price", "Price",
+     "Competitor price scraping (retail + wholesale portals) merged with our "
+     "own list price so each SKU's market position is one glance away.  "
+     "Comparison rows show our-vs-Tempe/JAX/BJ delta in %.",
+     "table tbody tr", 8000),
+
+    ("/demo/meeting", "Salesmen Visit Log",
+     "Drag-and-drop calendar (planned visits per day / per salesman) with "
+     "post-visit memos on the right.  Impact chips per entry show pre/post "
+     "sales delta; Postcode / Region / City cards on the left let you drag "
+     "a whole region's shops onto a date in one shot.",
+     ".cal-cell, #calGrid, #recentSection", 8000),
+
+    ("/demo/claims", "Claims",
+     "Warranty claim intake + threaded follow-up.  Per-shop history, current "
+     "status, and photo evidence all in one thread.",
+     "table, .claim-card, .card", 6000),
+
+    ("/demo/order", "Special Price Request Form",
+     "Line-by-line pricing with server-authoritative Base DC (5-tier priority "
+     "chain), 443 promo (multi-condition AND gate), Aging-DC override, "
+     "compound pricing formula, and parallel management-approval workflow.  "
+     "Screenshot shows the empty template before a customer is loaded.",
+     ".hdr, #linesTable", 6000),
+
     ("/demo/orders_list", "Submitted Orders",
-     "Audit-locked list of every submitted SPRF with SAP-entry flag "
-     "(CS-only), parallel approver status, edit re-triggers approvals.",
-     2500),
-    ("/demo/highlights",  "Highlights",
-     "Auto-generated strategic commentary: trajectory slope, mix-shift, "
-     "decline analysis, watch list of actionable to-dos, plus the "
-     "narrative card that summarises the month in three sentences.",
-     12000),
+     "Audit-locked list of every submitted SPRF with the SAP-entry flag "
+     "(CS-only toggle), parallel approver status, and Edit link (author-only) "
+     "that re-triggers approvals on any content change.",
+     "table, .list-table, #listBody", 6000),
+
+    ("/demo/highlights", "Highlights",
+     "Auto-generated strategic commentary: trajectory slope (linear "
+     "regression on 6 months of sales), month-over-month mix shift, "
+     "decline analysis per customer group, and a watch list of actionable "
+     "to-dos.  The narrative card summarises the month in 3 sentences.",
+     ".narrative, .decl-card, .tr-card, .wl-card, .mx-card, canvas",
+     18000),
 ]
 
 VIEWPORT = {"width": 1600, "height": 1000}     # widescreen so nothing wraps
 OUT_PDF  = Path(__file__).resolve().parent / "HKAU_Dashboard_Live_Demo.pdf"
 
 
-def full_page_shot(page, extra_wait_ms=1500):
-    """Wait for JS-driven content to settle, then capture the whole
-    scrollable page (not just the visible viewport).
+def full_page_shot(page, wait_selector=None, min_wait_ms=3000):
+    """Wait for JS-driven content to actually appear, then capture the
+    whole scrollable page (not just the visible viewport).
 
-    Long calendar / list pages can overrun the default 30s screenshot
-    budget on slower machines — we bump timeout to 90s, and if it
-    STILL times out we fall back to a viewport-only capture so the
-    PDF still gets one page for that route (better than aborting the
-    entire run)."""
+    Strategy:
+      1. Wait for network to go quiet (charts probably fetched data).
+      2. Try to wait for `wait_selector` to appear — proves the
+         page's actual content is in the DOM.  If nothing shows up
+         in min_wait_ms we still sleep min_wait_ms so slow renderers
+         get their chance.
+      3. Scroll through the page in chunks so lazy-loaded rows /
+         charts below the fold get drawn before we snapshot.
+      4. Screenshot with 120s budget; fall back to viewport-only if
+         even that overruns."""
     # networkidle waits until there are no >2 network calls for 500ms
     # — good proxy for "charts have loaded their data".
     try:
-        page.wait_for_load_state("networkidle", timeout=15_000)
+        page.wait_for_load_state("networkidle", timeout=20_000)
     except Exception:
         pass
-    page.wait_for_timeout(extra_wait_ms)
-    # Scroll to the bottom once so lazy-loaded rows render before we
-    # snapshot; then scroll back to top so the shot starts cleanly.
+    saw_selector = False
+    if wait_selector:
+        try:
+            page.wait_for_selector(wait_selector,
+                                   timeout=min_wait_ms, state="visible")
+            saw_selector = True
+        except Exception:
+            saw_selector = False
+    # Floor wait so animation frames complete even after the DOM
+    # node exists — Chart.js draws AFTER the canvas is in the tree.
+    page.wait_for_timeout(min_wait_ms if not saw_selector else 2500)
+    # Scroll through the page in chunks so lazy-loaded rows / charts
+    # below the fold get drawn before we snapshot.
     try:
-        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(400)
+        for y in (0, 500, 1000, 1600, 2400, 3200, 999999):
+            page.evaluate(f"() => window.scrollTo(0, {y})")
+            page.wait_for_timeout(250)
         page.evaluate("() => window.scrollTo(0, 0)")
-        page.wait_for_timeout(300)
+        page.wait_for_timeout(500)
     except Exception:
         pass
     try:
         return page.screenshot(full_page=True, type="png",
-                               timeout=90_000, animations="disabled")
+                               timeout=120_000, animations="disabled")
     except Exception as e:
         print(f"          full-page shot timed out ({e}); "
               f"falling back to viewport-only")
@@ -153,29 +193,69 @@ def _wrap(draw, text, font, max_width):
     return lines
 
 
-def add_caption(img, title, description):
-    """Prepend a slate header strip with the page title (large, white)
-    and description (smaller, light-grey) above the screenshot."""
+def add_caption(img, page_num, total_pages, title, description):
+    """Prepend a big yellow-band caption above each screenshot with:
+      - PAGE N of M badge (top-left corner, slate)
+      - DEMO MODE badge (top-right corner, orange)
+      - Huge title in the middle (Hankook yellow band)
+      - Description body underneath (slate body, wraps)
+      - Thin "screenshot below is proof of the above" hint bar
+
+    Deliberately loud so the reader immediately knows what the
+    following screenshot is meant to demonstrate.  Screenshot below
+    should visually confirm what the description says."""
     W = img.width
-    title_font = _load_font(30, bold=True)
-    desc_font  = _load_font(16, bold=False)
-    demo_font  = _load_font(12, bold=True)
+    title_font = _load_font(56, bold=True)
+    desc_font  = _load_font(22, bold=False)
+    small_font = _load_font(14, bold=True)
+    tiny_font  = _load_font(13, bold=False)
+
+    # Measure the description so we can size the block.
     dummy = Image.new("RGB", (W, 10))
     d = ImageDraw.Draw(dummy)
-    desc_lines = _wrap(d, description, desc_font, W - 80)
-    # Header height = title (~44) + each desc line (~24) + padding.
-    header_h = 32 + 44 + max(24 * len(desc_lines), 24) + 20
-    header = Image.new("RGB", (W, header_h), (30, 41, 59))     # slate-800
+    body_w = W - 120
+    desc_lines = _wrap(d, description, desc_font, body_w)
+
+    # Layout: 3 stacked bands
+    # 1) yellow title band (fixed height)
+    # 2) slate description band (grows with text)
+    # 3) thin arrow-down hint bar
+    title_band_h = 130
+    desc_band_h  = 34 + 30 * len(desc_lines) + 28
+    hint_band_h  = 44
+    header_h = title_band_h + desc_band_h + hint_band_h
+
+    header = Image.new("RGB", (W, header_h), (255, 255, 255))
     d = ImageDraw.Draw(header)
-    # DEMO badge in the top-right corner.
-    d.rectangle([(W - 130, 12), (W - 20, 34)], fill=(249, 115, 22))
-    d.text((W - 120, 15), "DEMO MODE", font=demo_font, fill=(255, 255, 255))
-    # Title + description.
-    d.text((40, 30), title, font=title_font, fill=(255, 255, 255))
-    y = 30 + 44 + 8
+
+    # ─── 1) Title band — Hankook signature yellow ───
+    d.rectangle([(0, 0), (W, title_band_h)], fill=(245, 197, 24))
+    # Page N of M badge (top-left)
+    d.rectangle([(24, 20), (150, 52)], fill=(15, 23, 42))
+    d.text((36, 26), f"PAGE {page_num} of {total_pages}",
+           font=small_font, fill=(255, 255, 255))
+    # DEMO MODE badge (top-right)
+    d.rectangle([(W - 174, 20), (W - 24, 52)], fill=(249, 115, 22))
+    d.text((W - 162, 26), "DEMO MODE",
+           font=small_font, fill=(255, 255, 255))
+    # Big title, centered vertically
+    d.text((36, 62), title, font=title_font, fill=(15, 23, 42))
+
+    # ─── 2) Description band — slate ───
+    y0 = title_band_h
+    d.rectangle([(0, y0), (W, y0 + desc_band_h)], fill=(30, 41, 59))
+    y = y0 + 18
     for ln in desc_lines:
-        d.text((40, y), ln, font=desc_font, fill=(203, 213, 225))    # slate-300
-        y += 24
+        d.text((60, y), ln, font=desc_font, fill=(226, 232, 240))
+        y += 30
+
+    # ─── 3) Hint bar — "screenshot below is proof" ───
+    y0 += desc_band_h
+    d.rectangle([(0, y0), (W, y0 + hint_band_h)], fill=(254, 243, 199))  # amber-50
+    d.text((36, y0 + 12),
+           "↓  SCREENSHOT BELOW  ·  what the description above looks like in the live app",
+           font=tiny_font, fill=(146, 64, 14))       # amber-800
+
     combined = Image.new("RGB", (W, header_h + img.height), (255, 255, 255))
     combined.paste(header, (0, 0))
     combined.paste(img, (0, header_h))
@@ -190,20 +270,22 @@ def main():
                                   device_scale_factor=1.5)   # crisper text
         page = ctx.new_page()
 
-        for path, title, description, wait_ms in PAGES:
+        total = len(PAGES)
+        for idx, (path, title, description, sel, wait_ms) in enumerate(PAGES, 1):
             url = BASE_URL + path
-            print(f"[capture] {title:34s}  wait {wait_ms/1000:.1f}s  {url}")
+            print(f"[capture] {idx}/{total}  {title:34s}  "
+                  f"wait {wait_ms/1000:.1f}s  {url}")
             try:
                 page.goto(url, wait_until="load", timeout=30_000)
             except Exception as e:
                 print(f"          skip — {e}")
                 continue
-            png = full_page_shot(page, wait_ms)
+            png = full_page_shot(page, wait_selector=sel, min_wait_ms=wait_ms)
             if png is None:
                 print(f"          skip — no screenshot captured")
                 continue
             img = Image.open(io.BytesIO(png)).convert("RGB")
-            img = add_caption(img, title, description)
+            img = add_caption(img, idx, total, title, description)
             imgs.append((title, img))
 
         browser.close()
