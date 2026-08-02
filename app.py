@@ -1057,6 +1057,14 @@ _DEMO_HIDE_FIELDS = {
     "phone_email", "address", "address_1", "ship_to_address",
     "city", "postcode", "post_code",
 }
+# Brand identifiers → generic labels (HK/LF are the real Hankook/
+# Laufenn tyre lines that would leak in demo mode).  Consistent
+# mapping so a customer's HK column stays "Brand-A" everywhere.
+_DEMO_BRAND_FIELDS = {"brand", "brand_line", "tyre_brand"}
+_DEMO_BRAND_MAP = {
+    "HK": "Brand-A", "LF": "Brand-B", "KS": "Brand-C",
+    "HANKOOK": "Brand-A", "LAUFENN": "Brand-B", "KUMHO": "Brand-C",
+}
 
 
 def _is_demo_mode():
@@ -1112,6 +1120,11 @@ def _demo_anon_value(key_lower, val):
         return f"D{_demo_short_hash(s, 100000):05d}"
     if key_lower in _DEMO_HIDE_FIELDS:
         return "—"
+    if key_lower in _DEMO_BRAND_FIELDS:
+        # Map real brand codes to generic labels; unknown values fall
+        # back to a stable-hash label so nothing branded leaks.
+        up = s.strip().upper()
+        return _DEMO_BRAND_MAP.get(up, f"Brand-{_demo_short_hash(up, 100):02d}")
     return val
 
 
@@ -1255,6 +1268,32 @@ _DEMO_FETCH_PATCH = """
       });
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
+  // Static substitutions for hardcoded labels the server-side JSON
+  // scrubber can't reach (table headers, dropdown legends, DC-cell
+  // captions).  Whole-word boundaries via regex so "HK" doesn't
+  // accidentally rewrite "HKAU BDE Name".  Order matters: longer /
+  // more specific patterns first.
+  const _STATIC_RX = [
+    [/\bHK-PCLT\b/g,    "Brand-A-PCLT"],
+    [/\bLF-PCLT\b/g,    "Brand-B-PCLT"],
+    [/\bTBR\s*\(HK&LF\)/g, "TBR (Brand-A&B)"],
+    [/\bHKAU BDE Name\b/g, "HKAU Salesmen Name"],
+    [/\bHKAU BDE\b/g,      "HKAU Salesmen"],
+    [/\bBDE Name\b/g,      "Salesmen Name"],
+    [/\bBDEs\b/g,          "Salesmen"],
+    [/\bBDE\b/g,           "Salesmen"],
+    [/\bHankook\b/g,       "Brand-A"],
+    [/\bLaufenn\b/g,       "Brand-B"],
+    [/\bKumho\b/g,         "Brand-C"],
+    [/(^|\s)HK(\s|$)/g,    "$1Brand-A$2"],
+    [/(^|\s)LF(\s|$)/g,    "$1Brand-B$2"],
+    [/(^|\s)KS(\s|$)/g,    "$1Brand-C$2"],
+  ];
+  const _applyStatic = (t) => {
+    let out = t;
+    for (const [rx, repl] of _STATIC_RX) out = out.replace(rx, repl);
+    return out;
+  };
   const _scrubDom = (root) => {
     if (!root) return;
     if (root.nodeType === 3) {
@@ -1266,6 +1305,8 @@ _DEMO_FETCH_PATCH = """
           changed = true;
         }
       }
+      const t2 = _applyStatic(t);
+      if (t2 !== t) { t = t2; changed = true; }
       if (changed) root.textContent = t;
       return;
     }
@@ -1278,6 +1319,8 @@ _DEMO_FETCH_PATCH = """
       for (const real in _nameMap) {
         if (t.indexOf(real) !== -1) { t = t.split(real).join(_nameMap[real]); changed = true; }
       }
+      const t2 = _applyStatic(t);
+      if (t2 !== t) { t = t2; changed = true; }
       if (changed) { root.text = t; if (root.value && _nameMap[root.value]) root.value = _nameMap[root.value]; }
     }
   };
