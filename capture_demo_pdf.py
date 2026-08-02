@@ -46,7 +46,13 @@ OUT_PDF  = Path(__file__).resolve().parent / "HKAU_Dashboard_Live_Demo.pdf"
 
 def full_page_shot(page, extra_wait_ms=1500):
     """Wait for JS-driven content to settle, then capture the whole
-    scrollable page (not just the visible viewport)."""
+    scrollable page (not just the visible viewport).
+
+    Long calendar / list pages can overrun the default 30s screenshot
+    budget on slower machines — we bump timeout to 90s, and if it
+    STILL times out we fall back to a viewport-only capture so the
+    PDF still gets one page for that route (better than aborting the
+    entire run)."""
     # networkidle waits until there are no >2 network calls for 500ms
     # — good proxy for "charts have loaded their data".
     try:
@@ -54,7 +60,27 @@ def full_page_shot(page, extra_wait_ms=1500):
     except Exception:
         pass
     page.wait_for_timeout(extra_wait_ms)
-    return page.screenshot(full_page=True, type="png")
+    # Scroll to the bottom once so lazy-loaded rows render before we
+    # snapshot; then scroll back to top so the shot starts cleanly.
+    try:
+        page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        page.wait_for_timeout(400)
+        page.evaluate("() => window.scrollTo(0, 0)")
+        page.wait_for_timeout(300)
+    except Exception:
+        pass
+    try:
+        return page.screenshot(full_page=True, type="png",
+                               timeout=90_000, animations="disabled")
+    except Exception as e:
+        print(f"          full-page shot timed out ({e}); "
+              f"falling back to viewport-only")
+        try:
+            return page.screenshot(full_page=False, type="png",
+                                   timeout=30_000, animations="disabled")
+        except Exception as e2:
+            print(f"          viewport shot also failed: {e2}")
+            return None
 
 
 def main():
@@ -74,6 +100,9 @@ def main():
                 print(f"          skip — {e}")
                 continue
             png = full_page_shot(page, wait_ms)
+            if png is None:
+                print(f"          skip — no screenshot captured")
+                continue
             img = Image.open(io.BytesIO(png)).convert("RGB")
             # Stamp a small footer with the title so the PDF page
             # has a clear label at the top even after downscaling.
