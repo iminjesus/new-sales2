@@ -65,13 +65,13 @@ PAGES = [
      "wholesale portals) merged with our own list price by size and "
      "month.  Left table = ours vs each competitor per month; right "
      "chart lets you flip between By Store and By Brand views.",
-     "table, canvas, svg", 10000),
+     ".btable tbody tr, #chart-table-wrap table, .hdr", 15000),
 
     ("/demo/fleet", "Fleet-demand Chart",
      "Postcode-level tyre demand estimated from vehicle registrations × "
      "base-OE fitment × ownership churn.  Bar chart is aggregate demand "
      "by rim / size; drives which SKUs to stock in each state's plant.",
-     "canvas, svg, .chart", 10000),
+     "canvas, svg, .chart, table", 10000),
 
     ("/demo/meeting", "Salesmen Visit Log",
      "Drag-and-drop calendar (planned visits per day / per salesman) with "
@@ -103,8 +103,8 @@ PAGES = [
      "regression on 6 months of sales), month-over-month mix shift, "
      "decline analysis per customer group, and a watch list of actionable "
      "to-dos.  The narrative card summarises the month in 3 sentences.",
-     ".narrative, .decl-card, .tr-card, .wl-card, .mx-card, canvas",
-     18000),
+     "#wrap .card.narrative, #wrap .card.remarkable, #wrap .card",
+     25000),
 ]
 
 VIEWPORT = {"width": 1600, "height": 1000}     # widescreen so nothing wraps
@@ -139,6 +139,21 @@ def full_page_shot(page, wait_selector=None, min_wait_ms=3000):
             saw_selector = True
         except Exception:
             saw_selector = False
+    # If the page has a #status element that currently reads
+    # "Loading…", wait for it to change — Highlights uses this
+    # pattern to signal that all its async fetches are done.
+    try:
+        page.wait_for_function(
+            """() => {
+                const s = document.querySelector('#status, .status-msg');
+                if (!s) return true;
+                const t = (s.textContent || '').toLowerCase();
+                return !t.includes('loading');
+            }""",
+            timeout=min(min_wait_ms, 15_000),
+        )
+    except Exception:
+        pass
     # Floor wait so animation frames complete even after the DOM
     # node exists — Chart.js draws AFTER the canvas is in the tree.
     page.wait_for_timeout(min_wait_ms if not saw_selector else 2500)
