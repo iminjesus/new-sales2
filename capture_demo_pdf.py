@@ -65,7 +65,10 @@ PAGES = [
      "wholesale portals) merged with our own list price by size and "
      "month.  Left table = ours vs each competitor per month; right "
      "chart lets you flip between By Store and By Brand views.",
-     ".btable tbody tr, #chart-table-wrap table, .hdr", 15000),
+     # Must wait for JS-populated content, not the static .hdr shell:
+     # #size-btns button (JS injects size chips) OR
+     # #chart-table-wrap table (JS injects the main comparison table).
+     "#size-btns button, #chart-table-wrap table", 20000),
 
     ("/demo/meeting", "Salesmen Visit Log",
      "Drag-and-drop calendar (planned visits per day / per salesman) with "
