@@ -1352,6 +1352,17 @@ def demo_page(page):
                 "Demo mode is restricted.</h1>"
                 "<p style='font-family:sans-serif;padding:0 30px;color:#6b7280'>"
                 "Ask Jayden Bhang if you need access.</p>"), 403
+    # Special-case: /demo/price has no static file.  The /price route
+    # is dynamically registered from price_compare.price_dashboard at
+    # startup and renders via render_template_string.  Set the demo
+    # cookie + request flag, then 302 to /price so the demo cookie
+    # + fetch-patch flow takes over from there.
+    if page in ("price", "fleet"):
+        resp = make_response(redirect(f"/{page}"))
+        resp.set_cookie(_DEMO_COOKIE, "1", path="/", samesite="Lax")
+        try: request._demo_mode_flag = True
+        except Exception: pass
+        return resp
     static_file = _DEMO_PAGES.get(page, "index.html")
     import os
     file_path = os.path.join(app.static_folder or "static", static_file)

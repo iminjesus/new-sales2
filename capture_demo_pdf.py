@@ -60,6 +60,13 @@ PAGES = [
      "% + units-needed-to-reach, and current rebate accrued.",
      "table tbody tr", 8000),
 
+    ("/demo/price", "Tyre Price Comparison",
+     "Competitor price scraping (Tempe / Bob Jane / JAX — retail + "
+     "wholesale portals) merged with our own list price by size and "
+     "month.  Left table = ours vs each competitor per month; right "
+     "chart lets you flip between By Store and By Brand views.",
+     "table, canvas, svg", 10000),
+
     ("/demo/fleet", "Fleet-demand Chart",
      "Postcode-level tyre demand estimated from vehicle registrations × "
      "base-OE fitment × ownership churn.  Bar chart is aggregate demand "
