@@ -1274,6 +1274,8 @@ _DEMO_FETCH_PATCH = """
   // accidentally rewrite "HKAU BDE Name".  Order matters: longer /
   // more specific patterns first.
   const _STATIC_RX = [
+    // Longer / more specific patterns first so they don't get eaten
+    // by the short-brand-code rules below.
     [/\bHK-PCLT\b/g,    "Brand-A-PCLT"],
     [/\bLF-PCLT\b/g,    "Brand-B-PCLT"],
     [/\bTBR\s*\(HK&LF\)/g, "TBR (Brand-A&B)"],
@@ -1282,12 +1284,19 @@ _DEMO_FETCH_PATCH = """
     [/\bBDE Name\b/g,      "Salesmen Name"],
     [/\bBDEs\b/g,          "Salesmen"],
     [/\bBDE\b/g,           "Salesmen"],
-    [/\bHankook\b/g,       "Brand-A"],
-    [/\bLaufenn\b/g,       "Brand-B"],
-    [/\bKumho\b/g,         "Brand-C"],
-    [/(^|\s)HK(\s|$)/g,    "$1Brand-A$2"],
-    [/(^|\s)LF(\s|$)/g,    "$1Brand-B$2"],
-    [/(^|\s)KS(\s|$)/g,    "$1Brand-C$2"],
+    [/Hankook/gi,          "Brand-A"],
+    [/Laufenn/gi,          "Brand-B"],
+    [/Kumho/gi,            "Brand-C"],
+    // Short brand codes — need explicit character-class boundaries
+    // because \b treats "_" as a word char, so \bHK\b misses HK inside
+    // compound identifiers like "HK_TBR_ATP_Q_SR" that the rebate
+    // page renders in its structure-name column.  These patterns fire
+    // whenever HK / LF / KS is surrounded by anything other than an
+    // ASCII letter or digit (spaces, dashes, underscores, punctuation,
+    // string boundaries all count as separators).
+    [/(^|[^A-Za-z0-9])HK(?=[^A-Za-z0-9]|$)/g, "$1Brand-A"],
+    [/(^|[^A-Za-z0-9])LF(?=[^A-Za-z0-9]|$)/g, "$1Brand-B"],
+    [/(^|[^A-Za-z0-9])KS(?=[^A-Za-z0-9]|$)/g, "$1Brand-C"],
   ];
   const _applyStatic = (t) => {
     let out = t;
