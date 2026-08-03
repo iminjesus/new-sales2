@@ -67,12 +67,6 @@ PAGES = [
      "chart lets you flip between By Store and By Brand views.",
      ".btable tbody tr, #chart-table-wrap table, .hdr", 15000),
 
-    ("/demo/fleet", "Fleet-demand Chart",
-     "Postcode-level tyre demand estimated from vehicle registrations × "
-     "base-OE fitment × ownership churn.  Bar chart is aggregate demand "
-     "by rim / size; drives which SKUs to stock in each state's plant.",
-     "canvas, svg, .chart, table", 10000),
-
     ("/demo/meeting", "Salesmen Visit Log",
      "Drag-and-drop calendar (planned visits per day / per salesman) with "
      "post-visit memos on the right.  Impact chips per entry show pre/post "
