@@ -1246,20 +1246,21 @@ _DEMO_FETCH_PATCH = """
   };
   const _maskBDE = (n) => "BDE-" + String(_hash(n, 100)).padStart(2, "0");
 
-  // Wait for REGION_SALESMEN, then rewrite it and every leaf name in
-  // the DOM.  50 ms poll is more than fast enough — app.js's first
-  // render usually lands ~100-200 ms after DOMContentLoaded.
+  // Two parallel jobs — must not gate on each other:
+  //
+  //   (A) DOM scrubbing (regex-only rules from _STATIC_RX) — set up
+  //       IMMEDIATELY so pages without REGION_SALESMEN (rebate,
+  //       order, orders_list, highlights, price, …) still get their
+  //       hardcoded HK / LF / BDE / brand tokens rewritten on load
+  //       and on every mutation.
+  //
+  //   (B) BDE-name masking (REGION_SALESMEN, meeting page only) —
+  //       best-effort poll for the global; when it appears, populate
+  //       _nameMap with real → masked names so subsequent scrub
+  //       passes catch them.  If the global never appears (any
+  //       non-meeting page), (A) still runs to completion.
   const _nameMap = {};
-  const _apply = () => {
-    if (typeof REGION_SALESMEN === "undefined"
-        || !REGION_SALESMEN || typeof REGION_SALESMEN !== "object") {
-      return setTimeout(_apply, 50);
-    }
-    Object.entries(REGION_SALESMEN).forEach(([k, list]) => {
-      if (!Array.isArray(list)) return;
-      list.forEach(name => { if (name && !_nameMap[name]) _nameMap[name] = _maskBDE(name); });
-      REGION_SALESMEN[k] = list.map(n => _nameMap[n] || n);
-    });
+  const _startScrubbing = () => {
     _scrubDom(document.body);
     new MutationObserver(muts => {
       muts.forEach(m => {
@@ -1268,6 +1269,24 @@ _DEMO_FETCH_PATCH = """
       });
     }).observe(document.body, { childList: true, subtree: true, characterData: true });
   };
+  const _seedBdeMap = (attempts) => {
+    if (typeof REGION_SALESMEN !== "undefined"
+        && REGION_SALESMEN && typeof REGION_SALESMEN === "object") {
+      Object.entries(REGION_SALESMEN).forEach(([k, list]) => {
+        if (!Array.isArray(list)) return;
+        list.forEach(name => { if (name && !_nameMap[name]) _nameMap[name] = _maskBDE(name); });
+        REGION_SALESMEN[k] = list.map(n => _nameMap[n] || n);
+      });
+      // Rescan the DOM once we have the name map so any previously
+      // rendered BDE labels get retro-masked.
+      _scrubDom(document.body);
+      return;
+    }
+    // Give up after ~5s of polling on pages that plainly don't
+    // export REGION_SALESMEN.  A-side scrubbing is already running.
+    if (attempts > 0) setTimeout(() => _seedBdeMap(attempts - 1), 50);
+  };
+  const _apply = () => { _startScrubbing(); _seedBdeMap(100); };
   // Static substitutions for hardcoded labels the server-side JSON
   // scrubber can't reach (table headers, dropdown legends, DC-cell
   // captions).  Whole-word boundaries via regex so "HK" doesn't
