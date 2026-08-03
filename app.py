@@ -1303,19 +1303,40 @@ _DEMO_FETCH_PATCH = """
     [/\bBDE Name\b/g,      "Salesmen Name"],
     [/\bBDEs\b/g,          "Salesmen"],
     [/\bBDE\b/g,           "Salesmen"],
+    // Full brand names — case-insensitive so any casing lands on
+    // the same anonymised label.  Extends beyond HK/LF/KS to cover
+    // every competitor on the Price comparison page.
     [/Hankook/gi,          "Brand-A"],
     [/Laufenn/gi,          "Brand-B"],
     [/Kumho/gi,            "Brand-C"],
-    // Short brand codes — need explicit character-class boundaries
-    // because \b treats "_" as a word char, so \bHK\b misses HK inside
-    // compound identifiers like "HK_TBR_ATP_Q_SR" that the rebate
-    // page renders in its structure-name column.  These patterns fire
-    // whenever HK / LF / KS is surrounded by anything other than an
-    // ASCII letter or digit (spaces, dashes, underscores, punctuation,
-    // string boundaries all count as separators).
+    [/Michelin/gi,         "Brand-D"],
+    [/Bridgestone/gi,      "Brand-E"],
+    [/Continental/gi,      "Brand-F"],
+    [/Goodyear/gi,         "Brand-G"],
+    [/Falken/gi,           "Brand-H"],
+    [/Dunlop/gi,           "Brand-I"],
+    [/Yokohama/gi,         "Brand-J"],
+    [/Pirelli/gi,          "Brand-K"],
+    [/Toyo/gi,             "Brand-L"],
+    [/Nexen/gi,            "Brand-M"],
+    // Short 2-letter brand codes — need explicit character-class
+    // boundaries because \b treats "_" as a word char, so \bHK\b
+    // misses HK inside compound identifiers like "HK_TBR_ATP_Q_SR"
+    // that the rebate page renders.  Fires whenever the code is
+    // surrounded by anything other than an ASCII letter or digit
+    // (spaces, dashes, underscores, punctuation, string boundaries
+    // all count as separators).
     [/(^|[^A-Za-z0-9])HK(?=[^A-Za-z0-9]|$)/g, "$1Brand-A"],
     [/(^|[^A-Za-z0-9])LF(?=[^A-Za-z0-9]|$)/g, "$1Brand-B"],
     [/(^|[^A-Za-z0-9])KS(?=[^A-Za-z0-9]|$)/g, "$1Brand-C"],
+    [/(^|[^A-Za-z0-9])KH(?=[^A-Za-z0-9]|$)/g, "$1Brand-C"],   // Kumho alt code
+    [/(^|[^A-Za-z0-9])MC(?=[^A-Za-z0-9]|$)/g, "$1Brand-D"],
+    [/(^|[^A-Za-z0-9])BS(?=[^A-Za-z0-9]|$)/g, "$1Brand-E"],
+    [/(^|[^A-Za-z0-9])CT(?=[^A-Za-z0-9]|$)/g, "$1Brand-F"],
+    [/(^|[^A-Za-z0-9])GY(?=[^A-Za-z0-9]|$)/g, "$1Brand-G"],
+    [/(^|[^A-Za-z0-9])FK(?=[^A-Za-z0-9]|$)/g, "$1Brand-H"],
+    [/(^|[^A-Za-z0-9])DL(?=[^A-Za-z0-9]|$)/g, "$1Brand-I"],
+    [/(^|[^A-Za-z0-9])YO(?=[^A-Za-z0-9]|$)/g, "$1Brand-J"],
   ];
   const _applyStatic = (t) => {
     let out = t;
