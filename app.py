@@ -11614,12 +11614,32 @@ def api_rebate_data():
     region_filter = request.args.get("region",        "ALL").upper()
     sales_tbl     = _rebate_sales_table(request.args.get("month"))  # source table per month button
     # Month table not present in the DB yet (e.g. Jun clicked before the
-    # end-of-month archive job runs) → return an empty payload with a
-    # friendly note so the UI just shows "no data for this month" rather
-    # than showing the same numbers as This Month.
+    # end-of-month archive job runs) → return an empty-but-shape-
+    # compatible payload so the frontend's renderPage() doesn't crash
+    # dereferencing summary.region_totals etc.  Every field the
+    # renderer expects is present, all zeroed out.
     if sales_tbl == "__MISSING__":
+        REGION_KEYS_EMPTY = ["NSW", "QLD", "VIC", "WA"]
+        empty_region_totals = {rk: {"rebate": 0.0, "qty": 0.0, "amt": 0.0}
+                               for rk in REGION_KEYS_EMPTY}
         return jsonify({
-            "rows": [], "total": {}, "page": 0, "page_size": 0,
+            "rows":        [],
+            "groups":      [],
+            "page":        0,
+            "page_size":   0,
+            "total_pages": 1,
+            "sold_to_groups": [],
+            "summary": {
+                "total_ship_to": 0, "has_next": 0, "max_tier": 0,
+                "zero_sales":    0, "est_total": 0,
+                "region_totals": empty_region_totals,
+                "region_grand":  {rk: 0.0 for rk in REGION_KEYS_EMPTY},
+                "hq_by_region":  {rk: 0.0 for rk in REGION_KEYS_EMPTY},
+                "store_total":   0.0,
+                "hq_total":      0.0,
+                "grand_total":   0.0,
+                "hq_box": {"total": 0.0, "count_sold_to": 0, "by_region": {}},
+            },
             "note": ("Sales table for the requested month has not been "
                      "archived yet.  It becomes available after the "
                      "end-of-month archive job runs."),
