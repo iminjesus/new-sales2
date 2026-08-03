@@ -1178,11 +1178,29 @@ def _demo_after_request(response):
             if response.headers.get("Content-Disposition", "").startswith("attachment"):
                 return response
             html = response.get_data(as_text=True)
+            changed = False
+            # (A) Fetch-patch + DOM scrubber script — must land BEFORE any
+            # in-page JS fires its first API call, so we inject at </head>.
+            # /price and /fleet are served by render_template_string which
+            # skips the /demo route's own injection step, so without this
+            # every non-/demo landing (including redirect targets like
+            # /price) would render with brand names / BDE names intact.
+            if "SPRF_DEMO_FETCH" not in html:
+                patched = _DEMO_FETCH_PATCH.replace(
+                    "<script>", '<script id="SPRF_DEMO_FETCH">', 1)
+                if "</head>" in html:
+                    html = html.replace("</head>", patched + "\n</head>", 1)
+                else:
+                    html = patched + html
+                changed = True
+            # (B) Orange banner strip — injected right before </body>.
             if "SPRF_DEMO_BANNER" not in html:
                 if "</body>" in html:
                     html = html.replace("</body>", _DEMO_BANNER_HTML + "\n</body>", 1)
                 else:
                     html += _DEMO_BANNER_HTML
+                changed = True
+            if changed:
                 response.set_data(html)
                 response.content_length = None
         except Exception:
