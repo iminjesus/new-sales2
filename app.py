@@ -14233,34 +14233,29 @@ def ai_status():
 # at least defensible (the model: "BDE visited mid-April; did May
 # sales tick up vs March?").  We don't claim causation in the UI —
 # this is correlation surfaced to the BDE/manager to spot patterns.
-def _sales_table_for_ym(year, month):
-    """Return the sales-table name that holds a given (year, month),
-    or None if we don't have that month on disk."""
+def _sales_for_month(cur, ship_to, year, month):
+    """SUM(qty), SUM(amt) for ship_to in (year, month).  Reads
+    sales_thismonth for the current calendar month (real-time) and
+    sales_2526 filtered by YEAR/MONTH(billing_date) for every other
+    month.  Returns None only when the query itself blows up."""
     try:
         now = datetime.now()
         if int(year) == now.year and int(month) == now.month:
-            return "sales_thismonth"
-        yymm = f"{int(year) % 100:02d}{int(month):02d}"
-        table = f"sales_{yymm}"
-        if table in REBATE_SALES_TABLES.values():
-            return table
-    except Exception:
-        pass
-    return None
-
-def _sales_for_month(cur, ship_to, year, month):
-    """SUM(qty), SUM(amt) for ship_to in (year, month).  Returns None
-    when the table for that month doesn't exist on this server."""
-    table = _sales_table_for_ym(year, month)
-    if not table:
-        return None
-    try:
-        cur.execute(
-            "SELECT COALESCE(SUM(qty),0) AS qty, COALESCE(SUM(amt),0) AS amt "
-            "FROM " + table + " "
-            "WHERE ship_to = %s AND brand IN ('HK','LF')",
-            (ship_to,)
-        )
+            cur.execute(
+                "SELECT COALESCE(SUM(qty),0) AS qty, "
+                "       COALESCE(SUM(amt),0) AS amt "
+                "FROM sales_thismonth "
+                "WHERE ship_to = %s AND brand IN ('HK','LF')",
+                (ship_to,))
+        else:
+            cur.execute(
+                "SELECT COALESCE(SUM(qty),0) AS qty, "
+                "       COALESCE(SUM(amt),0) AS amt "
+                "FROM sales_2526 "
+                "WHERE ship_to = %s AND brand IN ('HK','LF') "
+                "  AND YEAR(billing_date) = %s "
+                "  AND MONTH(billing_date) = %s",
+                (ship_to, int(year), int(month)))
         r = cur.fetchone() or {}
         return {"qty": float(r.get("qty") or 0), "amt": float(r.get("amt") or 0)}
     except Exception:
@@ -14346,17 +14341,24 @@ def meeting_impact():
 
 @app.get("/api/meeting/impact_summary")
 def meeting_impact_summary():
-    """Roll every meeting_log entry's pre/post sales delta up to the
-    BDE that logged it.
+    """Monthly rollup: how much did **this month's visits** move
+    **next month's sales**?
 
       ?from=YYYY-MM-DD   default: 90 days ago
       ?to=YYYY-MM-DD     default: today
       ?bde=<name>        optional single-BDE drilldown
 
-    Returns per-BDE totals: visits, up/flat/down counts, pre/post
-    sums, delta $ and %, plus the top-3 winning and top-3 losing
-    shop names inside the window.  Scope respects the same
-    BDE / SM / ALL locks as /api/meeting_plan/list."""
+    Simple logic:
+      • Bucket every visit by its calendar month M.
+      • For every ship_to visited that month, sum HK+LF qty in
+        month M+1 (post — the follow-through) and month M-1
+        (pre — the baseline).
+      • Δ = post − pre for the whole cohort.
+
+    So the June row means: "Everything the team visited in June,
+    with July HK+LF sell-out for those shops vs. May sell-out."
+    Scope respects the same BDE / SM / ALL locks as
+    /api/meeting_plan/list."""
     from datetime import date as _date, timedelta as _timedelta
     q_from = (request.args.get("from") or "").strip()
     q_to   = (request.args.get("to")   or "").strip()
@@ -14401,135 +14403,98 @@ def meeting_impact_summary():
         # on customer master.  Correlated subquery keeps rows whose
         # ship_to isn't in customer (potential customers, deleted rows).
         cur.execute(f"""
-            SELECT m.id, m.bde_name, m.ship_to, m.visit_date,
-                   (SELECT MIN(NULLIF(TRIM(c.ship_to_name),''))
-                    FROM customer c WHERE c.ship_to = m.ship_to) AS ship_to_name
+            SELECT m.id, m.bde_name, m.ship_to, m.visit_date
             FROM meeting_log m
             {where_sql}
             ORDER BY m.visit_date DESC
         """, tuple(params))
         visits = cur.fetchall()
 
-        # Aggregate per BDE — reuse _sales_for_month for consistency.
-        bdes = {}   # bde_name → dict
+        # Bucket every visit by its calendar month (visit_ym) and
+        # keep the set of unique ship_tos touched in that month so we
+        # can look up their next-month sales once per shop rather
+        # than once per visit.
+        # months["2026-06"] = {"visits": 5, "shops": {"731942", ...}}
+        months = {}
         for v in visits:
-            bde = (v.get("bde_name") or "—").strip() or "—"
-            g = bdes.setdefault(bde, {
-                "bde_name": bde,
-                "visits": 0, "up": 0, "flat": 0, "down": 0,
-                "pre_qty": 0.0, "post_qty": 0.0,
-                "pre_amt": 0.0, "post_amt": 0.0,
-                "wins":   [],  # (delta_pct, ship_to_name)
-                "losses": [],
-                "pending": 0, "pre_missing": 0,
-            })
-            g["visits"] += 1
             vd = v.get("visit_date")
-            if not vd: continue
-            year, month = vd.year, vd.month
-            py = year - 1 if month == 1 else year
-            pm = 12 if month == 1 else month - 1
-            ny = year + 1 if month == 12 else year
-            nm = 1 if month == 12 else month + 1
-            pre  = _sales_for_month(cur, v["ship_to"], py, pm)
-            post = _sales_for_month(cur, v["ship_to"], ny, nm)
-            if pre is None:
-                g["pre_missing"] += 1
+            if not vd:
                 continue
-            if post is None:
-                g["pending"] += 1
-                continue
-            g["pre_qty"]  += pre["qty"];  g["post_qty"] += post["qty"]
-            g["pre_amt"]  += pre["amt"];  g["post_amt"] += post["amt"]
-            dq  = post["qty"] - pre["qty"]
-            dpct = ((post["qty"] - pre["qty"]) / pre["qty"] * 100) if pre["qty"] > 0 else None
-            if dq > 0 and (dpct is None or dpct >= 1):
-                g["up"] += 1
-                if dpct is not None:
-                    g["wins"].append((dpct, v.get("ship_to_name") or v["ship_to"]))
-            elif dq < 0:
-                g["down"] += 1
-                if dpct is not None:
-                    g["losses"].append((dpct, v.get("ship_to_name") or v["ship_to"]))
-            else:
-                g["flat"] += 1
+            ym = f"{vd.year:04d}-{vd.month:02d}"
+            m = months.setdefault(ym, {"visits": 0, "shops": set(),
+                                       "year": vd.year, "month": vd.month})
+            m["visits"] += 1
+            if v.get("ship_to"):
+                m["shops"].add(str(v["ship_to"]))
+
+        _today = _date.today()
+        _cur_ym = f"{_today.year:04d}-{_today.month:02d}"
+
+        def _add_month(y, mo):
+            return (y + 1, 1) if mo == 12 else (y, mo + 1)
+        def _sub_month(y, mo):
+            return (y - 1, 12) if mo == 1 else (y, mo - 1)
+
+        _MONTH_NAME = ["", "Jan","Feb","Mar","Apr","May","Jun",
+                       "Jul","Aug","Sep","Oct","Nov","Dec"]
+        def _lbl(y, mo): return f"{_MONTH_NAME[mo]} {y}"
+
+        month_rows = []
+        for ym in sorted(months.keys()):
+            m = months[ym]
+            ny, nm = _add_month(m["year"], m["month"])
+            py, pm = _sub_month(m["year"], m["month"])
+            sales_ym = f"{ny:04d}-{nm:02d}"
+
+            # A visit-month row is only meaningful once the following
+            # calendar month has actually started — until then the
+            # "post" bucket has no data yet.
+            sales_available = (sales_ym <= _cur_ym)
+
+            pre_qty = post_qty = 0.0
+            pre_amt = post_amt = 0.0
+            counted = 0
+            if sales_available:
+                for sh in m["shops"]:
+                    pre  = _sales_for_month(cur, sh, py, pm)
+                    post = _sales_for_month(cur, sh, ny, nm)
+                    if pre is None or post is None:
+                        continue
+                    counted  += 1
+                    pre_qty  += pre["qty"];  post_qty += post["qty"]
+                    pre_amt  += pre["amt"];  post_amt += post["amt"]
+
+            delta_qty = post_qty - pre_qty
+            delta_amt = post_amt - pre_amt
+            delta_pct = (delta_qty / pre_qty * 100.0) if pre_qty > 0 else None
+
+            month_rows.append({
+                "visit_ym":        ym,
+                "visit_label":     _lbl(m["year"], m["month"]),
+                "sales_ym":        sales_ym,
+                "sales_label":     _lbl(ny, nm),
+                "pre_ym":          f"{py:04d}-{pm:02d}",
+                "pre_label":       _lbl(py, pm),
+                "visits":          m["visits"],
+                "unique_shops":    len(m["shops"]),
+                "shops_counted":   counted,
+                "sales_available": sales_available,
+                "pre_qty":         round(pre_qty, 1),
+                "post_qty":        round(post_qty, 1),
+                "pre_amt":         round(pre_amt, 0),
+                "post_amt":        round(post_amt, 0),
+                "delta_qty":       round(delta_qty, 1),
+                "delta_amt":       round(delta_amt, 0),
+                "delta_pct":       (round(delta_pct, 1) if delta_pct is not None else None),
+            })
+        # Newest visit month first — matches the Recent-entries reading order.
+        month_rows.reverse()
+
         cur.close(); conn.close()
-
-        # BDE-name → state lookup so state and grand totals can be
-        # rolled up alongside the per-BDE rows.
-        _bde_state_lc = {n.upper(): s for (n, _e, s, _r) in _BDE_DIRECTORY}
-        # Finalise: round + take top 3 wins / bottom 3 losses.
-        rows = []
-        for g in bdes.values():
-            g["state"] = _bde_state_lc.get(g["bde_name"].upper(), "")
-            g["delta_qty"] = round(g["post_qty"] - g["pre_qty"], 1)
-            g["delta_amt"] = round(g["post_amt"] - g["pre_amt"], 0)
-            g["delta_pct"] = round((g["post_qty"] - g["pre_qty"]) / g["pre_qty"] * 100, 1) \
-                             if g["pre_qty"] > 0 else None
-            g["wins"].sort(key=lambda t: -t[0])
-            g["losses"].sort(key=lambda t: t[0])
-            g["top_wins"]   = [{"ship_to_name": n, "delta_pct": round(p, 1)}
-                               for (p, n) in g["wins"][:3]]
-            g["top_losses"] = [{"ship_to_name": n, "delta_pct": round(p, 1)}
-                               for (p, n) in g["losses"][:3]]
-            del g["wins"]; del g["losses"]
-            for k in ("pre_qty", "post_qty"):  g[k] = round(g[k], 1)
-            for k in ("pre_amt", "post_amt"):  g[k] = round(g[k], 0)
-            rows.append(g)
-        # Order by total visits desc so the busiest BDE lands on top.
-        rows.sort(key=lambda r: -r["visits"])
-
-        # Roll up state totals and one grand total from the per-BDE
-        # rows.  Frontend renders these as separate table sections so
-        # the reader can eyeball state-level performance without
-        # having to sum in their head.
-        def _agg(pool):
-            if not pool:
-                return None
-            visits = sum(r["visits"] for r in pool)
-            up     = sum(r["up"]     for r in pool)
-            flat   = sum(r["flat"]   for r in pool)
-            down   = sum(r["down"]   for r in pool)
-            pending     = sum(r.get("pending", 0)     for r in pool)
-            pre_missing = sum(r.get("pre_missing", 0) for r in pool)
-            pre_qty  = round(sum(r["pre_qty"]  for r in pool), 1)
-            post_qty = round(sum(r["post_qty"] for r in pool), 1)
-            pre_amt  = round(sum(r["pre_amt"]  for r in pool), 0)
-            post_amt = round(sum(r["post_amt"] for r in pool), 0)
-            delta_qty = round(post_qty - pre_qty, 1)
-            delta_amt = round(post_amt - pre_amt, 0)
-            delta_pct = round((post_qty - pre_qty) / pre_qty * 100, 1) if pre_qty > 0 else None
-            return {
-                "visits": visits, "up": up, "flat": flat, "down": down,
-                "pending": pending, "pre_missing": pre_missing,
-                "pre_qty": pre_qty, "post_qty": post_qty,
-                "pre_amt": pre_amt, "post_amt": post_amt,
-                "delta_qty": delta_qty, "delta_amt": delta_amt,
-                "delta_pct": delta_pct,
-                "bde_count": len(pool),
-            }
-        by_state = {}
-        for r in rows:
-            s = r["state"] or "—"
-            by_state.setdefault(s, []).append(r)
-        states = []
-        # NSW → QLD → VIC → WA → SA → TAS → NT → ACT → 기타 순.
-        _STATE_ORDER = {"NSW":0,"QLD":1,"VIC":2,"WA":3,"SA":4,"TAS":5,"NT":6,"ACT":7}
-        for st in sorted(by_state.keys(),
-                         key=lambda k: (_STATE_ORDER.get(k, 99), k)):
-            agg = _agg(by_state[st])
-            if agg is not None:
-                agg["state"] = st
-                states.append(agg)
-        total = _agg(rows) or {}
-        if total:
-            total["state"] = "TOTAL"
         return jsonify({
-            "from": d_from.strftime("%Y-%m-%d"),
-            "to":   d_to.strftime("%Y-%m-%d"),
-            "bdes":   rows,
-            "states": states,
-            "total":  total,
+            "from":   d_from.strftime("%Y-%m-%d"),
+            "to":     d_to.strftime("%Y-%m-%d"),
+            "months": month_rows,
         })
     except Exception as e:
         traceback.print_exc()

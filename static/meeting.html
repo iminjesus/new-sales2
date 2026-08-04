@@ -854,14 +854,12 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     background:#374151;color:#fff;padding:4px 6px;text-align:right;font-weight:700;
     font-size:10px;letter-spacing:.3px;text-transform:uppercase;
   }
-  #bdeImpactInline table.bdeImpactTbl thead th:first-child,
-  #bdeImpactInline table.bdeImpactTbl thead th:last-child{text-align:left;}
+  #bdeImpactInline table.bdeImpactTbl thead th:first-child{text-align:left;}
   #bdeImpactInline table.bdeImpactTbl tbody td{
     padding:4px 6px;border-bottom:1px solid #f1f5f9;text-align:right;
     font-variant-numeric:tabular-nums;vertical-align:top;
   }
   #bdeImpactInline table.bdeImpactTbl tbody td:first-child{text-align:left;font-weight:700;color:#111;}
-  #bdeImpactInline table.bdeImpactTbl tbody td:last-child{text-align:left;color:#374151;}
   #bdeImpactInline .bi-chip{
     display:inline-block;padding:0 5px;border-radius:8px;font-weight:700;
     font-size:10px;min-width:20px;text-align:center;
@@ -2063,6 +2061,10 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
   async function load(){
     body.innerHTML = `<div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">Loading…</div>`;
     const q = new URLSearchParams({ from: fFrom.value, to: fTo.value });
+    // Respect the top-of-panel BDE dropdown so the summary drills
+    // into that one BDE when the reader has filtered the page.
+    const bdePick = (filtBde && filtBde.value || "").trim();
+    if (bdePick) q.set("bde", bdePick);
     let j;
     try {
       const r = await fetch(`/api/meeting/impact_summary?${q}`, {credentials:"include"});
@@ -2072,8 +2074,8 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
       body.innerHTML = `<div style="color:#b91c1c;padding:20px;">Load failed: ${e.message}</div>`;
       return;
     }
-    const rows = j.bdes || [];
-    if (!rows.length){
+    const months = j.months || [];
+    if (!months.length){
       body.innerHTML = `<div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">No visits in this window.</div>`;
       return;
     }
@@ -2081,89 +2083,70 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
     const fmt$  = n => (n == null ? "—" : "$" + Math.round(Number(n)).toLocaleString());
     const fmtP  = p => (p == null ? "—" : (p > 0 ? "+" : "") + Number(p).toFixed(1) + "%");
     const deltaCls = p => (p == null ? "" : (p >= 1 ? "bi-delta-up" : (p <= -1 ? "bi-delta-down" : "")));
-    const winList = arr => (!arr || !arr.length)
-      ? "" : `<span class="bi-detail">▲ ${arr.map(w =>
-                `<b>${_esc(w.ship_to_name)}</b> ${fmtP(w.delta_pct)}`).join(", ")}</span>`;
-    const lossList = arr => (!arr || !arr.length)
-      ? "" : `<span class="bi-detail">▼ ${arr.map(w =>
-                `<b>${_esc(w.ship_to_name)}</b> ${fmtP(w.delta_pct)}`).join(", ")}</span>`;
-    const states = j.states || [];
-    const total  = j.total  || null;
-    // BDE row grouped by state so state summary rows can slot in
-    // right below their group.  Order matches the sorted state
-    // list from the backend so what the user reads top-to-bottom
-    // is consistent between the state-summary and per-BDE rows.
-    const byState = new Map();
-    for (const r of rows){
-      const s = r.state || "—";
-      if (!byState.has(s)) byState.set(s, []);
-      byState.get(s).push(r);
-    }
-    const stateHtml = (s) => {
-      const bdeGroup = byState.get(s.state) || [];
-      const stateHead = `
-        <tr style="background:#e0e7ff;">
-          <td colspan="11" style="padding:6px 8px;font-weight:800;color:#3730a3;text-align:left;">
-            🗺 ${_esc(s.state)} · ${s.bde_count} BDE${s.bde_count===1?"":"s"} ·
-            ${fmtN(s.visits)} visits · ${fmtN(s.up)} ↗ / ${fmtN(s.flat)} ↔ / ${fmtN(s.down)} ↘
-            &nbsp;·&nbsp; <span class="${deltaCls(s.delta_pct)}">Δ ${fmtN(s.delta_qty)}u · ${fmtP(s.delta_pct)} · ${fmt$(s.delta_amt)}</span>
+
+    // The one-line rule so the reader doesn't have to guess what the
+    // Pre/Post columns are comparing.
+    const explainer = `
+      <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;
+                  padding:8px 10px;margin-bottom:8px;color:#1e293b;font-size:11px;line-height:1.5;">
+        <b>How this is calculated —</b>
+        Every visit is bucketed by <b>visit month</b>. For the shops touched
+        that month, we sum HK+LF <b>sell-out qty in the next month</b>
+        (the follow-through) and compare it to the <b>previous month</b>
+        (the baseline). <span style="color:#475569;">Example: <b>Jun visits → Jul qty</b>, benchmarked against May qty.</span>
+      </div>
+    `;
+
+    // Newest month at the top; a "—" delta cell means the follow-up
+    // month hasn't started yet so Post hasn't accrued any sales.
+    const rowHtml = m => {
+      const pending = !m.sales_available;
+      return `
+        <tr${pending ? ' style="opacity:.55;"' : ''}>
+          <td style="text-align:left;font-weight:700;color:#1e293b;">
+            ${_esc(m.visit_label)}
           </td>
+          <td>${fmtN(m.visits)}</td>
+          <td>${fmtN(m.unique_shops)}</td>
+          <td style="text-align:left;color:#475569;">
+            ${_esc(m.pre_label)}
+          </td>
+          <td style="text-align:left;color:#0f172a;font-weight:600;">
+            ${_esc(m.sales_label)}${pending ? ' <span style="color:#f59e0b;font-weight:600;">(pending)</span>' : ''}
+          </td>
+          <td>${pending ? "—" : fmtN(m.pre_qty)}</td>
+          <td>${pending ? "—" : fmtN(m.post_qty)}</td>
+          <td class="${deltaCls(m.delta_pct)}">${pending ? "—" : fmtN(m.delta_qty)}</td>
+          <td class="${deltaCls(m.delta_pct)}">${pending ? "—" : fmtP(m.delta_pct)}</td>
+          <td class="${deltaCls(m.delta_pct)}">${pending ? "—" : fmt$(m.delta_amt)}</td>
         </tr>
       `;
-      const bdeRows = bdeGroup.map(r => `
-        <tr>
-          <td>${_esc(r.bde_name)}</td>
-          <td>${fmtN(r.visits)}</td>
-          <td><span class="bi-chip bi-up">${r.up}</span></td>
-          <td><span class="bi-chip bi-flat">${r.flat}</span></td>
-          <td><span class="bi-chip bi-down">${r.down}</span></td>
-          <td>${fmtN(r.pre_qty)}</td>
-          <td>${fmtN(r.post_qty)}</td>
-          <td class="${deltaCls(r.delta_pct)}">${fmtN(r.delta_qty)}</td>
-          <td class="${deltaCls(r.delta_pct)}">${fmtP(r.delta_pct)}</td>
-          <td class="${deltaCls(r.delta_pct)}">${fmt$(r.delta_amt)}</td>
-          <td style="text-align:left;color:#374151;">
-            ${winList(r.top_wins)}
-            ${lossList(r.top_losses)}
-          </td>
-        </tr>
-      `).join("");
-      return stateHead + bdeRows;
     };
-    const totalRow = !total ? "" : `
-      <tr style="background:#111827;color:#fff;">
-        <td style="color:#fff;">🌏 TOTAL</td>
-        <td>${fmtN(total.visits)}</td>
-        <td><span class="bi-chip bi-up">${total.up}</span></td>
-        <td><span class="bi-chip bi-flat">${total.flat}</span></td>
-        <td><span class="bi-chip bi-down">${total.down}</span></td>
-        <td>${fmtN(total.pre_qty)}</td>
-        <td>${fmtN(total.post_qty)}</td>
-        <td>${fmtN(total.delta_qty)}</td>
-        <td>${fmtP(total.delta_pct)}</td>
-        <td>${fmt$(total.delta_amt)}</td>
-        <td style="text-align:left;color:#e5e7eb;">
-          ${total.bde_count} BDE${total.bde_count===1?"":"s"} across ${states.length} state${states.length===1?"":"s"}
-        </td>
-      </tr>`;
+
     body.innerHTML = `
       <div style="color:#6b7280;font-size:11px;margin-bottom:8px;">
-        Window: <b>${_esc(j.from)}</b> → <b>${_esc(j.to)}</b> ·
-        ${rows.length} BDE${rows.length===1?"":"s"} across ${states.length} state${states.length===1?"":"s"}
+        Window: <b>${_esc(j.from)}</b> → <b>${_esc(j.to)}</b>
+        ${bdePick ? ` · BDE: <b>${_esc(bdePick)}</b>` : ""}
+        · ${months.length} month${months.length===1?"":"s"}
       </div>
+      ${explainer}
       <table class="bdeImpactTbl">
         <thead>
           <tr>
-            <th>BDE</th><th>Visits</th>
-            <th>↗ Up</th><th>↔ Flat</th><th>↘ Down</th>
-            <th>Pre Qty</th><th>Post Qty</th><th>Δ Qty</th><th>Δ %</th>
+            <th style="text-align:left;">Visit Month</th>
+            <th>Visits</th>
+            <th>Shops</th>
+            <th style="text-align:left;">Pre (baseline)</th>
+            <th style="text-align:left;">Post (impact)</th>
+            <th>Pre Qty</th>
+            <th>Post Qty</th>
+            <th>Δ Qty</th>
+            <th>Δ %</th>
             <th>Δ $</th>
-            <th style="text-align:left;">Winners / Losers</th>
           </tr>
         </thead>
         <tbody>
-          ${states.map(stateHtml).join("")}
-          ${totalRow}
+          ${months.map(rowHtml).join("")}
         </tbody>
       </table>
     `;
