@@ -11449,65 +11449,20 @@ def api_monthly_highlights():
 # unknown month can never inject a table name.
 REBATE_SALES_TABLES = {
     "thismonth": "sales_thismonth",
+    "2601": "sales_2601",
+    "2602": "sales_2602",
+    "2603": "sales_2603",
+    "2604": "sales_2604",
+    "2605": "sales_2605",
+    "2606": "sales_2606",
+    "2607": "sales_2607",
 }
 
 def _rebate_sales_table(month_arg):
-    """Resolve a Month-button key to a table reference the FROM clause
-    can splice in directly.
-
-      "thismonth"           → sales_thismonth               (fast path)
-      4-digit YYMM (2606…)  → sales_2606                    if exists
-                            OR (SELECT * FROM sales_2526
-                                WHERE YEAR(billing_date)=…
-                                  AND MONTH(billing_date)=…) v
-                                                            fallback view
-      unknown               → __MISSING__ (endpoint returns empty)
-
-    The virtual-view fallback means Jun / Jul work the moment the
-    button appears — no need to wait for the end-of-month archive
-    job to build the dedicated sales_YYMM table.  Resolution is
-    cached per-process so the frontend stays snappy on repeat clicks.
-
-    NB: `sales_2526` must contain a `billing_date` column (all
-    current deployments do)."""
-    key = (month_arg or "thismonth").strip().lower()
-    hit = REBATE_SALES_TABLES.get(key)
-    if hit:
-        return hit
-    if len(key) == 4 and key.isdigit():
-        candidate = f"sales_{key}"
-        # 1) Prefer the dedicated per-month archive when it exists —
-        # cheaper (already narrowed + indexed).
-        try:
-            conn = get_connection(); cur = conn.cursor()
-            cur.execute("SHOW TABLES LIKE %s", (candidate,))
-            has_dedicated = cur.fetchone() is not None
-            cur.close(); conn.close()
-        except Exception:
-            has_dedicated = False
-        if has_dedicated:
-            REBATE_SALES_TABLES[key] = candidate
-            return candidate
-        # 2) Virtual view over sales_2526 filtered by year/month —
-        # works as long as the year matches 2025 or 2026 (the range
-        # sales_2526 covers).  Parenthesised subquery aliased so the
-        # existing "FROM {sales_tbl} s" pattern keeps working.
-        try:
-            yy = 2000 + int(key[:2])
-            mm = int(key[2:])
-            if 1 <= mm <= 12 and yy in (2025, 2026):
-                view = (f"(SELECT * FROM sales_2526 "
-                        f"WHERE YEAR(billing_date)={yy} "
-                        f"AND MONTH(billing_date)={mm})")
-                REBATE_SALES_TABLES[key] = view
-                return view
-        except Exception:
-            pass
-        REBATE_SALES_TABLES[key] = "__MISSING__"
-        return "__MISSING__"
-    if hit == "__MISSING__":
-        return "__MISSING__"
-    return "sales_thismonth"
+    """Month-button key → physical sales table.  Falls back to
+    sales_thismonth for anything unmapped."""
+    return REBATE_SALES_TABLES.get((month_arg or "thismonth").strip().lower(),
+                                   "sales_thismonth")
 
 
 _REBATE_REGION_MAP = {"SA": "VIC", "TAS": "VIC", "NT": "VIC", "ACT": "NSW"}
@@ -11635,37 +11590,6 @@ def api_rebate_data():
     stg_filter    = request.args.get("sold_to_group", "ALL")
     region_filter = request.args.get("region",        "ALL").upper()
     sales_tbl     = _rebate_sales_table(request.args.get("month"))  # source table per month button
-    # Month table not present in the DB yet (e.g. Jun clicked before the
-    # end-of-month archive job runs) → return an empty-but-shape-
-    # compatible payload so the frontend's renderPage() doesn't crash
-    # dereferencing summary.region_totals etc.  Every field the
-    # renderer expects is present, all zeroed out.
-    if sales_tbl == "__MISSING__":
-        REGION_KEYS_EMPTY = ["NSW", "QLD", "VIC", "WA"]
-        empty_region_totals = {rk: {"rebate": 0.0, "qty": 0.0, "amt": 0.0}
-                               for rk in REGION_KEYS_EMPTY}
-        return jsonify({
-            "rows":        [],
-            "groups":      [],
-            "page":        0,
-            "page_size":   0,
-            "total_pages": 1,
-            "sold_to_groups": [],
-            "summary": {
-                "total_ship_to": 0, "has_next": 0, "max_tier": 0,
-                "zero_sales":    0, "est_total": 0,
-                "region_totals": empty_region_totals,
-                "region_grand":  {rk: 0.0 for rk in REGION_KEYS_EMPTY},
-                "hq_by_region":  {rk: 0.0 for rk in REGION_KEYS_EMPTY},
-                "store_total":   0.0,
-                "hq_total":      0.0,
-                "grand_total":   0.0,
-                "hq_box": {"total": 0.0, "count_sold_to": 0, "by_region": {}},
-            },
-            "note": ("Sales table for the requested month has not been "
-                     "archived yet.  It becomes available after the "
-                     "end-of-month archive job runs."),
-        })
     export_fmt    = (request.args.get("export") or "").strip().lower()  # 'xlsx' -> download
     # BDE filter — matches the role-scope lock used by graph/map views.
     # Comparison is case-insensitive on salesman_name so name casing in
