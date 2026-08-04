@@ -11452,35 +11452,57 @@ REBATE_SALES_TABLES = {
 }
 
 def _rebate_sales_table(month_arg):
-    """Resolve a Month-button key to the physical sales table.
-    - "thismonth"            → sales_thismonth
-    - 4-digit YYMM (e.g.2606) → sales_2606 (if the table exists)
-    - unknown / missing       → sales_thismonth (last-resort fallback)
+    """Resolve a Month-button key to a table reference the FROM clause
+    can splice in directly.
 
-    Existence check runs once per key and caches so the front-end
-    stays snappy across button clicks; a table that appears later
-    (end-of-month archive job) is picked up on the next process
-    restart."""
+      "thismonth"           → sales_thismonth               (fast path)
+      4-digit YYMM (2606…)  → sales_2606                    if exists
+                            OR (SELECT * FROM sales_2526
+                                WHERE YEAR(billing_date)=…
+                                  AND MONTH(billing_date)=…) v
+                                                            fallback view
+      unknown               → __MISSING__ (endpoint returns empty)
+
+    The virtual-view fallback means Jun / Jul work the moment the
+    button appears — no need to wait for the end-of-month archive
+    job to build the dedicated sales_YYMM table.  Resolution is
+    cached per-process so the frontend stays snappy on repeat clicks.
+
+    NB: `sales_2526` must contain a `billing_date` column (all
+    current deployments do)."""
     key = (month_arg or "thismonth").strip().lower()
     hit = REBATE_SALES_TABLES.get(key)
     if hit:
         return hit
-    # YYMM pattern like "2606" → try sales_2606.  Verify the table
-    # exists so we don't blow up on an as-yet-unloaded month.
     if len(key) == 4 and key.isdigit():
         candidate = f"sales_{key}"
+        # 1) Prefer the dedicated per-month archive when it exists —
+        # cheaper (already narrowed + indexed).
         try:
             conn = get_connection(); cur = conn.cursor()
             cur.execute("SHOW TABLES LIKE %s", (candidate,))
-            exists = cur.fetchone() is not None
+            has_dedicated = cur.fetchone() is not None
             cur.close(); conn.close()
         except Exception:
-            exists = False
-        if exists:
+            has_dedicated = False
+        if has_dedicated:
             REBATE_SALES_TABLES[key] = candidate
             return candidate
-        # Table not there yet — cache the miss so we don't re-probe
-        # every request in the same process.
+        # 2) Virtual view over sales_2526 filtered by year/month —
+        # works as long as the year matches 2025 or 2026 (the range
+        # sales_2526 covers).  Parenthesised subquery aliased so the
+        # existing "FROM {sales_tbl} s" pattern keeps working.
+        try:
+            yy = 2000 + int(key[:2])
+            mm = int(key[2:])
+            if 1 <= mm <= 12 and yy in (2025, 2026):
+                view = (f"(SELECT * FROM sales_2526 "
+                        f"WHERE YEAR(billing_date)={yy} "
+                        f"AND MONTH(billing_date)={mm})")
+                REBATE_SALES_TABLES[key] = view
+                return view
+        except Exception:
+            pass
         REBATE_SALES_TABLES[key] = "__MISSING__"
         return "__MISSING__"
     if hit == "__MISSING__":
