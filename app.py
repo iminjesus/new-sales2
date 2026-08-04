@@ -14341,37 +14341,33 @@ def meeting_impact():
 
 @app.get("/api/meeting/impact_summary")
 def meeting_impact_summary():
-    """Monthly rollup: how much did **this month's visits** move
-    **next month's sales**?
+    """Monthly-per-BDE rollup: how much did **this month's visits**
+    move **next month's sell-out** for each BDE?
 
-      ?from=YYYY-MM-DD   default: 90 days ago
-      ?to=YYYY-MM-DD     default: today
-      ?bde=<name>        optional single-BDE drilldown
+    No date filters — the window is fixed:
+      • Floor  = LOG_START_YM (visit logging started here; anything
+                 earlier has no meaningful visit data to attribute).
+      • Ceil   = last calendar month that has *fully* passed
+                 (current month excluded — the M+1 bucket for a
+                 visit in the current month hasn't accrued yet).
 
-    Simple logic:
-      • Bucket every visit by its calendar month M.
-      • For every ship_to visited that month, sum HK+LF qty in
-        month M+1 (post — the follow-through) and month M-1
-        (pre — the baseline).
-      • Δ = post − pre for the whole cohort.
+      ?bde=<name>  optional single-BDE drilldown
 
-    So the June row means: "Everything the team visited in June,
-    with July HK+LF sell-out for those shops vs. May sell-out."
+    Simple logic (unchanged):
+      • Bucket every visit by (visit_month M, bde_name).
+      • For every ship_to visited that (M, bde), sum HK+LF qty in
+        M+1 (post — the follow-through) and M-1 (pre — the
+        baseline).
+      • Δ = post − pre for that BDE's cohort that month.
+
     Scope respects the same BDE / SM / ALL locks as
     /api/meeting_plan/list."""
     from datetime import date as _date, timedelta as _timedelta
-    q_from = (request.args.get("from") or "").strip()
-    q_to   = (request.args.get("to")   or "").strip()
     q_bde  = (request.args.get("bde")  or "").strip()
-    try:
-        d_from = datetime.strptime(q_from, "%Y-%m-%d").date() if q_from \
-                 else (_date.today() - _timedelta(days=90))
-        d_to   = datetime.strptime(q_to,   "%Y-%m-%d").date() if q_to   \
-                 else _date.today()
-    except Exception:
-        return jsonify({"error": "from/to must be YYYY-MM-DD"}), 400
-    if d_from > d_to:
-        return jsonify({"error": "from must be <= to"}), 400
+
+    # First calendar month with real visit logs. Any visit before
+    # this month is ignored — the impact story starts here.
+    LOG_START_YM = "2026-06"
 
     # Scope — same as meeting_plan_list.
     email = _bde_from_request()
@@ -14380,8 +14376,29 @@ def meeting_impact_summary():
     scope_bde   = me[0] if me else None
     scope_state = me[1] if me else None
 
-    # Build the WHERE with the `m.` alias baked in from the start so
-    # the query below can reference the meeting_log fields safely.
+    def _sub_month(y, mo):
+        return (y - 1, 12) if mo == 1 else (y, mo - 1)
+    def _add_month(y, mo):
+        return (y + 1, 1) if mo == 12 else (y, mo + 1)
+
+    # Window: from LOG_START_YM's first day, up to the last day of
+    # (current month - 1) — i.e. only visit months whose sales
+    # follow-up month has already ended.
+    _today = _date.today()
+    ly, lm = int(LOG_START_YM[:4]), int(LOG_START_YM[5:])
+    d_from = _date(ly, lm, 1)
+    # last complete visit month = the month before the current one
+    py, pm = _sub_month(_today.year, _today.month)
+    # d_to = last day of (py, pm)
+    ny2, nm2 = _add_month(py, pm)
+    d_to = _date(ny2, nm2, 1) - _timedelta(days=1)
+    if d_to < d_from:
+        # We haven't crossed a full sales-follow-up month yet since
+        # logging began.  Nothing meaningful to report.
+        return jsonify({"from": d_from.strftime("%Y-%m-%d"),
+                        "to":   d_from.strftime("%Y-%m-%d"),
+                        "months": []})
+
     wh = ["m.visit_date BETWEEN %s AND %s",
           "m.ship_to IS NOT NULL", "m.ship_to <> ''"]
     params = [d_from, d_to]
@@ -14399,9 +14416,6 @@ def meeting_impact_summary():
 
     try:
         conn = get_connection(); cur = conn.cursor(dictionary=True)
-        # meeting_log carries ship_to code only; the readable name lives
-        # on customer master.  Correlated subquery keeps rows whose
-        # ship_to isn't in customer (potential customers, deleted rows).
         cur.execute(f"""
             SELECT m.id, m.bde_name, m.ship_to, m.visit_date
             FROM meeting_log m
@@ -14410,85 +14424,119 @@ def meeting_impact_summary():
         """, tuple(params))
         visits = cur.fetchall()
 
-        # Bucket every visit by its calendar month (visit_ym) and
-        # keep the set of unique ship_tos touched in that month so we
-        # can look up their next-month sales once per shop rather
-        # than once per visit.
-        # months["2026-06"] = {"visits": 5, "shops": {"731942", ...}}
-        months = {}
+        # Bucket per (visit_ym, bde_name). Keep the ship_to set per
+        # bucket so post/pre sales are counted once per shop, not
+        # once per visit (a BDE that visits the same shop 3× in a
+        # month shouldn't 3× the sell-out weight).
+        # buckets[(ym, bde)] = {"visits": n, "shops": set(...),
+        #                       "year": y, "month": m}
+        buckets = {}
         for v in visits:
             vd = v.get("visit_date")
             if not vd:
                 continue
-            ym = f"{vd.year:04d}-{vd.month:02d}"
-            m = months.setdefault(ym, {"visits": 0, "shops": set(),
-                                       "year": vd.year, "month": vd.month})
-            m["visits"] += 1
+            ym  = f"{vd.year:04d}-{vd.month:02d}"
+            bde = (v.get("bde_name") or "—").strip() or "—"
+            b = buckets.setdefault((ym, bde),
+                {"visits": 0, "shops": set(),
+                 "year": vd.year, "month": vd.month})
+            b["visits"] += 1
             if v.get("ship_to"):
-                m["shops"].add(str(v["ship_to"]))
-
-        _today = _date.today()
-        _cur_ym = f"{_today.year:04d}-{_today.month:02d}"
-
-        def _add_month(y, mo):
-            return (y + 1, 1) if mo == 12 else (y, mo + 1)
-        def _sub_month(y, mo):
-            return (y - 1, 12) if mo == 1 else (y, mo - 1)
+                b["shops"].add(str(v["ship_to"]))
 
         _MONTH_NAME = ["", "Jan","Feb","Mar","Apr","May","Jun",
                        "Jul","Aug","Sep","Oct","Nov","Dec"]
         def _lbl(y, mo): return f"{_MONTH_NAME[mo]} {y}"
+        _bde_state = {n.upper(): s for (n, _e, s, _r) in _BDE_DIRECTORY}
+
+        # Cache post/pre sales per (ship_to, ym) so two BDEs who
+        # visited the same shop don't each pay for a fresh lookup.
+        _sales_cache = {}
+        def _sales(sh, y, mo):
+            k = (sh, y, mo)
+            if k not in _sales_cache:
+                _sales_cache[k] = _sales_for_month(cur, sh, y, mo)
+            return _sales_cache[k]
+
+        # Group buckets by visit_ym so the frontend can render
+        # month sections with per-BDE rows underneath.
+        by_ym = {}
+        for (ym, bde), b in buckets.items():
+            by_ym.setdefault(ym, []).append((bde, b))
 
         month_rows = []
-        for ym in sorted(months.keys()):
-            m = months[ym]
-            ny, nm = _add_month(m["year"], m["month"])
-            py, pm = _sub_month(m["year"], m["month"])
-            sales_ym = f"{ny:04d}-{nm:02d}"
+        for ym in sorted(by_ym.keys(), reverse=True):
+            # Any bucket in this ym has the same (year, month).
+            any_b = by_ym[ym][0][1]
+            y, mo = any_b["year"], any_b["month"]
+            ny, nm = _add_month(y, mo)
+            py2, pm2 = _sub_month(y, mo)
 
-            # A visit-month row is only meaningful once the following
-            # calendar month has actually started — until then the
-            # "post" bucket has no data yet.
-            sales_available = (sales_ym <= _cur_ym)
-
-            pre_qty = post_qty = 0.0
-            pre_amt = post_amt = 0.0
-            counted = 0
-            if sales_available:
-                for sh in m["shops"]:
-                    pre  = _sales_for_month(cur, sh, py, pm)
-                    post = _sales_for_month(cur, sh, ny, nm)
+            bde_rows = []
+            m_visits = 0
+            m_shops_uniq = set()
+            m_pre_qty = m_post_qty = 0.0
+            m_pre_amt = m_post_amt = 0.0
+            for bde, b in by_ym[ym]:
+                pre_qty = post_qty = 0.0
+                pre_amt = post_amt = 0.0
+                counted = 0
+                for sh in b["shops"]:
+                    pre  = _sales(sh, py2, pm2)
+                    post = _sales(sh, ny, nm)
                     if pre is None or post is None:
                         continue
                     counted  += 1
                     pre_qty  += pre["qty"];  post_qty += post["qty"]
                     pre_amt  += pre["amt"];  post_amt += post["amt"]
-
-            delta_qty = post_qty - pre_qty
-            delta_amt = post_amt - pre_amt
-            delta_pct = (delta_qty / pre_qty * 100.0) if pre_qty > 0 else None
-
+                delta_qty = post_qty - pre_qty
+                delta_amt = post_amt - pre_amt
+                delta_pct = (delta_qty / pre_qty * 100.0) if pre_qty > 0 else None
+                bde_rows.append({
+                    "bde_name":      bde,
+                    "state":         _bde_state.get(bde.upper(), ""),
+                    "visits":        b["visits"],
+                    "unique_shops":  len(b["shops"]),
+                    "shops_counted": counted,
+                    "pre_qty":       round(pre_qty, 1),
+                    "post_qty":      round(post_qty, 1),
+                    "pre_amt":       round(pre_amt, 0),
+                    "post_amt":      round(post_amt, 0),
+                    "delta_qty":     round(delta_qty, 1),
+                    "delta_amt":     round(delta_amt, 0),
+                    "delta_pct":     (round(delta_pct, 1) if delta_pct is not None else None),
+                })
+                m_visits    += b["visits"]
+                m_shops_uniq |= b["shops"]
+                m_pre_qty   += pre_qty;  m_post_qty += post_qty
+                m_pre_amt   += pre_amt;  m_post_amt += post_amt
+            # Order BDEs by Δ% desc (nulls at the bottom).
+            bde_rows.sort(key=lambda r: (r["delta_pct"] is None,
+                                         -(r["delta_pct"] or 0)))
+            m_delta_qty = m_post_qty - m_pre_qty
+            m_delta_amt = m_post_amt - m_pre_amt
+            m_delta_pct = (m_delta_qty / m_pre_qty * 100.0) if m_pre_qty > 0 else None
             month_rows.append({
-                "visit_ym":        ym,
-                "visit_label":     _lbl(m["year"], m["month"]),
-                "sales_ym":        sales_ym,
-                "sales_label":     _lbl(ny, nm),
-                "pre_ym":          f"{py:04d}-{pm:02d}",
-                "pre_label":       _lbl(py, pm),
-                "visits":          m["visits"],
-                "unique_shops":    len(m["shops"]),
-                "shops_counted":   counted,
-                "sales_available": sales_available,
-                "pre_qty":         round(pre_qty, 1),
-                "post_qty":        round(post_qty, 1),
-                "pre_amt":         round(pre_amt, 0),
-                "post_amt":        round(post_amt, 0),
-                "delta_qty":       round(delta_qty, 1),
-                "delta_amt":       round(delta_amt, 0),
-                "delta_pct":       (round(delta_pct, 1) if delta_pct is not None else None),
+                "visit_ym":    ym,
+                "visit_label": _lbl(y, mo),
+                "sales_ym":    f"{ny:04d}-{nm:02d}",
+                "sales_label": _lbl(ny, nm),
+                "pre_ym":      f"{py2:04d}-{pm2:02d}",
+                "pre_label":   _lbl(py2, pm2),
+                "total": {
+                    "visits":       m_visits,
+                    "unique_shops": len(m_shops_uniq),
+                    "pre_qty":      round(m_pre_qty, 1),
+                    "post_qty":     round(m_post_qty, 1),
+                    "pre_amt":      round(m_pre_amt, 0),
+                    "post_amt":     round(m_post_amt, 0),
+                    "delta_qty":    round(m_delta_qty, 1),
+                    "delta_amt":    round(m_delta_amt, 0),
+                    "delta_pct":    (round(m_delta_pct, 1) if m_delta_pct is not None else None),
+                    "bde_count":    len(bde_rows),
+                },
+                "bdes":       bde_rows,
             })
-        # Newest visit month first — matches the Recent-entries reading order.
-        month_rows.reverse()
 
         cur.close(); conn.close()
         return jsonify({

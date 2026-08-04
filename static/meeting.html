@@ -805,24 +805,16 @@ header .nav{margin-left:auto;display:flex;gap:6px}
     <div id="bdeImpactInline" hidden style="margin-top:8px;
          border:1px solid #e5e7eb;border-radius:6px;padding:10px 12px;background:#fafafa;">
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-        <label style="font-size:11px;color:#6b7280;">
-          From <input type="date" id="bdeImpactFrom"
-                      style="border:1px solid #cbd5e1;border-radius:4px;padding:2px 5px;font-size:11px;">
-        </label>
-        <label style="font-size:11px;color:#6b7280;">
-          To <input type="date" id="bdeImpactTo"
-                    style="border:1px solid #cbd5e1;border-radius:4px;padding:2px 5px;font-size:11px;">
-        </label>
-        <button type="button" id="bdeImpactRun"
-                style="background:#374151;color:#fff;border:none;border-radius:4px;
-                       padding:3px 10px;font-size:11px;cursor:pointer;">Run</button>
+        <span style="font-size:11px;color:#6b7280;font-weight:600;">
+          📊 Visit → Next-month sales impact, per BDE
+        </span>
         <span style="flex:1;"></span>
         <a href="javascript:void(0)" id="bdeImpactHide"
            style="color:#9ca3af;font-size:11px;text-decoration:underline;">Hide</a>
       </div>
       <div id="bdeImpactBody">
         <div style="color:#94a3b8;font-style:italic;padding:10px 4px;text-align:center;font-size:11px;">
-          Click Run — default window is the last 90 days.
+          Loading…
         </div>
       </div>
     </div>
@@ -2025,29 +2017,19 @@ fForm.addEventListener("submit", async (e) => {
 
 document.getElementById("btnRefresh").addEventListener("click", loadRecent);
 
-/* ─── BDE Impact modal ────────────────────────────────────────
-   Aggregates per-shop pre/post sales delta up to the BDE level.
-   Default window = last 90 days; adjustable via the two date
-   inputs.  Same scope locks (BDE own / SM own state / ALL) as
-   the meeting list so people only see what they should. */
+/* ─── BDE Impact panel ────────────────────────────────────────
+   Fixed window (backend picks it): logging-start month up to the
+   last calendar month whose sales follow-up has fully passed.
+   No date inputs — anything the reader could pick with a
+   from/to would just be a subset of the meaningful range.
+   Same BDE/SM/ALL scope locks as the meeting list. */
 (function wireBdeImpact(){
   const btn    = document.getElementById("btnBdeImpact");
   const inline = document.getElementById("bdeImpactInline");
   const hide   = document.getElementById("bdeImpactHide");
-  const run    = document.getElementById("bdeImpactRun");
-  const fFrom  = document.getElementById("bdeImpactFrom");
-  const fTo    = document.getElementById("bdeImpactTo");
   const body   = document.getElementById("bdeImpactBody");
   if (!btn || !inline) return;
-  const _iso = d => d.toISOString().slice(0, 10);
-  const _seed = () => {
-    const now  = new Date();
-    const from = new Date(now); from.setDate(from.getDate() - 90);
-    if (!fFrom.value) fFrom.value = _iso(from);
-    if (!fTo.value)   fTo.value   = _iso(now);
-  };
   btn.addEventListener("click", () => {
-    _seed();
     inline.hidden = false;
     btn.textContent = "📊 Refresh BDE impact summary";
     load();
@@ -2056,11 +2038,10 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
     inline.hidden = true;
     btn.textContent = "📊 Show BDE impact summary";
   });
-  run.addEventListener("click", load);
 
   async function load(){
     body.innerHTML = `<div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">Loading…</div>`;
-    const q = new URLSearchParams({ from: fFrom.value, to: fTo.value });
+    const q = new URLSearchParams();
     // Respect the top-of-panel BDE dropdown so the summary drills
     // into that one BDE when the reader has filtered the page.
     const bdePick = (filtBde && filtBde.value || "").trim();
@@ -2075,10 +2056,6 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
       return;
     }
     const months = j.months || [];
-    if (!months.length){
-      body.innerHTML = `<div style="color:#94a3b8;font-style:italic;padding:20px;text-align:center;">No visits in this window.</div>`;
-      return;
-    }
     const fmtN  = n => (n == null ? "—" : Number(n).toLocaleString());
     const fmt$  = n => (n == null ? "—" : "$" + Math.round(Number(n)).toLocaleString());
     const fmtP  = p => (p == null ? "—" : (p > 0 ? "+" : "") + Number(p).toFixed(1) + "%");
@@ -2090,36 +2067,71 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
       <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;
                   padding:8px 10px;margin-bottom:8px;color:#1e293b;font-size:11px;line-height:1.5;">
         <b>How this is calculated —</b>
-        Every visit is bucketed by <b>visit month</b>. For the shops touched
-        that month, we sum HK+LF <b>sell-out qty in the next month</b>
-        (the follow-through) and compare it to the <b>previous month</b>
-        (the baseline). <span style="color:#475569;">Example: <b>Jun visits → Jul qty</b>, benchmarked against May qty.</span>
+        Every visit is bucketed by <b>visit month</b> and <b>BDE</b>.
+        For the shops each BDE touched that month, we sum HK+LF
+        <b>sell-out qty in the next month</b> (the follow-through) and
+        compare it to the <b>previous month</b> (the baseline).
+        <span style="color:#475569;">Example: <b>Jun visits → Jul qty</b>, benchmarked against May qty.</span>
+        Only months whose follow-up is complete are shown.
       </div>
     `;
 
-    // Newest month at the top; a "—" delta cell means the follow-up
-    // month hasn't started yet so Post hasn't accrued any sales.
-    const rowHtml = m => {
-      const pending = !m.sales_available;
+    if (!months.length){
+      body.innerHTML = explainer + `<div style="color:#94a3b8;font-style:italic;padding:14px;text-align:center;">
+        No complete-follow-up month yet — check back once the month after your visits has ended.
+      </div>`;
+      return;
+    }
+
+    const bdeRow = r => `
+      <tr>
+        <td style="text-align:left;">${_esc(r.bde_name)}<span style="color:#94a3b8;font-size:9px;margin-left:4px;">${_esc(r.state || "")}</span></td>
+        <td>${fmtN(r.visits)}</td>
+        <td>${fmtN(r.unique_shops)}</td>
+        <td>${fmtN(r.pre_qty)}</td>
+        <td>${fmtN(r.post_qty)}</td>
+        <td class="${deltaCls(r.delta_pct)}">${fmtN(r.delta_qty)}</td>
+        <td class="${deltaCls(r.delta_pct)}">${fmtP(r.delta_pct)}</td>
+        <td class="${deltaCls(r.delta_pct)}">${fmt$(r.delta_amt)}</td>
+      </tr>
+    `;
+
+    // One section per visit month. Header row says "Jun 2026 →
+    // Jul 2026 (vs May)", then the month total, then one row per
+    // BDE that logged a visit that month.
+    const monthHtml = m => {
+      const t = m.total || {};
       return `
-        <tr${pending ? ' style="opacity:.55;"' : ''}>
-          <td style="text-align:left;font-weight:700;color:#1e293b;">
-            ${_esc(m.visit_label)}
-          </td>
-          <td>${fmtN(m.visits)}</td>
-          <td>${fmtN(m.unique_shops)}</td>
-          <td style="text-align:left;color:#475569;">
-            ${_esc(m.pre_label)}
-          </td>
-          <td style="text-align:left;color:#0f172a;font-weight:600;">
-            ${_esc(m.sales_label)}${pending ? ' <span style="color:#f59e0b;font-weight:600;">(pending)</span>' : ''}
-          </td>
-          <td>${pending ? "—" : fmtN(m.pre_qty)}</td>
-          <td>${pending ? "—" : fmtN(m.post_qty)}</td>
-          <td class="${deltaCls(m.delta_pct)}">${pending ? "—" : fmtN(m.delta_qty)}</td>
-          <td class="${deltaCls(m.delta_pct)}">${pending ? "—" : fmtP(m.delta_pct)}</td>
-          <td class="${deltaCls(m.delta_pct)}">${pending ? "—" : fmt$(m.delta_amt)}</td>
-        </tr>
+        <div style="margin-top:14px;">
+          <div style="background:#e0e7ff;color:#3730a3;font-weight:800;font-size:12px;
+                      padding:5px 8px;border-radius:6px 6px 0 0;border:1px solid #c7d2fe;border-bottom:none;">
+            🗓 ${_esc(m.visit_label)} visits → ${_esc(m.sales_label)} sales
+            <span style="color:#4338ca;font-weight:600;margin-left:6px;">
+              (baseline: ${_esc(m.pre_label)})
+            </span>
+            <span style="float:right;font-weight:600;">
+              ${fmtN(t.visits)} visits · ${fmtN(t.unique_shops)} shops ·
+              <span class="${deltaCls(t.delta_pct)}">Δ ${fmtN(t.delta_qty)}u · ${fmtP(t.delta_pct)} · ${fmt$(t.delta_amt)}</span>
+            </span>
+          </div>
+          <table class="bdeImpactTbl" style="border:1px solid #c7d2fe;border-top:none;border-radius:0 0 6px 6px;">
+            <thead>
+              <tr>
+                <th style="text-align:left;">BDE</th>
+                <th>Visits</th>
+                <th>Shops</th>
+                <th>Pre Qty</th>
+                <th>Post Qty</th>
+                <th>Δ Qty</th>
+                <th>Δ %</th>
+                <th>Δ $</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${m.bdes.map(bdeRow).join("")}
+            </tbody>
+          </table>
+        </div>
       `;
     };
 
@@ -2130,25 +2142,7 @@ document.getElementById("btnRefresh").addEventListener("click", loadRecent);
         · ${months.length} month${months.length===1?"":"s"}
       </div>
       ${explainer}
-      <table class="bdeImpactTbl">
-        <thead>
-          <tr>
-            <th style="text-align:left;">Visit Month</th>
-            <th>Visits</th>
-            <th>Shops</th>
-            <th style="text-align:left;">Pre (baseline)</th>
-            <th style="text-align:left;">Post (impact)</th>
-            <th>Pre Qty</th>
-            <th>Post Qty</th>
-            <th>Δ Qty</th>
-            <th>Δ %</th>
-            <th>Δ $</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${months.map(rowHtml).join("")}
-        </tbody>
-      </table>
+      ${months.map(monthHtml).join("")}
     `;
   }
   function _esc(s){
