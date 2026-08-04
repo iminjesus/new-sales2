@@ -11444,25 +11444,31 @@ def api_monthly_highlights():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-# Sales source table per ?month=... button on the rebate page.  A whitelist —
-# the resolved value is the only thing interpolated into the FROM clause, so an
-# unknown month can never inject a table name.
-REBATE_SALES_TABLES = {
-    "thismonth": "sales_thismonth",
-    "2601": "sales_2601",
-    "2602": "sales_2602",
-    "2603": "sales_2603",
-    "2604": "sales_2604",
-    "2605": "sales_2605",
-    "2606": "sales_2606",
-    "2607": "sales_2607",
-}
+# Sales source per ?month=... button on the rebate page.
+#   thismonth → sales_thismonth (real-time, no date filter needed)
+#   YYMM      → parenthesized subquery over sales_2526 filtered by
+#               YEAR/MONTH of billing_date, so only sales_2526 has to
+#               be kept fresh — no per-month archive tables.
+# Whitelisted so the interpolated string can never be attacker-controlled.
+REBATE_SALES_TABLES = {"thismonth": "sales_thismonth"}
 
 def _rebate_sales_table(month_arg):
-    """Month-button key → physical sales table.  Falls back to
-    sales_thismonth for anything unmapped."""
-    return REBATE_SALES_TABLES.get((month_arg or "thismonth").strip().lower(),
-                                   "sales_thismonth")
+    """Month-button key → table reference the FROM clause can splice
+    directly.  Returns the physical table for 'thismonth', or a
+    parenthesized SELECT over sales_2526 for a YYMM key.  Falls back
+    to sales_thismonth for anything unrecognised."""
+    key = (month_arg or "thismonth").strip().lower()
+    hit = REBATE_SALES_TABLES.get(key)
+    if hit:
+        return hit
+    if len(key) == 4 and key.isdigit():
+        yy = 2000 + int(key[:2])
+        mm = int(key[2:])
+        if 1 <= mm <= 12:
+            return (f"(SELECT * FROM sales_2526 "
+                    f"WHERE YEAR(billing_date)={yy} "
+                    f"AND MONTH(billing_date)={mm})")
+    return "sales_thismonth"
 
 
 _REBATE_REGION_MAP = {"SA": "VIC", "TAS": "VIC", "NT": "VIC", "ACT": "NSW"}
