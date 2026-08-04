@@ -14381,15 +14381,18 @@ def meeting_impact_summary():
     def _add_month(y, mo):
         return (y + 1, 1) if mo == 12 else (y, mo + 1)
 
-    # Window: from LOG_START_YM's first day, up to the last day of
-    # (current month - 1) — i.e. only visit months whose sales
-    # follow-up month has already ended.
+    # Window: from LOG_START_YM's first day up to the last day of
+    # (current month − 2).  A visit in month M can only be
+    # summarised once the follow-up month M+1 has *fully* ended;
+    # that means M+1 ≤ current-1, i.e. M ≤ current-2.
+    #   e.g. today = Aug 2026  →  ceiling = Jun 2026
+    #        (Jun visits → Jul sales is closed; Jul visits → Aug
+    #         is still in-flight and is dropped, not shown.)
     _today = _date.today()
     ly, lm = int(LOG_START_YM[:4]), int(LOG_START_YM[5:])
     d_from = _date(ly, lm, 1)
-    # last complete visit month = the month before the current one
-    py, pm = _sub_month(_today.year, _today.month)
-    # d_to = last day of (py, pm)
+    py, pm = _sub_month(_today.year, _today.month)   # current-1
+    py, pm = _sub_month(py, pm)                       # current-2
     ny2, nm2 = _add_month(py, pm)
     d_to = _date(ny2, nm2, 1) - _timedelta(days=1)
     if d_to < d_from:
