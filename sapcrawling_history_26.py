@@ -51,15 +51,31 @@ from sapcrawling import (
     SAP_EXPORT_DIR,
     UNLOCK_DIR,
     OUTPUT_HEADER,
+    ZSDM_FIELDS,
     wait,
+    exists,
     close_popups,
     start_transaction_fresh,
-    set_selection_screen,
     newest_export_xlsx,
     trigger_export,
     go_back_to_selection,
     extract_keep_rows,
+    dump_screen,
+    _try_set_text,
+    _try_set_radio,
 )
+
+
+# HIGH bound of the interface-date range.  Many SAP DATS-range
+# selection fields silently interpret a lone LOW as "anywhere
+# from LOW to today" — the first backfill run pulled the same
+# ~8900-row cross-section 8 times because HIGH was left empty
+# and SAP fell back to today's data every call.  Setting HIGH
+# equal to LOW turns the range into a single-day filter.
+INTERFACE_DATE_HIGH_IDS = [
+    "wnd[0]/usr/ctxtS_DATE-HIGH",
+    "wnd[0]/usr/ctxtS_INTFDT-HIGH",
+]
 
 
 # ================= CONFIG =================
@@ -99,6 +115,92 @@ def _ensure_dir(d):
 
 def _mysql_path(p: str) -> str:
     return p.replace("\\", "/")
+
+
+def _first_existing(session, id_list):
+    for wid in id_list:
+        if exists(session, wid):
+            return wid
+    return None
+
+
+def _set_and_read(session, wid, value):
+    """Assign `value` to field `wid` and read back what SAP stored.
+    Returns the round-tripped text (or None on failure).  Used to
+    tell 'set silently succeeded' from 'value actually stuck'."""
+    try:
+        session.findById(wid).Text = value
+        try:    return session.findById(wid).Text
+        except: return None
+    except Exception:
+        return None
+
+
+def set_selection_screen_history(session, plant, ddmmyyyy, dump_once=False):
+    """Stricter replacement for sapcrawling.set_selection_screen.
+
+    Sets BOTH the LOW and HIGH interface-date bounds to the
+    target day so SAP treats it as a single-day filter (not
+    'LOW..today').  Reads the LOW field back to confirm the
+    value stuck and prints a loud warning if it didn't — the
+    first backfill run silently swallowed every date and returned
+    the same day 8 times.  If `dump_once` is True, dumps the
+    entire selection screen post-set so we can see the real
+    field IDs on THIS SAP layout."""
+    _try_set_text(session, ZSDM_FIELDS["plant"], plant)
+
+    low_id  = _first_existing(session, ZSDM_FIELDS["interface_date"])
+    high_id = _first_existing(session, INTERFACE_DATE_HIGH_IDS)
+
+    if low_id:
+        got_low = _set_and_read(session, low_id, ddmmyyyy)
+        if got_low and ddmmyyyy in got_low:
+            pass  # confirmed
+        else:
+            print(f"    [WARN] LOW date field {low_id} set to "
+                  f"{ddmmyyyy!r} but reads back as {got_low!r}")
+    else:
+        print(f"    [WARN] No known LOW date field exists on this "
+              f"selection screen — SAP will fall back to its default "
+              f"(usually today's data).")
+
+    if high_id:
+        got_high = _set_and_read(session, high_id, ddmmyyyy)
+        if got_high and ddmmyyyy not in got_high:
+            print(f"    [WARN] HIGH date field {high_id} set to "
+                  f"{ddmmyyyy!r} but reads back as {got_high!r}")
+    # HIGH missing is OK on single-date screens; only warn if LOW
+    # was also missing (already warned above).
+
+    _try_set_radio(session, ZSDM_FIELDS["display_interface"])
+
+    if dump_once:
+        print(f"\n─── SELECTION SCREEN DUMP (plant={plant}, date={ddmmyyyy}) ───")
+        try:    dump_screen(session)
+        except Exception as e:  print(f"    dump failed: {e}")
+        print("─── END DUMP ───\n")
+
+    session.findById("wnd[0]").sendVKey(0)
+    wait(0.4)
+    close_popups(session, 3)
+
+
+def _normalise_ddmmyyyy(val):
+    """openpyxl reads DATE cells as datetime → str() gives ISO
+    'YYYY-MM-DD HH:MM:SS', so LOAD DATA's STR_TO_DATE(..,'%d.%m.%Y')
+    NULLs every row.  Convert whatever we get into DD.MM.YYYY so
+    the LOAD parses cleanly."""
+    val = (val or "").strip()
+    if not val:
+        return ""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+                "%Y-%m-%d",           "%d.%m.%Y",
+                "%d/%m/%Y",           "%Y%m%d"):
+        try:
+            return datetime.strptime(val, fmt).strftime("%d.%m.%Y")
+        except Exception:
+            pass
+    return val   # give up gracefully; LOAD will null it
 
 
 def months_from_start():
@@ -203,9 +305,14 @@ def load_month_csv(conn, snap, csv_path):
 # ================= COMBINE HELPERS =================
 def combine_month(xlsx_paths, csv_path):
     """Same shape as sapcrawling.combine_to_csv but writes to a
-    per-month CSV path so parallel months don't collide."""
+    per-month CSV path so parallel months don't collide.  Also
+    normalises the interface_date column into DD.MM.YYYY so the
+    LOAD DATA's STR_TO_DATE actually parses (the first backfill
+    left interface_date NULL because openpyxl handed us ISO)."""
     _ensure_dir(os.path.dirname(csv_path))
+    idate_idx = OUTPUT_HEADER.index("interface_date")
     total = 0
+    seen_idates = set()
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(OUTPUT_HEADER)
@@ -214,17 +321,25 @@ def combine_month(xlsx_paths, csv_path):
                 continue
             rows = extract_keep_rows(p)
             for r in rows:
+                r[idate_idx] = _normalise_ddmmyyyy(r[idate_idx])
+                if r[idate_idx]:
+                    seen_idates.add(r[idate_idx])
                 w.writerow(r)
             total += len(rows)
             print(f"    {os.path.basename(p)} → {len(rows):,} rows")
     print(f"  Combined CSV → {csv_path}  ({total:,} rows)")
+    if seen_idates:
+        print(f"  Interface dates in this month's CSV: {sorted(seen_idates)}")
     return total
 
 
 # ================= SAP LOOP FOR ONE MONTH =================
+_DUMPED_SELECTION = False   # print the selection-screen dump once per run
+
 def run_one_month(session, snap):
     """Loop the plants for ONE snapshot month.  Returns list of
     per-plant XLSX file paths that we successfully collected."""
+    global _DUMPED_SELECTION
     ddmmyyyy = snap.strftime("%d.%m.%Y")
     ym_tag   = snap.strftime("%Y%m%d")
     _ensure_dir(HISTORY_DIR)
@@ -233,7 +348,15 @@ def run_one_month(session, snap):
     for plant in PLANTS:
         print(f"  ── {plant} @ {ddmmyyyy} ──")
         start_transaction_fresh(session)
-        set_selection_screen(session, plant, ddmmyyyy)
+        # Dump the selection screen on the very first call of the
+        # run so we can see which date-field IDs actually exist on
+        # this SAP layout (useful to diagnose 'same data 8 times'
+        # failures).
+        dump_now = not _DUMPED_SELECTION
+        set_selection_screen_history(session, plant, ddmmyyyy,
+                                     dump_once=dump_now)
+        if dump_now:
+            _DUMPED_SELECTION = True
 
         export_start_ts = time.time()
         session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 execute
