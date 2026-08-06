@@ -4197,24 +4197,39 @@ def api_stock_history():
         brand_wh = "ss.brand IN ('HK','LF')"
         if   category == "HK": brand_wh = "ss.brand = 'HK'"
         elif category == "LF": brand_wh = "ss.brand = 'LF'"
+        # sales_2526 has no state column of its own — state lives on
+        # the customer master, so join customer on ship_to and filter
+        # via bde_state / ship_to_state (whichever exists).  Only
+        # added when the region chip is on to keep the ALL-state
+        # query index-friendly.
+        sales_state_join = ""
+        sales_state_wh   = ""
+        sales_state_params = []
+        if state in _STATE_TO_PLANT_CHART:
+            sales_state_join = " JOIN customer cst ON cst.ship_to = ss.ship_to"
+            # ship_to_state is the more precise pick when present;
+            # fall back to bde_state (which always exists).
+            sales_state_wh = " AND COALESCE(NULLIF(TRIM(cst.ship_to_state),''), cst.bde_state) = %s"
+            sales_state_params = [state]
+
         sales_sql = (
             f"SELECT YEAR(ss.billing_date)  AS y, "
             f"       MONTH(ss.billing_date) AS m, "
             f"       SUM(ss.qty)            AS q "
             f"FROM sales_2526 ss "
-            + " ".join(sa_joins) + " "
+            + " ".join(sa_joins) + sales_state_join + " "
             f"WHERE ss.billing_date >= '2026-01-01' "
             f"  AND {brand_wh} "
             f"  AND ss.qty > 0"
+            + sales_state_wh   # placeholder in SQL comes BEFORE sa_wh
         )
         if sa_wh:
             sales_sql += " AND " + " AND ".join(sa_wh)
-        if state in _STATE_TO_PLANT_CHART:
-            sales_sql += " AND ss.state = %s"
-            sa_params = list(sa_params) + [state]
         sales_sql += (" GROUP BY YEAR(ss.billing_date), MONTH(ss.billing_date) "
                       "ORDER BY y, m")
-        cur.execute(sales_sql, sa_params)
+        # Param order must mirror placeholder order: state chip first,
+        # then the filter-chip params from _filter_sql.
+        cur.execute(sales_sql, sales_state_params + list(sa_params))
         sales_by_ym = {}
         for r in cur.fetchall():
             y, m = r.get("y"), r.get("m")
