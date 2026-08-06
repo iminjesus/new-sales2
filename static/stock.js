@@ -1055,7 +1055,7 @@
             data:  months.map(m => m.stock_qty),
             borderColor: "#3b82f6",
             backgroundColor: "rgba(59,130,246,0.15)",
-            fill: true, tension: 0.25, yAxisID: "y",
+            fill: true, tension: 0.25,
             pointRadius: 3, pointHoverRadius: 5,
           },
           {
@@ -1063,7 +1063,7 @@
             data:  months.map(m => m.sales_qty),
             borderColor: "#f97316",
             backgroundColor: "rgba(249,115,22,0.10)",
-            fill: false, tension: 0.25, yAxisID: "y1",
+            fill: false, tension: 0.25,
             pointRadius: 3, pointHoverRadius: 5,
           },
         ],
@@ -1083,17 +1083,11 @@
         },
         scales: {
           x: { ticks: { font: { size: 10 } } },
-          y:  { type: "linear", position: "left",
-                title: { display: true, text: "Stock",
-                         font: { size: 10 }, color: "#3b82f6" },
-                ticks: { font: { size: 10 },
-                         callback: v => Number(v).toLocaleString() } },
-          y1: { type: "linear", position: "right",
-                title: { display: true, text: "Sales",
-                         font: { size: 10 }, color: "#f97316" },
-                grid: { drawOnChartArea: false },
-                ticks: { font: { size: 10 },
-                         callback: v => Number(v).toLocaleString() } },
+          // Shared y so Stock vs Sales sit on the same magnitude —
+          // the visual gap between the two lines IS the story.
+          y: { type: "linear", beginAtZero: true,
+               ticks: { font: { size: 10 },
+                        callback: v => Number(v).toLocaleString() } },
         },
       },
     });
