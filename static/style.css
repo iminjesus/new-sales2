@@ -1151,7 +1151,19 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
    Reuses #stateTable styling for cell padding / colour scheme; only
    the wrapper + header chrome are extra.  Rows are clickable on the
    first three cascade levels (drill in), inert on size (terminal). */
-#cascadeTableWrap { margin-top: 8px; }
+#cascadeTableWrap {
+  margin-top: 8px;
+  /* Expanding the Stock column into 5 aging buckets pushes the table
+     from 13 to 18 nowrap columns and it stops fitting the side panel's
+     fixed width, so let the wrap scroll horizontally on its own. Also
+     tell inner width to shrink to content so a horizontal scrollbar
+     actually appears (an auto-width flex child otherwise clips). */
+  overflow-x: auto;
+  min-width: 0;
+}
+/* Anchor the table to the wrap width when collapsed, then let it grow
+   past that width when expanded so the wrap's overflow-x kicks in. */
+#cascadeTableWrap #cascadeTable { min-width: 100%; width: auto; }
 #cascadeTableWrap .cascade-header {
   display: flex; align-items: center; gap: 10px;
   padding: 4px 0 6px;
