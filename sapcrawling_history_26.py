@@ -66,13 +66,13 @@ from sapcrawling import (
 )
 
 
-# HIGH bound of the interface-date range.  Many SAP DATS-range
-# selection fields silently interpret a lone LOW as "anywhere
-# from LOW to today" — the first backfill run pulled the same
-# ~8900-row cross-section 8 times because HIGH was left empty
-# and SAP fell back to today's data every call.  Setting HIGH
-# equal to LOW turns the range into a single-day filter.
+# HIGH bound of the interface-date range.  Confirmed via
+# Technical Information on the live SAP layout: Dynpro Field is
+# S_IFDAT-HIGH.  Setting HIGH equal to LOW turns the range into
+# a single-day filter so SAP can't fall back to
+# 'LOW..today' behaviour.
 INTERFACE_DATE_HIGH_IDS = [
+    "wnd[0]/usr/ctxtS_IFDAT-HIGH",
     "wnd[0]/usr/ctxtS_DATE-HIGH",
     "wnd[0]/usr/ctxtS_INTFDT-HIGH",
 ]

@@ -64,7 +64,13 @@ ZSDM_FIELDS = {
     "plant":              ["wnd[0]/usr/ctxtP_WERKS",
                             "wnd[0]/usr/ctxtS_WERKS-LOW",
                             "wnd[0]/usr/ctxtWERKS-LOW"],
-    "interface_date":     ["wnd[0]/usr/ctxtS_DATE-LOW",
+    # Confirmed via Technical Information popup on the live SAP
+    # layout (screen 1000 of ZSDM64300): Dynpro Field is
+    # S_IFDAT-LOW.  Old guesses (S_DATE-LOW / P_DATE / S_INTFDT-LOW)
+    # never matched — every prior crawl silently fell back to
+    # SAP's default (today's data).
+    "interface_date":     ["wnd[0]/usr/ctxtS_IFDAT-LOW",
+                            "wnd[0]/usr/ctxtS_DATE-LOW",
                             "wnd[0]/usr/ctxtP_DATE",
                             "wnd[0]/usr/ctxtS_INTFDT-LOW"],
     # Radio "Display 3PL Interface Data" — usually a P_RADIO field.
