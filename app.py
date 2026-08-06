@@ -4307,6 +4307,180 @@ def api_stock_history():
         cur.close(); conn.close()
 
 
+# ─── Low-coverage warning list (Stock.idx ≤ threshold) ────────────────
+# Surfaces (line/pg/pattern/size × state) combos where today's
+# stock will last fewer than N months at recent sales velocity.
+# Same filter chips as the cascade table — clicking a warning
+# row on the frontend drills the cascade to that size, matching
+# how the size-row click already works.
+@app.get("/api/stock_warnings")
+def api_stock_warnings():
+    try:
+        threshold = float(request.args.get("threshold") or 1.5)
+    except Exception:
+        threshold = 1.5
+
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+    code       = (request.args.get("code")          or "").strip()
+
+    # Restrict to real product lines (matches cascade defaults).
+    wh     = ["c.line IN ('PCLT','TBR')",
+              "c.size IS NOT NULL", "TRIM(c.size) <> ''"]
+    params = []
+    if prod_group and prod_group != "ALL":
+        wh.append("c.product_group = %s"); params.append(prod_group)
+    if pattern:
+        wh.append("c.pattern LIKE %s");   params.append(f"%{pattern}%")
+    if material:
+        wh.append("c.size = %s");         params.append(material)
+    if code and code != "ALL":
+        wh.append("c.m_code = %s");       params.append(code)
+    if   category == "PCLT":   wh.append("c.line = 'PCLT'")
+    elif category == "TBR":    wh.append("c.line = 'TBR'")
+    elif category == "18PLUS":
+        wh.append("c.line = 'PCLT'")
+        wh.append("CAST(SUBSTRING_INDEX(c.size,'R',-1) AS DECIMAL(5,2)) >= 18.0")
+
+    inner_wh = " AND ".join(w.replace("c.", "") for w in wh) or "1=1"
+
+    # State ↔ plant mapping, same as the cascade table.
+    PLANT_STATE = {"42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA"}
+    STATE_ORDER = ["NSW","QLD","VIC","WA"]
+    STATE_REMAP = {"SA":"VIC","NT":"WA","TAS":"VIC","ACT":"NSW"}
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        DEDUP = (
+            "(SELECT m_code, "
+            " MIN(line)          AS line, "
+            " MIN(product_group) AS product_group, "
+            " MIN(pattern)       AS pattern, "
+            " MIN(size)          AS size "
+            f"FROM carrying_26 WHERE {inner_wh} "
+            " GROUP BY m_code)")
+
+        # ── Stock at (line,pg,pattern,size,state) ─────────────────
+        cur.execute(
+            f"SELECT c.line, c.product_group, c.pattern, c.size, "
+            f"       s.plant, SUM(s.stock_qty) AS q "
+            f"FROM stock s JOIN {DEDUP} c ON c.m_code = s.material "
+            f"WHERE s.stock_qty > 0 "
+            f"GROUP BY c.line, c.product_group, c.pattern, c.size, s.plant",
+            params)
+        # rows[(line,pg,pattern,size,state)] = {"stock": q, "s3":0, "s6":0, "s12":0}
+        rows = {}
+        for r in cur.fetchall():
+            st = PLANT_STATE.get(r["plant"])
+            if not st: continue
+            key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
+            d = rows.setdefault(key, {"stock":0.0,"s3":0.0,"s6":0.0,"s12":0.0})
+            d["stock"] += float(r["q"] or 0)
+
+        # Latest sales month drives the rolling window (same source
+        # of truth as the cascade table).
+        cur.execute("SELECT MAX(YEAR(billing_date)*100 + MONTH(billing_date)) AS ym FROM sales_2526")
+        r = cur.fetchone() or {}
+        latest_ym = int(r.get("ym") or 0)
+        if latest_ym:
+            latest_y, latest_m = latest_ym // 100, latest_ym % 100
+            def _months_back(n):
+                out = []; y, m = latest_y, latest_m
+                for _ in range(n):
+                    out.append((y, m))
+                    m -= 1
+                    if m == 0: m = 12; y -= 1
+                return out
+            def _period_clause(periods, alias="s"):
+                if not periods: return "1=0"
+                parts = []
+                for y, m in periods:
+                    first = f"{y}-{m:02d}-01"
+                    ny, nm = (y+1, 1) if m == 12 else (y, m+1)
+                    nxt   = f"{ny}-{nm:02d}-01"
+                    parts.append(
+                        f"({alias}.billing_date >= '{first}' "
+                        f"AND {alias}.billing_date < '{nxt}')")
+                return "(" + " OR ".join(parts) + ")"
+
+            sales_joins = (
+                f"JOIN {DEDUP} mat ON mat.m_code = s.material "
+                f"JOIN ("
+                f"  SELECT ship_to, MIN(bde_state) AS bde_state "
+                f"  FROM customer "
+                f"  WHERE bde_state IS NOT NULL AND bde_state != 'COMMON' "
+                f"  GROUP BY ship_to"
+                f") cus ON cus.ship_to = s.ship_to")
+
+            for label, periods in (("s3",  _months_back(3)),
+                                   ("s6",  _months_back(6)),
+                                   ("s12", _months_back(12))):
+                n_months = {"s3":3, "s6":6, "s12":12}[label]
+                pcond = _period_clause(periods, "s")
+                cur.execute(
+                    f"SELECT mat.line, mat.product_group, mat.pattern, mat.size, "
+                    f"       cus.bde_state AS state, SUM(s.qty) AS qty "
+                    f"FROM sales_2526 s {sales_joins} "
+                    f"WHERE {pcond} "
+                    f"GROUP BY mat.line, mat.product_group, mat.pattern, mat.size, cus.bde_state",
+                    params + params)   # DEDUP appears twice → params twice
+                for r in cur.fetchall():
+                    st = r["state"]
+                    if not st or st == "COMMON": continue
+                    st = STATE_REMAP.get(st, st)
+                    if st not in STATE_ORDER: continue
+                    key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
+                    d = rows.setdefault(key, {"stock":0.0,"s3":0.0,"s6":0.0,"s12":0.0})
+                    d[label] += float(r["qty"] or 0) / n_months
+
+        # Compute Stock.idx per row and keep the ones below threshold.
+        # A row with stock but no sales (idx = ∞) is still worth
+        # surfacing as "unmoving"? — user asked for low coverage
+        # meaning near-stockout, so we skip idx = ∞ (dead stock)
+        # and only warn on rows with real sales velocity.
+        out = []
+        for (line, pg, pat, size, st), d in rows.items():
+            base = (d["s3"] + d["s6"] + d["s12"]) / 3.0
+            stock = d["stock"]
+            if base <= 0:                       # no recent sales → skip
+                continue
+            idx = stock / base
+            if idx > threshold:                 # comfortably covered
+                continue
+            out.append({
+                "line":         line,
+                "product_group":pg,
+                "pattern":      pat,
+                "size":         size,
+                "state":        st,
+                "stock_qty":    round(stock, 0),
+                "base_sales":   round(base, 1),
+                "stock_idx":    round(idx, 2),
+            })
+        # Lowest idx first — that's the most urgent row.
+        out.sort(key=lambda r: (r["stock_idx"], -r["base_sales"]))
+
+        # Small helper aggregates so the UI can chip-count per state
+        # without re-scanning `out`.
+        by_state = {st: 0 for st in STATE_ORDER}
+        for r in out:
+            by_state[r["state"]] = by_state.get(r["state"], 0) + 1
+
+        return jsonify({
+            "threshold": threshold,
+            "rows":      out,
+            "count":     len(out),
+            "by_state":  by_state,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+
 # ─── Aging bucket helpers (shared with /api/stock_aging) ──────────────
 _AGING_BUCKETS = ["≤12M", "13-18M", "19-24M", "25-36M", "37M+"]
 

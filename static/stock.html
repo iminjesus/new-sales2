@@ -164,6 +164,14 @@
         <div class="cascade-header">
           <span id="cascadeCrumb">All › Line</span>
           <button id="cascadeBack" type="button" style="display:none;">← Back</button>
+          <!-- Toggle: replaces the cascade body with just the (size × state)
+               rows whose Stock.idx ≤ 1.5 mo — the "about to stock out"
+               list.  Same interaction as a normal size row: click a row
+               to drill the cascade to that size. -->
+          <button id="lowStockBtn" type="button" title="Show only sizes with Stock.idx ≤ 1.5 months">
+            ⚠ Low stock warning
+          </button>
+          <span id="lowStockCount"></span>
         </div>
         <table id="cascadeTable">
           <thead>

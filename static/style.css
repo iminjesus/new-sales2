@@ -1180,6 +1180,28 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #cascadeTableWrap .cascade-header #cascadeBack:hover {
   background: #fde68a; border-color: #d97706;
 }
+#cascadeTableWrap .cascade-header #lowStockBtn {
+  margin-left: auto; font-size: 11px; font-weight: 700;
+  background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b;
+  border-radius: 5px; padding: 3px 10px; cursor: pointer;
+}
+#cascadeTableWrap .cascade-header #lowStockBtn:hover {
+  background: #fecaca; border-color: #ef4444;
+}
+#cascadeTableWrap .cascade-header #lowStockBtn.active {
+  background: #dc2626; color: #fff; border-color: #b91c1c;
+}
+#cascadeTableWrap .cascade-header #lowStockCount {
+  font-size: 11px; color: #b91c1c; font-weight: 700;
+}
+/* Warning rows — Stock.idx colour scale (deep red near-stockout →
+   amber "tight but ok"). */
+#cascadeTable tr.warn-crit td.st-pipe   { color: #b91c1c; font-weight: 700; }
+#cascadeTable tr.warn-high td.st-pipe   { color: #c2410c; font-weight: 700; }
+#cascadeTable tr.warn-med  td.st-pipe   { color: #b45309; font-weight: 700; }
+#cascadeTable tr.warn-crit td.cas-state { color: #b91c1c; font-weight: 700; }
+#cascadeTable tr.warn-high td.cas-state { color: #c2410c; font-weight: 700; }
+#cascadeTable tr.warn-med  td.cas-state { color: #b45309; font-weight: 700; }
 
 #cascadeTable {
   width: 100%; border-collapse: collapse; font-size: 14px;

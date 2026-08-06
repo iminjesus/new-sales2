@@ -670,7 +670,13 @@
     if (th) th.textContent = CASCADE_LABEL[cascadeState.level];
   }
 
+  // Low-stock-warning mode: when on, the cascade body is replaced
+  // with just the (line › pg › pattern › size × state) rows whose
+  // Stock.idx ≤ 1.5 mo.  Same table, same columns, filtered content.
+  let _lowStockOn = false;
+
   async function fetchAndRenderCascadeTable(){
+    if (_lowStockOn) { await renderLowStockRows(); return; }
     _renderCascadeCrumb();
     _renderCascadeHeader();
     const tbody = document.getElementById("cascadeTableBody");
@@ -820,6 +826,79 @@
       <td class="st-pipe">${tpipeSWF}</td>
     </tr>`;
   }
+
+  // ── Low-stock warning body ──────────────────────────────────────
+  // Same cascade table, filtered content: one row per
+  // (line › pg › pattern › size × state) whose Stock.idx ≤ 1.5.
+  // Water / CY / Factory columns show '—' since the warning
+  // endpoint doesn't compute those (we only need stock + base +
+  // Stock.idx to make the warn/no-warn call).
+  async function renderLowStockRows(){
+    const tbody = document.getElementById("cascadeTableBody");
+    const tfoot = document.getElementById("cascadeTableFoot");
+    const crumb = document.getElementById("cascadeCrumb");
+    const back  = document.getElementById("cascadeBack");
+    const bkTh  = document.getElementById("cascadeBucketTh");
+    if (!tbody || !tfoot) return;
+    if (crumb) crumb.textContent = "⚠ Low stock warning";
+    if (back)  back.style.display = "none";
+    if (bkTh)  bkTh.textContent = "Line › PG › Pattern › Size";
+    const _colspan = _cascadeColspan();
+    tbody.innerHTML = `<tr><td colspan="${_colspan}" class="st-loading">Loading…</td></tr>`;
+    tfoot.innerHTML = "";
+
+    const qs = buildQueryParams({ threshold: 1.5 });
+    const d  = await fetchJSON(`/api/stock_warnings?${qs}`);
+    const rows = (d && d.rows) || [];
+    const countEl = document.getElementById("lowStockCount");
+    if (countEl) countEl.textContent = rows.length
+      ? `— ${rows.length} row${rows.length===1?"":"s"}`
+      : "— none";
+    if (!rows.length) {
+      tbody.innerHTML = `<tr><td colspan="${_colspan}" class="st-loading">
+        No sizes with Stock.idx ≤ 1.5 for the current filter.
+      </td></tr>`;
+      return;
+    }
+    // Colour scale by urgency.
+    const warnCls = idx => idx <= 0.5 ? "warn-crit"
+                        :  idx <= 1.0 ? "warn-high"
+                        :  "warn-med";
+    const dash = `<td class="st-qty">—</td>`;
+    const html = rows.map(r => {
+      const label = [r.line, r.product_group, r.pattern, r.size]
+                    .filter(x => x && String(x).trim()).join(" › ");
+      // Empty Stock aging cells when the ▸ Stock header is expanded
+      // — keep the layout aligned but visually blank.
+      const stkPart = _agingExpanded
+        ? (_AGING_BUCKETS.map(() => `<td class="st-qty aging-cell"></td>`).join("")
+           + `<td class="st-qty aging-cell" style="background:#e0e7ff;font-weight:600;">${fmtQty(r.stock_qty)}</td>`)
+        : `<td class="st-qty">${fmtQty(r.stock_qty)}</td>`;
+      // Data-* attributes so a click can drill the cascade to that
+      // exact size (same interaction the normal size-row click has).
+      return `
+        <tr class="cascade-clickable ${warnCls(r.stock_idx)}"
+            data-warn-line="${escAttr(r.line)}"
+            data-warn-pg="${escAttr(r.product_group)}"
+            data-warn-pattern="${escAttr(r.pattern)}"
+            data-warn-size="${escAttr(r.size)}">
+          <td class="cas-bucket">${escHtml(label)}</td>
+          <td class="cas-state">${r.state}</td>
+          <td>—</td><td>—</td><td>—</td>
+          <td class="st-base">${fmtQty(r.base_sales)}</td>
+          ${stkPart}
+          ${dash}${dash}${dash}
+          <td class="st-pipe">${r.stock_idx.toFixed(1)} mo</td>
+          <td class="st-pipe">—</td>
+          <td class="st-pipe">—</td>
+        </tr>
+      `;
+    }).join("");
+    tbody.innerHTML = html;
+  }
+  function escHtml(s){ return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function escAttr(s){ return escHtml(s).replace(/"/g,"&quot;"); }
 
   // Reverse direction of _syncPageFiltersFromCascade: when the user
   // narrows via the search/dropdowns (product_group / pattern /
@@ -996,10 +1075,46 @@
       e.stopPropagation();
       return;
     }
-    const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
-    if (row && row.dataset.bucket != null) {
-      _cascadeAdvance(row.dataset.bucket);
+    // ⚠ Low stock warning chip → swap the cascade body for the
+    // warning list (or back).
+    if (e.target && e.target.id === "lowStockBtn") {
+      _lowStockOn = !_lowStockOn;
+      e.target.classList.toggle("active", _lowStockOn);
+      if (!_lowStockOn) {
+        const c = document.getElementById("lowStockCount");
+        if (c) c.textContent = "";
+      }
+      fetchAndRenderCascadeTable();
       return;
+    }
+    const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
+    if (row) {
+      // Warning-mode row: drill the cascade to that exact size and
+      // exit warning mode so the drill lands on the normal Size view.
+      if (row.dataset.warnSize != null) {
+        _lowStockOn = false;
+        const btn = document.getElementById("lowStockBtn");
+        if (btn) btn.classList.remove("active");
+        const countEl = document.getElementById("lowStockCount");
+        if (countEl) countEl.textContent = "";
+        // Set the size filter directly — same effect as clicking a
+        // size row in the normal cascade — then let
+        // _syncCascadeFromFilters snap the cascade to the size's
+        // ancestors before we re-render.
+        state.material = row.dataset.warnSize || "ALL";
+        const matEl = document.getElementById("material");
+        if (matEl) { matEl.value = state.material === "ALL" ? "" : state.material;
+                     ddUpdateActive(matEl); }
+        (async () => {
+          await _syncCascadeFromFilters();
+          await fetchAndRender();
+        })();
+        return;
+      }
+      if (row.dataset.bucket != null) {
+        _cascadeAdvance(row.dataset.bucket);
+        return;
+      }
     }
     if (e.target && e.target.id === "cascadeBack") _cascadeBack();
   });
