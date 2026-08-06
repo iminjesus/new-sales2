@@ -1028,6 +1028,9 @@
   // from wherever we already fetch the stock history so the two
   // views stay in sync with the current filter set.
   let _agingHistoryOn         = false;
+  // Region chip in the chart header — 'ALL' or one of NSW/QLD/VIC/WA.
+  // Applies to both the line chart and the aging bars.
+  let _historyState           = "ALL";
   // Same palette the /stock aging popover uses so the two views
   // read consistently (green fresh → deep red 37M+).
   const _AGING_BAR_COLORS = {
@@ -1044,8 +1047,11 @@
     if (!canvas || typeof Chart === "undefined") return;
     const hint = document.getElementById("stockHistoryHint");
     if (hint) hint.textContent = "loading…";
-    const params = buildQueryParams();
-    const qs = _agingHistoryOn ? (params + "&with_aging=1") : params;
+    const parts = [buildQueryParams()];
+    if (_agingHistoryOn)              parts.push("with_aging=1");
+    if (_historyState && _historyState !== "ALL")
+                                      parts.push("state=" + encodeURIComponent(_historyState));
+    const qs = parts.join("&");
     const d  = await fetchJSON(`/api/stock_history?${qs}`);
     if (!d) { if (hint) hint.textContent = "load failed"; return; }
     const months = d.months || [];
@@ -1179,6 +1185,26 @@
         btn.textContent = (_agingHistoryOn ? "◂ Aging" : "▸ Aging");
         // Refresh — the fetch adds ?with_aging=1 when the flag
         // is on so we don't pay the extra grouping cost otherwise.
+        fetchAndRenderStockHistory();
+      });
+    }
+  }
+
+  // Wire the region-chip row (All / NSW / QLD / VIC / WA) in the
+  // history header.  A click just flips _historyState and re-fetches
+  // — both the line chart and the aging bars pick up the same filter
+  // via the shared fetchAndRenderStockHistory path.
+  {
+    const seg = document.getElementById("stockHistoryStateSeg");
+    if (seg) {
+      seg.addEventListener("click", (e) => {
+        const btn = e.target.closest(".hist-st-btn");
+        if (!btn) return;
+        const val = btn.dataset.st || "ALL";
+        if (val === _historyState) return;   // no-op click on active chip
+        _historyState = val;
+        seg.querySelectorAll(".hist-st-btn").forEach(b =>
+          b.classList.toggle("active", b === btn));
         fetchAndRenderStockHistory();
       });
     }

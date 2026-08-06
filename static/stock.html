@@ -200,6 +200,16 @@
           <button type="button" id="stockAgingToggle" class="ag-toggle" title="Add aging-bucket breakdown">
             ▸ Aging
           </button>
+          <!-- Region chip: filter both the line chart and the aging
+               bars to a single state's warehouse.  Each state maps to
+               one 3PL plant (NSW=42R1, QLD=42R0, VIC=42R2, WA=42R4). -->
+          <div id="stockHistoryStateSeg" class="hist-state-seg">
+            <button type="button" class="hist-st-btn active" data-st="ALL">All</button>
+            <button type="button" class="hist-st-btn" data-st="NSW">NSW</button>
+            <button type="button" class="hist-st-btn" data-st="QLD">QLD</button>
+            <button type="button" class="hist-st-btn" data-st="VIC">VIC</button>
+            <button type="button" class="hist-st-btn" data-st="WA">WA</button>
+          </div>
           <span id="stockHistoryHint"></span>
         </div>
         <div class="stock-history-canvasWrap">

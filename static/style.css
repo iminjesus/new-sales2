@@ -1287,6 +1287,21 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #stockHistoryWrap #stockAgingToggle.active {
   background: #1d4ed8; color: #fff; border-color: #1e40af;
 }
+#stockHistoryWrap .hist-state-seg {
+  display: inline-flex; gap: 3px; margin-left: 4px;
+}
+#stockHistoryWrap .hist-st-btn {
+  font-size: 10px; line-height: 14px; padding: 1px 8px;
+  background: #f3f4f6; color: #374151;
+  border: 1px solid #d1d5db; border-radius: 3px;
+  cursor: pointer; font-weight: 600;
+}
+#stockHistoryWrap .hist-st-btn:hover {
+  background: #e5e7eb; border-color: #9ca3af;
+}
+#stockHistoryWrap .hist-st-btn.active {
+  background: #1e3a8a; color: #fff; border-color: #1e40af;
+}
 #stockHistoryWrap #stockHistoryHint {
   margin-left: auto; font-size: 10px; color: #9ca3af;
   font-style: italic;

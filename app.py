@@ -4104,6 +4104,7 @@ def api_stock_history():
     pattern    = (request.args.get("pattern")       or "").strip()
     material   = (request.args.get("material")      or "").strip()
     code       = (request.args.get("code")          or "").strip()
+    state      = (request.args.get("state")         or "ALL").strip().upper()
     with_aging = (request.args.get("with_aging") or "").strip() in ("1","true","yes")
 
     plants_param = (request.args.get("plants") or "").strip()
@@ -4112,6 +4113,15 @@ def api_stock_history():
     else:
         plants = ["42R0", "42R1", "42R2", "42R4"]
     plants = [p for p in plants if p in PLANT_GEO]
+
+    # Region chip on the chart: narrow to just the matching plant
+    # (each state has one 3PL warehouse — 42R1=NSW / 42R0=QLD /
+    # 42R2=VIC / 42R4=WA).  Sales get the same narrowing via
+    # sales_2526.state below.
+    _STATE_TO_PLANT_CHART = {"NSW":"42R1","QLD":"42R0","VIC":"42R2","WA":"42R4"}
+    if state in _STATE_TO_PLANT_CHART:
+        one = _STATE_TO_PLANT_CHART[state]
+        plants = [p for p in plants if p == one] or [one]
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
@@ -4199,6 +4209,9 @@ def api_stock_history():
         )
         if sa_wh:
             sales_sql += " AND " + " AND ".join(sa_wh)
+        if state in _STATE_TO_PLANT_CHART:
+            sales_sql += " AND ss.state = %s"
+            sa_params = list(sa_params) + [state]
         sales_sql += (" GROUP BY YEAR(ss.billing_date), MONTH(ss.billing_date) "
                       "ORDER BY y, m")
         cur.execute(sales_sql, sa_params)
