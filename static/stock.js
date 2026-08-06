@@ -1016,6 +1016,89 @@
     drawYearlySales(yearRows || []);
   }
 
+  // ── Monthly stock-vs-sales history chart ───────────────────────
+  // Reads /api/stock_history (backed by the `stock_history` table
+  // that sapcrawling_history_26.py populates + sales_2526 for the
+  // sell-out leg). One canvas, two datasets, twin y-axes because
+  // month-start stock and single-month sales sit on very
+  // different scales.
+  let _stockHistoryChart = null;
+  async function fetchAndRenderStockHistory(){
+    const canvas = document.getElementById("stockHistoryChart");
+    if (!canvas || typeof Chart === "undefined") return;
+    const hint = document.getElementById("stockHistoryHint");
+    if (hint) hint.textContent = "loading…";
+    const qs = buildQueryParams();
+    const d  = await fetchJSON(`/api/stock_history?${qs}`);
+    if (!d) { if (hint) hint.textContent = "load failed"; return; }
+    const months = d.months || [];
+    if (hint) {
+      hint.textContent = d.warning
+        ? d.warning
+        : (months.length + " month" + (months.length === 1 ? "" : "s"));
+    }
+    if (_stockHistoryChart) { _stockHistoryChart.destroy(); _stockHistoryChart = null; }
+    if (!months.length) {
+      // Nothing to plot — leave the canvas blank so the panel
+      // doesn't look broken.
+      const ctx = canvas.getContext && canvas.getContext("2d");
+      if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    _stockHistoryChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: months.map(m => m.label || m.snapshot_date),
+        datasets: [
+          {
+            label: "Stock (month start)",
+            data:  months.map(m => m.stock_qty),
+            borderColor: "#3b82f6",
+            backgroundColor: "rgba(59,130,246,0.15)",
+            fill: true, tension: 0.25, yAxisID: "y",
+            pointRadius: 3, pointHoverRadius: 5,
+          },
+          {
+            label: "Sales (that month)",
+            data:  months.map(m => m.sales_qty),
+            borderColor: "#f97316",
+            backgroundColor: "rgba(249,115,22,0.10)",
+            fill: false, tension: 0.25, yAxisID: "y1",
+            pointRadius: 3, pointHoverRadius: 5,
+          },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom",
+                    labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) =>
+                `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}`,
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { font: { size: 10 } } },
+          y:  { type: "linear", position: "left",
+                title: { display: true, text: "Stock",
+                         font: { size: 10 }, color: "#3b82f6" },
+                ticks: { font: { size: 10 },
+                         callback: v => Number(v).toLocaleString() } },
+          y1: { type: "linear", position: "right",
+                title: { display: true, text: "Sales",
+                         font: { size: 10 }, color: "#f97316" },
+                grid: { drawOnChartArea: false },
+                ticks: { font: { size: 10 },
+                         callback: v => Number(v).toLocaleString() } },
+        },
+      },
+    });
+  }
+
   // ---------------------- main fetch ----------------------
   async function fetchAndRender(){
     setStatus("Loading…");
@@ -1068,6 +1151,12 @@
       // (NSW / QLD / VIC / WA) underneath itself so the separate State
       // table on top is no longer needed.
       await fetchAndRenderCascadeTable();
+
+      // Monthly history line chart under the cascade — same filter
+      // chips so the two views move together.  Non-blocking: it
+      // takes a few hundred ms so we don't await it in the critical
+      // path.
+      fetchAndRenderStockHistory();
 
       setStatus(
         `Done. Stock: ${(stockRes?.rows||[]).length}, ` +

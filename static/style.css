@@ -1258,3 +1258,27 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #cascadeTable tfoot td.aging-cell {
   padding-left: 6px; padding-right: 6px;
 }
+
+/* ── Monthly history chart (stock_history + sales_2526) ── */
+#stockHistoryWrap {
+  margin-top: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+}
+#stockHistoryWrap .stock-history-head {
+  display: flex; align-items: baseline; margin-bottom: 6px;
+}
+#stockHistoryWrap .stock-history-head h4 {
+  margin: 0; font-size: 12px; color: #6b7280;
+  font-weight: 700; letter-spacing: 0.02em;
+}
+#stockHistoryWrap #stockHistoryHint {
+  margin-left: auto; font-size: 10px; color: #9ca3af;
+  font-style: italic;
+}
+#stockHistoryWrap .stock-history-canvasWrap {
+  height: 220px; position: relative;
+}

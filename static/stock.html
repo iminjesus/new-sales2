@@ -189,6 +189,20 @@
           <tfoot id="cascadeTableFoot"></tfoot>
         </table>
       </div>
+
+      <!-- Monthly history: month-start stock vs the same month's
+           HK+LF sell-out. Backed by stock_history (populated by
+           sapcrawling_history_26.py) + sales_2526.  Reacts to the
+           same filter chips as the cascade above. -->
+      <div id="stockHistoryWrap">
+        <div class="stock-history-head">
+          <h4>Monthly History — Stock (month start) vs Sales (that month)</h4>
+          <span id="stockHistoryHint"></span>
+        </div>
+        <div class="stock-history-canvasWrap">
+          <canvas id="stockHistoryChart"></canvas>
+        </div>
+      </div>
     </div>
   </div>
 

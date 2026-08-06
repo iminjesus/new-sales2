@@ -4088,6 +4088,146 @@ def api_stock():
         conn.close()
 
 
+# ─── Historical stock + sales (monthly time series) ────────────────────
+# Feeds the /stock page's line chart.  Two series per month:
+#   • stock_qty  — SUM(stock_history.stock_qty) at that month's 1st
+#                  (loaded by sapcrawling_history_26.py).
+#   • sales_qty  — SUM(sales_2526.qty) for HK+LF billed within that
+#                  same calendar month.
+# Same filter chips as /api/stock (category / product_group /
+# pattern / size / code) so the chart tracks whatever the user has
+# already narrowed the page to.
+@app.get("/api/stock_history")
+def api_stock_history():
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+    code       = (request.args.get("code")          or "").strip()
+
+    plants_param = (request.args.get("plants") or "").strip()
+    if plants_param:
+        plants = [p.strip().upper() for p in plants_param.split(",") if p.strip()]
+    else:
+        plants = ["42R0", "42R1", "42R2", "42R4"]
+    plants = [p for p in plants if p in PLANT_GEO]
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        # Bail gracefully if the backfill hasn't been run yet — the
+        # chart just renders empty instead of surfacing a 500.
+        cur.execute(
+            "SELECT COUNT(*) AS c FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'stock_history'")
+        row = cur.fetchone() or {}
+        if not row.get("c"):
+            return jsonify({"months": [],
+                            "warning": "stock_history not present yet — "
+                                       "run sapcrawling_history_26.py first."})
+
+        # Build the WHERE/JOIN suffix used by both queries.  Mirrors
+        # the /api/stock filter logic so the two views agree on what
+        # a chip narrows down to.  Aliases are parameters so the same
+        # helper works for stock_history (s/c) and sales_2526 (ss/cc).
+        def _filter_sql(alias_s, alias_c):
+            joins  = [f"JOIN carrying_26 {alias_c} "
+                      f"ON {alias_c}.m_code = {alias_s}.material"]
+            wh     = []
+            params = []
+            if prod_group and prod_group != "ALL":
+                wh.append(f"{alias_c}.product_group = %s"); params.append(prod_group)
+            if pattern:
+                wh.append(f"{alias_c}.pattern LIKE %s");   params.append(f"%{pattern}%")
+            if material:
+                wh.append(f"{alias_c}.size LIKE %s");      params.append(f"%{material}%")
+            if code and code != "ALL":
+                wh.append(f"{alias_c}.m_code = %s");       params.append(code)
+            if   category == "PCLT":   wh.append(f"{alias_c}.line = 'PCLT'")
+            elif category == "TBR":    wh.append(f"{alias_c}.line = 'TBR'")
+            elif category == "18PLUS":
+                wh.append(f"{alias_c}.line = 'PCLT'")
+                wh.append(f"CAST(SUBSTRING_INDEX({alias_c}.size, 'R', -1) "
+                          f"AS DECIMAL(5,2)) >= 18.0")
+            elif category == "ISEG":
+                joins.append(f"JOIN iseg i ON CAST(TRIM(i.Material) AS UNSIGNED) "
+                             f"= {alias_s}.material")
+            elif category == "SUV":
+                joins.append(f"JOIN suv suv ON suv.Pattern = {alias_c}.pattern")
+            elif category == "LOWPROFILE":
+                joins.append(f"JOIN lowprofile lp ON CAST(TRIM(lp.Material) AS UNSIGNED) "
+                             f"= {alias_s}.material")
+            # HK / LF / HM / 443 handled by the display or brand
+            # filter below — no extra join needed here.
+            return joins, wh, params
+
+        # ── Stock leg ───────────────────────────────────────────────
+        s_joins, s_wh, s_params = _filter_sql("s", "c")
+        stock_sql = (
+            f"SELECT s.snapshot_date, SUM(s.stock_qty) AS q "
+            f"FROM stock_history s "
+            + " ".join(s_joins) + " "
+            f"WHERE s.plant IN ({','.join(['%s'] * len(plants))})"
+        )
+        stock_params = list(plants) + s_params
+        if s_wh:
+            stock_sql += " AND " + " AND ".join(s_wh)
+        stock_sql += " GROUP BY s.snapshot_date ORDER BY s.snapshot_date"
+        cur.execute(stock_sql, stock_params)
+        stock_by_ym = {}
+        for r in cur.fetchall():
+            d = r.get("snapshot_date")
+            if not d: continue
+            stock_by_ym[d.strftime("%Y-%m")] = float(r.get("q") or 0)
+
+        # ── Sales leg ───────────────────────────────────────────────
+        sa_joins, sa_wh, sa_params = _filter_sql("ss", "cc")
+        # HK/LF chips narrow to just that brand; every other chip
+        # counts both (matches how sell-out sits in graph view).
+        brand_wh = "ss.brand IN ('HK','LF')"
+        if   category == "HK": brand_wh = "ss.brand = 'HK'"
+        elif category == "LF": brand_wh = "ss.brand = 'LF'"
+        sales_sql = (
+            f"SELECT YEAR(ss.billing_date)  AS y, "
+            f"       MONTH(ss.billing_date) AS m, "
+            f"       SUM(ss.qty)            AS q "
+            f"FROM sales_2526 ss "
+            + " ".join(sa_joins) + " "
+            f"WHERE ss.billing_date >= '2026-01-01' "
+            f"  AND {brand_wh} "
+            f"  AND ss.qty > 0"
+        )
+        if sa_wh:
+            sales_sql += " AND " + " AND ".join(sa_wh)
+        sales_sql += (" GROUP BY YEAR(ss.billing_date), MONTH(ss.billing_date) "
+                      "ORDER BY y, m")
+        cur.execute(sales_sql, sa_params)
+        sales_by_ym = {}
+        for r in cur.fetchall():
+            y, m = r.get("y"), r.get("m")
+            if not y or not m: continue
+            sales_by_ym[f"{int(y):04d}-{int(m):02d}"] = float(r.get("q") or 0)
+
+        # ── Merge on union of months, sorted chronologically ────────
+        _MN = ["", "Jan","Feb","Mar","Apr","May","Jun",
+               "Jul","Aug","Sep","Oct","Nov","Dec"]
+        months = sorted(set(stock_by_ym) | set(sales_by_ym))
+        out = []
+        for ym in months:
+            yy, mm = int(ym[:4]), int(ym[5:7])
+            out.append({
+                "snapshot_date": f"{ym}-01",
+                "label":         f"{_MN[mm]} {yy}",
+                "stock_qty":     round(stock_by_ym.get(ym, 0), 1),
+                "sales_qty":     round(sales_by_ym.get(ym, 0), 1),
+            })
+        return jsonify({"months": out})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+
 # ─── Aging bucket helpers (shared with /api/stock_aging) ──────────────
 _AGING_BUCKETS = ["≤12M", "13-18M", "19-24M", "25-36M", "37M+"]
 
