@@ -4208,9 +4208,16 @@ def api_stock_history():
             sales_by_ym[f"{int(y):04d}-{int(m):02d}"] = float(r.get("q") or 0)
 
         # ── Merge on union of months, sorted chronologically ────────
+        # Drop the *current* calendar month — its sales row is only a
+        # partial-month snapshot (we're only N days into it) so
+        # plotting it next to fully-closed months makes it look like
+        # a huge dip.  We show months up to and including (current - 1).
         _MN = ["", "Jan","Feb","Mar","Apr","May","Jun",
                "Jul","Aug","Sep","Oct","Nov","Dec"]
-        months = sorted(set(stock_by_ym) | set(sales_by_ym))
+        from datetime import date as _date
+        _today = _date.today()
+        _cur_ym = f"{_today.year:04d}-{_today.month:02d}"
+        months = sorted((set(stock_by_ym) | set(sales_by_ym)) - {_cur_ym})
         out = []
         for ym in months:
             yy, mm = int(ym[:4]), int(ym[5:7])
