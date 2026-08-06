@@ -197,10 +197,25 @@
       <div id="stockHistoryWrap">
         <div class="stock-history-head">
           <h4>Monthly History — Stock (month start) vs Sales (that month)</h4>
+          <button type="button" id="stockAgingToggle" class="ag-toggle" title="Add aging-bucket breakdown">
+            ▸ Aging
+          </button>
           <span id="stockHistoryHint"></span>
         </div>
         <div class="stock-history-canvasWrap">
           <canvas id="stockHistoryChart"></canvas>
+        </div>
+        <!-- Optional aging stacked-bar sibling — hidden until
+             the ▸ Aging chip is clicked.  Shares the same x
+             labels (months) as the line chart above so the two
+             read together. -->
+        <div id="stockAgingHistoryWrap" hidden>
+          <div class="stock-history-subhead">
+            Stock composition by DOT age (as of each month start)
+          </div>
+          <div class="stock-history-canvasWrap">
+            <canvas id="stockAgingHistoryChart"></canvas>
+          </div>
         </div>
       </div>
     </div>

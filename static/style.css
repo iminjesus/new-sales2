@@ -1269,11 +1269,23 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
   flex-shrink: 0;
 }
 #stockHistoryWrap .stock-history-head {
-  display: flex; align-items: baseline; margin-bottom: 6px;
+  display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px;
 }
 #stockHistoryWrap .stock-history-head h4 {
   margin: 0; font-size: 12px; color: #6b7280;
   font-weight: 700; letter-spacing: 0.02em;
+}
+#stockHistoryWrap #stockAgingToggle {
+  font-size: 10px; line-height: 14px; padding: 1px 8px;
+  background: #dbeafe; color: #1d4ed8;
+  border: 1px solid #93c5fd; border-radius: 3px;
+  cursor: pointer; font-weight: 600;
+}
+#stockHistoryWrap #stockAgingToggle:hover {
+  background: #bfdbfe; border-color: #60a5fa;
+}
+#stockHistoryWrap #stockAgingToggle.active {
+  background: #1d4ed8; color: #fff; border-color: #1e40af;
 }
 #stockHistoryWrap #stockHistoryHint {
   margin-left: auto; font-size: 10px; color: #9ca3af;
@@ -1281,4 +1293,8 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 }
 #stockHistoryWrap .stock-history-canvasWrap {
   height: 220px; position: relative;
+}
+#stockHistoryWrap .stock-history-subhead {
+  margin-top: 10px; margin-bottom: 4px;
+  font-size: 11px; color: #6b7280; font-weight: 600;
 }

@@ -1022,13 +1022,30 @@
   // sell-out leg). One canvas, two datasets, twin y-axes because
   // month-start stock and single-month sales sit on very
   // different scales.
-  let _stockHistoryChart = null;
+  let _stockHistoryChart      = null;
+  let _stockAgingHistoryChart = null;
+  // The ▸ Aging toggle just flips this; the fetch/render is kicked
+  // from wherever we already fetch the stock history so the two
+  // views stay in sync with the current filter set.
+  let _agingHistoryOn         = false;
+  // Same palette the /stock aging popover uses so the two views
+  // read consistently (green fresh → deep red 37M+).
+  const _AGING_BAR_COLORS = {
+    "≤12M":    "#22c55e",
+    "13-18M":  "#84cc16",
+    "19-24M":  "#eab308",
+    "25-36M":  "#f97316",
+    "37M+":    "#dc2626",
+    "unknown": "#94a3b8",
+  };
+  const _AGING_BAR_ORDER = ["≤12M","13-18M","19-24M","25-36M","37M+","unknown"];
   async function fetchAndRenderStockHistory(){
     const canvas = document.getElementById("stockHistoryChart");
     if (!canvas || typeof Chart === "undefined") return;
     const hint = document.getElementById("stockHistoryHint");
     if (hint) hint.textContent = "loading…";
-    const qs = buildQueryParams();
+    const params = buildQueryParams();
+    const qs = _agingHistoryOn ? (params + "&with_aging=1") : params;
     const d  = await fetchJSON(`/api/stock_history?${qs}`);
     if (!d) { if (hint) hint.textContent = "load failed"; return; }
     const months = d.months || [];
@@ -1091,6 +1108,80 @@
         },
       },
     });
+
+    // Aging companion: same x labels, stacked bars per bucket.
+    renderStockAgingHistory(d.aging || []);
+  }
+
+  function renderStockAgingHistory(aging){
+    const wrap   = document.getElementById("stockAgingHistoryWrap");
+    const canvas = document.getElementById("stockAgingHistoryChart");
+    if (!wrap || !canvas) return;
+    // Hidden unless the ▸ Aging chip is on.
+    wrap.hidden = !_agingHistoryOn;
+    if (_stockAgingHistoryChart) {
+      _stockAgingHistoryChart.destroy();
+      _stockAgingHistoryChart = null;
+    }
+    if (!_agingHistoryOn || !aging.length) return;
+
+    // One dataset per bucket; stacked on the same y so the bar
+    // height is the total stock and the coloured segments show
+    // how the mix ages over time.
+    const datasets = _AGING_BAR_ORDER
+      .filter(b => aging.some(m => (m.buckets || {})[b] > 0))
+      .map(b => ({
+        label: b,
+        data:  aging.map(m => (m.buckets || {})[b] || 0),
+        backgroundColor: _AGING_BAR_COLORS[b],
+        borderColor:     _AGING_BAR_COLORS[b],
+        borderWidth: 1,
+        stack: "stock",
+      }));
+    _stockAgingHistoryChart = new Chart(canvas, {
+      type: "bar",
+      data: { labels: aging.map(m => m.label || m.snapshot_date), datasets },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "bottom",
+                    labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) =>
+                `${ctx.dataset.label}: ${Math.round(ctx.parsed.y).toLocaleString()}`,
+              footer: (items) => {
+                const tot = items.reduce((s, it) => s + (it.parsed.y || 0), 0);
+                return `Total: ${Math.round(tot).toLocaleString()}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { stacked: true, ticks: { font: { size: 10 } } },
+          y: { stacked: true, beginAtZero: true,
+               ticks: { font: { size: 10 },
+                        callback: v => Number(v).toLocaleString() } },
+        },
+      },
+    });
+  }
+
+  // Wire the ▸ Aging toggle chip.  Deferred so the DOM is
+  // guaranteed to be there — this file loads with `defer`.
+  {
+    const btn = document.getElementById("stockAgingToggle");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        _agingHistoryOn = !_agingHistoryOn;
+        btn.classList.toggle("active", _agingHistoryOn);
+        btn.textContent = (_agingHistoryOn ? "◂ Aging" : "▸ Aging");
+        // Refresh — the fetch adds ?with_aging=1 when the flag
+        // is on so we don't pay the extra grouping cost otherwise.
+        fetchAndRenderStockHistory();
+      });
+    }
   }
 
   // ---------------------- main fetch ----------------------

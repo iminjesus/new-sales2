@@ -4104,6 +4104,7 @@ def api_stock_history():
     pattern    = (request.args.get("pattern")       or "").strip()
     material   = (request.args.get("material")      or "").strip()
     code       = (request.args.get("code")          or "").strip()
+    with_aging = (request.args.get("with_aging") or "").strip() in ("1","true","yes")
 
     plants_param = (request.args.get("plants") or "").strip()
     if plants_param:
@@ -4227,7 +4228,50 @@ def api_stock_history():
                 "stock_qty":     round(stock_by_ym.get(ym, 0), 1),
                 "sales_qty":     round(sales_by_ym.get(ym, 0), 1),
             })
-        return jsonify({"months": out})
+
+        # ── Optional aging breakdown per month ──────────────────────
+        # Aging is computed relative to each snapshot_date (a tyre
+        # made in Q1 2025 is <12M in Jan 2026 but 13-18M by Jul 2026),
+        # so we can't reuse the "as of today" bucket helper — group
+        # by dot_no in SQL and bucket in Python against each snap.
+        aging_out = []
+        if with_aging and months:
+            snap_dates = [f"{ym}-01" for ym in months]
+            placeholders = ",".join(["%s"] * len(snap_dates))
+            age_sql = (
+                f"SELECT s.snapshot_date, s.dot_no, "
+                f"       SUM(s.stock_qty) AS q "
+                f"FROM stock_history s "
+                + " ".join(s_joins) + " "
+                f"WHERE s.plant IN ({','.join(['%s'] * len(plants))}) "
+                f"  AND s.snapshot_date IN ({placeholders})"
+            )
+            age_params = list(plants) + snap_dates + s_params
+            if s_wh:
+                age_sql += " AND " + " AND ".join(s_wh)
+            age_sql += " GROUP BY s.snapshot_date, s.dot_no"
+            cur.execute(age_sql, age_params)
+            # buckets_by_ym["2026-01"] = {"≤12M": 0.0, "13-18M": 0.0, ...}
+            _EMPTY = lambda: {b: 0.0 for b in _AGING_BUCKETS + ["unknown"]}
+            buckets_by_ym = {ym: _EMPTY() for ym in months}
+            for r in cur.fetchall():
+                snap = r.get("snapshot_date")
+                if not snap: continue
+                ym = snap.strftime("%Y-%m")
+                if ym not in buckets_by_ym: continue
+                age = _dot_age_months_as_of(r.get("dot_no") or "", snap)
+                bucket = _age_bucket(age)
+                buckets_by_ym[ym][bucket] += float(r.get("q") or 0)
+            for ym in months:
+                yy, mm = int(ym[:4]), int(ym[5:7])
+                bkts = buckets_by_ym[ym]
+                aging_out.append({
+                    "snapshot_date": f"{ym}-01",
+                    "label":         f"{_MN[mm]} {yy}",
+                    "buckets":       {k: round(v, 1) for k, v in bkts.items()},
+                })
+
+        return jsonify({"months": out, "aging": aging_out})
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -4253,6 +4297,25 @@ def _dot_age_months(dot_str: str):
         d = datetime.fromisocalendar(year, week, 1).date()
         today = date.today()
         return (today.year - d.year) * 12 + (today.month - d.month)
+    except Exception:
+        return None
+
+def _dot_age_months_as_of(dot_str: str, ref_date):
+    """Age of a DOT WWYY tyre as of `ref_date` (a `date` object),
+    not today.  Needed for historical snapshots — a tyre made in Q1
+    2025 is <12M in Jan 2026 but 13-18M by Jul 2026."""
+    if not dot_str or len(dot_str) != 4 or not dot_str.isdigit():
+        return None
+    if ref_date is None:
+        return None
+    try:
+        week = int(dot_str[:2])
+        year = 2000 + int(dot_str[2:])
+        if week < 1 or week > 53:
+            return None
+        from datetime import datetime as _dt
+        d = _dt.fromisocalendar(year, week, 1).date()
+        return (ref_date.year - d.year) * 12 + (ref_date.month - d.month)
     except Exception:
         return None
 
