@@ -1212,6 +1212,27 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #cascadeTable tr.warn-high td.cas-state { color: #c2410c; font-weight: 700; }
 #cascadeTable tr.warn-med  td.cas-state { color: #b45309; font-weight: 700; }
 
+/* Warning rows are clickable — force a pointer cursor on every cell
+   of the row so the affordance is unmistakable even when hovering
+   the numeric columns (some browsers otherwise pick the number
+   caret from vertical-align:top). */
+#cascadeTable tbody tr.warn-crit,
+#cascadeTable tbody tr.warn-high,
+#cascadeTable tbody tr.warn-med { cursor: pointer; }
+#cascadeTable tbody tr.warn-crit td,
+#cascadeTable tbody tr.warn-high td,
+#cascadeTable tbody tr.warn-med td { cursor: pointer; }
+#cascadeTable tbody tr.warn-crit:hover td,
+#cascadeTable tbody tr.warn-high:hover td,
+#cascadeTable tbody tr.warn-med:hover td { background: #fef2f2; }
+
+/* Low-stock state chip: active state should match the warning
+   panel's red identity (the Monthly History chart's own state
+   chips stay blue via the more-general #stockHistoryWrap rule). */
+#lowStockStateSeg .hist-st-btn.active {
+  background: #dc2626; color: #fff; border-color: #b91c1c;
+}
+
 #cascadeTable {
   width: 100%; border-collapse: collapse; font-size: 14px;
   background: #fff; border: 1px solid #e5e7eb; border-radius: 7px;
