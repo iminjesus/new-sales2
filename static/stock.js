@@ -1148,8 +1148,16 @@
         cascadeState = { level:"line", line:"", pg:"", pat:"" };
       }
       _updateLowStockChrome();
-      if (_lowStockOn) fetchAndRenderCascadeTable();
-      else             fetchAndRender();
+      if (_lowStockOn) {
+        // Sequence — cascade populates _lowStockSCodes, then
+        // history picks it up and rescopes to that cohort.
+        (async () => {
+          await fetchAndRenderCascadeTable();
+          fetchAndRenderStockHistory();
+        })();
+      } else {
+        fetchAndRender();
+      }
       return;
     }
     // "← Show all stock" — full escape from the workflow.
