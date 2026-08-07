@@ -1118,15 +1118,26 @@
     }
     // ⚠ Low stock warning chip → enter / exit the warning workflow.
     if (e.target && e.target.id === "lowStockBtn") {
+      const wasDrilled = _lowStockOn && _lowStockDrilled;
       _lowStockOn = !_lowStockOn;
       // Toggling the button always returns to the warning LIST
       // (not the mid-drill view) so the chip behaves predictably.
       _lowStockDrilled = false;
-      if (!_lowStockOn) {
-        // Full exit — also drop any code filter the workflow set.
-        state.code = "ALL";
-        const cdEl = document.getElementById("code");
-        if (cdEl) { cdEl.value = ""; ddUpdateActive(cdEl); }
+      // If we're either fully exiting OR bouncing back to the
+      // warning list from a drilled view, drop the filters the
+      // drill/sync auto-applied — otherwise the list re-renders
+      // filtered to whatever ancestors the last drill locked in
+      // and reads empty.
+      if (!_lowStockOn || wasDrilled) {
+        state.code          = "ALL";
+        state.material      = "ALL";
+        state.pattern       = "ALL";
+        state.product_group = "ALL";
+        for (const id of ["code","material","pattern","product_group"]) {
+          const el = document.getElementById(id);
+          if (el) { el.value = ""; ddUpdateActive(el); }
+        }
+        cascadeState = { level:"line", line:"", pg:"", pat:"" };
       }
       _updateLowStockChrome();
       if (_lowStockOn) fetchAndRenderCascadeTable();
@@ -1134,12 +1145,21 @@
       return;
     }
     // "← Show all stock" — full escape from the workflow.
+    // Clears every narrowing filter (code + material + pattern +
+    // pg) so the cascade opens back at the line root, not filtered
+    // down to whatever the last drill left behind.
     if (e.target && e.target.id === "showAllStockBtn") {
       _lowStockOn      = false;
       _lowStockDrilled = false;
-      state.code       = "ALL";
-      const cdEl = document.getElementById("code");
-      if (cdEl) { cdEl.value = ""; ddUpdateActive(cdEl); }
+      state.code          = "ALL";
+      state.material      = "ALL";
+      state.pattern       = "ALL";
+      state.product_group = "ALL";
+      for (const id of ["code","material","pattern","product_group"]) {
+        const el = document.getElementById(id);
+        if (el) { el.value = ""; ddUpdateActive(el); }
+      }
+      cascadeState = { level:"line", line:"", pg:"", pat:"" };
       _updateLowStockChrome();
       fetchAndRender();
       return;
@@ -1186,12 +1206,22 @@
     if (e.target && e.target.id === "cascadeBack") {
       // In the low-stock workflow, Back returns to the warning
       // list (not the parent cascade level) so the reader lands
-      // back on the "about to stock out" set they drilled from.
+      // back on the same "about to stock out" set they drilled
+      // from — with the region chip they had picked preserved.
+      // Drilling into an s_code auto-sets PG / Pattern / Size via
+      // _syncCascadeFromFilters, so clear all four here or the
+      // warning list would come back filtered to "just the
+      // drilled row's ancestors" and read empty.
       if (_lowStockOn && _lowStockDrilled) {
         _lowStockDrilled = false;
-        state.code = "ALL";
-        const cdEl = document.getElementById("code");
-        if (cdEl) { cdEl.value = ""; ddUpdateActive(cdEl); }
+        state.code          = "ALL";
+        state.material      = "ALL";
+        state.pattern       = "ALL";
+        state.product_group = "ALL";
+        for (const id of ["code","material","pattern","product_group"]) {
+          const el = document.getElementById(id);
+          if (el) { el.value = ""; ddUpdateActive(el); }
+        }
         // Reset cascade to the line root so nothing stale carries
         // over the next time the workflow exits.
         cascadeState = { level:"line", line:"", pg:"", pat:"" };
