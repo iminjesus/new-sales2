@@ -887,6 +887,7 @@
         : `<td class="st-qty">${fmtQty(r.stock_qty)}</td>`;
       return `
         <tr class="cascade-clickable ${warnCls(r.stock_idx)}"
+            data-warn-scode="${escAttr(r.s_code)}"
             data-warn-line="${escAttr(r.line)}"
             data-warn-pg="${escAttr(r.product_group)}"
             data-warn-pattern="${escAttr(r.pattern)}"
@@ -1116,23 +1117,28 @@
     }
     const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
     if (row) {
-      // Warning-mode row: drill the cascade to that exact size and
-      // exit warning mode so the drill lands on the normal Size view.
-      if (row.dataset.warnSize != null) {
+      // Warning-mode row: narrow the whole page to just that s_code
+      // and exit warning mode.  We set the Code filter (which the
+      // backend expands to every m_code sharing the picked s_code
+      // via _code_group_clause) rather than the Size filter — a
+      // single size still spans many s_codes, so filtering by size
+      // would leave sibling warnings mixed in.
+      if (row.dataset.warnScode != null) {
         _lowStockOn = false;
         const btn = document.getElementById("lowStockBtn");
         if (btn) btn.classList.remove("active");
         const countEl = document.getElementById("lowStockCount");
         if (countEl) countEl.textContent = "";
-        // Set the size filter directly — same effect as clicking a
-        // size row in the normal cascade — then let
-        // _syncCascadeFromFilters snap the cascade to the size's
-        // ancestors before we re-render.
-        state.material = row.dataset.warnSize || "ALL";
-        const matEl = document.getElementById("material");
-        if (matEl) { matEl.value = state.material === "ALL" ? "" : state.material;
-                     ddUpdateActive(matEl); }
+        const seg = document.getElementById("lowStockStateSeg");
+        if (seg) seg.hidden = true;
+        state.code = row.dataset.warnScode || "ALL";
+        const cdEl = document.getElementById("code");
+        if (cdEl) { cdEl.value = state.code === "ALL" ? "" : state.code;
+                    ddUpdateActive(cdEl); }
         (async () => {
+          // _syncCascadeFromFilters resolves the picked code to its
+          // line/pg/pattern/size ancestors and drops the cascade
+          // straight onto the size row.
           await _syncCascadeFromFilters();
           await fetchAndRender();
         })();
