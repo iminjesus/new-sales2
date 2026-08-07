@@ -4560,27 +4560,33 @@ def api_stock_warnings():
         # meaning near-stockout, so we skip idx = ∞ (dead stock)
         # and only warn on rows with real sales velocity.
         out = []
+        _dbg = {"total":0,"no_sales":0,"crit":0,"high":0,
+                "dropped_by_rule":0,"dropped_by_cap":0}
         for (s_code, st), d in rows.items():
+            _dbg["total"] += 1
             base = (d["s3"] + d["s6"] + d["s12"]) / 3.0
             stock   = d["stock"]
             water   = d["water"]
             cy      = d["cy"]
             factory = max(0.0, d["factory"] - cy)   # cascade-table logic
             if base <= 0:                       # no recent sales → skip
+                _dbg["no_sales"] += 1
                 continue
             idx      = stock / base
             idx_sw   = (stock + water)                       / base
             idx_swf  = (stock + water + cy + factory)        / base
             # Two-tier warning rule.
             if idx <= CRIT_STOCK:
-                pass                            # keep — critical
+                _dbg["crit"] += 1                # keep — critical
             elif idx <= HIGH_STOCK and idx_sw <= HIGH_STOCK_WATER:
-                pass                            # keep — thin coverage, no relief in water
+                _dbg["high"] += 1                # keep — thin coverage, no relief in water
             else:
+                _dbg["dropped_by_rule"] += 1
                 continue                        # comfortable enough
             # `threshold` (loosened outer cap) still lets a caller
             # cut higher rows out entirely.
             if idx > _outer_cap:
+                _dbg["dropped_by_cap"] += 1
                 continue
             # d["s3"] / d["s6"] / d["s12"] are already monthly
             # averages (period sum ÷ N months) — same shape the
@@ -4617,10 +4623,11 @@ def api_stock_warnings():
             by_state[r["state"]] = by_state.get(r["state"], 0) + 1
 
         return jsonify({
-            "threshold": threshold,
+            "threshold": _outer_cap,
             "rows":      out,
             "count":     len(out),
             "by_state":  by_state,
+            "debug":     _dbg,
         })
     except Exception as e:
         traceback.print_exc()
