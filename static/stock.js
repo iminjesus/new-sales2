@@ -685,6 +685,11 @@
   let _lowStockOn      = false;
   let _lowStockDrilled = false;
   let _lowStockState   = "ALL";
+  // s_codes on the warning list right now — passed to
+  // /api/stock_history so the Monthly History chart tracks
+  // the same cohort while the warning list is showing.  Null
+  // when we're not in the workflow.
+  let _lowStockSCodes  = null;
 
   function _updateLowStockChrome(){
     // Button stays red for the whole low-stock workflow (list AND
@@ -879,6 +884,10 @@
     const qs = buildQueryParams({ threshold: 1.5, state: _lowStockState });
     const d  = await fetchJSON(`/api/stock_warnings?${qs}`);
     const rows = (d && d.rows) || [];
+    // Capture the s_code cohort so the history chart below can
+    // narrow to the same set (deduped — one row per s_code even
+    // when state="ALL" collapses states).
+    _lowStockSCodes = Array.from(new Set(rows.map(r => r.s_code).filter(Boolean)));
     const countEl = document.getElementById("lowStockCount");
     if (countEl) countEl.textContent = rows.length
       ? `— ${rows.length} row${rows.length===1?"":"s"}`
@@ -1121,6 +1130,7 @@
       // Toggling the button always returns to the warning LIST
       // (not the mid-drill view) so the chip behaves predictably.
       _lowStockDrilled = false;
+      if (!_lowStockOn) _lowStockSCodes = null;
       // If we're either fully exiting OR bouncing back to the
       // warning list from a drilled view, drop the filters the
       // drill/sync auto-applied — otherwise the list re-renders
@@ -1149,6 +1159,7 @@
     if (e.target && e.target.id === "showAllStockBtn") {
       _lowStockOn      = false;
       _lowStockDrilled = false;
+      _lowStockSCodes  = null;
       state.code          = "ALL";
       state.material      = "ALL";
       state.pattern       = "ALL";
@@ -1170,7 +1181,15 @@
         _lowStockState = val;
         document.querySelectorAll("#lowStockStateSeg .hist-st-btn")
           .forEach(b => b.classList.toggle("active", b === stChip));
-        if (_lowStockOn) fetchAndRenderCascadeTable();
+        if (_lowStockOn) {
+          // Re-render the warning list (fills _lowStockSCodes) and
+          // then refresh the history chart so it tracks the new
+          // s_code cohort.  Sequenced so history sees the fresh set.
+          (async () => {
+            await fetchAndRenderCascadeTable();
+            fetchAndRenderStockHistory();
+          })();
+        }
       }
       return;
     }
@@ -1278,6 +1297,13 @@
     if (_agingHistoryOn)              parts.push("with_aging=1");
     if (_historyState && _historyState !== "ALL")
                                       parts.push("state=" + encodeURIComponent(_historyState));
+    // While the low-stock warning LIST is on (not drilled) narrow
+    // the history chart to the s_codes currently on the list.  When
+    // drilled, buildQueryParams already carries state.code so the
+    // page-wide code filter does the narrowing instead.
+    if (_lowStockOn && !_lowStockDrilled && Array.isArray(_lowStockSCodes) && _lowStockSCodes.length) {
+      parts.push("scodes=" + encodeURIComponent(_lowStockSCodes.join(",")));
+    }
     const qs = parts.join("&");
     const d  = await fetchJSON(`/api/stock_history?${qs}`);
     if (!d) { if (hint) hint.textContent = "load failed"; return; }

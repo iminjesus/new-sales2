@@ -4147,6 +4147,11 @@ def api_stock_history():
     code       = (request.args.get("code")          or "").strip()
     state      = (request.args.get("state")         or "ALL").strip().upper()
     with_aging = (request.args.get("with_aging") or "").strip() in ("1","true","yes")
+    # Optional narrowing to a specific s_code cohort (used by the
+    # Low-stock workflow so the history chart tracks the same
+    # SKUs the warning list is showing).  Comma-separated.
+    scodes_raw = (request.args.get("scodes") or "").strip()
+    scode_list = [s.strip() for s in scodes_raw.split(",") if s.strip()] if scodes_raw else []
 
     plants_param = (request.args.get("plants") or "").strip()
     if plants_param:
@@ -4194,6 +4199,13 @@ def api_stock_history():
                 wh.append(f"{alias_c}.size LIKE %s");      params.append(f"%{material}%")
             if code and code != "ALL":
                 wh.append(_code_group_clause(alias_c));       params.append(code)
+            # Optional cohort narrowing — used by the low-stock
+            # workflow so the history chart follows the same s_code
+            # set that's on the warning table.
+            if scode_list:
+                placeholders = ",".join(["%s"] * len(scode_list))
+                wh.append(f"{alias_c}.s_code IN ({placeholders})")
+                params.extend(scode_list)
             if   category == "PCLT":   wh.append(f"{alias_c}.line = 'PCLT'")
             elif category == "TBR":    wh.append(f"{alias_c}.line = 'TBR'")
             elif category == "18PLUS":
