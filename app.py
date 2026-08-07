@@ -4366,6 +4366,10 @@ def api_stock_warnings():
     pattern    = (request.args.get("pattern")       or "").strip()
     material   = (request.args.get("material")      or "").strip()
     code       = (request.args.get("code")          or "").strip()
+    # Region chip on the warning table: 'ALL' rolls every state
+    # together into one row per s_code; a specific state narrows
+    # (and still one row per s_code, only for that state).
+    state_arg  = (request.args.get("state")         or "ALL").strip().upper()
 
     # Restrict to real product lines (matches cascade defaults).
     wh     = ["c.line IN ('PCLT','TBR')",
@@ -4391,6 +4395,15 @@ def api_stock_warnings():
     PLANT_STATE = {"42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA"}
     STATE_ORDER = ["NSW","QLD","VIC","WA"]
     STATE_REMAP = {"SA":"VIC","NT":"WA","TAS":"VIC","ACT":"NSW"}
+
+    # ALL mode rolls every state into a single "-" bucket per
+    # s_code; a specific state chip drops everything outside it and
+    # keeps the state tag on the row.
+    one_state_only = state_arg in STATE_ORDER
+    def _state_key(st):
+        if one_state_only:
+            return st if st == state_arg else None    # None = discard
+        return "-"
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
@@ -4440,7 +4453,9 @@ def api_stock_warnings():
             for r in rows_from_db:
                 st = PLANT_STATE.get(r["plant"])
                 if not st: continue
-                key = (r["s_code"] or "", st)
+                sk = _state_key(st)
+                if sk is None: continue
+                key = (r["s_code"] or "", sk)
                 d = rows.setdefault(key, _EMPTY())
                 d[bucket_key] += float(r["q"] or 0)
                 # Fill display attrs on first sight so downstream can
@@ -4516,7 +4531,9 @@ def api_stock_warnings():
                     if not st or st == "COMMON": continue
                     st = STATE_REMAP.get(st, st)
                     if st not in STATE_ORDER: continue
-                    key = (r["s_code"] or "", st)
+                    sk = _state_key(st)
+                    if sk is None: continue
+                    key = (r["s_code"] or "", sk)
                     d = rows.setdefault(key, _EMPTY())
                     d[label] += float(r["qty"] or 0) / n_months
                     for k in ("line","product_group","pattern","size"):

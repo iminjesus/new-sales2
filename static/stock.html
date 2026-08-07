@@ -172,13 +172,24 @@
         <div class="cascade-header">
           <span id="cascadeCrumb">All › Line</span>
           <button id="cascadeBack" type="button" style="display:none;">← Back</button>
-          <!-- Toggle: replaces the cascade body with just the (size × state)
-               rows whose Stock.idx ≤ 1.5 mo — the "about to stock out"
-               list.  Same interaction as a normal size row: click a row
-               to drill the cascade to that size. -->
-          <button id="lowStockBtn" type="button" title="Show only sizes with Stock.idx ≤ 1.5 months">
+          <!-- Toggle: replaces the cascade body with just the s_code
+               rows whose Stock.idx ≤ 1.5 mo — the "about to stock
+               out" list.  Same interaction as a normal size row:
+               click a row to drill the cascade to that size. -->
+          <button id="lowStockBtn" type="button" title="Show only s_codes with Stock.idx ≤ 1.5 months">
             ⚠ Low stock warning
           </button>
+          <!-- State chip row (only visible while the low-stock body
+               is on).  ALL rolls every state into one row per
+               s_code; a specific state narrows AND still one row
+               per s_code, only for that state. -->
+          <div id="lowStockStateSeg" class="hist-state-seg" hidden>
+            <button type="button" class="hist-st-btn active" data-st="ALL">All</button>
+            <button type="button" class="hist-st-btn" data-st="NSW">NSW</button>
+            <button type="button" class="hist-st-btn" data-st="QLD">QLD</button>
+            <button type="button" class="hist-st-btn" data-st="VIC">VIC</button>
+            <button type="button" class="hist-st-btn" data-st="WA">WA</button>
+          </div>
           <span id="lowStockCount"></span>
         </div>
         <table id="cascadeTable">

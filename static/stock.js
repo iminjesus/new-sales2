@@ -671,9 +671,12 @@
   }
 
   // Low-stock-warning mode: when on, the cascade body is replaced
-  // with just the (line › pg › pattern › size × state) rows whose
-  // Stock.idx ≤ 1.5 mo.  Same table, same columns, filtered content.
-  let _lowStockOn = false;
+  // with s_code rows whose Stock.idx ≤ 1.5 mo.  Same table, same
+  // columns, filtered content.  _lowStockState narrows to one
+  // NSW/QLD/VIC/WA warehouse or 'ALL' (which rolls every state
+  // into a single row per s_code).
+  let _lowStockOn    = false;
+  let _lowStockState = "ALL";
 
   async function fetchAndRenderCascadeTable(){
     if (_lowStockOn) { await renderLowStockRows(); return; }
@@ -847,7 +850,7 @@
     tbody.innerHTML = `<tr><td colspan="${_colspan}" class="st-loading">Loading…</td></tr>`;
     tfoot.innerHTML = "";
 
-    const qs = buildQueryParams({ threshold: 1.5 });
+    const qs = buildQueryParams({ threshold: 1.5, state: _lowStockState });
     const d  = await fetchJSON(`/api/stock_warnings?${qs}`);
     const rows = (d && d.rows) || [];
     const countEl = document.getElementById("lowStockCount");
@@ -889,7 +892,7 @@
             data-warn-pattern="${escAttr(r.pattern)}"
             data-warn-size="${escAttr(r.size)}">
           <td class="cas-bucket">${label}</td>
-          <td class="cas-state">${r.state}</td>
+          <td class="cas-state">${r.state === "-" ? "AU" : r.state}</td>
           <td>${fmtQty(r.qty_3m)}</td>
           <td>${fmtQty(r.qty_6m)}</td>
           <td>${fmtQty(r.qty_12m)}</td>
@@ -1090,11 +1093,25 @@
     if (e.target && e.target.id === "lowStockBtn") {
       _lowStockOn = !_lowStockOn;
       e.target.classList.toggle("active", _lowStockOn);
+      const seg = document.getElementById("lowStockStateSeg");
+      if (seg) seg.hidden = !_lowStockOn;
       if (!_lowStockOn) {
         const c = document.getElementById("lowStockCount");
         if (c) c.textContent = "";
       }
       fetchAndRenderCascadeTable();
+      return;
+    }
+    // State chip inside the low-stock header.
+    const stChip = e.target.closest && e.target.closest("#lowStockStateSeg .hist-st-btn");
+    if (stChip) {
+      const val = stChip.dataset.st || "ALL";
+      if (val !== _lowStockState) {
+        _lowStockState = val;
+        document.querySelectorAll("#lowStockStateSeg .hist-st-btn")
+          .forEach(b => b.classList.toggle("active", b === stChip));
+        if (_lowStockOn) fetchAndRenderCascadeTable();
+      }
       return;
     }
     const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
