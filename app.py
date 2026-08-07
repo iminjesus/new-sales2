@@ -4559,6 +4559,10 @@ def api_stock_warnings():
                 continue
             idx_sw   = (stock + water)                       / base
             idx_swf  = (stock + water + cy + factory)        / base
+            # d["s3"] / d["s6"] / d["s12"] are already monthly
+            # averages (period sum ÷ N months) — same shape the
+            # cascade table's 3M/6M/12M columns carry.  Emit them
+            # as integers so the warning list reads uniformly.
             out.append({
                 "s_code":       s_code,
                 "line":         d["line"],
@@ -4566,17 +4570,19 @@ def api_stock_warnings():
                 "pattern":      d["pattern"],
                 "size":         d["size"],
                 "state":        st,
-                "qty_3m":       round(d["s3"]  * 3,  0),
-                "qty_6m":       round(d["s6"]  * 6,  0),
-                "qty_12m":      round(d["s12"] * 12, 0),
-                "base_sales":   round(base,     1),
-                "stock_qty":    round(stock,    0),
-                "water_qty":    round(water,    0),
-                "cy_qty":       round(cy,       0),
-                "factory_qty":  round(factory,  0),
-                "stock_idx":    round(idx,      2),
-                "sw_idx":       round(idx_sw,   2),
-                "swf_idx":      round(idx_swf,  2),
+                "qty_3m":       int(round(d["s3"])),
+                "qty_6m":       int(round(d["s6"])),
+                "qty_12m":      int(round(d["s12"])),
+                "base_sales":   int(round(base)),
+                "stock_qty":    int(round(stock)),
+                "water_qty":    int(round(water)),
+                "cy_qty":       int(round(cy)),
+                "factory_qty":  int(round(factory)),
+                # Coverage months stay 1-decimal — that's the whole
+                # point of the "1.5 mo" threshold read.
+                "stock_idx":    round(idx,      1),
+                "sw_idx":       round(idx_sw,   1),
+                "swf_idx":      round(idx_swf,  1),
             })
         # Lowest idx first — that's the most urgent row.
         out.sort(key=lambda r: (r["stock_idx"], -r["base_sales"]))
