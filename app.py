@@ -4362,22 +4362,41 @@ def api_stock_warnings():
             f"FROM carrying_26 WHERE {inner_wh} "
             " GROUP BY m_code)")
 
-        # ── Stock at (line,pg,pattern,size,state) ─────────────────
-        cur.execute(
-            f"SELECT c.line, c.product_group, c.pattern, c.size, "
-            f"       s.plant, SUM(s.stock_qty) AS q "
-            f"FROM stock s JOIN {DEDUP} c ON c.m_code = s.material "
-            f"WHERE s.stock_qty > 0 "
-            f"GROUP BY c.line, c.product_group, c.pattern, c.size, s.plant",
-            params)
-        # rows[(line,pg,pattern,size,state)] = {"stock": q, "s3":0, "s6":0, "s12":0}
+        # Shared plant-aggregation for stock/incoming/orders — same
+        # (line,pg,pattern,size,plant) grouping so the four legs
+        # line up cleanly on the merge.
+        def _agg_plant(table, val_col, extra=""):
+            sql = (
+                f"SELECT c.line, c.product_group, c.pattern, c.size, "
+                f"       t.plant, SUM(t.{val_col}) AS q "
+                f"FROM {table} t JOIN {DEDUP} c ON c.m_code = t.material "
+                f"WHERE 1=1{extra} "
+                f"GROUP BY c.line, c.product_group, c.pattern, c.size, t.plant"
+            )
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+        _EMPTY = lambda: {"stock":0.0,"water":0.0,"cy":0.0,"factory":0.0,
+                          "s3":0.0,"s6":0.0,"s12":0.0}
         rows = {}
-        for r in cur.fetchall():
-            st = PLANT_STATE.get(r["plant"])
-            if not st: continue
-            key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
-            d = rows.setdefault(key, {"stock":0.0,"s3":0.0,"s6":0.0,"s12":0.0})
-            d["stock"] += float(r["q"] or 0)
+        def _dump_into(bucket_key, rows_from_db):
+            for r in rows_from_db:
+                st = PLANT_STATE.get(r["plant"])
+                if not st: continue
+                key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
+                d = rows.setdefault(key, _EMPTY())
+                d[bucket_key] += float(r["q"] or 0)
+
+        # ── Stock / Water / CY / Factory legs ─────────────────────
+        _dump_into("stock",   _agg_plant("stock", "stock_qty", " AND t.stock_qty > 0"))
+        _dump_into("water",   _agg_plant("incoming", "po_qty"))
+        # CY = orders w/ po_no LIKE '42%'
+        _dump_into("cy",      _agg_plant("orders", "confirm_qty",
+                                         " AND t.po_no LIKE '42%'"))
+        # Factory = orders whose po_no isn't yet on the water (incoming)
+        _dump_into("factory", _agg_plant("orders", "po_qty",
+            " AND t.po_no NOT IN (SELECT DISTINCT po_no FROM incoming "
+            "                     WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')"))
 
         # Latest sales month drives the rolling window (same source
         # of truth as the cascade table).
@@ -4432,7 +4451,7 @@ def api_stock_warnings():
                     st = STATE_REMAP.get(st, st)
                     if st not in STATE_ORDER: continue
                     key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
-                    d = rows.setdefault(key, {"stock":0.0,"s3":0.0,"s6":0.0,"s12":0.0})
+                    d = rows.setdefault(key, _EMPTY())
                     d[label] += float(r["qty"] or 0) / n_months
 
         # Compute Stock.idx per row and keep the ones below threshold.
@@ -4443,21 +4462,34 @@ def api_stock_warnings():
         out = []
         for (line, pg, pat, size, st), d in rows.items():
             base = (d["s3"] + d["s6"] + d["s12"]) / 3.0
-            stock = d["stock"]
+            stock   = d["stock"]
+            water   = d["water"]
+            cy      = d["cy"]
+            factory = max(0.0, d["factory"] - cy)   # cascade-table logic
             if base <= 0:                       # no recent sales → skip
                 continue
-            idx = stock / base
+            idx      = stock / base
             if idx > threshold:                 # comfortably covered
                 continue
+            idx_sw   = (stock + water)                       / base
+            idx_swf  = (stock + water + cy + factory)        / base
             out.append({
                 "line":         line,
                 "product_group":pg,
                 "pattern":      pat,
                 "size":         size,
                 "state":        st,
-                "stock_qty":    round(stock, 0),
-                "base_sales":   round(base, 1),
-                "stock_idx":    round(idx, 2),
+                "qty_3m":       round(d["s3"]  * 3,  0),
+                "qty_6m":       round(d["s6"]  * 6,  0),
+                "qty_12m":      round(d["s12"] * 12, 0),
+                "base_sales":   round(base,     1),
+                "stock_qty":    round(stock,    0),
+                "water_qty":    round(water,    0),
+                "cy_qty":       round(cy,       0),
+                "factory_qty":  round(factory,  0),
+                "stock_idx":    round(idx,      2),
+                "sw_idx":       round(idx_sw,   2),
+                "swf_idx":      round(idx_swf,  2),
             })
         # Lowest idx first — that's the most urgent row.
         out.sort(key=lambda r: (r["stock_idx"], -r["base_sales"]))

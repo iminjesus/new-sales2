@@ -864,18 +864,19 @@
     const warnCls = idx => idx <= 0.5 ? "warn-crit"
                         :  idx <= 1.0 ? "warn-high"
                         :  "warn-med";
-    const dash = `<td class="st-qty">—</td>`;
+    const fmtMo = n => (Number.isFinite(n) && n > 0)
+                      ? n.toFixed(1) + " mo" : "—";
     const html = rows.map(r => {
       const label = [r.line, r.product_group, r.pattern, r.size]
                     .filter(x => x && String(x).trim()).join(" › ");
-      // Empty Stock aging cells when the ▸ Stock header is expanded
-      // — keep the layout aligned but visually blank.
+      // Same aging-expand behaviour as the normal cascade row —
+      // when the ▸ Stock header is open we split Stock into 5
+      // buckets + a Total; the warning endpoint doesn't return
+      // aging so we leave the 5 buckets blank and only fill Total.
       const stkPart = _agingExpanded
         ? (_AGING_BUCKETS.map(() => `<td class="st-qty aging-cell"></td>`).join("")
            + `<td class="st-qty aging-cell" style="background:#e0e7ff;font-weight:600;">${fmtQty(r.stock_qty)}</td>`)
         : `<td class="st-qty">${fmtQty(r.stock_qty)}</td>`;
-      // Data-* attributes so a click can drill the cascade to that
-      // exact size (same interaction the normal size-row click has).
       return `
         <tr class="cascade-clickable ${warnCls(r.stock_idx)}"
             data-warn-line="${escAttr(r.line)}"
@@ -884,13 +885,17 @@
             data-warn-size="${escAttr(r.size)}">
           <td class="cas-bucket">${escHtml(label)}</td>
           <td class="cas-state">${r.state}</td>
-          <td>—</td><td>—</td><td>—</td>
+          <td>${fmtQty(r.qty_3m)}</td>
+          <td>${fmtQty(r.qty_6m)}</td>
+          <td>${fmtQty(r.qty_12m)}</td>
           <td class="st-base">${fmtQty(r.base_sales)}</td>
           ${stkPart}
-          ${dash}${dash}${dash}
-          <td class="st-pipe">${r.stock_idx.toFixed(1)} mo</td>
-          <td class="st-pipe">—</td>
-          <td class="st-pipe">—</td>
+          <td class="st-qty">${fmtQty(r.water_qty)}</td>
+          <td class="st-qty">${fmtQty(r.cy_qty)}</td>
+          <td class="st-qty">${fmtQty(r.factory_qty)}</td>
+          <td class="st-pipe">${fmtMo(r.stock_idx)}</td>
+          <td class="st-pipe">${fmtMo(r.sw_idx)}</td>
+          <td class="st-pipe">${fmtMo(r.swf_idx)}</td>
         </tr>
       `;
     }).join("");
