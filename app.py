@@ -4421,6 +4421,18 @@ def api_stock_warnings():
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
+        # Set of s_codes whose representative m_code is 'OPE'
+        # (actively operated).  Anything else — chiefly 'Fadeout',
+        # meaning the SKU is being phased out — has no business in
+        # the warning list because we deliberately aren't stocking
+        # it anymore.
+        cur.execute(
+            "SELECT DISTINCT s_code FROM carrying_26 "
+            "WHERE operation = 'OPE' "
+            "  AND s_code IS NOT NULL "
+            "  AND TRIM(s_code) <> ''")
+        _active_scodes = {r["s_code"] for r in cur.fetchall()}
+
         # Dedup carrying_26 to one row per m_code (many m_codes carry
         # variants across size/pattern rows — we need MIN() so the JOIN
         # doesn't multiply stock/sales).  s_code is the coarser bucket
@@ -4561,6 +4573,10 @@ def api_stock_warnings():
         # and only warn on rows with real sales velocity.
         out = []
         for (s_code, st), d in rows.items():
+            # Skip s_codes whose representative m_code isn't OPE
+            # (e.g. Fadeout — being phased out, no active operation).
+            if s_code not in _active_scodes:
+                continue
             base = (d["s3"] + d["s6"] + d["s12"]) / 3.0
             stock   = d["stock"]
             water   = d["water"]
