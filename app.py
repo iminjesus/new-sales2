@@ -9034,7 +9034,15 @@ def profit_monthly():
             wh_p    += cat_where_p
 
             # ?? product_group / pattern filter (via carrying_26) ??
-            if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL" or f.get("material", "ALL") != "ALL":
+            # Any filter touching the `mat` alias needs the
+            # carrying_26 JOIN — code + brand were missing from
+            # this gate, so picking ONLY a code left mat.m_code
+            # unresolved and the whole query returned nothing.
+            if (f.get("product_group", "ALL") != "ALL"
+                or f.get("pattern", "ALL") != "ALL"
+                or f.get("material", "ALL") != "ALL"
+                or f.get("code", "ALL") != "ALL"
+                or f.get("brand", "ALL") != "ALL"):
                 _ensure_carrying_join("p", joins_p)
             if f.get("product_group", "ALL") != "ALL":
                 wh_p.append("mat.product_group = %s"); params_p.append(f["product_group"])
