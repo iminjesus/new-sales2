@@ -884,9 +884,17 @@
       ? `— ${rows.length} row${rows.length===1?"":"s"}`
       : "— none";
     if (!rows.length) {
+      const dbg = d.debug
+        ? `<br><br><span style="font-size:11px;color:#94a3b8;">
+             Debug — total:${d.debug.total} no_sales:${d.debug.no_sales}
+             crit:${d.debug.crit} high:${d.debug.high}
+             dropped_by_rule:${d.debug.dropped_by_rule}
+             dropped_by_cap:${d.debug.dropped_by_cap}
+           </span>` : "";
       tbody.innerHTML = `<tr><td colspan="${_colspan}" class="st-loading">
         No s_codes matching the low-stock rule for the current filter
         (Stock.idx ≤ 0.5, or 0.5–1.0 with +Water.idx ≤ 1.5).
+        ${dbg}
       </td></tr>`;
       return;
     }
