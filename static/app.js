@@ -2546,8 +2546,10 @@ async function drawMonthlyStacked(){
   stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
     type:"bar",
     data:{ labels, datasets:[...ds25Pct, ...ds26Pct] },
+    // Cap at 100 — it's a 100%-stacked chart, so anything above is
+    // rounding noise; the previous auto-scale drifted up to 120.
     options: withStackKeyLegend(
-      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+      getCommonOptions(true, 100, "Monthly (2025 Actual / 2026 Actual+Target)")
     )
   });
 
@@ -2555,7 +2557,7 @@ async function drawMonthlyStacked(){
     type:"bar",
     data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum] },
     options: withStackKeyLegend(
-      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+      getCommonOptions(true, 100, "Monthly (2025 Actual / 2026 Actual+Target)")
     )
   });
 }
