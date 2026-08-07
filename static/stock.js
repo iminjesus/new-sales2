@@ -867,8 +867,13 @@
     const fmtMo = n => (Number.isFinite(n) && n > 0)
                       ? n.toFixed(1) + " mo" : "—";
     const html = rows.map(r => {
-      const label = [r.line, r.product_group, r.pattern, r.size]
+      const path = [r.line, r.product_group, r.pattern, r.size]
                     .filter(x => x && String(x).trim()).join(" › ");
+      // Show s_code prominently — that's the bucket the row now
+      // aggregates on (multiple m_codes roll up into one s_code).
+      const label = r.s_code
+        ? `<b>${escHtml(r.s_code)}</b> <span style="color:#6b7280;font-weight:400;">${escHtml(path)}</span>`
+        : escHtml(path);
       // Same aging-expand behaviour as the normal cascade row —
       // when the ▸ Stock header is open we split Stock into 5
       // buckets + a Total; the warning endpoint doesn't return
@@ -883,7 +888,7 @@
             data-warn-pg="${escAttr(r.product_group)}"
             data-warn-pattern="${escAttr(r.pattern)}"
             data-warn-size="${escAttr(r.size)}">
-          <td class="cas-bucket">${escHtml(label)}</td>
+          <td class="cas-bucket">${label}</td>
           <td class="cas-state">${r.state}</td>
           <td>${fmtQty(r.qty_3m)}</td>
           <td>${fmtQty(r.qty_6m)}</td>

@@ -4353,8 +4353,14 @@ def api_stock_warnings():
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
+        # Dedup carrying_26 to one row per m_code (many m_codes carry
+        # variants across size/pattern rows — we need MIN() so the JOIN
+        # doesn't multiply stock/sales).  s_code is the coarser bucket
+        # we roll up TO — one s_code covers many m_codes (same product
+        # SKU, different load-rating / spec variants).
         DEDUP = (
             "(SELECT m_code, "
+            " MIN(s_code)        AS s_code, "
             " MIN(line)          AS line, "
             " MIN(product_group) AS product_group, "
             " MIN(pattern)       AS pattern, "
@@ -4362,30 +4368,45 @@ def api_stock_warnings():
             f"FROM carrying_26 WHERE {inner_wh} "
             " GROUP BY m_code)")
 
-        # Shared plant-aggregation for stock/incoming/orders — same
-        # (line,pg,pattern,size,plant) grouping so the four legs
-        # line up cleanly on the merge.
+        # Shared plant-aggregation for stock/incoming/orders — grouped
+        # by (s_code × plant) so multiple m_codes belonging to the
+        # same s_code get summed into one warning bucket.  We carry
+        # a representative line/pg/pattern/size along via MIN() so
+        # the UI still has a readable breadcrumb.
         def _agg_plant(table, val_col, extra=""):
             sql = (
-                f"SELECT c.line, c.product_group, c.pattern, c.size, "
+                f"SELECT c.s_code, "
+                f"       MIN(c.line)          AS line, "
+                f"       MIN(c.product_group) AS product_group, "
+                f"       MIN(c.pattern)       AS pattern, "
+                f"       MIN(c.size)          AS size, "
                 f"       t.plant, SUM(t.{val_col}) AS q "
                 f"FROM {table} t JOIN {DEDUP} c ON c.m_code = t.material "
                 f"WHERE 1=1{extra} "
-                f"GROUP BY c.line, c.product_group, c.pattern, c.size, t.plant"
+                f"GROUP BY c.s_code, t.plant"
             )
             cur.execute(sql, params)
             return cur.fetchall()
 
         _EMPTY = lambda: {"stock":0.0,"water":0.0,"cy":0.0,"factory":0.0,
-                          "s3":0.0,"s6":0.0,"s12":0.0}
+                          "s3":0.0,"s6":0.0,"s12":0.0,
+                          # cache the display attributes so the last
+                          # non-null MIN() wins (they should all agree
+                          # within a single s_code but let's be safe).
+                          "line":"","product_group":"","pattern":"","size":""}
         rows = {}
         def _dump_into(bucket_key, rows_from_db):
             for r in rows_from_db:
                 st = PLANT_STATE.get(r["plant"])
                 if not st: continue
-                key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
+                key = (r["s_code"] or "", st)
                 d = rows.setdefault(key, _EMPTY())
                 d[bucket_key] += float(r["q"] or 0)
+                # Fill display attrs on first sight so downstream can
+                # render "PCLT › Kinergy › K125 › 205/55R16 › <s_code>".
+                for k in ("line","product_group","pattern","size"):
+                    if r.get(k) and not d[k]:
+                        d[k] = r[k]
 
         # ── Stock / Water / CY / Factory legs ─────────────────────
         _dump_into("stock",   _agg_plant("stock", "stock_qty", " AND t.stock_qty > 0"))
@@ -4439,20 +4460,27 @@ def api_stock_warnings():
                 n_months = {"s3":3, "s6":6, "s12":12}[label]
                 pcond = _period_clause(periods, "s")
                 cur.execute(
-                    f"SELECT mat.line, mat.product_group, mat.pattern, mat.size, "
+                    f"SELECT mat.s_code, "
+                    f"       MIN(mat.line)          AS line, "
+                    f"       MIN(mat.product_group) AS product_group, "
+                    f"       MIN(mat.pattern)       AS pattern, "
+                    f"       MIN(mat.size)          AS size, "
                     f"       cus.bde_state AS state, SUM(s.qty) AS qty "
                     f"FROM sales_2526 s {sales_joins} "
                     f"WHERE {pcond} "
-                    f"GROUP BY mat.line, mat.product_group, mat.pattern, mat.size, cus.bde_state",
+                    f"GROUP BY mat.s_code, cus.bde_state",
                     params + params)   # DEDUP appears twice → params twice
                 for r in cur.fetchall():
                     st = r["state"]
                     if not st or st == "COMMON": continue
                     st = STATE_REMAP.get(st, st)
                     if st not in STATE_ORDER: continue
-                    key = (r["line"], r["product_group"], r["pattern"], r["size"], st)
+                    key = (r["s_code"] or "", st)
                     d = rows.setdefault(key, _EMPTY())
                     d[label] += float(r["qty"] or 0) / n_months
+                    for k in ("line","product_group","pattern","size"):
+                        if r.get(k) and not d[k]:
+                            d[k] = r[k]
 
         # Compute Stock.idx per row and keep the ones below threshold.
         # A row with stock but no sales (idx = ∞) is still worth
@@ -4460,7 +4488,7 @@ def api_stock_warnings():
         # meaning near-stockout, so we skip idx = ∞ (dead stock)
         # and only warn on rows with real sales velocity.
         out = []
-        for (line, pg, pat, size, st), d in rows.items():
+        for (s_code, st), d in rows.items():
             base = (d["s3"] + d["s6"] + d["s12"]) / 3.0
             stock   = d["stock"]
             water   = d["water"]
@@ -4474,10 +4502,11 @@ def api_stock_warnings():
             idx_sw   = (stock + water)                       / base
             idx_swf  = (stock + water + cy + factory)        / base
             out.append({
-                "line":         line,
-                "product_group":pg,
-                "pattern":      pat,
-                "size":         size,
+                "s_code":       s_code,
+                "line":         d["line"],
+                "product_group":d["product_group"],
+                "pattern":      d["pattern"],
+                "size":         d["size"],
                 "state":        st,
                 "qty_3m":       round(d["s3"]  * 3,  0),
                 "qty_6m":       round(d["s6"]  * 6,  0),
