@@ -697,9 +697,13 @@
     // scoped to a warning path.
     const btn = document.getElementById("lowStockBtn");
     if (btn) btn.classList.toggle("active", _lowStockOn);
-    // State chip row only when the warning list itself is showing.
+    // State chip row + Excel button only when the warning list
+    // itself is showing (drill view has a single s_code so the
+    // Excel of "the list" doesn't apply there).
     const seg = document.getElementById("lowStockStateSeg");
     if (seg) seg.hidden = !(_lowStockOn && !_lowStockDrilled);
+    const xlsx = document.getElementById("lowStockXlsxBtn");
+    if (xlsx) xlsx.hidden = !(_lowStockOn && !_lowStockDrilled);
     // Full-reset chip visible for the whole workflow.
     const back = document.getElementById("showAllStockBtn");
     if (back) back.hidden = !_lowStockOn;
@@ -1158,6 +1162,18 @@
       } else {
         fetchAndRender();
       }
+      return;
+    }
+    // Excel download of the current warning list.  Same params
+    // the warning fetch used so what you download matches what
+    // you see (filters + state chip + threshold).
+    if (e.target && e.target.id === "lowStockXlsxBtn") {
+      const qs = buildQueryParams({
+        threshold: 1.5,
+        state:     _lowStockState,
+        export:    "xlsx",
+      });
+      window.location.href = `/api/stock_warnings?${qs}`;
       return;
     }
     // "← Show all stock" — full escape from the workflow.

@@ -1200,6 +1200,14 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #cascadeTableWrap .cascade-header #showAllStockBtn:hover {
   background: #e5e7eb; border-color: #9ca3af;
 }
+#cascadeTableWrap .cascade-header #lowStockXlsxBtn {
+  font-size: 11px; font-weight: 700;
+  background: #d1fae5; border: 1px solid #6ee7b7; color: #065f46;
+  border-radius: 5px; padding: 3px 10px; cursor: pointer;
+}
+#cascadeTableWrap .cascade-header #lowStockXlsxBtn:hover {
+  background: #a7f3d0; border-color: #10b981;
+}
 #cascadeTableWrap .cascade-header #lowStockCount {
   font-size: 11px; color: #b91c1c; font-weight: 700;
 }

@@ -4644,6 +4644,56 @@ def api_stock_warnings():
         for r in out:
             by_state[r["state"]] = by_state.get(r["state"], 0) + 1
 
+        # XLSX download of exactly what the warning table shows.
+        # ?export=xlsx flips the response from JSON to a file.
+        if (request.args.get("export") or "").strip().lower() == "xlsx":
+            wb = Workbook(); ws = wb.active; ws.title = "Low stock warning"
+            headers = [
+                "s_code","Line","Product Group","Pattern","Size","State",
+                "3M","6M","12M","Base Sales",
+                "Stock","Water","CY","Factory",
+                "Stock.idx (mo)","+Water.idx (mo)","+Factory.idx (mo)",
+            ]
+            ws.append(headers)
+            for c in range(1, len(headers)+1):
+                cell = ws.cell(row=1, column=c)
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.fill = PatternFill(start_color="374151", end_color="374151",
+                                        fill_type="solid")
+            for r in out:
+                ws.append([
+                    r["s_code"], r["line"], r["product_group"], r["pattern"], r["size"],
+                    r["state"],
+                    r["qty_3m"], r["qty_6m"], r["qty_12m"], r["base_sales"],
+                    r["stock_qty"], r["water_qty"], r["cy_qty"], r["factory_qty"],
+                    r["stock_idx"], r["sw_idx"], r["swf_idx"],
+                ])
+            # Number formatting on the two blocks.
+            n_rows = len(out)
+            if n_rows:
+                for row in ws.iter_rows(min_row=2, max_row=1+n_rows,
+                                        min_col=7, max_col=14):
+                    for cell in row: cell.number_format = "#,##0"
+                for row in ws.iter_rows(min_row=2, max_row=1+n_rows,
+                                        min_col=15, max_col=17):
+                    for cell in row: cell.number_format = "0.0"
+            # Sensible column widths.
+            widths = [12, 8, 20, 14, 16, 6,
+                      9, 9, 9, 11,
+                      9, 9, 9, 9,
+                      13, 13, 13]
+            for i, w in enumerate(widths, start=1):
+                ws.column_dimensions[get_column_letter(i)].width = w
+            ws.freeze_panes = "A2"
+
+            bio = BytesIO(); wb.save(bio); bio.seek(0)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M")
+            return send_file(
+                bio, as_attachment=True,
+                download_name=f"low_stock_warning_{stamp}.xlsx",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
         return jsonify({
             "threshold": _outer_cap,
             "rows":      out,

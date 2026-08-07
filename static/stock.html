@@ -201,6 +201,14 @@
             <button type="button" class="hist-st-btn" data-st="VIC">VIC</button>
             <button type="button" class="hist-st-btn" data-st="WA">WA</button>
           </div>
+          <!-- Excel download of the exact rows currently on the
+               warning list.  Same filter chips + state chip carry
+               through so what you export matches what you see. -->
+          <button id="lowStockXlsxBtn" type="button"
+                  title="Download this warning list as an Excel file"
+                  hidden>
+            ⬇ Excel
+          </button>
           <span id="lowStockCount"></span>
         </div>
         <table id="cascadeTable">
