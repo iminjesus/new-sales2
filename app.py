@@ -2616,6 +2616,8 @@ def api_orders_material():
         c_load         = pick("load_speed", "load", "load_index")
         c_speed        = pick("speed", "speed_rating")
         c_list_price   = pick("list_price", "price")
+        c_s_code       = pick("s_code")
+        c_operation    = pick("operation")
         if not c_m_code:
             return jsonify({"error": "carrying_26 has no m_code column"}), 500
 
@@ -2632,7 +2634,25 @@ def api_orders_material():
             parts.append(f"CONCAT_WS('', {c_load}, {c_speed}) AS load_speed")
         elif c_load:
             parts.append(f"{c_load} AS load_speed")
-        if c_list_price:   parts.append(f"{c_list_price} AS list_price")
+        # list_price follows the OPE representative m_code of the
+        # matched row's s_code (secondary spec variants can carry
+        # override prices — the OPE row is the canonical one).
+        # Falls back to the row's own price when the schema doesn't
+        # carry s_code/operation.
+        if c_list_price:
+            if c_s_code and c_operation:
+                parts.append(
+                    f"COALESCE("
+                    f" (SELECT {c_list_price} FROM carrying_26 ope "
+                    f"  WHERE ope.{c_s_code} = carrying_26.{c_s_code} "
+                    f"    AND ope.{c_operation} = 'OPE' "
+                    f"    AND ope.{c_list_price} IS NOT NULL "
+                    f"    AND ope.{c_list_price} <> 0 "
+                    f"  LIMIT 1), "
+                    f" {c_list_price}"
+                    f") AS list_price")
+            else:
+                parts.append(f"{c_list_price} AS list_price")
 
         select_sql = ", ".join(parts)
 
@@ -8722,7 +8742,14 @@ def materials():
 
 @app.get("/api/carrying_price")
 def carrying_price():
-    """Return avg list_price and purchase_price from carrying_26 for current filter."""
+    """Return list_price and purchase_price from carrying_26 for the
+    current filter.  Prices are read ONLY from the representative
+    (`operation = 'OPE'`) m_code of each s_code — non-OPE variants
+    (secondary specs of the same SKU) can carry stale or override
+    prices and would drag the average.  If nothing OPE matches the
+    filter (schema without operation, or filter too narrow), we
+    fall back to averaging every matched row so the UI never
+    goes blank."""
     product_group = (request.args.get("product_group") or "ALL").strip()
     pattern       = (request.args.get("pattern")       or "").strip()
     material      = (request.args.get("material")      or "").strip()
@@ -8744,21 +8771,32 @@ def carrying_price():
             where.append("size LIKE %s")
             params.append(f"%{material}%")
 
-        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        base_where = " AND ".join(where) if where else "1=1"
 
+        # OPE-first pass — the representative m_code per s_code.
         cur.execute(f"""
-            SELECT AVG(NULLIF(list_price, 0)) AS list_price,
+            SELECT AVG(NULLIF(list_price, 0))     AS list_price,
                    AVG(NULLIF(purchase_price, 0)) AS purchase_price
             FROM carrying_26
-            {where_sql}
+            WHERE operation = 'OPE' AND {base_where}
         """, tuple(params))
-
-        row = cur.fetchone()
+        row = cur.fetchone() or {}
+        # Fallback: if no OPE row matched (data quality edge case or
+        # a filter that only hits secondary specs), average every
+        # matched row so the price box doesn't silently blank.
+        if row.get("list_price") is None and row.get("purchase_price") is None:
+            cur.execute(f"""
+                SELECT AVG(NULLIF(list_price, 0))     AS list_price,
+                       AVG(NULLIF(purchase_price, 0)) AS purchase_price
+                FROM carrying_26
+                WHERE {base_where}
+            """, tuple(params))
+            row = cur.fetchone() or {}
         cur.close(); conn.close()
 
         return jsonify({
-            "list_price":      float(row["list_price"])      if row and row["list_price"]      is not None else None,
-            "purchase_price":  float(row["purchase_price"])  if row and row["purchase_price"]  is not None else None,
+            "list_price":      float(row["list_price"])      if row and row.get("list_price")      is not None else None,
+            "purchase_price":  float(row["purchase_price"])  if row and row.get("purchase_price")  is not None else None,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
