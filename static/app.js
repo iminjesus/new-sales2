@@ -399,6 +399,20 @@ function getCommonOptions(stacked=false, yMax, yTitle){
           title: function(items){
             const lbl = items && items[0] ? items[0].label : '';
             return typeof lbl === 'string' ? lbl.slice(0,5) : lbl; // dd-mm in tooltip title
+          },
+          // Round every numeric tooltip value to integer with comma
+          // separators.  Targets (both qty and amount) were showing
+          // as fractional decimals; consistent int rendering across
+          // Sales / Target / Cumulative / Amount keeps the hover
+          // read simple.  Percent lines (Ach%) keep their %-suffix
+          // one-decimal format.
+          label: function(ctx){
+            const lbl = ctx.dataset.label || "";
+            const v   = ctx.parsed && (ctx.parsed.y != null ? ctx.parsed.y : ctx.parsed);
+            if (v == null || Number.isNaN(v)) return `${lbl}: —`;
+            if (/%/.test(lbl) || /Ach/i.test(lbl))
+              return `${lbl}: ${Number(v).toFixed(1)}%`;
+            return `${lbl}: ${Math.round(Number(v)).toLocaleString()}`;
           }
         }
       }
@@ -1195,7 +1209,19 @@ async function drawDailyTotals(){
           legend: { position: "right", align: "start",
                     labels: { boxWidth: 12, boxHeight: 12, padding: 6, font: { size: 11 } },
                     maxWidth: 140 },
-          tooltip: { callbacks: { title: items => items[0]?.label } }
+          tooltip: {
+            callbacks: {
+              title: items => items[0]?.label,
+              label: (ctx) => {
+                const lbl = ctx.dataset.label || "";
+                const v   = ctx.parsed && (ctx.parsed.y != null ? ctx.parsed.y : ctx.parsed);
+                if (v == null || Number.isNaN(v)) return `${lbl}: —`;
+                if (/%/.test(lbl) || /Ach/i.test(lbl))
+                  return `${lbl}: ${Number(v).toFixed(1)}%`;
+                return `${lbl}: ${Math.round(Number(v)).toLocaleString()}`;
+              }
+            }
+          }
         },
         scales: {
           x: xAxisDdMm(false),
