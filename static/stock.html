@@ -179,6 +179,15 @@
           <button id="lowStockBtn" type="button" title="Show only s_codes with Stock.idx ≤ 1.5 months">
             ⚠ Low stock warning
           </button>
+          <!-- Full-reset chip: appears only while the user is in
+               the low-stock workflow (list OR drilled from it).
+               Click clears the warning context + any code filter
+               and drops the user back on the normal full cascade. -->
+          <button id="showAllStockBtn" type="button"
+                  title="Exit low-stock workflow and show every s_code again"
+                  hidden>
+            ← Show all stock
+          </button>
           <!-- State chip row (only visible while the low-stock body
                is on).  ALL rolls every state into one row per
                s_code; a specific state narrows AND still one row

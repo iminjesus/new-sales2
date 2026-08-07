@@ -672,14 +672,41 @@
 
   // Low-stock-warning mode: when on, the cascade body is replaced
   // with s_code rows whose Stock.idx ≤ 1.5 mo.  Same table, same
-  // columns, filtered content.  _lowStockState narrows to one
-  // NSW/QLD/VIC/WA warehouse or 'ALL' (which rolls every state
-  // into a single row per s_code).
-  let _lowStockOn    = false;
-  let _lowStockState = "ALL";
+  // columns, filtered content.
+  //   _lowStockOn      — user is in the low-stock workflow at all
+  //                       (button stays red, chip row visible).
+  //   _lowStockDrilled — user has clicked into an s_code from the
+  //                       warning list, so the cascade view is
+  //                       what's rendered.  Cascade Back returns
+  //                       to the warning list instead of doing a
+  //                       normal cascade-level back.
+  //   _lowStockState   — NSW/QLD/VIC/WA or ALL (rolls every state
+  //                       into a single row per s_code).
+  let _lowStockOn      = false;
+  let _lowStockDrilled = false;
+  let _lowStockState   = "ALL";
+
+  function _updateLowStockChrome(){
+    // Button stays red for the whole low-stock workflow (list AND
+    // drilled) so the reader always knows the current filter is
+    // scoped to a warning path.
+    const btn = document.getElementById("lowStockBtn");
+    if (btn) btn.classList.toggle("active", _lowStockOn);
+    // State chip row only when the warning list itself is showing.
+    const seg = document.getElementById("lowStockStateSeg");
+    if (seg) seg.hidden = !(_lowStockOn && !_lowStockDrilled);
+    // Full-reset chip visible for the whole workflow.
+    const back = document.getElementById("showAllStockBtn");
+    if (back) back.hidden = !_lowStockOn;
+    const cnt = document.getElementById("lowStockCount");
+    if (cnt && !_lowStockOn) cnt.textContent = "";
+  }
 
   async function fetchAndRenderCascadeTable(){
-    if (_lowStockOn) { await renderLowStockRows(); return; }
+    if (_lowStockOn && !_lowStockDrilled) {
+      await renderLowStockRows();
+      return;
+    }
     _renderCascadeCrumb();
     _renderCascadeHeader();
     const tbody = document.getElementById("cascadeTableBody");
@@ -1089,18 +1116,32 @@
       e.stopPropagation();
       return;
     }
-    // ⚠ Low stock warning chip → swap the cascade body for the
-    // warning list (or back).
+    // ⚠ Low stock warning chip → enter / exit the warning workflow.
     if (e.target && e.target.id === "lowStockBtn") {
       _lowStockOn = !_lowStockOn;
-      e.target.classList.toggle("active", _lowStockOn);
-      const seg = document.getElementById("lowStockStateSeg");
-      if (seg) seg.hidden = !_lowStockOn;
+      // Toggling the button always returns to the warning LIST
+      // (not the mid-drill view) so the chip behaves predictably.
+      _lowStockDrilled = false;
       if (!_lowStockOn) {
-        const c = document.getElementById("lowStockCount");
-        if (c) c.textContent = "";
+        // Full exit — also drop any code filter the workflow set.
+        state.code = "ALL";
+        const cdEl = document.getElementById("code");
+        if (cdEl) { cdEl.value = ""; ddUpdateActive(cdEl); }
       }
-      fetchAndRenderCascadeTable();
+      _updateLowStockChrome();
+      if (_lowStockOn) fetchAndRenderCascadeTable();
+      else             fetchAndRender();
+      return;
+    }
+    // "← Show all stock" — full escape from the workflow.
+    if (e.target && e.target.id === "showAllStockBtn") {
+      _lowStockOn      = false;
+      _lowStockDrilled = false;
+      state.code       = "ALL";
+      const cdEl = document.getElementById("code");
+      if (cdEl) { cdEl.value = ""; ddUpdateActive(cdEl); }
+      _updateLowStockChrome();
+      fetchAndRender();
       return;
     }
     // State chip inside the low-stock header.
@@ -1117,24 +1158,17 @@
     }
     const row = e.target.closest && e.target.closest("#cascadeTable tbody tr.cascade-clickable");
     if (row) {
-      // Warning-mode row: narrow the whole page to just that s_code
-      // and exit warning mode.  We set the Code filter (which the
-      // backend expands to every m_code sharing the picked s_code
-      // via _code_group_clause) rather than the Size filter — a
-      // single size still spans many s_codes, so filtering by size
-      // would leave sibling warnings mixed in.
+      // Warning-mode row: narrow the whole page to just that s_code.
+      // We STAY in the low-stock workflow (button keeps its red
+      // context, Back returns to the warning list) — the "Show
+      // all stock" chip is the only full exit.
       if (row.dataset.warnScode != null) {
-        _lowStockOn = false;
-        const btn = document.getElementById("lowStockBtn");
-        if (btn) btn.classList.remove("active");
-        const countEl = document.getElementById("lowStockCount");
-        if (countEl) countEl.textContent = "";
-        const seg = document.getElementById("lowStockStateSeg");
-        if (seg) seg.hidden = true;
+        _lowStockDrilled = true;
         state.code = row.dataset.warnScode || "ALL";
         const cdEl = document.getElementById("code");
         if (cdEl) { cdEl.value = state.code === "ALL" ? "" : state.code;
                     ddUpdateActive(cdEl); }
+        _updateLowStockChrome();
         (async () => {
           // _syncCascadeFromFilters resolves the picked code to its
           // line/pg/pattern/size ancestors and drops the cascade
@@ -1149,7 +1183,24 @@
         return;
       }
     }
-    if (e.target && e.target.id === "cascadeBack") _cascadeBack();
+    if (e.target && e.target.id === "cascadeBack") {
+      // In the low-stock workflow, Back returns to the warning
+      // list (not the parent cascade level) so the reader lands
+      // back on the "about to stock out" set they drilled from.
+      if (_lowStockOn && _lowStockDrilled) {
+        _lowStockDrilled = false;
+        state.code = "ALL";
+        const cdEl = document.getElementById("code");
+        if (cdEl) { cdEl.value = ""; ddUpdateActive(cdEl); }
+        // Reset cascade to the line root so nothing stale carries
+        // over the next time the workflow exits.
+        cascadeState = { level:"line", line:"", pg:"", pat:"" };
+        _updateLowStockChrome();
+        fetchAndRender();
+        return;
+      }
+      _cascadeBack();
+    }
   });
 
   async function fetchAndRenderSales(){
