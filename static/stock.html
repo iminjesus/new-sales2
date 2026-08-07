@@ -172,11 +172,13 @@
         <div class="cascade-header">
           <span id="cascadeCrumb">All › Line</span>
           <button id="cascadeBack" type="button" style="display:none;">← Back</button>
-          <!-- Toggle: replaces the cascade body with just the s_code
-               rows whose Stock.idx ≤ 1.5 mo — the "about to stock
-               out" list.  Same interaction as a normal size row:
-               click a row to drill the cascade to that size. -->
-          <button id="lowStockBtn" type="button" title="Show only s_codes with Stock.idx ≤ 1.5 months">
+          <!-- Toggle: replaces the cascade body with the "about to
+               stock out" list — Stock.idx ≤ 0.5, OR 0.5 < Stock.idx
+               ≤ 1.0 with no relief on the way (Stock+Water idx ≤
+               2.0).  Same interaction as a normal size row: click a
+               row to drill the cascade to that size. -->
+          <button id="lowStockBtn" type="button"
+                  title="Critical: Stock.idx ≤ 0.5   ·   High: 0.5 < Stock.idx ≤ 1.0 AND +Water.idx ≤ 1.5">
             ⚠ Low stock warning
           </button>
           <!-- Full-reset chip: appears only while the user is in

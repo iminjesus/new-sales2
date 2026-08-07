@@ -4356,10 +4356,24 @@ def api_stock_history():
 # how the size-row click already works.
 @app.get("/api/stock_warnings")
 def api_stock_warnings():
+    # Two-tier rule (replaces the old simple "stock_idx ≤ 1.5" cut):
+    #   CRIT — stock alone won't outlast the next month
+    #          (stock_idx ≤ CRIT_STOCK).
+    #   HIGH — stock alone will last 0.5–1.0 mo AND even with the
+    #          water on the way (stock + incoming) coverage stays
+    #          at or below HIGH_STOCK_WATER months → not enough
+    #          incoming to relieve it.
+    # Anything better than those two buckets is out.  Thresholds
+    # kept as constants so the rule is one place to look.
+    CRIT_STOCK      = 0.5
+    HIGH_STOCK      = 1.0
+    HIGH_STOCK_WATER = 1.5
+    # `threshold` is still accepted but only used as an outer
+    # comfort cap so a caller can loosen (never tighten) the rule.
     try:
-        threshold = float(request.args.get("threshold") or 1.5)
+        _outer_cap = float(request.args.get("threshold") or HIGH_STOCK)
     except Exception:
-        threshold = 1.5
+        _outer_cap = HIGH_STOCK
 
     category   = (request.args.get("category")      or "ALL").strip().upper()
     prod_group = (request.args.get("product_group") or "ALL").strip()
@@ -4555,10 +4569,19 @@ def api_stock_warnings():
             if base <= 0:                       # no recent sales → skip
                 continue
             idx      = stock / base
-            if idx > threshold:                 # comfortably covered
-                continue
             idx_sw   = (stock + water)                       / base
             idx_swf  = (stock + water + cy + factory)        / base
+            # Two-tier warning rule.
+            if idx <= CRIT_STOCK:
+                pass                            # keep — critical
+            elif idx <= HIGH_STOCK and idx_sw <= HIGH_STOCK_WATER:
+                pass                            # keep — thin coverage, no relief in water
+            else:
+                continue                        # comfortable enough
+            # `threshold` (loosened outer cap) still lets a caller
+            # cut higher rows out entirely.
+            if idx > _outer_cap:
+                continue
             # d["s3"] / d["s6"] / d["s12"] are already monthly
             # averages (period sum ÷ N months) — same shape the
             # cascade table's 3M/6M/12M columns carry.  Emit them

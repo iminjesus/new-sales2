@@ -858,11 +858,10 @@
   }
 
   // ── Low-stock warning body ──────────────────────────────────────
-  // Same cascade table, filtered content: one row per
-  // (line › pg › pattern › size × state) whose Stock.idx ≤ 1.5.
-  // Water / CY / Factory columns show '—' since the warning
-  // endpoint doesn't compute those (we only need stock + base +
-  // Stock.idx to make the warn/no-warn call).
+  // Same cascade table, filtered content: one row per s_code that
+  // is either critical (Stock.idx ≤ 0.5) or high-risk-no-relief
+  // (0.5 < Stock.idx ≤ 1.0 AND (Stock+Water)/base ≤ 2.0).  The
+  // rule lives on the backend — see api_stock_warnings.
   async function renderLowStockRows(){
     const tbody = document.getElementById("cascadeTableBody");
     const tfoot = document.getElementById("cascadeTableFoot");
@@ -886,14 +885,13 @@
       : "— none";
     if (!rows.length) {
       tbody.innerHTML = `<tr><td colspan="${_colspan}" class="st-loading">
-        No sizes with Stock.idx ≤ 1.5 for the current filter.
+        No s_codes matching the low-stock rule for the current filter
+        (Stock.idx ≤ 0.5, or 0.5–1.0 with +Water.idx ≤ 1.5).
       </td></tr>`;
       return;
     }
-    // Colour scale by urgency.
-    const warnCls = idx => idx <= 0.5 ? "warn-crit"
-                        :  idx <= 1.0 ? "warn-high"
-                        :  "warn-med";
+    // Two-tier scale — matches the backend rule.
+    const warnCls = idx => idx <= 0.5 ? "warn-crit" : "warn-high";
     const fmtMo = n => (Number.isFinite(n) && n > 0)
                       ? n.toFixed(1) + " mo" : "—";
     const html = rows.map(r => {
