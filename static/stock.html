@@ -98,6 +98,14 @@
         <div class="dd-menu" id="codeMenu"></div>
       </div>
 
+      <!-- Clear all four narrowing dropdowns (Product Group / Pattern /
+           Size / Code) in one click.  Category chips + Orders-PO /
+           Ready-to-Ship stay as-is — those are toggled, not searched. -->
+      <button type="button" id="clearAllFiltersBtn" class="btn clear-all-btn"
+              title="Clear Product Group / Pattern / Size / Code filters">
+        ✕ Clear
+      </button>
+
       <div id="viewSwitch" style="margin-left:auto; display:flex; gap:6px;">
         <button class="btn" onclick="window.location.href='/' + window.location.search">Graph View</button>
         <button class="btn" onclick="window.location.href='/map' + window.location.search">Map View</button>

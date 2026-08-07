@@ -1596,6 +1596,18 @@
       }
     });
 
+    // Clear-all button in the top bar.  The Product-Group clear
+    // already cascades the reset down (pg → pattern → material →
+    // code) and triggers a full fetchAndRender, so just proxy the
+    // click to it.
+    const clearAllBtn = document.getElementById("clearAllFiltersBtn");
+    if (clearAllBtn) {
+      clearAllBtn.addEventListener("click", () => {
+        const pgClearBtn = document.getElementById("pgClear");
+        if (pgClearBtn) pgClearBtn.click();
+      });
+    }
+
     // Let the browser paint the flex layout before Leaflet measures the map div
     await new Promise(r => setTimeout(r, 100));
     try { map.invalidateSize(); } catch(_e) {}

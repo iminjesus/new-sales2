@@ -1335,3 +1335,16 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
   margin-top: 10px; margin-bottom: 4px;
   font-size: 11px; color: #6b7280; font-weight: 600;
 }
+
+/* Clear-all button in the top filter bar — sits between the Code
+   dropdown and the view-switcher.  Amber tint so it reads as a
+   destructive-ish action without competing with the primary
+   Graph/Stock/Rebate view chips. */
+#clearAllFiltersBtn.clear-all-btn {
+  background: #fef3c7; color: #92400e;
+  border: 1px solid #fbbf24; font-weight: 700;
+  padding: 4px 12px;
+}
+#clearAllFiltersBtn.clear-all-btn:hover {
+  background: #fde68a; border-color: #d97706; color: #78350f;
+}
