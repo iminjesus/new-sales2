@@ -3043,6 +3043,19 @@ async function refreshAllWithKpi(){
 // For >10 rows we render the first 10 and add an expand chip so
 // the panel doesn't dominate the top row on Top 30.
 async function refreshTopSoldPanel(){
+  // Top-level try/catch — this runs inside Promise.all with the
+  // main chart fetches; any uncaught throw here would reject the
+  // whole batch and blank the dashboard.
+  try {
+    return await _refreshTopSoldPanelImpl();
+  } catch (e) {
+    console.error("refreshTopSoldPanel failed:", e);
+    const box = document.getElementById("topSoldBox");
+    if (box) box.hidden = true;
+    return null;
+  }
+}
+async function _refreshTopSoldPanelImpl(){
   const box  = document.getElementById("topSoldBox");
   const body = document.getElementById("topSoldBody");
   const title = document.getElementById("topSoldTitle");
