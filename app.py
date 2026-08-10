@@ -169,25 +169,15 @@ REGION_STATES = {
 }
 
 
-# Picking a specific `code` (m_code) from the Code dropdown should
-# pull the WHOLE s_code group's stock/sales, not just that one
-# variant — e.g. 1024924 and 1021000 share s_code 1021000, so
-# picking either has to surface both.  Every "<alias>.m_code = %s"
-# filter is replaced by this snippet (same single %s placeholder,
-# same params flow).  Falls back to an exact m_code match when the
-# picked m_code has no s_code so nothing accidentally drops out on
-# schemas that don't populate s_code.
+# Code (m_code) chip filter.  Kept as a simple exact-match against
+# the picked m_code on the passed alias.  The earlier s_code-group
+# expansion required every caller to guarantee a carrying_26 JOIN,
+# which several endpoints didn't — the mismatch surfaced as 500s
+# across the whole dashboard.  Revert to the original exact match
+# to unblock; a proper s_code-group implementation can be layered
+# in per-endpoint later where the carrying JOIN is known to exist.
 def _code_group_clause(alias):
-    return (
-        f"{alias}.m_code IN ("
-        f" SELECT c2.m_code FROM carrying_26 c2, carrying_26 c3 "
-        f" WHERE c3.m_code = %s AND ("
-        f"   (c2.s_code = c3.s_code "
-        f"    AND NULLIF(TRIM(c3.s_code), '') IS NOT NULL) "
-        f"   OR c2.m_code = c3.m_code"
-        f" )"
-        f")"
-    )
+    return f"{alias}.m_code = %s"
 
 def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     """
