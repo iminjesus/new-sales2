@@ -277,6 +277,14 @@
       <table id="kpiByRegion" class="kpi-table" style="width:100%; table-layout:fixed; border-collapse:collapse;"></table>
     </div>
 
+    <!-- Top-N sold_to panel — only visible when Top 10/20/30 chip is on.
+         Ranking = 2026 sales_2526 total within the current filter slice
+         (same source of truth as get_top_sold_to_from_baseline). -->
+    <div class="box top-sold-box" id="topSoldBox" hidden>
+      <h3 id="topSoldTitle" style="margin:0 0 6px;">Top sold-to</h3>
+      <div id="topSoldBody"></div>
+    </div>
+
     <!-- Profit -->
     <div class="box profit-box">
       <h3>Profit (Monthly)</h3>

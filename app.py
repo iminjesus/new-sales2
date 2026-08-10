@@ -6071,6 +6071,76 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
     return out
 
 
+# Top-N sold_to with names + qty/amt for the little panel that sits
+# between the KPI table and the Profit chart.  Same slice logic as
+# get_top_sold_to_from_baseline (region/salesman/category/... all
+# respected) — 2026 sales_2526 is the ranking window.
+@app.get("/api/top_sold_to_details")
+def api_top_sold_to_details():
+    try:
+        top_limit = int(request.args.get("top_limit") or 0)
+    except Exception:
+        top_limit = 0
+    if top_limit <= 0:
+        return jsonify({"rows": []})
+    top_limit = min(top_limit, 100)   # safety cap
+
+    f = parse_filters(request)
+    metric = f.get("metric", "qty")
+    value = "qty" if metric == "qty" else "amt"
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        joins, wh, params = build_customer_filters("sTop", f, use_sold_to_name=False)
+        if f.get("category") != "443":
+            cat_joins, cat_where = category_filters_sales("sTop", f.get("category"))
+            joins += cat_joins; wh += cat_where
+        if (f.get("product_group") != "ALL" or f.get("pattern") != "ALL"
+            or f.get("material") != "ALL" or f.get("code") != "ALL"
+            or f.get("brand") != "ALL"):
+            _ensure_carrying_join("sTop", joins)
+        if f.get("product_group") != "ALL":
+            wh.append("mat.product_group = %s"); params.append(f["product_group"])
+        if f["brand"] != "ALL":
+            wh.append("mat.brand = %s"); params.append(f["brand"])
+        if f.get("pattern") != "ALL":
+            wh.append("mat.pattern = %s"); params.append(f["pattern"])
+        if f.get("material") != "ALL":
+            wh.append("mat.size = %s"); params.append(f["material"])
+        if f["code"] != "ALL":
+            wh.append(_code_group_clause("mat")); params.append(f["code"])
+        wh.append("sTop.year = 2026")
+        where_sql = "WHERE " + " AND ".join(wh)
+        sql = f"""
+          SELECT sTop.sold_to,
+                 (SELECT MIN(NULLIF(TRIM(sold_to_name),''))
+                    FROM customer WHERE sold_to = sTop.sold_to) AS sold_to_name,
+                 SUM(sTop.qty) AS qty,
+                 SUM(sTop.amt) AS amt
+            FROM {_sales_2526_from("sTop", year=2026)}
+            {' '.join(joins)}
+            {where_sql}
+           GROUP BY sTop.sold_to
+           ORDER BY SUM(sTop.{value}) DESC
+           LIMIT %s
+        """
+        cur.execute(sql, tuple(params) + (int(top_limit),))
+        rows = []
+        for r in cur.fetchall():
+            rows.append({
+                "sold_to":      str(r.get("sold_to") or "").strip(),
+                "sold_to_name": (r.get("sold_to_name") or "").strip(),
+                "qty":          int(round(float(r.get("qty") or 0))),
+                "amt":          int(round(float(r.get("amt") or 0))),
+            })
+        return jsonify({"rows": rows, "metric": metric, "top_limit": top_limit})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+
 # ---------------------------------- v2: consolidated APIs ----------------------------------
 
 @app.get("/api/v2/dimensions")

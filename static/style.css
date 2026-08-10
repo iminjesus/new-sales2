@@ -757,10 +757,11 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 .kpi-profit-row {
   margin-top: 4px;
   display: grid;
-  /* Table needs ~645px for Region + BDE + This Month + Q1..Q4.
-     Give it 700px so all 7 columns fit (Q3/Q4 are blank now but
-     should still show as columns). */
-  grid-template-columns: 700px minmax(0, 1fr);
+  /* KPI table (700px fixed) + optional Top-N panel (auto — 0 when
+     hidden) + Profit chart (takes the rest).  A hidden middle
+     child collapses its column so the profit box gets the full
+     remaining width, same as before top-N was added. */
+  grid-template-columns: 700px auto minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   width: 100%;
@@ -772,6 +773,45 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
   overflow-x: auto;          /* let the 7-col table scroll horizontally
                                  instead of clipping when the screen is
                                  narrower than 700px */
+}
+.kpi-profit-row > .top-sold-box {
+  width: 260px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+}
+.kpi-profit-row > .top-sold-box h3 {
+  font-size: 12px; color: #6b7280; letter-spacing: 0.02em;
+  font-weight: 700;
+}
+.kpi-profit-row > .top-sold-box table {
+  width: 100%; border-collapse: collapse; font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.kpi-profit-row > .top-sold-box thead th {
+  background: #f3f4f6; color: #6b7280; font-weight: 600;
+  text-align: right; padding: 3px 6px; border-bottom: 1px solid #e5e7eb;
+}
+.kpi-profit-row > .top-sold-box thead th:first-child,
+.kpi-profit-row > .top-sold-box thead th:nth-child(2) { text-align: left; }
+.kpi-profit-row > .top-sold-box tbody td {
+  padding: 3px 6px; border-bottom: 1px solid #f3f4f6;
+  color: #1f2937; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kpi-profit-row > .top-sold-box tbody td:first-child { color: #6b7280; }
+.kpi-profit-row > .top-sold-box tbody td:nth-child(2) {
+  text-align: left; font-weight: 600;
+  max-width: 120px;
+}
+.kpi-profit-row > .top-sold-box tbody tr.hidden-row { display: none; }
+.kpi-profit-row > .top-sold-box .expand-btn {
+  margin-top: 6px; width: 100%;
+  font-size: 11px; font-weight: 600;
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1d4ed8;
+  border-radius: 5px; padding: 4px; cursor: pointer;
+}
+.kpi-profit-row > .top-sold-box .expand-btn:hover {
+  background: #dbeafe; border-color: #60a5fa;
 }
 .kpi-profit-row > .profit-box {
   width: 100%;
@@ -786,6 +826,7 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 @media (max-width: 1100px) {
   .kpi-profit-row { grid-template-columns: 1fr !important; }
   .kpi-profit-row > .kpi-box,
+  .kpi-profit-row > .top-sold-box,
   .kpi-profit-row > .profit-box {
     width: 100% !important;
     min-width: 0;
