@@ -1189,8 +1189,16 @@ def _demo_after_request(response):
             data = response.get_json(silent=True)
             if data is not None:
                 data = _demo_anon_walk(data)
-                response.set_data(_json.dumps(data, ensure_ascii=False, default=str))
-                response.content_length = None
+                new_body = _json.dumps(data, ensure_ascii=False, default=str)
+                response.set_data(new_body)
+                # Explicit byte length + drop chunked encoding.  Setting
+                # content_length = None occasionally leaks a bogus
+                # header value through Werkzeug's WSGI iter, which
+                # Cloudflare tunnel then 502s on.  Setting to the
+                # actual byte count is version-safe.
+                encoded = new_body.encode("utf-8")
+                response.headers["Content-Length"] = str(len(encoded))
+                response.headers.pop("Transfer-Encoding", None)
         except Exception:
             pass
     elif ctype in ("text/html", "text/html; charset=utf-8", "text/html;charset=utf-8"):
@@ -1223,7 +1231,13 @@ def _demo_after_request(response):
                 changed = True
             if changed:
                 response.set_data(html)
-                response.content_length = None
+                # Same fix as the JSON leg — set the exact byte
+                # length so Cloudflare tunnel doesn't 502 on a
+                # malformed Content-Length header emitted by
+                # Werkzeug's WSGI iter.
+                encoded = html.encode("utf-8")
+                response.headers["Content-Length"] = str(len(encoded))
+                response.headers.pop("Transfer-Encoding", None)
         except Exception:
             pass
     return response
