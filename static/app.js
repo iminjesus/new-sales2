@@ -2964,8 +2964,14 @@ function renderProfitCombined(rows) {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: "index", intersect: false },
+      // Widen the bar group per category so few-month views
+      // (Jan–Jul mid-year) don't leave the plot area looking
+      // half-empty around each month tick.
+      datasets: {
+        bar: { categoryPercentage: 0.95, barPercentage: 0.9 }
+      },
       scales: {
-        x: { stacked: false },
+        x: { stacked: false, offset: true },
         y: {
           beginAtZero: true,
           title: { display: true, text: "Amount" },
