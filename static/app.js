@@ -1066,14 +1066,18 @@ async function drawDailyTotals(){
     }
   }
 
-  // Use all N day labels (non-working day dates remain on x-axis, bars are null)
-  const fL  = labels.slice(0, N);
-  const fS  = sales.slice(0, N);
-  const fT  = targets.slice(0, N);
-  const fSC = salesCum.slice(0, N);
-  const fTC = targetCum.slice(0, N);
-  const fA  = achievement.slice(0, N);
-  const fCA = cumAchievement.slice(0, N);
+  // Truncate every dataset to the last day we actually have data
+  // for — same rule the stacked-daily charts use.  Otherwise the
+  // Daily Sales + Cumulative bar charts render an empty axis out
+  // to day 31 for months still in progress.
+  const cutLen = Math.min(N, (cutoffIdx >= 0 ? cutoffIdx + 1 : N));
+  const fL  = labels.slice(0, cutLen);
+  const fS  = sales.slice(0, cutLen);
+  const fT  = targets.slice(0, cutLen);
+  const fSC = salesCum.slice(0, cutLen);
+  const fTC = targetCum.slice(0, cutLen);
+  const fA  = achievement.slice(0, cutLen);
+  const fCA = cumAchievement.slice(0, cutLen);
 
   [dailyInst, dailyCumInst].forEach(c => c && c.destroy());
 
