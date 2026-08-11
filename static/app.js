@@ -2887,33 +2887,11 @@ function renderProfitCombined(rows) {
     type: "bar",
     data: {
       labels: labels,
+      // Bar datasets FIRST so Chart.js centers the 2 stack groups
+      // (Gross | Costs) on each month tick.  Line dataset last so
+      // it doesn't reserve a column slot in the bar grouping — that
+      // was pushing the bar pair to the left of the category.
       datasets: [
-        // Line: Profit %
-        {
-          type: "line",
-          label: "Profit %",
-          data: profitPct,
-          yAxisID: "y1",
-          tension: 0.25,
-          borderWidth: 2.5,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          fill: false,
-          borderColor: "#10b981",
-          pointBackgroundColor: profitPct.map(v => v >= 0 ? "#10b981" : "#ef4444"),
-          datalabels: {
-            display: ctx => gross[ctx.dataIndex] > 0,
-            align: "top",
-            anchor: "end",
-            offset: 4,
-            formatter: v => v == null ? "" : v.toFixed(1) + "%",
-            font: { weight: "bold", size: 10 },
-            color: ctx => profitPct[ctx.dataIndex] >= 0 ? "#065f46" : "#991b1b",
-            backgroundColor: "rgba(255,255,255,0.75)",
-            borderRadius: 3,
-            padding: { top: 1, bottom: 1, left: 3, right: 3 }
-          }
-        },
         // Bar group 1: Gross
         {
           type: "bar",
@@ -2925,7 +2903,6 @@ function renderProfitCombined(rows) {
           borderWidth: 1
         },
         // Bar group 2: stacked Costs (beside Gross)
-       
         {
           type: "bar",
           label: "COGS",
@@ -2949,6 +2926,34 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "C",
           backgroundColor: "#d55fc3ff"
+        },
+        // Line: Profit % — placed LAST so it doesn't participate
+        // in the bar column allocation.
+        {
+          type: "line",
+          label: "Profit %",
+          data: profitPct,
+          yAxisID: "y1",
+          tension: 0.25,
+          borderWidth: 2.5,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          fill: false,
+          borderColor: "#10b981",
+          pointBackgroundColor: profitPct.map(v => v >= 0 ? "#10b981" : "#ef4444"),
+          order: -1,   // draw the line ON TOP of the bars visually
+          datalabels: {
+            display: ctx => gross[ctx.dataIndex] > 0,
+            align: "top",
+            anchor: "end",
+            offset: 4,
+            formatter: v => v == null ? "" : v.toFixed(1) + "%",
+            font: { weight: "bold", size: 10 },
+            color: ctx => profitPct[ctx.dataIndex] >= 0 ? "#065f46" : "#991b1b",
+            backgroundColor: "rgba(255,255,255,0.75)",
+            borderRadius: 3,
+            padding: { top: 1, bottom: 1, left: 3, right: 3 }
+          }
         }
       ]
     },
