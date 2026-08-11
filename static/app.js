@@ -2922,9 +2922,7 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "G",
           backgroundColor: "#93c5fd",
-          borderWidth: 1,
-          categoryPercentage: 0.9,
-          barPercentage: 0.9
+          borderWidth: 1
         },
         // Bar group 2: stacked Costs (beside Gross)
        
@@ -2934,9 +2932,7 @@ function renderProfitCombined(rows) {
           data: cogs,
           yAxisID: "y",
           stack: "C",
-          backgroundColor: "#f87171",
-          categoryPercentage: 0.9,
-          barPercentage: 0.9
+          backgroundColor: "#f87171"
         },
         {
           type: "bar",
@@ -2944,9 +2940,7 @@ function renderProfitCombined(rows) {
           data: op,
           yAxisID: "y",
           stack: "C",
-          backgroundColor: "#fbbf24",
-          categoryPercentage: 0.9,
-          barPercentage: 0.9
+          backgroundColor: "#fbbf24"
         },
         {
           type: "bar",
@@ -2954,9 +2948,7 @@ function renderProfitCombined(rows) {
           data: sd,
           yAxisID: "y",
           stack: "C",
-          backgroundColor: "#d55fc3ff",
-          categoryPercentage: 0.9,
-          barPercentage: 0.9
+          backgroundColor: "#d55fc3ff"
         }
       ]
     },
