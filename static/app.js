@@ -3162,10 +3162,12 @@ async function _refreshTopProductsPanelImpl(){
   // has narrowed to a specific ship-to / sold-to — in that
   // customer-drilled case the panel answers "what does this
   // customer actually buy?" without needing to click Top N.
+  // When auto-triggered by drill, fetch top 20 so the reader can
+  // expand past the initial 10 if they want the long tail.
   const explicit = Number(filters.top_limit || 0);
   const drilled  = (filters.ship_to && filters.ship_to !== "ALL")
                 || (filters.sold_to && filters.sold_to !== "ALL");
-  const n = explicit > 0 ? explicit : (drilled ? 10 : 0);
+  const n = explicit > 0 ? explicit : (drilled ? 20 : 0);
   if (n <= 0) { box.hidden = true; body.innerHTML = ""; return; }
   const metric = (filters.metric === "amount") ? "amount" : "qty";
   const qs = new URLSearchParams({
