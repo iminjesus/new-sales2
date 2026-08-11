@@ -2965,10 +2965,15 @@ function renderProfitCombined(rows) {
       // (Jan–Jul mid-year) don't leave the plot area looking
       // half-empty around each month tick.
       datasets: {
-        bar: { categoryPercentage: 0.95, barPercentage: 0.9 }
+        bar: { categoryPercentage: 1.0, barPercentage: 0.9 }
       },
       scales: {
-        x: { stacked: false, offset: true },
+        // x.stacked:true with different `stack` names (G vs C)
+        // makes Chart.js group by stack, centered on each tick —
+        // same-stack datasets pile vertically, different-stack
+        // datasets sit side-by-side but still centered on the
+        // category tick.  stacked:false left them left-aligned.
+        x: { stacked: true, offset: true },
         y: {
           beginAtZero: true,
           title: { display: true, text: "Amount" },
