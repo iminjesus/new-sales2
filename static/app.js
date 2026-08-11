@@ -3033,6 +3033,7 @@ async function refreshAllWithKpi(){
     drawYearlyTotals(),
     drawYearlyStacked(),
     refreshTopSoldPanel(),
+    refreshTopProductsPanel(),
   ]);
 
 }
@@ -3133,6 +3134,107 @@ async function _refreshTopSoldPanelImpl(){
         if (i >= 10) tr.classList.toggle("hidden-row", !collapsed);
       });
       btn.dataset.tsx = collapsed ? "expanded" : "collapsed";
+      btn.textContent = collapsed
+        ? `▴ Show top 10 only`
+        : `▾ Show all ${rows.length} (${collapsedCount} more)`;
+    });
+  }
+}
+
+// Top-N products (s_code) panel — mirrors refreshTopSoldPanel but
+// bucket = product SKU (s_code with representative size/pattern).
+async function refreshTopProductsPanel(){
+  try {
+    return await _refreshTopProductsPanelImpl();
+  } catch (e) {
+    console.error("refreshTopProductsPanel failed:", e);
+    const box = document.getElementById("topProdBox");
+    if (box) box.hidden = true;
+    return null;
+  }
+}
+async function _refreshTopProductsPanelImpl(){
+  const box   = document.getElementById("topProdBox");
+  const body  = document.getElementById("topProdBody");
+  const title = document.getElementById("topProdTitle");
+  if (!box || !body) return;
+  const n = Number(filters.top_limit || 0);
+  if (n <= 0) { box.hidden = true; body.innerHTML = ""; return; }
+  const metric = (filters.metric === "amount") ? "amount" : "qty";
+  const qs = new URLSearchParams({
+    top_limit:     n,
+    metric:        metric,
+    category:      filters.category,
+    region:        filters.region,
+    salesman:      filters.salesman,
+    sold_to_group: filters.sold_to_group,
+    sold_to:       filters.sold_to,
+    ship_to:       filters.ship_to,
+    product_group: filters.product_group,
+    pattern:       filters.pattern,
+    material:      filters.material,
+    code:          filters.code,
+    brand:         filters.brand,
+    channel:       filters.channel,
+  });
+  box.hidden = false;
+  body.innerHTML = `<div style="color:#9ca3af;font-size:11px;padding:4px;">Loading…</div>`;
+  let d;
+  try {
+    d = await fetch(`/api/top_products_details?${qs.toString()}`,
+                    {credentials:"include"}).then(r => r.json());
+  } catch(e){
+    body.innerHTML = `<div style="color:#b91c1c;font-size:11px;padding:4px;">Load failed</div>`;
+    return;
+  }
+  const rows = (d && d.rows) || [];
+  if (title) title.textContent =
+    `Top ${n} products — ${metric === "qty" ? "Qty" : "Amount"} (2026 YTD)`;
+  if (!rows.length) {
+    body.innerHTML = `<div style="color:#9ca3af;font-size:11px;padding:4px;">No sales in this slice.</div>`;
+    return;
+  }
+  const fmt = v => Number(v || 0).toLocaleString();
+  const esc = s => String(s == null ? "" : s)
+                    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
+                    .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  const showAllInitially = rows.length <= 10;
+  const rowHtml = rows.map((r, i) => {
+    const hide = (!showAllInitially && i >= 10) ? " hidden-row" : "";
+    const sizeTxt = r.size || "—";
+    const patTxt  = r.pattern || "—";
+    // s_code visible in the size cell tooltip so BDE can copy it.
+    return `
+      <tr class="tp-row${hide}">
+        <td>${i + 1}</td>
+        <td title="${esc(r.s_code)} · ${esc(r.line || "")} › ${esc(r.product_group || "")}">${esc(sizeTxt)}</td>
+        <td title="${esc(patTxt)}">${esc(patTxt)}</td>
+        <td>${fmt(metric === "qty" ? r.qty : r.amt)}</td>
+      </tr>`;
+  }).join("");
+  const collapsedCount = showAllInitially ? 0 : (rows.length - 10);
+  const expandBtn = collapsedCount > 0
+    ? `<button type="button" class="expand-btn" data-tpx="collapsed">
+         ▾ Show all ${rows.length} (${collapsedCount} more)
+       </button>`
+    : "";
+  body.innerHTML = `
+    <table>
+      <thead>
+        <tr><th>#</th><th>Size</th><th>Pattern</th><th>${metric === "qty" ? "Qty" : "Amount"}</th></tr>
+      </thead>
+      <tbody>${rowHtml}</tbody>
+    </table>
+    ${expandBtn}
+  `;
+  const btn = body.querySelector(".expand-btn");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      const collapsed = btn.dataset.tpx === "collapsed";
+      body.querySelectorAll(".tp-row").forEach((tr, i) => {
+        if (i >= 10) tr.classList.toggle("hidden-row", !collapsed);
+      });
+      btn.dataset.tpx = collapsed ? "expanded" : "collapsed";
       btn.textContent = collapsed
         ? `▴ Show top 10 only`
         : `▾ Show all ${rows.length} (${collapsedCount} more)`;

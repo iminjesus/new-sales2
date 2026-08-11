@@ -6135,6 +6135,102 @@ def api_top_sold_to_details():
         cur.close(); conn.close()
 
 
+# Top-N products (s_code) with representative size/pattern for the
+# little panel that sits between the Top Sold-to box and the Profit
+# chart.  Same slice logic as top_sold_to_details — 2026
+# sales_2526 as the ranking window, respects the same filter
+# chips, ordered by SUM(qty) or SUM(amt) desc.
+@app.get("/api/top_products_details")
+def api_top_products_details():
+    try:
+        top_limit = int(request.args.get("top_limit") or 0)
+    except Exception:
+        top_limit = 0
+    if top_limit <= 0:
+        return jsonify({"rows": []})
+    top_limit = min(top_limit, 100)
+
+    f = parse_filters(request)
+    metric = f.get("metric", "qty")
+    value = "qty" if metric == "qty" else "amt"
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
+        if f.get("category") != "443":
+            cat_joins, cat_where = category_filters_sales("s", f.get("category"))
+            joins += cat_joins; wh += cat_where
+
+        # Carrying dedup subquery — we need s_code + representative
+        # size/pattern/line/product_group per m_code so multiple
+        # m_codes in the same s_code group roll up into one product.
+        # The narrowing filter chips get baked into the inner WHERE
+        # so we don't lose data via post-JOIN filter drop.
+        inner_wh = ["line IN ('PCLT','TBR')",
+                    "size IS NOT NULL", "TRIM(size) <> ''"]
+        inner_p  = []
+        if f.get("product_group") != "ALL":
+            inner_wh.append("product_group = %s"); inner_p.append(f["product_group"])
+        if f["brand"] != "ALL":
+            inner_wh.append("brand = %s"); inner_p.append(f["brand"])
+        if f.get("pattern") != "ALL":
+            inner_wh.append("pattern = %s"); inner_p.append(f["pattern"])
+        if f.get("material") != "ALL":
+            inner_wh.append("size = %s"); inner_p.append(f["material"])
+        if f["code"] != "ALL":
+            inner_wh.append("m_code = %s"); inner_p.append(f["code"])
+        dedup = (
+            "(SELECT m_code, "
+            " MIN(s_code)        AS s_code, "
+            " MIN(size)          AS size, "
+            " MIN(pattern)       AS pattern, "
+            " MIN(line)          AS line, "
+            " MIN(product_group) AS product_group "
+            f" FROM carrying_26 WHERE {' AND '.join(inner_wh)} "
+            " GROUP BY m_code) mat")
+
+        joins.append(f"JOIN {dedup} ON mat.m_code = s.material")
+
+        wh.append("s.billing_date >= '2026-01-01' "
+                  "AND s.billing_date <  '2027-01-01'")
+        where_sql = "WHERE " + " AND ".join(wh)
+
+        sql = f"""
+          SELECT mat.s_code,
+                 MIN(mat.size)          AS size,
+                 MIN(mat.pattern)       AS pattern,
+                 MIN(mat.line)          AS line,
+                 MIN(mat.product_group) AS product_group,
+                 SUM(s.qty) AS qty,
+                 SUM(s.amt) AS amt
+            FROM {_sales_2526_from("s", year=2026)}
+            {' '.join(joins)}
+            {where_sql}
+              AND mat.s_code IS NOT NULL AND TRIM(mat.s_code) <> ''
+           GROUP BY mat.s_code
+           ORDER BY SUM(s.{value}) DESC
+           LIMIT %s
+        """
+        cur.execute(sql, tuple(inner_p) + tuple(params) + (int(top_limit),))
+        rows = []
+        for r in cur.fetchall():
+            rows.append({
+                "s_code":       str(r.get("s_code") or "").strip(),
+                "size":         (r.get("size") or "").strip(),
+                "pattern":      (r.get("pattern") or "").strip(),
+                "line":         (r.get("line") or "").strip(),
+                "product_group":(r.get("product_group") or "").strip(),
+                "qty":          int(round(float(r.get("qty") or 0))),
+                "amt":          int(round(float(r.get("amt") or 0))),
+            })
+        return jsonify({"rows": rows, "metric": metric, "top_limit": top_limit})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        cur.close(); conn.close()
+
+
 # ---------------------------------- v2: consolidated APIs ----------------------------------
 
 @app.get("/api/v2/dimensions")
