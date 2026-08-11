@@ -2858,10 +2858,27 @@ function renderProfitCombined(rows) {
     rows.find(r => +r.month === i + 1) || { month: i + 1, gross: 0, sd: 0, cogs: 0, op_cost: 0 }
   );
 
-  const gross = byMonth.map(r => +r.gross || 0);
-  const sd    = byMonth.map(r => +r.sd || 0);
-  const cogs  = byMonth.map(r => +r.cogs || 0);
-  const op    = byMonth.map(r => +r.op_cost || 0);
+  const grossFull = byMonth.map(r => +r.gross || 0);
+  const sdFull    = byMonth.map(r => +r.sd || 0);
+  const cogsFull  = byMonth.map(r => +r.cogs || 0);
+  const opFull    = byMonth.map(r => +r.op_cost || 0);
+
+  // Truncate the x-axis at the last month with any actual data —
+  // otherwise the chart stretches empty out to Dec in mid-year
+  // views (a flat 0% line reads as "0 profit", not "no data yet").
+  let lastMonthIdx = -1;
+  for (let i = 0; i < 12; i++) {
+    if (grossFull[i] > 0 || sdFull[i] > 0 || cogsFull[i] > 0 || opFull[i] > 0) {
+      lastMonthIdx = i;
+    }
+  }
+  const cutLen = lastMonthIdx >= 0 ? lastMonthIdx + 1 : 12;
+
+  const gross = grossFull.slice(0, cutLen);
+  const sd    = sdFull.slice(0, cutLen);
+  const cogs  = cogsFull.slice(0, cutLen);
+  const op    = opFull.slice(0, cutLen);
+  const labels = PROFIT_MONTH_LABELS.slice(0, cutLen);
 
   const totalCost = sd.map((v, i) => sd[i] + cogs[i] + op[i]);
   const profitPct = gross.map((g, i) => (g > 0 ? ((g - totalCost[i]) / g) * 100 : 0));
@@ -2869,7 +2886,7 @@ function renderProfitCombined(rows) {
   profitComboInst = new Chart(el, {
     type: "bar",
     data: {
-      labels: PROFIT_MONTH_LABELS,
+      labels: labels,
       datasets: [
         // Line: Profit %
         {
@@ -2956,8 +2973,13 @@ function renderProfitCombined(rows) {
         },
         y1: {
           position: "right",
-          min: -10,
-          max: 10,
+          // Auto-fit around actual Profit % values — the fixed
+          // ±10 window clipped anything past ±10 (a real +15% or
+          // -12% just fell off the chart).  Suggested bounds keep
+          // small ranges from squishing to zero-height, but real
+          // extremes now push the axis out to fit them.
+          suggestedMin: -10,
+          suggestedMax:  10,
           title: { display: true, text: "Profit %" },
           grid: { drawOnChartArea: false },
           ticks: { callback: v => `${v}%` }
