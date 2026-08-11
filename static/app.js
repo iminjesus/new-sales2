@@ -3158,17 +3158,21 @@ async function _refreshTopProductsPanelImpl(){
   const body  = document.getElementById("topProdBody");
   const title = document.getElementById("topProdTitle");
   if (!box || !body) return;
-  // Show the panel when EITHER the Top N chip is on OR the reader
-  // has narrowed to a specific ship-to / sold-to — in that
-  // customer-drilled case the panel answers "what does this
-  // customer actually buy?" without needing to click Top N.
-  // When auto-triggered by drill, fetch top 20 so the reader can
-  // expand past the initial 10 if they want the long tail.
+  // Panel visibility — show whenever:
+  //   • Top N chip (any of 10/20/30) is on — the reader is
+  //     analysing top customers and wants product context too, OR
+  //   • Ship-to / sold-to is drilled — the panel answers "what
+  //     does this customer actually buy?"
+  // Row count is always 20 (rendered as 10 + expand) — top_limit
+  // is a customer-side filter, so tying product count to it would
+  // be a category error.  Top 30 chip still gives 30 sold-tos in
+  // the sold-to panel; products stay 20.
   const explicit = Number(filters.top_limit || 0);
   const drilled  = (filters.ship_to && filters.ship_to !== "ALL")
                 || (filters.sold_to && filters.sold_to !== "ALL");
-  const n = explicit > 0 ? explicit : (drilled ? 20 : 0);
-  if (n <= 0) { box.hidden = true; body.innerHTML = ""; return; }
+  const visible  = explicit > 0 || drilled;
+  if (!visible) { box.hidden = true; body.innerHTML = ""; return; }
+  const n = 20;
   const metric = (filters.metric === "amount") ? "amount" : "qty";
   const qs = new URLSearchParams({
     top_limit:     n,
