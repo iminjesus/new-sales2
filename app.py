@@ -6040,7 +6040,10 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
 
     # Always restrict to 2026 — the ranking is "this year's top sold_tos
     # within the selected slice", not last year's.
-    wh.append("sTop.year = 2026")
+    # Use billing_date (indexed) — the virtual `year` column isn't
+    # populated on every deployment.
+    wh.append("sTop.billing_date >= '2026-01-01' "
+              "AND sTop.billing_date <  '2027-01-01'")
     where_sql = "WHERE " + " AND ".join(wh)
 
     sql = f"""
@@ -6099,7 +6102,8 @@ def api_top_sold_to_details():
             wh.append("mat.size = %s"); params.append(f["material"])
         if f["code"] != "ALL":
             wh.append(_code_group_clause("mat")); params.append(f["code"])
-        wh.append("sTop.year = 2026")
+        wh.append("sTop.billing_date >= '2026-01-01' "
+                  "AND sTop.billing_date <  '2027-01-01'")
         where_sql = "WHERE " + " AND ".join(wh)
         sql = f"""
           SELECT sTop.sold_to,
