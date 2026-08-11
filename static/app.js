@@ -2965,7 +2965,9 @@ function renderProfitCombined(rows) {
       // (Jan–Jul mid-year) don't leave the plot area looking
       // half-empty around each month tick.
       datasets: {
-        bar: { categoryPercentage: 1.0, barPercentage: 0.9 }
+        // 0.85 keeps a small breathing gap between month
+        // categories; 1.0 made adjacent months' bars touch.
+        bar: { categoryPercentage: 0.85, barPercentage: 0.95 }
       },
       scales: {
         // x.stacked:true with different `stack` names (G vs C)
