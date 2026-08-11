@@ -3158,7 +3158,14 @@ async function _refreshTopProductsPanelImpl(){
   const body  = document.getElementById("topProdBody");
   const title = document.getElementById("topProdTitle");
   if (!box || !body) return;
-  const n = Number(filters.top_limit || 0);
+  // Show the panel when EITHER the Top N chip is on OR the reader
+  // has narrowed to a specific ship-to / sold-to — in that
+  // customer-drilled case the panel answers "what does this
+  // customer actually buy?" without needing to click Top N.
+  const explicit = Number(filters.top_limit || 0);
+  const drilled  = (filters.ship_to && filters.ship_to !== "ALL")
+                || (filters.sold_to && filters.sold_to !== "ALL");
+  const n = explicit > 0 ? explicit : (drilled ? 10 : 0);
   if (n <= 0) { box.hidden = true; body.innerHTML = ""; return; }
   const metric = (filters.metric === "amount") ? "amount" : "qty";
   const qs = new URLSearchParams({
