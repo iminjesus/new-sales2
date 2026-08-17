@@ -161,7 +161,7 @@ ROW_FILLS = {
     "DL":"FADBD8","YO":"D4E6F1",
 }
 
-# ── Style helpers ─────────────────────────────────────────────────────────────
+# ── Style helpers ────────────────────────────────────────────────────────────────────────────────
 def thin():
     s = Side(style="thin", color="CCCCCC")
     return Border(left=s, right=s, top=s, bottom=s)
@@ -204,8 +204,7 @@ def kw_match(desc, keywords):
     return any(k.lower() in d for k in keywords)
 
 def load_csv(path):
-    # utf-8-sig strips the UTF-8 BOM (Excel exports add it); cp949 covers
-    # Korean Windows exports; latin-1 is the last-resort byte-safe fallback.
+    rows = []
     for enc in ("utf-8-sig", "cp949", "latin-1"):
         try:
             with open(path, encoding=enc) as f:
@@ -213,10 +212,16 @@ def load_csv(path):
             break
         except UnicodeDecodeError:
             continue
-    # normalise header keys to uppercase so lookups work regardless of case
-    return [{k.upper(): v for k, v in r.items()} for r in rows]
+    # Strip UTF-8 BOM that latin-1 reads as 3 bytes (\xef\xbb\xbf) from keys,
+    # then normalise to uppercase so lookups work regardless of CSV case.
+    BOM = '\xef\xbb\xbf'
+    return [
+        {(k[3:] if k.startswith(BOM) else k).strip().upper(): v
+         for k, v in r.items()}
+        for r in rows
+    ]
 
-# ── Chunk 2: Series extraction + lookup builders + matchers ───────────────────
+# ── Chunk 2: Series extraction + lookup builders + matchers ─────────────────────────────────
 
 _LEAD_RE = re.compile(
     r'^(C\s+)?'
@@ -359,7 +364,7 @@ def best_twi(size, abbr, tw_lk):
     desc, cost_val, _price_val = items[0]
     return desc, None, cost_val
 
-# ── Chunk 3: Sheet 1 — Summary (9 cols/brand) ─────────────────────────────────
+# ── Chunk 3: Sheet 1 — Summary (9 cols/brand) ───────────────────────────────────────────────────
 
 def sheet_summary(wb, t_rows, bj_rows, jax_rows):
     ws = wb.create_sheet("Summary")
@@ -371,7 +376,7 @@ def sheet_summary(wb, t_rows, bj_rows, jax_rows):
 
     brand_abbrs  = list(BRANDS.keys())
     N            = len(brand_abbrs)
-    COLS_PER_BRAND = 9   # T.Product|T.Cost|T.Price|BJ Product|BJ Price|BJ Disc|JAX Product|JAX Price|JAX Disc
+    COLS_PER_BRAND = 9
     total_cols   = 3 + N * COLS_PER_BRAND
 
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=total_cols)
@@ -468,7 +473,7 @@ def sheet_summary(wb, t_rows, bj_rows, jax_rows):
         ws.column_dimensions[get_column_letter(col+6)].width = 32
         col += COLS_PER_BRAND
 
-# ── Chunk 4: Sheet 2 — BJ Products  /  Sheet 3 — JAX Products ────────────────
+# ── Chunk 4: Sheet 2 — BJ Products  /  Sheet 3 — JAX Products ────────────────────────────────
 
 def _sheet_products(wb, rows, sheet_name, header_bg, has_save_text=True):
     ws = wb.create_sheet(sheet_name)
@@ -481,23 +486,23 @@ def _sheet_products(wb, rows, sheet_name, header_bg, has_save_text=True):
         hdr_cell(ws, 1, ci, h, bg=header_bg)
 
     sorted_rows = sorted(rows, key=lambda r: (
-        r.get("SIZE",""), r.get("brand",""),
+        r.get("SIZE",""), r.get("BRAND","") or r.get("brand",""),
         float(r.get("PRICE","0") or 0)
     ))
     for i, r in enumerate(sorted_rows):
         rn    = i + 2
         price = r.get("PRICE","").strip()
         disc  = r.get("DISC_PRICE","").strip()
-        abbr  = abbr_for(r.get("brand","").strip())
+        abbr  = abbr_for((r.get("BRAND") or r.get("brand","")).strip())
         bg    = ROW_FILLS.get(abbr, "F9F9F9") if abbr else "F9F9F9"
 
         price_f = float(price) if price else None
         disc_f  = float(disc)  if disc  else None
         diff    = round(disc_f - price_f, 2) if (price_f and disc_f) else None
 
-        dc(ws, rn, 1, r.get("SIZE",""),        bg=bg, align="center")
-        dc(ws, rn, 2, r.get("brand",""),       bg=bg)
-        dc(ws, rn, 3, r.get("DESCRIPTION",""), bg=bg)
+        dc(ws, rn, 1, r.get("SIZE",""),                              bg=bg, align="center")
+        dc(ws, rn, 2, r.get("BRAND") or r.get("brand",""),          bg=bg)
+        dc(ws, rn, 3, r.get("DESCRIPTION",""),                      bg=bg)
         dc(ws, rn, 4, price_f, bg=bg, align="right", num_fmt="$#,##0.00")
         dc(ws, rn, 5, disc_f,  bg=bg, align="right", num_fmt="$#,##0.00")
         dc(ws, rn, 6, diff,    bg=bg, align="right", num_fmt="$#,##0.00")
@@ -521,7 +526,7 @@ def sheet_bj_products(wb, bj_rows):
 def sheet_jax_products(wb, jax_rows):
     _sheet_products(wb, jax_rows, "JAX Products", "1A4A6E", has_save_text=False)
 
-# ── Chunk 5: Sheet 4 — Match Detail + main() ─────────────────────────────────
+# ── Chunk 5: Sheet 4 — Match Detail + main() ───────────────────────────────────────────────────
 
 def sheet_match(wb, t_rows, bj_rows, jax_rows):
     ws = wb.create_sheet("Match Detail")
