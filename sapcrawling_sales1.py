@@ -32,6 +32,22 @@ OUT_CSV  = os.path.join(BASE_DIR, "rawdata", "unlock", "sales_thismonth.csv")
 DELETE_XLSX_AFTER_CONVERT = False
 MIN_CSV_SIZE = 200  # bytes
 
+# SAP user-profile date format varies per operator (System → User Profile
+# → Own Data → Defaults → Date format).  Order matters: the first accepted
+# format wins.  If SAP rejects one with a status-bar warning, main() will
+# reset the selection screen and try the next.
+DATE_FORMATS = [
+    "%d.%m.%Y",   # 01.08.2026  (SAP default 1 — Jayden's profile)
+    "%Y.%m.%d",   # 2026.08.01  (SAP default 4 — this user's profile)
+    "%m/%d/%Y",   # 08/01/2026  (SAP default 2 — US)
+    "%d/%m/%Y",   # 01/08/2026  (SAP default 6 — UK/AU)
+    "%Y-%m-%d",   # 2026-08-01  (ISO / SAP default 6)
+]
+
+# ALV Grid saved layout to auto-apply after F8 (Settings → Layout → Choose).
+# Set to "" or None to skip auto-layout and use the SAP default.
+LAYOUT_NAME = "JaydenSQL"
+
 
 # ================= DATE HELPERS =================
 def last_business_day(ref: date) -> date:
@@ -93,6 +109,30 @@ def start_tcode(session, tcode):
     session.findById("wnd[0]").sendVKey(0)
     wait(1.5)
     close_popups(session, 4)
+
+
+def sbar_text(session) -> str:
+    """Return the SAP status-bar text ('Enter data in the format XX/YY/ZZZZ',
+    'No data was selected', etc.) or empty string if unavailable."""
+    try:
+        return (session.findById("wnd[0]/sbar").Text or "").strip()
+    except:
+        return ""
+
+def sbar_is_error(session) -> bool:
+    """True when the status bar carries an error/warning (MessageType E/W/A).
+    Empty MessageType means no message or informational only."""
+    try:
+        return (session.findById("wnd[0]/sbar").MessageType or "").upper() in ("E", "W", "A")
+    except:
+        return False
+
+def looks_like_date_format_error(msg: str) -> bool:
+    """The SAP messages that indicate 'wrong date format' vary by language:
+    'Enter data in the format XX/YY/ZZZZ', 'Please enter a valid date',
+    'Ungültiges Datum', etc.  Match on the common keywords."""
+    m = (msg or "").lower()
+    return any(k in m for k in ("format", "date", "invalid", "enter", "gültig", "valid"))
 
 def set_selection_fields(session, date_from: str, date_to: str):
     """Sales Organization 4200 + Billing Date 설정"""
@@ -312,6 +352,134 @@ def trigger_export(session):
     return False
 
 
+# ---------- Layout auto-apply ----------
+def try_set_layout_on_selection(session, layout_name: str) -> bool:
+    """Some reports (including ZSDR24030 in many customer configs) expose
+    a 'Display variant' parameter on the selection screen — filling it
+    means F8 opens the results with the layout already applied, no popup.
+    Silently returns False if no such field exists on the current screen."""
+    if not layout_name:
+        return False
+    for wid in (
+        "wnd[0]/usr/ctxtP_VARI",
+        "wnd[0]/usr/ctxtP_LAYOUT",
+        "wnd[0]/usr/ctxtP_VARIANT",
+        "wnd[0]/usr/ctxtLIS_LAYOUT",
+        "wnd[0]/usr/ctxtP_ALV",
+    ):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = layout_name
+                print(f"  Layout '{layout_name}' set on selection screen via {wid}")
+                return True
+            except:
+                pass
+    return False
+
+def apply_layout_via_dialog(session, layout_name: str) -> bool:
+    """After the report has executed and the ALV grid is showing, open
+    the 'Choose Layout' dialog and select the row whose name matches
+    layout_name.  Tries three strategies in order:
+      1. Grid toolbar button (&LOAD / &VARIANT).
+      2. Ctrl+F9 shortcut (Settings → Layout → Choose).
+      3. Menu-path walk ('Settings' → 'Layout' → 'Choose').
+    Then in the popup, tries to find the layout by scanning the ALV
+    list or by typing into the search box.  Returns False on any
+    failure — caller may proceed with the default layout."""
+    if not layout_name:
+        return False
+
+    # ---- 1. Open the 'Choose Layout' dialog --------------------------------
+    opened = False
+    grid_ids = [
+        "wnd[0]/usr/cntlGRID1/shellcont/shell",
+        "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
+        "wnd[0]/usr/cntlALV_CONTAINER/shellcont/shell",
+        "wnd[0]/usr/cntlGRID1/shellcont/shellcont/shell",
+    ]
+    for gid in grid_ids:
+        if not exists(session, gid):
+            continue
+        for btn in ("&LOAD", "&VARIANT", "&MB_VARIANT"):
+            try:
+                session.findById(gid).pressToolbarButton(btn)
+                wait(0.6)
+                opened = True
+                break
+            except:
+                continue
+        if opened:
+            break
+    if not opened:
+        try:
+            session.findById("wnd[0]").sendVKey(33)   # Ctrl+F9
+            wait(0.6)
+            opened = True
+        except:
+            pass
+    if not opened:
+        item = find_menu_path_by_text(session, ["Settings", "Layout", "Choose..."])
+        if item is None:
+            item = find_menu_path_by_text(session, ["Settings", "Layout", "Choose"])
+        if item is not None:
+            try:
+                item.select(); wait(0.6); opened = True
+            except:
+                pass
+
+    if not opened or not exists(session, "wnd[1]"):
+        return False
+
+    # ---- 2. Find the row for layout_name in the popup ----------------------
+    lname = layout_name.strip().lower()
+
+    # (a) ALV grid inside popup — scan rows/cols for the name
+    popup_grid_ids = [
+        "wnd[1]/usr/cntlG_ALV_LAYOUT/shellcont/shell",
+        "wnd[1]/usr/cntlCONTAINER1/shellcont/shell",
+        "wnd[1]/usr/cntlSHELL/shellcont/shell",
+    ]
+    for gid in popup_grid_ids:
+        if not exists(session, gid):
+            continue
+        try:
+            grid = session.findById(gid)
+            row_cnt = int(getattr(grid, "RowCount", 0) or 0)
+            for r in range(row_cnt):
+                for col in ("VARIANT", "TEXT", "LTEXT", "NAME"):
+                    try:
+                        val = grid.getCellValue(r, col)
+                        if val and val.strip().lower() == lname:
+                            grid.setCurrentCell(r, col)
+                            grid.doubleClickCurrentCell()
+                            wait(0.5)
+                            print(f"  Layout '{layout_name}' applied via popup grid")
+                            return True
+                    except:
+                        continue
+        except:
+            continue
+
+    # (b) Search box in popup — type name + Enter
+    for wid in ("wnd[1]/usr/ctxt%%DYN001-LOW",
+                "wnd[1]/usr/txtRSVAR-VARIANT",
+                "wnd[1]/usr/txtV-LOW"):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = layout_name
+                session.findById("wnd[1]/tbar[0]/btn[0]").press()  # Enter
+                wait(0.5)
+                print(f"  Layout '{layout_name}' applied via popup search")
+                return True
+            except:
+                continue
+
+    # Give up — close popup gracefully so caller can continue
+    try: session.findById("wnd[1]/tbar[0]/btn[12]").press()   # Cancel
+    except: pass
+    return False
+
+
 # ================= MAIN =================
 def main():
     today   = date.today()
@@ -326,10 +494,6 @@ def main():
         d_from = month_start(today)
         d_to   = last_business_day(today)
 
-    date_from = sap_date(d_from)
-    date_to   = sap_date(d_to)
-
-    print(f"Billing date : {date_from} ~ {date_to}")
     print(f"Output file  : {OUT_CSV}")
 
     ensure_out_dir(OUT_CSV)
@@ -338,8 +502,6 @@ def main():
             os.remove(OUT_CSV)
         except:
             pass
-
-    export_start_ts = time.time()
 
     SapGuiAuto = win32com.client.GetObject("SAPGUI")
     app = SapGuiAuto.GetScriptingEngine
@@ -356,13 +518,54 @@ def main():
     except:
         pass
 
-    start_tcode(session, TCODE)
-    set_selection_fields(session, date_from, date_to)
+    # ---- Loop over date formats until SAP accepts one --------------------
+    # The user profile date format varies (Jayden's = DD.MM.YYYY, this
+    # operator's = YYYY.MM.DD, US ops = MM/DD/YYYY).  We reset the
+    # selection screen and retry each format, checking the status bar for
+    # 'Enter data in the format XX/YY/ZZZZ' style warnings before giving up.
+    export_start_ts = None
+    accepted_fmt    = None
+    for i, fmt in enumerate(DATE_FORMATS, 1):
+        date_from = d_from.strftime(fmt)
+        date_to   = d_to.strftime(fmt)
+        print(f"[Attempt {i}/{len(DATE_FORMATS)}] date format = {fmt} → {date_from} ~ {date_to}")
 
-    # Execute (F8)
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()
-    wait(2.0)
-    close_popups(session, 4)
+        start_tcode(session, TCODE)
+        set_selection_fields(session, date_from, date_to)
+        try_set_layout_on_selection(session, LAYOUT_NAME)
+
+        export_start_ts = time.time()
+        session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
+        wait(2.0)
+        close_popups(session, 4)
+
+        msg = sbar_text(session)
+        if sbar_is_error(session) and looks_like_date_format_error(msg):
+            print(f"  ✗ SAP rejected: {msg}")
+            continue
+
+        # No date-format complaint — assume F8 worked.  If the report
+        # returned zero rows, trigger_export below will just fail cleanly.
+        accepted_fmt = fmt
+        if msg:
+            print(f"  ✓ format {fmt} accepted (status: {msg})")
+        else:
+            print(f"  ✓ format {fmt} accepted")
+        break
+
+    if not accepted_fmt:
+        raise RuntimeError(
+            "None of the candidate date formats were accepted by SAP.  "
+            "Check System → User Profile → Own Data → Defaults → Date format "
+            "and add that format to DATE_FORMATS at the top of this script."
+        )
+
+    # ---- Auto-apply the saved layout (JaydenSQL) -------------------------
+    if apply_layout_via_dialog(session, LAYOUT_NAME):
+        # give ALV a moment to redraw with the new columns
+        wait(0.6)
+    else:
+        print(f"  [WARN] Could not auto-apply layout '{LAYOUT_NAME}' — using SAP default")
 
     ok = trigger_export(session)
     if not ok:
