@@ -45,8 +45,10 @@ DATE_FORMATS = [
 ]
 
 # ALV Grid saved layout to auto-apply after F8 (Settings → Layout → Choose).
+# Use the TECHNICAL name from the first column of the layout dialog (starts
+# with '/' and is usually uppercase — 'Layout Description' is only a label).
 # Set to "" or None to skip auto-layout and use the SAP default.
-LAYOUT_NAME = "JaydenSQL"
+LAYOUT_NAME = "/JAYDENSQL"
 
 
 # ================= DATE HELPERS =================
