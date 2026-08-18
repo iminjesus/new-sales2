@@ -13509,6 +13509,7 @@ _BDE_DIRECTORY = [
     ("Begbie Hayden",    "hayden.begbie@hankooktyre.com.au",    "NSW", "ALL"),
     ("Cho JunJong",      "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
     ("Bhang Jayden",     "jayden.bhang@hankooktyre.com.au",     "NSW", "ALL"),
+    ("Park Brian",       "brian.park@hankooktyre.com.au",       "NSW", "ALL"),
 ]
 STATE_MANAGER_EMAIL = {
     "NSW": "paul.buckley@hankooktyre.com.au",
