@@ -8,3 +8,7 @@ selenium
 beautifulsoup4
 openpyxl
 qrcode[pil]
+# Daily pipeline (SAP auto-login + last-business-day verify)
+pywin32
+keyring
+holidays
