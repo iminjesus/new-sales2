@@ -1491,3 +1491,12 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #topSizesTable td.st-loading {
   text-align: center; color: #9ca3af; padding: 20px;
 }
+
+/* ── Mobile: hide the floating monthly/yearly sales overlay ─────
+   On phone / narrow tablet widths the overlay covers a large slice
+   of the Australia map (marker cluster area around Sydney/Melbourne),
+   making the stock circles hard to tap.  Users can still see the
+   same monthly/yearly bars on the Graph View page. */
+@media (max-width: 900px) {
+  #stockChartsOverlay { display: none !important; }
+}
