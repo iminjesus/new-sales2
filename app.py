@@ -4760,6 +4760,215 @@ def _age_bucket(age_months):
     return "37M+"
 
 
+@app.get("/api/stock_top_sizes")
+def api_stock_top_sizes():
+    """Top 30 (size, pattern) rows ranked by calendar-2026 sales
+    quantity — same metric set as /api/stock_warnings but grouped by
+    size × pattern instead of s_code, and without the low-coverage
+    filter (every real row is a candidate for top 30).
+
+    Query params:
+      category, product_group, pattern, material, code   — same filters as the cascade table
+      state                                              — ALL | NSW | QLD | VIC | WA
+
+    Response: { rows: [ {size, pattern, state, sales_2026, qty_3m, qty_6m,
+                          qty_12m, base_sales, stock_qty, water_qty,
+                          cy_qty, factory_qty, stock_idx, sw_idx,
+                          swf_idx}, ... 30 ] }"""
+    category   = (request.args.get("category")      or "ALL").strip().upper()
+    prod_group = (request.args.get("product_group") or "ALL").strip()
+    pattern    = (request.args.get("pattern")       or "").strip()
+    material   = (request.args.get("material")      or "").strip()
+    code       = (request.args.get("code")          or "").strip()
+    state_arg  = (request.args.get("state")         or "ALL").strip().upper()
+
+    # Filter carrying_26 to real product lines (matches cascade defaults).
+    wh     = ["c.line IN ('PCLT','TBR')",
+              "c.size IS NOT NULL", "TRIM(c.size) <> ''",
+              "c.pattern IS NOT NULL", "TRIM(c.pattern) <> ''"]
+    params = []
+    if prod_group and prod_group != "ALL":
+        wh.append("c.product_group = %s"); params.append(prod_group)
+    if pattern:
+        wh.append("c.pattern LIKE %s");    params.append(f"%{pattern}%")
+    if material:
+        wh.append("c.size = %s");          params.append(material)
+    if code and code != "ALL":
+        wh.append(_code_group_clause("c")); params.append(code)
+    if   category == "PCLT":   wh.append("c.line = 'PCLT'")
+    elif category == "TBR":    wh.append("c.line = 'TBR'")
+    elif category == "18PLUS":
+        wh.append("c.line = 'PCLT'")
+        wh.append("CAST(SUBSTRING_INDEX(c.size,'R',-1) AS DECIMAL(5,2)) >= 18.0")
+    inner_wh = " AND ".join(w.replace("c.", "") for w in wh) or "1=1"
+
+    PLANT_STATE = {"42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA"}
+    STATE_ORDER = ["NSW","QLD","VIC","WA"]
+    STATE_REMAP = {"SA":"VIC","NT":"WA","TAS":"VIC","ACT":"NSW"}
+    one_state = state_arg if state_arg in STATE_ORDER else None
+    def _state_ok(st):
+        if one_state is None: return True
+        return st == one_state
+    # For the plant-side aggregations, when a state chip is on we only
+    # count that state's warehouse.  ALL sums every warehouse.
+    plants_want = [p for p, s in PLANT_STATE.items() if _state_ok(s)] if one_state \
+                  else list(PLANT_STATE.keys())
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        # Deduped carrying_26 keyed by m_code so plant/sales joins don't
+        # multiply.  We only need (size, pattern) as the grouping key so
+        # we still MIN() the other columns for display consistency.
+        DEDUP = (
+            "(SELECT m_code, "
+            " MIN(size)    AS size, "
+            " MIN(pattern) AS pattern "
+            f"FROM carrying_26 WHERE {inner_wh} "
+            " GROUP BY m_code)")
+
+        rows = {}   # (size, pattern) -> {stock, water, cy, factory, s3, s6, s12, s2026}
+        _EMPTY = lambda: {"stock":0.0,"water":0.0,"cy":0.0,"factory":0.0,
+                          "s3":0.0,"s6":0.0,"s12":0.0,"s2026":0.0}
+
+        def _dump_plant(bucket, table, val_col, extra=""):
+            plant_in = ",".join(["%s"] * len(plants_want))
+            sql = (
+                f"SELECT c.size, c.pattern, SUM(t.{val_col}) AS q "
+                f"FROM {table} t JOIN {DEDUP} c ON c.m_code = t.material "
+                f"WHERE t.plant IN ({plant_in}){extra} "
+                f"GROUP BY c.size, c.pattern"
+            )
+            cur.execute(sql, plants_want + params)
+            for r in cur.fetchall():
+                key = ((r["size"] or "").strip(), (r["pattern"] or "").strip())
+                if not key[0] or not key[1]: continue
+                d = rows.setdefault(key, _EMPTY())
+                d[bucket] += float(r["q"] or 0)
+
+        _dump_plant("stock",   "stock",    "stock_qty", " AND t.stock_qty > 0")
+        _dump_plant("water",   "incoming", "po_qty")
+        _dump_plant("cy",      "orders",   "confirm_qty", " AND t.po_no LIKE '42%'")
+        _dump_plant("factory", "orders",   "po_qty",
+            " AND t.po_no NOT IN (SELECT DISTINCT po_no FROM incoming "
+            "                     WHERE po_no IS NOT NULL AND TRIM(po_no) <> '')")
+
+        # Sales legs — s3 / s6 / s12 rolling averages + calendar-2026 total.
+        cur.execute("SELECT MAX(YEAR(billing_date)*100 + MONTH(billing_date)) AS ym FROM sales_2526")
+        r = cur.fetchone() or {}
+        latest_ym = int(r.get("ym") or 0)
+        if latest_ym:
+            latest_y, latest_m = latest_ym // 100, latest_ym % 100
+            def _months_back(n):
+                out = []; y, m = latest_y, latest_m
+                for _ in range(n):
+                    out.append((y, m))
+                    m -= 1
+                    if m == 0: m = 12; y -= 1
+                return out
+            def _period_clause(periods, alias="s"):
+                if not periods: return "1=0"
+                parts = []
+                for y, m in periods:
+                    first = f"{y}-{m:02d}-01"
+                    ny, nm = (y+1, 1) if m == 12 else (y, m+1)
+                    nxt   = f"{ny}-{nm:02d}-01"
+                    parts.append(
+                        f"({alias}.billing_date >= '{first}' "
+                        f"AND {alias}.billing_date < '{nxt}')")
+                return "(" + " OR ".join(parts) + ")"
+
+            # State filter on sales: use customer.bde_state (same source
+            # as stock_warnings) so an NSW chip filters sales to NSW shops.
+            state_join_and_where = (
+                "JOIN ("
+                "  SELECT ship_to, MIN(bde_state) AS bde_state "
+                "  FROM customer "
+                "  WHERE bde_state IS NOT NULL AND bde_state != 'COMMON' "
+                "  GROUP BY ship_to"
+                ") cus ON cus.ship_to = s.ship_to"
+            )
+            state_filter_wh = ""
+            state_params = []
+            if one_state is not None:
+                # Map STATE_REMAP-aware set for filter.
+                accepted = {one_state}
+                for src, dst in STATE_REMAP.items():
+                    if dst == one_state: accepted.add(src)
+                ph = ",".join(["%s"] * len(accepted))
+                state_filter_wh = f" AND cus.bde_state IN ({ph})"
+                state_params = list(accepted)
+
+            for label, periods in (("s3",  _months_back(3)),
+                                   ("s6",  _months_back(6)),
+                                   ("s12", _months_back(12))):
+                n_months = {"s3":3, "s6":6, "s12":12}[label]
+                pcond = _period_clause(periods, "s")
+                cur.execute(
+                    f"SELECT mat.size, mat.pattern, SUM(s.qty) AS qty "
+                    f"FROM sales_2526 s "
+                    f"JOIN {DEDUP} mat ON mat.m_code = s.material "
+                    f"{state_join_and_where} "
+                    f"WHERE {pcond}{state_filter_wh} "
+                    f"GROUP BY mat.size, mat.pattern",
+                    params + state_params)
+                for r in cur.fetchall():
+                    key = ((r["size"] or "").strip(), (r["pattern"] or "").strip())
+                    if not key[0] or not key[1]: continue
+                    d = rows.setdefault(key, _EMPTY())
+                    d[label] += float(r["qty"] or 0) / n_months
+
+            # Calendar-2026 total.
+            cur.execute(
+                f"SELECT mat.size, mat.pattern, SUM(s.qty) AS qty "
+                f"FROM sales_2526 s "
+                f"JOIN {DEDUP} mat ON mat.m_code = s.material "
+                f"{state_join_and_where} "
+                f"WHERE YEAR(s.billing_date) = 2026{state_filter_wh} "
+                f"GROUP BY mat.size, mat.pattern",
+                params + state_params)
+            for r in cur.fetchall():
+                key = ((r["size"] or "").strip(), (r["pattern"] or "").strip())
+                if not key[0] or not key[1]: continue
+                d = rows.setdefault(key, _EMPTY())
+                d["s2026"] += float(r["qty"] or 0)
+
+        out = []
+        for (sz, pat), d in rows.items():
+            base = (d["s3"] + d["s6"] + d["s12"]) / 3.0
+            stock   = d["stock"]
+            water   = d["water"]
+            cy      = d["cy"]
+            factory = max(0.0, d["factory"] - cy)
+            idx     = (stock / base) if base > 0 else None
+            idx_sw  = ((stock + water) / base) if base > 0 else None
+            idx_swf = ((stock + water + cy + factory) / base) if base > 0 else None
+            out.append({
+                "size":         sz,
+                "pattern":      pat,
+                "state":        one_state or "ALL",
+                "sales_2026":   int(round(d["s2026"])),
+                "qty_3m":       int(round(d["s3"])),
+                "qty_6m":       int(round(d["s6"])),
+                "qty_12m":      int(round(d["s12"])),
+                "base_sales":   int(round(base)),
+                "stock_qty":    int(round(stock)),
+                "water_qty":    int(round(water)),
+                "cy_qty":       int(round(cy)),
+                "factory_qty":  int(round(factory)),
+                "stock_idx":    (round(idx,     1) if idx     is not None else None),
+                "sw_idx":       (round(idx_sw,  1) if idx_sw  is not None else None),
+                "swf_idx":      (round(idx_swf, 1) if idx_swf is not None else None),
+            })
+        # 2026 sales desc, then base_sales desc as tie-break.
+        out.sort(key=lambda r: (-(r["sales_2026"] or 0), -(r["base_sales"] or 0)))
+        return jsonify({"rows": out[:30], "state": one_state or "ALL"})
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 @app.get("/api/stock_aging")
 def api_stock_aging():
     """Stock aging breakdown for one plant.  Called when a stock circle

@@ -1312,6 +1312,10 @@
     "unknown": "#94a3b8",
   };
   const _AGING_BAR_ORDER = ["≤12M","13-18M","19-24M","25-36M","37M+","unknown"];
+  // Top-sizes row click sets this so the history chart re-fetches
+  // scoped to that (size, pattern) pair.  Cleared on second click of
+  // the same row or on any filter chip change above the table.
+  let _historySizeOverride = null;   // { size, pattern } | null
   async function fetchAndRenderStockHistory(){
     const canvas = document.getElementById("stockHistoryChart");
     if (!canvas || typeof Chart === "undefined") return;
@@ -1321,6 +1325,15 @@
     if (_agingHistoryOn)              parts.push("with_aging=1");
     if (_historyState && _historyState !== "ALL")
                                       parts.push("state=" + encodeURIComponent(_historyState));
+    // Top-sizes row click narrows the chart to one (size, pattern).
+    // Applied AFTER buildQueryParams so a page-level material/pattern
+    // filter doesn't clobber the narrower row-level pick.
+    if (_historySizeOverride && _historySizeOverride.size) {
+      parts.push("material=" + encodeURIComponent(_historySizeOverride.size));
+      if (_historySizeOverride.pattern) {
+        parts.push("pattern=" + encodeURIComponent(_historySizeOverride.pattern));
+      }
+    }
     // While the low-stock warning LIST is on (not drilled) narrow
     // the history chart to the s_codes currently on the list.  When
     // drilled, buildQueryParams already carries state.code so the
@@ -1487,6 +1500,117 @@
     }
   }
 
+  // ── Top 30 sizes table (below the history chart) ────────────────
+  // Same metric columns as the cascade table, grouped by size × pattern,
+  // sorted by calendar-2026 sales desc.  Row click narrows the history
+  // chart above to that (size, pattern) — click same row again to clear.
+  let _topSizesState = "ALL";
+  let _topSizesSelectedKey = null;   // "size||pattern" of the highlighted row
+  async function fetchAndRenderTopSizes(){
+    const body = document.getElementById("topSizesTableBody");
+    const hint = document.getElementById("topSizesHint");
+    if (!body) return;
+    if (hint) hint.textContent = "loading…";
+    const parts = [buildQueryParams()];
+    if (_topSizesState && _topSizesState !== "ALL") {
+      parts.push("state=" + encodeURIComponent(_topSizesState));
+    }
+    const qs = parts.join("&");
+    const d = await fetchJSON(`/api/stock_top_sizes?${qs}`);
+    if (!d) { if (hint) hint.textContent = "load failed"; body.innerHTML = ""; return; }
+    const rows = d.rows || [];
+    if (hint) hint.textContent = rows.length + " row" + (rows.length === 1 ? "" : "s");
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="15" class="st-loading">No data</td></tr>`;
+      return;
+    }
+    const idxCell = (v) => (v == null ? "—" : v.toFixed(1));
+    body.innerHTML = rows.map(r => {
+      const key = `${r.size}||${r.pattern}`;
+      const sel = (key === _topSizesSelectedKey) ? " top-size-selected" : "";
+      return `<tr class="top-size-row${sel}" data-size="${r.size}" data-pattern="${r.pattern}">
+        <td>${r.size}</td>
+        <td>${r.pattern}</td>
+        <td>${r.state || "ALL"}</td>
+        <td style="text-align:right">${fmt(r.qty_3m)}</td>
+        <td style="text-align:right">${fmt(r.qty_6m)}</td>
+        <td style="text-align:right">${fmt(r.qty_12m)}</td>
+        <td style="text-align:right">${fmt(r.base_sales)}</td>
+        <td style="text-align:right; font-weight:600">${fmt(r.sales_2026)}</td>
+        <td style="text-align:right">${fmt(r.stock_qty)}</td>
+        <td style="text-align:right">${fmt(r.water_qty)}</td>
+        <td style="text-align:right">${fmt(r.cy_qty)}</td>
+        <td style="text-align:right">${fmt(r.factory_qty)}</td>
+        <td style="text-align:right">${idxCell(r.stock_idx)}</td>
+        <td style="text-align:right">${idxCell(r.sw_idx)}</td>
+        <td style="text-align:right">${idxCell(r.swf_idx)}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  // State chip wiring for the top-sizes table.  Independent of the
+  // history chart's own state chip — one narrows the plant/warehouse
+  // for the ranking, the other narrows the chart.  Typical usage: pick
+  // NSW here to see the NSW top 30 and then click a row to see the
+  // NSW-scoped history for that size.
+  {
+    const seg = document.getElementById("topSizesStateSeg");
+    if (seg) {
+      seg.addEventListener("click", (e) => {
+        const btn = e.target.closest(".hist-st-btn");
+        if (!btn) return;
+        const val = btn.dataset.st || "ALL";
+        if (val === _topSizesState) return;
+        _topSizesState = val;
+        seg.querySelectorAll(".hist-st-btn").forEach(b =>
+          b.classList.toggle("active", b === btn));
+        // Chip change clears the row selection so the history chart
+        // isn't left showing a size that's no longer in the top list.
+        _topSizesSelectedKey = null;
+        _historySizeOverride = null;
+        fetchAndRenderTopSizes();
+        fetchAndRenderStockHistory();
+      });
+    }
+  }
+
+  // Row click → narrow the history chart above to this (size, pattern).
+  // Second click on the same row clears the override.
+  {
+    const body = document.getElementById("topSizesTableBody");
+    if (body) {
+      body.addEventListener("click", (e) => {
+        const tr = e.target.closest("tr.top-size-row");
+        if (!tr) return;
+        const sz = tr.dataset.size || "";
+        const pat = tr.dataset.pattern || "";
+        const key = `${sz}||${pat}`;
+        if (_topSizesSelectedKey === key) {
+          // Toggle off.
+          _topSizesSelectedKey = null;
+          _historySizeOverride = null;
+        } else {
+          _topSizesSelectedKey = key;
+          _historySizeOverride = { size: sz, pattern: pat };
+          // Sync history chart's state chip to match this table's chip
+          // so both views agree on which warehouse we're looking at.
+          if (_topSizesState !== _historyState) {
+            _historyState = _topSizesState;
+            const seg = document.getElementById("stockHistoryStateSeg");
+            if (seg) seg.querySelectorAll(".hist-st-btn").forEach(b =>
+              b.classList.toggle("active", (b.dataset.st || "ALL") === _historyState));
+          }
+        }
+        // Repaint selection highlight without a re-fetch.
+        body.querySelectorAll("tr.top-size-row").forEach(row => {
+          const rowKey = `${row.dataset.size || ""}||${row.dataset.pattern || ""}`;
+          row.classList.toggle("top-size-selected", rowKey === _topSizesSelectedKey);
+        });
+        fetchAndRenderStockHistory();
+      });
+    }
+  }
+
   // ---------------------- main fetch ----------------------
   async function fetchAndRender(){
     setStatus("Loading…");
@@ -1545,6 +1669,13 @@
       // takes a few hundred ms so we don't await it in the critical
       // path.
       fetchAndRenderStockHistory();
+
+      // Top 30 sizes table below the history chart.  A filter change
+      // clears any row selection so the history chart isn't left
+      // showing a size that's no longer on this list.
+      _topSizesSelectedKey = null;
+      _historySizeOverride = null;
+      fetchAndRenderTopSizes();
 
       setStatus(
         `Done. Stock: ${(stockRes?.rows||[]).length}, ` +

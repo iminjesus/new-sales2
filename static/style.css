@@ -1448,3 +1448,46 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 #clearAllFiltersBtn.clear-all-btn:hover {
   background: #fde68a; border-color: #d97706; color: #78350f;
 }
+
+/* ── Top 30 Sizes table (below stock history chart) ─────────── */
+#topSizesWrap {
+  margin-top: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+  background: #fff;
+  padding: 8px 10px 10px;
+  overflow-x: auto;
+  min-width: 0;
+}
+#topSizesWrap .top-sizes-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 2px 0 8px;
+}
+#topSizesWrap .top-sizes-head h4 {
+  margin: 0; font-size: 13px; font-weight: 700; color: #1e3a5f;
+}
+#topSizesTable {
+  width: 100%; border-collapse: collapse; font-size: 11.5px;
+}
+#topSizesTable th {
+  background: #f3f4f6; color: #374151; font-weight: 600;
+  padding: 6px 8px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid #d1d5db; position: sticky; top: 0;
+}
+#topSizesTable th:first-child, #topSizesTable th:nth-child(2),
+#topSizesTable th:nth-child(3) { text-align: left; }
+#topSizesTable td {
+  padding: 5px 8px; border-bottom: 1px solid #f3f4f6;
+  white-space: nowrap;
+}
+#topSizesTable tbody tr.top-size-row { cursor: pointer; }
+#topSizesTable tbody tr.top-size-row:hover { background: #f9fafb; }
+#topSizesTable tbody tr.top-size-row.top-size-selected {
+  background: #dbeafe;
+}
+#topSizesTable tbody tr.top-size-row.top-size-selected:hover {
+  background: #bfdbfe;
+}
+#topSizesTable td.st-loading {
+  text-align: center; color: #9ca3af; padding: 20px;
+}

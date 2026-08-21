@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Stock</title>
 
-  <link rel="stylesheet" href="/static/style.css?v=20260715">
+  <link rel="stylesheet" href="/static/style.css?v=20260817t">
 
   <link
     rel="stylesheet"
@@ -274,6 +274,49 @@
           </div>
         </div>
       </div>
+
+      <!-- Top 30 sizes by 2026 sales.  Same metric columns as the
+           cascade table above but grouped by size × pattern instead
+           of the Line → PG → Pattern → Size cascade.  Clicking a
+           row narrows the Monthly History chart above to that
+           (size, pattern) pair; click again to clear. -->
+      <div id="topSizesWrap">
+        <div class="top-sizes-head">
+          <h4>Top 30 Sizes — by 2026 Sales</h4>
+          <div id="topSizesStateSeg" class="hist-state-seg">
+            <button type="button" class="hist-st-btn active" data-st="ALL">All</button>
+            <button type="button" class="hist-st-btn" data-st="NSW">NSW</button>
+            <button type="button" class="hist-st-btn" data-st="QLD">QLD</button>
+            <button type="button" class="hist-st-btn" data-st="VIC">VIC</button>
+            <button type="button" class="hist-st-btn" data-st="WA">WA</button>
+          </div>
+          <span id="topSizesHint" style="color:#6b7280; font-size:12px;"></span>
+        </div>
+        <table id="topSizesTable">
+          <thead>
+            <tr>
+              <th>Size</th>
+              <th>Pattern</th>
+              <th>State</th>
+              <th>3M</th>
+              <th>6M</th>
+              <th>12M</th>
+              <th>Base Sales</th>
+              <th>2026</th>
+              <th>Stock</th>
+              <th>Water</th>
+              <th>CY</th>
+              <th>Factory</th>
+              <th>Stock.idx</th>
+              <th>+Water.idx</th>
+              <th>+Factory.idx</th>
+            </tr>
+          </thead>
+          <tbody id="topSizesTableBody">
+            <tr><td colspan="15" class="st-loading">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -296,6 +339,6 @@
   })();
   </script>
 
-  <script src="/static/stock.js?v=20260715e" defer></script>
+  <script src="/static/stock.js?v=20260817t" defer></script>
 </body>
 </html>
