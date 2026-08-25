@@ -4961,7 +4961,60 @@ def api_stock_top_sizes():
             })
         # 2026 sales desc, then base_sales desc as tie-break.
         out.sort(key=lambda r: (-(r["sales_2026"] or 0), -(r["base_sales"] or 0)))
-        return jsonify({"rows": out[:30], "state": one_state or "ALL"})
+        top_rows = out[:30]
+
+        # XLSX download of exactly what's on the table.  ?export=xlsx flips
+        # the response from JSON to a file so the browser fires a download.
+        if (request.args.get("export") or "").strip().lower() == "xlsx":
+            wb = Workbook(); ws = wb.active; ws.title = f"Top30 Sizes ({one_state or 'ALL'})"
+            headers = [
+                "Size","Pattern","State",
+                "3M","6M","12M","Base Sales","2026",
+                "Stock","Water","CY","Factory",
+                "Stock.idx (mo)","+Water.idx (mo)","+Factory.idx (mo)",
+            ]
+            ws.append(headers)
+            for c in range(1, len(headers)+1):
+                cell = ws.cell(row=1, column=c)
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A",
+                                        fill_type="solid")
+            for r in top_rows:
+                ws.append([
+                    r["size"], r["pattern"], r["state"],
+                    r["qty_3m"], r["qty_6m"], r["qty_12m"],
+                    r["base_sales"], r["sales_2026"],
+                    r["stock_qty"], r["water_qty"], r["cy_qty"], r["factory_qty"],
+                    r["stock_idx"], r["sw_idx"], r["swf_idx"],
+                ])
+            n_rows = len(top_rows)
+            if n_rows:
+                # qty blocks: integer with thousands separator
+                for row in ws.iter_rows(min_row=2, max_row=1+n_rows,
+                                        min_col=4, max_col=12):
+                    for cell in row: cell.number_format = "#,##0"
+                # coverage-months block: one decimal
+                for row in ws.iter_rows(min_row=2, max_row=1+n_rows,
+                                        min_col=13, max_col=15):
+                    for cell in row: cell.number_format = "0.0"
+            widths = [14, 16, 6,
+                      9, 9, 9, 11, 11,
+                      9, 9, 9, 9,
+                      13, 13, 13]
+            for i, w in enumerate(widths, start=1):
+                ws.column_dimensions[get_column_letter(i)].width = w
+            ws.freeze_panes = "A2"
+
+            bio = BytesIO(); wb.save(bio); bio.seek(0)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M")
+            fname = f"top30_sizes_{(one_state or 'ALL').lower()}_{stamp}.xlsx"
+            return send_file(
+                bio, as_attachment=True,
+                download_name=fname,
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+        return jsonify({"rows": top_rows, "state": one_state or "ALL"})
     finally:
         try: cur.close()
         except: pass

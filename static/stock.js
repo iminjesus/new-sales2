@@ -1548,6 +1548,23 @@
     }).join("");
   }
 
+  // Excel download of the current Top 30 rows.  Uses the same query
+  // params as the JSON fetch so the file matches what's on screen
+  // (current category / product_group / pattern / material / code
+  // filters plus the state chip on this table).
+  {
+    const btn = document.getElementById("topSizesXlsxBtn");
+    if (btn) {
+      btn.addEventListener("click", () => {
+        const parts = [buildQueryParams({ export: "xlsx" })];
+        if (_topSizesState && _topSizesState !== "ALL") {
+          parts.push("state=" + encodeURIComponent(_topSizesState));
+        }
+        window.location.href = `/api/stock_top_sizes?${parts.join("&")}`;
+      });
+    }
+  }
+
   // State chip wiring for the top-sizes table.  Independent of the
   // history chart's own state chip — one narrows the plant/warehouse
   // for the ranking, the other narrows the chart.  Typical usage: pick

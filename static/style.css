@@ -1500,3 +1500,15 @@ body[data-loading="1"] .dd-btn { cursor: progress !important; }
 @media (max-width: 900px) {
   #stockChartsOverlay { display: none !important; }
 }
+
+/* Excel-download chip in the Top 30 Sizes header (same shape as
+   the Low-stock warning Excel button). */
+#topSizesXlsxBtn {
+  margin-left: auto;
+  font-size: 11px; font-weight: 600;
+  background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46;
+  border-radius: 5px; padding: 3px 10px; cursor: pointer;
+}
+#topSizesXlsxBtn:hover {
+  background: #d1fae5; border-color: #10b981;
+}
