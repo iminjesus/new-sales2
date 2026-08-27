@@ -1026,7 +1026,7 @@ _DEMO_COOKIE = "SPRF_DEMO"
 # authenticated email on every request in production).  Local-dev
 # requests without any Cf-Access header are treated as allowed so a
 # developer can test /demo on 127.0.0.1 without spoofing headers.
-_DEMO_ALLOWED_EMAILS = {"jayden.bhang@hankooktyre.com.au"}
+_DEMO_ALLOWED_EMAILS = {"jayden.bhang@gmail.com"}
 
 
 def _demo_user_allowed():
