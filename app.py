@@ -13770,7 +13770,6 @@ _BDE_DIRECTORY = [
     # Leadership / dashboard ops — full scope
     ("Begbie Hayden",    "hayden.begbie@hankooktyre.com.au",    "NSW", "ALL"),
     ("Cho JunJong",      "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
-    ("Bhang Jayden",     "jayden.bhang@hankooktyre.com.au",     "NSW", "ALL"),
     ("Park Brian",       "brian.park@hankooktyre.com.au",       "NSW", "ALL"),
 ]
 STATE_MANAGER_EMAIL = {
@@ -13782,8 +13781,7 @@ STATE_MANAGER_EMAIL = {
     "WA":  "asim.qureshi@hankooktyre.com.au",
 }
 ALWAYS_TO = ["hayden.begbie@hankooktyre.com.au",
-             "junjong.cho@hankooktyre.com.au",
-             "jayden.bhang@hankooktyre.com.au"]
+             "junjong.cho@hankooktyre.com.au"]
 
 def _bde_name_keys(full_name):
     """Generate uppercase lookup keys for both 'First Last' and 'Last First'."""
