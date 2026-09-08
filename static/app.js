@@ -54,6 +54,55 @@ function withAlpha(hex, alphaHex){
   const base = hex.length >= 7 ? hex.slice(0, 7) : hex;
   return base + alphaHex;
 }
+
+// For a SINGLE-bar-per-bucket stacked-percentage chart, return line
+// datasets that connect the top edge of each region's stack across
+// adjacent buckets so month-over-month (or day-over-day, year-over-year)
+// share changes read as trend lines rather than lots of independent bars.
+//
+//   groups      : region labels in stack order (bottom → top)
+//   pctByGroup  : { region: [pct at bucket 0, 1, 2, ...] } — same length
+//                 as the bar labels; nulls tolerated
+//   nBuckets    : total bucket count (defaults to first group's length)
+//
+// Returns groups.length - 1 line datasets (the top of the last region
+// is always 100% in a 100%-stacked chart, so a flat line adds no signal).
+// Skip entirely if there's fewer than 2 groups.
+function boundaryLinesForStack(groups, pctByGroup, nBuckets){
+  if (!Array.isArray(groups) || groups.length < 2) return [];
+  const N = nBuckets ?? ((pctByGroup[groups[0]] || []).length || 0);
+  if (N < 2) return [];
+  const out = [];
+  for (let i = 0; i < groups.length - 1; i++){
+    const cum = Array(N).fill(null);
+    let anyValue = false;
+    for (let b = 0; b < N; b++){
+      let s = 0, seen = false;
+      for (let j = 0; j <= i; j++){
+        const v = (pctByGroup[groups[j]] || [])[b];
+        if (v != null){ s += (+v || 0); seen = true; }
+      }
+      if (seen){ cum[b] = s; anyValue = true; }
+    }
+    if (!anyValue) continue;
+    out.push({
+      label:                `${groups[i]} boundary`,
+      type:                 "line",
+      data:                 cum,
+      borderColor:          COLORS[i % COLORS.length],
+      borderWidth:          1.8,
+      pointRadius:          3,
+      pointHoverRadius:     5,
+      pointBackgroundColor: COLORS[i % COLORS.length],
+      fill:                 false,
+      tension:              0.15,
+      stack:                undefined,
+      datalabels:           { display:false },
+      order:                -1,     // draw ON TOP of bars
+    });
+  }
+  return out;
+}
 const REGION_SALESMEN={
   NSW:["Makris George","Borghese Alessio","Buckley Paul"],
   QLD:["Maclure Adam","Spires Steven","Bovey Craig","Marsh Aaron"],
@@ -1442,11 +1491,15 @@ async function drawDailyStacked(){
   stackedDailyCumInst = new Chart(document.getElementById("stackedDailyCumChart"), {
     type:"bar", data:{ labels, datasets:datasetsCum }, options:getCommonOptions(true, undefined, "Cumulative by Day")
   });
+  // Boundary connector lines — this chart has 1 bar per day so the
+  // reader can trace region-share drift across days as a curve.
+  const boundaryPctDay    = boundaryLinesForStack(groups, pct,    labels.length);
+  const boundaryPctCumDay = boundaryLinesForStack(groups, pctCum, labels.length);
   stackedDailyPctInst = new Chart(document.getElementById("stackedDailyPercentChart"), {
-    type:"bar", data:{ labels, datasets:datasetsPct }, options:getCommonOptions(true, 100, "Daily %")
+    type:"bar", data:{ labels, datasets:[...datasetsPct,  ...boundaryPctDay] },    options:getCommonOptions(true, 100, "Daily %")
   });
   stackedDailyCumPctInst = new Chart(document.getElementById("stackedDailyCumPercentChart"), {
-    type:"bar", data:{ labels, datasets:datasetsPctC }, options:getCommonOptions(true, 100, "Cumulative %")
+    type:"bar", data:{ labels, datasets:[...datasetsPctC, ...boundaryPctCumDay] }, options:getCommonOptions(true, 100, "Cumulative %")
   });
 }
 
@@ -2542,51 +2595,6 @@ async function drawMonthlyStacked(){
     datalabels: { display:false }
   }));
 
-  // Cumulative-percentage boundary lines for the right-column %
-  // charts (user request): each region contributes one line whose Y
-  // value at month M = sum of pct(g0..g_i) at M, so consecutive
-  // months are joined and the reader sees whether a region's share
-  // is growing or shrinking through the year.  Only the top N-1
-  // boundaries are drawn (the top of the last region is always 100%
-  // in a 100%-stacked chart, so a flat line there adds no signal).
-  function _boundaryLinesFromPct(pctMap, yearLabel){
-    const lines = [];
-    for (let i = 0; i < groups.length - 1; i++){
-      const cumRow = Array(12).fill(null);
-      let anyValue = false;
-      for (let m = 0; m < 12; m++){
-        let s = 0, seen = false;
-        for (let j = 0; j <= i; j++){
-          const v = (pctMap[groups[j]] || [])[m];
-          if (v != null){ s += (+v || 0); seen = true; }
-        }
-        if (seen){ cumRow[m] = s; anyValue = true; }
-      }
-      if (!anyValue) continue;
-      lines.push({
-        label:       `${groups[i]} boundary (${yearLabel})`,
-        type:        "line",
-        data:        cumRow,
-        borderColor: COLORS[i % COLORS.length],
-        borderWidth: 1.8,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        pointBackgroundColor: COLORS[i % COLORS.length],
-        fill:        false,
-        tension:     0.15,
-        stack:       undefined,      // do NOT stack — line is standalone
-        // Legend-key filter uses the "(YEAR)" substring in the label;
-        // tag it here so the existing stack-key legend can hide/show
-        // these along with the year they annotate.
-        datalabels:  { display:false },
-        order:       -1,             // draw ON TOP of bars
-      });
-    }
-    return lines;
-  }
-  const boundaryPct26     = _boundaryLinesFromPct(pct26,    "2026");
-  const boundaryPctCum26  = _boundaryLinesFromPct(pct26Cum, "2026");
-
   // Destroy old
   [stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst]
     .forEach(c=>c && c.destroy());
@@ -2609,7 +2617,7 @@ async function drawMonthlyStacked(){
 
   stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25Pct, ...ds26Pct, ...boundaryPct26] },
+    data:{ labels, datasets:[...ds25Pct, ...ds26Pct] },
     // Cap at 100 — it's a 100%-stacked chart, so anything above is
     // rounding noise; the previous auto-scale drifted up to 120.
     options: withStackKeyLegend(
@@ -2619,7 +2627,7 @@ async function drawMonthlyStacked(){
 
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum, ...boundaryPctCum26] },
+    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum] },
     options: withStackKeyLegend(
       getCommonOptions(true, 100, "Monthly (2025 Actual / 2026 Actual+Target)")
     )
@@ -2860,11 +2868,14 @@ async function drawYearlyStacked() {
     options: getCommonOptions(true, undefined, "Yearly")
   });
 
+  // Boundary connector lines — Yearly stacked % has one bar per year,
+  // so lines across years read as "region share is growing/shrinking".
+  const boundaryPctYearly = boundaryLinesForStack(groups, pct, labels.length);
   stackedYearlyPctInst = new Chart(
     document.getElementById("stackedYearlyPercentChart"),
     {
       type: "bar",
-      data: { labels, datasets: datasetsPct },
+      data: { labels, datasets: [...datasetsPct, ...boundaryPctYearly] },
       options: getCommonOptions(true, 100, "Yearly %")
     }
   );
