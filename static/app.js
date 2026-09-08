@@ -2114,9 +2114,9 @@ async function drawMonthlyStacked(){
               // a real dataset's color, so the swatch reads as "this
               // shading = this year/role" independent of any region.
               const ROLE_ORDER = [
-                { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#64748b", dash: [] },
-                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#2563eb", dash: [] },
-                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#b45309", dash: [4, 3] },
+                { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#cbd5e1", dash: [] },
+                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#dc2626", dash: [] },
+                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#7dd3fc", dash: [4, 3] },
               ];
               const rolesPresent = new Set();
               chart.data.datasets.forEach((ds) => {
@@ -2345,10 +2345,12 @@ async function drawMonthlyStacked(){
     (byT26[g] || Array(12).fill(null)).map(v => (v==null ? 0 : +v||0))
   ])));
 
-  // Null out cumulative after cutoff for 2026 series
+  // Null out cumulative after cutoff for 2026 ACTUAL series only —
+  // target is a planned figure that legitimately exists for every
+  // month of the year, so we keep the cumulative target line running
+  // all the way to Dec (per user request).
   groups.forEach(g=>{
     by26Cum[g]  = nullAfterLastActual(by26Cum[g]  || Array(12).fill(0), last26);
-    byT26Cum[g] = nullAfterLastActual(byT26Cum[g] || Array(12).fill(0), last26);
   });
 
   // Cumulative totals for 2026 actual + 2026 target
@@ -2407,10 +2409,14 @@ async function drawMonthlyStacked(){
   //   2026 Target  → amber  #b45309 dashed outline (already dashed)
   // categoryPercentage lowered from 0.9 → 0.62 so consecutive months
   // get a clearly visible gap between them (previous user request).
-  const YR_2025_BORDER = "#64748b";  // slate — matches left-column 2025
-  const YR_2026_BORDER = "#2563eb";  // blue  — matches left-column 2026
-  const TARGET_BORDER  = "#b45309";  // amber — matches left-column target
-  const _YEAR_BORDER_W = 2;          // thick enough to read as year band
+  // Year-marker border colours (user request):
+  //   2025 Actual  → light gray  #cbd5e1 (reference year, faded)
+  //   2026 Actual  → red         #dc2626 (this year, primary)
+  //   2026 Target  → light blue  #7dd3fc (goal / projection)
+  const YR_2025_BORDER = "#cbd5e1";
+  const YR_2026_BORDER = "#dc2626";
+  const TARGET_BORDER  = "#7dd3fc";
+  const _YEAR_BORDER_W = 2;
   const _CAT_PCT = 0.62;             // wider gap between months
   const _BAR_PCT = 0.9;
 
@@ -2536,6 +2542,51 @@ async function drawMonthlyStacked(){
     datalabels: { display:false }
   }));
 
+  // Cumulative-percentage boundary lines for the right-column %
+  // charts (user request): each region contributes one line whose Y
+  // value at month M = sum of pct(g0..g_i) at M, so consecutive
+  // months are joined and the reader sees whether a region's share
+  // is growing or shrinking through the year.  Only the top N-1
+  // boundaries are drawn (the top of the last region is always 100%
+  // in a 100%-stacked chart, so a flat line there adds no signal).
+  function _boundaryLinesFromPct(pctMap, yearLabel){
+    const lines = [];
+    for (let i = 0; i < groups.length - 1; i++){
+      const cumRow = Array(12).fill(null);
+      let anyValue = false;
+      for (let m = 0; m < 12; m++){
+        let s = 0, seen = false;
+        for (let j = 0; j <= i; j++){
+          const v = (pctMap[groups[j]] || [])[m];
+          if (v != null){ s += (+v || 0); seen = true; }
+        }
+        if (seen){ cumRow[m] = s; anyValue = true; }
+      }
+      if (!anyValue) continue;
+      lines.push({
+        label:       `${groups[i]} boundary (${yearLabel})`,
+        type:        "line",
+        data:        cumRow,
+        borderColor: COLORS[i % COLORS.length],
+        borderWidth: 1.8,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        pointBackgroundColor: COLORS[i % COLORS.length],
+        fill:        false,
+        tension:     0.15,
+        stack:       undefined,      // do NOT stack — line is standalone
+        // Legend-key filter uses the "(YEAR)" substring in the label;
+        // tag it here so the existing stack-key legend can hide/show
+        // these along with the year they annotate.
+        datalabels:  { display:false },
+        order:       -1,             // draw ON TOP of bars
+      });
+    }
+    return lines;
+  }
+  const boundaryPct26     = _boundaryLinesFromPct(pct26,    "2026");
+  const boundaryPctCum26  = _boundaryLinesFromPct(pct26Cum, "2026");
+
   // Destroy old
   [stackedMonthlyInst, stackedMonthlyCumInst, stackedMonthlyPctInst, stackedMonthlyCumPctInst]
     .forEach(c=>c && c.destroy());
@@ -2558,7 +2609,7 @@ async function drawMonthlyStacked(){
 
   stackedMonthlyPctInst = new Chart(document.getElementById("stackedMonthlyPercentChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25Pct, ...ds26Pct] },
+    data:{ labels, datasets:[...ds25Pct, ...ds26Pct, ...boundaryPct26] },
     // Cap at 100 — it's a 100%-stacked chart, so anything above is
     // rounding noise; the previous auto-scale drifted up to 120.
     options: withStackKeyLegend(
@@ -2568,7 +2619,7 @@ async function drawMonthlyStacked(){
 
   stackedMonthlyCumPctInst = new Chart(document.getElementById("stackedMonthlyCumPercentChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum] },
+    data:{ labels, datasets:[...ds25PctCum, ...ds26PctCum, ...boundaryPctCum26] },
     options: withStackKeyLegend(
       getCommonOptions(true, 100, "Monthly (2025 Actual / 2026 Actual+Target)")
     )
