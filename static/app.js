@@ -2114,9 +2114,9 @@ async function drawMonthlyStacked(){
               // a real dataset's color, so the swatch reads as "this
               // shading = this year/role" independent of any region.
               const ROLE_ORDER = [
-                { key: "(2025)",        text: "2025 Actual",  fill: "#16a34a", stroke: "#166534", dash: [] },
-                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#dc2626", stroke: "#991b1b", dash: [] },
-                { key: "(2026 Target)", text: "2026 Target",  fill: "#2563eb", stroke: "#1e3a8a", dash: [4, 3] },
+                { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#64748b", dash: [] },
+                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#2563eb", dash: [] },
+                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#b45309", dash: [4, 3] },
               ];
               const rolesPresent = new Set();
               chart.data.datasets.forEach((ds) => {
@@ -2397,27 +2397,29 @@ async function drawMonthlyStacked(){
     last26
   );
 
-  // Datasets — year-distinguishing colour scheme (user request):
-  //   2025 Actual  → green shades  (reference year, secondary)
-  //   2026 Actual  → red shades    (current year, primary)
-  //   2026 Target  → blue shades   (goal / projection)
-  // Region groups (NSW/QLD/VIC/SA/WA/COMMON) get different shades
-  // within each palette so the region breakdown inside a bar is still
-  // readable, while the year distinction is now the dominant signal.
+  // Datasets — fill stays region-coloured (so the region breakdown
+  // inside each bar stays readable), and the YEAR is signalled by a
+  // coloured OUTLINE around each bar segment, matching the same year
+  // palette the left-column non-stacked Monthly Sales chart already
+  // uses:
+  //   2025 Actual  → slate  #64748b outline
+  //   2026 Actual  → blue   #2563eb outline
+  //   2026 Target  → amber  #b45309 dashed outline (already dashed)
   // categoryPercentage lowered from 0.9 → 0.62 so consecutive months
-  // get a clearly visible gap between them (also user request).
-  const GREEN_2025  = ["#14532d", "#166534", "#15803d", "#16a34a", "#22c55e", "#4ade80"];
-  const RED_2026    = ["#7f1d1d", "#991b1b", "#b91c1c", "#dc2626", "#ef4444", "#f87171"];
-  const BLUE_TARGET = ["#1e3a8a", "#1e40af", "#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa"];
-  const _CAT_PCT = 0.62;  // was 0.9 — smaller value = wider gap between months
+  // get a clearly visible gap between them (previous user request).
+  const YR_2025_BORDER = "#64748b";  // slate — matches left-column 2025
+  const YR_2026_BORDER = "#2563eb";  // blue  — matches left-column 2026
+  const TARGET_BORDER  = "#b45309";  // amber — matches left-column target
+  const _YEAR_BORDER_W = 2;          // thick enough to read as year band
+  const _CAT_PCT = 0.62;             // wider gap between months
   const _BAR_PCT = 0.9;
-  const TARGET_BORDER = "#1e3a8a";  // dark blue border on target so
-                                     // dashed edge reads as "target" too
 
   const ds25 = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: by25[g] || Array(12).fill(0),
-    backgroundColor: GREEN_2025[i % GREEN_2025.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
+    borderColor:     YR_2025_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2427,7 +2429,9 @@ async function drawMonthlyStacked(){
   const ds26 = groups.map((g,i)=>({
     label: `${g} (2026 Actual)`,
     data: by26[g] || Array(12).fill(null),
-    backgroundColor: RED_2026[i % RED_2026.length],
+    backgroundColor: COLORS[i%COLORS.length],
+    borderColor:     YR_2026_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2026",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2437,9 +2441,9 @@ async function drawMonthlyStacked(){
   const dsT26 = groups.map((g,i)=>({
     label: `${g} (2026 Target)`,
     data: byT26[g] || Array(12).fill(null),
-    backgroundColor: BLUE_TARGET[i % BLUE_TARGET.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "b0"),
     borderColor:    TARGET_BORDER,
-    borderWidth:    1.5,
+    borderWidth:    _YEAR_BORDER_W,
     borderDash:     [4, 3],
     stack: "T2026",
     categoryPercentage: _CAT_PCT,
@@ -2450,7 +2454,9 @@ async function drawMonthlyStacked(){
   const ds25Cum = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: by25Cum[g] || Array(12).fill(0),
-    backgroundColor: GREEN_2025[i % GREEN_2025.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
+    borderColor:     YR_2025_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2460,7 +2466,9 @@ async function drawMonthlyStacked(){
   const ds26Cum = groups.map((g,i)=>({
     label: `${g} (2026 Actual)`,
     data: by26Cum[g] || Array(12).fill(null),
-    backgroundColor: RED_2026[i % RED_2026.length],
+    backgroundColor: COLORS[i%COLORS.length],
+    borderColor:     YR_2026_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2026",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2470,9 +2478,9 @@ async function drawMonthlyStacked(){
   const dsT26Cum = groups.map((g,i)=>({
     label: `${g} (2026 Target)`,
     data: byT26Cum[g] || Array(12).fill(null),
-    backgroundColor: BLUE_TARGET[i % BLUE_TARGET.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "b0"),
     borderColor:    TARGET_BORDER,
-    borderWidth:    1.5,
+    borderWidth:    _YEAR_BORDER_W,
     borderDash:     [4, 3],
     stack: "T2026",
     categoryPercentage: _CAT_PCT,
@@ -2483,7 +2491,9 @@ async function drawMonthlyStacked(){
   const ds25Pct = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: pct25[g] || Array(12).fill(0),
-    backgroundColor: GREEN_2025[i % GREEN_2025.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
+    borderColor:     YR_2025_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2493,7 +2503,9 @@ async function drawMonthlyStacked(){
   const ds26Pct = groups.map((g,i)=>({
     label: `${g} (2026)`,
     data: pct26[g] || Array(12).fill(null),
-    backgroundColor: RED_2026[i % RED_2026.length],
+    backgroundColor: COLORS[i%COLORS.length],
+    borderColor:     YR_2026_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2026",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2503,7 +2515,9 @@ async function drawMonthlyStacked(){
   const ds25PctCum = groups.map((g,i)=>({
     label: `${g} (2025)`,
     data: pct25Cum[g] || Array(12).fill(0),
-    backgroundColor: GREEN_2025[i % GREEN_2025.length],
+    backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
+    borderColor:     YR_2025_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2513,7 +2527,9 @@ async function drawMonthlyStacked(){
   const ds26PctCum = groups.map((g,i)=>({
     label: `${g} (2026)`,
     data: pct26Cum[g] || Array(12).fill(null),
-    backgroundColor: RED_2026[i % RED_2026.length],
+    backgroundColor: COLORS[i%COLORS.length],
+    borderColor:     YR_2026_BORDER,
+    borderWidth:     _YEAR_BORDER_W,
     stack: "Y2026",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
