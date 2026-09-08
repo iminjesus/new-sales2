@@ -55,67 +55,61 @@ function withAlpha(hex, alphaHex){
   return base + alphaHex;
 }
 
-// For a SINGLE-bar-per-bucket stacked-percentage chart, return line
-// datasets that visually connect the top edge of each region's stack
-// across adjacent buckets so the share drift reads as a trend.
+// Returns an inline Chart.js plugin that draws region-share boundary
+// lines on top of a 100%-stacked bar chart with ONE bar per bucket.
 //
-// Visual style (per user spec):
-//   - thin, muted grey  → subtle overlay that doesn't fight the bars
-//   - no centre dots     → clean line, no chunky point markers
-//   - stepped 'middle'   → horizontal segment ACROSS each bar's width,
-//                          vertical transition at the gap between bars,
-//                          so the line reads as bar-edge → bar-edge
-//                          rather than centre → centre
-//   - skip zero buckets  → a bucket whose cumulative share is exactly 0
-//                          (no data for those groups yet) drops out and
-//                          the line jumps over it via spanGaps: true
+// The line traces the *top edge* of each bar (left edge → right edge,
+// horizontal at that bar's cumulative %), then a straight diagonal
+// jump across the gap to the *left edge* of the next bar.  This is
+// true edge-to-edge, not centre-to-centre — implemented by drawing
+// on the canvas directly using each bar element's x + width metadata.
 //
-//   groups      : region labels in stack order (bottom → top)
-//   pctByGroup  : { region: [pct at bucket 0, 1, 2, ...] } — same length
-//                 as the bar labels; nulls tolerated
-//   nBuckets    : total bucket count (defaults to first group's length)
+// Buckets whose cumulative share is null or 0 (no data yet) break the
+// path so the line jumps past them and picks up at the next real bar.
 //
-// Returns groups.length - 1 line datasets.  The top of the last region
-// is always 100% in a 100%-stacked chart, so no flat line is drawn there.
-function boundaryLinesForStack(groups, pctByGroup, nBuckets){
-  if (!Array.isArray(groups) || groups.length < 2) return [];
-  const N = nBuckets ?? ((pctByGroup[groups[0]] || []).length || 0);
-  if (N < 2) return [];
-  const LINE_COLOR = "rgba(107, 114, 128, 0.55)";  // slate-500 @ 55%
-  const out = [];
-  for (let i = 0; i < groups.length - 1; i++){
-    const cum = Array(N).fill(null);
-    let anyValue = false;
-    for (let b = 0; b < N; b++){
-      let s = 0, seen = false;
-      for (let j = 0; j <= i; j++){
-        const v = (pctByGroup[groups[j]] || [])[b];
-        if (v != null){ s += (+v || 0); seen = true; }
+// Style: thin muted grey line, no point markers, no curvature.
+function makeBoundaryLinesPlugin(groups, pctByGroup) {
+  return {
+    id: "boundaryLines",
+    afterDatasetsDraw(chart) {
+      if (!Array.isArray(groups) || groups.length < 2) return;
+      const barMeta = chart.getDatasetMeta(0);
+      if (!barMeta || !barMeta.data || !barMeta.data.length) return;
+      const yScale = chart.scales && chart.scales.y;
+      if (!yScale) return;
+
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.strokeStyle = "rgba(107, 114, 128, 0.55)";  // slate-500 @ 55%
+      ctx.lineWidth   = 1;
+
+      const nBuckets = chart.data.labels.length;
+      for (let i = 0; i < groups.length - 1; i++) {
+        ctx.beginPath();
+        let inPath = false;
+        for (let n = 0; n < nBuckets; n++) {
+          let cum = 0, hasValue = false;
+          for (let j = 0; j <= i; j++) {
+            const v = (pctByGroup[groups[j]] || [])[n];
+            if (v != null) { cum += (+v || 0); hasValue = true; }
+          }
+          if (!hasValue || cum === 0) { inPath = false; continue; }
+          const bar = barMeta.data[n];
+          if (!bar || bar.width == null) { inPath = false; continue; }
+          const halfW  = bar.width / 2;
+          const leftX  = bar.x - halfW;
+          const rightX = bar.x + halfW;
+          const yPx    = yScale.getPixelForValue(cum);
+
+          if (!inPath) { ctx.moveTo(leftX, yPx); inPath = true; }
+          else         { ctx.lineTo(leftX, yPx); }
+          ctx.lineTo(rightX, yPx);
+        }
+        ctx.stroke();
       }
-      // A bucket whose contributing groups sum to exactly 0 (no data
-      // in those regions yet) is treated as "no value" so spanGaps
-      // draws right past it to the next real bucket.
-      if (seen && s > 0){ cum[b] = s; anyValue = true; }
+      ctx.restore();
     }
-    if (!anyValue) continue;
-    out.push({
-      label:            `${groups[i]} boundary`,
-      type:             "line",
-      data:             cum,
-      borderColor:      LINE_COLOR,
-      borderWidth:      1,
-      pointRadius:      0,          // no centre dots
-      pointHoverRadius: 4,          // still show a marker on hover
-      pointHitRadius:   8,          // easier to hover over the thin line
-      fill:             false,
-      tension:          0,          // straight segments, no curvature
-      spanGaps:         true,       // jump over null / zero buckets
-      stack:            undefined,
-      datalabels:       { display:false },
-      order:            -1,         // draw ON TOP of bars
-    });
-  }
-  return out;
+  };
 }
 const REGION_SALESMEN={
   NSW:["Makris George","Borghese Alessio","Buckley Paul"],
@@ -1506,14 +1500,16 @@ async function drawDailyStacked(){
     type:"bar", data:{ labels, datasets:datasetsCum }, options:getCommonOptions(true, undefined, "Cumulative by Day")
   });
   // Boundary connector lines — this chart has 1 bar per day so the
-  // reader can trace region-share drift across days as a curve.
-  const boundaryPctDay    = boundaryLinesForStack(groups, pct,    labels.length);
-  const boundaryPctCumDay = boundaryLinesForStack(groups, pctCum, labels.length);
+  // reader can trace region-share drift across days.  Drawn on top of
+  // the bars via an inline plugin so the line hugs each bar's left/
+  // right pixel edges (true edge-to-edge, not centre-to-centre).
   stackedDailyPctInst = new Chart(document.getElementById("stackedDailyPercentChart"), {
-    type:"bar", data:{ labels, datasets:[...datasetsPct,  ...boundaryPctDay] },    options:getCommonOptions(true, 100, "Daily %")
+    type:"bar", data:{ labels, datasets:datasetsPct },  options:getCommonOptions(true, 100, "Daily %"),
+    plugins: [makeBoundaryLinesPlugin(groups, pct)]
   });
   stackedDailyCumPctInst = new Chart(document.getElementById("stackedDailyCumPercentChart"), {
-    type:"bar", data:{ labels, datasets:[...datasetsPctC, ...boundaryPctCumDay] }, options:getCommonOptions(true, 100, "Cumulative %")
+    type:"bar", data:{ labels, datasets:datasetsPctC }, options:getCommonOptions(true, 100, "Cumulative %"),
+    plugins: [makeBoundaryLinesPlugin(groups, pctCum)]
   });
 }
 
@@ -2183,7 +2179,7 @@ async function drawMonthlyStacked(){
               const ROLE_ORDER = [
                 { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#64748b", dash: [] },
                 { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#1e40af", dash: [] },
-                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#c2410c", dash: [4, 3] },
+                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#f97316", dash: [4, 3] },
               ];
               const rolesPresent = new Set();
               chart.data.datasets.forEach((ds) => {
@@ -2477,13 +2473,14 @@ async function drawMonthlyStacked(){
   // categoryPercentage lowered from 0.9 → 0.62 so consecutive months
   // get a clearly visible gap between them (previous user request).
   // Year-marker border colours (user request):
-  //   2025 Actual  → medium slate  #64748b (previous year, still readable)
-  //   2026 Actual  → dark blue     #1e40af (this year, primary)
-  //   2026 Target  → dark orange   #c2410c (goal / projection)
-  const YR_2025_BORDER = "#64748b";
-  const YR_2026_BORDER = "#1e40af";
-  const TARGET_BORDER  = "#c2410c";
-  const _YEAR_BORDER_W = 2;
+  //   2025 Actual  → NO border in the middle-column (non-%) charts,
+  //                  faded slate  #64748b in the right-column % charts
+  //   2026 Actual  → dark blue     #1e40af
+  //   2026 Target  → bright orange #f97316 (clearly orange, not red)
+  const YR_2025_BORDER_PCT = "#64748b";   // right column % only
+  const YR_2026_BORDER     = "#1e40af";
+  const TARGET_BORDER      = "#f97316";
+  const _YEAR_BORDER_W     = 2;
   // categoryPercentage 0.70 → 3 bars fill 70 %% of a month's slot,
   // gap between months = 30 %% ≈ 1.4 bar-widths (roughly half of the
   // three-bar block, per user's spacing request).
@@ -2494,8 +2491,7 @@ async function drawMonthlyStacked(){
     label: `${g} (2025)`,
     data: by25[g] || Array(12).fill(0),
     backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
-    borderColor:     YR_2025_BORDER,
-    borderWidth:     _YEAR_BORDER_W,
+    borderWidth:     0,          // middle-column: no year border on 2025
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2531,8 +2527,7 @@ async function drawMonthlyStacked(){
     label: `${g} (2025)`,
     data: by25Cum[g] || Array(12).fill(0),
     backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
-    borderColor:     YR_2025_BORDER,
-    borderWidth:     _YEAR_BORDER_W,
+    borderWidth:     0,          // middle-column: no year border on 2025
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
     barPercentage: _BAR_PCT,
@@ -2568,7 +2563,7 @@ async function drawMonthlyStacked(){
     label: `${g} (2025)`,
     data: pct25[g] || Array(12).fill(0),
     backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
-    borderColor:     YR_2025_BORDER,
+    borderColor:     YR_2025_BORDER_PCT,
     borderWidth:     _YEAR_BORDER_W,
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
@@ -2592,7 +2587,7 @@ async function drawMonthlyStacked(){
     label: `${g} (2025)`,
     data: pct25Cum[g] || Array(12).fill(0),
     backgroundColor: withAlpha(COLORS[i%COLORS.length], "66"),
-    borderColor:     YR_2025_BORDER,
+    borderColor:     YR_2025_BORDER_PCT,
     borderWidth:     _YEAR_BORDER_W,
     stack: "Y2025",
     categoryPercentage: _CAT_PCT,
@@ -2887,13 +2882,13 @@ async function drawYearlyStacked() {
 
   // Boundary connector lines — Yearly stacked % has one bar per year,
   // so lines across years read as "region share is growing/shrinking".
-  const boundaryPctYearly = boundaryLinesForStack(groups, pct, labels.length);
   stackedYearlyPctInst = new Chart(
     document.getElementById("stackedYearlyPercentChart"),
     {
       type: "bar",
-      data: { labels, datasets: [...datasetsPct, ...boundaryPctYearly] },
-      options: getCommonOptions(true, 100, "Yearly %")
+      data: { labels, datasets: datasetsPct },
+      options: getCommonOptions(true, 100, "Yearly %"),
+      plugins: [makeBoundaryLinesPlugin(groups, pct)]
     }
   );
 }
