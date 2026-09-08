@@ -55,8 +55,11 @@ def _month_key(fp):
     return "000000"
 
 def _month_label(yyyymm):
+    """Short label like "'26.9" (year 2-digit, month 1-2 digit, no zero-pad).
+    Compact so the x-axis doesn't need to wrap or shrink under many months."""
     try:
-        return datetime.strptime(str(yyyymm), "%Y%m").strftime("%b %Y")
+        d = datetime.strptime(str(yyyymm), "%Y%m")
+        return f"'{d.year % 100:02d}.{d.month}"
     except Exception:
         return str(yyyymm)
 
@@ -486,7 +489,26 @@ const baseOpts = {
     responsive:true, maintainAspectRatio:false,
     clip: false,
     plugins:{
-        legend:{ position:'bottom', labels:{ boxWidth:11, font:{size:10}, padding:8 } },
+        legend:{
+            position:'right',
+            align:'start',
+            labels:{
+                boxWidth:11, font:{size:10}, padding:6,
+                // Order legend entries by each dataset's LAST non-null
+                // value (descending) so the top of the legend matches
+                // the highest line on the right edge of the chart.
+                sort: (a, b, data) => {
+                    const lastVal = (idx) => {
+                        const arr = (data.datasets[idx] || {}).data || [];
+                        for (let i = arr.length - 1; i >= 0; i--) {
+                            if (arr[i] != null) return +arr[i];
+                        }
+                        return -Infinity;
+                    };
+                    return lastVal(b.datasetIndex) - lastVal(a.datasetIndex);
+                },
+            }
+        },
         tooltip:{ callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
     },
     scales:{
