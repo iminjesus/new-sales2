@@ -108,7 +108,7 @@ function boundaryLinesForStack(groups, pctByGroup, nBuckets){
       pointHoverRadius: 4,          // still show a marker on hover
       pointHitRadius:   8,          // easier to hover over the thin line
       fill:             false,
-      stepped:          "middle",   // edge-to-edge rather than centre-to-centre
+      tension:          0,          // straight segments, no curvature
       spanGaps:         true,       // jump over null / zero buckets
       stack:            undefined,
       datalabels:       { display:false },
@@ -2181,9 +2181,9 @@ async function drawMonthlyStacked(){
               // a real dataset's color, so the swatch reads as "this
               // shading = this year/role" independent of any region.
               const ROLE_ORDER = [
-                { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#cbd5e1", dash: [] },
-                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#dc2626", dash: [] },
-                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#7dd3fc", dash: [4, 3] },
+                { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#64748b", dash: [] },
+                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#1e40af", dash: [] },
+                { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#c2410c", dash: [4, 3] },
               ];
               const rolesPresent = new Set();
               chart.data.datasets.forEach((ds) => {
@@ -2477,14 +2477,17 @@ async function drawMonthlyStacked(){
   // categoryPercentage lowered from 0.9 → 0.62 so consecutive months
   // get a clearly visible gap between them (previous user request).
   // Year-marker border colours (user request):
-  //   2025 Actual  → light gray  #cbd5e1 (reference year, faded)
-  //   2026 Actual  → red         #dc2626 (this year, primary)
-  //   2026 Target  → light blue  #7dd3fc (goal / projection)
-  const YR_2025_BORDER = "#cbd5e1";
-  const YR_2026_BORDER = "#dc2626";
-  const TARGET_BORDER  = "#7dd3fc";
+  //   2025 Actual  → medium slate  #64748b (previous year, still readable)
+  //   2026 Actual  → dark blue     #1e40af (this year, primary)
+  //   2026 Target  → dark orange   #c2410c (goal / projection)
+  const YR_2025_BORDER = "#64748b";
+  const YR_2026_BORDER = "#1e40af";
+  const TARGET_BORDER  = "#c2410c";
   const _YEAR_BORDER_W = 2;
-  const _CAT_PCT = 0.62;             // wider gap between months
+  // categoryPercentage 0.70 → 3 bars fill 70 %% of a month's slot,
+  // gap between months = 30 %% ≈ 1.4 bar-widths (roughly half of the
+  // three-bar block, per user's spacing request).
+  const _CAT_PCT = 0.70;
   const _BAR_PCT = 0.9;
 
   const ds25 = groups.map((g,i)=>({
