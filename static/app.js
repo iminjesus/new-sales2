@@ -56,22 +56,32 @@ function withAlpha(hex, alphaHex){
 }
 
 // For a SINGLE-bar-per-bucket stacked-percentage chart, return line
-// datasets that connect the top edge of each region's stack across
-// adjacent buckets so month-over-month (or day-over-day, year-over-year)
-// share changes read as trend lines rather than lots of independent bars.
+// datasets that visually connect the top edge of each region's stack
+// across adjacent buckets so the share drift reads as a trend.
+//
+// Visual style (per user spec):
+//   - thin, muted grey  → subtle overlay that doesn't fight the bars
+//   - no centre dots     → clean line, no chunky point markers
+//   - stepped 'middle'   → horizontal segment ACROSS each bar's width,
+//                          vertical transition at the gap between bars,
+//                          so the line reads as bar-edge → bar-edge
+//                          rather than centre → centre
+//   - skip zero buckets  → a bucket whose cumulative share is exactly 0
+//                          (no data for those groups yet) drops out and
+//                          the line jumps over it via spanGaps: true
 //
 //   groups      : region labels in stack order (bottom → top)
 //   pctByGroup  : { region: [pct at bucket 0, 1, 2, ...] } — same length
 //                 as the bar labels; nulls tolerated
 //   nBuckets    : total bucket count (defaults to first group's length)
 //
-// Returns groups.length - 1 line datasets (the top of the last region
-// is always 100% in a 100%-stacked chart, so a flat line adds no signal).
-// Skip entirely if there's fewer than 2 groups.
+// Returns groups.length - 1 line datasets.  The top of the last region
+// is always 100% in a 100%-stacked chart, so no flat line is drawn there.
 function boundaryLinesForStack(groups, pctByGroup, nBuckets){
   if (!Array.isArray(groups) || groups.length < 2) return [];
   const N = nBuckets ?? ((pctByGroup[groups[0]] || []).length || 0);
   if (N < 2) return [];
+  const LINE_COLOR = "rgba(107, 114, 128, 0.55)";  // slate-500 @ 55%
   const out = [];
   for (let i = 0; i < groups.length - 1; i++){
     const cum = Array(N).fill(null);
@@ -82,23 +92,27 @@ function boundaryLinesForStack(groups, pctByGroup, nBuckets){
         const v = (pctByGroup[groups[j]] || [])[b];
         if (v != null){ s += (+v || 0); seen = true; }
       }
-      if (seen){ cum[b] = s; anyValue = true; }
+      // A bucket whose contributing groups sum to exactly 0 (no data
+      // in those regions yet) is treated as "no value" so spanGaps
+      // draws right past it to the next real bucket.
+      if (seen && s > 0){ cum[b] = s; anyValue = true; }
     }
     if (!anyValue) continue;
     out.push({
-      label:                `${groups[i]} boundary`,
-      type:                 "line",
-      data:                 cum,
-      borderColor:          COLORS[i % COLORS.length],
-      borderWidth:          1.8,
-      pointRadius:          3,
-      pointHoverRadius:     5,
-      pointBackgroundColor: COLORS[i % COLORS.length],
-      fill:                 false,
-      tension:              0.15,
-      stack:                undefined,
-      datalabels:           { display:false },
-      order:                -1,     // draw ON TOP of bars
+      label:            `${groups[i]} boundary`,
+      type:             "line",
+      data:             cum,
+      borderColor:      LINE_COLOR,
+      borderWidth:      1,
+      pointRadius:      0,          // no centre dots
+      pointHoverRadius: 4,          // still show a marker on hover
+      pointHitRadius:   8,          // easier to hover over the thin line
+      fill:             false,
+      stepped:          "middle",   // edge-to-edge rather than centre-to-centre
+      spanGaps:         true,       // jump over null / zero buckets
+      stack:            undefined,
+      datalabels:       { display:false },
+      order:            -1,         // draw ON TOP of bars
     });
   }
   return out;
