@@ -1870,29 +1870,35 @@ async function drawMonthlyTotals(){
   let sales26     = labels.map((_,i)=> +sales26Rows[i]?.value || 0);
   let target26    = labels.map((_,i)=> +target26Rows[i]?.value || 0);
 
-  // 2026 YTD cut (null after last non-zero actual)
+  // 2026 YTD cut — null out ACTUAL after the last non-zero actual so
+  // future months don't render phantom zero bars.  Target is a planned
+  // figure that legitimately covers the whole year, so leave it as-is
+  // for months Sep-Dec (user request).
   let last26 = -1;
   for (let i=0;i<sales26.length;i++){
     if ((+sales26[i]||0) !== 0) last26 = i;
   }
   for (let i=last26+1;i<12;i++){
     sales26[i]  = null;
-    target26[i] = null;
   }
 
   // cumulative (2025 actual cum always full year)
   const salesCum25 = toCumulative(sales25);
 
-  // cumulative 2026 actual/target stop at last26
+  // cumulative 2026 actual stops at last26; target cumulative keeps
+  // accruing all the way to Dec so the reader sees the full-year goal.
   const salesCum26 = Array(12).fill(null);
   const targetCum26= Array(12).fill(null);
   let sRun=0, tRun=0;
   for (let i=0;i<12;i++){
-    if (sales26[i] == null || target26[i] == null) break;
-    sRun += (+sales26[i]||0);
-    tRun += (+target26[i]||0);
-    salesCum26[i]  = sRun;
-    targetCum26[i] = tRun;
+    if (target26[i] != null){
+      tRun += (+target26[i]||0);
+      targetCum26[i] = tRun;
+    }
+    if (i <= last26 && sales26[i] != null){
+      sRun += (+sales26[i]||0);
+      salesCum26[i]  = sRun;
+    }
   }
 
   [monthlyInst, monthlyCumInst].forEach(c => c && c.destroy());
