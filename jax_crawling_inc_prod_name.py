@@ -227,27 +227,47 @@ return (function() {
             if (loadM) spec = size + ' ' + loadM[1].trim();
         }
 
-        /* Name extraction.  Multi-strategy pipeline (first match wins):
-           1) h2/h3/h4 inside the card — JAX wraps the product name in a
-              heading tag on most cards ("X Fit HP LA41", "G Fit AS-01
-              LH42", "Ecopia EP150" etc.).  Strip promo/badge text so a
-              heading like "BUY 4 & GET 20% OFF X Fit HP LA41" reduces
-              to just "X Fit HP LA41".
-           2) "<brand>\s+<candidate>\s+<size>" surgical capture.  The
-              candidate pattern here ALLOWS digits (LA41, LH02, MSU01
-              are legal model tokens) but bans the $ character and any
-              three-digit size-like sequence, so it won't over-capture
-              into the size block.
-           3) Full pre-size text with JUNK + BRAND stripped (legacy). */
+        /* Name extraction.  Multi-strategy pipeline (first VALIDATED
+           match wins).  A "promo pattern" check runs after each
+           strategy's raw output — if the extracted string still looks
+           like a bulk-deal banner ("BUY 4 & GET ... OFF", "OR BUY 4
+           FOR $X", "20% OFF") we discard it and try the next strategy,
+           because we know that text isn't a model name.
+           Strategies:
+             1) h2/h3/h4 inside the card
+             2) DOM-based name element (class-name heuristics)
+             3) img[alt] on the product image (JAX often carries the
+                model name in the alt text)
+             4) "<brand>\s+<candidate>\s+<size>" surgical capture
+             5) Full pre-size text with JUNK + BRAND stripped
+             6) Detail-page link text
+        */
         var name = '';
         var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}/i));
 
+        // Aggressive promo-recogniser used to validate every candidate.
+        // A hit means "this is promo text, not a product name" → reject.
+        var PROMO_LOOKS_LIKE = /^\s*(?:BUY\s*\d|OR\s+BUY|(?:\d+\s*%|SPECIAL|SEPTEMBER|NEW|WAS\b|NOW\b|FREE\s+SHIPPING|GET\s+\d+\s*%|GIFT|EGIFT))/i;
+
         function _cleanCandidate(s) {
             return (s || '')
+                // hard-strip common promo prefixes even if JUNK_RE
+                // missed them due to unusual whitespace / punctuation
+                .replace(/BUY\s*\d+\s*[&+]?\s*GET\s*\d+\s*%\s*OFF/gi, ' ')
+                .replace(/BUY\s*\d+\s*[&+]?\s*GET\s*\d+(?:ST|ND|RD|TH)?\s*TYRE\s+FREE/gi, ' ')
+                .replace(/OR\s+BUY\s+\d+\s+FOR\s+\$[\d.,]+/gi, ' ')
+                .replace(/\b\d+\s*%\s*OFF\b/gi, ' ')
                 .replace(JUNK_RE, ' ')
                 .replace(BRAND_NAMES_RE, ' ')
                 .replace(/\s+/g, ' ')
                 .trim();
+        }
+
+        function _acceptName(v) {
+            if (!v) return '';
+            if (v.length < 2 || v.length > 90) return '';
+            if (PROMO_LOOKS_LIKE.test(v)) return '';
+            return v;
         }
 
         // 1) h2/h3/h4 inside the card
@@ -255,15 +275,41 @@ return (function() {
         for (var hi = 0; hi < heads.length; hi++) {
             var ht = (heads[hi].textContent || '').trim();
             if (!ht || ht.length > 90) continue;
-            if (/\$|\d{3}\/\d{2}/.test(ht)) continue;   // skip if it holds a $ or size
-            var cleaned = _cleanCandidate(ht);
-            if (cleaned.length >= 3 && cleaned.length < 80) {
-                name = cleaned;
-                break;
+            if (/\$|\d{3}\/\d{2}/.test(ht)) continue;
+            var cleaned = _acceptName(_cleanCandidate(ht));
+            if (cleaned) { name = cleaned; break; }
+        }
+
+        // 2) DOM elements with product-name-like class hints
+        if (!name) {
+            var nameCandidates = card.querySelectorAll(
+                '[class*="product-name" i],[class*="ProductName" i],' +
+                '[class*="product-title" i],[class*="ProductTitle" i],' +
+                '[class*="tyre-name" i],[class*="tyre-title" i],' +
+                '[class*="model" i]');
+            for (var nci = 0; nci < nameCandidates.length; nci++) {
+                var nct = (nameCandidates[nci].textContent || '').trim();
+                if (!nct || nct.length > 90) continue;
+                if (/\$|\d{3}\/\d{2}/.test(nct)) continue;
+                var cleaned2 = _acceptName(_cleanCandidate(nct));
+                if (cleaned2) { name = cleaned2; break; }
             }
         }
 
-        // 2) Surgical "brand + candidate + size" capture
+        // 3) img[alt] on product image (JAX often uses alt="X Fit HP LA41")
+        if (!name) {
+            var imgs = card.querySelectorAll('img[alt]');
+            for (var ii = 0; ii < imgs.length; ii++) {
+                var alt = (imgs[ii].getAttribute('alt') || '').trim();
+                if (!alt || alt.length > 90) continue;
+                if (/logo|badge|icon|promo|banner/i.test(alt)) continue;
+                if (/\$|\d{3}\/\d{2}/.test(alt)) continue;
+                var cleaned3 = _acceptName(_cleanCandidate(alt));
+                if (cleaned3) { name = cleaned3; break; }
+            }
+        }
+
+        // 4) Surgical "brand + candidate + size" capture
         if (!name) {
             var brandSpanRe = new RegExp(
                 '\\b(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama|pirelli|bfgoodrich|double\\s*coin|dynamo|general\\s+tire|giti|mickey\\s+thompson(?:\\s+m\\/t)?|radar(?:\\s+tyres)?|rovelo|tracmax|transmate|venom|wanli|nexen|toyo|nitto|maxxis|cooper)\\b\\s+' +
@@ -273,41 +319,39 @@ return (function() {
             );
             var bsm = text.match(brandSpanRe);
             if (bsm) {
-                var candidate = _cleanCandidate(bsm[1]);
-                if (candidate.length > 1 && candidate.length < 80) name = candidate;
+                var candidate = _acceptName(_cleanCandidate(bsm[1]));
+                if (candidate) name = candidate;
             }
         }
 
-        // 3) Legacy fallback: everything before the size, stripped
+        // 5) Legacy fallback: everything before the size, stripped
         if (!name && sizePos > 0) {
-            var pre = _cleanCandidate(text.substring(0, sizePos));
-            if (pre.length > 2 && pre.length < 80) name = pre;
+            var pre = _acceptName(_cleanCandidate(text.substring(0, sizePos)));
+            if (pre) name = pre;
         }
-        /* Fallback 1: h2/h3/h4 */
+
+        // 6) Detail-page link text
         if (!name) {
-            var hEl = card.querySelector('h2,h3,h4');
-            if (hEl) name = (hEl.textContent || '').trim();
-        }
-        /* Fallback 2: first p/span that looks like a product name */
-        if (!name) {
-            var elems = card.querySelectorAll('p,span');
-            for (var ei = 0; ei < elems.length; ei++) {
-                var et = (elems[ei].textContent || '').trim();
-                if (et.length > 3 && et.length < 60 &&
-                        !/\$|\d{3}\/|\bqty\b|booking|detail|view|store/i.test(et) &&
-                        !/^\d+/.test(et)) {
-                    name = et; break;
-                }
+            var links2 = card.querySelectorAll('a');
+            for (var li2 = 0; li2 < links2.length; li2++) {
+                var lt2 = (links2[li2].textContent || '').trim();
+                if (!lt2 || lt2.length > 90) continue;
+                if (/view|detail|store|booking|cart|add/i.test(lt2)) continue;
+                var cleaned6 = _acceptName(_cleanCandidate(lt2));
+                if (cleaned6) { name = cleaned6; break; }
             }
         }
-        /* Fallback 3: first meaningful link */
+
+        // 7) Last-ditch: any p/span with reasonable non-promo text
         if (!name) {
-            var ls = card.querySelectorAll('a');
-            for (var li = 0; li < ls.length; li++) {
-                var lt = (ls[li].textContent || '').trim();
-                if (lt.length > 5 && !/add|booking|detail|view|cart/i.test(lt)) {
-                    name = lt; break;
-                }
+            var elems = card.querySelectorAll('p,span,div');
+            for (var ei = 0; ei < elems.length; ei++) {
+                var et = (elems[ei].textContent || '').trim();
+                if (et.length < 3 || et.length > 60) continue;
+                if (/\$|\d{3}\/|\bqty\b|booking|detail|view|store/i.test(et)) continue;
+                if (/^\d/.test(et)) continue;                   // starts with digit → probably spec
+                var cleaned7 = _acceptName(_cleanCandidate(et));
+                if (cleaned7) { name = cleaned7; break; }
             }
         }
 
