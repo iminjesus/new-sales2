@@ -21,10 +21,14 @@ Page URL template:
     &sorttype=PriceAsc&pagesize=45&pagenumber={N}
 
 Output: jax_inc_prod_name_YYYYMMDD_HHMM.csv
-Columns: SIZE | brand | DESCRIPTION | PRICE | DISC_PRICE | PROMO
+Columns: SIZE | brand | DESCRIPTION | PRICE | DISC_PRICE | PROMO | RUN_FLAT
 
   PRICE      — regular per-tyre price
   DISC_PRICE — "OR BUY 4 FOR $X" per-tyre price (blank if no bulk deal)
+  RUN_FLAT   — "Y" if the SKU came from JAX's isrunflat=True view,
+               "N" if from isrunflat=False.  Each brand is crawled twice
+               so both catalogues are captured (~95 runflat SKUs on
+               Bridgestone were silently skipped by the original crawler).
 
 Usage:
     python jax_crawling_inc_prod_name.py
@@ -38,11 +42,21 @@ from selenium import webdriver
 
 PAGE_URL = (
     "https://www.jaxtyres.com.au/tyres/{brand}"
-    "?searchqrytype=Brand&isrunflat=False&searchtype=All"
+    "?searchqrytype=Brand&isrunflat={runflat}&searchtype=All"
     "&sorttype=PriceAsc&pagesize=45&pagenumber={page}"
 )
+# We crawl each brand TWICE — once for non-runflat, once for runflat —
+# so a brand's runflat catalogue (~95 SKUs on Bridgestone) is captured
+# too.  Each row in the CSV carries a RUN_FLAT flag ("N" or "Y").
+RUNFLAT_PASSES = [("False", "N"), ("True", "Y")]
 OUTPUT_FILE = datetime.now().strftime("jax_inc_prod_name_%Y%m%d_%H%M.csv")
 PAGE_SIZE   = 45
+
+# Set HEADLESS = True to run without a visible Chrome window (safer if
+# you want to keep using the PC while the crawler runs — no risk of
+# accidentally clicking the browser).  Set False (default) if you want
+# to watch the pages load or JAX starts blocking headless requests.
+HEADLESS = False
 
 # abbr → (display name, JAX URL slug)
 # Verify slugs at: https://www.jaxtyres.com.au/tyres/<slug>
@@ -64,6 +78,9 @@ def init_driver():
     options.add_argument("--disable-blink-features=AutomationControlled")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("useAutomationExtension", False)
+    if HEADLESS:
+        options.add_argument("--headless=new")
+        options.add_argument("--disable-gpu")
     driver = webdriver.Chrome(options=options)
     driver.set_script_timeout(60)
     return driver
@@ -390,7 +407,7 @@ def extract_page(driver, run_diag=False):
         return []
 
 
-def process_raw(raw_items, brand_name):
+def process_raw(raw_items, brand_name, run_flat_flag):
     rows = []
     for item in raw_items:
         name      = (item.get("name")       or "").strip()
@@ -413,6 +430,7 @@ def process_raw(raw_items, brand_name):
         rows.append({
             "size": size, "brand": brand_name, "desc": desc,
             "price": price, "disc": disc, "promo": promo,
+            "run_flat": run_flat_flag,
         })
     return rows
 
@@ -420,8 +438,9 @@ def process_raw(raw_items, brand_name):
 def write_rows(writer, rows):
     for r in rows:
         writer.writerow([r["size"], r["brand"], r["desc"],
-                         r["price"], r["disc"], r["promo"]])
-        line = f"  {r['brand']:<14} | {r['size']:<12} | {r['desc'][:38]:<38} | ${r['price']}"
+                         r["price"], r["disc"], r["promo"], r["run_flat"]])
+        rf = " RF" if r["run_flat"] == "Y" else "   "
+        line = f"  {r['brand']:<14} | {r['size']:<12} |{rf}| {r['desc'][:35]:<35} | ${r['price']}"
         if r["disc"]:
             line += f"  → ${r['disc']}"
         print(line)
@@ -432,30 +451,38 @@ def scrape_brand(driver, abbr, brand_name, slug, writer, f_out):
     print(f"  {abbr}  {brand_name}  (slug: {slug})")
     print(f"{'='*65}")
 
-    url1 = PAGE_URL.format(brand=slug, page=1)
-    driver.get(url1)
-    time.sleep(4)
-
-    total = get_total(driver)
-    if total <= 0:
-        print(f"  WARNING: could not read item count (total={total}). Assuming 1 page.")
-        total = PAGE_SIZE
-    total_pages = math.ceil(total / PAGE_SIZE)
-    print(f"  {total} items → {total_pages} page(s)\n")
-
     brand_total = 0
-    for page in range(1, total_pages + 1):
-        if page > 1:
-            driver.get(PAGE_URL.format(brand=slug, page=page))
-            time.sleep(3)
+    diag_done   = False   # only run DOM diagnostic once per brand
 
-        # Run diagnostic only on page 1 of the first brand (page=1, brand_total=0)
-        raw  = extract_page(driver, run_diag=(page == 1 and brand_total == 0))
-        rows = process_raw(raw, brand_name)
-        write_rows(writer, rows)
-        f_out.flush()
-        brand_total += len(rows)
-        print(f"  ── page {page}/{total_pages}: {len(rows)} products  (subtotal: {brand_total})")
+    # Loop the two runflat variants so a brand's runflat catalogue is
+    # captured too (was silently skipped by the original crawler).
+    for rf_param, rf_flag in RUNFLAT_PASSES:
+        variant = "Run Flat" if rf_flag == "Y" else "Non-Run Flat"
+        print(f"\n  --- {variant} pass -----------------------------------------")
+
+        url1 = PAGE_URL.format(brand=slug, runflat=rf_param, page=1)
+        driver.get(url1)
+        time.sleep(4)
+
+        total = get_total(driver)
+        if total <= 0:
+            print(f"  [{variant}] no items (total={total}) — skipping.")
+            continue
+        total_pages = math.ceil(total / PAGE_SIZE)
+        print(f"  [{variant}] {total} items → {total_pages} page(s)")
+
+        for page in range(1, total_pages + 1):
+            if page > 1:
+                driver.get(PAGE_URL.format(brand=slug, runflat=rf_param, page=page))
+                time.sleep(3)
+
+            raw  = extract_page(driver, run_diag=(not diag_done))
+            diag_done = True
+            rows = process_raw(raw, brand_name, rf_flag)
+            write_rows(writer, rows)
+            f_out.flush()
+            brand_total += len(rows)
+            print(f"  ── [{variant}] page {page}/{total_pages}: {len(rows)} products  (subtotal: {brand_total})")
 
     return brand_total
 
@@ -473,7 +500,7 @@ def main():
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(["SIZE", "brand", "DESCRIPTION",
-                             "PRICE", "DISC_PRICE", "PROMO"])
+                             "PRICE", "DISC_PRICE", "PROMO", "RUN_FLAT"])
 
             for abbr, (brand_name, slug) in BRANDS.items():
                 try:
