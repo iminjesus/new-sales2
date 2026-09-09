@@ -485,31 +485,89 @@ const SD = { tempe:[], bj:[5,5], jax:[2,3], tw:[8,3], twi:[3,3] };
 const PALETTE = ['#C8102E','#E31837','#FFA500','#003087','#00539B',
                  '#E8001A','#FF6600','#E4002B','#003DA5','#555555'];
 
+// Custom plugin: draw each brand's label at the Y-height of its LAST
+// non-null data point (right-anchored, one label per line-end).  If two
+// labels would overlap, nudge them apart with a minimum vertical gap so
+// the text stays legible.  Replaces Chart.js's built-in legend for this
+// dashboard.
+const brandEndLabelsPlugin = {
+    id: 'brandEndLabels',
+    afterDatasetsDraw(chart) {
+        const opts = chart.options.plugins && chart.options.plugins.brandEndLabels;
+        if (!opts || opts.enabled === false) return;
+        const yScale = chart.scales && chart.scales.y;
+        const area   = chart.chartArea;
+        if (!yScale || !area) return;
+        const ctx = chart.ctx;
+
+        // Gather anchor points: one per dataset that has any non-null value.
+        const items = [];
+        chart.data.datasets.forEach((ds, i) => {
+            if (!ds || !Array.isArray(ds.data)) return;
+            let lastIdx = -1;
+            for (let k = ds.data.length - 1; k >= 0; k--) {
+                if (ds.data[k] != null) { lastIdx = k; break; }
+            }
+            if (lastIdx < 0) return;
+            const value = +ds.data[lastIdx];
+            items.push({
+                text:   ds.label || '',
+                colour: ds.borderColor || ds.backgroundColor || '#555',
+                yTarget: yScale.getPixelForValue(value),
+            });
+        });
+        if (!items.length) return;
+
+        // Sort top-to-bottom, then space overlapping labels apart.
+        items.sort((a, b) => a.yTarget - b.yTarget);
+        const MIN_GAP = 13;
+        for (let i = 1; i < items.length; i++) {
+            if (items[i].yTarget - items[i-1].yTarget < MIN_GAP) {
+                items[i].yTarget = items[i-1].yTarget + MIN_GAP;
+            }
+        }
+        // If the pushdown overflowed the chart bottom, walk back up.
+        if (items[items.length-1].yTarget > area.bottom - 4) {
+            items[items.length-1].yTarget = area.bottom - 4;
+            for (let i = items.length - 2; i >= 0; i--) {
+                if (items[i+1].yTarget - items[i].yTarget < MIN_GAP) {
+                    items[i].yTarget = items[i+1].yTarget - MIN_GAP;
+                }
+            }
+        }
+
+        // Draw each label to the right of the chart area.
+        ctx.save();
+        ctx.font         = '10px system-ui, sans-serif';
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        const boxX = area.right + 6;
+        const boxW = 9, boxH = 9;
+        const textX = boxX + boxW + 4;
+
+        items.forEach(it => {
+            ctx.fillStyle = it.colour;
+            ctx.fillRect(boxX, it.yTarget - boxH/2, boxW, boxH);
+            ctx.fillStyle = '#111';
+            ctx.fillText(it.text, textX, it.yTarget);
+        });
+        ctx.restore();
+    }
+};
+if (window.Chart && window.Chart.register) {
+    try { window.Chart.register(brandEndLabelsPlugin); } catch (_) {}
+}
+
 const baseOpts = {
     responsive:true, maintainAspectRatio:false,
     clip: false,
+    // Reserve horizontal space on the right for the end-labels so the
+    // last data point isn't overlapped by the label text.
+    layout: { padding: { right: 120 } },
     plugins:{
-        legend:{
-            position:'right',
-            align:'start',
-            labels:{
-                boxWidth:11, font:{size:10}, padding:6,
-                // Order legend entries by each dataset's LAST non-null
-                // value (descending) so the top of the legend matches
-                // the highest line on the right edge of the chart.
-                sort: (a, b, data) => {
-                    const lastVal = (idx) => {
-                        const arr = (data.datasets[idx] || {}).data || [];
-                        for (let i = arr.length - 1; i >= 0; i--) {
-                            if (arr[i] != null) return +arr[i];
-                        }
-                        return -Infinity;
-                    };
-                    return lastVal(b.datasetIndex) - lastVal(a.datasetIndex);
-                },
-            }
-        },
-        tooltip:{ callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
+        legend:  { display: false },   // replaced by brandEndLabels plugin
+        brandEndLabels: { enabled: true },
+        tooltip: { callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
     },
     scales:{
         x:{ offset:true, ticks:{ font:{size:10}, padding:8 } },
