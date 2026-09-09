@@ -165,29 +165,39 @@ return (function() {
     var results = [];
     var seen = {};
 
-    // Expanded JUNK_RE — now catches promo banners that used to leak into
-    // the name field: bulk deals ("BUY 4 & GET 20% OFF"), "OR BUY 4 FOR
-    // $X", monthly campaigns ("SEPTEMBER SPECIAL DEALS"), "WAS $x / NOW",
-    // "RECOMMENDED BY JAX", satisfaction blurbs, tyre-fitting fine print.
+    // Expanded JUNK_RE — now catches promo banners AND card-corner badges
+    // that used to leak into the name field: bulk deals ("BUY 4 & GET 20%
+    // OFF"), "OR BUY 4 FOR $X", monthly campaigns ("SEPTEMBER SPECIAL
+    // DEALS"), "WAS $x / NOW", "RECOMMENDED BY JAX", "M+S" mud-snow
+    // badge, "+1" recommendation badge, satisfaction blurbs, tyre-fitting
+    // fine print.
     var JUNK_RE = new RegExp([
         '\\d+\\s*day\\s+satisfaction\\s+guarantee',
         'compare\\s+fuel\\s+saving', '\\bfuel\\s+saving\\b',
         '\\bcompare\\b', 'run\\s*flat', 'EV\\s+tyre',
         'select\\s+a\\s+store', 'add\\s+to\\s+booking', 'view\\s+product',
         '\\bqty\\b',
-        // Bulk-deal banners:
-        'BUY\\s*\\d+\\s*[&+]\\s*GET(?:\\s+\\d+(?:ST|ND|RD|TH))?(?:\\s+TYRE)?(?:\\s+\\d+)?\\s*%?\\s*(?:OFF|FREE)',
+        // Bulk-deal banners (also match plain "BUY 4 & GET 20% OFF"):
+        'BUY\\s*\\d+\\s*[&+]\\s*GET\\s+\\d+\\s*%\\s*OFF',
+        'BUY\\s*\\d+\\s*[&+]\\s*GET\\s+\\d+(?:ST|ND|RD|TH)\\s+TYRE\\s+FREE',
+        'BUY\\s*\\d+\\s*[&+]\\s*GET\\s+4TH\\s+TYRE\\s+FREE',
         'BUY\\s*\\d+\\s+FOR\\s+\\$[\\d,.]+',
         'OR\\s+BUY\\s+\\d+\\s+FOR\\s+\\$[\\d,.]+',
-        'BUY\\s*\\d+\\s*[&+]\\s*GET\\s+\\d+(?:ST|ND|RD|TH)\\s+TYRE\\s+FREE',
         // Monthly campaigns (any month name + special deals or offer):
         '(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\\s+SPECIAL\\s+(?:DEAL|OFFER)S?',
         // Price flip banners:
         '\\bWAS\\s*\\$?[\\d,.]+', '\\bNOW\\s*\\$?[\\d,.]+',
         // Cross-brand promo:
         'RECOMMENDED\\s+BY\\s+JAX',
+        // Card-corner badges (small icons):
+        '\\bM\\+S\\b',                  // Mud + Snow
+        '\\bM\\s*\\+\\s*S\\b',          // Space variants
+        '\\+\\d+\\s*(?=\\s|$|[A-Z])',   // "+1", "+2" recommendation badges
+        '\\bAll\\s+Weather\\b',
         // Extra noise:
         'FREE\\s+SHIPPING', '\\$\\d+\\s+OFF', 'FIT\\s+AT\\s+HOME',
+        'Tyre\\s+Fitting', 'Wheel\\s+Balancing', 'Tubeless\\s+Valve',
+        'Waste\\s+Tyre\\s+Management', 'Best\\s+Sellers', 'All\\s+Tyres',
     ].join('|'), 'gi');
     // Broad brand-name regex, NOT anchored — so it strips a brand name
     // that appears in the middle of the pre-size chunk (which happens
@@ -217,40 +227,60 @@ return (function() {
             if (loadM) spec = size + ' ' + loadM[1].trim();
         }
 
-        /* Name extraction.  Primary strategy: capture text between the
-           brand name and the size pattern.  This is more targeted than
-           "everything before the size" because it survives promo text
-           that sits BEFORE the brand block, which is exactly the case
-           that made the original crawler drop "G Fit AS-01 LH42".
-           Fallback: strip JUNK + BRAND from the pre-size chunk. */
+        /* Name extraction.  Multi-strategy pipeline (first match wins):
+           1) h2/h3/h4 inside the card — JAX wraps the product name in a
+              heading tag on most cards ("X Fit HP LA41", "G Fit AS-01
+              LH42", "Ecopia EP150" etc.).  Strip promo/badge text so a
+              heading like "BUY 4 & GET 20% OFF X Fit HP LA41" reduces
+              to just "X Fit HP LA41".
+           2) "<brand>\s+<candidate>\s+<size>" surgical capture.  The
+              candidate pattern here ALLOWS digits (LA41, LH02, MSU01
+              are legal model tokens) but bans the $ character and any
+              three-digit size-like sequence, so it won't over-capture
+              into the size block.
+           3) Full pre-size text with JUNK + BRAND stripped (legacy). */
         var name = '';
         var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}/i));
 
-        // Primary: look for "<brand>\s+<candidate>\s+<size>".  Note the
-        // brand list here mirrors BRAND_NAMES_RE above so it stays in sync.
-        var brandSpanRe = new RegExp(
-            '\\b(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama|pirelli|bfgoodrich|double\\s*coin|dynamo|general\\s+tire|giti|mickey\\s+thompson(?:\\s+m\\/t)?|radar(?:\\s+tyres)?|rovelo|tracmax|transmate|venom|wanli|nexen|toyo|nitto|maxxis|cooper)\\b\\s+' +
-            '([^\\d\\$][^\\d]{1,80}?)\\s+' +
-            '\\d{3}[\\/A-Z]',
-            'i'
-        );
-        var bsm = text.match(brandSpanRe);
-        if (bsm) {
-            var candidate = bsm[1]
+        function _cleanCandidate(s) {
+            return (s || '')
                 .replace(JUNK_RE, ' ')
+                .replace(BRAND_NAMES_RE, ' ')
                 .replace(/\s+/g, ' ')
                 .trim();
-            if (candidate.length > 1 && candidate.length < 80) name = candidate;
         }
 
-        // Fallback: original "everything before the size, then strip
-        // JUNK + BRAND" — still useful when the brand token isn't caught
-        // above (e.g. a brand JAX added recently that we haven't listed).
+        // 1) h2/h3/h4 inside the card
+        var heads = card.querySelectorAll('h1,h2,h3,h4');
+        for (var hi = 0; hi < heads.length; hi++) {
+            var ht = (heads[hi].textContent || '').trim();
+            if (!ht || ht.length > 90) continue;
+            if (/\$|\d{3}\/\d{2}/.test(ht)) continue;   // skip if it holds a $ or size
+            var cleaned = _cleanCandidate(ht);
+            if (cleaned.length >= 3 && cleaned.length < 80) {
+                name = cleaned;
+                break;
+            }
+        }
+
+        // 2) Surgical "brand + candidate + size" capture
+        if (!name) {
+            var brandSpanRe = new RegExp(
+                '\\b(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama|pirelli|bfgoodrich|double\\s*coin|dynamo|general\\s+tire|giti|mickey\\s+thompson(?:\\s+m\\/t)?|radar(?:\\s+tyres)?|rovelo|tracmax|transmate|venom|wanli|nexen|toyo|nitto|maxxis|cooper)\\b\\s+' +
+                '([^\\$\\n]{2,80}?)\\s+' +
+                '\\d{3}[\\/R]',
+                'i'
+            );
+            var bsm = text.match(brandSpanRe);
+            if (bsm) {
+                var candidate = _cleanCandidate(bsm[1]);
+                if (candidate.length > 1 && candidate.length < 80) name = candidate;
+            }
+        }
+
+        // 3) Legacy fallback: everything before the size, stripped
         if (!name && sizePos > 0) {
-            var pre = text.substring(0, sizePos)
-                         .replace(JUNK_RE, ' ')
-                         .replace(BRAND_NAMES_RE, '')
-                         .replace(/\s+/g, ' ').trim();
+            var pre = _cleanCandidate(text.substring(0, sizePos));
             if (pre.length > 2 && pre.length < 80) name = pre;
         }
         /* Fallback 1: h2/h3/h4 */
