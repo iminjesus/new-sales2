@@ -171,15 +171,43 @@ KNOWN_BRANDS = [
 ]
 
 
+def normalize_size(size):
+    """Bob Jane titles use TWO notations for LT / off-road sizes with a
+    decimal aspect ratio: "33/10.5R15" (slash) and "35X12.5R18" (X).
+    Force the slash form into the X form so a size only appears one way
+    in the output.  Standard passenger sizes ("315/35R20") never have a
+    decimal in the aspect ratio, so they keep their slash — the match
+    below requires `\\d+\\.\\d+` so it does not touch them."""
+    if not size:
+        return size
+    m = re.match(r'^(\d{2,3})/(\d{1,2}\.\d+)([A-Za-z]{1,2}\d{2})$', size)
+    if m:
+        return f"{m.group(1)}X{m.group(2)}{m.group(3)}"
+    return size
+
+
 def extract_size_from_title(title):
     # Accept one OR two letters between the aspect-ratio and rim-diameter:
     # R (standard), ZR (Z-rated speed) — Michelin/Pirelli/Tracmax write
     # high-speed tyres as "225/40ZR18" so the old single-letter regex left
     # the SIZE blank.  Normalise ZR -> R so the size matches the comparison
     # dropdown which only carries R sizes.
+    #
+    # LT / off-road sizes (2-digit width, decimal aspect ratio, X or /
+    # separator: 33/10.5R15, 35X12.5R18, 33X12.50R15) are matched FIRST
+    # so their more specific pattern wins over the fallback rim-only
+    # regex below.  The match runs through normalize_size() so a slash
+    # notation with decimal comes out as X notation.
+    m = re.search(r'(\d{2,3}[/Xx]\d{1,2}\.\d+[A-Za-z]{1,2}\d{2})', title)
+    if m:
+        return normalize_size(m.group(1).upper().replace("ZR", "R").replace("x", "X"))
     m = re.search(r'(\d{3}/\d{2}[A-Za-z]{1,2}\d{2})', title)
     if m:
         return m.group(1).upper().replace("ZR", "R")
+    # LT with X but WITHOUT a decimal aspect ratio: 33X12R15
+    m = re.search(r'(\d{2,3}X\d{1,2}[A-Za-z]{1,2}\d{2})', title, re.IGNORECASE)
+    if m:
+        return m.group(1).upper().replace("ZR", "R").replace("x", "X")
     m = re.search(r'(\d{3}[A-Za-z]{1,2}\d{2})', title)
     if m:
         return m.group(1).upper().replace("ZR", "R")
@@ -196,7 +224,15 @@ def parse_title(title):
             rest  = rest[len(b):].strip()
             break
     if size:
-        rest = re.sub(re.escape(size), "", rest, flags=re.IGNORECASE).strip()
+        # After normalize_size(), the size we hold may differ from what
+        # is written in the title.  Strip BOTH forms — the normalised
+        # one and the raw slash form — so no fragment leaks into the
+        # description.
+        for form in {size, size.replace('X', '/'), size.replace('/', 'X')}:
+            rest = re.sub(re.escape(form), "", rest, flags=re.IGNORECASE).strip()
+    # Sweep any remaining size-shaped chunks that were not the primary
+    # match (a title occasionally embeds a secondary spec).
+    rest = re.sub(r'\d{2,3}[/Xx]\d{1,2}(?:\.\d+)?[A-Za-z]{1,2}\d{2}[A-Za-z\d]*', "", rest, flags=re.IGNORECASE).strip()
     rest = re.sub(r'\d{3}/\d{2}[A-Za-z]\d{2}[A-Za-z\d]*', "", rest).strip()
     rest = re.sub(r'\d{3}[A-Za-z]\d{2}[A-Za-z\d]*',       "", rest).strip()
     rest = re.sub(r'^[\s\-–/]+', '', rest).strip()
