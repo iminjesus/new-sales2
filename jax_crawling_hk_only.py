@@ -95,12 +95,12 @@ _HK_NEXT_TOKEN = (
     r'(?:\s+(?!'
     r'\d{2,3}[/A-Za-z]'                              # 185/55R16, 88V, 175R14
     r'|[A-Z]{1,3}\d{2,3}\b'                          # K425, RA43, IH01
-    r'|\$?\d'                                        # $180, 180
+    r'|\$\d'                                         # $180 (price)  — bare "4"/"5" allowed (Primacy 4, Pilot Sport 5)
     r'|BUY|GET|OR|WAS|NOW|FREE|SPECIAL|RECOMMENDED'  # promo verbs
     r'|MUD|SNOW|SEAL|NOISE|ROAD|HAZARD|TOYOTA|AUDI'  # attribute/vehicle tags
     r'|VOLKSWAGEN|MERCEDES|VOLVO|HYUNDAI|BMW|HONDA'
     r'|NISSAN|FORD|MAZDA|SUBARU|KIA'
-    r')[A-Za-z][\w\.\*\+\-]*)'
+    r')[A-Za-z0-9][\w\.\*\+\-]*)'  # first char can be digit (Ventus V12 evo2 → "V12" allowed)
 )
 HK_LINE_RE = re.compile(
     r'\b(?:'
