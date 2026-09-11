@@ -50,8 +50,17 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 
 STATES = ["NSW", "QLD", "VIC", "WA"]
 
-STATUS_SHORTAGE_MOH = 1.0      # < 1 month → shortage
-STATUS_SURPLUS_MOH  = 4.0      # > 4 months → surplus
+# Status thresholds in months of inventory (MOI = stock / 3M avg demand).
+# The bucket boundaries match Hankook Australia's own definitions:
+#   MOI ≤ 1      → Shortage
+#   1  < MOI ≤ 3 → Balance
+#   3  < MOI ≤ 6 → Surplus
+#   MOI > 6      → Serious Surplus
+# (Stock > 0 AND demand == 0 stays its own "No-move" bucket — dead
+# stock is different from over-stock and needs a different response.)
+STATUS_SHORTAGE_MOI  = 1.0
+STATUS_BALANCE_MOI   = 3.0
+STATUS_SURPLUS_MOI   = 6.0
 
 # Which sheet columns hold which value.  These indices are 1-based to
 # match openpyxl's cell().  Verified against the sample workbook.
@@ -142,6 +151,60 @@ def _extract_pattern(desc):
         return ""
     p = parts[2].strip()
     return p if p and not p.startswith("#") else ""
+
+
+# Groups that fall under the PCLT bucket (Passenger Car / Light Truck).
+# Anything else with a truck pattern rolls into TBR.
+_PCLT_GROUPS = {"SP", "HP", "UHP", "LS", "LV", "RUNFLAT", "RACING"}
+_TBR_GROUPS  = {"TBR", "TBR/M", "M-T", "M/T", "MT"}
+
+def _product_category(group, line):
+    """Return 'PCLT' or 'TBR' or 'Other' for the row.  The two big
+    charts on the dashboard are split along this axis so the user
+    can see truck-tyre health without passenger-car noise (and vice
+    versa)."""
+    if not group:
+        group = ""
+    g = str(group).strip().upper()
+    if g in _PCLT_GROUPS:
+        return "PCLT"
+    if g in _TBR_GROUPS:
+        return "TBR"
+    if line in ("Truck / TBR",):
+        return "TBR"
+    if line in ("Kinergy", "Ventus", "Dynapro", "Winter i*cept",
+                "Laufenn G/S/X/I Fit", "Optimo (legacy)"):
+        return "PCLT"
+    return "Other"
+
+
+def _is_suv(line, pattern):
+    """SUV chip.  Hankook's Dynapro line is the SUV / LT tyre family.
+    Pattern-prefix fallback catches SKUs whose group label is missing
+    but whose pattern code is unambiguous."""
+    if line == "Dynapro":
+        return True
+    if pattern and re.match(r"^(RA|RF|RH)", str(pattern).upper()):
+        return True
+    return False
+
+
+def _num_or_none(v):
+    """Best-effort numeric coercion for LI / SR / Inch cells.  Returns
+    None on '#N/A' / blank / string junk."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        if v.startswith("#"):
+            return None
+        try:
+            return float(v.split("/")[0])   # LI can be "149/146" — take first
+        except ValueError:
+            return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 # Sheet2 headers we care about for enrichment
 _SHEET2_COLS = ("M CODE", "Description", "Group", "Brand",
@@ -300,33 +363,42 @@ def load_stock_data():
             except Exception:
                 pass
 
-        # Status bucket
+        # Status bucket (MOI = months of inventory)
         moh = (total_stock / total_3m) if total_3m > 0 else None
         if total_3m == 0 and total_stock == 0:
             status = "empty"
         elif total_3m == 0 and total_stock > 0:
             status = "no_move"
-        elif moh is not None and moh < STATUS_SHORTAGE_MOH:
+        elif moh is not None and moh <= STATUS_SHORTAGE_MOI:
             status = "shortage"
-        elif moh is not None and moh > STATUS_SURPLUS_MOH:
+        elif moh is not None and moh <= STATUS_BALANCE_MOI:
+            status = "balanced"
+        elif moh is not None and moh <= STATUS_SURPLUS_MOI:
             status = "surplus"
         else:
-            status = "balanced"
+            status = "serious_surplus"
 
         raw_desc = detail.get("description", "")
         pattern  = _extract_pattern(raw_desc)
         line     = _marketing_line(pattern)
+        eff_group = (group or detail.get("group") or "").strip()
 
-        # Second MOH: Stock On Hand + entire Factory pipeline (incoming
-        # from KR/JP/HU plants) — a longer-horizon planning metric.
-        moh_plus = ((total_stock + total_all - total_stock) / total_3m) if total_3m > 0 else None
-        # total_all already includes stock+pipeline, so:
+        # MOI including entire Factory pipeline (incoming KR/JP/HU) —
+        # a longer-horizon planning metric than the current MOI.
         moh_plus = (total_all / total_3m) if total_3m > 0 else None
+
+        # Product characteristics for the quick-filter chips
+        category = _product_category(eff_group, line)
+        inch_num = _num_or_none(detail.get("inch"))
+        sr_num   = _num_or_none(detail.get("sr"))
+        is_18plus     = inch_num is not None and inch_num >= 18
+        is_low_prof   = sr_num   is not None and sr_num   < 50
+        is_suv_flag   = _is_suv(line, pattern)
 
         rows_out.append({
             "merge_code":     mc,
             "m_code":         mcode,
-            "group":          group or detail.get("group") or "",
+            "group":          eff_group,
             "classification": classif or "",
             "brand":          detail.get("brand", ""),
             "line":           line,           # Marketing line (Kinergy / Dynapro / Ventus…)
@@ -334,10 +406,16 @@ def load_stock_data():
             "description":    raw_desc,
             "size":           size,
             "inch":           detail.get("inch", ""),
+            "sr":             detail.get("sr", ""),
             "li":             detail.get("li", ""),
             "ss":             detail.get("ss", ""),
             "factory":        detail.get("factory", ""),
             "origin":         detail.get("origin", ""),
+            # Quick-filter flags used by the top chip bar
+            "category":       category,        # "PCLT" | "TBR" | "Other"
+            "is_18plus":      is_18plus,
+            "is_low_profile": is_low_prof,
+            "is_suv":         is_suv_flag,
             "state_stock":       state_stock,
             "state_pipeline":    state_pipe,
             "state_pipe_parts":  state_pipe_parts,
@@ -365,7 +443,7 @@ def load_stock_data():
 
 def _aggregate(rows):
     """Build the summary payload sent to the front-end."""
-    STATUSES = ["shortage", "balanced", "surplus", "no_move"]
+    STATUSES = ["shortage", "balanced", "surplus", "serious_surplus", "no_move"]
 
     def _empty_bucket():
         return {s: 0 for s in STATUSES + ["empty"]}
@@ -375,15 +453,17 @@ def _aggregate(rows):
     total_3m    = 0.0
     total_pipe  = 0.0
     state_totals = {s: {"stock": 0.0, "pipeline": 0.0, "demand_3m": 0.0,
-                        "shortage": 0, "surplus": 0, "balanced": 0,
-                        "no_move": 0} for s in STATES}
+                        "shortage": 0, "surplus": 0, "serious_surplus": 0,
+                        "balanced": 0, "no_move": 0} for s in STATES}
     by_group    = {}
     by_inch     = {}
     by_brand    = {}
     by_classif  = {}
     by_line     = {}    # marketing line: Kinergy / Dynapro / Ventus / …
+    by_pclt     = {}    # marketing line within PCLT only  → main chart 1
+    by_tbr      = {}    # marketing line within TBR only   → main chart 2
 
-    shortage_rows, surplus_rows, no_move_rows = [], [], []
+    shortage_rows, surplus_rows, serious_rows, no_move_rows = [], [], [], []
     all_rows_flat = []   # every non-empty row, for the drill-down index
 
     for r in rows:
@@ -409,12 +489,11 @@ def _aggregate(rows):
                 state_totals[s]["no_move"] += 1
             else:
                 s_moh = ss / sd if sd > 0 else None
-                if s_moh is not None and s_moh < STATUS_SHORTAGE_MOH:
-                    state_totals[s]["shortage"] += 1
-                elif s_moh is not None and s_moh > STATUS_SURPLUS_MOH:
-                    state_totals[s]["surplus"] += 1
-                else:
-                    state_totals[s]["balanced"] += 1
+                if   s_moh is None:                        pass
+                elif s_moh <= STATUS_SHORTAGE_MOI:         state_totals[s]["shortage"] += 1
+                elif s_moh <= STATUS_BALANCE_MOI:          state_totals[s]["balanced"] += 1
+                elif s_moh <= STATUS_SURPLUS_MOI:          state_totals[s]["surplus"] += 1
+                else:                                      state_totals[s]["serious_surplus"] += 1
 
         # Group breakdowns
         g = r["group"] or "—"
@@ -440,6 +519,17 @@ def _aggregate(rows):
         by_line.setdefault(ln, _empty_bucket())[st] += 1
         by_line[ln].setdefault("stock", 0); by_line[ln]["stock"] += r["total_stock"]
 
+        # Chart split — PCLT and TBR each get their own by-line
+        # breakdown so the two hero charts show the axis the user
+        # actually reads (never mix passenger and truck lines on
+        # the same bar).
+        if r["category"] == "PCLT":
+            by_pclt.setdefault(ln, _empty_bucket())[st] += 1
+            by_pclt[ln].setdefault("stock", 0); by_pclt[ln]["stock"] += r["total_stock"]
+        elif r["category"] == "TBR":
+            by_tbr.setdefault(ln, _empty_bucket())[st] += 1
+            by_tbr[ln].setdefault("stock", 0); by_tbr[ln]["stock"] += r["total_stock"]
+
         # SKU entry (unified — every table + the drill-down index uses
         # the same shape so the front-end can look up a full row from
         # its Merge Code without a second lookup structure).
@@ -453,8 +543,13 @@ def _aggregate(rows):
             "brand":          r["brand"],
             "size":           r["size"],
             "inch":           str(r["inch"]) if r["inch"] not in (None, "") else "",
+            "sr":             str(r["sr"])   if r["sr"]   not in (None, "") else "",
             "li":             str(r["li"])   if r["li"]   not in (None, "") else "",
             "ss":             str(r["ss"])   if r["ss"]   not in (None, "") else "",
+            "category":       r["category"],
+            "is_18plus":      r["is_18plus"],
+            "is_low_profile": r["is_low_profile"],
+            "is_suv":         r["is_suv"],
             "total_stock":    r["total_stock"],
             "total_all":      r["total_all"],
             "total_3m":       round(r["total_3m"], 2),
@@ -472,13 +567,16 @@ def _aggregate(rows):
             shortage_rows.append(entry)
         elif st == "surplus":
             surplus_rows.append(entry)
+        elif st == "serious_surplus":
+            serious_rows.append(entry)
         elif st == "no_move":
             no_move_rows.append(entry)
 
-    # Sort tables — shortage by MOH ascending (most urgent first)
+    # Sort tables — shortage by MOI ascending (most urgent first)
     shortage_rows.sort(key=lambda e: (e["moh"] if e["moh"] is not None else 0, -e["total_3m"]))
-    # Surplus by MOH descending (biggest overstock first)
+    # Surplus / Serious Surplus by MOI descending (biggest overstock first)
     surplus_rows.sort(key=lambda e: -(e["moh"] if e["moh"] is not None else 0))
+    serious_rows.sort(key=lambda e: -(e["moh"] if e["moh"] is not None else 0))
     # No-move by stock size descending
     no_move_rows.sort(key=lambda e: -e["total_stock"])
 
@@ -490,26 +588,35 @@ def _aggregate(rows):
 
     return {
         "kpi": {
-            "sku_total":      sum(kpi_status[k] for k in ["shortage", "balanced", "surplus", "no_move"]),
-            "sku_shortage":   kpi_status["shortage"],
-            "sku_balanced":   kpi_status["balanced"],
-            "sku_surplus":    kpi_status["surplus"],
-            "sku_no_move":    kpi_status["no_move"],
-            "total_stock":    int(total_stock),
-            "total_pipeline": int(total_pipe),
-            "total_demand_3m": int(round(total_3m)),   # integer with thousand sep
-            "national_moh":   nat_moh,
+            "sku_total":      sum(kpi_status[k] for k in ["shortage","balanced","surplus","serious_surplus","no_move"]),
+            "sku_shortage":        kpi_status["shortage"],
+            "sku_balanced":        kpi_status["balanced"],
+            "sku_surplus":         kpi_status["surplus"],
+            "sku_serious_surplus": kpi_status["serious_surplus"],
+            "sku_no_move":         kpi_status["no_move"],
+            "total_stock":         int(total_stock),
+            "total_pipeline":      int(total_pipe),
+            "total_demand_3m":     int(round(total_3m)),
+            "national_moh":        nat_moh,
+        },
+        "thresholds": {
+            "shortage": STATUS_SHORTAGE_MOI,
+            "balance":  STATUS_BALANCE_MOI,
+            "surplus":  STATUS_SURPLUS_MOI,
         },
         "state":         state_totals,
         "by_group":      by_group,
         "by_line":       by_line,
+        "by_pclt":       by_pclt,
+        "by_tbr":        by_tbr,
         "by_inch":       by_inch,
         "by_brand":      by_brand,
         "by_classif":    by_classif,
-        "shortage_rows": shortage_rows,   # all — front-end filters/paginates
-        "surplus_rows":  surplus_rows,
-        "no_move_rows":  no_move_rows,
-        "all_rows":      all_rows_flat,   # complete SKU index for drill-down lookups
+        "shortage_rows":        shortage_rows,
+        "surplus_rows":         surplus_rows,
+        "serious_surplus_rows": serious_rows,
+        "no_move_rows":         no_move_rows,
+        "all_rows":             all_rows_flat,
     }
 
 
@@ -554,6 +661,8 @@ _HTML = r"""<!DOCTYPE html>
     --bal-fg: #E8F5E9;
     --sur:    #EF6C00;
     --sur-fg: #FFF3E0;
+    --ser:    #B71C1C;   /* Serious surplus — darker warning red */
+    --ser-fg: #FDE0E0;
     --nom:    #6A1B9A;
     --nom-fg: #F3E5F5;
     --hover:  #F5F7FA;
@@ -575,63 +684,50 @@ body { font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
 .hdr .nav a:hover { background: rgba(255,255,255,0.15); }
 .hdr .nav a.active { background: #fff; color: var(--hdr1); font-weight: 600; }
 
-/* ── Top persistent filter bar ── */
-.topfilters { background: #263238; color: #ECEFF1; padding: 8px 16px;
-              display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-              flex-shrink: 0; border-bottom: 1px solid #1a2225; }
-.topfilters .lbl { font-size: 10.5px; text-transform: uppercase;
-                   letter-spacing: .08em; color: #90A4AE; font-weight: 600;
-                   margin-right: 4px; }
+/* ── Top filter (two rows: PRODUCT / REGION-BDE) ── */
+.topfilters { background: #fff; border-bottom: 1px solid var(--border);
+              flex-shrink: 0; }
+.filter-row { display: flex; align-items: center; gap: 6px; padding: 8px 16px;
+              flex-wrap: wrap; border-bottom: 1px solid #F1F3F5; }
+.filter-row:last-child { border-bottom: none; }
+.filter-row .flabel { font-size: 10.5px; text-transform: uppercase;
+                      letter-spacing: .08em; color: var(--muted); font-weight: 700;
+                      min-width: 80px; }
+.chip-btn { background: #F1F5F9; border: 1px solid #CBD5E1; color: #334155;
+            font: 500 12px/1 'IBM Plex Sans', system-ui, sans-serif;
+            padding: 6px 12px; border-radius: 6px; cursor: pointer;
+            transition: background .12s, color .12s, border-color .12s; }
+.chip-btn:hover:not(.active) { background: #E2E8F0; }
+.chip-btn.active { background: #1D4ED8; border-color: #1D4ED8; color: #fff;
+                   font-weight: 600; }
+.chip-btn.disabled { opacity: .45; cursor: not-allowed; text-decoration: line-through;
+                     font-style: italic; }
+.chip-btn.disabled:hover { background: #F1F5F9; }
 
-/* Multi-select checkbox dropdown widget */
-.ms { position: relative; display: inline-block; }
-.ms-btn { background: #37474F; border: 1px solid #455A64; color: #ECEFF1;
-          font: 500 12px 'IBM Plex Sans', system-ui, sans-serif;
-          padding: 5px 24px 5px 11px; border-radius: 4px; cursor: pointer;
-          min-width: 92px; text-align: left; position: relative; }
-.ms-btn::after { content: '▾'; position: absolute; right: 8px; top: 50%;
-                 transform: translateY(-50%); font-size: 9px; opacity: .7; }
-.ms-btn:hover { background: #455A64; }
-.ms-btn.active { background: var(--hdr2); border-color: var(--hdr2); color: #fff; }
-.ms-btn .n { background: rgba(255,255,255,0.22); border-radius: 8px;
-             padding: 0 5px; margin-left: 4px; font-size: 10px; font-weight: 600; }
-.ms-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 60;
-            background: #fff; color: var(--ink);
-            border: 1px solid #B0BEC5; border-radius: 5px; margin-top: 3px;
-            min-width: 180px; max-height: 320px; overflow-y: auto;
-            box-shadow: 0 6px 20px rgba(0,0,0,0.2); padding: 4px 0; }
-.ms.open .ms-panel { display: block; }
-.ms-panel label { display: flex; align-items: center; gap: 7px;
-                  padding: 5px 12px; font-size: 12px; cursor: pointer;
-                  user-select: none; }
-.ms-panel label:hover { background: var(--hover); }
-.ms-panel input[type=checkbox] { margin: 0; }
-.ms-panel .ms-actions { display: flex; justify-content: space-between;
-                        padding: 6px 12px 8px; border-top: 1px solid #ECEFF1;
-                        margin-top: 4px; }
-.ms-panel .ms-actions button { font-size: 11px; padding: 3px 10px; border-radius: 3px;
-                               border: 1px solid #CFD8DC; background: #fff;
-                               cursor: pointer; color: var(--hdr1); }
-.ms-panel .ms-actions button:hover { background: var(--hover); }
-
-.topfilters .search { margin-left: auto; }
-.topfilters .search input { background: #37474F; border: 1px solid #455A64;
-                             color: #ECEFF1; font: 500 12px 'IBM Plex Sans', sans-serif;
-                             padding: 5px 11px; border-radius: 4px; width: 240px; }
-.topfilters .search input::placeholder { color: #78909C; }
-.topfilters .reset { background: none; border: 1px solid #607D8B;
-                     color: #B0BEC5; padding: 4px 11px; border-radius: 4px;
-                     cursor: pointer; font: 500 11px 'IBM Plex Sans', sans-serif; }
-.topfilters .reset:hover { background: #37474F; color: #fff; }
+.combo { display: flex; align-items: center; gap: 5px; }
+.combo label { font-size: 12px; color: #334155; font-weight: 600; }
+.combo select, .combo input {
+    font: 500 12px 'IBM Plex Sans', system-ui, sans-serif;
+    padding: 5px 10px; border: 1px solid #CBD5E1;
+    border-radius: 5px; background: #fff; color: var(--ink);
+    min-width: 130px; }
+.combo select:focus, .combo input:focus { outline: none; border-color: #1D4ED8; }
+.combo .clear { background: none; border: none; color: #94A3B8; font-size: 13px;
+                cursor: pointer; padding: 0 3px; }
+.combo .clear:hover { color: var(--short); }
+.reset-btn { margin-left: auto; background: none; border: 1px solid #94A3B8;
+             color: #475569; font: 500 11px 'IBM Plex Sans', sans-serif;
+             padding: 4px 12px; border-radius: 5px; cursor: pointer; }
+.reset-btn:hover { background: #E2E8F0; }
 
 /* ── KPI strip ── */
-.kpi-strip { display: grid; grid-template-columns: repeat(6, 1fr);
+.kpi-strip { display: grid; grid-template-columns: repeat(7, 1fr);
              gap: 10px; padding: 10px 16px 4px; }
 .kpi { background: var(--card); border-radius: 8px; padding: 10px 14px;
        border: 1px solid var(--border); position: relative; overflow: hidden; }
 .kpi h4 { font-size: 10px; color:var(--muted); text-transform: uppercase;
           letter-spacing:.1em; margin-bottom: 4px; font-weight: 600; }
-.kpi .v { font-size: 24px; font-weight: 700; color:var(--hdr1);
+.kpi .v { font-size: 22px; font-weight: 700; color:var(--hdr1);
           font-family: 'IBM Plex Mono', ui-monospace, monospace;
           font-variant-numeric: tabular-nums; }
 .kpi .u { font-size: 10.5px; color:#78909C; margin-left: 4px; }
@@ -641,8 +737,22 @@ body { font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
 .kpi.bal    .v { color:var(--bal); }
 .kpi.sur   { border-left: 4px solid var(--sur); }
 .kpi.sur    .v { color:var(--sur); }
+.kpi.ser   { border-left: 4px solid var(--ser); }
+.kpi.ser    .v { color:var(--ser); }
 .kpi.nom   { border-left: 4px solid var(--nom); }
 .kpi.nom    .v { color:var(--nom); }
+
+/* ── Threshold footnote strip ── */
+.thresh-note { font-size: 11px; color: var(--muted);
+               padding: 4px 18px 6px; line-height: 1.6; }
+.thresh-note b { color: var(--ink); font-weight: 600; }
+.thresh-note .sw { display: inline-block; width: 10px; height: 10px;
+                   border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
+.thresh-note .sw.short { background: var(--short); }
+.thresh-note .sw.bal   { background: var(--bal); }
+.thresh-note .sw.sur   { background: var(--sur); }
+.thresh-note .sw.ser   { background: var(--ser); }
+.thresh-note .sw.nom   { background: var(--nom); }
 
 /* ── main body grid ── */
 .wrap { flex:1; overflow-y: auto; padding: 6px 16px 20px; }
@@ -666,6 +776,7 @@ body { font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
         font-family: 'IBM Plex Mono', monospace; }
 .chip.short { background:var(--short-fg); color:var(--short); }
 .chip.sur   { background:var(--sur-fg);   color:var(--sur); }
+.chip.ser   { background:var(--ser-fg);   color:var(--ser); }
 .chip.bal   { background:var(--bal-fg);   color:var(--bal); }
 .chip.nom   { background:var(--nom-fg);   color:var(--nom); }
 
@@ -677,7 +788,10 @@ body { font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
            display: flex; justify-content: space-between; align-items: baseline;
            font-weight: 600; }
 .card h3 .hint { font-size: 10.5px; color:#78909C; font-weight: 400; }
-.chartbox { position: relative; height: 210px; }
+.card h3 .cat-pill { display: inline-block; padding: 1px 8px; border-radius: 10px;
+                     background: #E2E8F0; color: #334155; font-size: 10px;
+                     font-weight: 700; letter-spacing: .06em; margin-left: 6px; }
+.chartbox { position: relative; height: 240px; }
 .chartbox.tall { height: 260px; }
 
 .tabs { display:flex; gap: 4px; margin-bottom: 6px; }
@@ -702,7 +816,8 @@ table.dt tbody tr:hover td { background: var(--hover); }
 table.dt .r { text-align: right; font-family: 'IBM Plex Mono', monospace;
               font-variant-numeric: tabular-nums; }
 table.dt .r.short { color:var(--short); font-weight: 700; }
-table.dt .r.sur   { color:var(--sur); font-weight: 700; }
+table.dt .r.sur   { color:var(--sur);   font-weight: 700; }
+table.dt .r.ser   { color:var(--ser);   font-weight: 700; }
 .tbl-wrap { max-height: 480px; overflow-y: auto; overflow-x: auto; }
 
 .pill { display: inline-block; padding: 2px 7px; border-radius: 10px;
@@ -724,13 +839,14 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
 .legend .dot.short { background: var(--short); }
 .legend .dot.bal   { background: var(--bal); }
 .legend .dot.sur   { background: var(--sur); }
+.legend .dot.ser   { background: var(--ser); }
 .legend .dot.nom   { background: var(--nom); }
 
 .row-count { margin-left: auto; align-self: center; color: var(--muted);
              font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
-.filter-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+.filter-row-inner { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
 
-/* ── Modal (drill-down) ── */
+/* ── Modal ── */
 .modal-bg { display: none; position: fixed; inset: 0; z-index: 200;
             background: rgba(15,25,35,0.55); }
 .modal-bg.open { display: flex; align-items: center; justify-content: center; }
@@ -760,6 +876,7 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
                        font-family: 'IBM Plex Sans', sans-serif; margin-left: 3px; }
 .modal-body .figv.short { color: var(--short); }
 .modal-body .figv.sur   { color: var(--sur); }
+.modal-body .figv.ser   { color: var(--ser); }
 .modal-body .figv.bal   { color: var(--bal); }
 
 .pipe-tbl { width: 100%; border-collapse: collapse;
@@ -774,6 +891,7 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
 .pipe-tbl tr.tot td { border-top: 2px solid #CFD8DC; font-weight: 700; }
 .pipe-tbl .short { color: var(--short); }
 .pipe-tbl .sur   { color: var(--sur); }
+.pipe-tbl .ser   { color: var(--ser); }
 </style>
 </head>
 <body>
@@ -789,19 +907,54 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
   </nav>
 </div>
 
-<!-- Top persistent filter bar -->
+<!-- Top filter — matches the attached mock (Salesman + Promotion + EV/iSeg
+     are not driven by data in the current XLSM so they render disabled). -->
 <div class="topfilters" id="topfilters">
-  <span class="lbl">Filter</span>
-  <div class="ms" data-key="status"><button class="ms-btn">Status</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="state"><button class="ms-btn">State</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="brand"><button class="ms-btn">Brand</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="group"><button class="ms-btn">Group</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="line"><button class="ms-btn">Marketing Line</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="inch"><button class="ms-btn">Rim (inch)</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="pattern"><button class="ms-btn">Pattern</button><div class="ms-panel"></div></div>
-  <button class="reset" onclick="resetFilters()">Reset</button>
-  <div class="search">
-    <input id="fltr-search" type="text" placeholder="Search SKU / M-code / description / size…">
+  <div class="filter-row">
+    <span class="flabel">Product</span>
+    <button class="chip-btn active" data-prod="all">All</button>
+    <button class="chip-btn"        data-prod="pclt">PCLT</button>
+    <button class="chip-btn"        data-prod="18plus">18+ Inch</button>
+    <button class="chip-btn disabled" title="No EV/iSeg tag in source data">EV/iSeg</button>
+    <button class="chip-btn"        data-prod="suv">SUV</button>
+    <button class="chip-btn"        data-prod="tbr">TBR</button>
+    <button class="chip-btn"        data-prod="lowprofile">Low profile</button>
+    <button class="chip-btn"        data-brand="HK">HK</button>
+    <button class="chip-btn"        data-brand="LF">LF</button>
+    <button class="chip-btn disabled" title="No promotion column in source data">Promotion</button>
+    <div class="combo">
+      <label>Product Group</label>
+      <select id="f-group"><option value="">All Groups</option></select>
+      <button class="clear" onclick="clearSelect('f-group')">×</button>
+    </div>
+    <div class="combo">
+      <label>Pattern</label>
+      <input type="text" id="f-pattern" placeholder="Search Pattern">
+      <button class="clear" onclick="clearInput('f-pattern')">×</button>
+    </div>
+    <div class="combo">
+      <label>Size</label>
+      <select id="f-size"><option value="">Search Size</option></select>
+      <button class="clear" onclick="clearSelect('f-size')">×</button>
+    </div>
+    <div class="combo">
+      <label>Code</label>
+      <input type="text" id="f-code" placeholder="Search Code">
+      <button class="clear" onclick="clearInput('f-code')">×</button>
+    </div>
+    <button class="reset-btn" onclick="resetAllFilters()">Reset</button>
+  </div>
+  <div class="filter-row">
+    <span class="flabel">Region /<br>BDE</span>
+    <button class="chip-btn active" data-state="all">All</button>
+    <button class="chip-btn"        data-state="NSW">NSW</button>
+    <button class="chip-btn"        data-state="QLD">QLD</button>
+    <button class="chip-btn"        data-state="VIC">VIC</button>
+    <button class="chip-btn"        data-state="WA">WA</button>
+    <div class="combo" style="margin-left:14px">
+      <label>Salesman:</label>
+      <select disabled title="No salesman data in current source"><option>ALL</option></select>
+    </div>
   </div>
 </div>
 
@@ -809,10 +962,20 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
 <div class="kpi-strip">
   <div class="kpi"><h4>Active SKUs</h4><span class="v" id="kpi-sku">—</span></div>
   <div class="kpi short"><h4>Shortage</h4><span class="v" id="kpi-short">—</span><span class="u">SKUs</span></div>
-  <div class="kpi bal"><h4>Balanced</h4><span class="v" id="kpi-bal">—</span><span class="u">SKUs</span></div>
+  <div class="kpi bal"><h4>Balance</h4><span class="v" id="kpi-bal">—</span><span class="u">SKUs</span></div>
   <div class="kpi sur"><h4>Surplus</h4><span class="v" id="kpi-sur">—</span><span class="u">SKUs</span></div>
+  <div class="kpi ser"><h4>Serious Surplus</h4><span class="v" id="kpi-ser">—</span><span class="u">SKUs</span></div>
   <div class="kpi nom"><h4>No move</h4><span class="v" id="kpi-nom">—</span><span class="u">SKUs</span></div>
-  <div class="kpi"><h4>National MOH</h4><span class="v" id="kpi-moh">—</span><span class="u">months</span></div>
+  <div class="kpi"><h4>National MOI</h4><span class="v" id="kpi-moi">—</span><span class="u">months</span></div>
+</div>
+
+<div class="thresh-note">
+  <b>MOI</b> = Months Of Inventory (Stock on hand ÷ 3-month avg monthly demand) &nbsp;·&nbsp;
+  <span class="sw short"></span><b>Shortage</b> MOI ≤ 1 &nbsp;·&nbsp;
+  <span class="sw bal"></span><b>Balance</b> 1 &lt; MOI ≤ 3 &nbsp;·&nbsp;
+  <span class="sw sur"></span><b>Surplus</b> 3 &lt; MOI ≤ 6 &nbsp;·&nbsp;
+  <span class="sw ser"></span><b>Serious Surplus</b> MOI &gt; 6 &nbsp;·&nbsp;
+  <span class="sw nom"></span><b>No move</b> stock present but zero 3M demand
 </div>
 
 <div class="wrap">
@@ -827,18 +990,21 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
   <div class="right">
     <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
       <div class="card">
-        <h3>By Marketing Line <span class="hint">SKU count · stacked by status</span></h3>
-        <div class="chartbox"><canvas id="chart-line"></canvas></div>
+        <h3>Marketing Lines <span class="cat-pill">PCLT</span>
+            <span class="hint">SKU count · stacked by status</span></h3>
+        <div class="chartbox"><canvas id="chart-pclt"></canvas></div>
         <div class="legend">
           <span><span class="dot short"></span>Shortage</span>
-          <span><span class="dot bal"></span>Balanced</span>
+          <span><span class="dot bal"></span>Balance</span>
           <span><span class="dot sur"></span>Surplus</span>
+          <span><span class="dot ser"></span>Serious Surplus</span>
           <span><span class="dot nom"></span>No move</span>
         </div>
       </div>
       <div class="card">
-        <h3>By Rim size (inch) <span class="hint">SKU count · stacked</span></h3>
-        <div class="chartbox"><canvas id="chart-inch"></canvas></div>
+        <h3>Marketing Lines <span class="cat-pill">TBR</span>
+            <span class="hint">SKU count · stacked by status</span></h3>
+        <div class="chartbox"><canvas id="chart-tbr"></canvas></div>
       </div>
     </div>
 
@@ -847,10 +1013,11 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
       <div class="tabs">
         <div class="tab active" data-tab="shortage">🔴 Shortage <span class="n" id="n-short">0</span></div>
         <div class="tab" data-tab="surplus">🟠 Surplus <span class="n" id="n-sur">0</span></div>
+        <div class="tab" data-tab="serious_surplus">🟥 Serious Surplus <span class="n" id="n-ser">0</span></div>
         <div class="tab" data-tab="no_move">🟣 No move <span class="n" id="n-nom">0</span></div>
       </div>
 
-      <div class="filter-row">
+      <div class="filter-row-inner">
         <span class="row-count" id="row-count">—</span>
       </div>
 
@@ -860,9 +1027,9 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
             <tr>
               <th>Merge</th><th>M CODE</th><th>Brand</th>
               <th>Marketing Line</th><th>Pattern</th>
-              <th>Group</th><th>Size</th><th>Inch</th><th>LI/SS</th>
+              <th>Group</th><th>Size</th><th>LI/SS</th>
               <th class="r">NSW</th><th class="r">QLD</th><th class="r">VIC</th><th class="r">WA</th>
-              <th class="r">Stock</th><th class="r">3M/mo</th><th class="r">MOH</th>
+              <th class="r">Stock</th><th class="r">3M Avg</th><th class="r">MOI</th>
             </tr>
           </thead>
           <tbody id="tbl-body"></tbody>
@@ -891,10 +1058,10 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
         <div class="figv" id="m-pipe">—</div>
         <div class="stat">3-month avg demand / month</div>
         <div class="figv" id="m-3m">—</div>
-        <div class="stat">MOH — on hand only</div>
-        <div class="figv" id="m-moh">—</div>
-        <div class="stat">MOH — including Factory pipeline</div>
-        <div class="figv" id="m-mohplus">—</div>
+        <div class="stat">MOI — stock on hand only</div>
+        <div class="figv" id="m-moi">—</div>
+        <div class="stat">MOI — including Factory pipeline</div>
+        <div class="figv" id="m-moiplus">—</div>
       </div>
       <div>
         <div class="stat">12-month sales by state</div>
@@ -903,7 +1070,7 @@ table.dt .r.sur   { color:var(--sur); font-weight: 700; }
         <div class="stat" style="margin-top:14px">State breakdown</div>
         <table class="pipe-tbl">
           <thead><tr><th>State</th><th>Stock</th><th>Port</th><th>Water</th>
-              <th>Factory</th><th>Pipeline</th><th>3M/mo</th><th>MOH</th><th>MOH +Pipe</th></tr></thead>
+              <th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +Pipe</th></tr></thead>
           <tbody id="m-pipe-tbl"></tbody>
         </table>
       </div>
@@ -929,23 +1096,107 @@ function pill(gr) {
     return '<span class="' + cls + '">' + (gr || '—') + '</span>';
 }
 
-/* ── KPI tiles ── */
-document.getElementById('kpi-sku').textContent   = fmtI(DATA.kpi.sku_total);
-document.getElementById('kpi-short').textContent = fmtI(DATA.kpi.sku_shortage);
-document.getElementById('kpi-bal').textContent   = fmtI(DATA.kpi.sku_balanced);
-document.getElementById('kpi-sur').textContent   = fmtI(DATA.kpi.sku_surplus);
-document.getElementById('kpi-nom').textContent   = fmtI(DATA.kpi.sku_no_move);
-document.getElementById('kpi-moh').textContent   = DATA.kpi.national_moh != null
-    ? FMT_2.format(DATA.kpi.national_moh) : '—';
+/* ── Filter state (matches the attached mock) ── */
+const F = {
+    /* PRODUCT row chips */
+    prod: 'all',       /* 'all' | 'pclt' | '18plus' | 'suv' | 'tbr' | 'lowprofile' */
+    brand: null,       /* null | 'HK' | 'LF' */
+    /* PRODUCT row combos */
+    group: '',
+    pattern: '',
+    size: '',
+    code: '',
+    /* REGION row */
+    state: 'all',      /* 'all' | 'NSW' | 'QLD' | 'VIC' | 'WA' */
+};
 
-/* ── State cards ── */
-(function renderState() {
+/* Row passes all top filters */
+function rowPassesTopFilters(r) {
+    switch (F.prod) {
+        case 'pclt':       if (r.category !== 'PCLT') return false; break;
+        case 'tbr':        if (r.category !== 'TBR') return false; break;
+        case '18plus':     if (!r.is_18plus) return false; break;
+        case 'suv':        if (!r.is_suv) return false; break;
+        case 'lowprofile': if (!r.is_low_profile) return false; break;
+        case 'all':        default: break;
+    }
+    if (F.brand && r.brand !== F.brand) return false;
+    if (F.group && r.group !== F.group) return false;
+    if (F.pattern) {
+        const p = F.pattern.toLowerCase();
+        if (!(r.pattern || '').toLowerCase().includes(p)) return false;
+    }
+    if (F.size && r.size !== F.size) return false;
+    if (F.code) {
+        const c = F.code.toLowerCase();
+        const hay = ((r.m_code || '') + ' ' + (r.merge_code || '')).toLowerCase();
+        if (!hay.includes(c)) return false;
+    }
+    if (F.state !== 'all') {
+        if ((r.state_stock[F.state] || 0) === 0 && (r.state_3m[F.state] || 0) === 0) return false;
+    }
+    return true;
+}
+
+/* ── KPI tiles (fed from the current filter selection) ── */
+function currentSetOfRows() {
+    return DATA.all_rows.filter(rowPassesTopFilters);
+}
+function recomputeKPI() {
+    const rows = currentSetOfRows();
+    let sh=0, bl=0, su=0, se=0, nm=0;
+    rows.forEach(r => {
+        if (r.status === 'shortage')        sh++;
+        else if (r.status === 'balanced')   bl++;
+        else if (r.status === 'surplus')    su++;
+        else if (r.status === 'serious_surplus') se++;
+        else if (r.status === 'no_move')    nm++;
+    });
+    const totStk = rows.reduce((s,r) => s + r.total_stock, 0);
+    const tot3m  = rows.reduce((s,r) => s + r.total_3m, 0);
+    document.getElementById('kpi-sku').textContent   = fmtI(sh+bl+su+se+nm);
+    document.getElementById('kpi-short').textContent = fmtI(sh);
+    document.getElementById('kpi-bal').textContent   = fmtI(bl);
+    document.getElementById('kpi-sur').textContent   = fmtI(su);
+    document.getElementById('kpi-ser').textContent   = fmtI(se);
+    document.getElementById('kpi-nom').textContent   = fmtI(nm);
+    document.getElementById('kpi-moi').textContent   = tot3m > 0 ? FMT_2.format(totStk / tot3m) : '—';
+    document.getElementById('n-short').textContent   = fmtI(sh);
+    document.getElementById('n-sur').textContent     = fmtI(su);
+    document.getElementById('n-ser').textContent     = fmtI(se);
+    document.getElementById('n-nom').textContent     = fmtI(nm);
+}
+
+/* ── State cards (also react to the top filters) ── */
+function renderStateCards() {
+    const rows = currentSetOfRows();
     const host = document.getElementById('state-cards');
+    /* Aggregate per state from the filtered rows */
+    const acc = {};
+    STATES.forEach(s => acc[s] = {stock:0, pipeline:0, demand_3m:0,
+        shortage:0, balanced:0, surplus:0, serious_surplus:0, no_move:0});
+    rows.forEach(r => {
+        STATES.forEach(s => {
+            acc[s].stock     += r.state_stock[s]    || 0;
+            acc[s].pipeline  += r.state_pipeline[s] || 0;
+            acc[s].demand_3m += r.state_3m[s]       || 0;
+            const sd = r.state_3m[s] || 0, ss = r.state_stock[s] || 0;
+            if      (sd === 0 && ss > 0)   acc[s].no_move++;
+            else if (sd  >  0) {
+                const m = ss / sd;
+                if      (m <= 1) acc[s].shortage++;
+                else if (m <= 3) acc[s].balanced++;
+                else if (m <= 6) acc[s].surplus++;
+                else             acc[s].serious_surplus++;
+            }
+        });
+    });
     let html = '';
     STATES.forEach(s => {
-        const st = DATA.state[s];
+        const st = acc[s];
+        const moi = st.demand_3m > 0 ? (st.stock / st.demand_3m) : null;
         html += '<div class="state-card">'
-             + '<h3>' + s + ' <span class="m">MOH ' + (st.moh != null ? FMT_2.format(st.moh) : '—') + '</span></h3>'
+             + '<h3>' + s + ' <span class="m">MOI ' + (moi != null ? FMT_1.format(moi) : '—') + '</span></h3>'
              + '<div class="state-row"><span class="lbl">Stock on hand</span>'
              + '<span class="v">' + fmtI(st.stock) + '</span></div>'
              + '<div class="state-row"><span class="lbl">In pipeline</span>'
@@ -957,239 +1208,145 @@ document.getElementById('kpi-moh').textContent   = DATA.kpi.national_moh != null
              + '<span class="chip short">' + fmtI(st.shortage) + '</span>'
              + '<span class="chip bal">'   + fmtI(st.balanced) + '</span>'
              + '<span class="chip sur">'   + fmtI(st.surplus)  + '</span>'
+             + '<span class="chip ser">'   + fmtI(st.serious_surplus) + '</span>'
              + '<span class="chip nom">'   + fmtI(st.no_move)  + '</span>'
              + '</span></div>'
              + '</div>';
     });
     host.innerHTML = html;
-})();
+}
 
-/* ── Stacked bar charts (marketing line / inch) ── */
-function stackedBar(canvas_id, srcObj, order) {
-    const labels = order || Object.keys(srcObj);
-    const short = labels.map(k => srcObj[k].shortage || 0);
-    const bal   = labels.map(k => srcObj[k].balanced || 0);
-    const sur   = labels.map(k => srcObj[k].surplus  || 0);
-    const nom   = labels.map(k => srcObj[k].no_move  || 0);
-    new Chart(document.getElementById(canvas_id), {
+/* ── PCLT / TBR stacked-bar charts (built from filtered rows) ── */
+let _pcltChart = null, _tbrChart = null;
+function computeByLine(rows, category) {
+    const by = {};
+    rows.forEach(r => {
+        if (r.category !== category) return;
+        const ln = r.line || 'Other';
+        if (!by[ln]) by[ln] = {shortage:0, balanced:0, surplus:0, serious_surplus:0, no_move:0};
+        if (by[ln][r.status] !== undefined) by[ln][r.status]++;
+    });
+    return by;
+}
+function drawStackedBar(canvas_id, by) {
+    const labels = Object.keys(by).sort((a,b) => (by[b].shortage||0) - (by[a].shortage||0));
+    const short = labels.map(k => by[k].shortage);
+    const bal   = labels.map(k => by[k].balanced);
+    const sur   = labels.map(k => by[k].surplus);
+    const ser   = labels.map(k => by[k].serious_surplus);
+    const nom   = labels.map(k => by[k].no_move);
+    const ctx = document.getElementById(canvas_id);
+    return new Chart(ctx, {
         type: 'bar',
         data: { labels, datasets: [
             { label: 'Shortage', data: short, backgroundColor: '#C62828' },
-            { label: 'Balanced', data: bal,   backgroundColor: '#66BB6A' },
+            { label: 'Balance',  data: bal,   backgroundColor: '#66BB6A' },
             { label: 'Surplus',  data: sur,   backgroundColor: '#FB8C00' },
+            { label: 'Serious',  data: ser,   backgroundColor: '#B71C1C' },
             { label: 'No move',  data: nom,   backgroundColor: '#8E24AA' },
         ]},
         options: {
             responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { display: false } },
+            plugins: { legend: { display: false },
+                       tooltip: { callbacks: {
+                           footer: items => {
+                               let sum = 0; items.forEach(i => sum += i.raw);
+                               return 'Total: ' + FMT_INT.format(sum);
+                           }} } },
             scales: {
-                x: { stacked: true, ticks: { font: { size: 10 }, autoSkip: false, maxRotation: 55, minRotation: 30 } },
+                x: { stacked: true, ticks: { font: { size: 10 }, autoSkip: false, maxRotation: 45, minRotation: 25 } },
                 y: { stacked: true, ticks: { font: { size: 10 } } },
             }
         }
     });
 }
-/* Marketing line ordered by shortage descending — most urgent first */
-{
-    const src = DATA.by_line;
-    const order = Object.keys(src).sort((a,b) => (src[b].shortage||0) - (src[a].shortage||0));
-    stackedBar('chart-line', src, order);
-}
-/* Inch ordered numerically */
-{
-    const src = DATA.by_inch;
-    const order = Object.keys(src).sort((a,b) => {
-        const na = parseFloat(a), nb = parseFloat(b);
-        if (!isNaN(na) && !isNaN(nb)) return na - nb;
-        return a.localeCompare(b);
-    });
-    stackedBar('chart-inch', src, order);
+function renderCharts() {
+    const rows = currentSetOfRows();
+    if (_pcltChart) _pcltChart.destroy();
+    if (_tbrChart)  _tbrChart.destroy();
+    _pcltChart = drawStackedBar('chart-pclt', computeByLine(rows, 'PCLT'));
+    _tbrChart  = drawStackedBar('chart-tbr',  computeByLine(rows, 'TBR'));
 }
 
-/* ── Multi-select checkbox dropdowns ── */
-const filterState = {
-    status:  new Set(),
-    state:   new Set(),
-    brand:   new Set(),
-    group:   new Set(),
-    line:    new Set(),
-    inch:    new Set(),
-    pattern: new Set(),
-};
-
-function buildFilterOptions() {
-    /* Collect option values from every SKU in all_rows so filters
-       include every possible value, not just the current tab. */
-    const values = { status: [], state: STATES.slice(),
-        brand: new Set(), group: new Set(), line: new Set(),
-        inch: new Set(), pattern: new Set() };
-    values.status = ['shortage','balanced','surplus','no_move'];
+/* ── Combo (Product Group, Size) options + wiring ── */
+function populateCombos() {
+    const groups = new Set(), sizes = new Set();
     DATA.all_rows.forEach(r => {
-        if (r.brand)   values.brand.add(r.brand);
-        if (r.group)   values.group.add(r.group);
-        if (r.line)    values.line.add(r.line);
-        if (r.inch)    values.inch.add(r.inch);
-        if (r.pattern) values.pattern.add(r.pattern);
+        if (r.group) groups.add(r.group);
+        if (r.size)  sizes.add(r.size);
     });
-    return {
-        status:  values.status,
-        state:   values.state,
-        brand:   [...values.brand].sort(),
-        group:   [...values.group].sort(),
-        line:    [...values.line].sort(),
-        inch:    [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
-        pattern: [...values.pattern].sort(),
-    };
-}
-const OPT = buildFilterOptions();
-
-function renderMsPanel(key) {
-    const opts = OPT[key];
-    const chosen = filterState[key];
-    const panel = document.querySelector('.ms[data-key="'+key+'"] .ms-panel');
-    let h = '';
-    opts.forEach(v => {
-        const id = 'ms-' + key + '-' + v.toString().replace(/[^A-Za-z0-9]/g,'_');
-        const checked = chosen.has(v) ? ' checked' : '';
-        h += '<label><input type="checkbox" value="' + v + '"' + checked + '> ' + v + '</label>';
+    const gSel = document.getElementById('f-group');
+    [...groups].sort().forEach(g => {
+        const o = document.createElement('option'); o.value = g; o.textContent = g;
+        gSel.appendChild(o);
     });
-    h += '<div class="ms-actions">'
-       + '<button data-act="all">All</button>'
-       + '<button data-act="none">None</button></div>';
-    panel.innerHTML = h;
-    panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
-        cb.addEventListener('change', () => {
-            if (cb.checked) filterState[key].add(cb.value);
-            else            filterState[key].delete(cb.value);
-            updateMsBtn(key);
-            renderTable();
-        });
-    });
-    panel.querySelector('[data-act="all"]').addEventListener('click', (e) => {
-        e.stopPropagation();
-        opts.forEach(v => filterState[key].add(v));
-        renderMsPanel(key); updateMsBtn(key); renderTable();
-    });
-    panel.querySelector('[data-act="none"]').addEventListener('click', (e) => {
-        e.stopPropagation();
-        filterState[key].clear();
-        renderMsPanel(key); updateMsBtn(key); renderTable();
+    const sSel = document.getElementById('f-size');
+    [...sizes].sort().forEach(s => {
+        const o = document.createElement('option'); o.value = s; o.textContent = s;
+        sSel.appendChild(o);
     });
 }
+populateCombos();
 
-function updateMsBtn(key) {
-    const btn = document.querySelector('.ms[data-key="'+key+'"] .ms-btn');
-    const chosen = filterState[key];
-    const total = OPT[key].length;
-    const KEY_LBL = { status:'Status', state:'State', brand:'Brand',
-                      group:'Group', line:'Marketing Line', inch:'Rim (inch)',
-                      pattern:'Pattern' };
-    if (chosen.size === 0) {
-        btn.classList.remove('active');
-        btn.innerHTML = KEY_LBL[key];
-    } else {
+document.getElementById('f-group').addEventListener('change',   e => { F.group = e.target.value; refresh(); });
+document.getElementById('f-size').addEventListener('change',    e => { F.size  = e.target.value; refresh(); });
+document.getElementById('f-pattern').addEventListener('input',
+    (function(){ let t; return function(e) { clearTimeout(t); t = setTimeout(()=>{ F.pattern = e.target.value; refresh(); }, 150); }; })());
+document.getElementById('f-code').addEventListener('input',
+    (function(){ let t; return function(e) { clearTimeout(t); t = setTimeout(()=>{ F.code = e.target.value; refresh(); }, 150); }; })());
+
+/* Chip buttons — PRODUCT row */
+document.querySelectorAll('[data-prod]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (btn.classList.contains('disabled')) return;
+        F.prod = btn.dataset.prod;
+        document.querySelectorAll('[data-prod]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        btn.innerHTML = KEY_LBL[key] + '<span class="n">' + chosen.size + '</span>';
-    }
-}
-
-/* Wire dropdowns */
-Object.keys(filterState).forEach(key => {
-    renderMsPanel(key);
-    updateMsBtn(key);
-    const holder = document.querySelector('.ms[data-key="'+key+'"]');
-    holder.querySelector('.ms-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        document.querySelectorAll('.ms.open').forEach(o => { if (o !== holder) o.classList.remove('open'); });
-        holder.classList.toggle('open');
+        refresh();
     });
 });
-document.addEventListener('click', (e) => {
-    if (!e.target.closest('.ms')) {
-        document.querySelectorAll('.ms.open').forEach(o => o.classList.remove('open'));
-    }
+document.querySelectorAll('[data-brand]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (btn.classList.contains('disabled')) return;
+        const br = btn.dataset.brand;
+        if (F.brand === br) { F.brand = null; btn.classList.remove('active'); }
+        else {
+            F.brand = br;
+            document.querySelectorAll('[data-brand]').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+        refresh();
+    });
+});
+/* Chip buttons — REGION row */
+document.querySelectorAll('[data-state]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        F.state = btn.dataset.state;
+        document.querySelectorAll('[data-state]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        refresh();
+    });
 });
 
-function resetFilters() {
-    Object.keys(filterState).forEach(key => {
-        filterState[key].clear();
-        renderMsPanel(key); updateMsBtn(key);
-    });
-    document.getElementById('fltr-search').value = '';
-    renderTable();
+function clearSelect(id) { document.getElementById(id).value = '';
+    if (id === 'f-group') F.group = ''; else if (id === 'f-size') F.size = '';
+    refresh(); }
+function clearInput(id) { document.getElementById(id).value = '';
+    if (id === 'f-pattern') F.pattern = ''; else if (id === 'f-code') F.code = '';
+    refresh(); }
+
+function resetAllFilters() {
+    F.prod = 'all'; F.brand = null; F.state = 'all';
+    F.group = ''; F.pattern = ''; F.size = ''; F.code = '';
+    document.querySelectorAll('[data-prod]').forEach(b => b.classList.toggle('active', b.dataset.prod === 'all'));
+    document.querySelectorAll('[data-brand]').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('[data-state]').forEach(b => b.classList.toggle('active', b.dataset.state === 'all'));
+    ['f-group','f-size','f-pattern','f-code'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+    refresh();
 }
 
-/* ── SKU table (tabs) ── */
+/* ── SKU drill-down table + tabs ── */
 let curTab = 'shortage';
-
-document.getElementById('n-short').textContent = fmtI(DATA.shortage_rows.length);
-document.getElementById('n-sur').textContent   = fmtI(DATA.surplus_rows.length);
-document.getElementById('n-nom').textContent   = fmtI(DATA.no_move_rows.length);
-
-function activeSource() {
-    /* When no status filter is set, honour the tab.  When ANY status
-       is chosen in the top filter, source from all_rows and let the
-       status filter narrow it — this lets the user combine e.g.
-       "Shortage + Surplus" in one view. */
-    if (filterState.status.size === 0) return DATA[curTab + '_rows'];
-    return DATA.all_rows;
-}
-
-function renderTable() {
-    const src = activeSource();
-    const fq  = (document.getElementById('fltr-search').value || '').trim().toLowerCase();
-    const body = document.getElementById('tbl-body');
-    const filtered = src.filter(r => {
-        if (filterState.status.size  && !filterState.status.has(r.status))   return false;
-        if (filterState.brand.size   && !filterState.brand.has(r.brand))     return false;
-        if (filterState.group.size   && !filterState.group.has(r.group))     return false;
-        if (filterState.line.size    && !filterState.line.has(r.line))       return false;
-        if (filterState.inch.size    && !filterState.inch.has(r.inch))       return false;
-        if (filterState.pattern.size && !filterState.pattern.has(r.pattern)) return false;
-        if (filterState.state.size) {
-            /* Show only rows that have stock or demand in AT LEAST ONE
-               of the chosen states — helps focus on regional issues. */
-            let hit = false;
-            filterState.state.forEach(s => {
-                if (r.state_stock[s] > 0 || r.state_3m[s] > 0) hit = true;
-            });
-            if (!hit) return false;
-        }
-        if (fq) {
-            const hay = ((r.description||'') + ' ' + (r.size||'') + ' '
-                       + (r.m_code||'') + ' ' + (r.merge_code||'') + ' '
-                       + (r.pattern||'') + ' ' + (r.line||'')).toLowerCase();
-            if (!hay.includes(fq)) return false;
-        }
-        return true;
-    });
-
-    const shorts = curTab === 'shortage', surplus = curTab === 'surplus';
-    body.innerHTML = filtered.slice(0, 500).map(r => {
-        const cls_mo = r.status === 'shortage' ? 'short'
-                     : (r.status === 'surplus' ? 'sur' : '');
-        return '<tr onclick="openModal(' + r.merge_code + ')">'
-            + '<td>' + r.merge_code + '</td>'
-            + '<td>' + (r.m_code || '—') + '</td>'
-            + '<td>' + (r.brand || '—') + '</td>'
-            + '<td>' + (r.line || '—') + '</td>'
-            + '<td>' + (r.pattern || '—') + '</td>'
-            + '<td>' + pill(r.group) + '</td>'
-            + '<td>' + (r.size || '—') + '</td>'
-            + '<td>' + (r.inch || '—') + '</td>'
-            + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.NSW) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.QLD) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.VIC) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.WA)  + '</td>'
-            + '<td class="r">' + fmtI(r.total_stock) + '</td>'
-            + '<td class="r">' + fmtF(r.total_3m, 1) + '</td>'
-            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 2) : '—') + '</td>'
-            + '</tr>';
-    }).join('');
-    const suffix = filtered.length > 500 ? ' — showing first 500' : '';
-    document.getElementById('row-count').textContent = fmtI(filtered.length) + ' rows' + suffix;
-}
 document.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => {
         document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -1198,17 +1355,49 @@ document.querySelectorAll('.tab').forEach(t => {
         renderTable();
     });
 });
-document.getElementById('fltr-search').addEventListener('input',
-    (function() { let t; return function() { clearTimeout(t); t = setTimeout(renderTable, 150); }; })());
-renderTable();
+
+function renderTable() {
+    const src = DATA[curTab + '_rows'].filter(rowPassesTopFilters);
+    const body = document.getElementById('tbl-body');
+    body.innerHTML = src.slice(0, 500).map(r => {
+        const cls_mo = r.status === 'shortage'        ? 'short'
+                     : r.status === 'surplus'         ? 'sur'
+                     : r.status === 'serious_surplus' ? 'ser' : '';
+        return '<tr onclick="openModal(' + r.merge_code + ')">'
+            + '<td>' + r.merge_code + '</td>'
+            + '<td>' + (r.m_code || '—') + '</td>'
+            + '<td>' + (r.brand || '—') + '</td>'
+            + '<td>' + (r.line || '—') + '</td>'
+            + '<td>' + (r.pattern || '—') + '</td>'
+            + '<td>' + pill(r.group) + '</td>'
+            + '<td>' + (r.size || '—') + '</td>'
+            + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.NSW) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.QLD) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.VIC) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.WA)  + '</td>'
+            + '<td class="r">' + fmtI(r.total_stock) + '</td>'
+            + '<td class="r">' + fmtF(r.total_3m, 1) + '</td>'
+            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
+            + '</tr>';
+    }).join('');
+    const suffix = src.length > 500 ? ' — showing first 500' : '';
+    document.getElementById('row-count').textContent = fmtI(src.length) + ' rows' + suffix;
+}
+
+/* Central refresh — re-runs everything that depends on filter state */
+function refresh() {
+    recomputeKPI();
+    renderStateCards();
+    renderCharts();
+    renderTable();
+}
+refresh();
 
 /* ── Drill-down modal ── */
 let _modalChart = null;
 const MONTH_LABELS = ['-12M','-11M','-10M','-9M','-8M','-7M','-6M','-5M','-4M','-3M','-2M','-1M'];
-
-function findRow(merge_code) {
-    return DATA.all_rows.find(r => r.merge_code === merge_code);
-}
+function findRow(mc) { return DATA.all_rows.find(r => r.merge_code === mc); }
 
 function openModal(mergeCode) {
     const r = findRow(mergeCode);
@@ -1223,13 +1412,14 @@ function openModal(mergeCode) {
     const pipe = STATES.reduce((s, k) => s + (r.state_pipeline[k] || 0), 0);
     document.getElementById('m-pipe').innerHTML    = fmtI(pipe) + '<span class="u">units on the way</span>';
     document.getElementById('m-3m').innerHTML      = fmtF(r.total_3m, 1) + '<span class="u">units / mo</span>';
-    const mohClass = r.moh != null && r.moh < 1 ? 'short'
-                   : r.moh != null && r.moh > 4 ? 'sur' : 'bal';
-    document.getElementById('m-moh').className     = 'figv ' + mohClass;
-    document.getElementById('m-moh').innerHTML     = (r.moh != null ? fmtF(r.moh, 2) : '—') + '<span class="u">months</span>';
-    document.getElementById('m-mohplus').innerHTML = (r.moh_plus != null ? fmtF(r.moh_plus, 2) : '—') + '<span class="u">months (Stock + Factory pipeline)</span>';
+    const mohClass = r.moh == null ? ''
+                   : r.moh <= 1 ? 'short'
+                   : r.moh <= 3 ? 'bal'
+                   : r.moh <= 6 ? 'sur' : 'ser';
+    document.getElementById('m-moi').className     = 'figv ' + mohClass;
+    document.getElementById('m-moi').innerHTML     = (r.moh != null ? fmtF(r.moh, 1) : '—') + '<span class="u">months</span>';
+    document.getElementById('m-moiplus').innerHTML = (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '<span class="u">months (Stock + Factory pipeline)</span>';
 
-    /* Monthly chart per state */
     if (_modalChart) { _modalChart.destroy(); _modalChart = null; }
     const stateColour = { NSW: '#1976D2', QLD: '#EF6C00', VIC: '#8E24AA', WA: '#00897B' };
     const datasets = STATES.map(s => ({
@@ -1237,7 +1427,6 @@ function openModal(mergeCode) {
         backgroundColor: stateColour[s] + '22', borderWidth: 2,
         pointRadius: 3, tension: .25, fill: false,
     }));
-    /* National total as a dashed grey line */
     datasets.push({
         label: 'Total', data: r.history.TOTAL,
         borderColor: '#37474F', backgroundColor: '#37474F22',
@@ -1249,14 +1438,11 @@ function openModal(mergeCode) {
         options: {
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { position: 'top', labels: { boxWidth: 14, font: { size: 11 } } } },
-            scales: {
-                y: { beginAtZero: true, ticks: { font: { size: 10 } } },
-                x: { ticks: { font: { size: 10 } } },
-            }
+            scales: { y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+                       x: { ticks: { font: { size: 10 } } } }
         }
     });
 
-    /* Per-state pipeline table */
     const rows = STATES.map(s => {
         const pp = r.state_pipe_parts[s];
         const stock = r.state_stock[s];
@@ -1264,8 +1450,8 @@ function openModal(mergeCode) {
         const dem = r.state_3m[s];
         const smoh = dem > 0 ? (stock / dem) : null;
         const spmoh = dem > 0 ? ((stock + pipe) / dem) : null;
-        const cls = smoh != null && smoh < 1 ? 'short'
-                  : smoh != null && smoh > 4 ? 'sur' : '';
+        const cls = smoh == null ? '' : smoh <= 1 ? 'short'
+                  : smoh <= 3 ? '' : smoh <= 6 ? 'sur' : 'ser';
         return '<tr>'
             + '<td class="st">' + s + '</td>'
             + '<td>' + fmtI(stock) + '</td>'
@@ -1274,17 +1460,15 @@ function openModal(mergeCode) {
             + '<td>' + fmtI(pp.fac) + '</td>'
             + '<td>' + fmtI(pipe) + '</td>'
             + '<td>' + fmtF(dem, 1) + '</td>'
-            + '<td class="' + cls + '">' + (smoh != null ? fmtF(smoh, 2) : '—') + '</td>'
-            + '<td>' + (spmoh != null ? fmtF(spmoh, 2) : '—') + '</td>'
+            + '<td class="' + cls + '">' + (smoh != null ? fmtF(smoh, 1) : '—') + '</td>'
+            + '<td>' + (spmoh != null ? fmtF(spmoh, 1) : '—') + '</td>'
             + '</tr>';
     }).join('');
-    /* Totals */
     const totStock = STATES.reduce((s,k) => s + r.state_stock[k], 0);
     const totPort  = STATES.reduce((s,k) => s + r.state_pipe_parts[k].port, 0);
     const totWater = STATES.reduce((s,k) => s + r.state_pipe_parts[k].water, 0);
     const totFac   = STATES.reduce((s,k) => s + r.state_pipe_parts[k].fac, 0);
     const totPipe  = totPort + totWater + totFac;
-    const totDem   = r.total_3m;
     document.getElementById('m-pipe-tbl').innerHTML = rows
       + '<tr class="tot">'
       + '<td class="st">Total</td>'
@@ -1293,9 +1477,9 @@ function openModal(mergeCode) {
       + '<td>' + fmtI(totWater) + '</td>'
       + '<td>' + fmtI(totFac) + '</td>'
       + '<td>' + fmtI(totPipe) + '</td>'
-      + '<td>' + fmtF(totDem, 1) + '</td>'
-      + '<td>' + (r.moh != null ? fmtF(r.moh, 2) : '—') + '</td>'
-      + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 2) : '—') + '</td>'
+      + '<td>' + fmtF(r.total_3m, 1) + '</td>'
+      + '<td>' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
+      + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td>'
       + '</tr>';
 
     document.getElementById('modal-bg').classList.add('open');
