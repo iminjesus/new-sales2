@@ -420,8 +420,29 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 .left { width: 40%; border-right: 1px solid #d0d5dd;
         display: flex; flex-direction: column; overflow: hidden; background: #fff; }
 .left-title { background: #1F4E79; color: #fff; padding: 7px 14px;
-              font-size: 11.5px; font-weight: 700; flex-shrink: 0; letter-spacing: .02em; }
+              font-size: 11.5px; font-weight: 700; flex-shrink: 0; letter-spacing: .02em;
+              display: flex; align-items: center; justify-content: space-between; }
+.left-title .lt-text { flex: 1; }
 .left-scroll { flex: 1; overflow-y: auto; }
+
+/* Expand / collapse icon for the tables — clicking it swaps the LEFT
+   panel to full-viewport overlay so the ‘26.8 / ‘26.9 columns that
+   normally get clipped by the 40 % left-panel width become fully
+   readable.  Clicking again returns to the split layout. */
+.expand-btn { background: rgba(255,255,255,0.12); color: #fff;
+              border: 1px solid rgba(255,255,255,0.45); border-radius: 3px;
+              width: 22px; height: 22px; padding: 0; margin-left: 8px;
+              font: 14px/1 system-ui, sans-serif; cursor: pointer;
+              display: flex; align-items: center; justify-content: center; }
+.expand-btn:hover { background: rgba(255,255,255,0.28); }
+body.tables-expanded .left {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    width: 100vw; height: 100vh; z-index: 9998; border-right: none;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.35);
+}
+body.tables-expanded .left-title { background: #143756; }
+body.tables-expanded .expand-btn { background: #C62828; border-color: #C62828; }
+body.tables-expanded .ctable { font-size: 14px; }
 #chart-table-wrap { padding: 4px 0 0; }
 /* ── Base pattern table ── */
 .base-section { border-top: 3px solid #1F4E79; margin-top: 14px; }
@@ -562,7 +583,12 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 
   <!-- ── LEFT: comparison tables ── -->
   <div class="left">
-    <div class="left-title">Comparison Base table for popular size</div>
+    <div class="left-title">
+      <span class="lt-text">Comparison Base table for popular size</span>
+      <button id="expand-tables-btn" class="expand-btn"
+              onclick="toggleTablesExpand()" title="Expand tables to full view"
+              aria-label="Expand tables">&#x26F6;</button>
+    </div>
     <div class="left-scroll">
       <div id="chart-table-wrap"></div>
       {% if base_rows %}
@@ -1313,6 +1339,33 @@ function _median(arr) {
     const mid = Math.floor(vals.length / 2);
     return vals.length % 2 ? vals[mid] : (vals[mid-1] + vals[mid]) / 2;
 }
+
+/* ── Expand / collapse the LEFT tables ─────────────────
+   Overlays the entire viewport with the tables panel so the
+   right-most month columns (‘26.8 / ‘26.9) that get clipped at
+   40 % left-panel width become fully readable.  Icon swaps to an
+   ✕ while expanded so the click target's meaning is obvious. */
+function toggleTablesExpand() {
+    const on = document.body.classList.toggle('tables-expanded');
+    const btn = document.getElementById('expand-tables-btn');
+    if (btn) {
+        btn.innerHTML = on ? '✕' : '⛶';   // ✕ or ⛶
+        btn.title     = on ? 'Return to split view' : 'Expand tables to full view';
+    }
+    /* When collapsing back, scroll the left panel back to the top so
+       the user isn't stranded mid-table. */
+    if (!on) {
+        const sc = document.querySelector('.left-scroll');
+        if (sc) sc.scrollTop = 0;
+    }
+}
+/* Escape key exits the expanded view — muscle memory from most
+   overlay UIs. */
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.body.classList.contains('tables-expanded')) {
+        toggleTablesExpand();
+    }
+});
 
 /* ── Size buttons ─────────────────────────────────────── */
 function _setSize(size, btn) {
