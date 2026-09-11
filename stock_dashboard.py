@@ -87,6 +87,62 @@ COL_TOTAL_3M = 68
 COL_STATE_12M = {"NSW": 74, "QLD": 75, "VIC": 76, "WA": 77}
 COL_TOTAL_12M = 78
 
+# 12-month sales history: 12 blocks of [NSW, QLD, VIC, WA, TOTAL] at
+# cols 4-63.  Used by the drill-down modal to draw a per-state
+# monthly line chart when the user clicks a problem SKU.
+HIST_MONTHS   = 12
+HIST_COL_START = 4      # -12M NSW column
+HIST_BLOCK_LEN = 5      # NSW, QLD, VIC, WA, TOTAL per month
+
+
+# ── Marketing line (Group in the user's vernacular) ──────────────
+# Derived from the pattern code.  Hankook / Laufenn use a stable
+# letter-prefix system that maps to a marketing line:
+#   K7xx / K4xx / K3xx / KH..     → Kinergy    (touring / comfort)
+#   K1xx (K107/K115/K117/K120…)   → Ventus     (UHP / performance)
+#   RA / RF / RH / RT             → Dynapro    (SUV / LT / MT)
+#   LH / LK / LS / LI (Laufenn)   → Laufenn G/S/X/I Fit
+#   W (Winter)                    → Winter i*cept
+#   AH / AL / AM / DH / DL / TH   → TBR / Truck (Smart / e-cube …)
+#   Z / older H4xx / RH0x         → Optimo / legacy
+# This is intentionally coarse — good enough to slice the shortage
+# vs surplus board.  Falls back to "Other" so the column never blanks.
+_LINE_RULES = [
+    (r"^LH|^LK|^LS|^LI",         "Laufenn G/S/X/I Fit"),
+    (r"^RA|^RF|^RH0|^RH1|^RT",   "Dynapro"),
+    (r"^K1\d\d",                 "Ventus"),
+    (r"^K7\d\d|^K4\d\d|^K3\d\d|^KH", "Kinergy"),
+    (r"^H4\d\d",                 "Kinergy"),
+    (r"^W\d\d\d",                "Winter i*cept"),
+    (r"^AH|^AL|^AM|^DH|^DL|^TH|^SM|^TL", "Truck / TBR"),
+    (r"^Z\d\d\d",                "Optimo (legacy)"),
+]
+
+def _marketing_line(pattern):
+    """Map a raw pattern code (K425, RA33, LH41…) to a marketing line
+    name suitable for grouping and filtering."""
+    if not pattern:
+        return ""
+    p = str(pattern).strip().upper()
+    for regex, name in _LINE_RULES:
+        if re.match(regex, p):
+            return name
+    return "Other"
+
+
+def _extract_pattern(desc):
+    """Pull the pattern code out of a JAX / Sheet2 description.  Format
+    is comma-separated fields where the 3rd field is the pattern code
+    (K425, RA33, Z222…).  Returns "" on unusual formats so downstream
+    code doesn't need a null guard."""
+    if not desc:
+        return ""
+    parts = str(desc).split(",")
+    if len(parts) < 3:
+        return ""
+    p = parts[2].strip()
+    return p if p and not p.startswith("#") else ""
+
 # Sheet2 headers we care about for enrichment
 _SHEET2_COLS = ("M CODE", "Description", "Group", "Brand",
                 "LI", "SS", "PLY", "S.W", "SR", "Inch",
@@ -200,11 +256,32 @@ def load_stock_data():
                 return 0.0
 
         state_stock = {s: _num(r[COL_STATE_STOCK[s] - 1]) for s in STATES}
-        state_pipe  = {s: sum(_num(r[c - 1]) for c in COL_STATE_PIPELINE[s]) for s in STATES}
-        state_3m    = {s: _num(r[COL_STATE_3M[s] - 1]) for s in STATES}
+        # Pipeline decomposed so the drill-down can show Port/Water/Factory
+        # separately.  Order = (PORT, WATER, FAC) per COL_STATE_PIPELINE.
+        state_pipe_parts = {
+            s: {
+                "port":  _num(r[COL_STATE_PIPELINE[s][0] - 1]),
+                "water": _num(r[COL_STATE_PIPELINE[s][1] - 1]),
+                "fac":   _num(r[COL_STATE_PIPELINE[s][2] - 1]),
+            } for s in STATES
+        }
+        state_pipe = {s: sum(state_pipe_parts[s].values()) for s in STATES}
+        state_3m   = {s: _num(r[COL_STATE_3M[s] - 1]) for s in STATES}
         total_stock = _num(r[COL_TOTAL_STOCK - 1])
         total_all   = _num(r[COL_TOTAL_TOTAL - 1])
         total_3m    = _num(r[COL_TOTAL_3M - 1])
+
+        # 12-month sales history per state — used by the drill-down modal
+        # to draw a per-state line chart.  Stored as [-12M … -1M] so the
+        # front-end can plot in chronological order.
+        history = {"NSW": [], "QLD": [], "VIC": [], "WA": [], "TOTAL": []}
+        for m in range(HIST_MONTHS):
+            base = HIST_COL_START + m * HIST_BLOCK_LEN
+            history["NSW"].append(_num(r[base - 1]))
+            history["QLD"].append(_num(r[base + 0]))
+            history["VIC"].append(_num(r[base + 1]))
+            history["WA"].append(_num(r[base + 2]))
+            history["TOTAL"].append(_num(r[base + 3]))
 
         # Enrich via MM → Sheet2
         mcode = mc_to_mcode.get(mc)
@@ -236,27 +313,42 @@ def load_stock_data():
         else:
             status = "balanced"
 
+        raw_desc = detail.get("description", "")
+        pattern  = _extract_pattern(raw_desc)
+        line     = _marketing_line(pattern)
+
+        # Second MOH: Stock On Hand + entire Factory pipeline (incoming
+        # from KR/JP/HU plants) — a longer-horizon planning metric.
+        moh_plus = ((total_stock + total_all - total_stock) / total_3m) if total_3m > 0 else None
+        # total_all already includes stock+pipeline, so:
+        moh_plus = (total_all / total_3m) if total_3m > 0 else None
+
         rows_out.append({
-            "merge_code":  mc,
-            "m_code":      mcode,
-            "group":       group or detail.get("group") or "",
+            "merge_code":     mc,
+            "m_code":         mcode,
+            "group":          group or detail.get("group") or "",
             "classification": classif or "",
-            "brand":       detail.get("brand", ""),
-            "description": detail.get("description", ""),
-            "size":        size,
-            "inch":        detail.get("inch", ""),
-            "li":          detail.get("li", ""),
-            "ss":          detail.get("ss", ""),
-            "factory":     detail.get("factory", ""),
-            "origin":      detail.get("origin", ""),
-            "state_stock":    state_stock,
-            "state_pipeline": state_pipe,
-            "state_3m":       state_3m,
-            "total_stock":    total_stock,
-            "total_all":      total_all,
-            "total_3m":       total_3m,
-            "moh":            round(moh, 2) if moh is not None else None,
-            "status":         status,
+            "brand":          detail.get("brand", ""),
+            "line":           line,           # Marketing line (Kinergy / Dynapro / Ventus…)
+            "pattern":        pattern,        # Pattern code (K425, RA33…)
+            "description":    raw_desc,
+            "size":           size,
+            "inch":           detail.get("inch", ""),
+            "li":             detail.get("li", ""),
+            "ss":             detail.get("ss", ""),
+            "factory":        detail.get("factory", ""),
+            "origin":         detail.get("origin", ""),
+            "state_stock":       state_stock,
+            "state_pipeline":    state_pipe,
+            "state_pipe_parts":  state_pipe_parts,
+            "state_3m":          state_3m,
+            "history":           history,    # 12 months by state
+            "total_stock":       total_stock,
+            "total_all":         total_all,
+            "total_3m":          total_3m,
+            "moh":               round(moh, 2)      if moh      is not None else None,
+            "moh_plus":          round(moh_plus, 2) if moh_plus is not None else None,
+            "status":            status,
         })
 
     meta = {
@@ -289,8 +381,10 @@ def _aggregate(rows):
     by_inch     = {}
     by_brand    = {}
     by_classif  = {}
+    by_line     = {}    # marketing line: Kinergy / Dynapro / Ventus / …
 
     shortage_rows, surplus_rows, no_move_rows = [], [], []
+    all_rows_flat = []   # every non-empty row, for the drill-down index
 
     for r in rows:
         st = r["status"]
@@ -342,20 +436,38 @@ def _aggregate(rows):
         by_classif.setdefault(cl, _empty_bucket())[st] += 1
         by_classif[cl].setdefault("stock", 0); by_classif[cl]["stock"] += r["total_stock"]
 
-        # SKU tables (top offenders)
+        ln = r["line"] or "Other"
+        by_line.setdefault(ln, _empty_bucket())[st] += 1
+        by_line[ln].setdefault("stock", 0); by_line[ln]["stock"] += r["total_stock"]
+
+        # SKU entry (unified — every table + the drill-down index uses
+        # the same shape so the front-end can look up a full row from
+        # its Merge Code without a second lookup structure).
         entry = {
-            "merge_code":  r["merge_code"],
-            "m_code":      r["m_code"],
-            "description": r["description"] or f"MC {r['merge_code']}",
-            "group":       r["group"],
-            "brand":       r["brand"],
-            "size":        r["size"],
-            "total_stock": r["total_stock"],
-            "total_3m":    round(r["total_3m"], 2),
-            "moh":         r["moh"],
-            "state_stock": r["state_stock"],
-            "state_3m":    r["state_3m"],
+            "merge_code":     r["merge_code"],
+            "m_code":         r["m_code"],
+            "description":    r["description"] or f"MC {r['merge_code']}",
+            "group":          r["group"],
+            "line":           r["line"],
+            "pattern":        r["pattern"],
+            "brand":          r["brand"],
+            "size":           r["size"],
+            "inch":           str(r["inch"]) if r["inch"] not in (None, "") else "",
+            "li":             str(r["li"])   if r["li"]   not in (None, "") else "",
+            "ss":             str(r["ss"])   if r["ss"]   not in (None, "") else "",
+            "total_stock":    r["total_stock"],
+            "total_all":      r["total_all"],
+            "total_3m":       round(r["total_3m"], 2),
+            "moh":            r["moh"],
+            "moh_plus":       r["moh_plus"],
+            "status":         r["status"],
+            "state_stock":    r["state_stock"],
+            "state_3m":       r["state_3m"],
+            "state_pipeline": r["state_pipeline"],
+            "state_pipe_parts": r["state_pipe_parts"],
+            "history":        r["history"],
         }
+        all_rows_flat.append(entry)
         if st == "shortage":
             shortage_rows.append(entry)
         elif st == "surplus":
@@ -378,24 +490,26 @@ def _aggregate(rows):
 
     return {
         "kpi": {
-            "sku_total":    sum(kpi_status[k] for k in ["shortage", "balanced", "surplus", "no_move"]),
-            "sku_shortage": kpi_status["shortage"],
-            "sku_balanced": kpi_status["balanced"],
-            "sku_surplus":  kpi_status["surplus"],
-            "sku_no_move":  kpi_status["no_move"],
-            "total_stock":  int(total_stock),
+            "sku_total":      sum(kpi_status[k] for k in ["shortage", "balanced", "surplus", "no_move"]),
+            "sku_shortage":   kpi_status["shortage"],
+            "sku_balanced":   kpi_status["balanced"],
+            "sku_surplus":    kpi_status["surplus"],
+            "sku_no_move":    kpi_status["no_move"],
+            "total_stock":    int(total_stock),
             "total_pipeline": int(total_pipe),
-            "total_demand_3m": round(total_3m, 1),
-            "national_moh": nat_moh,
+            "total_demand_3m": int(round(total_3m)),   # integer with thousand sep
+            "national_moh":   nat_moh,
         },
-        "state":       state_totals,
-        "by_group":    by_group,
-        "by_inch":     by_inch,
-        "by_brand":    by_brand,
-        "by_classif":  by_classif,
-        "shortage_rows": shortage_rows[:200],   # first 200 — enough for a scan
-        "surplus_rows":  surplus_rows[:200],
-        "no_move_rows":  no_move_rows[:200],
+        "state":         state_totals,
+        "by_group":      by_group,
+        "by_line":       by_line,
+        "by_inch":       by_inch,
+        "by_brand":      by_brand,
+        "by_classif":    by_classif,
+        "shortage_rows": shortage_rows,   # all — front-end filters/paginates
+        "surplus_rows":  surplus_rows,
+        "no_move_rows":  no_move_rows,
+        "all_rows":      all_rows_flat,   # complete SKU index for drill-down lookups
     }
 
 
@@ -423,97 +537,173 @@ _HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Stock Balance Lab</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', system-ui, sans-serif;
-       background: #F4F6F9; color: #263238;
-       height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+:root {
+    --ground: #F4F6F9;
+    --card:   #FFFFFF;
+    --border: #E1E5EB;
+    --ink:    #263238;
+    --muted:  #607D8B;
+    --hdr1:   #0E3F5F;
+    --hdr2:   #1F4E79;
+    --short:  #C62828;
+    --short-fg:#FFEBEE;
+    --bal:    #2E7D32;
+    --bal-fg: #E8F5E9;
+    --sur:    #EF6C00;
+    --sur-fg: #FFF3E0;
+    --nom:    #6A1B9A;
+    --nom-fg: #F3E5F5;
+    --hover:  #F5F7FA;
+}
+body { font-family: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+       background: var(--ground); color: var(--ink); height: 100vh;
+       display: flex; flex-direction: column; overflow: hidden;
+       font-variant-numeric: tabular-nums; }
 
-.hdr { background: linear-gradient(135deg,#0E3F5F,#1F4E79); color:#fff;
-       padding: 12px 22px; display:flex; align-items:center; gap:14px; flex-shrink:0;
-       box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
-.hdr h1 { font-size: 17px; letter-spacing:.4px; }
-.hdr .subtitle { font-size: 11px; opacity:.72; }
+/* ── Header ── */
+.hdr { background: linear-gradient(135deg,var(--hdr1),var(--hdr2));
+       color:#fff; padding: 12px 22px; display:flex; align-items:center;
+       gap:14px; flex-shrink:0; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+.hdr h1 { font-size: 18px; letter-spacing:.3px; font-weight: 600; }
+.hdr .subtitle { font-size: 11px; opacity:.75; line-height: 1.4; }
 .hdr .nav { margin-left:auto; display:flex; gap:6px; }
 .hdr .nav a { font-size: 12px; padding: 5px 13px; border-radius: 5px; cursor: pointer;
               border: 1px solid rgba(255,255,255,0.45); color: #fff; text-decoration: none; }
 .hdr .nav a:hover { background: rgba(255,255,255,0.15); }
-.hdr .nav a.active { background: #fff; color: #0E3F5F; font-weight: 600; }
+.hdr .nav a.active { background: #fff; color: var(--hdr1); font-weight: 600; }
 
-.body { flex:1; display:flex; overflow:hidden; }
+/* ── Top persistent filter bar ── */
+.topfilters { background: #263238; color: #ECEFF1; padding: 8px 16px;
+              display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+              flex-shrink: 0; border-bottom: 1px solid #1a2225; }
+.topfilters .lbl { font-size: 10.5px; text-transform: uppercase;
+                   letter-spacing: .08em; color: #90A4AE; font-weight: 600;
+                   margin-right: 4px; }
 
-/* ── KPI strip ───────────────────────────────────────────── */
+/* Multi-select checkbox dropdown widget */
+.ms { position: relative; display: inline-block; }
+.ms-btn { background: #37474F; border: 1px solid #455A64; color: #ECEFF1;
+          font: 500 12px 'IBM Plex Sans', system-ui, sans-serif;
+          padding: 5px 24px 5px 11px; border-radius: 4px; cursor: pointer;
+          min-width: 92px; text-align: left; position: relative; }
+.ms-btn::after { content: '▾'; position: absolute; right: 8px; top: 50%;
+                 transform: translateY(-50%); font-size: 9px; opacity: .7; }
+.ms-btn:hover { background: #455A64; }
+.ms-btn.active { background: var(--hdr2); border-color: var(--hdr2); color: #fff; }
+.ms-btn .n { background: rgba(255,255,255,0.22); border-radius: 8px;
+             padding: 0 5px; margin-left: 4px; font-size: 10px; font-weight: 600; }
+.ms-panel { display: none; position: absolute; top: 100%; left: 0; z-index: 60;
+            background: #fff; color: var(--ink);
+            border: 1px solid #B0BEC5; border-radius: 5px; margin-top: 3px;
+            min-width: 180px; max-height: 320px; overflow-y: auto;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.2); padding: 4px 0; }
+.ms.open .ms-panel { display: block; }
+.ms-panel label { display: flex; align-items: center; gap: 7px;
+                  padding: 5px 12px; font-size: 12px; cursor: pointer;
+                  user-select: none; }
+.ms-panel label:hover { background: var(--hover); }
+.ms-panel input[type=checkbox] { margin: 0; }
+.ms-panel .ms-actions { display: flex; justify-content: space-between;
+                        padding: 6px 12px 8px; border-top: 1px solid #ECEFF1;
+                        margin-top: 4px; }
+.ms-panel .ms-actions button { font-size: 11px; padding: 3px 10px; border-radius: 3px;
+                               border: 1px solid #CFD8DC; background: #fff;
+                               cursor: pointer; color: var(--hdr1); }
+.ms-panel .ms-actions button:hover { background: var(--hover); }
+
+.topfilters .search { margin-left: auto; }
+.topfilters .search input { background: #37474F; border: 1px solid #455A64;
+                             color: #ECEFF1; font: 500 12px 'IBM Plex Sans', sans-serif;
+                             padding: 5px 11px; border-radius: 4px; width: 240px; }
+.topfilters .search input::placeholder { color: #78909C; }
+.topfilters .reset { background: none; border: 1px solid #607D8B;
+                     color: #B0BEC5; padding: 4px 11px; border-radius: 4px;
+                     cursor: pointer; font: 500 11px 'IBM Plex Sans', sans-serif; }
+.topfilters .reset:hover { background: #37474F; color: #fff; }
+
+/* ── KPI strip ── */
 .kpi-strip { display: grid; grid-template-columns: repeat(6, 1fr);
-             gap: 10px; padding: 12px 16px 4px; }
-.kpi { background: #fff; border-radius: 8px; padding: 10px 14px;
-       border: 1px solid #E1E5EB; position: relative; overflow: hidden; }
-.kpi h4 { font-size: 10.5px; color:#546E7A; text-transform: uppercase;
-          letter-spacing:.06em; margin-bottom: 4px; font-weight: 600; }
-.kpi .v { font-size: 24px; font-weight: 700; color:#0E3F5F; font-family:'Segoe UI Semibold', monospace; }
+             gap: 10px; padding: 10px 16px 4px; }
+.kpi { background: var(--card); border-radius: 8px; padding: 10px 14px;
+       border: 1px solid var(--border); position: relative; overflow: hidden; }
+.kpi h4 { font-size: 10px; color:var(--muted); text-transform: uppercase;
+          letter-spacing:.1em; margin-bottom: 4px; font-weight: 600; }
+.kpi .v { font-size: 24px; font-weight: 700; color:var(--hdr1);
+          font-family: 'IBM Plex Mono', ui-monospace, monospace;
+          font-variant-numeric: tabular-nums; }
 .kpi .u { font-size: 10.5px; color:#78909C; margin-left: 4px; }
-.kpi.short { border-left: 4px solid #C62828; }
-.kpi.short  .v { color:#C62828; }
-.kpi.bal   { border-left: 4px solid #2E7D32; }
-.kpi.bal    .v { color:#2E7D32; }
-.kpi.sur   { border-left: 4px solid #EF6C00; }
-.kpi.sur    .v { color:#EF6C00; }
-.kpi.nom   { border-left: 4px solid #6A1B9A; }
-.kpi.nom    .v { color:#6A1B9A; }
+.kpi.short { border-left: 4px solid var(--short); }
+.kpi.short  .v { color:var(--short); }
+.kpi.bal   { border-left: 4px solid var(--bal); }
+.kpi.bal    .v { color:var(--bal); }
+.kpi.sur   { border-left: 4px solid var(--sur); }
+.kpi.sur    .v { color:var(--sur); }
+.kpi.nom   { border-left: 4px solid var(--nom); }
+.kpi.nom    .v { color:var(--nom); }
 
-/* ── main grid ───────────────────────────────────────────── */
+/* ── main body grid ── */
 .wrap { flex:1; overflow-y: auto; padding: 6px 16px 20px; }
-.grid { display: grid; grid-template-columns: 340px 1fr; gap: 14px; }
+.grid { display: grid; grid-template-columns: 320px 1fr; gap: 12px; }
 
-/* State cards on the left */
 .state-col { display: flex; flex-direction: column; gap: 10px; }
-.state-card { background:#fff; border-radius:8px; border:1px solid #E1E5EB;
+.state-card { background:var(--card); border-radius:8px; border:1px solid var(--border);
               padding: 12px 14px; }
 .state-card h3 { font-size: 13px; display:flex; justify-content:space-between;
-                 align-items:baseline; margin-bottom: 6px; }
-.state-card h3 .m { font-family:monospace; color:#546E7A; font-size:11px; }
+                 align-items:baseline; margin-bottom: 6px; font-weight: 600; }
+.state-card h3 .m { font-family:'IBM Plex Mono', monospace;
+                    color:#546E7A; font-size:11px; font-variant-numeric: tabular-nums; }
 .state-row { display:flex; justify-content:space-between; align-items:baseline;
              font-size: 11.5px; padding: 3px 0; border-top: 1px solid #F1F3F5; }
 .state-row:first-of-type { border-top: none; }
-.state-row .lbl { color:#607D8B; }
-.state-row .v   { font-family: monospace; font-weight: 600; color:#263238; }
+.state-row .lbl { color:var(--muted); }
+.state-row .v   { font-family: 'IBM Plex Mono', monospace; font-weight: 600;
+                  color:var(--ink); font-variant-numeric: tabular-nums; }
 .chip { display:inline-block; padding: 1px 7px; border-radius: 8px;
-        font-size: 10px; font-weight: 600; margin-left: 4px; }
-.chip.short { background:#FFEBEE; color:#C62828; }
-.chip.sur   { background:#FFF3E0; color:#EF6C00; }
-.chip.bal   { background:#E8F5E9; color:#2E7D32; }
-.chip.nom   { background:#F3E5F5; color:#6A1B9A; }
+        font-size: 10px; font-weight: 600; margin-left: 4px;
+        font-family: 'IBM Plex Mono', monospace; }
+.chip.short { background:var(--short-fg); color:var(--short); }
+.chip.sur   { background:var(--sur-fg);   color:var(--sur); }
+.chip.bal   { background:var(--bal-fg);   color:var(--bal); }
+.chip.nom   { background:var(--nom-fg);   color:var(--nom); }
 
 .right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.card { background:#fff; border-radius:8px; border:1px solid #E1E5EB;
+.card { background:var(--card); border-radius:8px; border:1px solid var(--border);
         padding: 12px 14px 14px; }
-.card h3 { font-size: 12.5px; color:#0E3F5F;
+.card h3 { font-size: 12.5px; color:var(--hdr1);
            border-bottom: 1px solid #ECEFF1; padding-bottom: 6px; margin-bottom: 8px;
-           display: flex; justify-content: space-between; align-items: baseline; }
+           display: flex; justify-content: space-between; align-items: baseline;
+           font-weight: 600; }
 .card h3 .hint { font-size: 10.5px; color:#78909C; font-weight: 400; }
 .chartbox { position: relative; height: 210px; }
+.chartbox.tall { height: 260px; }
 
-/* Bar chart legend text */
 .tabs { display:flex; gap: 4px; margin-bottom: 6px; }
 .tab {  font-size: 11.5px; padding: 5px 12px; border-radius: 5px; cursor: pointer;
         background: #ECEFF1; color: #37474F; border: 1px solid #CFD8DC; }
-.tab.active { background: #0E3F5F; color: #fff; border-color: #0E3F5F; }
+.tab.active { background: var(--hdr1); color: #fff; border-color: var(--hdr1); }
 .tab:hover:not(.active) { background: #CFD8DC; }
 .tab .n { display:inline-block; margin-left: 6px; padding: 0 6px;
-          border-radius: 8px; background: rgba(255,255,255,0.25); font-size: 10px; }
-.tab.active .n { background: rgba(255,255,255,0.3); }
-.tab:not(.active) .n { background: rgba(0,0,0,0.08); }
+          border-radius: 8px; background: rgba(0,0,0,0.08); font-size: 10px;
+          font-family: 'IBM Plex Mono', monospace; }
+.tab.active .n { background: rgba(255,255,255,0.24); }
 
 table.dt { width: 100%; border-collapse: collapse; font-size: 11.5px; }
 table.dt thead th { background: #ECEFF1; color:#37474F; padding: 6px 8px;
                     text-align: left; position: sticky; top: 0; z-index: 2;
-                    border-bottom: 1px solid #CFD8DC; font-size: 11px; }
+                    border-bottom: 1px solid #CFD8DC; font-size: 10.5px;
+                    text-transform: uppercase; letter-spacing: .04em; }
 table.dt tbody td { padding: 5px 8px; border-bottom: 1px solid #F1F3F5;
                     white-space: nowrap; font-size: 11.5px; }
-table.dt tbody tr:hover td { background: #F5F7FA; }
-table.dt .r { text-align: right; font-family: monospace; }
-table.dt .r.short { color:#C62828; font-weight: 700; }
-table.dt .r.sur   { color:#EF6C00; font-weight: 700; }
-.tbl-wrap { max-height: 340px; overflow-y: auto; }
+table.dt tbody tr { cursor: pointer; }
+table.dt tbody tr:hover td { background: var(--hover); }
+table.dt .r { text-align: right; font-family: 'IBM Plex Mono', monospace;
+              font-variant-numeric: tabular-nums; }
+table.dt .r.short { color:var(--short); font-weight: 700; }
+table.dt .r.sur   { color:var(--sur); font-weight: 700; }
+.tbl-wrap { max-height: 480px; overflow-y: auto; overflow-x: auto; }
 
 .pill { display: inline-block; padding: 2px 7px; border-radius: 10px;
         font-size: 10.5px; font-weight: 600; }
@@ -521,23 +711,69 @@ table.dt .r.sur   { color:#EF6C00; font-weight: 700; }
 .pill.g-HP  { background: #FFF3E0; color: #E65100; }
 .pill.g-UHP { background: #FCE4EC; color: #AD1457; }
 .pill.g-TBR { background: #E8F5E9; color: #2E7D32; }
+.pill.g-LS  { background: #EDE7F6; color: #4527A0; }
+.pill.g-LV  { background: #E0F2F1; color: #00695C; }
+.pill.g-RUNFLAT { background: #FCE4EC; color: #880E4F; }
+.pill.g-RACING  { background: #FBE9E7; color: #BF360C; }
 .pill.g-other { background: #ECEFF1; color: #455A64; }
+.pill.sm { font-size: 9.5px; padding: 1px 6px; }
 
-.filter-row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-.filter-row select, .filter-row input {
-    font-size: 12px; padding: 4px 8px; border: 1px solid #CFD8DC;
-    border-radius: 4px; background: #fff; }
-.filter-row label { font-size: 11px; color: #607D8B;
-                    display: flex; align-items: center; gap: 4px; }
-
-/* Legend inline (dot markers) */
 .legend { display: flex; gap: 12px; font-size: 11px; margin-top: 6px; }
 .legend .dot { display: inline-block; width: 9px; height: 9px;
                border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
-.legend .dot.short { background: #C62828; }
-.legend .dot.bal   { background: #2E7D32; }
-.legend .dot.sur   { background: #EF6C00; }
-.legend .dot.nom   { background: #6A1B9A; }
+.legend .dot.short { background: var(--short); }
+.legend .dot.bal   { background: var(--bal); }
+.legend .dot.sur   { background: var(--sur); }
+.legend .dot.nom   { background: var(--nom); }
+
+.row-count { margin-left: auto; align-self: center; color: var(--muted);
+             font-size: 11px; font-family: 'IBM Plex Mono', monospace; }
+.filter-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: center; }
+
+/* ── Modal (drill-down) ── */
+.modal-bg { display: none; position: fixed; inset: 0; z-index: 200;
+            background: rgba(15,25,35,0.55); }
+.modal-bg.open { display: flex; align-items: center; justify-content: center; }
+.modal { background: var(--card); width: min(1080px, 96vw); max-height: 92vh;
+         border-radius: 10px; overflow: hidden; display: flex;
+         flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
+.modal-hdr { background: linear-gradient(135deg,var(--hdr1),var(--hdr2));
+             color: #fff; padding: 14px 20px; display: flex; align-items: center;
+             gap: 12px; }
+.modal-hdr .mtitle { font-size: 15px; font-weight: 600; }
+.modal-hdr .msub { font-size: 11.5px; opacity: .75; margin-top: 2px; }
+.modal-hdr .close { margin-left: auto; background: rgba(255,255,255,0.15);
+                    color: #fff; border: 1px solid rgba(255,255,255,0.35);
+                    border-radius: 5px; padding: 4px 12px; cursor: pointer;
+                    font: 500 12px 'IBM Plex Sans', sans-serif; }
+.modal-hdr .close:hover { background: rgba(255,255,255,0.25); }
+.modal-body { padding: 18px 20px 22px; overflow-y: auto; display: grid;
+              grid-template-columns: 320px 1fr; gap: 18px; }
+.modal-body .stat { font-size: 11px; color: var(--muted);
+                    text-transform: uppercase; letter-spacing: .06em;
+                    margin-bottom: 2px; font-weight: 600; }
+.modal-body .figv { font-size: 20px; font-weight: 700;
+                    font-family: 'IBM Plex Mono', monospace;
+                    color: var(--hdr1); font-variant-numeric: tabular-nums;
+                    margin-bottom: 10px; }
+.modal-body .figv .u { font-size: 11px; color: var(--muted);
+                       font-family: 'IBM Plex Sans', sans-serif; margin-left: 3px; }
+.modal-body .figv.short { color: var(--short); }
+.modal-body .figv.sur   { color: var(--sur); }
+.modal-body .figv.bal   { color: var(--bal); }
+
+.pipe-tbl { width: 100%; border-collapse: collapse;
+            font-size: 11.5px; margin-top: 6px; }
+.pipe-tbl th { text-align: left; color: var(--muted); padding: 5px 6px;
+               font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.pipe-tbl td { padding: 5px 6px; border-top: 1px solid #ECEFF1;
+               font-family: 'IBM Plex Mono', monospace;
+               font-variant-numeric: tabular-nums; text-align: right; }
+.pipe-tbl td.st { text-align: left; font-family: 'IBM Plex Sans', sans-serif;
+                  font-weight: 600; color: var(--ink); }
+.pipe-tbl tr.tot td { border-top: 2px solid #CFD8DC; font-weight: 700; }
+.pipe-tbl .short { color: var(--short); }
+.pipe-tbl .sur   { color: var(--sur); }
 </style>
 </head>
 <body>
@@ -553,6 +789,22 @@ table.dt .r.sur   { color:#EF6C00; font-weight: 700; }
   </nav>
 </div>
 
+<!-- Top persistent filter bar -->
+<div class="topfilters" id="topfilters">
+  <span class="lbl">Filter</span>
+  <div class="ms" data-key="status"><button class="ms-btn">Status</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="state"><button class="ms-btn">State</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="brand"><button class="ms-btn">Brand</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="group"><button class="ms-btn">Group</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="line"><button class="ms-btn">Marketing Line</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="inch"><button class="ms-btn">Rim (inch)</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="pattern"><button class="ms-btn">Pattern</button><div class="ms-panel"></div></div>
+  <button class="reset" onclick="resetFilters()">Reset</button>
+  <div class="search">
+    <input id="fltr-search" type="text" placeholder="Search SKU / M-code / description / size…">
+  </div>
+</div>
+
 <!-- KPI strip -->
 <div class="kpi-strip">
   <div class="kpi"><h4>Active SKUs</h4><span class="v" id="kpi-sku">—</span></div>
@@ -563,25 +815,20 @@ table.dt .r.sur   { color:#EF6C00; font-weight: 700; }
   <div class="kpi"><h4>National MOH</h4><span class="v" id="kpi-moh">—</span><span class="u">months</span></div>
 </div>
 
-<!-- main body -->
 <div class="wrap">
 <div class="grid">
 
-  <!-- LEFT: state cards -->
   <div class="state-col">
     <div class="card"><h3>Stock across states <span class="hint">as of {{ meta.mtime }}</span></h3>
       <div id="state-cards"></div>
     </div>
   </div>
 
-  <!-- RIGHT: analytics -->
   <div class="right">
-
-    <!-- Charts row -->
     <div style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;">
       <div class="card">
-        <h3>By product Group <span class="hint">stacked count of SKUs</span></h3>
-        <div class="chartbox"><canvas id="chart-group"></canvas></div>
+        <h3>By Marketing Line <span class="hint">SKU count · stacked by status</span></h3>
+        <div class="chartbox"><canvas id="chart-line"></canvas></div>
         <div class="legend">
           <span><span class="dot short"></span>Shortage</span>
           <span><span class="dot bal"></span>Balanced</span>
@@ -590,14 +837,13 @@ table.dt .r.sur   { color:#EF6C00; font-weight: 700; }
         </div>
       </div>
       <div class="card">
-        <h3>By Rim size (inch) <span class="hint">stacked count of SKUs</span></h3>
+        <h3>By Rim size (inch) <span class="hint">SKU count · stacked</span></h3>
         <div class="chartbox"><canvas id="chart-inch"></canvas></div>
       </div>
     </div>
 
-    <!-- SKU tables -->
     <div class="card">
-      <h3>SKU drill-down <span class="hint">click a tab to switch list</span></h3>
+      <h3>SKU drill-down <span class="hint">click any row for the monthly-by-state view</span></h3>
       <div class="tabs">
         <div class="tab active" data-tab="shortage">🔴 Shortage <span class="n" id="n-short">0</span></div>
         <div class="tab" data-tab="surplus">🟠 Surplus <span class="n" id="n-sur">0</span></div>
@@ -605,201 +851,344 @@ table.dt .r.sur   { color:#EF6C00; font-weight: 700; }
       </div>
 
       <div class="filter-row">
-        <label>State
-          <select id="fltr-state">
-            <option value="">All</option>
-            <option>NSW</option><option>QLD</option><option>VIC</option><option>WA</option>
-          </select>
-        </label>
-        <label>Group
-          <select id="fltr-group">
-            <option value="">All</option>
-          </select>
-        </label>
-        <label>Search
-          <input id="fltr-search" type="text" placeholder="SKU / description / size…" style="width: 220px">
-        </label>
-        <span id="row-count" style="margin-left:auto; align-self:center; color:#78909C; font-size:11px"></span>
+        <span class="row-count" id="row-count">—</span>
       </div>
 
       <div class="tbl-wrap">
         <table class="dt">
           <thead>
             <tr>
-              <th>Merge</th><th>M CODE</th><th>Group</th><th>Size</th>
-              <th>Description</th>
+              <th>Merge</th><th>M CODE</th><th>Brand</th>
+              <th>Marketing Line</th><th>Pattern</th>
+              <th>Group</th><th>Size</th><th>Inch</th><th>LI/SS</th>
               <th class="r">NSW</th><th class="r">QLD</th><th class="r">VIC</th><th class="r">WA</th>
-              <th class="r">Stock</th><th class="r">3M dem/mo</th><th class="r">MOH</th>
+              <th class="r">Stock</th><th class="r">3M/mo</th><th class="r">MOH</th>
             </tr>
           </thead>
           <tbody id="tbl-body"></tbody>
         </table>
       </div>
     </div>
-
   </div>
 </div>
+</div>
+
+<!-- ── Drill-down modal ── -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <div class="modal-hdr">
+      <div>
+        <div class="mtitle" id="m-title">—</div>
+        <div class="msub" id="m-sub">—</div>
+      </div>
+      <button class="close" onclick="closeModal()">✕ Close</button>
+    </div>
+    <div class="modal-body">
+      <div>
+        <div class="stat">Stock on hand</div>
+        <div class="figv" id="m-stock">—</div>
+        <div class="stat">Pipeline incoming (Port + Water + Factory)</div>
+        <div class="figv" id="m-pipe">—</div>
+        <div class="stat">3-month avg demand / month</div>
+        <div class="figv" id="m-3m">—</div>
+        <div class="stat">MOH — on hand only</div>
+        <div class="figv" id="m-moh">—</div>
+        <div class="stat">MOH — including Factory pipeline</div>
+        <div class="figv" id="m-mohplus">—</div>
+      </div>
+      <div>
+        <div class="stat">12-month sales by state</div>
+        <div class="chartbox tall"><canvas id="m-chart"></canvas></div>
+
+        <div class="stat" style="margin-top:14px">State breakdown</div>
+        <table class="pipe-tbl">
+          <thead><tr><th>State</th><th>Stock</th><th>Port</th><th>Water</th>
+              <th>Factory</th><th>Pipeline</th><th>3M/mo</th><th>MOH</th><th>MOH +Pipe</th></tr></thead>
+          <tbody id="m-pipe-tbl"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
 const DATA = {{ data_json | safe }};
 const STATES = ["NSW","QLD","VIC","WA"];
 
-function fmtN(n) {
-    if (n == null || n === '') return '—';
-    if (typeof n !== 'number') n = +n;
-    if (isNaN(n)) return '—';
-    return n.toLocaleString('en-US', { maximumFractionDigits: 0 });
-}
-function fmtF(n, d) {
-    if (n == null || n === '') return '—';
-    if (typeof n !== 'number') n = +n;
-    if (isNaN(n)) return '—';
-    return n.toFixed(d != null ? d : 1);
+/* ── Formatting helpers ── */
+const FMT_INT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+const FMT_1   = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, minimumFractionDigits: 1 });
+const FMT_2   = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+function fmtI(n) { if (n == null || n === '') return '—';
+    const v = +n; if (isNaN(v)) return '—'; return FMT_INT.format(v); }
+function fmtF(n, d) { if (n == null || n === '') return '—';
+    const v = +n; if (isNaN(v)) return '—';
+    return (d === 2 ? FMT_2 : FMT_1).format(v); }
+function pill(gr) {
+    const cls = 'pill g-' + (gr || 'other').toString().replace(/[^A-Za-z]/g,'') + ' sm';
+    return '<span class="' + cls + '">' + (gr || '—') + '</span>';
 }
 
-/* ── KPI tiles ─────────────────────────────── */
-document.getElementById('kpi-sku').textContent   = fmtN(DATA.kpi.sku_total);
-document.getElementById('kpi-short').textContent = fmtN(DATA.kpi.sku_shortage);
-document.getElementById('kpi-bal').textContent   = fmtN(DATA.kpi.sku_balanced);
-document.getElementById('kpi-sur').textContent   = fmtN(DATA.kpi.sku_surplus);
-document.getElementById('kpi-nom').textContent   = fmtN(DATA.kpi.sku_no_move);
+/* ── KPI tiles ── */
+document.getElementById('kpi-sku').textContent   = fmtI(DATA.kpi.sku_total);
+document.getElementById('kpi-short').textContent = fmtI(DATA.kpi.sku_shortage);
+document.getElementById('kpi-bal').textContent   = fmtI(DATA.kpi.sku_balanced);
+document.getElementById('kpi-sur').textContent   = fmtI(DATA.kpi.sku_surplus);
+document.getElementById('kpi-nom').textContent   = fmtI(DATA.kpi.sku_no_move);
 document.getElementById('kpi-moh').textContent   = DATA.kpi.national_moh != null
-    ? DATA.kpi.national_moh.toFixed(2) : '—';
+    ? FMT_2.format(DATA.kpi.national_moh) : '—';
 
-/* ── State cards ────────────────────────────── */
+/* ── State cards ── */
 (function renderState() {
     const host = document.getElementById('state-cards');
     let html = '';
     STATES.forEach(s => {
         const st = DATA.state[s];
         html += '<div class="state-card">'
-             + '<h3>' + s + ' <span class="m">MOH ' + (st.moh != null ? st.moh.toFixed(2) : '—') + '</span></h3>'
+             + '<h3>' + s + ' <span class="m">MOH ' + (st.moh != null ? FMT_2.format(st.moh) : '—') + '</span></h3>'
              + '<div class="state-row"><span class="lbl">Stock on hand</span>'
-             + '<span class="v">' + fmtN(st.stock) + '</span></div>'
+             + '<span class="v">' + fmtI(st.stock) + '</span></div>'
              + '<div class="state-row"><span class="lbl">In pipeline</span>'
-             + '<span class="v">' + fmtN(st.pipeline) + '</span></div>'
+             + '<span class="v">' + fmtI(st.pipeline) + '</span></div>'
              + '<div class="state-row"><span class="lbl">3M avg demand / mo</span>'
-             + '<span class="v">' + fmtF(st.demand_3m, 1) + '</span></div>'
+             + '<span class="v">' + fmtI(st.demand_3m) + '</span></div>'
              + '<div class="state-row"><span class="lbl">SKU status</span>'
              + '<span class="v">'
-             + '<span class="chip short">' + fmtN(st.shortage) + '</span>'
-             + '<span class="chip bal">'   + fmtN(st.balanced) + '</span>'
-             + '<span class="chip sur">'   + fmtN(st.surplus)  + '</span>'
-             + '<span class="chip nom">'   + fmtN(st.no_move)  + '</span>'
+             + '<span class="chip short">' + fmtI(st.shortage) + '</span>'
+             + '<span class="chip bal">'   + fmtI(st.balanced) + '</span>'
+             + '<span class="chip sur">'   + fmtI(st.surplus)  + '</span>'
+             + '<span class="chip nom">'   + fmtI(st.no_move)  + '</span>'
              + '</span></div>'
              + '</div>';
     });
     host.innerHTML = html;
 })();
 
-/* ── Group / Inch stacked bar charts ────────── */
-function stackedBar(canvas_id, srcObj, sortKey) {
-    const labels = Object.keys(srcObj).sort((a, b) => {
-        const va = srcObj[a][sortKey] || 0;
-        const vb = srcObj[b][sortKey] || 0;
-        return vb - va;
-    });
+/* ── Stacked bar charts (marketing line / inch) ── */
+function stackedBar(canvas_id, srcObj, order) {
+    const labels = order || Object.keys(srcObj);
     const short = labels.map(k => srcObj[k].shortage || 0);
     const bal   = labels.map(k => srcObj[k].balanced || 0);
     const sur   = labels.map(k => srcObj[k].surplus  || 0);
     const nom   = labels.map(k => srcObj[k].no_move  || 0);
     new Chart(document.getElementById(canvas_id), {
         type: 'bar',
-        data: {
-            labels,
-            datasets: [
-                { label: 'Shortage', data: short, backgroundColor: '#C62828' },
-                { label: 'Balanced', data: bal,   backgroundColor: '#66BB6A' },
-                { label: 'Surplus',  data: sur,   backgroundColor: '#FB8C00' },
-                { label: 'No move',  data: nom,   backgroundColor: '#8E24AA' },
-            ]
-        },
+        data: { labels, datasets: [
+            { label: 'Shortage', data: short, backgroundColor: '#C62828' },
+            { label: 'Balanced', data: bal,   backgroundColor: '#66BB6A' },
+            { label: 'Surplus',  data: sur,   backgroundColor: '#FB8C00' },
+            { label: 'No move',  data: nom,   backgroundColor: '#8E24AA' },
+        ]},
         options: {
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
             scales: {
-                x: { stacked: true, ticks: { font: { size: 10 } } },
+                x: { stacked: true, ticks: { font: { size: 10 }, autoSkip: false, maxRotation: 55, minRotation: 30 } },
                 y: { stacked: true, ticks: { font: { size: 10 } } },
             }
         }
     });
 }
-stackedBar('chart-group', DATA.by_group, 'shortage');
-// Order inch numerically so 12 → 14 → 16 → 18 not alphabetical
-(function(){
-    const sd = DATA.by_inch;
-    const labels = Object.keys(sd).sort((a, b) => {
+/* Marketing line ordered by shortage descending — most urgent first */
+{
+    const src = DATA.by_line;
+    const order = Object.keys(src).sort((a,b) => (src[b].shortage||0) - (src[a].shortage||0));
+    stackedBar('chart-line', src, order);
+}
+/* Inch ordered numerically */
+{
+    const src = DATA.by_inch;
+    const order = Object.keys(src).sort((a,b) => {
         const na = parseFloat(a), nb = parseFloat(b);
         if (!isNaN(na) && !isNaN(nb)) return na - nb;
         return a.localeCompare(b);
     });
-    const src = {};
-    labels.forEach(k => src[k] = sd[k]);
-    stackedBar('chart-inch', src, '__none__');   // preserve inch order
-    // Rebuild inch chart with pre-ordered dict — quick monkey by
-    // relying on stackedBar reading Object.keys in insertion order:
-    // labels above respect insertion order in modern JS engines.
-})();
+    stackedBar('chart-inch', src, order);
+}
 
-/* ── SKU tables (tabs) ─────────────────────── */
+/* ── Multi-select checkbox dropdowns ── */
+const filterState = {
+    status:  new Set(),
+    state:   new Set(),
+    brand:   new Set(),
+    group:   new Set(),
+    line:    new Set(),
+    inch:    new Set(),
+    pattern: new Set(),
+};
+
+function buildFilterOptions() {
+    /* Collect option values from every SKU in all_rows so filters
+       include every possible value, not just the current tab. */
+    const values = { status: [], state: STATES.slice(),
+        brand: new Set(), group: new Set(), line: new Set(),
+        inch: new Set(), pattern: new Set() };
+    values.status = ['shortage','balanced','surplus','no_move'];
+    DATA.all_rows.forEach(r => {
+        if (r.brand)   values.brand.add(r.brand);
+        if (r.group)   values.group.add(r.group);
+        if (r.line)    values.line.add(r.line);
+        if (r.inch)    values.inch.add(r.inch);
+        if (r.pattern) values.pattern.add(r.pattern);
+    });
+    return {
+        status:  values.status,
+        state:   values.state,
+        brand:   [...values.brand].sort(),
+        group:   [...values.group].sort(),
+        line:    [...values.line].sort(),
+        inch:    [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
+        pattern: [...values.pattern].sort(),
+    };
+}
+const OPT = buildFilterOptions();
+
+function renderMsPanel(key) {
+    const opts = OPT[key];
+    const chosen = filterState[key];
+    const panel = document.querySelector('.ms[data-key="'+key+'"] .ms-panel');
+    let h = '';
+    opts.forEach(v => {
+        const id = 'ms-' + key + '-' + v.toString().replace(/[^A-Za-z0-9]/g,'_');
+        const checked = chosen.has(v) ? ' checked' : '';
+        h += '<label><input type="checkbox" value="' + v + '"' + checked + '> ' + v + '</label>';
+    });
+    h += '<div class="ms-actions">'
+       + '<button data-act="all">All</button>'
+       + '<button data-act="none">None</button></div>';
+    panel.innerHTML = h;
+    panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.addEventListener('change', () => {
+            if (cb.checked) filterState[key].add(cb.value);
+            else            filterState[key].delete(cb.value);
+            updateMsBtn(key);
+            renderTable();
+        });
+    });
+    panel.querySelector('[data-act="all"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        opts.forEach(v => filterState[key].add(v));
+        renderMsPanel(key); updateMsBtn(key); renderTable();
+    });
+    panel.querySelector('[data-act="none"]').addEventListener('click', (e) => {
+        e.stopPropagation();
+        filterState[key].clear();
+        renderMsPanel(key); updateMsBtn(key); renderTable();
+    });
+}
+
+function updateMsBtn(key) {
+    const btn = document.querySelector('.ms[data-key="'+key+'"] .ms-btn');
+    const chosen = filterState[key];
+    const total = OPT[key].length;
+    const KEY_LBL = { status:'Status', state:'State', brand:'Brand',
+                      group:'Group', line:'Marketing Line', inch:'Rim (inch)',
+                      pattern:'Pattern' };
+    if (chosen.size === 0) {
+        btn.classList.remove('active');
+        btn.innerHTML = KEY_LBL[key];
+    } else {
+        btn.classList.add('active');
+        btn.innerHTML = KEY_LBL[key] + '<span class="n">' + chosen.size + '</span>';
+    }
+}
+
+/* Wire dropdowns */
+Object.keys(filterState).forEach(key => {
+    renderMsPanel(key);
+    updateMsBtn(key);
+    const holder = document.querySelector('.ms[data-key="'+key+'"]');
+    holder.querySelector('.ms-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.ms.open').forEach(o => { if (o !== holder) o.classList.remove('open'); });
+        holder.classList.toggle('open');
+    });
+});
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.ms')) {
+        document.querySelectorAll('.ms.open').forEach(o => o.classList.remove('open'));
+    }
+});
+
+function resetFilters() {
+    Object.keys(filterState).forEach(key => {
+        filterState[key].clear();
+        renderMsPanel(key); updateMsBtn(key);
+    });
+    document.getElementById('fltr-search').value = '';
+    renderTable();
+}
+
+/* ── SKU table (tabs) ── */
 let curTab = 'shortage';
 
-/* Populate the Group filter dropdown from every table's rows */
-(function populateGroupFilter() {
-    const groups = new Set();
-    ['shortage_rows','surplus_rows','no_move_rows'].forEach(k => {
-        DATA[k].forEach(r => { if (r.group) groups.add(r.group); });
-    });
-    const sel = document.getElementById('fltr-group');
-    [...groups].sort().forEach(g => {
-        const o = document.createElement('option');
-        o.value = g; o.textContent = g;
-        sel.appendChild(o);
-    });
-})();
+document.getElementById('n-short').textContent = fmtI(DATA.shortage_rows.length);
+document.getElementById('n-sur').textContent   = fmtI(DATA.surplus_rows.length);
+document.getElementById('n-nom').textContent   = fmtI(DATA.no_move_rows.length);
 
-document.getElementById('n-short').textContent = DATA.shortage_rows.length;
-document.getElementById('n-sur').textContent   = DATA.surplus_rows.length;
-document.getElementById('n-nom').textContent   = DATA.no_move_rows.length;
+function activeSource() {
+    /* When no status filter is set, honour the tab.  When ANY status
+       is chosen in the top filter, source from all_rows and let the
+       status filter narrow it — this lets the user combine e.g.
+       "Shortage + Surplus" in one view. */
+    if (filterState.status.size === 0) return DATA[curTab + '_rows'];
+    return DATA.all_rows;
+}
 
 function renderTable() {
-    const src = DATA[curTab + '_rows'];
-    const fs  = document.getElementById('fltr-state').value;
-    const fg  = document.getElementById('fltr-group').value;
+    const src = activeSource();
     const fq  = (document.getElementById('fltr-search').value || '').trim().toLowerCase();
     const body = document.getElementById('tbl-body');
-    const shorts = curTab === 'shortage', surplus = curTab === 'surplus';
-    let n = 0;
-    const html = src.filter(r => {
-        if (fs && r.state_stock[fs] == null) return false;
-        if (fg && r.group !== fg) return false;
+    const filtered = src.filter(r => {
+        if (filterState.status.size  && !filterState.status.has(r.status))   return false;
+        if (filterState.brand.size   && !filterState.brand.has(r.brand))     return false;
+        if (filterState.group.size   && !filterState.group.has(r.group))     return false;
+        if (filterState.line.size    && !filterState.line.has(r.line))       return false;
+        if (filterState.inch.size    && !filterState.inch.has(r.inch))       return false;
+        if (filterState.pattern.size && !filterState.pattern.has(r.pattern)) return false;
+        if (filterState.state.size) {
+            /* Show only rows that have stock or demand in AT LEAST ONE
+               of the chosen states — helps focus on regional issues. */
+            let hit = false;
+            filterState.state.forEach(s => {
+                if (r.state_stock[s] > 0 || r.state_3m[s] > 0) hit = true;
+            });
+            if (!hit) return false;
+        }
         if (fq) {
             const hay = ((r.description||'') + ' ' + (r.size||'') + ' '
-                       + (r.m_code||'') + ' ' + (r.merge_code||'')).toLowerCase();
+                       + (r.m_code||'') + ' ' + (r.merge_code||'') + ' '
+                       + (r.pattern||'') + ' ' + (r.line||'')).toLowerCase();
             if (!hay.includes(fq)) return false;
         }
         return true;
-    }).map(r => {
-        n++;
-        const cls_mo = shorts ? 'short' : (surplus ? 'sur' : '');
-        return '<tr>'
+    });
+
+    const shorts = curTab === 'shortage', surplus = curTab === 'surplus';
+    body.innerHTML = filtered.slice(0, 500).map(r => {
+        const cls_mo = r.status === 'shortage' ? 'short'
+                     : (r.status === 'surplus' ? 'sur' : '');
+        return '<tr onclick="openModal(' + r.merge_code + ')">'
             + '<td>' + r.merge_code + '</td>'
             + '<td>' + (r.m_code || '—') + '</td>'
-            + '<td><span class="pill g-' + (r.group||'other').replace(/[^A-Za-z]/g,'') + '">' + (r.group||'—') + '</span></td>'
+            + '<td>' + (r.brand || '—') + '</td>'
+            + '<td>' + (r.line || '—') + '</td>'
+            + '<td>' + (r.pattern || '—') + '</td>'
+            + '<td>' + pill(r.group) + '</td>'
             + '<td>' + (r.size || '—') + '</td>'
-            + '<td>' + (r.description || '—') + '</td>'
-            + '<td class="r">' + fmtN(r.state_stock.NSW) + '</td>'
-            + '<td class="r">' + fmtN(r.state_stock.QLD) + '</td>'
-            + '<td class="r">' + fmtN(r.state_stock.VIC) + '</td>'
-            + '<td class="r">' + fmtN(r.state_stock.WA)  + '</td>'
-            + '<td class="r">' + fmtN(r.total_stock) + '</td>'
+            + '<td>' + (r.inch || '—') + '</td>'
+            + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.NSW) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.QLD) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.VIC) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.WA)  + '</td>'
+            + '<td class="r">' + fmtI(r.total_stock) + '</td>'
             + '<td class="r">' + fmtF(r.total_3m, 1) + '</td>'
-            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? r.moh.toFixed(2) : '—') + '</td>'
+            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 2) : '—') + '</td>'
             + '</tr>';
     }).join('');
-    body.innerHTML = html;
-    document.getElementById('row-count').textContent = n + ' rows';
+    const suffix = filtered.length > 500 ? ' — showing first 500' : '';
+    document.getElementById('row-count').textContent = fmtI(filtered.length) + ' rows' + suffix;
 }
 document.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => {
@@ -809,11 +1198,118 @@ document.querySelectorAll('.tab').forEach(t => {
         renderTable();
     });
 });
-document.getElementById('fltr-state').addEventListener('change', renderTable);
-document.getElementById('fltr-group').addEventListener('change', renderTable);
 document.getElementById('fltr-search').addEventListener('input',
     (function() { let t; return function() { clearTimeout(t); t = setTimeout(renderTable, 150); }; })());
 renderTable();
+
+/* ── Drill-down modal ── */
+let _modalChart = null;
+const MONTH_LABELS = ['-12M','-11M','-10M','-9M','-8M','-7M','-6M','-5M','-4M','-3M','-2M','-1M'];
+
+function findRow(merge_code) {
+    return DATA.all_rows.find(r => r.merge_code === merge_code);
+}
+
+function openModal(mergeCode) {
+    const r = findRow(mergeCode);
+    if (!r) return;
+    document.getElementById('m-title').textContent =
+        (r.brand || '—') + ' · ' + (r.line || 'Other') + ' · ' + (r.pattern || '—')
+        + '  ·  ' + (r.size || '') + '  ·  LI/SS ' + (r.li||'—') + '/' + (r.ss||'—');
+    document.getElementById('m-sub').textContent =
+        'Merge ' + r.merge_code + ' · M-code ' + (r.m_code || '—')
+        + ' · ' + (r.description || '');
+    document.getElementById('m-stock').innerHTML   = fmtI(r.total_stock) + '<span class="u">units</span>';
+    const pipe = STATES.reduce((s, k) => s + (r.state_pipeline[k] || 0), 0);
+    document.getElementById('m-pipe').innerHTML    = fmtI(pipe) + '<span class="u">units on the way</span>';
+    document.getElementById('m-3m').innerHTML      = fmtF(r.total_3m, 1) + '<span class="u">units / mo</span>';
+    const mohClass = r.moh != null && r.moh < 1 ? 'short'
+                   : r.moh != null && r.moh > 4 ? 'sur' : 'bal';
+    document.getElementById('m-moh').className     = 'figv ' + mohClass;
+    document.getElementById('m-moh').innerHTML     = (r.moh != null ? fmtF(r.moh, 2) : '—') + '<span class="u">months</span>';
+    document.getElementById('m-mohplus').innerHTML = (r.moh_plus != null ? fmtF(r.moh_plus, 2) : '—') + '<span class="u">months (Stock + Factory pipeline)</span>';
+
+    /* Monthly chart per state */
+    if (_modalChart) { _modalChart.destroy(); _modalChart = null; }
+    const stateColour = { NSW: '#1976D2', QLD: '#EF6C00', VIC: '#8E24AA', WA: '#00897B' };
+    const datasets = STATES.map(s => ({
+        label: s, data: r.history[s], borderColor: stateColour[s],
+        backgroundColor: stateColour[s] + '22', borderWidth: 2,
+        pointRadius: 3, tension: .25, fill: false,
+    }));
+    /* National total as a dashed grey line */
+    datasets.push({
+        label: 'Total', data: r.history.TOTAL,
+        borderColor: '#37474F', backgroundColor: '#37474F22',
+        borderDash: [5,4], borderWidth: 1.5, pointRadius: 2, tension: .25, fill: false,
+    });
+    _modalChart = new Chart(document.getElementById('m-chart'), {
+        type: 'line',
+        data: { labels: MONTH_LABELS, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'top', labels: { boxWidth: 14, font: { size: 11 } } } },
+            scales: {
+                y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+                x: { ticks: { font: { size: 10 } } },
+            }
+        }
+    });
+
+    /* Per-state pipeline table */
+    const rows = STATES.map(s => {
+        const pp = r.state_pipe_parts[s];
+        const stock = r.state_stock[s];
+        const pipe = pp.port + pp.water + pp.fac;
+        const dem = r.state_3m[s];
+        const smoh = dem > 0 ? (stock / dem) : null;
+        const spmoh = dem > 0 ? ((stock + pipe) / dem) : null;
+        const cls = smoh != null && smoh < 1 ? 'short'
+                  : smoh != null && smoh > 4 ? 'sur' : '';
+        return '<tr>'
+            + '<td class="st">' + s + '</td>'
+            + '<td>' + fmtI(stock) + '</td>'
+            + '<td>' + fmtI(pp.port) + '</td>'
+            + '<td>' + fmtI(pp.water) + '</td>'
+            + '<td>' + fmtI(pp.fac) + '</td>'
+            + '<td>' + fmtI(pipe) + '</td>'
+            + '<td>' + fmtF(dem, 1) + '</td>'
+            + '<td class="' + cls + '">' + (smoh != null ? fmtF(smoh, 2) : '—') + '</td>'
+            + '<td>' + (spmoh != null ? fmtF(spmoh, 2) : '—') + '</td>'
+            + '</tr>';
+    }).join('');
+    /* Totals */
+    const totStock = STATES.reduce((s,k) => s + r.state_stock[k], 0);
+    const totPort  = STATES.reduce((s,k) => s + r.state_pipe_parts[k].port, 0);
+    const totWater = STATES.reduce((s,k) => s + r.state_pipe_parts[k].water, 0);
+    const totFac   = STATES.reduce((s,k) => s + r.state_pipe_parts[k].fac, 0);
+    const totPipe  = totPort + totWater + totFac;
+    const totDem   = r.total_3m;
+    document.getElementById('m-pipe-tbl').innerHTML = rows
+      + '<tr class="tot">'
+      + '<td class="st">Total</td>'
+      + '<td>' + fmtI(totStock) + '</td>'
+      + '<td>' + fmtI(totPort) + '</td>'
+      + '<td>' + fmtI(totWater) + '</td>'
+      + '<td>' + fmtI(totFac) + '</td>'
+      + '<td>' + fmtI(totPipe) + '</td>'
+      + '<td>' + fmtF(totDem, 1) + '</td>'
+      + '<td>' + (r.moh != null ? fmtF(r.moh, 2) : '—') + '</td>'
+      + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 2) : '—') + '</td>'
+      + '</tr>';
+
+    document.getElementById('modal-bg').classList.add('open');
+}
+function closeModal() {
+    document.getElementById('modal-bg').classList.remove('open');
+    if (_modalChart) { _modalChart.destroy(); _modalChart = null; }
+}
+document.getElementById('modal-bg').addEventListener('click', (e) => {
+    if (e.target.id === 'modal-bg') closeModal();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('modal-bg').classList.contains('open')) closeModal();
+});
 </script>
 </body>
 </html>
