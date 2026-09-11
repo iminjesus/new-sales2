@@ -135,8 +135,18 @@ def build_data(monthly):
     abbrs        = list(BRANDS.keys())
 
     store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": []}
-    # size_data[size][abbr][store] = [price_per_month, ...]
-    size_data = {s: {a: {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": []} for a in abbrs} for s in sizes}
+    # size_data[size][abbr][store]     = [price_per_month, ...]
+    # size_data[size][abbr]["<st>_d"]  = [desc_per_month,  ...]   (jax / bj / tempe)
+    # size_data[size][abbr]["<st>_f"]  = [flag_per_month,  ...]   ("" / cat_fb / chg)
+    # The desc + flag arrays let the front-end show a tooltip with the
+    # actual product name at each point, and highlight points where
+    # the product changed month-over-month or fell back to the
+    # COMPETITOR_PATTERNS filter because Tempe had no reference row.
+    def _mk_slots():
+        return {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
+                "tempe_d": [], "bj_d": [], "jax_d": [],
+                "bj_f":    [], "jax_f":  []}
+    size_data = {s: {a: _mk_slots() for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
     summary_rows = []
@@ -151,11 +161,11 @@ def build_data(monthly):
 
         for size in sizes:
             for abbr in abbrs:
-                t_desc, t_cost, t_price      = best_tempe(size, abbr, t_lk)
-                bj_desc, bj_price, *_        = best_bj(size, abbr, bj_lk, t_desc)
-                jx_desc, jx_price, *_        = best_jax(size, abbr, jx_lk, t_desc)
-                _tw_desc, _tw_cost, tw_price  = best_tw(size, abbr, tw_lk)
-                _twi_desc, _, twi_price          = best_twi(size, abbr, tw_lk)
+                t_desc, t_cost, t_price               = best_tempe(size, abbr, t_lk)
+                bj_desc, bj_price, _, _, _, bj_flag   = best_bj(size, abbr, bj_lk, t_desc)
+                jx_desc, jx_price, _, _, _, jx_flag   = best_jax(size, abbr, jx_lk, t_desc)
+                _tw_desc, _tw_cost, tw_price          = best_tw(size, abbr, tw_lk)
+                _twi_desc, _, twi_price               = best_twi(size, abbr, tw_lk)
                 # Void the meaningless sentinels (0 / 999) so the chart and
                 # tables treat them as missing instead of plotting them.
                 t_price  = _norm(t_price)
@@ -169,6 +179,19 @@ def build_data(monthly):
                 size_data[size][abbr]["jax"].append(jx_price)
                 size_data[size][abbr]["tw"].append(tw_price)
                 size_data[size][abbr]["twi"].append(twi_price)
+
+                # Descriptions (per month) — used by the front-end tooltip.
+                size_data[size][abbr]["tempe_d"].append(t_desc  or "")
+                size_data[size][abbr]["bj_d"].append(bj_desc    or "")
+                size_data[size][abbr]["jax_d"].append(jx_desc   or "")
+
+                # Flag: "cat_fb" when the row came from the
+                # COMPETITOR_PATTERNS fallback (Tempe had no reference),
+                # "match" for the normal word-walk path, "" otherwise.
+                # A "chg" flag is layered on below when the picked
+                # description differs from the previous month's.
+                size_data[size][abbr]["bj_f"].append(bj_flag  or "")
+                size_data[size][abbr]["jax_f"].append(jx_flag or "")
 
                 if t_price:   tp.append(t_price)
                 if bj_price:  bp.append(bj_price)
@@ -193,6 +216,44 @@ def build_data(monthly):
         store_avg["jax"].append(round(sum(jp)/len(jp),    2) if jp  else None)
         store_avg["tw"].append(round(sum(twp)/len(twp),   2) if twp   else None)
         store_avg["twi"].append(round(sum(twip2)/len(twip2), 2) if twip2 else None)
+
+    # ── Month-over-month "product changed" flag ──────────────────────
+    # Compare each month's picked description with the previous month's
+    # for the same (size, brand).  When the *first meaningful word* of
+    # the description differs (e.g. "Primacy" → "Lotus"), tag the point
+    # so the front-end can render a callout showing the change.  We
+    # skip empty descriptions on either side — a blank slot is a miss,
+    # not a product change.
+    def _first_word(desc):
+        if not desc:
+            return ""
+        for tok in desc.split():
+            t = re.sub(r'[().,+]', '', tok).strip()
+            if not t or len(t) <= 1:
+                continue
+            if re.match(r'^\d', t):        # skip pure-numeric leaders
+                continue
+            if t.upper() in ('XL','OWT','RWL','OBL','TL','TT','FR','MFS',
+                             'DOT','BMW','AUDI','BENZ','DEMO','EV','RC'):
+                continue
+            return t.upper()
+        return ""
+
+    for size in sizes:
+        for abbr in abbrs:
+            d = size_data[size][abbr]
+            for store_d, store_f in (("jax_d", "jax_f"), ("bj_d", "bj_f")):
+                descs = d[store_d]; flags = d[store_f]
+                prev_key = ""
+                for i, desc in enumerate(descs):
+                    key = _first_word(desc)
+                    if key and prev_key and key != prev_key:
+                        # Layer "chg" onto any existing flag so the
+                        # front-end can distinguish plain fallback vs
+                        # a mid-series product change.
+                        flags[i] = (flags[i] + "+chg") if flags[i] else "chg"
+                    if key:
+                        prev_key = key
 
     # brand_size_data: only combos that have at least one real price
     brand_size_data = {}
@@ -567,7 +628,34 @@ const baseOpts = {
     plugins:{
         legend:  { display: false },   // replaced by brandEndLabels plugin
         brandEndLabels: { enabled: true },
-        tooltip: { callbacks:{ label: ctx => ' $' + (ctx.raw ?? '—') } }
+        tooltip: {
+            /* Full descriptions + a callout line whenever the point was
+               picked via the COMPETITOR_PATTERNS fallback (Tempe had no
+               reference) or when the picked product changed vs the
+               previous month.  Datasets carry these as `_descs` and
+               `_flags` arrays parallel to `data`. */
+            callbacks: {
+                label(ctx) {
+                    return ' $' + (ctx.raw ?? '—');
+                },
+                afterLabel(ctx) {
+                    const ds = ctx.dataset;
+                    const i  = ctx.dataIndex;
+                    const parts = [];
+                    if (ds._descs && ds._descs[i]) {
+                        parts.push('— ' + ds._descs[i]);
+                    }
+                    const f = ds._flags && ds._flags[i] ? ds._flags[i] : '';
+                    if (f.includes('chg')) {
+                        parts.push('⚠ Product changed vs prev month');
+                    }
+                    if (f.includes('cat_fb')) {
+                        parts.push('⚠ Tempe reference missing — pattern fallback');
+                    }
+                    return parts;
+                }
+            }
+        }
     },
     scales:{
         x:{ offset:true, ticks:{ font:{size:10}, padding:8 } },
@@ -779,6 +867,48 @@ function _noData(msg) {
     if (wrap) wrap.innerHTML = '';
 }
 
+/* ── Per-point description / flag lookup ──────────────────
+   Each price array in size_data has parallel "<store>_d" (descriptions)
+   and "<store>_f" (flags) arrays.  These helpers fetch them safely and
+   return arrays whose length matches `months` (so the tooltip and
+   point-styling callbacks can index into them without bounds checks).
+   ---------------------------------------------------------------- */
+function _descsFor(abbr, size, store) {
+    if (!store) return [];
+    // Averaged views ("ALL sizes" / "ALL brands") don't map to a single
+    // real row, so we return blanks — the tooltip just shows the price.
+    if (abbr === 'ALL' || size === 'ALL') return months.map(() => '');
+    const bsd = (D.brand_size_data[abbr] || {})[size];
+    if (!bsd) return months.map(() => '');
+    // Only tempe / bj / jax have desc arrays; tw/twi share their
+    // tempe-lookup style so no per-point description is stored.
+    const key = store + '_d';
+    return bsd[key] || months.map(() => '');
+}
+function _flagsFor(abbr, size, store) {
+    if (!store) return [];
+    if (abbr === 'ALL' || size === 'ALL') return months.map(() => '');
+    const bsd = (D.brand_size_data[abbr] || {})[size];
+    if (!bsd) return months.map(() => '');
+    const key = store + '_f';
+    return bsd[key] || months.map(() => '');
+}
+/* Vary per-point colour so a "changed product" or "fallback" point
+   pops visually — a red ring around the marker.  Returns arrays
+   suitable for Chart.js pointBorderColor / pointBackgroundColor /
+   pointRadius (parallel to data). */
+function _pointStyles(flags, prices, baseColour) {
+    const border = [], bg = [], radius = [];
+    for (let i = 0; i < prices.length; i++) {
+        const f = flags[i] || '';
+        const anom = f.includes('chg') || f.includes('cat_fb');
+        border.push(anom ? '#E53935' : '#fff');           // red ring on anomaly
+        bg.push(anom ? '#FFCDD2' : baseColour);           // pink fill on anomaly
+        radius.push(anom ? 9 : 7);                        // slightly larger
+    }
+    return { border, bg, radius };
+}
+
 /* ── ALL sizes: average across every size ──────────────── */
 function _avgAllSizes(abbr, store) {
     const nM = months.length;
@@ -828,10 +958,19 @@ function _renderStore() {
             const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
             prices = bsd ? bsd[s] : null;
         }
-        if (prices && !prices.every(p => p === null))
+        if (prices && !prices.every(p => p === null)) {
+            const descs = _descsFor(abbr, selectedSize, s);
+            const flags = _flagsFor(abbr, selectedSize, s);
+            const st    = _pointStyles(flags, prices, SC[s]+'33');
             arr.push({ label:SL[s], data:prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
-                       spanGaps:true, tension:.3, pointRadius:5, fill:false });
+                       spanGaps:true, tension:.3, fill:false,
+                       pointRadius: st.radius,
+                       pointBackgroundColor: st.bg,
+                       pointBorderColor: st.border,
+                       pointBorderWidth: 2,
+                       _descs: descs, _flags: flags });
+        }
         return arr;
     }, []);
     if (!ds.length) { _noData(brandLabel + ' — ' + sizeLabel + ': no data'); return; }
@@ -854,12 +993,27 @@ function _renderBrand() {
         const c = '#' + (BCOLORS[abbr] || PALETTE[ci%PALETTE.length].slice(1));
         const solid = (abbr === 'HK' || abbr === 'LF');
         ci++;
+        const descs = _descsFor(abbr, selectedSize, store);
+        const flags = _flagsFor(abbr, selectedSize, store);
+        const st    = _pointStyles(flags, prices, c+'33');
+        // Non-anomalous points keep the brand-specific base radius
+        // (solid brands 7px, dashed brands 5px); anomalous points get
+        // the enlarged radius from _pointStyles (9px + red ring).
+        const baseR = solid ? 7 : 5;
+        const finalR = st.radius.map((r, i) => {
+            const anom = /chg|cat_fb/.test(flags[i] || '');
+            return anom ? r : baseR;
+        });
         ds.push({ label:abbr + ' ' + (BRANDS[abbr]||''), data:prices,
                   borderColor:c, backgroundColor:c+'33',
                   borderDash: solid ? [] : [6,4],
                   borderWidth: solid ? 3 : 1.5,
-                  pointRadius: solid ? 7 : 5,
-                  spanGaps:true, tension:.3, fill:false });
+                  pointRadius: finalR,
+                  pointBackgroundColor: st.bg,
+                  pointBorderColor: st.border,
+                  pointBorderWidth: 2,
+                  spanGaps:true, tension:.3, fill:false,
+                  _descs: descs, _flags: flags });
     });
     if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
     _render(SL[store] + ' \u2014 ' + sizeLabel + ' \u2014 Brand Comparison', ds);

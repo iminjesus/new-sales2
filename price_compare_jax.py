@@ -298,13 +298,39 @@ def best_tempe(size, abbr, t_lk):
     return best[0], best[1], best[2]
 
 def _best_competitor(size, abbr, lk, t_desc):
+    """Pick the best-matching competitor row for (size, abbr) given a Tempe
+    reference description.  Returns a 6-tuple:
+        (desc, price, disc, promo, save_text, flag)
+
+    flag values:
+        "match"    — word-walked match against t_desc (normal path)
+        "cat_fb"   — no Tempe reference → filtered by the size/brand's
+                     COMPETITOR_PATTERNS keywords (Primacy 4 / K435 /
+                     Kinergy Eco2 / …).  This is still a "same-segment"
+                     pick, just without a Tempe row to steer it.
+        ""         — no candidates at all (all fields None)
+
+    When Tempe is missing AND the competitor catalogue has no row whose
+    description matches any COMPETITOR_PATTERNS keyword, we return an
+    all-None tuple instead of blindly falling back to the cheapest — the
+    old fallback surfaced completely-unrelated products (e.g. Michelin
+    'Lotus Pilot Sport Cup 2' $439 appearing in the K135 GT chart when
+    the intended Primacy 5 wasn't stocked), which distorted the chart."""
     cands = lk.get((size, abbr), [])
     if not cands:
-        return None, None, None, "", ""
+        return None, None, None, "", "", ""
     if not t_desc:
-        # No Tempe reference — return cheapest available product
-        best = sorted(cands, key=lambda x: (x[1] is None, x[1] or 0))[0]
-        return best
+        # A안: filter by the size/brand's COMPETITOR_PATTERNS keywords
+        # instead of the old blind "cheapest" fallback.  If nothing in
+        # the filtered pool, hand back BLANK so the chart draws a gap
+        # rather than an unrelated product.
+        cat = SIZE_CATEGORY.get(size)
+        kws = COMPETITOR_PATTERNS.get(cat, {}).get(abbr, []) if cat else []
+        pool = [x for x in cands if kw_match(x[0], kws)] if kws else []
+        if not pool:
+            return None, None, None, "", "", ""
+        best = sorted(pool, key=lambda x: (x[1] is None, x[1] or 0))[0]
+        return best + ("cat_fb",)
     s = _LEAD_RE.sub("", t_desc.strip())
     for raw_w in s.split():
         w = re.sub(r'[().,+]', '', raw_w)
@@ -319,8 +345,9 @@ def _best_competitor(size, abbr, lk, t_desc):
             continue
         matched = [x for x in cands if w.lower() in x[0].lower()]
         if matched:
-            return sorted(matched, key=lambda x: (x[1] is None, x[1] or 0))[0]
-    return None, None, None, "", ""
+            best = sorted(matched, key=lambda x: (x[1] is None, x[1] or 0))[0]
+            return best + ("match",)
+    return None, None, None, "", "", ""
 
 def best_bj(size, abbr, bj_lk, t_desc=None):
     return _best_competitor(size, abbr, bj_lk, t_desc)
@@ -442,8 +469,8 @@ def sheet_summary(wb, t_rows, bj_rows, jax_rows):
             bbg = ROW_FILLS.get(abbr, "FFFFFF")
 
             t_desc,   t_cost,   t_price  = best_tempe(size, abbr, t_lk)
-            bj_desc,  bj_price, bj_disc, _, _ = best_bj(size, abbr, bj_lk, t_desc)
-            jax_desc, jax_price,jax_disc, _, _ = best_jax(size, abbr, jax_lk, t_desc)
+            bj_desc,  bj_price, bj_disc, *_ = best_bj(size, abbr, bj_lk, t_desc)
+            jax_desc, jax_price,jax_disc, *_ = best_jax(size, abbr, jax_lk, t_desc)
 
             if t_desc or bj_desc or jax_desc:
                 dc(ws, row_num, col,   t_desc   or "—", bg=bbg)
@@ -564,8 +591,8 @@ def sheet_match(wb, t_rows, bj_rows, jax_rows):
             bg = ROW_FILLS.get(abbr, "F9F9F9")
 
             t_desc,   t_cost,   t_price  = best_tempe(size, abbr, t_lk)
-            bj_desc,  bj_price, bj_disc,  bj_promo,  _ = best_bj(size, abbr, bj_lk, t_desc)
-            jax_desc, jax_price,jax_disc, jax_promo, _ = best_jax(size, abbr, jax_lk, t_desc)
+            bj_desc,  bj_price, bj_disc,  bj_promo,  *_ = best_bj(size, abbr, bj_lk, t_desc)
+            jax_desc, jax_price,jax_disc, jax_promo, *_ = best_jax(size, abbr, jax_lk, t_desc)
 
             if not t_desc and not bj_desc and not jax_desc:
                 continue
