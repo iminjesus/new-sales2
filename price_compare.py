@@ -496,6 +496,12 @@ body { font-family: system-ui, sans-serif; background: #f0f2f5;
 .ctable tbody td { padding: 7px 12px; border-bottom: 1px solid #eee; white-space: nowrap; font-size: 13.5px; }
 .ctable tbody tr:hover td { background: #f0f4fa; }
 .ctable .r { text-align: right; font-family: monospace; }
+/* Sibling series rows (Kinergy GT under HK Hankook — Kinergy Eco 2)
+   get a thinner border and a slight indent so the primary brand rows
+   stay visually dominant. */
+.ctable tbody tr.extra td { border-bottom: 1px dashed #eee; padding-top: 4px; padding-bottom: 4px; }
+.ctable tbody tr.extra + tr:not(.extra) td { border-top: 1px solid #d5dae2; }
+.ctable .r.anom { color: #C62828; font-weight: 700; }
 .ctable.idxtbl thead th.th-month { background: #37474F; }
 .idx-title { font-size: 12px; font-weight: 700; color: #37474F;
              padding: 12px 12px 4px 12px; letter-spacing: .03em; text-transform: uppercase; }
@@ -893,14 +899,56 @@ function _renderStoreTable(wrap) {
 
 function _renderBrandTable(wrap) {
     const store = selectedSubKey;
-    const entries = Object.keys(BRANDS).map(function(abbr) {
-        const prices = selectedSize === 'ALL'
+
+    // Build one entry per (brand, pattern) — same primary + siblings
+    // logic the chart uses, so the tables and the chart stay in sync.
+    // `isExtra` marks sibling rows with a subtler style so the primary
+    // brand entries remain easy to scan at a glance.
+    const entries = [];
+    Object.keys(BRANDS).forEach(function(abbr) {
+        const primaryPrices = selectedSize === 'ALL'
             ? _avgAllSizes(abbr, store)
             : ((D.size_data[selectedSize] || {})[abbr] || {})[store];
-        return { abbr: abbr, prices: prices || [] };
-    }).filter(function(e) {
-        return e.prices.some(function(p){ return p !== null && p !== undefined; });
+        if (!primaryPrices || !primaryPrices.some(p => p != null)) return;
+
+        const descs   = _descsFor(abbr, selectedSize, store);
+        const flags   = _flagsFor(abbr, selectedSize, store);
+        const primaryPattern = _seriesPattern(abbr, selectedSize, store)
+                            || _guessPatternFromDescs(descs);
+        entries.push({
+            abbr:      abbr,
+            pattern:   primaryPattern,
+            prices:    primaryPrices,
+            flags:     flags,
+            isExtra:   false,
+        });
+
+        // Sibling series get their own rows too — filtered by the same
+        // price band used on the chart so segment-different products
+        // stay out of the table just like they stay off the chart.
+        if (selectedSize !== 'ALL') {
+            const extras = _extraSeries(abbr, selectedSize, store,
+                                        primaryPattern, primaryPrices);
+            extras.forEach(function(series) {
+                entries.push({
+                    abbr:    abbr,
+                    pattern: series.pattern,
+                    prices:  series.prices,
+                    flags:   series.flags || series.prices.map(() => ''),
+                    isExtra: true,
+                });
+            });
+        }
     });
+
+    function _label(e) {
+        const brand = e.abbr + ' ' + (BRANDS[e.abbr] || '');
+        return e.pattern ? (brand + ' — ' + e.pattern) : brand;
+    }
+    function _cellClass(flag) {
+        if (!flag) return 'r';
+        return /chg|cat_fb/.test(flag) ? 'r anom' : 'r';
+    }
 
     // ── Price table ──
     let html = '<table class="ctable"><thead><tr><th class="th-month">Brand</th>';
@@ -908,16 +956,24 @@ function _renderBrandTable(wrap) {
     html += '</tr></thead><tbody>';
     entries.forEach(function(e) {
         const c = '#' + (BCOLORS[e.abbr] || '555555');
-        html += '<tr><td style="color:' + c + ';font-weight:700">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</td>';
-        e.prices.forEach(function(p) {
-            html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
+        const rowStyle = e.isExtra
+            ? 'color:' + c + ';font-weight:500;padding-left:14px;font-size:.92em'
+            : 'color:' + c + ';font-weight:700';
+        html += '<tr' + (e.isExtra ? ' class="extra"' : '') + '>'
+              + '<td style="' + rowStyle + '">' + _label(e) + '</td>';
+        e.prices.forEach(function(p, i) {
+            html += '<td class="' + _cellClass(e.flags[i]) + '">'
+                  + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
         });
         html += '</tr>';
     });
     html += '</tbody></table>';
 
     // ── HK Index table (HK = 100) ──
-    const hkEntry = entries.find(function(e) { return e.abbr === 'HK'; });
+    // Baseline: the primary Hankook row.  HK's own sibling patterns
+    // (e.g. Kinergy GT) are indexed against Kinergy Eco 2 so users can
+    // see how HK's alternative series compares against HK's canonical.
+    const hkEntry = entries.find(function(e) { return e.abbr === 'HK' && !e.isExtra; });
     const hkPrices = hkEntry ? hkEntry.prices : [];
     html += '<div class="idx-title">HK Index &nbsp;(Hankook = 100)</div>';
     html += '<table class="ctable idxtbl"><thead><tr><th class="th-month">Brand</th>';
@@ -925,14 +981,18 @@ function _renderBrandTable(wrap) {
     html += '</tr></thead><tbody>';
     entries.forEach(function(e) {
         const c = '#' + (BCOLORS[e.abbr] || '555555');
-        html += '<tr><td style="color:' + c + ';font-weight:700">' + e.abbr + ' ' + (BRANDS[e.abbr] || '') + '</td>';
+        const rowStyle = e.isExtra
+            ? 'color:' + c + ';font-weight:500;padding-left:14px;font-size:.92em'
+            : 'color:' + c + ';font-weight:700';
+        html += '<tr' + (e.isExtra ? ' class="extra"' : '') + '>'
+              + '<td style="' + rowStyle + '">' + _label(e) + '</td>';
         e.prices.forEach(function(p, i) {
             const base = hkPrices[i];
             let cell;
             if (base == null) {
-                cell = '—';                          // HK blank → all blank
+                cell = '—';
             } else if (p == null) {
-                cell = '—';                          // brand blank → blank
+                cell = '—';
             } else {
                 const idx = Math.round(p / base * 100);
                 const clr = idx < 98 ? '#388E3C' : (idx > 102 ? '#C62828' : '#37474F');
