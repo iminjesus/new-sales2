@@ -21,6 +21,7 @@ from price_compare_jax import (
     build_tempe_lookup, build_bj_lookup, build_jax_lookup, build_tw_lookup,
     best_tempe, best_bj, best_jax, best_tw, best_twi,
     BRANDS, SIZE_CATEGORY, BRAND_COLOURS, ROW_FILLS,
+    COMPETITOR_PATTERNS,
 )
 
 app = Flask(__name__)
@@ -114,6 +115,59 @@ def load_compare_base():
     return rows
 
 
+def _pattern_key(desc, size, abbr):
+    """Return a stable pattern label from a product description.
+
+    First tries the (size, brand)'s COMPETITOR_PATTERNS keyword list — a
+    hit (e.g. desc "Kinergy Eco2 K425 94V" against kw "Kinergy Eco 2")
+    gives us a canonical pattern name that different SKUs in the same
+    series collapse under, so the chart shows one line per marketing
+    line instead of one per SKU.  Falls back to the first meaningful
+    2 words of the description when no keyword hits — that catches
+    genuinely off-segment products (Michelin's "Lotus Pilot Sport Cup
+    2") and keeps them on their own line rather than mixing into the
+    main line."""
+    if not desc:
+        return ""
+    dlow = desc.lower()
+    cat  = SIZE_CATEGORY.get(size)
+    if cat:
+        # Prefer the LONGEST matching keyword (Kinergy Eco 2 wins over
+        # Kinergy) so ambiguous names like "Kinergy GT" don't fold into
+        # "Kinergy" alongside the touring "Kinergy Eco 2".
+        best_kw = ""
+        for kw in COMPETITOR_PATTERNS.get(cat, {}).get(abbr, []):
+            if kw.lower() in dlow and len(kw) > len(best_kw):
+                best_kw = kw
+        if best_kw:
+            # Prettify shouty ALL-CAPS keywords (PRIMACY / KINERGY ECO /
+            # AZENIS FK520) so the chart legend reads cleanly.  Any
+            # mixed-case keyword is returned verbatim.
+            letters = [ch for ch in best_kw if ch.isalpha()]
+            if letters and all(ch.isupper() for ch in letters):
+                # Keep model codes (all-caps + digits, like "FK520") in
+                # their original form — title-casing them turns "FK520"
+                # into "Fk520" which is worse.
+                if any(ch.isdigit() for ch in best_kw):
+                    return best_kw
+                return best_kw.title()
+            return best_kw
+    words = []
+    for tok in desc.split():
+        t = re.sub(r'[().,+]', '', tok).strip()
+        if not t or len(t) <= 1:
+            continue
+        if re.match(r'^\d', t):
+            continue
+        if t.upper() in ('XL','OWT','RWL','OBL','TL','TT','FR','MFS',
+                         'DOT','BMW','AUDI','BENZ','DEMO','EV','RC'):
+            continue
+        words.append(t)
+        if len(words) >= 2:
+            break
+    return ' '.join(words) if words else desc[:30]
+
+
 def build_data(monthly):
     # Sentinel values that should be treated as "no price" — these creep in
     # from the source data and otherwise show up as nonsensical points on the
@@ -145,13 +199,59 @@ def build_data(monthly):
     def _mk_slots():
         return {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
                 "tempe_d": [], "bj_d": [], "jax_d": [],
-                "bj_f":    [], "jax_f":  []}
+                "bj_f":    [], "jax_f":  [],
+                # Per-pattern series: pattern_label → {prices, descs}
+                # Populated month-by-month below.  Front-end expands
+                # these into extra dashed lines on the "By Brand"
+                # chart so competing series (Kinergy Eco 2 vs Kinergy
+                # GT for HK/K135) show up side-by-side.
+                "jax_series": {}, "bj_series": {}}
     size_data = {s: {a: _mk_slots() for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
     summary_rows = []
 
-    for mk in months:
+    # ── Per-month, per-store per-pattern series builder ──────────────
+    # Given the raw candidate list for (size, abbr) at store, group
+    # candidates by pattern_key, keep the cheapest per pattern, then
+    # append this month's price into the running series arrays.  New
+    # patterns discovered mid-series get back-filled with None for
+    # prior months so all series arrays stay length-aligned.
+    def _accumulate_series(store, cands, size, abbr, series_dict, mk_idx, price_idx):
+        by_pat = {}
+        for c in cands:
+            cd = c[0]
+            cp = c[price_idx] if len(c) > price_idx else None
+            if cp is None:
+                continue
+            try:
+                if float(cp) in VOID_PRICES:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            pk = _pattern_key(cd, size, abbr)
+            if not pk:
+                continue
+            if pk not in by_pat or cp < by_pat[pk][0]:
+                by_pat[pk] = (cp, cd)
+        # Extend every already-tracked pattern with this month's slot
+        for pk, entry in series_dict.items():
+            if pk in by_pat:
+                entry["prices"].append(by_pat[pk][0])
+                entry["descs"].append(by_pat[pk][1])
+            else:
+                entry["prices"].append(None)
+                entry["descs"].append("")
+        # Register any new pattern discovered this month, back-filling
+        # None for the (mk_idx) months that came before it.
+        for pk, (cp, cd) in by_pat.items():
+            if pk not in series_dict:
+                series_dict[pk] = {
+                    "prices": [None] * mk_idx + [cp],
+                    "descs":  [""]   * mk_idx + [cd],
+                }
+
+    for mk_idx, mk in enumerate(months):
         md     = monthly[mk]
         t_lk   = build_tempe_lookup(md["t_rows"])
         bj_lk  = build_bj_lookup(md["bj_rows"])
@@ -192,6 +292,19 @@ def build_data(monthly):
                 # description differs from the previous month's.
                 size_data[size][abbr]["bj_f"].append(bj_flag  or "")
                 size_data[size][abbr]["jax_f"].append(jx_flag or "")
+
+                # Per-pattern series: JAX + BJ candidates grouped by
+                # pattern label (Kinergy Eco 2 vs Kinergy GT etc.).
+                # price_idx=1 because build_bj_lookup / build_jax_lookup
+                # both put price at tuple index [1].
+                _accumulate_series("jax", jx_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["jax_series"],
+                                   mk_idx, price_idx=1)
+                _accumulate_series("bj", bj_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["bj_series"],
+                                   mk_idx, price_idx=1)
 
                 if t_price:   tp.append(t_price)
                 if bj_price:  bp.append(bj_price)
@@ -1004,7 +1117,13 @@ function _renderBrand() {
             const anom = /chg|cat_fb/.test(flags[i] || '');
             return anom ? r : baseR;
         });
-        ds.push({ label:abbr + ' ' + (BRANDS[abbr]||''), data:prices,
+        // Derive the primary line's pattern label so the legend reads
+        // "HK Hankook — Kinergy Eco 2" instead of just "HK Hankook".
+        const primaryPattern = _seriesPattern(abbr, selectedSize, store)
+                            || _guessPatternFromDescs(descs);
+        const primaryLabel = abbr + ' ' + (BRANDS[abbr]||'')
+                           + (primaryPattern ? ' — ' + primaryPattern : '');
+        ds.push({ label: primaryLabel, data: prices,
                   borderColor:c, backgroundColor:c+'33',
                   borderDash: solid ? [] : [6,4],
                   borderWidth: solid ? 3 : 1.5,
@@ -1014,10 +1133,122 @@ function _renderBrand() {
                   pointBorderWidth: 2,
                   spanGaps:true, tension:.3, fill:false,
                   _descs: descs, _flags: flags });
+
+        // Extra dashed lines for sibling patterns (Kinergy Eco 2 vs
+        // Kinergy GT etc.) filtered to prices in a reasonable band
+        // around the primary line — patterns whose typical price is
+        // way above the primary (e.g. Michelin Lotus Pilot Sport Cup
+        // 2 vs Primacy) stay hidden because the user asked for
+        // extras only when prices don't differ too much.
+        if (selectedSize !== 'ALL') {
+            const extras = _extraSeries(abbr, selectedSize, store,
+                                        primaryPattern, prices);
+            extras.forEach(function(series, si) {
+                const label = abbr + ' ' + (BRANDS[abbr]||'')
+                            + ' — ' + series.pattern;
+                // Dash pattern rotates so 3+ siblings stay distinct.
+                const dashPatterns = [[2,3], [10,4], [4,2,1,2], [6,6,2,6]];
+                const dash = dashPatterns[si % dashPatterns.length];
+                const sflags = series.flags || series.descs.map(() => '');
+                const sst    = _pointStyles(sflags, series.prices, c+'22');
+                ds.push({ label: label, data: series.prices,
+                          borderColor: c, backgroundColor: c+'22',
+                          borderDash: dash, borderWidth: 1.2,
+                          pointRadius: sst.radius.map(r => Math.max(r-2, 3)),
+                          pointBackgroundColor: sst.bg,
+                          pointBorderColor: sst.border,
+                          pointBorderWidth: 1.5,
+                          spanGaps:true, tension:.3, fill:false,
+                          _descs: series.descs, _flags: sflags });
+            });
+        }
     });
     if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
     _render(SL[store] + ' \u2014 ' + sizeLabel + ' \u2014 Brand Comparison', ds);
     _renderTable();
+}
+
+/* \u2500\u2500 Series helpers (per-pattern lines on By-Brand chart) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+   Each (size, brand, store) can carry a `<store>_series` dict:
+     { pattern_label: { prices:[...], descs:[...] } }
+   The primary line uses whichever pattern's latest-month price is
+   lowest (matches best_jax / best_bj), and extra dashed lines are
+   added for sibling patterns whose median price is within a
+   reasonable band around the primary \u2014 so competing series in the
+   same segment show up side-by-side but genuinely off-segment
+   products (Michelin Lotus Pilot Sport Cup 2 vs Primacy) stay
+   hidden. */
+function _seriesDict(abbr, size, store) {
+    if (!size || size === 'ALL' || abbr === 'ALL') return null;
+    const bsd = (D.brand_size_data[abbr] || {})[size];
+    if (!bsd) return null;
+    return bsd[store + '_series'] || null;
+}
+function _seriesPattern(abbr, size, store) {
+    const sd = _seriesDict(abbr, size, store);
+    if (!sd) return '';
+    let bestPat = '', bestPrice = Infinity;
+    Object.keys(sd).forEach(function(pk) {
+        const prices = sd[pk].prices || [];
+        for (let i = prices.length - 1; i >= 0; i--) {
+            const p = prices[i];
+            if (p !== null && p !== undefined) {
+                if (p < bestPrice) { bestPat = pk; bestPrice = p; }
+                break;
+            }
+        }
+    });
+    return bestPat;
+}
+function _guessPatternFromDescs(descs) {
+    if (!descs || !descs.length) return '';
+    for (let i = descs.length - 1; i >= 0; i--) {
+        const d = descs[i];
+        if (!d) continue;
+        const toks = d.split(/\s+/).filter(function(t) {
+            if (!t || t.length <= 1) return false;
+            if (/^\d/.test(t)) return false;
+            if (/^(XL|OWT|RWL|OBL|TL|TT|FR|MFS|DOT|BMW|AUDI|BENZ|DEMO|EV|RC)$/i.test(t)) return false;
+            return true;
+        }).slice(0, 2);
+        if (toks.length) return toks.join(' ');
+    }
+    return '';
+}
+function _extraSeries(abbr, size, store, primaryPattern, primaryPrices) {
+    const sd = _seriesDict(abbr, size, store);
+    if (!sd) return [];
+    const PRICE_BAND_HI = 1.6;   /* <= 60 % above primary median */
+    const PRICE_BAND_LO = 0.55;  /* >= 45 % below primary median */
+    const primaryMed = _median(primaryPrices);
+    if (primaryMed == null) return [];
+    const extras = [];
+    Object.keys(sd).forEach(function(pk) {
+        if (pk === primaryPattern) return;
+        const series = sd[pk];
+        const prices = series.prices || [];
+        if (prices.every(p => p == null)) return;
+        const med = _median(prices);
+        if (med == null) return;
+        if (med > primaryMed * PRICE_BAND_HI) return;
+        if (med < primaryMed * PRICE_BAND_LO) return;
+        extras.push({
+            pattern: pk,
+            prices:  prices,
+            descs:   series.descs || prices.map(() => ''),
+            flags:   series.flags || prices.map(() => ''),
+            median:  med,
+        });
+    });
+    extras.sort((a, b) => a.median - b.median);
+    /* Cap at 4 extras per brand so a busy size doesn't drown in dashes. */
+    return extras.slice(0, 4);
+}
+function _median(arr) {
+    const vals = (arr || []).filter(p => p != null).sort((a, b) => a - b);
+    if (!vals.length) return null;
+    const mid = Math.floor(vals.length / 2);
+    return vals.length % 2 ? vals[mid] : (vals[mid-1] + vals[mid]) / 2;
 }
 
 /* ── Size buttons ─────────────────────────────────────── */
