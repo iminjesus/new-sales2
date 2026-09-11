@@ -116,42 +116,36 @@ def load_compare_base():
 
 
 def _pattern_key(desc, size, abbr):
-    """Return a stable pattern label from a product description.
+    """Return the full marketing name from a product description by
+    stripping the trailing load rating.  So "Kinergy Eco2 K425 94V"
+    becomes "Kinergy Eco2 K425" — model line AND model code are kept
+    so the legend can show them (the previous version returned only
+    a COMPETITOR_PATTERNS keyword substring like "Kinergy Eco" which
+    the user asked to be expanded).
 
-    First tries the (size, brand)'s COMPETITOR_PATTERNS keyword list — a
-    hit (e.g. desc "Kinergy Eco2 K425 94V" against kw "Kinergy Eco 2")
-    gives us a canonical pattern name that different SKUs in the same
-    series collapse under, so the chart shows one line per marketing
-    line instead of one per SKU.  Falls back to the first meaningful
-    2 words of the description when no keyword hits — that catches
-    genuinely off-segment products (Michelin's "Lotus Pilot Sport Cup
-    2") and keeps them on their own line rather than mixing into the
-    main line."""
+    The load-rating regex matches the standard "<digits>[/<digits>]
+    <1-2 letters> [XL]" spec that comes AT THE END of every JAX / BJ
+    / Tempe description.  If the tail can't be identified we fall
+    back to the first N meaningful words, which keeps oddball
+    descriptions readable.
+
+    Consistent SKU-to-pattern grouping (Kinergy Eco2 K425 94V and
+    91V both collapse under "Kinergy Eco2 K425") works because the
+    trailing tokens differ ONLY in the load rating."""
     if not desc:
         return ""
-    dlow = desc.lower()
-    cat  = SIZE_CATEGORY.get(size)
-    if cat:
-        # Prefer the LONGEST matching keyword (Kinergy Eco 2 wins over
-        # Kinergy) so ambiguous names like "Kinergy GT" don't fold into
-        # "Kinergy" alongside the touring "Kinergy Eco 2".
-        best_kw = ""
-        for kw in COMPETITOR_PATTERNS.get(cat, {}).get(abbr, []):
-            if kw.lower() in dlow and len(kw) > len(best_kw):
-                best_kw = kw
-        if best_kw:
-            # Prettify shouty ALL-CAPS keywords (PRIMACY / KINERGY ECO /
-            # AZENIS FK520) so the chart legend reads cleanly.  Any
-            # mixed-case keyword is returned verbatim.
-            letters = [ch for ch in best_kw if ch.isalpha()]
-            if letters and all(ch.isupper() for ch in letters):
-                # Keep model codes (all-caps + digits, like "FK520") in
-                # their original form — title-casing them turns "FK520"
-                # into "Fk520" which is worse.
-                if any(ch.isdigit() for ch in best_kw):
-                    return best_kw
-                return best_kw.title()
-            return best_kw
+    s = desc.strip()
+    # Strip trailing load rating: "91V" / "88Y XL" / "108T" / "94/92R"
+    s = re.sub(r'\s+\d{2,3}(?:/\d{2,3})?[A-Za-z]{1,2}(?:\s+XL)?\s*$', '', s)
+    # Strip any remaining trailing badge / spec suffix so "Primacy 5
+    # XL" or "Grandtrek AT5 M+S" doesn't inflate the label.
+    s = re.sub(r'\s+(?:XL|OWT|RWL|OBL|TL|TT|FR|MFS|DOT|M\+S)\s*$',
+               '', s, flags=re.IGNORECASE)
+    s = s.strip(' -–|,')
+    if s:
+        return s
+    # Fallback: first 3 meaningful words when the description doesn't
+    # have a recognisable load-rating tail.
     words = []
     for tok in desc.split():
         t = re.sub(r'[().,+]', '', tok).strip()
@@ -163,9 +157,9 @@ def _pattern_key(desc, size, abbr):
                          'DOT','BMW','AUDI','BENZ','DEMO','EV','RC'):
             continue
         words.append(t)
-        if len(words) >= 2:
+        if len(words) >= 3:
             break
-    return ' '.join(words) if words else desc[:30]
+    return ' '.join(words) if words else desc[:40]
 
 
 def build_data(monthly):
@@ -736,8 +730,10 @@ const baseOpts = {
     responsive:true, maintainAspectRatio:false,
     clip: false,
     // Reserve horizontal space on the right for the end-labels so the
-    // last data point isn't overlapped by the label text.
-    layout: { padding: { right: 120 } },
+    // last data point isn't overlapped by the label text.  Widened
+    // from 120 → 240 after the legend labels started carrying the
+    // pattern name ("MC Michelin — Primacy 5" needs ~40 chars).
+    layout: { padding: { right: 240 } },
     plugins:{
         legend:  { display: false },   // replaced by brandEndLabels plugin
         brandEndLabels: { enabled: true },
@@ -780,11 +776,14 @@ const baseOpts = {
     },
     elements:{
         point:{
-            radius: 7,
-            hoverRadius: 9,
-            borderWidth: 2,
-            borderColor: '#fff',
-            hitRadius: 12,
+            // Small dot painted in the line colour, no white ring.
+            // Per-dataset pointRadius / pointBackgroundColor arrays
+            // (built by _pointStyles) override these defaults per
+            // point when there's an anomaly (chg / cat_fb).
+            radius: 2,
+            hoverRadius: 4,
+            borderWidth: 0,
+            hitRadius: 10,
         }
     }
 };
@@ -813,7 +812,7 @@ const _labelPlugin = {
                 if (val === null || val === undefined) return;
                 const color = Array.isArray(ds.borderColor) ? ds.borderColor[i] : ds.borderColor;
                 ctx.fillStyle = color || '#333';
-                ctx.fillText('$' + val, pt.x, pt.y - 12);
+                ctx.fillText('$' + val, pt.x, pt.y - 8);
             });
         });
         ctx.restore();
@@ -1006,18 +1005,22 @@ function _flagsFor(abbr, size, store) {
     const key = store + '_f';
     return bsd[key] || months.map(() => '');
 }
-/* Vary per-point colour so a "changed product" or "fallback" point
-   pops visually — a red ring around the marker.  Returns arrays
-   suitable for Chart.js pointBorderColor / pointBackgroundColor /
-   pointRadius (parallel to data). */
-function _pointStyles(flags, prices, baseColour) {
+/* Per-point colour + radius arrays for Chart.js.  Normal points
+   are small dots painted in the line's own colour (no white ring
+   any more — the ring made the dots look larger than they were and
+   almost lost their identity against the line).  Anomalous points
+   (product changed vs previous month, or COMPETITOR_PATTERNS
+   fallback fired) are slightly larger and painted red so they
+   stand out without dominating the chart. */
+function _pointStyles(flags, prices, lineColour) {
     const border = [], bg = [], radius = [];
     for (let i = 0; i < prices.length; i++) {
         const f = flags[i] || '';
         const anom = f.includes('chg') || f.includes('cat_fb');
-        border.push(anom ? '#E53935' : '#fff');           // red ring on anomaly
-        bg.push(anom ? '#FFCDD2' : baseColour);           // pink fill on anomaly
-        radius.push(anom ? 9 : 7);                        // slightly larger
+        // Anomaly: red dot 3px.  Normal: line-coloured dot 2px.
+        border.push(anom ? '#C62828' : lineColour);
+        bg.push(anom ? '#E53935' : lineColour);
+        radius.push(anom ? 3 : 2);
     }
     return { border, bg, radius };
 }
@@ -1074,14 +1077,15 @@ function _renderStore() {
         if (prices && !prices.every(p => p === null)) {
             const descs = _descsFor(abbr, selectedSize, s);
             const flags = _flagsFor(abbr, selectedSize, s);
-            const st    = _pointStyles(flags, prices, SC[s]+'33');
+            const st    = _pointStyles(flags, prices, SC[s]);
             arr.push({ label:SL[s], data:prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
                        spanGaps:true, tension:.3, fill:false,
                        pointRadius: st.radius,
+                       pointHoverRadius: st.radius.map(r => r + 2),
                        pointBackgroundColor: st.bg,
                        pointBorderColor: st.border,
-                       pointBorderWidth: 2,
+                       pointBorderWidth: 0,
                        _descs: descs, _flags: flags });
         }
         return arr;
@@ -1108,15 +1112,12 @@ function _renderBrand() {
         ci++;
         const descs = _descsFor(abbr, selectedSize, store);
         const flags = _flagsFor(abbr, selectedSize, store);
-        const st    = _pointStyles(flags, prices, c+'33');
-        // Non-anomalous points keep the brand-specific base radius
-        // (solid brands 7px, dashed brands 5px); anomalous points get
-        // the enlarged radius from _pointStyles (9px + red ring).
-        const baseR = solid ? 7 : 5;
-        const finalR = st.radius.map((r, i) => {
-            const anom = /chg|cat_fb/.test(flags[i] || '');
-            return anom ? r : baseR;
-        });
+        const st    = _pointStyles(flags, prices, c);
+        // Point size is small + uniform (2px normal, 3px anomaly) so
+        // the dot doesn't dominate over the line.  The old code varied
+        // radius per brand which produced inconsistent-sized markers
+        // even for non-anomalous points.
+        const finalR = st.radius;
         // Derive the primary line's pattern label so the legend reads
         // "HK Hankook — Kinergy Eco 2" instead of just "HK Hankook".
         const primaryPattern = _seriesPattern(abbr, selectedSize, store)
@@ -1128,9 +1129,10 @@ function _renderBrand() {
                   borderDash: solid ? [] : [6,4],
                   borderWidth: solid ? 3 : 1.5,
                   pointRadius: finalR,
+                  pointHoverRadius: finalR.map(r => r + 2),
                   pointBackgroundColor: st.bg,
                   pointBorderColor: st.border,
-                  pointBorderWidth: 2,
+                  pointBorderWidth: 0,
                   spanGaps:true, tension:.3, fill:false,
                   _descs: descs, _flags: flags });
 
@@ -1150,14 +1152,15 @@ function _renderBrand() {
                 const dashPatterns = [[2,3], [10,4], [4,2,1,2], [6,6,2,6]];
                 const dash = dashPatterns[si % dashPatterns.length];
                 const sflags = series.flags || series.descs.map(() => '');
-                const sst    = _pointStyles(sflags, series.prices, c+'22');
+                const sst    = _pointStyles(sflags, series.prices, c);
                 ds.push({ label: label, data: series.prices,
                           borderColor: c, backgroundColor: c+'22',
                           borderDash: dash, borderWidth: 1.2,
-                          pointRadius: sst.radius.map(r => Math.max(r-2, 3)),
+                          pointRadius: sst.radius,
+                          pointHoverRadius: sst.radius.map(r => r + 2),
                           pointBackgroundColor: sst.bg,
                           pointBorderColor: sst.border,
-                          pointBorderWidth: 1.5,
+                          pointBorderWidth: 0,
                           spanGaps:true, tension:.3, fill:false,
                           _descs: series.descs, _flags: sflags });
             });
