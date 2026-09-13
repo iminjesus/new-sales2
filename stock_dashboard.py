@@ -839,6 +839,19 @@ table.dt .r.sur   { color:var(--sur);   font-weight:700; }
 table.dt .r.ser   { color:var(--ser);   font-weight:700; }
 .tbl-wrap { max-height:480px; overflow-y:auto; overflow-x:auto; }
 
+/* ── Active-filter summary strip ── */
+.filter-text { padding:6px 10px; background:#EEF3F8; border-radius:5px;
+               font-size:11.5px; color:var(--muted); margin-bottom:6px;
+               border:1px solid #DBE4EE; display:flex; gap:6px; flex-wrap:wrap;
+               align-items:center; line-height:1.5; }
+.filter-text .lbl { color:var(--hdr1); font-weight:700; text-transform:uppercase;
+                    letter-spacing:.06em; font-size:10.5px; }
+.filter-text .chip-txt { display:inline-block; background:#fff; color:var(--ink);
+                         padding:2px 8px; border-radius:12px; font-weight:600;
+                         border:1px solid #CFD8DC; font-size:11px; }
+.filter-text .chip-txt .k { color:var(--muted); font-weight:500; margin-right:4px; }
+.filter-text em { color:var(--muted); font-style:italic; }
+
 /* ── Selection summary strip ── */
 .sel-summary { display:flex; gap:14px; align-items:center; padding:6px 4px;
                font-size:11.5px; color:var(--ink); flex-wrap:wrap;
@@ -1032,10 +1045,20 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
       <h3>SKU drill-down
         <span class="hint">click any row for the monthly-by-state view</span>
         <span class="icons">
+          <button class="icon-btn" onclick="downloadCSV()" title="Download the current view as CSV (one value per cell)">⬇ CSV</button>
           <button class="icon-btn" onclick="toggleExpandTable()" title="Expand table full-screen" id="btn-expand-tbl">⛶</button>
           <button class="icon-btn" onclick="emailScreen('sku-card','SKU drill-down')" title="Email this table">✉</button>
         </span>
       </h3>
+
+      <!-- Active-filter summary — mirrors the top filter bar as plain text
+           so a captured screenshot / printed page tells you what the
+           values are filtered to without having to see the filter bar. -->
+      <div class="filter-text" id="filter-text">
+        <span class="lbl">Filter</span>
+        <em>all SKUs</em>
+      </div>
+
       <div class="tabs">
         <div class="tab active" data-tab="shortage">🔴 Shortage <span class="n" id="n-short">0</span></div>
         <div class="tab" data-tab="surplus">🟠 Surplus <span class="n" id="n-sur">0</span></div>
@@ -1066,13 +1089,13 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
               <th data-col="size">Size<span class="sort"></span></th>
               <th data-col="inch">Inch<span class="sort"></span></th>
               <th data-col="li_ss">LI/SS<span class="sort"></span></th>
-              <th class="r" data-col="nsw">NSW<span class="sort"></span></th>
-              <th class="r" data-col="qld">QLD<span class="sort"></span></th>
-              <th class="r" data-col="vic">VIC<span class="sort"></span></th>
-              <th class="r" data-col="wa">WA<span class="sort"></span></th>
-              <th class="r" data-col="total_stock">Stock<span class="sort"></span></th>
-              <th class="r" data-col="total_3m">3M Avg<span class="sort"></span></th>
+              <th class="r" data-col="nsw">NSW <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
+              <th class="r" data-col="qld">QLD <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
+              <th class="r" data-col="vic">VIC <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
+              <th class="r" data-col="wa">WA <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
+              <th class="r" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
               <th class="r" data-col="moh">MOI<span class="sort"></span></th>
+              <th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>
             </tr>
           </thead>
           <tbody id="tbl-body"></tbody>
@@ -1141,6 +1164,14 @@ function fmtF(n, d) { if (n == null || n === '') return '—';
 function pill(gr) {
     const cls = 'pill g-' + (gr || 'other').toString().replace(/[^A-Za-z]/g,'') + ' sm';
     return '<span class="' + cls + '">' + (gr || '—') + '</span>';
+}
+/* Small grey "(3M avg)" suffix rendered next to state stock cells so
+   each cell reads e.g. "129 (0.5)" — the second figure is that
+   state's 3-month monthly demand.  Skipped when the demand is zero
+   so the cell doesn't look busy for dead SKUs. */
+function demSuffix(demand) {
+    if (demand == null || demand === 0) return '';
+    return ' <span style="color:#78909C;font-weight:400">(' + FMT_1.format(demand) + ')</span>';
 }
 
 /* ── Multi-select filter state ── */
@@ -1441,8 +1472,9 @@ function sortKey(r, col) {
         case 'wa':  return r.state_stock.WA  || 0;
         case 'li_ss': return (parseFloat(r.li) || 0);
         case 'inch':  return (parseFloat(r.inch) || 0);
-        case 'moh':   return r.moh == null ? -1 : r.moh;
-        case 'total_3m': return r.total_3m || 0;
+        case 'moh':       return r.moh == null ? -1 : r.moh;
+        case 'merge_moi': return r.moh == null ? -1 : r.moh;   // same underlying value
+        case 'total_3m':  return r.total_3m || 0;
         case 'total_stock': return r.total_stock || 0;
         default:      return r[col] == null ? '' : r[col];
     }
@@ -1498,12 +1530,12 @@ function renderTable() {
             + '<td>' + (r.size || '—') + '</td>'
             + '<td>' + (r.inch || '—') + '</td>'
             + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.NSW) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.QLD) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.VIC) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.WA)  + '</td>'
-            + '<td class="r">' + fmtI(r.total_stock) + '</td>'
-            + '<td class="r">' + fmtF(r.total_3m, 1) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.NSW) + demSuffix(r.state_3m.NSW) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.QLD) + demSuffix(r.state_3m.QLD) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.VIC) + demSuffix(r.state_3m.VIC) + '</td>'
+            + '<td class="r">' + fmtI(r.state_stock.WA)  + demSuffix(r.state_3m.WA)  + '</td>'
+            + '<td class="r">' + fmtI(r.total_stock)     + demSuffix(r.total_3m)     + '</td>'
+            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
             + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
             + '</tr>';
     }).join('');
@@ -1560,11 +1592,120 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && document.body.classList.contains('expand-table')) toggleExpandTable();
 });
 
+/* ── Active-filter text row (mirrors the top filter bar as text) ── */
+function renderFilterText() {
+    const el = document.getElementById('filter-text');
+    if (!el) return;
+    const chips = [];
+    Object.keys(filterState).forEach(key => {
+        const set = filterState[key];
+        if (set.size === 0) return;
+        const label = KEY_LBL[key];
+        const values = [...set].map(v => key === 'status' ? STATUS_PRETTY[v] : v);
+        /* Cap really long lists so the chip stays readable — e.g.
+           "Pattern: 12 selected" once you tick more than 5. */
+        const shown = values.length <= 5
+            ? values.join(', ')
+            : (values.slice(0, 3).join(', ') + ' + ' + (values.length - 3) + ' more');
+        chips.push('<span class="chip-txt"><span class="k">' + label + ':</span> ' + shown + '</span>');
+    });
+    const sq = (document.getElementById('fltr-search').value || '').trim();
+    if (sq) chips.push('<span class="chip-txt"><span class="k">Search:</span> "' + sq + '"</span>');
+    if (chips.length === 0) {
+        el.innerHTML = '<span class="lbl">Filter</span><em>all SKUs</em>';
+    } else {
+        el.innerHTML = '<span class="lbl">Filter</span>' + chips.join(' ');
+    }
+}
+
+/* ── CSV download (current filtered view) ── */
+function downloadCSV() {
+    /* Same source the visible table draws from — status tab + top
+       filters + free-text search + current sort.  Values go into
+       separate cells so Excel opens it cleanly. */
+    let src = DATA[curTab + '_rows'].filter(rowPasses);
+    if (sortCol && sortDir !== 0) {
+        const dir = sortDir;
+        src = src.slice().sort((a, b) => {
+            const av = sortKey(a, sortCol), bv = sortKey(b, sortCol);
+            if (av < bv) return -1 * dir;
+            if (av > bv) return  1 * dir;
+            return 0;
+        });
+    }
+    const cols = [
+        ['Merge',           r => r.merge_code],
+        ['M CODE',          r => r.m_code || ''],
+        ['Brand',           r => r.brand || ''],
+        ['Marketing Line',  r => r.line || ''],
+        ['Pattern',         r => r.pattern || ''],
+        ['Group',           r => r.group || ''],
+        ['Size',            r => r.size || ''],
+        ['Inch',            r => r.inch || ''],
+        ['LI',              r => r.li || ''],
+        ['SS',              r => r.ss || ''],
+        ['NSW Stock',       r => r.state_stock.NSW || 0],
+        ['NSW 3M Avg',      r => (r.state_3m.NSW ?? 0).toFixed(2)],
+        ['QLD Stock',       r => r.state_stock.QLD || 0],
+        ['QLD 3M Avg',      r => (r.state_3m.QLD ?? 0).toFixed(2)],
+        ['VIC Stock',       r => r.state_stock.VIC || 0],
+        ['VIC 3M Avg',      r => (r.state_3m.VIC ?? 0).toFixed(2)],
+        ['WA Stock',        r => r.state_stock.WA  || 0],
+        ['WA 3M Avg',       r => (r.state_3m.WA  ?? 0).toFixed(2)],
+        ['Total Stock',     r => r.total_stock || 0],
+        ['Total 3M Avg',    r => (r.total_3m ?? 0).toFixed(2)],
+        ['NSW Port',        r => r.state_pipe_parts?.NSW?.port  || 0],
+        ['NSW Water',       r => r.state_pipe_parts?.NSW?.water || 0],
+        ['NSW Factory',     r => r.state_pipe_parts?.NSW?.fac   || 0],
+        ['QLD Port',        r => r.state_pipe_parts?.QLD?.port  || 0],
+        ['QLD Water',       r => r.state_pipe_parts?.QLD?.water || 0],
+        ['QLD Factory',     r => r.state_pipe_parts?.QLD?.fac   || 0],
+        ['VIC Port',        r => r.state_pipe_parts?.VIC?.port  || 0],
+        ['VIC Water',       r => r.state_pipe_parts?.VIC?.water || 0],
+        ['VIC Factory',     r => r.state_pipe_parts?.VIC?.fac   || 0],
+        ['WA Port',         r => r.state_pipe_parts?.WA?.port   || 0],
+        ['WA Water',        r => r.state_pipe_parts?.WA?.water  || 0],
+        ['WA Factory',      r => r.state_pipe_parts?.WA?.fac    || 0],
+        ['MOI',             r => r.moh != null ? r.moh.toFixed(2) : ''],
+        ['Merge_MOI',       r => r.moh != null ? r.moh.toFixed(2) : ''],
+        ['MOI + Pipeline',  r => r.moh_plus != null ? r.moh_plus.toFixed(2) : ''],
+        ['Status',          r => STATUS_PRETTY[r.status] || r.status || ''],
+        ['Description',     r => r.description || ''],
+    ];
+    /* Proper CSV escaping so a description with a comma or quote
+       doesn't split cells. */
+    const esc = v => {
+        const s = v == null ? '' : String(v);
+        return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [];
+    lines.push(cols.map(c => esc(c[0])).join(','));
+    src.forEach(r => lines.push(cols.map(c => esc(c[1](r))).join(',')));
+
+    /* Include a first-line comment showing the filter state so the
+       downloaded file has provenance — some SIEM tools object to a
+       leading BOM, but Excel opens UTF-8-BOM cleanly with tildes and
+       Korean characters. */
+    const provenance = '# Stock Balance Lab · ' + curTab.replace('_',' ')
+                     + ' · ' + new Date().toISOString().slice(0, 10)
+                     + ' · Filter: ' + (filterSummary() || 'all SKUs');
+    const csv = '﻿' + provenance + '\n' + lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'stock_balance_' + curTab + '_' + todayStr() + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    showToast('Downloaded ' + a.download + ' (' + fmtI(src.length) + ' rows)');
+}
+
 /* ── Central refresh ── */
 function refresh() {
     recomputeKPI();
     renderStateCards();
     renderCharts();
+    renderFilterText();
     renderTable();
 }
 refresh();
