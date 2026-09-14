@@ -100,8 +100,158 @@ COL_TOTAL_12M = 78
 # cols 4-63.  Used by the drill-down modal to draw a per-state
 # monthly line chart when the user clicks a problem SKU.
 HIST_MONTHS   = 12
-HIST_COL_START = 4      # -12M NSW column
+HIST_COL_START = 4      # -12M NSW column (default — overridden by header scan)
 HIST_BLOCK_LEN = 5      # NSW, QLD, VIC, WA, TOTAL per month
+
+
+def _detect_header_row(ws, max_scan=10):
+    """Find the row that carries the column headers.  Walks the first
+    `max_scan` rows and picks whichever row has the strongest match
+    against the expected label set (Merge Code + NSW + QLD + VIC + WA
+    + one of the state stock markers).  Returns a 1-based row index,
+    defaulting to 2 (the historical location) if nothing scores well.
+
+    This makes the loader resilient to blank leader rows being added
+    or removed above the header — a common Excel edit that would
+    otherwise break every column lookup below."""
+    KEY_LABELS = {"MERGE CODE", "NSW", "QLD", "VIC", "WA"}
+    STATE_STOCK_MARKERS = {"N.STOCK", "Q.STOCK", "V.STOCK", "W.STOCK", "STOCK"}
+    best_row, best_score = 2, 0
+    for r in range(1, max_scan + 1):
+        vals = [str(ws.cell(row=r, column=c).value or "").strip().upper()
+                for c in range(1, ws.max_column + 1)]
+        vset = set(vals)
+        score = sum(1 for k in KEY_LABELS if k in vset)
+        score += sum(1 for k in STATE_STOCK_MARKERS if k in vset)
+        if score > best_score:
+            best_row, best_score = r, score
+    return best_row
+
+
+def _scan_stock_header(ws, header_row=None):
+    """Walk the Stock Status Worksheet header (auto-detected row) and
+    return a column-index map keyed by semantic role rather than by
+    ordinal position.  When the workbook grows a column or a section
+    shifts, this scan keeps the loader working — the hard-coded COL_*
+    values below become fallbacks only.
+
+    The header alternates repeating labels — "NSW / QLD / VIC / WA"
+    appears 12 times for monthly history, 4 more times for the
+    3M_A/6M_A/12M_A/12M TOT block, and 5 more times for the
+    3M Avg/Max 12M/Max 12M Ave block — so we track a section
+    marker (the label that closes each 4-cell state group) and
+    interpret each state cell in that section's context.
+
+    Returns a dict with keys:
+      MERGE_CODE / GROUP / CLASSIFICATION
+      HIST[m]           -> {NSW, QLD, VIC, WA, TOTAL}     m ∈ 1..12  (month back)
+      PERIOD_3M / 6M / 12M / 12M_TOT   -> {NSW, QLD, VIC, WA, TOTAL}
+      STATE_STOCK       -> {NSW, QLD, VIC, WA}
+      STATE_PORT        -> {NSW, QLD, VIC, WA}
+      STATE_WATER       -> {NSW, QLD, VIC, WA}
+      STATE_FAC         -> {NSW, QLD, VIC, WA}
+      TOTAL_STOCK / TOTAL_PORT / TOTAL_WATER / TOTAL_FAC / TOTAL_ALL
+    Columns are 1-based to match openpyxl's cell(row, column) API.
+    """
+    if header_row is None:
+        header_row = _detect_header_row(ws)
+    header = [ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)]
+
+    def norm(v):
+        return str(v).strip() if v is not None else ""
+
+    cmap = {"HIST": {}}
+
+    # Identify the leading identity columns by exact label match
+    for c, h in enumerate(header, start=1):
+        n = norm(h).upper()
+        if n in ("MERGE CODE", "MERGE_CODE"):
+            cmap["MERGE_CODE"] = c
+        elif n == "NEW GROUP" or n == "GROUP":
+            cmap.setdefault("GROUP", c)
+        elif n == "CLASSIFICATION":
+            cmap["CLASSIFICATION"] = c
+
+    # Walk left-to-right in a small state machine.  Every time we see
+    # NSW/QLD/VIC/WA in row 2 we buffer the four indices, then look at
+    # the NEXT header cell to figure out which section this state group
+    # closes into.
+    STATES4 = ["NSW", "QLD", "VIC", "WA"]
+    def _label_maps_to(section, state_cols):
+        d = cmap.setdefault(section, {})   # return the dict *inside* cmap
+        d.update(dict(zip(STATES4, state_cols)))
+        return d
+
+    buf = []      # list of (col, header) for the current 4-state block
+    i = 0
+    while i < len(header):
+        h = norm(header[i]).upper()
+        col = i + 1
+        # If the current cell is a state name AND the next 3 are also
+        # state names, this is the start of a 4-state group.
+        if (h in STATES4
+                and i + 3 < len(header)
+                and norm(header[i+1]).upper() == "QLD"
+                and norm(header[i+2]).upper() == "VIC"
+                and norm(header[i+3]).upper() == "WA"):
+            state_cols = [col, col+1, col+2, col+3]
+            # The label immediately AFTER the 4 state cells identifies
+            # the section this group belongs to.
+            label = norm(header[i+4]).upper() if i + 4 < len(header) else ""
+            if label.startswith("-") and label.endswith("M"):
+                try:
+                    m = int(label[1:-1])
+                    d = _label_maps_to(f"HIST_{m}", state_cols)
+                    d["TOTAL"] = i + 5   # the label cell itself carries the monthly total
+                    cmap["HIST"][m] = d
+                except ValueError:
+                    pass
+            elif "3M_A" in label or "3M A" in label:
+                d = _label_maps_to("PERIOD_3M", state_cols); d["TOTAL"] = i + 5
+            elif "6M_A" in label or "6M A" in label:
+                d = _label_maps_to("PERIOD_6M", state_cols); d["TOTAL"] = i + 5
+            elif "12M_A" in label or "12M A" in label:
+                d = _label_maps_to("PERIOD_12M", state_cols); d["TOTAL"] = i + 5
+            elif "12M TOT" in label:
+                d = _label_maps_to("PERIOD_12M_TOT", state_cols); d["TOTAL"] = i + 5
+            i += 5
+            continue
+
+        # State-stock blocks: pattern is "After Sto | Σ 3M Ave |
+        # <STATE>.STOCK | PORT | WATER | FAC | TOTAL" (7 cols per
+        # state, then a 5-col national block after WA).
+        if h in ("N.STOCK", "Q.STOCK", "V.STOCK", "W.STOCK"):
+            st = {"N.STOCK": "NSW", "Q.STOCK": "QLD",
+                  "V.STOCK": "VIC", "W.STOCK": "WA"}[h]
+            cmap.setdefault("STATE_STOCK", {})[st] = col
+            # PORT/WATER/FAC follow in the next three cells
+            if norm(header[i+1]).upper() == "PORT":
+                cmap.setdefault("STATE_PORT",  {})[st] = i + 2
+            if norm(header[i+2]).upper() == "WATER":
+                cmap.setdefault("STATE_WATER", {})[st] = i + 3
+            if norm(header[i+3]).upper() == "FAC":
+                cmap.setdefault("STATE_FAC",   {})[st] = i + 4
+            i += 5   # jump past After Sto / Σ 3M Ave / STOCK / PORT / WATER / FAC / TOTAL
+            continue
+
+        # National total block: STOCK / PORT / WATER / FAC / TOTAL
+        if h == "STOCK" and "TOTAL_STOCK" not in cmap:
+            cmap["TOTAL_STOCK"] = col
+            if norm(header[i+1]).upper() == "PORT":
+                cmap["TOTAL_PORT"]  = i + 2
+            if norm(header[i+2]).upper() == "WATER":
+                cmap["TOTAL_WATER"] = i + 3
+            if norm(header[i+3]).upper() == "FAC":
+                cmap["TOTAL_FAC"]   = i + 4
+            if norm(header[i+4]).upper() == "TOTAL":
+                cmap["TOTAL_ALL"]   = i + 5
+            i += 5
+            continue
+
+        i += 1
+
+    cmap["_HEADER_ROW"] = header_row
+    return cmap
 
 
 # ── Marketing line (Group in the user's vernacular) ──────────────
@@ -280,25 +430,69 @@ def load_stock_data():
     t0 = time.time()
     wb = openpyxl.load_workbook(path, data_only=True, keep_vba=False, read_only=True)
 
-    # MM sheet: CODE → Merge Code map
+    # ── MM sheet: locate CODE + Merge Code columns by header name ──
+    # so a re-ordered MM sheet still parses.  Also survives when
+    # someone adds a header row above the data.
+    merge_to_mcodes = {}
     mc_to_mcode = {}
+    mm_order = []
     if "MM" in wb.sheetnames:
         ws = wb["MM"]
-        for i, r in enumerate(ws.iter_rows(min_row=2, values_only=True)):
-            if not r or r[0] is None or r[1] is None:
+        code_col = merge_col = None
+        header_row_mm = 1
+        for r in range(1, min(6, ws.max_row + 1)):
+            found = {"CODE": None, "MERGE CODE": None, "MERGE_CODE": None}
+            for c in range(1, ws.max_column + 1):
+                v = str(ws.cell(row=r, column=c).value or "").strip().upper()
+                if v in found:
+                    found[v] = c
+            if found["CODE"] and (found["MERGE CODE"] or found["MERGE_CODE"]):
+                code_col     = found["CODE"]
+                merge_col    = found["MERGE CODE"] or found["MERGE_CODE"]
+                header_row_mm = r
+                break
+        if code_col is None:
+            code_col, merge_col, header_row_mm = 1, 2, 1
+        for r in ws.iter_rows(min_row=header_row_mm + 1, values_only=True):
+            if not r:
                 continue
-            code, merge = r[0], r[1]
-            if isinstance(merge, (int, float)):
-                mc_to_mcode.setdefault(int(merge), int(code) if isinstance(code, (int, float)) else code)
+            code = r[code_col  - 1] if len(r) >= code_col  else None
+            merg = r[merge_col - 1] if len(r) >= merge_col else None
+            if code is None or merg is None:
+                continue
+            if not isinstance(merg, (int, float)):
+                continue
+            try:
+                code_i  = int(code) if isinstance(code, (int, float)) else code
+                merge_i = int(merg)
+            except (TypeError, ValueError):
+                continue
+            merge_to_mcodes.setdefault(merge_i, []).append(code_i)
+            mm_order.append((code_i, merge_i))
+            mc_to_mcode.setdefault(merge_i, code_i)
 
-    # Sheet2 SKU master: M CODE → detail dict
+    # ── Sheet2 SKU master ─────────────────────────────────────────
+    # Locate the header row by looking for the "M CODE" label; the
+    # SKU rows start on the line right after.  Column order is picked
+    # up from the header row itself so re-ordered / renamed columns
+    # still parse (matching on the label, not the position).
     m_master = {}
     if "Sheet2" in wb.sheetnames:
         ws = wb["Sheet2"]
-        rows = ws.iter_rows(min_row=1, values_only=True)
-        header = next(rows, None) or ()
+        header = None
+        header_row_s2 = 1
+        for r in range(1, min(6, ws.max_row + 1)):
+            vals = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
+            up = [str(v or "").strip().upper() for v in vals]
+            if "M CODE" in up or "M_CODE" in up or "MCODE" in up:
+                header = vals
+                header_row_s2 = r
+                break
+        if header is None:
+            header = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+            header_row_s2 = 1
         idx = {name: i for i, name in enumerate(header) if isinstance(name, str)}
-        for r in rows:
+        for r in ws.iter_rows(min_row=header_row_s2 + 1, values_only=True):
             if not r or r[0] is None:
                 continue
             m = r[0]
@@ -319,70 +513,126 @@ def load_stock_data():
                 "factory":     r[idx["Factory"]]     if "Factory"     in idx else "",
                 "origin":      r[idx["Origin"]]      if "Origin"      in idx else "",
                 "au":          r[idx["AU"]]          if "AU"          in idx else "",
+                "old_stock":   r[idx["OLD STOCK"]]   if "OLD STOCK"   in idx else "",
             }
 
-    # Stock Status Worksheet — main data
+    def _num(v):
+        if v is None:
+            return 0.0
+        if isinstance(v, str):
+            if v.startswith('#'):
+                return 0.0
+            try:
+                return float(v)
+            except ValueError:
+                return 0.0
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # ── Pass 1: read Stock Status Worksheet, keyed by Merge Code ──
+    # Each Merge Code carries the stock/demand aggregates; the pass
+    # that emits per-M-CODE rows will look up these values by merge.
+    stock_by_merge = {}
     ws = wb["Stock Status Worksheet"]
-    rows_out = []
-    for r in ws.iter_rows(min_row=3, values_only=True):
+    # Auto-detect the header row and build a semantic column map so
+    # inserted/moved columns don't break the loader.
+    cmap = _scan_stock_header(ws)
+    header_row_ssw = cmap.pop("_HEADER_ROW", 2)
+    data_start_row = header_row_ssw + 1
+
+    # Convenience lookups, with fallback to the hard-coded defaults
+    # if the header scan didn't manage to identify a section (older
+    # workbook variants).
+    def _c(key, fallback):
+        v = cmap.get(key)
+        return v if v is not None else fallback
+    c_merge   = _c("MERGE_CODE",     COL_MERGE_CODE)
+    c_group   = _c("GROUP",          COL_GROUP)
+    c_classif = _c("CLASSIFICATION", COL_CLASSIF)
+
+    state_stock_cols = cmap.get("STATE_STOCK") or COL_STATE_STOCK
+    state_port_cols  = cmap.get("STATE_PORT")  or {s: COL_STATE_PIPELINE[s][0] for s in STATES}
+    state_water_cols = cmap.get("STATE_WATER") or {s: COL_STATE_PIPELINE[s][1] for s in STATES}
+    state_fac_cols   = cmap.get("STATE_FAC")   or {s: COL_STATE_PIPELINE[s][2] for s in STATES}
+
+    state_3m_cols    = (cmap.get("PERIOD_3M")  or {}).get if isinstance(cmap.get("PERIOD_3M"), dict) else None
+    if cmap.get("PERIOD_3M"):
+        state_3m_map = {s: cmap["PERIOD_3M"][s] for s in STATES if s in cmap["PERIOD_3M"]}
+        total_3m_col = cmap["PERIOD_3M"].get("TOTAL", COL_TOTAL_3M)
+    else:
+        state_3m_map = COL_STATE_3M
+        total_3m_col = COL_TOTAL_3M
+
+    if cmap.get("PERIOD_12M"):
+        total_12m_col = cmap["PERIOD_12M"].get("TOTAL", COL_TOTAL_12M)
+    else:
+        total_12m_col = COL_TOTAL_12M
+
+    total_stock_col = _c("TOTAL_STOCK", COL_TOTAL_STOCK)
+    total_all_col   = _c("TOTAL_ALL",   COL_TOTAL_TOTAL)
+
+    # History start column (the -12M NSW cell).  Prefer the scanned
+    # HIST[12] map; fall back to the historical default (col 4).
+    hist_map = cmap.get("HIST") or {}
+    if 12 in hist_map:
+        hist_start = hist_map[12]["NSW"]
+    else:
+        hist_start = HIST_COL_START
+
+    for r in ws.iter_rows(min_row=data_start_row, values_only=True):
         if not r:
             continue
-        mc = r[COL_MERGE_CODE - 1]
+        mc = r[c_merge - 1] if len(r) >= c_merge else None
         if mc is None:
             continue
         try:
             mc = int(mc)
         except Exception:
             continue
-        group   = r[COL_GROUP - 1]
-        classif = r[COL_CLASSIF - 1]
+        group   = r[c_group   - 1] if len(r) >= c_group   else None
+        classif = r[c_classif - 1] if len(r) >= c_classif else None
 
-        def _num(v):
-            if v is None:
-                return 0.0
-            if isinstance(v, str):
-                if v.startswith('#'):
-                    return 0.0
-                try:
-                    return float(v)
-                except ValueError:
-                    return 0.0
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return 0.0
-
-        state_stock = {s: _num(r[COL_STATE_STOCK[s] - 1]) for s in STATES}
-        # Pipeline decomposed so the drill-down can show Port/Water/Factory
-        # separately.  Order = (PORT, WATER, FAC) per COL_STATE_PIPELINE.
+        def _cell(col):
+            return r[col - 1] if col and len(r) >= col else None
+        state_stock = {s: _num(_cell(state_stock_cols[s])) for s in STATES}
         state_pipe_parts = {
             s: {
-                "port":  _num(r[COL_STATE_PIPELINE[s][0] - 1]),
-                "water": _num(r[COL_STATE_PIPELINE[s][1] - 1]),
-                "fac":   _num(r[COL_STATE_PIPELINE[s][2] - 1]),
+                "port":  _num(_cell(state_port_cols[s])),
+                "water": _num(_cell(state_water_cols[s])),
+                "fac":   _num(_cell(state_fac_cols[s])),
             } for s in STATES
         }
         state_pipe = {s: sum(state_pipe_parts[s].values()) for s in STATES}
-        state_3m   = {s: _num(r[COL_STATE_3M[s] - 1]) for s in STATES}
-        total_stock = _num(r[COL_TOTAL_STOCK - 1])
-        total_all   = _num(r[COL_TOTAL_TOTAL - 1])
-        total_3m    = _num(r[COL_TOTAL_3M - 1])
+        state_3m   = {s: _num(_cell(state_3m_map[s])) for s in STATES}
+        total_stock = _num(_cell(total_stock_col))
+        total_all   = _num(_cell(total_all_col))
+        total_3m    = _num(_cell(total_3m_col))
 
-        # 12-month sales history per state — used by the drill-down modal
-        # to draw a per-state line chart.  Stored as [-12M … -1M] so the
-        # front-end can plot in chronological order.
+        # 12-month sales history per state.  Prefer the scanned per-
+        # month HIST map when present; otherwise fall back to the
+        # historical 5-column-per-month stride from hist_start.
         history = {"NSW": [], "QLD": [], "VIC": [], "WA": [], "TOTAL": []}
-        for m in range(HIST_MONTHS):
-            base = HIST_COL_START + m * HIST_BLOCK_LEN
-            history["NSW"].append(_num(r[base - 1]))
-            history["QLD"].append(_num(r[base + 0]))
-            history["VIC"].append(_num(r[base + 1]))
-            history["WA"].append(_num(r[base + 2]))
-            history["TOTAL"].append(_num(r[base + 3]))
+        for month in range(HIST_MONTHS):
+            m_back = 12 - month   # -12M … -1M
+            if m_back in hist_map:
+                d = hist_map[m_back]
+                history["NSW"].append(_num(_cell(d["NSW"])))
+                history["QLD"].append(_num(_cell(d["QLD"])))
+                history["VIC"].append(_num(_cell(d["VIC"])))
+                history["WA"].append(_num(_cell(d["WA"])))
+                history["TOTAL"].append(_num(_cell(d.get("TOTAL", d["WA"] + 1))))
+            else:
+                base = hist_start + month * HIST_BLOCK_LEN
+                history["NSW"].append(_num(_cell(base)))
+                history["QLD"].append(_num(_cell(base + 1)))
+                history["VIC"].append(_num(_cell(base + 2)))
+                history["WA"].append(_num(_cell(base + 3)))
+                history["TOTAL"].append(_num(_cell(base + 4)))
 
-        # 12M average (from the pre-computed column) — used as an
-        # alternate demand basis for Merge_MOI(PPL/3M).
-        total_12m = _num(r[COL_TOTAL_12M - 1]) if COL_TOTAL_12M else 0.0
+        # 12M average
+        total_12m = _num(_cell(total_12m_col))
 
         # ── Period-average demand ─────────────────────────────────
         # Every period average is computed the SAME way — sum three
@@ -403,35 +653,89 @@ def load_stock_data():
         # Max-demand basis: the larger of {3M avg, "4-6M" avg, 12M avg}
         max_demand = max(total_3m, avg_6m_old, total_12m) if any([total_3m, avg_6m_old, total_12m]) else 0.0
 
-        # Enrich via MM → Sheet2
-        mcode = mc_to_mcode.get(mc)
-        detail = m_master.get(mcode, {}) if mcode else {}
+        stock_by_merge[mc] = {
+            "group_raw":       group,
+            "classification":  classif or "",
+            "state_stock":     state_stock,
+            "state_pipe_parts":state_pipe_parts,
+            "state_pipe":      state_pipe,
+            "state_3m":        state_3m,
+            "total_stock":     total_stock,
+            "total_all":       total_all,
+            "total_3m":        total_3m,
+            "total_12m":       total_12m,
+            "p_3m":            p_3m,
+            "avg_6m_old":      avg_6m_old,
+            "avg_7_9m":        avg_7_9m,
+            "avg_10_12m":      avg_10_12m,
+            "max_demand":      max_demand,
+            "history":         history,
+        }
 
-        # Size string: try "SW/SR R Inch" (205/55R16)
+    # ── Pass 2: iterate every M CODE in MM order and emit one row
+    # per M CODE, sharing the merge-level stock/demand with siblings.
+    rows_out = []
+    seen_pairs = set()   # avoid MM duplicates
+    for m_code, merge_code in mm_order:
+        if (m_code, merge_code) in seen_pairs:
+            continue
+        seen_pairs.add((m_code, merge_code))
+        stk = stock_by_merge.get(merge_code)
+        if stk is None:
+            # Merge Code has no stock row in the worksheet — skip so the
+            # dashboard doesn't misreport a phantom SKU.
+            continue
+        mc = merge_code
+        detail = m_master.get(m_code, {})
+        # Fallback: if Sheet2 has no row for this specific M CODE, use
+        # any sibling M CODE in the same Merge — same size / brand /
+        # pattern applies (SKUs share the merge because they're the
+        # same product).
+        if not detail.get("description"):
+            for sibling in merge_to_mcodes.get(merge_code, []):
+                if sibling != m_code and sibling in m_master and m_master[sibling].get("description"):
+                    detail = {**m_master[sibling], **detail}
+                    break
+
+        raw_desc = detail.get("description", "")
+        pattern  = _extract_pattern(raw_desc)
+        line     = _marketing_line(pattern)
+        eff_group = (stk["group_raw"] or detail.get("group") or "").strip()
+
+        # Size: preserve whatever the Description's FIRST comma-field
+        # says.  Preferred (185R14C, 205/55R16, 33X12.5R15…) — only
+        # composes from SW/SR/Inch if the description has nothing.
         size = ""
-        if detail.get("sw") and detail.get("sr") and detail.get("inch"):
+        if raw_desc:
+            first = raw_desc.split(",", 1)[0].strip()
+            if first:
+                size = first
+        if not size and detail.get("sw") and detail.get("sr") and detail.get("inch"):
             try:
-                sw = int(detail["sw"])
-                sr = int(detail["sr"])
-                inch = detail["inch"]
-                # Inch may be float like 24.5 (truck)
+                sw = int(detail["sw"]); sr = int(detail["sr"]); inch = detail["inch"]
                 inch_s = str(inch).rstrip('0').rstrip('.') if isinstance(inch, float) else str(inch)
                 size = f"{sw}/{sr}R{inch_s}"
             except Exception:
                 pass
 
-        # Stock-only MOI kept as a diagnostic figure, but classification
-        # is now based on the more holistic Merge_MOI(PPL/3M) —
-        # (Stock + Port + Water + Factory) ÷ MAX(3M, 6M-old, 12M).  This
-        # honours the user's request that Shortage → No move buckets be
-        # computed at Merge-Code level in a way that credits the
-        # incoming pipeline and uses the largest observed demand.
-        moh = (total_stock / total_3m) if total_3m > 0 else None
+        # Fetch merge-level metrics
+        state_stock = stk["state_stock"]
+        state_pipe_parts = stk["state_pipe_parts"]
+        state_pipe  = stk["state_pipe"]
+        state_3m    = stk["state_3m"]
+        total_stock = stk["total_stock"]
+        total_all   = stk["total_all"]
+        total_3m    = stk["total_3m"]
+        total_12m   = stk["total_12m"]
+        p_3m        = stk["p_3m"]
+        avg_6m_old  = stk["avg_6m_old"]
+        avg_7_9m    = stk["avg_7_9m"]
+        avg_10_12m  = stk["avg_10_12m"]
+        max_demand  = stk["max_demand"]
+        history     = stk["history"]
+        classif     = stk["classification"]
 
-        raw_desc = detail.get("description", "")
-        pattern  = _extract_pattern(raw_desc)
-        line     = _marketing_line(pattern)
-        eff_group = (group or detail.get("group") or "").strip()
+        moh = (total_stock / total_3m) if total_3m > 0 else None
 
         # MOI including entire Factory pipeline (incoming KR/JP/HU) —
         # a longer-horizon planning metric than the current MOI.
@@ -468,9 +772,24 @@ def load_stock_data():
         is_low_prof   = sr_num   is not None and sr_num   < 50
         is_suv_flag   = _is_suv(line, pattern)
 
+        # F/O · OPE indicator from Sheet2's AU column.  Kept as a
+        # compact string so a filter dropdown can key on it:
+        #   'F/O' = Fade Out    'OPE'         = OE / open-market SKU
+        #   'OE A/S' = OE spare  'F/O + OPE'  = both flags set
+        au = str(detail.get("au", "") or "").upper().strip()
+        old_stock = str(detail.get("old_stock", "") or "").upper().strip()
+        sku_flags = []
+        if "FADE OUT" in au or old_stock == "YES":
+            sku_flags.append("F/O")
+        if "OPE" in au and "OE A/S" not in au:
+            sku_flags.append("OPE")
+        if "OE A/S" in au:
+            sku_flags.append("OE A/S")
+        sku_status = " + ".join(sku_flags) if sku_flags else "Active"
+
         rows_out.append({
             "merge_code":     mc,
-            "m_code":         mcode,
+            "m_code":         m_code,
             "group":          eff_group,
             "classification": classif or "",
             "brand":          detail.get("brand", ""),
@@ -484,6 +803,8 @@ def load_stock_data():
             "ss":             detail.get("ss", ""),
             "factory":        detail.get("factory", ""),
             "origin":         detail.get("origin", ""),
+            # F/O · OPE indicator
+            "sku_status":     sku_status,     # 'F/O' / 'OPE' / 'F/O + OPE' / 'OE A/S' / 'Active'
             # Quick-filter flags used by the top chip bar
             "category":       category,        # "PCLT" | "TBR" | "Other"
             "is_18plus":      is_18plus,
@@ -628,6 +949,7 @@ def _aggregate(rows):
             "sr":             str(r["sr"])   if r["sr"]   not in (None, "") else "",
             "li":             str(r["li"])   if r["li"]   not in (None, "") else "",
             "ss":             str(r["ss"])   if r["ss"]   not in (None, "") else "",
+            "sku_status":     r.get("sku_status", "Active"),
             "category":       r["category"],
             "is_18plus":      r["is_18plus"],
             "is_low_profile": r["is_low_profile"],
@@ -928,9 +1250,24 @@ table.dt thead th.sort-desc .sort::after { content:'▼'; opacity:1; }
 table.dt tbody td { padding:5px 8px; border-bottom:1px solid #F1F3F5;
                     white-space:nowrap; font-size:11.5px; }
 table.dt tbody tr { cursor:pointer; }
+/* Zebra stripes on even rows (soft grey) so the wide table stays
+   scannable across many columns. */
+table.dt tbody tr:nth-child(even) td { background:#F5F7FA; }
 table.dt tbody tr:hover td { background:var(--hover); }
 table.dt tbody tr.selected td { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td { background:#BFDBFE; }
+/* Merge-code separator: first row of each new Merge Code carries
+   `merge-break` and draws a heavy top border so the merge groups
+   read cleanly. */
+table.dt tbody tr.merge-break td { border-top:2px solid #37474F; }
+/* Sticky Total row at the top of the tbody, showing sums over the
+   current filtered view. */
+table.dt tbody tr.total-row td { background:#EEF3F8 !important;
+    font-weight:700; color:var(--hdr1); border-top:2px solid var(--hdr1);
+    border-bottom:2px solid var(--hdr1); position:sticky; top:24px; z-index:1; }
+/* Darker/blue treatment for the (3M) demand parenthesis so the
+   sales figure reads as a distinct piece of data next to stock. */
+.dem-parens { color:#1976D2 !important; font-weight:600; font-size:10.5px; }
 table.dt .r { text-align:right; font-family:'IBM Plex Mono',monospace;
               font-variant-numeric:tabular-nums; }
 /* Vertical group dividers: draw a solid left border on the FIRST
@@ -1063,7 +1400,6 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
     <button class="icon-btn" onclick="emailScreen('page','Full dashboard')"
             title="Capture the whole screen and start an Outlook mail">✉ Email screen</button>
     <a href="/">Dashboard</a>
-    <a href="/price">Price</a>
     <a href="/stock_balance" class="active">Stock Balance</a>
   </nav>
 </div>
@@ -1075,6 +1411,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
   <div class="ms" data-key="state"><button class="ms-btn">State</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="brand"><button class="ms-btn">Brand</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="product"><button class="ms-btn">Product</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="sku_status"><button class="ms-btn">F/O · OPE</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="group"><button class="ms-btn">Group</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="line"><button class="ms-btn">Marketing Line</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="inch"><button class="ms-btn">Rim (inch)</button><div class="ms-panel"></div></div>
@@ -1280,48 +1617,57 @@ function pill(gr) {
    so the cell doesn't look busy for dead SKUs. */
 function demSuffix(demand) {
     if (demand == null || demand === 0) return '';
-    return ' <span style="color:#78909C;font-weight:400">(' + FMT_1.format(demand) + ')</span>';
+    /* Sales figures render as integers on screen (rounded from the
+       raw monthly average); the exported XLSX still carries the
+       precise decimal for downstream analysis. */
+    return ' <span class="dem-parens">(' + FMT_INT.format(Math.round(demand)) + ')</span>';
 }
 
 /* ── Multi-select filter state ── */
 const filterState = {
-    status:  new Set(),
-    state:   new Set(),
-    brand:   new Set(),
-    product: new Set(),   // PCLT / TBR / Other  (r.category)
-    group:   new Set(),
-    line:    new Set(),
-    inch:    new Set(),
-    pattern: new Set(),
+    status:     new Set(),
+    state:      new Set(),
+    brand:      new Set(),
+    product:    new Set(),      // PCLT / TBR / Other  (r.category)
+    sku_status: new Set(),      // Active / F/O / OPE / OE A/S
+    group:      new Set(),
+    line:       new Set(),
+    inch:       new Set(),
+    pattern:    new Set(),
 };
 const KEY_LBL = { status:'Status', state:'State', brand:'Brand',
-                  product:'Product', group:'Group', line:'Marketing Line',
+                  product:'Product', sku_status:'F/O · OPE',
+                  group:'Group', line:'Marketing Line',
                   inch:'Rim (inch)', pattern:'Pattern' };
 
 function buildFilterOptions() {
     const values = { status: ['shortage','balanced','surplus','serious_surplus','no_move'],
                      state: STATES.slice(),
-                     brand: new Set(), product: new Set(), group: new Set(),
-                     line: new Set(), inch: new Set(), pattern: new Set() };
+                     brand: new Set(), product: new Set(), sku_status: new Set(),
+                     group: new Set(), line: new Set(), inch: new Set(), pattern: new Set() };
     DATA.all_rows.forEach(r => {
-        if (r.brand)    values.brand.add(r.brand);
-        if (r.category) values.product.add(r.category);
-        if (r.group)    values.group.add(r.group);
-        if (r.line)     values.line.add(r.line);
-        if (r.inch)     values.inch.add(r.inch);
-        if (r.pattern)  values.pattern.add(r.pattern);
+        if (r.brand)      values.brand.add(r.brand);
+        if (r.category)   values.product.add(r.category);
+        if (r.sku_status) values.sku_status.add(r.sku_status);
+        if (r.group)      values.group.add(r.group);
+        if (r.line)       values.line.add(r.line);
+        if (r.inch)       values.inch.add(r.inch);
+        if (r.pattern)    values.pattern.add(r.pattern);
     });
     /* Product order: PCLT first (biggest segment), TBR next, Other last */
     const prodOrder = ['PCLT','TBR','Other'];
+    /* F/O · OPE order: Active first, then flagged buckets */
+    const skuOrder = ['Active','F/O','OPE','F/O + OPE','OE A/S'];
     return {
-        status:  values.status,
-        state:   values.state,
-        brand:   [...values.brand].sort(),
-        product: prodOrder.filter(p => values.product.has(p)),
-        group:   [...values.group].sort(),
-        line:    [...values.line].sort(),
-        inch:    [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
-        pattern: [...values.pattern].sort(),
+        status:     values.status,
+        state:      values.state,
+        brand:      [...values.brand].sort(),
+        product:    prodOrder.filter(p => values.product.has(p)),
+        sku_status: skuOrder.filter(s => values.sku_status.has(s)),
+        group:      [...values.group].sort(),
+        line:       [...values.line].sort(),
+        inch:       [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
+        pattern:    [...values.pattern].sort(),
     };
 }
 const OPT = buildFilterOptions();
@@ -1388,10 +1734,11 @@ function resetFilters() {
 
 /* ── Row filter (used by every derived section) ── */
 function rowPasses(r) {
-    if (filterState.status.size  && !filterState.status.has(r.status))     return false;
-    if (filterState.brand.size   && !filterState.brand.has(r.brand))       return false;
-    if (filterState.product.size && !filterState.product.has(r.category))  return false;
-    if (filterState.group.size   && !filterState.group.has(r.group))       return false;
+    if (filterState.status.size     && !filterState.status.has(r.status))         return false;
+    if (filterState.brand.size      && !filterState.brand.has(r.brand))           return false;
+    if (filterState.product.size    && !filterState.product.has(r.category))      return false;
+    if (filterState.sku_status.size && !filterState.sku_status.has(r.sku_status)) return false;
+    if (filterState.group.size      && !filterState.group.has(r.group))           return false;
     if (filterState.line.size    && !filterState.line.has(r.line))       return false;
     if (filterState.inch.size    && !filterState.inch.has(r.inch))       return false;
     if (filterState.pattern.size && !filterState.pattern.has(r.pattern)) return false;
@@ -1598,8 +1945,8 @@ function buildTableHead() {
     const nonState = [
         ['merge_code','Merge'], ['m_code','M CODE'], ['brand','Brand'],
         ['line','Marketing Line'], ['pattern','Pattern'],
-        ['group','Group'], ['size','Size'], ['inch','Inch'],
-        ['li_ss','LI/SS'],
+        ['group','Group'], ['sku_status','F/O·OPE'],
+        ['size','Size'], ['inch','Inch'], ['li_ss','LI/SS'],
     ];
     const stateColour = { NSW:'#1976D2', QLD:'#EF6C00', VIC:'#8E24AA', WA:'#00897B' };
     let h = '';
@@ -1691,6 +2038,7 @@ function sortKey(r, col) {
         case 'wa':  return r.state_stock.WA  || 0;
         case 'li_ss': return (parseFloat(r.li) || 0);
         case 'inch':  return (parseFloat(r.inch) || 0);
+        case 'sku_status':     return r.sku_status || 'Active';
         case 'moh':            return r.moh          == null ? -1 : r.moh;
         case 'merge_moi':      return r.moh          == null ? -1 : r.moh;
         case 'merge_moi_ppl':  return r.moh_plus_max == null ? -1 : r.moh_plus_max;
@@ -1723,23 +2071,54 @@ function renderTable() {
     const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
     let src = rawSrc.filter(rowPasses);
 
-    /* ── MOI data-bar scale (Excel-style Conditional Format) ──
-       Compute the LARGEST MOI value across MOI + Merge_MOI(PPL/3M)
-       in the current view so all three MOI columns share the same
-       visual scale — a 4.8 in one column reads the same length as
-       a 4.8 in another.  We cap the reference max at 12 months so
-       a single outlier doesn't compress the whole column. */
-    let barMax = 0;
+    /* ── MOI data-bar scale — INDEPENDENT per column ──
+       Each of the three MOI columns computes its own reference max
+       so a small value in Merge_MOI(PPL/3M) still gets a visible
+       bar when the plain MOI column has an outlier and vice-versa.
+       Each scale is capped at 12 months so one giant SKU can't
+       compress the rest into invisible slivers. */
+    let mohMax = 0, mppMax = 0;
     src.forEach(r => {
-        if (r.moh          != null && r.moh          > barMax) barMax = r.moh;
-        if (r.moh_plus_max != null && r.moh_plus_max > barMax) barMax = r.moh_plus_max;
+        if (r.moh          != null && r.moh          > mohMax) mohMax = r.moh;
+        if (r.moh_plus_max != null && r.moh_plus_max > mppMax) mppMax = r.moh_plus_max;
     });
-    barMax = Math.min(Math.max(barMax, 1), 12);
-    const moiBar = v => {
+    mohMax = Math.min(Math.max(mohMax, 1), 12);
+    mppMax = Math.min(Math.max(mppMax, 1), 12);
+    const moiBarFor = (v, scale) => {
         if (v == null || v <= 0) return '';
-        const pct = Math.min(v / barMax, 1) * 100;
+        const pct = Math.min(v / scale, 1) * 100;
         return 'background:linear-gradient(to right,#C8E6C9 ' + pct + '%, transparent ' + pct + '%);';
     };
+    const moiBar    = v => moiBarFor(v, mohMax);
+    const moiBarPPL = v => moiBarFor(v, mppMax);
+
+    /* ── Aggregate row (rendered at the top) ──
+       Sums stock, pipeline, 3M demand + period averages over the
+       visible src.  MOI figures are re-computed FROM these sums,
+       not averaged, so the Total MOI = Total Stock ÷ Total 3M. */
+    let ttlStock=0, ttlAll=0, ttl3M=0, ttl6=0, ttl79=0, ttl1012=0, ttlMax=0;
+    const ttlStateStock = {NSW:0,QLD:0,VIC:0,WA:0}, ttlState3M = {NSW:0,QLD:0,VIC:0,WA:0};
+    const ttlPipe = {NSW:{port:0,water:0,fac:0}, QLD:{port:0,water:0,fac:0},
+                     VIC:{port:0,water:0,fac:0}, WA:{port:0,water:0,fac:0}};
+    src.forEach(r => {
+        ttlStock += r.total_stock || 0;
+        ttlAll   += r.total_all   || 0;
+        ttl3M    += r.total_3m    || 0;
+        ttl6     += r.avg_6m_old  || 0;
+        ttl79    += r.avg_7_9m    || 0;
+        ttl1012  += r.avg_10_12m  || 0;
+        ttlMax   += r.max_demand  || 0;
+        STATES.forEach(s => {
+            ttlStateStock[s] += r.state_stock[s]  || 0;
+            ttlState3M[s]    += r.state_3m[s]     || 0;
+            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+            ttlPipe[s].port  += pp.port  || 0;
+            ttlPipe[s].water += pp.water || 0;
+            ttlPipe[s].fac   += pp.fac   || 0;
+        });
+    });
+    const ttlMOI  = ttl3M   > 0 ? (ttlStock / ttl3M)  : null;
+    const ttlPPL  = ttlMax  > 0 ? (ttlAll   / ttlMax) : null;
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -1777,11 +2156,57 @@ function renderTable() {
     };
 
     const body = document.getElementById('tbl-body');
-    body.innerHTML = src.slice(0, 800).map(r => {
+
+    /* ── Total row (rendered at the top) ── */
+    const nonStateCount = 10;   /* Merge / M CODE / Brand / Line /
+                                   Pattern / Group / F/O·OPE / Size /
+                                   Inch / LI·SS = 10 non-numeric cols */
+    let totalRow = '<tr class="total-row"><td colspan="' + nonStateCount + '">TOTAL IN VIEW · '
+                 + fmtI(src.length) + ' rows</td>';
+    /* State cells for the Total row */
+    if (showPipeline) {
+        STATES.forEach((s, i) => {
+            totalRow += '<td class="r' + (i === 0 ? ' grp-start' : '') + '">' + fmtI(ttlStateStock[s]) + '</td>'
+                     +  '<td class="r">' + fmtI(ttlPipe[s].port)  + '</td>'
+                     +  '<td class="r">' + fmtI(ttlPipe[s].water) + '</td>'
+                     +  '<td class="r">' + fmtI(ttlPipe[s].fac)   + '</td>';
+        });
+        const tp = STATES.reduce((s,k)=>s+ttlPipe[k].port,0);
+        const tw = STATES.reduce((s,k)=>s+ttlPipe[k].water,0);
+        const tf = STATES.reduce((s,k)=>s+ttlPipe[k].fac,0);
+        totalRow += '<td class="r grp-start">' + fmtI(ttlStock) + '</td>'
+                 +  '<td class="r">' + fmtI(tp) + '</td>'
+                 +  '<td class="r">' + fmtI(tw) + '</td>'
+                 +  '<td class="r">' + fmtI(tf) + '</td>';
+    } else {
+        STATES.forEach((s, i) => {
+            totalRow += '<td class="r' + (i === 0 ? ' grp-start' : '') + '">'
+                     + fmtI(ttlStateStock[s]) + demSuffix(ttlState3M[s]) + '</td>';
+        });
+        totalRow += '<td class="r grp-start">' + fmtI(ttlStock) + demSuffix(ttl3M) + '</td>';
+    }
+    totalRow += '<td class="r grp-start" style="' + moiBar(ttlMOI) + '">' + (ttlMOI != null ? fmtF(ttlMOI, 1) : '—') + '</td>'
+             +  '<td class="r"           style="' + moiBar(ttlMOI) + '">' + (ttlMOI != null ? fmtF(ttlMOI, 1) : '—') + '</td>'
+             +  '<td class="r"           style="' + moiBarPPL(ttlPPL) + '">' + (ttlPPL != null ? fmtF(ttlPPL, 1) : '—') + '</td>'
+             +  '<td class="r grp-start">' + fmtF(ttl3M,   1) + '</td>'
+             +  '<td class="r">' + fmtF(ttl6,    1) + '</td>'
+             +  '<td class="r">' + fmtF(ttl79,   1) + '</td>'
+             +  '<td class="r">' + fmtF(ttl1012, 1) + '</td>'
+             +  '</tr>';
+
+    /* Track previous Merge Code for the merge-break separator */
+    let prevMerge = null;
+
+    body.innerHTML = totalRow + src.slice(0, 800).map(r => {
         const cls_mo = r.status === 'shortage' ? 'short'
                      : r.status === 'surplus'  ? 'sur'
                      : r.status === 'serious_surplus' ? 'ser' : '';
-        const selCls = selected.has(r.merge_code) ? ' class="selected"' : '';
+        const isNewMerge = r.merge_code !== prevMerge;
+        prevMerge = r.merge_code;
+        const classes = [];
+        if (selected.has(r.merge_code)) classes.push('selected');
+        if (isNewMerge)                 classes.push('merge-break');
+        const selCls = classes.length ? ' class="' + classes.join(' ') + '"' : '';
         let totalGroup;
         if (showPipeline) {
             const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
@@ -1792,6 +2217,13 @@ function renderTable() {
         } else {
             totalGroup = '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
         }
+        /* F/O · OPE flag rendered as a subtle pill so a scan of the
+           column reads "Active / F/O / OPE" at a glance. */
+        const skuStatus = r.sku_status || 'Active';
+        const skuPill = skuStatus === 'Active'
+            ? '<span style="color:#78909C;font-size:10.5px">—</span>'
+            : '<span style="display:inline-block;padding:1px 6px;border-radius:8px;'
+              + 'font-size:10px;font-weight:600;background:#FFEBEE;color:#C62828">' + skuStatus + '</span>';
         return '<tr' + selCls + ' data-mc="' + r.merge_code + '">'
             + '<td>' + r.merge_code + '</td>'
             + '<td>' + (r.m_code || '—') + '</td>'
@@ -1799,14 +2231,15 @@ function renderTable() {
             + '<td>' + (r.line || '—') + '</td>'
             + '<td>' + (r.pattern || '—') + '</td>'
             + '<td>' + pill(r.group) + '</td>'
+            + '<td>' + skuPill + '</td>'
             + '<td>' + (r.size || '—') + '</td>'
             + '<td>' + (r.inch || '—') + '</td>'
             + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
             + stateCells(r)
             + totalGroup
-            + '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)          + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)          + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
+            + '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
             + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
             + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
             + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
