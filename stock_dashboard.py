@@ -686,15 +686,26 @@ def load_stock_data():
             # dashboard doesn't misreport a phantom SKU.
             continue
         mc = merge_code
-        detail = m_master.get(m_code, {})
-        # Fallback: if Sheet2 has no row for this specific M CODE, use
-        # any sibling M CODE in the same Merge — same size / brand /
-        # pattern applies (SKUs share the merge because they're the
-        # same product).
-        if not detail.get("description"):
+        # Take THIS M CODE's Sheet2 record as the starting point, then
+        # patch any blank field from siblings in the same Merge.
+        # Siblings share the product (same size / brand / pattern) so
+        # borrowing the missing field is safe.
+        detail = dict(m_master.get(m_code, {}))
+        need_fields = ("description", "brand", "sw", "sr", "inch",
+                       "li", "ss", "group", "factory", "origin", "au")
+        missing = [f for f in need_fields if not detail.get(f)]
+        if missing:
             for sibling in merge_to_mcodes.get(merge_code, []):
-                if sibling != m_code and sibling in m_master and m_master[sibling].get("description"):
-                    detail = {**m_master[sibling], **detail}
+                if sibling == m_code:
+                    continue
+                sib = m_master.get(sibling, {})
+                if not sib:
+                    continue
+                for f in list(missing):
+                    if sib.get(f):
+                        detail[f] = sib[f]
+                        missing.remove(f)
+                if not missing:
                     break
 
         raw_desc = detail.get("description", "")
@@ -1260,6 +1271,16 @@ table.dt tbody tr.selected:hover td { background:#BFDBFE; }
    `merge-break` and draws a heavy top border so the merge groups
    read cleanly. */
 table.dt tbody tr.merge-break td { border-top:2px solid #37474F; }
+/* Sub Total row per merge — bold, quiet gold ground, tighter
+   border above so it visually clings to its M CODE siblings. */
+table.dt tbody tr.sub-total td { background:#FFF8E1 !important;
+    font-weight:700; border-top:1px dashed #94A3B8;
+    border-bottom:2px solid #94A3B8; }
+table.dt tbody tr.sub-total:hover td { background:#FFECB3 !important; }
+/* M CODE (non-total) rows keep a subtle band on the leftmost cell
+   so the reader's eye traces the merge group top-to-bottom. */
+table.dt tbody tr.mc-row td:first-child { font-family:'IBM Plex Mono',monospace;
+    font-weight:600; color:#37474F; }
 /* Sticky Total row at the top of the tbody, showing sums over the
    current filtered view. */
 table.dt tbody tr.total-row td { background:#EEF3F8 !important;
@@ -1762,10 +1783,28 @@ document.getElementById('fltr-search').addEventListener('input',
     (function() { let t; return function() { clearTimeout(t); t = setTimeout(refresh, 150); }; })());
 
 function currentSetOfRows() { return DATA.all_rows.filter(rowPasses); }
+/* Aggregate stats (KPI tiles, state cards, charts, Total row) count
+   each MERGE CODE once — the source workbook tracks stock/demand at
+   merge level, so counting once per M CODE row would multi-count.
+   The SKU table itself still lists every M CODE, so users see each
+   material and the aggregates stay honest. */
+function currentSetDedupedByMerge() {
+    const seen = new Set();
+    const out = [];
+    for (const r of DATA.all_rows) {
+        if (!rowPasses(r)) continue;
+        if (seen.has(r.merge_code)) continue;
+        seen.add(r.merge_code);
+        out.push(r);
+    }
+    return out;
+}
 
 /* ── KPI + state cards ── */
 function recomputeKPI() {
-    const rows = currentSetOfRows();
+    /* Deduped by Merge Code so status counts + Total Stock aren't
+       multiplied by however many M CODEs each merge carries. */
+    const rows = currentSetDedupedByMerge();
     let sh=0, bl=0, su=0, se=0, nm=0, totStk=0, tot3m=0;
     rows.forEach(r => {
         if      (r.status === 'shortage')        sh++;
@@ -1790,7 +1829,7 @@ function recomputeKPI() {
     document.getElementById('n-tot').textContent     = fmtI(sh + bl + su + se + nm);
 }
 function renderStateCards() {
-    const rows = currentSetOfRows();
+    const rows = currentSetDedupedByMerge();
     const host = document.getElementById('state-cards');
     const acc = {};
     STATES.forEach(s => acc[s] = {stock:0, pipeline:0, demand_3m:0,
@@ -1894,7 +1933,8 @@ function drawStackedBar(canvas_id, by, order, mode) {
     });
 }
 function renderCharts() {
-    const rows = currentSetOfRows();
+    /* Charts count SKUs — Merge Code is the SKU, so dedupe. */
+    const rows = currentSetDedupedByMerge();
     if (_lineChart) _lineChart.destroy();
     if (_inchChart) _inchChart.destroy();
     const byLine = computeBy(rows, r => r.line || 'Other');
@@ -2093,14 +2133,19 @@ function renderTable() {
     const moiBarPPL = v => moiBarFor(v, mppMax);
 
     /* ── Aggregate row (rendered at the top) ──
-       Sums stock, pipeline, 3M demand + period averages over the
-       visible src.  MOI figures are re-computed FROM these sums,
-       not averaged, so the Total MOI = Total Stock ÷ Total 3M. */
+       Deduped by Merge Code so each merge counts once even when many
+       M CODEs of that merge are visible in the table.  MOI figures
+       are re-computed FROM the sums (Total Stock ÷ Total 3M). */
+    const dedupSet = new Set(); const dedupSrc = [];
+    src.forEach(r => {
+        if (dedupSet.has(r.merge_code)) return;
+        dedupSet.add(r.merge_code); dedupSrc.push(r);
+    });
     let ttlStock=0, ttlAll=0, ttl3M=0, ttl6=0, ttl79=0, ttl1012=0, ttlMax=0;
     const ttlStateStock = {NSW:0,QLD:0,VIC:0,WA:0}, ttlState3M = {NSW:0,QLD:0,VIC:0,WA:0};
     const ttlPipe = {NSW:{port:0,water:0,fac:0}, QLD:{port:0,water:0,fac:0},
                      VIC:{port:0,water:0,fac:0}, WA:{port:0,water:0,fac:0}};
-    src.forEach(r => {
+    dedupSrc.forEach(r => {
         ttlStock += r.total_stock || 0;
         ttlAll   += r.total_all   || 0;
         ttl3M    += r.total_3m    || 0;
@@ -2119,6 +2164,22 @@ function renderTable() {
     });
     const ttlMOI  = ttl3M   > 0 ? (ttlStock / ttl3M)  : null;
     const ttlPPL  = ttlMax  > 0 ? (ttlAll   / ttlMax) : null;
+
+    /* ── Merge groups for Sub Total rows ──
+       Group visible src by merge_code so we can render M CODE rows
+       followed by a sub-total.  Preserves insertion order. */
+    const mergeGroups = new Map();
+    src.forEach(r => {
+        if (!mergeGroups.has(r.merge_code)) mergeGroups.set(r.merge_code, []);
+        mergeGroups.get(r.merge_code).push(r);
+    });
+    /* Cosmetic left-column band — cycles through 8 quiet hues so
+       adjacent merge groups are visually distinct without loud
+       colour bombing.  Same merge → same band on both M CODE rows
+       and its Sub Total. */
+    const BAND_COLOURS = ['#4A90E2','#F5A623','#7ED321','#BD10E0',
+                          '#50E3C2','#B8E986','#F8A5C2','#9013FE'];
+    const mergeBandColor = mc => BAND_COLOURS[Math.abs(mc) % BAND_COLOURS.length];
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -2194,9 +2255,141 @@ function renderTable() {
              +  '<td class="r">' + fmtF(ttl1012, 1) + '</td>'
              +  '</tr>';
 
-    /* Track previous Merge Code for the merge-break separator */
-    let prevMerge = null;
+    /* Walk merge groups; each group emits N M-CODE rows (with the
+       stock/sales columns blanked, since the numbers are shared at
+       merge level) followed by a Sub Total row that carries the
+       merge's actual figures.  Cosmetic left band ties each merge
+       group's rows together on the leftmost column. */
+    const rowsHtml = [];
+    let mergeIdx = 0;
+    let mergesRendered = 0;
+    const ROW_CAP = 800;   /* cap on visible rows to keep the DOM light */
+    for (const [mc, groupRows] of mergeGroups) {
+        if (mergesRendered >= ROW_CAP) break;
+        mergesRendered += groupRows.length;
+        const band = mergeBandColor(mc);
+        const rep  = groupRows[0];   /* representative for merge stats */
 
+        // Individual M CODE rows — product info only, stock columns dashed
+        groupRows.forEach((r, idxInGroup) => {
+            const isFirst = idxInGroup === 0;
+            const classes = ['mc-row'];
+            if (selected.has(r.merge_code)) classes.push('selected');
+            if (isFirst)                     classes.push('merge-break');
+            const selCls = ' class="' + classes.join(' ') + '"';
+            const bandStyle = ' style="border-left:4px solid ' + band + '"';
+            /* F/O · OPE pill re-rendered per row (each M CODE has its own) */
+            const skuStatus = r.sku_status || 'Active';
+            let skuPill;
+            if (skuStatus === 'Active') {
+                skuPill = '<span style="color:#78909C;font-size:10.5px">—</span>';
+            } else {
+                const tokens = skuStatus.split(/\s*\+\s*/);
+                skuPill = tokens.map(t => {
+                    const bg = t === 'F/O' ? '#FFEBEE' : t === 'OPE' ? '#FFF3E0' : '#E3F2FD';
+                    const fg = t === 'F/O' ? '#C62828' : t === 'OPE' ? '#E65100' : '#1565C0';
+                    return '<span style="display:inline-block;padding:1px 6px;'
+                         + 'border-radius:8px;font-size:10px;font-weight:600;'
+                         + 'white-space:nowrap;margin-right:2px;'
+                         + 'background:' + bg + ';color:' + fg + '">' + t + '</span>';
+                }).join('');
+            }
+            /* Blank-state cell factory: same column shape as the state
+               columns, but rendered as an em-dash so scanning down the
+               columns skips these rows.  The Sub Total row below
+               carries the actual figures. */
+            const blank = '<td class="r" style="color:#CFD8DC">—</td>';
+            const blanks = n => Array(n).fill(blank).join('');
+            let stateBlanks, totalBlanks;
+            if (showPipeline) {
+                stateBlanks = STATES.map((s,i) =>
+                    '<td class="r' + (i===0 ? ' grp-start' : '') + '" style="color:#CFD8DC">—</td>' + blanks(3)
+                ).join('');
+                totalBlanks = '<td class="r grp-start" style="color:#CFD8DC">—</td>' + blanks(3);
+            } else {
+                stateBlanks = STATES.map((s,i) =>
+                    '<td class="r' + (i===0 ? ' grp-start' : '') + '" style="color:#CFD8DC">—</td>'
+                ).join('');
+                totalBlanks = '<td class="r grp-start" style="color:#CFD8DC">—</td>';
+            }
+            const moiBlanks = '<td class="r grp-start" style="color:#CFD8DC">—</td>'
+                           + '<td class="r" style="color:#CFD8DC">—</td>'
+                           + '<td class="r" style="color:#CFD8DC">—</td>'
+                           + '<td class="r grp-start" style="color:#CFD8DC">—</td>'
+                           + '<td class="r" style="color:#CFD8DC">—</td>'
+                           + '<td class="r" style="color:#CFD8DC">—</td>'
+                           + '<td class="r" style="color:#CFD8DC">—</td>';
+            rowsHtml.push('<tr' + selCls.replace('"', '"') + ' data-mc="' + r.merge_code + '">'
+                + '<td' + bandStyle + '>' + r.merge_code + '</td>'
+                + '<td>' + (r.m_code || '—') + '</td>'
+                + '<td>' + (r.brand || '—') + '</td>'
+                + '<td>' + (r.line || '—') + '</td>'
+                + '<td>' + (r.pattern || '—') + '</td>'
+                + '<td>' + pill(r.group) + '</td>'
+                + '<td>' + skuPill + '</td>'
+                + '<td>' + (r.size || '—') + '</td>'
+                + '<td>' + (r.inch || '—') + '</td>'
+                + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
+                + stateBlanks + totalBlanks + moiBlanks
+                + '</tr>');
+        });
+
+        // Sub Total row for this merge — same shape as data rows but
+        // showing the aggregate figures.  Left band continues to tie
+        // it to its M CODE siblings.
+        const r = rep;
+        const cls_mo = r.status === 'shortage' ? 'short'
+                     : r.status === 'surplus'  ? 'sur'
+                     : r.status === 'serious_surplus' ? 'ser' : '';
+        let subState, subTotalGrp;
+        if (showPipeline) {
+            subState = STATES.map((s, i) => {
+                const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
+                return '<td class="r' + (i===0 ? ' grp-start' : '') + '">' + fmtI(r.state_stock[s]) + '</td>'
+                     + '<td class="r">' + fmtI(pp.port)  + '</td>'
+                     + '<td class="r">' + fmtI(pp.water) + '</td>'
+                     + '<td class="r">' + fmtI(pp.fac)   + '</td>';
+            }).join('');
+            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
+            subTotalGrp = '<td class="r grp-start">' + fmtI(r.total_stock) + '</td>'
+                        + '<td class="r">' + fmtI(tp) + '</td>'
+                        + '<td class="r">' + fmtI(tw) + '</td>'
+                        + '<td class="r">' + fmtI(tf) + '</td>';
+        } else {
+            subState = STATES.map((s, i) =>
+                '<td class="r' + (i===0 ? ' grp-start' : '') + '">'
+                + fmtI(r.state_stock[s]) + demSuffix(r.state_3m[s]) + '</td>'
+            ).join('');
+            subTotalGrp = '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
+        }
+        rowsHtml.push('<tr class="sub-total" data-mc="' + r.merge_code + '">'
+            + '<td style="border-left:4px solid ' + band + ';font-weight:700;color:' + band + '" '
+            +      'colspan="10">SUB TOTAL · Merge ' + r.merge_code + '</td>'
+            + subState + subTotalGrp
+            + '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
+            + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
+            + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
+            + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
+            + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>'
+            + '</tr>');
+        mergeIdx++;
+    }
+
+    body.innerHTML = totalRow + rowsHtml.join('');
+    /* Return early — the legacy per-row loop below is no longer
+       reached. */
+    if (true) {
+        /* Update row count summary */
+        const suffix = mergeGroups.size > ROW_CAP / 3 ? ' — showing first ' + ROW_CAP + ' rows' : '';
+        document.getElementById('row-count').textContent = fmtI(src.length) + ' M-CODE rows across ' + fmtI(mergeGroups.size) + ' merges' + suffix;
+        updateSelectionSummary(src);
+        return;
+    }
+
+    /* ------- DEAD CODE (legacy row-by-row rendering) ------- */
+    let prevMerge = null;
     body.innerHTML = totalRow + src.slice(0, 800).map(r => {
         const cls_mo = r.status === 'shortage' ? 'short'
                      : r.status === 'surplus'  ? 'sur'
@@ -2217,13 +2410,24 @@ function renderTable() {
         } else {
             totalGroup = '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
         }
-        /* F/O · OPE flag rendered as a subtle pill so a scan of the
-           column reads "Active / F/O / OPE" at a glance. */
+        /* F/O · OPE flag — each token in the sku_status string
+           renders as its own small pill so "F/O + OPE" doesn't wrap
+           inside one bubble.  Empty / Active states show a dash. */
         const skuStatus = r.sku_status || 'Active';
-        const skuPill = skuStatus === 'Active'
-            ? '<span style="color:#78909C;font-size:10.5px">—</span>'
-            : '<span style="display:inline-block;padding:1px 6px;border-radius:8px;'
-              + 'font-size:10px;font-weight:600;background:#FFEBEE;color:#C62828">' + skuStatus + '</span>';
+        let skuPill;
+        if (skuStatus === 'Active') {
+            skuPill = '<span style="color:#78909C;font-size:10.5px">—</span>';
+        } else {
+            const tokens = skuStatus.split(/\s*\+\s*/);
+            skuPill = tokens.map(t => {
+                const bg  = t === 'F/O'   ? '#FFEBEE' : t === 'OPE' ? '#FFF3E0' : '#E3F2FD';
+                const fg  = t === 'F/O'   ? '#C62828' : t === 'OPE' ? '#E65100' : '#1565C0';
+                return '<span style="display:inline-block;padding:1px 6px;'
+                     + 'border-radius:8px;font-size:10px;font-weight:600;'
+                     + 'white-space:nowrap;margin-right:2px;'
+                     + 'background:' + bg + ';color:' + fg + '">' + t + '</span>';
+            }).join('');
+        }
         return '<tr' + selCls + ' data-mc="' + r.merge_code + '">'
             + '<td>' + r.merge_code + '</td>'
             + '<td>' + (r.m_code || '—') + '</td>'
