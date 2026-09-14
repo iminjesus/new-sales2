@@ -1637,7 +1637,11 @@ body { font-family:'IBM Plex Sans','Segoe UI',system-ui,sans-serif;
 
 .state-col { display:flex; flex-direction:column; gap:10px; }
 .state-card { background:var(--card); border-radius:8px; border:1px solid var(--border);
-              padding:12px 14px; }
+    padding:12px 14px; cursor:pointer;
+    transition:box-shadow .12s, border-color .12s; }
+.state-card:hover { border-color:#94A3B8; box-shadow:0 2px 6px rgba(15,23,42,0.08); }
+.state-card-active { border-color:#1976D2; box-shadow:0 0 0 2px #DBEAFE inset; }
+.state-card-active h3 { color:#0E3F5F; }
 .state-card h3 { font-size:13px; display:flex; justify-content:space-between;
                  align-items:baseline; margin-bottom:6px; font-weight:600; }
 .state-card h3 .m { font-family:'IBM Plex Mono',monospace;
@@ -2149,7 +2153,12 @@ function demSuffix(demand) {
     return ' <span class="dem-parens">(' + FMT_INT.format(Math.round(demand)) + ')</span>';
 }
 
-/* ── Multi-select filter state ── */
+/* ── Multi-select filter state ──
+   Kept as Sets for O(1) membership tests, and persisted to
+   localStorage so a page refresh restores the same view.  The
+   storage key is versioned so a data-model change won't crash the
+   restore path — it just resets the affected keys. */
+const FILTER_LS_KEY = 'hkau_stock_filters_v1';
 const filterState = {
     status:     new Set(),
     state:      new Set(),
@@ -2161,6 +2170,36 @@ const filterState = {
     inch:       new Set(),
     pattern:    new Set(),
 };
+function saveFilterState() {
+    try {
+        const snap = {};
+        for (const k in filterState) snap[k] = [...filterState[k]];
+        localStorage.setItem(FILTER_LS_KEY, JSON.stringify(snap));
+    } catch (_) { /* private mode / disabled — silently no-op */ }
+}
+function loadFilterState() {
+    try {
+        const raw = localStorage.getItem(FILTER_LS_KEY);
+        if (!raw) return;
+        const snap = JSON.parse(raw);
+        for (const k in filterState) {
+            if (!Array.isArray(snap[k])) continue;
+            filterState[k] = new Set(snap[k]);
+        }
+    } catch (_) { /* corrupted / disabled — start fresh */ }
+}
+function clearAllFilters() {
+    for (const k in filterState) filterState[k].clear();
+    saveFilterState();
+    /* Refresh every visible multi-select panel + button label,
+       then re-render the page. */
+    Object.keys(filterState).forEach(k => {
+        renderMsPanel(k);
+        updateMsBtn(k);
+    });
+    refresh();
+    showToast('All filters cleared.');
+}
 const KEY_LBL = { status:'Status', state:'State', brand:'Brand',
                   product:'Product', sku_status:'F/O · OPE',
                   group:'Group', line:'Marketing Line',
@@ -2222,17 +2261,20 @@ function renderMsPanel(key) {
         cb.addEventListener('change', () => {
             if (cb.checked) filterState[key].add(cb.value);
             else            filterState[key].delete(cb.value);
+            saveFilterState();
             updateMsBtn(key); refresh();
         });
     });
     panel.querySelector('[data-act="all"]').addEventListener('click', (e) => {
         e.stopPropagation();
         opts.forEach(v => filterState[key].add(v));
+        saveFilterState();
         renderMsPanel(key); updateMsBtn(key); refresh();
     });
     panel.querySelector('[data-act="none"]').addEventListener('click', (e) => {
         e.stopPropagation();
         filterState[key].clear();
+        saveFilterState();
         renderMsPanel(key); updateMsBtn(key); refresh();
     });
 }
@@ -2242,6 +2284,10 @@ function updateMsBtn(key) {
     if (chosen.size === 0) { btn.classList.remove('active'); btn.innerHTML = KEY_LBL[key]; }
     else { btn.classList.add('active'); btn.innerHTML = KEY_LBL[key] + '<span class="n">' + chosen.size + '</span>'; }
 }
+/* Restore any saved filter state BEFORE we paint the dropdowns
+   for the first time — otherwise the checkboxes render unchecked
+   and users lose their view every refresh. */
+loadFilterState();
 Object.keys(filterState).forEach(key => {
     renderMsPanel(key); updateMsBtn(key);
     const holder = document.querySelector('.ms[data-key="'+key+'"]');
@@ -2260,7 +2306,10 @@ function resetFilters() {
     Object.keys(filterState).forEach(key => {
         filterState[key].clear(); renderMsPanel(key); updateMsBtn(key);
     });
-    document.getElementById('fltr-search').value = ''; refresh();
+    document.getElementById('fltr-search').value = '';
+    saveFilterState();
+    try { localStorage.removeItem(SEARCH_LS_KEY); } catch (_) {}
+    refresh();
 }
 
 /* ── Row filter (used by every derived section) ── */
@@ -2290,8 +2339,22 @@ function rowPasses(r) {
     }
     return true;
 }
+/* Persist the search box too, so a page refresh keeps the whole
+   filter picture — chips AND free text.  Debounced write matches the
+   render debounce so we don't hammer localStorage on every keystroke. */
+const SEARCH_LS_KEY = 'hkau_stock_search_v1';
+try {
+    const savedSearch = localStorage.getItem(SEARCH_LS_KEY);
+    if (savedSearch) document.getElementById('fltr-search').value = savedSearch;
+} catch (_) {}
 document.getElementById('fltr-search').addEventListener('input',
-    (function() { let t; return function() { clearTimeout(t); t = setTimeout(refresh, 150); }; })());
+    (function() { let t; return function(e) {
+        clearTimeout(t);
+        t = setTimeout(() => {
+            try { localStorage.setItem(SEARCH_LS_KEY, e.target.value || ''); } catch (_) {}
+            refresh();
+        }, 150);
+    }; })());
 
 function currentSetOfRows() { return DATA.all_rows.filter(rowPasses); }
 /* Aggregate stats (KPI tiles, state cards, charts, Total row) work
@@ -2433,7 +2496,9 @@ function renderStateCards() {
     STATES.forEach(s => {
         const st = acc[s];
         const moi = st.demand_3m > 0 ? (st.stock / st.demand_3m) : null;
-        html += '<div class="state-card">'
+        const activeCls = filterState.state.has(s) ? ' state-card-active' : '';
+        html += '<div class="state-card' + activeCls + '" data-state="' + s + '" '
+             +      'title="Click to toggle the ' + s + ' filter">'
              + '<h3>' + s + ' <span class="m">MOI ' + (moi != null ? FMT_1.format(moi) : '—') + '</span></h3>'
              + '<div class="state-row"><span class="lbl">Stock on hand</span>'
              + '<span class="v">' + fmtI(st.stock) + '</span></div>'
@@ -2452,6 +2517,24 @@ function renderStateCards() {
              + '</div>';
     });
     host.innerHTML = html;
+    /* Card click → toggle the State multi-select filter.  Solo-select
+       makes the most common flow ("show only NSW") one click, and
+       clicking the same card again turns it off.  Multi-state is
+       still available via the top filter dropdown for power users. */
+    host.querySelectorAll('.state-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const s = card.dataset.state;
+            if (filterState.state.has(s) && filterState.state.size === 1) {
+                filterState.state.clear();
+            } else {
+                filterState.state.clear();
+                filterState.state.add(s);
+            }
+            saveFilterState();
+            renderMsPanel('state'); updateMsBtn('state');
+            refresh();
+        });
+    });
 }
 
 /* ── Charts (Marketing Line + Rim inch) with # / % toggle ── */
