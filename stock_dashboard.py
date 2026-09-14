@@ -1044,37 +1044,57 @@ def load_stock_data():
         if aggregate:
             merge_details[merge_code] = aggregate
 
-    # ── Pass 2: iterate every stock-sheet row (per-M-CODE when the
-    # workbook has that granularity) and emit one dashboard row per
-    # stock row.  Each row's sales / stock / MOI figures come from
-    # THAT SPECIFIC row (not the merge aggregate) so per-material
-    # numbers show correctly.  Product info still falls back through
-    # Sheet2 → merge-wide sibling aggregate → stock-sheet Description.
+    # ── Pass 2: build the iteration plan.
+    # Two workbook layouts must both work:
+    #   (A) per-M-CODE — the stock sheet has a CODE column and one
+    #       row per M CODE with its own state stock / sales / MOI.
+    #   (B) per-merge — the stock sheet has one row per Merge with the
+    #       merge-total figures; individual M CODEs live only in the
+    #       MM sheet and every sibling shares the merge's numbers.
+    # Layout (A) iterates stock_rows directly so per-material figures
+    # come through.  Layout (B) iterates MM ORDER so every M CODE gets
+    # a row and the KPI / state cards de-dupe siblings at the merge
+    # level.  Rows that come from layout (B) are tagged `merge_shared`
+    # so downstream aggregation can tell shared numbers apart from
+    # unique per-M-CODE numbers.
     rows_out = []
     seen_pairs = set()
-    # Fallback iteration source: if the stock sheet is per-merge only
-    # (older workbook), stock_rows carries one entry per merge and
-    # every stock row's m_code_row equals the merge code.  If we're
-    # per-M-CODE, stock_rows carries the true M CODE per row.
-    if not stock_rows:
-        # Nothing loaded (workbook malformed or empty) — return early
-        # with the empty rows list so the caller renders a clean
-        # "no data" state instead of crashing.
-        stock_rows = []
-    # Merge-level rescue: any merge in stock_by_merge that never
-    # appeared in stock_rows (should not happen, but defensive) gets
-    # a synthetic row so it isn't silently dropped.  The synthetic
-    # M CODE equals the merge code.
-    stock_row_merges = {mc for mc, _, _ in stock_rows}
-    for merge_code in stock_by_merge:
-        if merge_code not in stock_row_merges:
-            stock_rows.append((merge_code, merge_code, stock_by_merge[merge_code]))
+    stock_by_pair = {(mc, m): stk for (mc, m, stk) in stock_rows}
+    # In per-M-CODE mode the primary source is stock_rows; extra
+    # merge-only rescue rows fill any merge that never appeared there.
+    if per_mcode_rows:
+        iter_plan = [(mc, m, stk, False) for (mc, m, stk) in stock_rows]
+        stock_row_merges = {mc for (mc, _) in stock_by_pair.keys()}
+        for merge_code in stock_by_merge:
+            if merge_code not in stock_row_merges:
+                iter_plan.append((merge_code, merge_code, stock_by_merge[merge_code], True))
+    else:
+        # Per-merge workbook — walk MM order so every M CODE surfaces
+        # even though the stock sheet only carries the merge total.
+        iter_plan = []
+        for m_code_mm, merge_code_mm in mm_order:
+            stk = stock_by_merge.get(merge_code_mm)
+            if stk is None:
+                continue
+            iter_plan.append((merge_code_mm, m_code_mm, stk, True))
+        # Any merge in the stock sheet that has NO MM entry still
+        # gets one synthetic row (merge code as M CODE).
+        seen_merges = {mc for (mc, _, _, _) in iter_plan}
+        for merge_code in stock_by_merge:
+            if merge_code not in seen_merges:
+                iter_plan.append((merge_code, merge_code, stock_by_merge[merge_code], True))
 
-    for merge_code, m_code, stk in stock_rows:
+    for merge_code, m_code, stk, merge_shared in iter_plan:
         if (m_code, merge_code) in seen_pairs:
             continue
         seen_pairs.add((m_code, merge_code))
         mc = merge_code
+        # Precise per-M-CODE bundle overrides the merge total when
+        # both are available.
+        pair_stk = stock_by_pair.get((mc, m_code))
+        if pair_stk is not None:
+            stk = pair_stk
+            merge_shared = False
         # Take THIS M CODE's Sheet2 record as the starting point, then
         # patch any blank field from the merge-wide aggregate built in
         # Pass 1.5 — that already scanned every sibling once, so we
@@ -1256,6 +1276,13 @@ def load_stock_data():
         rows_out.append({
             "merge_code":     mc,
             "m_code":         m_code,
+            # `merge_shared` = true when the row inherits the merge
+            # total (per-merge workbook layout) instead of carrying
+            # its own per-M-CODE numbers.  The frontend uses this
+            # flag so KPI / state-card aggregation dedupes shared
+            # rows by merge instead of summing them (which would
+            # multi-count).
+            "merge_shared":   merge_shared,
             "group":          eff_group,
             "classification": classif or "",
             "brand":          brand,
@@ -1366,52 +1393,76 @@ def _aggregate(rows):
     shortage_rows, balanced_rows, surplus_rows, serious_rows, no_move_rows = [], [], [], [], []
     all_rows_flat = []   # every non-empty row, for the drill-down index
 
+    # Dedupe stock/demand accumulation for rows that share their
+    # merge total (per-merge workbook layout — every sibling M CODE
+    # carries the same numbers so summing them would multi-count).
+    _shared_stock_seen = set()
+
     for r in rows:
         st = r["status"]
         kpi_status[st] += 1
         if st == "empty":
             continue
 
-        total_stock += r["total_stock"]
-        total_3m    += r["total_3m"]
-        total_pipe  += sum(r["state_pipeline"].values())
+        # Skip stock-total accumulation for shared rows we've already
+        # counted at the merge level.  Status counts still increment
+        # per row so the tab labels match what the table shows.
+        skip_stock = False
+        if r.get("merge_shared"):
+            if r["merge_code"] in _shared_stock_seen:
+                skip_stock = True
+            else:
+                _shared_stock_seen.add(r["merge_code"])
+
+        if not skip_stock:
+            total_stock += r["total_stock"]
+            total_3m    += r["total_3m"]
+            total_pipe  += sum(r["state_pipeline"].values())
+
+            for s in STATES:
+                state_totals[s]["stock"]     += r["state_stock"][s]
+                state_totals[s]["pipeline"]  += r["state_pipeline"][s]
+                state_totals[s]["demand_3m"] += r["state_3m"][s]
 
         for s in STATES:
-            state_totals[s]["stock"]     += r["state_stock"][s]
-            state_totals[s]["pipeline"]  += r["state_pipeline"][s]
-            state_totals[s]["demand_3m"] += r["state_3m"][s]
             # Per-state status: local MOH
             sd = r["state_3m"][s]
             ss = r["state_stock"][s]
             # State counts credit the SKU's MERGE-CODE status wherever
             # the SKU has activity — either non-zero stock or non-zero
-            # 3M demand in that state.
-            if (sd > 0 or ss > 0) and r["status"] in state_totals[s]:
+            # 3M demand in that state.  Skip on shared duplicates so a
+            # merge's status only counts once per state.
+            if not skip_stock and (sd > 0 or ss > 0) and r["status"] in state_totals[s]:
                 state_totals[s][r["status"]] += 1
 
         # Group breakdowns
         g = r["group"] or "—"
         by_group.setdefault(g, _empty_bucket())[st] += 1
-        by_group[g].setdefault("stock", 0)
-        by_group[g]["stock"] += r["total_stock"]
-        by_group[g].setdefault("demand_3m", 0)
-        by_group[g]["demand_3m"] += r["total_3m"]
+        if not skip_stock:
+            by_group[g].setdefault("stock", 0)
+            by_group[g]["stock"] += r["total_stock"]
+            by_group[g].setdefault("demand_3m", 0)
+            by_group[g]["demand_3m"] += r["total_3m"]
 
         inch = str(r["inch"] or "—")
         by_inch.setdefault(inch, _empty_bucket())[st] += 1
-        by_inch[inch].setdefault("stock", 0); by_inch[inch]["stock"] += r["total_stock"]
+        if not skip_stock:
+            by_inch[inch].setdefault("stock", 0); by_inch[inch]["stock"] += r["total_stock"]
 
         br = r["brand"] or "—"
         by_brand.setdefault(br, _empty_bucket())[st] += 1
-        by_brand[br].setdefault("stock", 0); by_brand[br]["stock"] += r["total_stock"]
+        if not skip_stock:
+            by_brand[br].setdefault("stock", 0); by_brand[br]["stock"] += r["total_stock"]
 
         cl = r["classification"] or "—"
         by_classif.setdefault(cl, _empty_bucket())[st] += 1
-        by_classif[cl].setdefault("stock", 0); by_classif[cl]["stock"] += r["total_stock"]
+        if not skip_stock:
+            by_classif[cl].setdefault("stock", 0); by_classif[cl]["stock"] += r["total_stock"]
 
         ln = r["line"] or "Other"
         by_line.setdefault(ln, _empty_bucket())[st] += 1
-        by_line[ln].setdefault("stock", 0); by_line[ln]["stock"] += r["total_stock"]
+        if not skip_stock:
+            by_line[ln].setdefault("stock", 0); by_line[ln]["stock"] += r["total_stock"]
 
         # Chart split — PCLT and TBR each get their own by-line
         # breakdown so the two hero charts show the axis the user
@@ -1419,10 +1470,12 @@ def _aggregate(rows):
         # the same bar).
         if r["category"] == "PCLT":
             by_pclt.setdefault(ln, _empty_bucket())[st] += 1
-            by_pclt[ln].setdefault("stock", 0); by_pclt[ln]["stock"] += r["total_stock"]
+            if not skip_stock:
+                by_pclt[ln].setdefault("stock", 0); by_pclt[ln]["stock"] += r["total_stock"]
         elif r["category"] == "TBR":
             by_tbr.setdefault(ln, _empty_bucket())[st] += 1
-            by_tbr[ln].setdefault("stock", 0); by_tbr[ln]["stock"] += r["total_stock"]
+            if not skip_stock:
+                by_tbr[ln].setdefault("stock", 0); by_tbr[ln]["stock"] += r["total_stock"]
 
         # SKU entry (unified — every table + the drill-down index uses
         # the same shape so the front-end can look up a full row from
@@ -1430,6 +1483,7 @@ def _aggregate(rows):
         entry = {
             "merge_code":     r["merge_code"],
             "m_code":         r["m_code"],
+            "merge_shared":   r.get("merge_shared", False),
             "description":    r["description"] or f"MC {r['merge_code']}",
             "group":          r["group"],
             "line":           r["line"],
@@ -2413,7 +2467,13 @@ function currentSetOfRows() { return DATA.all_rows.filter(rowPasses); }
    dedupe would UNDER-count the merge total.  We sum the M CODE
    rows into one synthetic merge-total row instead. */
 function currentSetDedupedByMerge() {
+    /* Merge-level roll-up.  Per-M CODE rows sum; merge-shared rows
+       (workbook only had per-merge granularity, so all siblings
+       inherit the same merge total) contribute exactly once so we
+       don't multi-count.  `_seen_shared` tracks which merges already
+       consumed their shared numbers. */
     const bucket = new Map();
+    const seenShared = new Set();
     for (const r of DATA.all_rows) {
         if (!rowPasses(r)) continue;
         let agg = bucket.get(r.merge_code);
@@ -2436,6 +2496,12 @@ function currentSetDedupedByMerge() {
                 p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0, max_demand:0,
             };
             bucket.set(r.merge_code, agg);
+        }
+        /* Shared rows: every sibling carries the SAME merge total, so
+           we take the first one and skip the rest. */
+        if (r.merge_shared) {
+            if (seenShared.has(r.merge_code)) continue;
+            seenShared.add(r.merge_code);
         }
         STATES.forEach(s => {
             agg.state_stock[s]    += r.state_stock[s]    || 0;
@@ -2855,19 +2921,21 @@ function renderTable() {
     const moiBarPPL = v => moiBarFor(v, mppMax);
 
     /* ── Aggregate row (rendered at the top) ──
-       Sum EVERY visible row.  In the per-M CODE layout each row
-       carries only its own stock/demand so summing all of them
-       is the correct merge total; in the per-merge layout each
-       merge has one row, so summing is still the correct total.
-       No dedupe needed either way.  max_demand should still be
-       taken merge-by-merge (else summing max_demand double-counts
-       when many M CODEs share a merge), so we track it separately. */
+       Per-M CODE rows sum; merge-shared rows (where every sibling
+       carries the same merge total) contribute exactly once so we
+       don't multi-count.  `mergeMax` tracks per-merge max_demand so
+       ttlMax is a sum of merge maxes, not per-row maxes. */
     let ttlStock=0, ttlAll=0, ttl3M=0, ttl6=0, ttl79=0, ttl1012=0, ttlMax=0;
     const ttlStateStock = {NSW:0,QLD:0,VIC:0,WA:0}, ttlState3M = {NSW:0,QLD:0,VIC:0,WA:0};
     const ttlPipe = {NSW:{port:0,water:0,fac:0}, QLD:{port:0,water:0,fac:0},
                      VIC:{port:0,water:0,fac:0}, WA:{port:0,water:0,fac:0}};
     const mergeMax = new Map();
+    const seenSharedTotals = new Set();
     src.forEach(r => {
+        if (r.merge_shared) {
+            if (seenSharedTotals.has(r.merge_code)) return;
+            seenSharedTotals.add(r.merge_code);
+        }
         ttlStock += r.total_stock || 0;
         ttlAll   += r.total_all   || 0;
         ttl3M    += r.total_3m    || 0;
@@ -3082,7 +3150,14 @@ function renderTable() {
             total_stock:0, total_all:0, total_3m:0,
             p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
         };
+        /* Merge-shared rows all carry the same total; take the first
+           one and skip the rest.  Per-M CODE rows sum normally. */
+        const sharedSeen = new Set();
         groupRows.forEach(r => {
+            if (r.merge_shared) {
+                if (sharedSeen.has(r.merge_code)) return;
+                sharedSeen.add(r.merge_code);
+            }
             STATES.forEach(s => {
                 sum.state_stock[s] += r.state_stock[s] || 0;
                 sum.state_3m[s]    += r.state_3m[s]    || 0;
