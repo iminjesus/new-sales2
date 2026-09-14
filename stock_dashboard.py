@@ -984,6 +984,17 @@ def load_stock_data():
                 "group_raw":       group,
                 "classification":  classif or "",
                 "ssw_desc":        ssw_desc,
+                # Row-level product info harvested from the FIRST
+                # non-empty stock-sheet cell across all rows sharing
+                # this merge.  Merge-shared M CODEs (siblings from
+                # the MM sheet without their own stock row) inherit
+                # these so they don't render as blank rows.
+                "row_prod_name":   row_prod_name,
+                "row_desc":        row_desc,
+                "row_size":        row_size,
+                "row_inch":        row_inch,
+                "row_pattern":     row_pattern,
+                "row_ope":         row_ope,
                 "state_stock":     {s: 0.0 for s in STATES},
                 "state_pipe_parts":{s: {"port":0.0,"water":0.0,"fac":0.0} for s in STATES},
                 "state_pipe":      {s: 0.0 for s in STATES},
@@ -1000,6 +1011,19 @@ def load_stock_data():
                 "history":         {k: [0.0]*HIST_MONTHS for k in ("NSW","QLD","VIC","WA","TOTAL")},
             }
             stock_by_merge[mc] = agg
+        else:
+            # First-non-empty fill for the merge-level product-info
+            # fallback fields — later stock-sheet rows for the same
+            # merge only patch in what the first row was missing.
+            for k, v in (("row_prod_name", row_prod_name),
+                         ("row_desc",      row_desc),
+                         ("row_size",      row_size),
+                         ("row_inch",      row_inch),
+                         ("row_pattern",   row_pattern),
+                         ("row_ope",       row_ope),
+                         ("ssw_desc",      ssw_desc)):
+                if not agg.get(k) and v:
+                    agg[k] = v
         for s in STATES:
             agg["state_stock"][s] += state_stock[s]
             agg["state_pipe"][s]  += state_pipe[s]
@@ -1833,6 +1857,54 @@ table.dt thead.pipe-mode tr.state-band th {
 }
 table.dt thead.pipe-mode tr.state-band th:hover { filter:brightness(1.05); }
 table.dt thead.pipe-mode tr.col-labels th { top:26px; }
+
+/* ── Frozen identity columns (Merge → LI/SS) ──
+   The first 11 cells of every row (Merge Code, M CODE, Brand,
+   Marketing Line, Product Name, Pattern, Group, F/O·OPE, Size,
+   Inch, LI/SS) stick to the left of the scroll container so they
+   stay visible when the user pans the state / MOI / period-avg
+   block horizontally.  Each column has a fixed width and a
+   pre-computed `left` offset (accumulated width of preceding
+   frozen columns).  `nth-child(N)` matches by ordinal position
+   which is stable regardless of pipeline mode. */
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:56px;  width:56px;  }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:80px;  width:80px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:64px;  width:64px;  }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:128px; width:128px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { min-width:110px; width:110px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { min-width:72px;  width:72px;  }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:56px;  width:56px;  }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:110px; width:110px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:110px; width:110px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:48px;  width:48px;  }
+table.dt th:nth-child(11), table.dt td:nth-child(11) { min-width:64px;  width:64px;  }
+
+table.dt tbody td:nth-child(-n+11) { position:sticky; background:#fff; z-index:1; }
+table.dt thead th:nth-child(-n+11) { position:sticky; z-index:4; }
+/* Preserve zebra / selection colours on the sticky cells */
+table.dt tbody tr:nth-child(even) td:nth-child(-n+11) { background:#F5F7FA; }
+table.dt tbody tr:hover td:nth-child(-n+11) { background:var(--hover); }
+table.dt tbody tr.selected td:nth-child(-n+11) { background:#DBEAFE; }
+table.dt tbody tr.selected:hover td:nth-child(-n+11) { background:#BFDBFE; }
+table.dt tbody tr.sub-total td:nth-child(-n+11) { background:#FFF8E1; }
+table.dt tbody tr.total-row td:nth-child(-n+11) { background:#EEF3F8; z-index:3; }
+table.dt tbody tr.merge-cohover td:nth-child(-n+11) { background:#EEF2FF; }
+/* Cumulative left offsets — sum of the widths above */
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:56px; }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:136px; }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:200px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:328px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:438px; }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:510px; }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:566px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:676px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { left:786px; }
+table.dt th:nth-child(11), table.dt td:nth-child(11) { left:834px; }
+/* Right edge marker on the last frozen column so users see the
+   freeze boundary as they scroll horizontally. */
+table.dt th:nth-child(11), table.dt td:nth-child(11) { border-right:2px solid #94A3B8; }
+
 table.dt thead th .sort { display:inline-block; margin-left:3px; opacity:.35;
                           font-size:9px; }
 table.dt thead th.sort-asc  .sort::after { content:'▲'; opacity:1; }
