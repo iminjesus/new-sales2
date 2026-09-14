@@ -1722,6 +1722,24 @@ function renderTable() {
        Serious Surplus + No move rolled into one). */
     const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
     let src = rawSrc.filter(rowPasses);
+
+    /* ── MOI data-bar scale (Excel-style Conditional Format) ──
+       Compute the LARGEST MOI value across MOI + Merge_MOI(PPL/3M)
+       in the current view so all three MOI columns share the same
+       visual scale — a 4.8 in one column reads the same length as
+       a 4.8 in another.  We cap the reference max at 12 months so
+       a single outlier doesn't compress the whole column. */
+    let barMax = 0;
+    src.forEach(r => {
+        if (r.moh          != null && r.moh          > barMax) barMax = r.moh;
+        if (r.moh_plus_max != null && r.moh_plus_max > barMax) barMax = r.moh_plus_max;
+    });
+    barMax = Math.min(Math.max(barMax, 1), 12);
+    const moiBar = v => {
+        if (v == null || v <= 0) return '';
+        const pct = Math.min(v / barMax, 1) * 100;
+        return 'background:linear-gradient(to right,#C8E6C9 ' + pct + '%, transparent ' + pct + '%);';
+    };
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -1786,9 +1804,9 @@ function renderTable() {
             + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
             + stateCells(r)
             + totalGroup
-            + '<td class="r grp-start ' + cls_mo + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r ' + cls_mo + '">'           + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r ' + cls_mo + '">'           + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
+            + '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)          + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)          + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
             + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
             + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
             + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
