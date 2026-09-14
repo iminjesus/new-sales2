@@ -1048,56 +1048,72 @@ def load_stock_data():
             merge_details[merge_code] = aggregate
 
     # ── Pass 2: build the iteration plan.
-    # Two workbook layouts must both work:
-    #   (A) per-M-CODE — the stock sheet has a CODE column and one
-    #       row per M CODE with its own state stock / sales / MOI.
-    #   (B) per-merge — the stock sheet has one row per Merge with the
-    #       merge-total figures; individual M CODEs live only in the
-    #       MM sheet and every sibling shares the merge's numbers.
-    # Layout (A) iterates stock_rows directly so per-material figures
-    # come through.  Layout (B) iterates MM ORDER so every M CODE gets
-    # a row and the KPI / state cards de-dupe siblings at the merge
-    # level.  Rows that come from layout (B) are tagged `merge_shared`
-    # so downstream aggregation can tell shared numbers apart from
-    # unique per-M-CODE numbers.
+    # We want a dashboard row for every M CODE the workbook knows
+    # about, from ANY source:
+    #   • stock_rows (per-M-CODE granularity in the stock sheet)
+    #   • MM sheet (M CODE ↔ Merge Code mapping)
+    #   • stock_by_merge (merges with a stock row but no MM entry)
+    # For each (merge, m_code) pair, we prefer per-M-CODE data when
+    # the stock sheet carries it; otherwise the row inherits the
+    # merge aggregate and is tagged `merge_shared` so downstream
+    # aggregation can dedupe by merge instead of summing (which
+    # would multi-count siblings).
     rows_out = []
     seen_pairs = set()
-    stock_by_pair = {(mc, m): stk for (mc, m, stk) in stock_rows}
-    # In per-M-CODE mode the primary source is stock_rows; extra
-    # merge-only rescue rows fill any merge that never appeared there.
+    # stock_by_pair only carries GENUINE per-M-CODE bundles.  In
+    # per-merge workbook layout the m_code_row was synthesised to
+    # equal the merge code, so those entries don't count as
+    # per-M-CODE data — everything from MM sheet inherits the merge
+    # aggregate instead.
+    stock_by_pair = ({(mc, m): stk for (mc, m, stk) in stock_rows}
+                     if per_mcode_rows else {})
+
+    # Collect every (merge, m_code) pair we've seen, preserving order:
+    # per-M-CODE stock rows first (workbook order) then MM entries
+    # not already covered.  A merge with NO M CODE anywhere gets one
+    # synthetic row (merge as its own M CODE) at the end.
+    pair_order = []
+    seen_plan = set()
     if per_mcode_rows:
-        iter_plan = [(mc, m, stk, False) for (mc, m, stk) in stock_rows]
-        stock_row_merges = {mc for (mc, _) in stock_by_pair.keys()}
-        for merge_code in stock_by_merge:
-            if merge_code not in stock_row_merges:
-                iter_plan.append((merge_code, merge_code, stock_by_merge[merge_code], True))
-    else:
-        # Per-merge workbook — walk MM order so every M CODE surfaces
-        # even though the stock sheet only carries the merge total.
-        iter_plan = []
-        for m_code_mm, merge_code_mm in mm_order:
-            stk = stock_by_merge.get(merge_code_mm)
-            if stk is None:
-                continue
-            iter_plan.append((merge_code_mm, m_code_mm, stk, True))
-        # Any merge in the stock sheet that has NO MM entry still
-        # gets one synthetic row (merge code as M CODE).
-        seen_merges = {mc for (mc, _, _, _) in iter_plan}
-        for merge_code in stock_by_merge:
-            if merge_code not in seen_merges:
-                iter_plan.append((merge_code, merge_code, stock_by_merge[merge_code], True))
+        for (mc_sr, m_sr) in stock_by_pair.keys():
+            if (mc_sr, m_sr) not in seen_plan:
+                pair_order.append((mc_sr, m_sr))
+                seen_plan.add((mc_sr, m_sr))
+    for m_code_mm, merge_code_mm in mm_order:
+        if merge_code_mm not in stock_by_merge:
+            continue        # merge has no stock row anywhere — skip
+        key = (merge_code_mm, m_code_mm)
+        if key not in seen_plan:
+            pair_order.append(key)
+            seen_plan.add(key)
+    # Merges with stock rows but no MM entry → one synthetic row.
+    merges_covered = {mc for (mc, _) in seen_plan}
+    for merge_code in stock_by_merge:
+        if merge_code in merges_covered:
+            continue
+        pair_order.append((merge_code, merge_code))
+        seen_plan.add((merge_code, merge_code))
+
+    iter_plan = []
+    for (merge_code, m_code) in pair_order:
+        stk = stock_by_merge.get(merge_code)
+        if stk is None:
+            continue
+        pair_stk = stock_by_pair.get((merge_code, m_code))
+        if pair_stk is not None:
+            # Per-M-CODE bundle exists — this row carries its own
+            # unique stock/demand figures.
+            iter_plan.append((merge_code, m_code, pair_stk, False))
+        else:
+            # No per-M-CODE row in the stock sheet — inherit the
+            # merge aggregate (all siblings share the same numbers).
+            iter_plan.append((merge_code, m_code, stk, True))
 
     for merge_code, m_code, stk, merge_shared in iter_plan:
         if (m_code, merge_code) in seen_pairs:
             continue
         seen_pairs.add((m_code, merge_code))
         mc = merge_code
-        # Precise per-M-CODE bundle overrides the merge total when
-        # both are available.
-        pair_stk = stock_by_pair.get((mc, m_code))
-        if pair_stk is not None:
-            stk = pair_stk
-            merge_shared = False
         # Take THIS M CODE's Sheet2 record as the starting point, then
         # patch any blank field from the merge-wide aggregate built in
         # Pass 1.5 — that already scanned every sibling once, so we
@@ -1790,8 +1806,15 @@ body { font-family:'IBM Plex Sans','Segoe UI',system-ui,sans-serif;
           font-family:'IBM Plex Mono',monospace; }
 .tab.active .n { background:rgba(255,255,255,0.24); }
 
-/* ── SKU table ── */
-table.dt { width:100%; border-collapse:collapse; font-size:11.5px; }
+/* ── SKU table ──
+   border-collapse: separate + border-spacing 0 keeps the visual of a
+   collapsed table but lets `position: sticky` work on <th>/<td>
+   in every browser (with `collapse`, Chromium drops the sticky
+   layer under the pipeline-detail two-row header, so the state
+   banner would slide out of view when the user scrolled — that's
+   what the user was hitting). */
+table.dt { width:100%; border-collapse:separate; border-spacing:0;
+           font-size:11.5px; }
 table.dt thead th { background:#ECEFF1; color:#37474F; padding:6px 8px;
                     text-align:left; position:sticky; top:0; z-index:2;
                     border-bottom:1px solid #CFD8DC; font-size:10.5px;
@@ -3069,7 +3092,7 @@ function renderTable() {
        user request — it's the most common non-Active tag and greens
        read as "planned outbound" rather than "problem". */
     const SKU_PILL = {
-        'F/O':      { bg:'#FFEBEE', fg:'#C62828' },
+        'F/O':      { bg:'#E5E7EB', fg:'#4B5563' },
         'OPE':      { bg:'#DCFCE7', fg:'#15803D' },
         'OE A/S':   { bg:'#E3F2FD', fg:'#1565C0' },
         'M/S':      { bg:'#F3E5F5', fg:'#6A1B9A' },
