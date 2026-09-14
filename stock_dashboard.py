@@ -1264,7 +1264,8 @@ def load_stock_data():
         if mc in seen_merges:
             continue
         seen_merges.add(mc)
-        if not (row.get("brand") or row.get("line") or row.get("size")):
+        if not (row.get("brand") or row.get("line") or row.get("size")
+                or row.get("product_name") or row.get("pattern")):
             no_info_merges.append(mc)
     meta = {
         "path":       os.path.basename(path),
@@ -2292,19 +2293,72 @@ document.getElementById('fltr-search').addEventListener('input',
     (function() { let t; return function() { clearTimeout(t); t = setTimeout(refresh, 150); }; })());
 
 function currentSetOfRows() { return DATA.all_rows.filter(rowPasses); }
-/* Aggregate stats (KPI tiles, state cards, charts, Total row) count
-   each MERGE CODE once — the source workbook tracks stock/demand at
-   merge level, so counting once per M CODE row would multi-count.
-   The SKU table itself still lists every M CODE, so users see each
-   material and the aggregates stay honest. */
+/* Aggregate stats (KPI tiles, state cards, charts, Total row) work
+   at the MERGE CODE level.  In the per-M-CODE workbook layout each
+   M CODE row carries only its own stock / demand, so a plain
+   dedupe would UNDER-count the merge total.  We sum the M CODE
+   rows into one synthetic merge-total row instead. */
 function currentSetDedupedByMerge() {
-    const seen = new Set();
-    const out = [];
+    const bucket = new Map();
     for (const r of DATA.all_rows) {
         if (!rowPasses(r)) continue;
-        if (seen.has(r.merge_code)) continue;
-        seen.add(r.merge_code);
-        out.push(r);
+        let agg = bucket.get(r.merge_code);
+        if (!agg) {
+            agg = {
+                merge_code: r.merge_code,
+                brand: r.brand, line: r.line, pattern: r.pattern,
+                product_name: r.product_name, size: r.size,
+                inch: r.inch, group: r.group, category: r.category,
+                is_18plus: r.is_18plus, is_low_profile: r.is_low_profile,
+                is_suv: r.is_suv, sku_status: r.sku_status,
+                state_stock:      {NSW:0,QLD:0,VIC:0,WA:0},
+                state_pipeline:   {NSW:0,QLD:0,VIC:0,WA:0},
+                state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+                state_3m:         {NSW:0,QLD:0,VIC:0,WA:0},
+                history:          {NSW:new Array(12).fill(0), QLD:new Array(12).fill(0),
+                                   VIC:new Array(12).fill(0), WA:new Array(12).fill(0),
+                                   TOTAL:new Array(12).fill(0)},
+                total_stock:0, total_all:0, total_3m:0, total_12m:0,
+                p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0, max_demand:0,
+            };
+            bucket.set(r.merge_code, agg);
+        }
+        STATES.forEach(s => {
+            agg.state_stock[s]    += r.state_stock[s]    || 0;
+            agg.state_pipeline[s] += r.state_pipeline[s] || 0;
+            agg.state_3m[s]       += r.state_3m[s]       || 0;
+            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+            agg.state_pipe_parts[s].port  += pp.port  || 0;
+            agg.state_pipe_parts[s].water += pp.water || 0;
+            agg.state_pipe_parts[s].fac   += pp.fac   || 0;
+            for (let i = 0; i < 12; i++) agg.history[s][i] += r.history[s]?.[i] || 0;
+        });
+        for (let i = 0; i < 12; i++) agg.history.TOTAL[i] += r.history.TOTAL?.[i] || 0;
+        agg.total_stock += r.total_stock || 0;
+        agg.total_all   += r.total_all   || 0;
+        agg.total_3m    += r.total_3m    || 0;
+        agg.total_12m   += r.total_12m   || 0;
+        agg.p_3m        += r.p_3m        || 0;
+        agg.avg_6m_old  += r.avg_6m_old  || 0;
+        agg.avg_7_9m    += r.avg_7_9m    || 0;
+        agg.avg_10_12m  += r.avg_10_12m  || 0;
+        agg.max_demand   = Math.max(agg.max_demand, r.max_demand || 0);
+    }
+    /* Recompute the merge-level MOI and status from the summed
+       stock / demand.  This is the ONLY correct place to derive
+       these; per-M CODE status doesn't apply to the merge total. */
+    const out = [];
+    for (const agg of bucket.values()) {
+        agg.moh          = agg.total_3m > 0 ? agg.total_stock / agg.total_3m : null;
+        agg.moh_plus     = agg.total_3m > 0 ? agg.total_all   / agg.total_3m : null;
+        agg.moh_plus_max = agg.max_demand > 0 ? agg.total_all / agg.max_demand : null;
+        if      (agg.total_3m === 0 && agg.total_stock === 0) agg.status = 'empty';
+        else if (agg.total_3m === 0 && agg.total_stock  >  0) agg.status = 'no_move';
+        else if (agg.moh <= 1)  agg.status = 'shortage';
+        else if (agg.moh <= 3)  agg.status = 'balanced';
+        else if (agg.moh <= 6)  agg.status = 'surplus';
+        else                    agg.status = 'serious_surplus';
+        out.push(agg);
     }
     return out;
 }
@@ -2652,26 +2706,27 @@ function renderTable() {
     const moiBarPPL = v => moiBarFor(v, mppMax);
 
     /* ── Aggregate row (rendered at the top) ──
-       Deduped by Merge Code so each merge counts once even when many
-       M CODEs of that merge are visible in the table.  MOI figures
-       are re-computed FROM the sums (Total Stock ÷ Total 3M). */
-    const dedupSet = new Set(); const dedupSrc = [];
-    src.forEach(r => {
-        if (dedupSet.has(r.merge_code)) return;
-        dedupSet.add(r.merge_code); dedupSrc.push(r);
-    });
+       Sum EVERY visible row.  In the per-M CODE layout each row
+       carries only its own stock/demand so summing all of them
+       is the correct merge total; in the per-merge layout each
+       merge has one row, so summing is still the correct total.
+       No dedupe needed either way.  max_demand should still be
+       taken merge-by-merge (else summing max_demand double-counts
+       when many M CODEs share a merge), so we track it separately. */
     let ttlStock=0, ttlAll=0, ttl3M=0, ttl6=0, ttl79=0, ttl1012=0, ttlMax=0;
     const ttlStateStock = {NSW:0,QLD:0,VIC:0,WA:0}, ttlState3M = {NSW:0,QLD:0,VIC:0,WA:0};
     const ttlPipe = {NSW:{port:0,water:0,fac:0}, QLD:{port:0,water:0,fac:0},
                      VIC:{port:0,water:0,fac:0}, WA:{port:0,water:0,fac:0}};
-    dedupSrc.forEach(r => {
+    const mergeMax = new Map();
+    src.forEach(r => {
         ttlStock += r.total_stock || 0;
         ttlAll   += r.total_all   || 0;
         ttl3M    += r.total_3m    || 0;
         ttl6     += r.avg_6m_old  || 0;
         ttl79    += r.avg_7_9m    || 0;
         ttl1012  += r.avg_10_12m  || 0;
-        ttlMax   += r.max_demand  || 0;
+        const cur = mergeMax.get(r.merge_code) || 0;
+        if ((r.max_demand || 0) > cur) mergeMax.set(r.merge_code, r.max_demand || 0);
         STATES.forEach(s => {
             ttlStateStock[s] += r.state_stock[s]  || 0;
             ttlState3M[s]    += r.state_3m[s]     || 0;
@@ -2681,6 +2736,7 @@ function renderTable() {
             ttlPipe[s].fac   += pp.fac   || 0;
         });
     });
+    for (const v of mergeMax.values()) ttlMax += v;
     const ttlMOI  = ttl3M   > 0 ? (ttlStock / ttl3M)  : null;
     const ttlPPL  = ttlMax  > 0 ? (ttlAll   / ttlMax) : null;
 
@@ -2910,10 +2966,12 @@ function renderTable() {
 
     /* Info-availability checks — used to render the ⚠ badge that
        tells the user which merges/rows the workbook itself is
-       missing.  Per-row check triggers even when siblings in the
-       same merge DO have data, so a partially-filled merge still
-       flags its truly-empty M CODEs. */
-    const rowHasInfo   = (r)   => !!(r.brand || r.line || r.size || r.pattern);
+       missing.  Product Name counts as info on its own since it's
+       the human-readable identifier straight from the stock sheet.
+       Per-row check triggers even when siblings in the same merge
+       DO have data, so a partially-filled merge still flags its
+       truly-empty M CODEs. */
+    const rowHasInfo   = (r)   => !!(r.brand || r.line || r.size || r.pattern || r.product_name);
     const mergeHasInfo = (grp) => grp.some(rowHasInfo);
     /* Small compact badge for M CODEs whose own record is empty —
        makes each empty row instantly identifiable in a mixed merge. */
@@ -3368,11 +3426,16 @@ function findRow(mc) { return DATA.all_rows.find(r => r.merge_code === mc); }
    sync with the Sub Total line rendered on the main table. */
 function aggregateMerge(mcRows) {
     if (!mcRows || !mcRows.length) return null;
-    const rep = mcRows[0];
+    /* Pick the first M CODE that actually has product info as the
+       "rep" for identity fields, not just mcRows[0].  A merge where
+       the first sibling is bare but the second is populated used
+       to show a mostly-empty modal header. */
+    const rep = mcRows.find(x => x.brand || x.line || x.size || x.pattern || x.product_name) || mcRows[0];
     const sum = {
         merge_code: rep.merge_code,
-        brand: rep.brand, line: rep.line, pattern: rep.pattern,
-        size: rep.size, li: rep.li, ss: rep.ss, group: rep.group,
+        brand: rep.brand, line: rep.line, product_name: rep.product_name,
+        pattern: rep.pattern, size: rep.size, li: rep.li, ss: rep.ss,
+        group: rep.group,
         state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
         state_pipeline: {NSW:0,QLD:0,VIC:0,WA:0},
         state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
