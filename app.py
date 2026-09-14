@@ -17063,14 +17063,15 @@ if __name__ == "__main__":
     from price_compare import price_dashboard, load_all_months, build_data
     app.add_url_rule('/price', 'price_dashboard', price_dashboard)
 
-    # Experimental Stock Balance Lab — reads latest Stock_report_*.xlsm
-    # in the project folder and renders /stock_lab.  If openpyxl isn't
-    # installed the import fails silently and the route is skipped.
+    # Stock Balance — reads the latest Stock_report_updated_*.xlsm and
+    # serves it at /stock_balance (kept /stock_lab as an alias so any
+    # bookmarks or share links from the experimental phase still work).
     try:
         from stock_dashboard import stock_dashboard
-        app.add_url_rule('/stock_lab', 'stock_dashboard', stock_dashboard)
+        app.add_url_rule('/stock_balance', 'stock_balance', stock_dashboard)
+        app.add_url_rule('/stock_lab',     'stock_dashboard', stock_dashboard)
     except Exception as _e:
-        print(f"[stock_lab] not enabled: {_e}")
+        print(f"[stock_balance] not enabled: {_e}")
 
     @app.get("/api/price_debug")
     def price_debug():

@@ -380,6 +380,23 @@ def load_stock_data():
             history["WA"].append(_num(r[base + 2]))
             history["TOTAL"].append(_num(r[base + 3]))
 
+        # 12M average (from the pre-computed column) — used as an
+        # alternate demand basis for Merge_MOI(PPL/3M).
+        total_12m = _num(r[COL_TOTAL_12M - 1]) if COL_TOTAL_12M else 0.0
+
+        # "6M-old" average = average of months -6, -5, -4 (the OLDER
+        # half of the 6-month window, i.e. before the current 3-month
+        # rolling average kicks in).  The user's MOI calc uses this
+        # figure so that a recent demand shock doesn't hide the older
+        # baseline.  history["TOTAL"] is indexed -12M(0) … -1M(11), so
+        # months -6/-5/-4 sit at indices 6, 7, 8.
+        h_tot = history["TOTAL"]
+        old_6m_vals = [h_tot[6], h_tot[7], h_tot[8]] if len(h_tot) >= 12 else []
+        avg_6m_old = sum(old_6m_vals) / 3.0 if old_6m_vals else 0.0
+
+        # Max-demand basis: the larger of {3M avg, "6M-old" avg, 12M avg}
+        max_demand = max(total_3m, avg_6m_old, total_12m) if any([total_3m, avg_6m_old, total_12m]) else 0.0
+
         # Enrich via MM → Sheet2
         mcode = mc_to_mcode.get(mc)
         detail = m_master.get(mcode, {}) if mcode else {}
@@ -421,6 +438,12 @@ def load_stock_data():
         # a longer-horizon planning metric than the current MOI.
         moh_plus = (total_all / total_3m) if total_3m > 0 else None
 
+        # Merge_MOI(PPL/3M): (Stock + Pipeline) ÷ MAX(3M avg, 6M-old avg, 12M avg)
+        # so demand shocks in the recent 3 months don't hide the older
+        # baseline — planners keep enough stock to cover the biggest
+        # observed monthly draw.
+        moh_plus_max = (total_all / max_demand) if max_demand > 0 else None
+
         # Product characteristics for the quick-filter chips
         category = _product_category(eff_group, line)
         inch_num = _num_or_none(detail.get("inch"))
@@ -458,8 +481,12 @@ def load_stock_data():
             "total_stock":       total_stock,
             "total_all":         total_all,
             "total_3m":          total_3m,
-            "moh":               round(moh, 2)      if moh      is not None else None,
-            "moh_plus":          round(moh_plus, 2) if moh_plus is not None else None,
+            "avg_6m_old":        round(avg_6m_old, 2),
+            "total_12m":         round(total_12m, 2),
+            "max_demand":        round(max_demand, 2),
+            "moh":               round(moh, 2)          if moh          is not None else None,
+            "moh_plus":          round(moh_plus, 2)     if moh_plus     is not None else None,
+            "moh_plus_max":      round(moh_plus_max, 2) if moh_plus_max is not None else None,
             "status":            status,
         })
 
@@ -595,8 +622,12 @@ def _aggregate(rows):
             "total_stock":    r["total_stock"],
             "total_all":      r["total_all"],
             "total_3m":       round(r["total_3m"], 2),
+            "avg_6m_old":     r["avg_6m_old"],
+            "total_12m":      r["total_12m"],
+            "max_demand":     r["max_demand"],
             "moh":            r["moh"],
             "moh_plus":       r["moh_plus"],
+            "moh_plus_max":   r["moh_plus_max"],
             "status":         r["status"],
             "state_stock":    r["state_stock"],
             "state_3m":       r["state_3m"],
@@ -699,7 +730,8 @@ _HTML = r"""<!DOCTYPE html>
     --ground:#F4F6F9; --card:#FFFFFF; --border:#E1E5EB;
     --ink:#263238; --muted:#607D8B;
     --hdr1:#0E3F5F; --hdr2:#1F4E79;
-    --short:#C62828;   --short-fg:#FFEBEE;
+    --short:#F57F17;   --short-fg:#FFF8E1;  /* bright amber-yellow — warning without alarm */
+    --short-line:#F9A825;                    /* used in charts + chips */
     --bal:#2E7D32;     --bal-fg:#E8F5E9;
     --sur:#EF6C00;     --sur-fg:#FFF3E0;
     --ser:#B71C1C;     --ser-fg:#FDE0E0;
@@ -881,6 +913,12 @@ table.dt tbody tr.selected td { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td { background:#BFDBFE; }
 table.dt .r { text-align:right; font-family:'IBM Plex Mono',monospace;
               font-variant-numeric:tabular-nums; }
+/* Vertical group dividers: draw a solid left border on the FIRST
+   cell of each column group.  In the compact view the boundaries
+   sit between state columns; in Pipeline-detail mode they sit
+   between state groups + before the national TOTAL group. */
+table.dt .grp-start { border-left:2px solid #90A4AE; }
+table.dt thead th.grp-start { border-left:2px solid #90A4AE; }
 table.dt .r.short { color:var(--short); font-weight:700; }
 table.dt .r.sur   { color:var(--sur);   font-weight:700; }
 table.dt .r.ser   { color:var(--ser);   font-weight:700; }
@@ -1000,11 +1038,13 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
     <b style="color:#FFD54F">Data as of {{ meta.data_date }}</b> &nbsp;·&nbsp; source: {{ meta.path }}
     &nbsp;·&nbsp; loaded {{ meta.mtime }} &nbsp;·&nbsp; {{ meta.rows }} rows in {{ meta.load_s }} s</span>
   <nav class="nav">
+    <button class="icon-btn" onclick="location.reload()"
+            title="Reload the page — the server picks up the newest Stock_report file automatically">🔄 Refresh</button>
     <button class="icon-btn" onclick="emailScreen('page','Full dashboard')"
             title="Capture the whole screen and start an Outlook mail">✉ Email screen</button>
     <a href="/">Dashboard</a>
     <a href="/price">Price</a>
-    <a href="/stock_lab" class="active">Stock Lab</a>
+    <a href="/stock_balance" class="active">Stock Balance</a>
   </nav>
 </div>
 
@@ -1166,7 +1206,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="figv" id="m-3m">—</div>
         <div class="stat">MOI — stock on hand only</div>
         <div class="figv" id="m-moi">—</div>
-        <div class="stat">MOI — including Factory pipeline</div>
+        <div class="stat" title="(Stock + Port + Water + Factory) ÷ MAX(3M avg, 6M-old avg months −6 to −4, 12M avg)">Merge_MOI(PPL/3M) — Stock+Pipeline ÷ max(3M · 6M-old · 12M) demand</div>
         <div class="figv" id="m-moiplus">—</div>
       </div>
       <div>
@@ -1457,7 +1497,7 @@ function drawStackedBar(canvas_id, by, order, mode) {
     return new Chart(document.getElementById(canvas_id), {
         type: 'bar',
         data: { labels, datasets: [
-            { label: 'Shortage', data: short, backgroundColor: '#C62828' },
+            { label: 'Shortage', data: short, backgroundColor: '#F9A825' },
             { label: 'Balance',  data: bal,   backgroundColor: '#66BB6A' },
             { label: 'Surplus',  data: sur,   backgroundColor: '#FB8C00' },
             { label: 'Serious',  data: ser,   backgroundColor: '#B71C1C' },
@@ -1550,11 +1590,11 @@ function buildTableHead() {
            per-state pipeline vs. the national roll-up in one glance. */
         h = '<tr><th colspan="' + nonState.length + '" style="background:#F1F5F9"></th>';
         STATES.forEach(s => {
-            h += '<th colspan="4" style="text-align:center;background:' + stateColour[s]
+            h += '<th colspan="4" class="grp-start" style="text-align:center;background:' + stateColour[s]
               + ';color:#fff;font-weight:700">' + s + '</th>';
         });
-        h += '<th colspan="4" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
-        h += '<th colspan="2" style="background:#F1F5F9"></th></tr><tr>';
+        h += '<th colspan="4" class="grp-start" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
+        h += '<th colspan="3" class="grp-start" style="background:#F1F5F9"></th></tr><tr>';
     } else {
         h = '<tr>';
     }
@@ -1564,26 +1604,33 @@ function buildTableHead() {
     if (showPipeline) {
         STATES.forEach(s => {
             const dc = s.toLowerCase();
-            h += '<th class="r" data-col="' + dc + '">Stock<span class="sort"></span></th>'
+            /* Vertical divider before each state's first sub-column */
+            h += '<th class="r grp-start" data-col="' + dc + '">Stock<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_port">Port<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_water">Water<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_fac">Factory<span class="sort"></span></th>';
         });
-        /* National Total group (right of the state groups) */
-        h += '<th class="r" data-col="total_stock">Stock<span class="sort"></span></th>'
+        /* National Total group divider */
+        h += '<th class="r grp-start" data-col="total_stock">Stock<span class="sort"></span></th>'
           +  '<th class="r" data-col="total_port">Port<span class="sort"></span></th>'
           +  '<th class="r" data-col="total_water">Water<span class="sort"></span></th>'
           +  '<th class="r" data-col="total_fac">Factory<span class="sort"></span></th>';
     } else {
-        STATES.forEach(s => {
+        STATES.forEach((s, i) => {
             const dc = s.toLowerCase();
-            h += '<th class="r" data-col="' + dc + '">' + s + ' <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
+            const cls = (i === 0) ? 'r grp-start' : 'r';   /* divider before NSW */
+            h += '<th class="' + cls + '" data-col="' + dc + '">' + s + ' <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
         });
-        h += '<th class="r" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
+        /* Divider before Stock total */
+        h += '<th class="r grp-start" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
     }
-    h += '<th class="r" data-col="moh">MOI<span class="sort"></span></th>'
+    /* Divider before MOI block */
+    h += '<th class="r grp-start" data-col="moh">MOI<span class="sort"></span></th>'
       +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>'
-      +  '<th class="r" data-col="merge_moi_ppl" title="Merge-level MOI including Port + Water + Factory pipeline (Stock+PPL ÷ 3M demand)">Merge_MOI(PPL)<span class="sort"></span></th>';
+      +  '<th class="r" data-col="merge_moi_ppl" '
+      +      'title="(Stock on hand + Port + Water + Factory) ÷ MAX(3M avg, 6M-old avg (months −6 to −4), 12M avg). '
+      +      'Using the LARGEST of the three demand baselines protects against under-stocking when the recent 3-month rolling average has dipped.">'
+      +      'Merge_MOI(PPL/3M)<span class="sort"></span></th>';
     h += '</tr>';
     document.getElementById('sku-thead').innerHTML = h;
     /* Re-wire sort handlers on the freshly built headers */
@@ -1619,9 +1666,9 @@ function sortKey(r, col) {
         case 'wa':  return r.state_stock.WA  || 0;
         case 'li_ss': return (parseFloat(r.li) || 0);
         case 'inch':  return (parseFloat(r.inch) || 0);
-        case 'moh':            return r.moh      == null ? -1 : r.moh;
-        case 'merge_moi':      return r.moh      == null ? -1 : r.moh;
-        case 'merge_moi_ppl':  return r.moh_plus == null ? -1 : r.moh_plus;
+        case 'moh':            return r.moh          == null ? -1 : r.moh;
+        case 'merge_moi':      return r.moh          == null ? -1 : r.moh;
+        case 'merge_moi_ppl':  return r.moh_plus_max == null ? -1 : r.moh_plus_max;
         case 'total_3m':  return r.total_3m || 0;
         case 'total_stock': return r.total_stock || 0;
         default:      return r[col] == null ? '' : r[col];
@@ -1663,19 +1710,22 @@ function renderTable() {
 
     /* State-cell factory — compact form (Stock + inline 3M) or the
        expanded 4-cell form (Stock / Port / Water / Factory).  A
-       national TOTAL group is emitted separately below. */
+       national TOTAL group is emitted separately below.  The FIRST
+       cell of each state group gets `grp-start` so a vertical
+       divider stripes the table. */
     const stateCells = r => {
         if (!showPipeline) {
-            return STATES.map(s =>
-                '<td class="r">' + fmtI(r.state_stock[s]) + demSuffix(r.state_3m[s]) + '</td>'
+            return STATES.map((s, i) =>
+                '<td class="r' + (i === 0 ? ' grp-start' : '') + '">'
+                + fmtI(r.state_stock[s]) + demSuffix(r.state_3m[s]) + '</td>'
             ).join('');
         }
         return STATES.map(s => {
             const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
-            return '<td class="r">' + fmtI(r.state_stock[s]) + '</td>'
-                 + '<td class="r">' + fmtI(pp.port)          + '</td>'
-                 + '<td class="r">' + fmtI(pp.water)         + '</td>'
-                 + '<td class="r">' + fmtI(pp.fac)           + '</td>';
+            return '<td class="r grp-start">' + fmtI(r.state_stock[s]) + '</td>'
+                 + '<td class="r">'          + fmtI(pp.port)          + '</td>'
+                 + '<td class="r">'          + fmtI(pp.water)         + '</td>'
+                 + '<td class="r">'          + fmtI(pp.fac)           + '</td>';
         }).join('');
     };
 
@@ -1688,12 +1738,12 @@ function renderTable() {
         let totalGroup;
         if (showPipeline) {
             const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
-            totalGroup = '<td class="r">' + fmtI(r.total_stock) + '</td>'
-                       + '<td class="r">' + fmtI(tp)            + '</td>'
-                       + '<td class="r">' + fmtI(tw)            + '</td>'
-                       + '<td class="r">' + fmtI(tf)            + '</td>';
+            totalGroup = '<td class="r grp-start">' + fmtI(r.total_stock) + '</td>'
+                       + '<td class="r">'          + fmtI(tp)            + '</td>'
+                       + '<td class="r">'          + fmtI(tw)            + '</td>'
+                       + '<td class="r">'          + fmtI(tf)            + '</td>';
         } else {
-            totalGroup = '<td class="r">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
+            totalGroup = '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
         }
         return '<tr' + selCls + ' data-mc="' + r.merge_code + '">'
             + '<td>' + r.merge_code + '</td>'
@@ -1707,9 +1757,9 @@ function renderTable() {
             + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
             + stateCells(r)
             + totalGroup
-            + '<td class="r ' + cls_mo + '">' + (r.moh      != null ? fmtF(r.moh, 1)      : '—') + '</td>'
-            + '<td class="r ' + cls_mo + '">' + (r.moh      != null ? fmtF(r.moh, 1)      : '—') + '</td>'
-            + '<td class="r ' + cls_mo + '">' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td>'
+            + '<td class="r grp-start ' + cls_mo + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r ' + cls_mo + '">'           + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+            + '<td class="r ' + cls_mo + '">'           + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
             + '</tr>';
     }).join('');
 
@@ -1840,9 +1890,13 @@ function downloadCSV() {
         ['WA Port',         r => r.state_pipe_parts?.WA?.port   || 0],
         ['WA Water',        r => r.state_pipe_parts?.WA?.water  || 0],
         ['WA Factory',      r => r.state_pipe_parts?.WA?.fac    || 0],
-        ['MOI',             r => r.moh != null ? r.moh.toFixed(2) : ''],
-        ['Merge_MOI',       r => r.moh != null ? r.moh.toFixed(2) : ''],
-        ['MOI + Pipeline',  r => r.moh_plus != null ? r.moh_plus.toFixed(2) : ''],
+        ['MOI',                r => r.moh          != null ? r.moh.toFixed(2)          : ''],
+        ['Merge_MOI',          r => r.moh          != null ? r.moh.toFixed(2)          : ''],
+        ['Merge_MOI(PPL/3M)',  r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
+        ['3M Avg (basis)',     r => (r.total_3m ?? 0).toFixed(2)],
+        ['6M-old Avg (basis)', r => (r.avg_6m_old ?? 0).toFixed(2)],
+        ['12M Avg (basis)',    r => (r.total_12m ?? 0).toFixed(2)],
+        ['Max demand (basis)', r => (r.max_demand ?? 0).toFixed(2)],
         ['Status',          r => STATUS_PRETTY[r.status] || r.status || ''],
         ['Description',     r => r.description || ''],
     ];
@@ -1903,7 +1957,7 @@ function openModal(mergeCode) {
     const mohClass = r.moh == null ? '' : r.moh <= 1 ? 'short' : r.moh <= 3 ? 'bal' : r.moh <= 6 ? 'sur' : 'ser';
     document.getElementById('m-moi').className   = 'figv ' + mohClass;
     document.getElementById('m-moi').innerHTML   = (r.moh != null ? fmtF(r.moh, 1) : '—') + '<span class="u">months</span>';
-    document.getElementById('m-moiplus').innerHTML = (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '<span class="u">months (Stock + Factory pipeline)</span>';
+    document.getElementById('m-moiplus').innerHTML = (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '<span class="u">months  ·  demand basis = ' + fmtF(r.max_demand, 1) + ' / mo</span>';
 
     if (_modalChart) { _modalChart.destroy(); _modalChart = null; }
     const stateColour = { NSW: '#1976D2', QLD: '#EF6C00', VIC: '#8E24AA', WA: '#00897B' };

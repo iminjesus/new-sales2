@@ -573,6 +573,7 @@ body.tables-expanded .ctable { font-size: 14px; }
     <a href="/">Graph View</a>
     <a href="/map">Map View</a>
     <a href="/stock">Stock</a>
+    <a href="/stock_balance">Stock Balance</a>
     <a href="/rebate">Rebate</a>
     <a href="/price" class="active">Price</a>
     <a href="/meeting">Meeting</a>
