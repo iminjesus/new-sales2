@@ -292,7 +292,10 @@ def _scan_stock_header(ws, header_row=None):
 #   K7xx / K4xx / K3xx / KH..     → Kinergy    (touring / comfort)
 #   K1xx (K107/K115/K117/K120…)   → Ventus     (UHP / performance)
 #   RA / RF / RH / RT             → Dynapro    (SUV / LT / MT)
-#   LH / LK / LS / LI (Laufenn)   → Laufenn G/S/X/I Fit
+#   LG / LC / LH (Laufenn)        → Laufenn G Fit
+#   LK / LP / LV (Laufenn)        → Laufenn X Fit
+#   LS (Laufenn)                  → Laufenn S Fit
+#   LI / LW (Laufenn)             → Laufenn I Fit  (winter)
 #   W (Winter)                    → Winter i*cept
 #   AH / AL / AM / DH / DL / TH   → TBR / Truck (Smart / e-cube …)
 #   Z / older H4xx / RH0x         → Optimo / legacy
@@ -3062,10 +3065,12 @@ function renderTable() {
 
     /* Palette for the F/O · OPE pill (per token).  Each bucket has
        its own soft ground + strong foreground; unrecognised tokens
-       fall back to a neutral blue-grey. */
+       fall back to a neutral blue-grey.  OPE uses fresh green per
+       user request — it's the most common non-Active tag and greens
+       read as "planned outbound" rather than "problem". */
     const SKU_PILL = {
         'F/O':      { bg:'#FFEBEE', fg:'#C62828' },
-        'OPE':      { bg:'#FFF3E0', fg:'#E65100' },
+        'OPE':      { bg:'#DCFCE7', fg:'#15803D' },
         'OE A/S':   { bg:'#E3F2FD', fg:'#1565C0' },
         'M/S':      { bg:'#F3E5F5', fg:'#6A1B9A' },
         'Testing':  { bg:'#FFF9C4', fg:'#827717' },
