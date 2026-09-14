@@ -1499,6 +1499,8 @@ _HTML = r"""<!DOCTYPE html>
 <title>Stock Balance Lab</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- SheetJS Community Edition — CSV export writes .xlsx directly. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1734,6 +1736,16 @@ table.dt tbody tr.mc-row td.r.ser   { color:var(--ser)   !important; }
 table.dt tbody tr.mc-row td.no-info {
     background:#FEF3C7 !important; color:#92400E; font-style:italic;
     font-weight:600; font-size:10.5px; }
+/* MOI-column magnifier button — opens the drill-down modal.  Row
+   clicks handle selection instead, so the button carries its own
+   affordance (subtle blue chip) to say "click me for detail". */
+.moi-detail-btn {
+    display:inline-block; margin-left:6px; padding:0 6px;
+    background:#E0F2FE; color:#0369A1; border:1px solid #7DD3FC;
+    border-radius:3px; font-size:11px; line-height:16px; cursor:pointer;
+    vertical-align:middle;
+}
+.moi-detail-btn:hover { background:#BAE6FD; }
 /* Sticky Total row at the top of the tbody, showing sums over the
    current filtered view.  Its top offset differs by header depth:
    compact mode -> 24px (below the single header row),
@@ -1982,6 +1994,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
       <h3>SKU drill-down
         <span class="hint">click any row for the monthly-by-state view</span>
         <span class="icons">
+          <button class="icon-btn" onclick="downloadXLSX()" title="Download the current view as XLSX (recommended — opens directly in Excel with formatted headers)">⬇ XLSX</button>
           <button class="icon-btn" onclick="downloadCSV()" title="Download the current view as CSV (one value per cell)">⬇ CSV</button>
           <button class="icon-btn" onclick="toggleExpandTable()" title="Expand table full-screen" id="btn-expand-tbl">⛶</button>
           <button class="icon-btn" onclick="emailScreen('sku-card','SKU drill-down')" title="Email this table">✉</button>
@@ -2057,13 +2070,20 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="figv" id="m-moiplus">—</div>
       </div>
       <div>
-        <div class="stat">12-month sales by state</div>
+        <div class="stat">12-month sales by state <span style="text-transform:none;font-weight:400;color:#B0BEC5">— state-stacked bar</span></div>
         <div class="chartbox tall"><canvas id="m-chart"></canvas></div>
         <div class="stat" style="margin-top:14px">State breakdown</div>
         <table class="pipe-tbl">
           <thead><tr><th>State</th><th>Stock</th><th>Port</th><th>Water</th>
               <th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +PPL</th></tr></thead>
           <tbody id="m-pipe-tbl"></tbody>
+        </table>
+
+        <div class="stat" style="margin-top:16px">M CODE breakdown <span style="text-transform:none;font-weight:400;color:#B0BEC5">— every material inside this Merge</span></div>
+        <table class="pipe-tbl">
+          <thead><tr><th>M CODE</th><th style="text-align:left">Product</th>
+              <th>Stock</th><th>3M Avg</th><th>4-6M</th><th>7-9M</th><th>10-12M</th><th>MOI</th></tr></thead>
+          <tbody id="m-mcode-tbl"></tbody>
         </table>
 
         <div class="stat" style="margin-top:16px">Top 10 Ship-to customers <span style="text-transform:none;font-weight:400;color:#B0BEC5">— last month · this month</span></div>
@@ -2086,6 +2106,11 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
 
 <script>
 const DATA = {{ data_json | safe }};
+/* Server-side workbook metadata (file, date, load stats) — exposed
+   globally so the XLSX and .eml flows can label their outputs with
+   the source workbook + data-as-of date. */
+const META = {{ meta | tojson | safe }};
+window.META = META;
 const STATES = ["NSW","QLD","VIC","WA"];
 
 /* ── Formatting ── */
@@ -2804,15 +2829,22 @@ function renderTable() {
         }
         return '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
     };
-    const moiCellsFor = (r) => {
+    const moiCellsFor = (r, showBtn) => {
         const cls_mo = r.status === 'shortage' ? 'short'
                      : r.status === 'surplus'  ? 'sur'
                      : r.status === 'serious_surplus' ? 'ser' : '';
+        // Small magnifier button that opens the drill-down modal.
+        // Sits inside the MOI cell so row clicks can be reserved for
+        // toggle-select (the user asked for that split).
+        const detailBtn = showBtn
+            ? '<button class="moi-detail-btn" data-open-mc="' + r.merge_code + '" '
+              + 'title="Show 12-month per-state stack + per-M CODE breakdown">🔍</button>'
+            : '';
         // Period averages render as ROUNDED INTEGERS on M CODE rows —
         // the user asked for individual per-material figures with
         // decimals rounded away.  Sub Total rows keep the full merge
         // sum with the same integer rounding.
-        return '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+        return '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + detailBtn + '</td>'
              + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
              + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
              + '<td class="r grp-start">' + fmtI(Math.round(r.p_3m       || 0)) + '</td>'
@@ -2931,7 +2963,7 @@ function renderTable() {
                     + '<td' + bandStyle + '>' + r.merge_code + '</td>'
                     + mcodeCell
                     + productCells
-                    + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r)
+                    + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r, true)
                     + '</tr>');
             });
 
@@ -2945,7 +2977,7 @@ function renderTable() {
                 + '<td style="border-left:4px solid ' + band
                 +      ';font-weight:700;color:' + band + '" colspan="10">'
                 + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
-                + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal)
+                + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
                 + '</tr>');
         }
     } else {
@@ -2981,7 +3013,7 @@ function renderTable() {
                 + '<td>' + (r.size    || '—') + '</td>'
                 + '<td>' + (r.inch    || '—') + '</td>'
                 + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
-                + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r)
+                + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r, true)
                 + '</tr>');
         }
     }
@@ -2994,17 +3026,27 @@ function renderTable() {
         fmtI(src.length) + ' M-CODE rows across '
         + fmtI(mergeGroups.size) + ' merges' + suffix;
 
-    /* Row click: open modal (default) or toggle-select (with Ctrl/Shift/Cmd) */
+    /* Row click behaviour split into two:
+         • Anywhere on the row → toggle-select the merge.
+         • The 🔍 button in the MOI cell → open the drill-down modal.
+       The button uses `data-open-mc` and stops-propagation so a click
+       on it doesn't also flip the row's selection state. */
     body.querySelectorAll('tr').forEach(tr => {
         tr.addEventListener('click', (e) => {
+            /* Ignore clicks that originated on the detail button —
+               those are handled by the delegated listener below. */
+            if (e.target.closest('.moi-detail-btn')) return;
             const mc = +tr.dataset.mc;
-            if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                if (selected.has(mc)) { selected.delete(mc); tr.classList.remove('selected'); }
-                else                  { selected.add(mc);    tr.classList.add('selected'); }
-                updateSelectionSummary(src);
-                return;
-            }
-            openModal(mc);
+            if (selected.has(mc)) { selected.delete(mc); tr.classList.remove('selected'); }
+            else                  { selected.add(mc);    tr.classList.add('selected'); }
+            updateSelectionSummary(src);
+        });
+    });
+    body.querySelectorAll('.moi-detail-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const mc = +btn.dataset.openMc;
+            if (!Number.isNaN(mc)) openModal(mc);
         });
     });
     updateSelectionSummary(src);
@@ -3024,8 +3066,8 @@ function updateSelectionSummary(currentList) {
     document.getElementById('sum-3m').textContent    = fmtF(tot3m, 1);
     document.getElementById('sum-moi').textContent   = tot3m > 0 ? FMT_1.format(totStk / tot3m) : '—';
     document.getElementById('sel-info').textContent = useSelected
-        ? (fmtI(rows.length) + ' rows selected — figures above cover this subset (Ctrl-/Cmd-click to add/remove)')
-        : 'no rows selected — click a row to open detail · Ctrl/Cmd-click rows to build a subset';
+        ? (fmtI(rows.length) + ' rows selected — figures above cover this subset (click a row again to remove)')
+        : 'no rows selected — click a row to add it to the subset · use the 🔍 button in the MOI column to open the detail modal';
     document.getElementById('sel-info').classList.toggle('none-selected', !useSelected);
     document.getElementById('clear-sel').style.display = useSelected ? 'inline-block' : 'none';
 }
@@ -3161,6 +3203,109 @@ function downloadCSV() {
     showToast('Downloaded ' + a.download + ' (' + fmtI(src.length) + ' rows)');
 }
 
+/* ── XLSX download (current filtered view) ──
+   Uses the same column list as downloadCSV so downstream users see
+   identical fields regardless of format.  Numbers are written as
+   Excel-native numeric cells (not strings) so pivot tables and
+   filters just work, and the header row gets a bold navy fill so
+   the file looks report-ready without extra formatting. */
+function downloadXLSX() {
+    if (typeof XLSX === 'undefined') {
+        showToast('XLSX library still loading — try again in a second');
+        return;
+    }
+    const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
+    let src = rawSrc.filter(rowPasses);
+    if (sortCol && sortDir !== 0) {
+        const dir = sortDir;
+        src = src.slice().sort((a, b) => {
+            const av = sortKey(a, sortCol), bv = sortKey(b, sortCol);
+            if (av < bv) return -1 * dir;
+            if (av > bv) return  1 * dir;
+            return 0;
+        });
+    }
+    /* Column list mirrors downloadCSV but returns NUMBERS as numbers
+       (not toFixed strings) so Excel treats them as numeric cells. */
+    const cols = [
+        ['Merge',                  r => r.merge_code],
+        ['M CODE',                 r => r.m_code || ''],
+        ['Brand',                  r => r.brand || ''],
+        ['Marketing Line',         r => r.line || ''],
+        ['Pattern',                r => r.pattern || ''],
+        ['Group',                  r => r.group || ''],
+        ['Size',                   r => r.size || ''],
+        ['Inch',                   r => r.inch || ''],
+        ['LI',                     r => r.li || ''],
+        ['SS',                     r => r.ss || ''],
+        ['F/O · OPE',              r => r.sku_status || 'Active'],
+        ['NSW Stock',              r => r.state_stock.NSW || 0],
+        ['NSW 3M Avg',             r => r.state_3m.NSW || 0],
+        ['QLD Stock',              r => r.state_stock.QLD || 0],
+        ['QLD 3M Avg',             r => r.state_3m.QLD || 0],
+        ['VIC Stock',              r => r.state_stock.VIC || 0],
+        ['VIC 3M Avg',             r => r.state_3m.VIC || 0],
+        ['WA Stock',               r => r.state_stock.WA  || 0],
+        ['WA 3M Avg',              r => r.state_3m.WA  || 0],
+        ['Total Stock',            r => r.total_stock || 0],
+        ['Total 3M Avg',           r => r.total_3m || 0],
+        ['NSW Port',               r => r.state_pipe_parts?.NSW?.port  || 0],
+        ['NSW Water',              r => r.state_pipe_parts?.NSW?.water || 0],
+        ['NSW Factory',            r => r.state_pipe_parts?.NSW?.fac   || 0],
+        ['QLD Port',               r => r.state_pipe_parts?.QLD?.port  || 0],
+        ['QLD Water',              r => r.state_pipe_parts?.QLD?.water || 0],
+        ['QLD Factory',            r => r.state_pipe_parts?.QLD?.fac   || 0],
+        ['VIC Port',               r => r.state_pipe_parts?.VIC?.port  || 0],
+        ['VIC Water',              r => r.state_pipe_parts?.VIC?.water || 0],
+        ['VIC Factory',            r => r.state_pipe_parts?.VIC?.fac   || 0],
+        ['WA Port',                r => r.state_pipe_parts?.WA?.port   || 0],
+        ['WA Water',               r => r.state_pipe_parts?.WA?.water  || 0],
+        ['WA Factory',             r => r.state_pipe_parts?.WA?.fac    || 0],
+        ['MOI',                    r => r.moh          == null ? null : r.moh],
+        ['Merge_MOI(PPL/3M)',      r => r.moh_plus_max == null ? null : r.moh_plus_max],
+        ['3M Avg (m -1..-3)',      r => r.p_3m       || 0],
+        ['4-6M Avg (m -4..-6)',    r => r.avg_6m_old || 0],
+        ['7-9M Avg (m -7..-9)',    r => r.avg_7_9m   || 0],
+        ['10-12M Avg (m -10..-12)',r => r.avg_10_12m || 0],
+        ['12M Avg (basis)',        r => r.total_12m  || 0],
+        ['Max demand (basis)',     r => r.max_demand || 0],
+        ['Status',                 r => STATUS_PRETTY[r.status] || r.status || ''],
+        ['Description',            r => r.description || ''],
+    ];
+    /* Build the sheet as an array-of-arrays; row 1 is the header. */
+    const aoa = [cols.map(c => c[0])];
+    src.forEach(r => aoa.push(cols.map(c => c[1](r))));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    /* Style header row bold + freeze it. */
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let c = range.s.c; c <= range.e.c; c++) {
+        const addr = XLSX.utils.encode_cell({r: 0, c});
+        if (ws[addr]) ws[addr].s = { font: { bold: true } };
+    }
+    ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+    /* Reasonable column widths — 12 for numeric, 26 for description. */
+    ws['!cols'] = cols.map(([name]) =>
+        ({ wch: name === 'Description' ? 26 : name.length > 12 ? 16 : 12 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, curTab === 'total' ? 'All' : curTab);
+    /* Data-provenance sheet: filter, tab, timestamp — a downstream
+       viewer can trace what generated the file. */
+    const provWs = XLSX.utils.aoa_to_sheet([
+        ['Property',        'Value'],
+        ['Generated',       new Date().toISOString()],
+        ['Tab',             curTab],
+        ['Filter',          filterSummary() || 'all SKUs'],
+        ['Rows',            src.length],
+        ['Data as of',      (window.META && META.data_date) || ''],
+        ['Source workbook', (window.META && META.path) || ''],
+    ]);
+    provWs['!cols'] = [{ wch: 20 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, provWs, 'Meta');
+    const fname = 'stock_balance_' + curTab + '_' + todayStr() + '.xlsx';
+    XLSX.writeFile(wb, fname);
+    showToast('Downloaded ' + fname + ' (' + fmtI(src.length) + ' rows)');
+}
+
 /* ── Central refresh ── */
 function refresh() {
     recomputeKPI();
@@ -3174,15 +3319,66 @@ refresh();
 /* ── Drill-down modal ── */
 let _modalChart = null;
 const MONTH_LABELS = ['-12M','-11M','-10M','-9M','-8M','-7M','-6M','-5M','-4M','-3M','-2M','-1M'];
+/* Every M CODE row in this merge (used for the per-M-CODE breakdown
+   table below the main aggregate). */
+function siblingRows(mc) {
+    return DATA.all_rows.filter(r => r.merge_code === mc);
+}
 function findRow(mc) { return DATA.all_rows.find(r => r.merge_code === mc); }
+
+/* Sum a set of M CODE rows into a synthetic "merge aggregate" row so
+   the modal's headline stats reflect the whole Merge (not just the
+   first M CODE that matches).  Keeps the modal source of truth in
+   sync with the Sub Total line rendered on the main table. */
+function aggregateMerge(mcRows) {
+    if (!mcRows || !mcRows.length) return null;
+    const rep = mcRows[0];
+    const sum = {
+        merge_code: rep.merge_code,
+        brand: rep.brand, line: rep.line, pattern: rep.pattern,
+        size: rep.size, li: rep.li, ss: rep.ss, group: rep.group,
+        state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
+        state_pipeline: {NSW:0,QLD:0,VIC:0,WA:0},
+        state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+        state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
+        history: {NSW: new Array(12).fill(0), QLD: new Array(12).fill(0),
+                  VIC: new Array(12).fill(0), WA:  new Array(12).fill(0),
+                  TOTAL: new Array(12).fill(0)},
+        total_stock:0, total_all:0, total_3m:0, max_demand:0,
+    };
+    mcRows.forEach(r => {
+        STATES.forEach(s => {
+            sum.state_stock[s]    += r.state_stock[s]    || 0;
+            sum.state_pipeline[s] += r.state_pipeline[s] || 0;
+            sum.state_3m[s]       += r.state_3m[s]       || 0;
+            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+            sum.state_pipe_parts[s].port  += pp.port  || 0;
+            sum.state_pipe_parts[s].water += pp.water || 0;
+            sum.state_pipe_parts[s].fac   += pp.fac   || 0;
+            for (let i = 0; i < 12; i++) sum.history[s][i] += r.history[s]?.[i] || 0;
+        });
+        for (let i = 0; i < 12; i++) sum.history.TOTAL[i] += r.history.TOTAL?.[i] || 0;
+        sum.total_stock += r.total_stock || 0;
+        sum.total_all   += r.total_all   || 0;
+        sum.total_3m    += r.total_3m    || 0;
+        sum.max_demand   = Math.max(sum.max_demand, r.max_demand || 0);
+    });
+    sum.moh          = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
+    sum.moh_plus     = sum.total_3m > 0 ? sum.total_all   / sum.total_3m : null;
+    sum.moh_plus_max = sum.max_demand > 0 ? sum.total_all / sum.max_demand : null;
+    return sum;
+}
+
 function openModal(mergeCode) {
-    const r = findRow(mergeCode); if (!r) return;
+    const mcRows = siblingRows(mergeCode);
+    const r = aggregateMerge(mcRows) || findRow(mergeCode);
+    if (!r) return;
     document.getElementById('m-title').textContent =
         (r.brand || '—') + ' · ' + (r.line || 'Other') + ' · ' + (r.pattern || '—')
         + '  ·  ' + (r.size || '') + '  ·  LI/SS ' + (r.li||'—') + '/' + (r.ss||'—');
     document.getElementById('m-sub').textContent =
-        'Merge ' + r.merge_code + ' · M-code ' + (r.m_code || '—')
-        + ' · ' + (r.description || '');
+        'Merge ' + r.merge_code + ' · ' + mcRows.length + ' M CODE'
+        + (mcRows.length === 1 ? '' : 's') + ' inside';
     document.getElementById('m-stock').innerHTML = fmtI(r.total_stock) + '<span class="u">units</span>';
     const pipe = STATES.reduce((s, k) => s + (r.state_pipeline[k] || 0), 0);
     document.getElementById('m-pipe').innerHTML  = fmtI(pipe) + '<span class="u">units on the way</span>';
@@ -3192,26 +3388,36 @@ function openModal(mergeCode) {
     document.getElementById('m-moi').innerHTML   = (r.moh != null ? fmtF(r.moh, 1) : '—') + '<span class="u">months</span>';
     document.getElementById('m-moiplus').innerHTML = (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '<span class="u">months  ·  demand basis = ' + fmtF(r.max_demand, 1) + ' / mo</span>';
 
+    /* 12-month per-state STACKED BAR (per user request) — one bar per
+       month, with the four states stacked so the reader can see the
+       state mix at a glance instead of four overlapping lines. */
     if (_modalChart) { _modalChart.destroy(); _modalChart = null; }
     const stateColour = { NSW: '#1976D2', QLD: '#EF6C00', VIC: '#8E24AA', WA: '#00897B' };
     const datasets = STATES.map(s => ({
-        label: s, data: r.history[s], borderColor: stateColour[s],
-        backgroundColor: stateColour[s] + '22', borderWidth: 2,
-        pointRadius: 3, tension: .25, fill: false,
+        label: s, data: r.history[s],
+        backgroundColor: stateColour[s], borderColor: stateColour[s],
+        borderWidth: 0, stack: 'monthly',
     }));
-    datasets.push({
-        label: 'Total', data: r.history.TOTAL,
-        borderColor: '#37474F', backgroundColor: '#37474F22',
-        borderDash: [5,4], borderWidth: 1.5, pointRadius: 2, tension: .25, fill: false,
-    });
     _modalChart = new Chart(document.getElementById('m-chart'), {
-        type: 'line',
+        type: 'bar',
         data: { labels: MONTH_LABELS, datasets },
         options: {
             responsive: true, maintainAspectRatio: false,
-            plugins: { legend: { position: 'top', labels: { boxWidth: 14, font: { size: 11 } } } },
-            scales: { y: { beginAtZero: true, ticks: { font: { size: 10 } } },
-                      x: { ticks: { font: { size: 10 } } } }
+            plugins: {
+                legend: { position: 'top', labels: { boxWidth: 14, font: { size: 11 } } },
+                tooltip: {
+                    callbacks: {
+                        footer: (items) => {
+                            const sum = items.reduce((s, it) => s + it.parsed.y, 0);
+                            return 'Total: ' + FMT_INT.format(Math.round(sum));
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: { beginAtZero: true, stacked: true, ticks: { font: { size: 10 } } },
+                x: { stacked: true, ticks: { font: { size: 10 } } }
+            }
         }
     });
 
@@ -3246,7 +3452,40 @@ function openModal(mergeCode) {
       + '<td>' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
       + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td></tr>';
 
+    /* Per-M-CODE breakdown — one row per material inside this Merge.
+       Product-info columns come from the row itself; sales figures
+       round to integer to match the main-table treatment. */
+    const mcRowsHtml = mcRows.map(mc => {
+        const mohCls = mc.moh == null ? '' :
+            mc.moh <= 1 ? 'short' : mc.moh <= 3 ? '' : mc.moh <= 6 ? 'sur' : 'ser';
+        const productBits = [mc.brand, mc.line, mc.pattern, mc.size]
+            .filter(x => x).join(' · ') || '—';
+        return '<tr>'
+            + '<td>' + (mc.m_code || '—') + '</td>'
+            + '<td style="text-align:left;font-size:11px">' + escapeHtml(productBits) + '</td>'
+            + '<td>' + fmtI(mc.total_stock)                + '</td>'
+            + '<td>' + fmtI(Math.round(mc.p_3m       || 0))+ '</td>'
+            + '<td>' + fmtI(Math.round(mc.avg_6m_old || 0))+ '</td>'
+            + '<td>' + fmtI(Math.round(mc.avg_7_9m   || 0))+ '</td>'
+            + '<td>' + fmtI(Math.round(mc.avg_10_12m || 0))+ '</td>'
+            + '<td class="' + mohCls + '">' + (mc.moh != null ? fmtF(mc.moh, 1) : '—') + '</td>'
+            + '</tr>';
+    }).join('');
+    document.getElementById('m-mcode-tbl').innerHTML = mcRowsHtml
+      + '<tr class="tot"><td>—</td><td style="text-align:left;font-weight:700">Merge total</td>'
+      + '<td>' + fmtI(r.total_stock)          + '</td>'
+      + '<td>' + fmtI(Math.round(mcRows.reduce((s,x)=>s+(x.p_3m       ||0),0))) + '</td>'
+      + '<td>' + fmtI(Math.round(mcRows.reduce((s,x)=>s+(x.avg_6m_old ||0),0))) + '</td>'
+      + '<td>' + fmtI(Math.round(mcRows.reduce((s,x)=>s+(x.avg_7_9m   ||0),0))) + '</td>'
+      + '<td>' + fmtI(Math.round(mcRows.reduce((s,x)=>s+(x.avg_10_12m ||0),0))) + '</td>'
+      + '<td>' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td></tr>';
+
     document.getElementById('modal-bg').classList.add('open');
+}
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g,
+        ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 function closeModal() {
     document.getElementById('modal-bg').classList.remove('open');
@@ -3284,6 +3523,26 @@ function showToast(msg) {
     setTimeout(() => t.classList.remove('show'), 2600);
 }
 
+/* Standard Hankook AU signature block, rendered inside the HTML
+   body of the outgoing message.  No drag-and-drop text — the PNG is
+   already attached to the .eml file the user opens. */
+const HKAU_SIGNATURE = ''
+  + '<div style="margin-top:24px;padding-top:12px;border-top:1px solid #E2E8F0;'
+  +      'font-family:Arial,sans-serif;font-size:12px;color:#334155">'
+  + '<div style="font-weight:600;color:#0E3F5F">Hankook Australia · Sales Strategy & Analytics</div>'
+  + '<div style="color:#64748B;margin-top:2px">'
+  +     'Stock Balance Lab · auto-generated snapshot'
+  + '</div>'
+  + '</div>';
+
+/* Convert an ArrayBuffer to base64 in ~64-char lines (RFC 2045). */
+function _b64Lines(u8) {
+    let b = '';
+    for (let i = 0; i < u8.length; i++) b += String.fromCharCode(u8[i]);
+    const b64 = btoa(b);
+    return b64.match(/.{1,76}/g).join('\r\n');
+}
+
 async function emailScreen(target, panelName) {
     /* Determine which DOM node to capture. */
     const node = target === 'page'
@@ -3297,29 +3556,65 @@ async function emailScreen(target, panelName) {
         const canvas = await html2canvas(node, {
             scale: 1.4, backgroundColor: '#F4F6F9', useCORS: true, logging: false,
         });
-        /* Download PNG so the user can drag it into Outlook */
-        const fname = 'stock_balance_' + panelName.replace(/[^A-Za-z0-9]+/g,'_')
-                    + '_' + todayStr() + '.png';
-        canvas.toBlob(blob => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url; a.download = fname; document.body.appendChild(a);
-            a.click(); document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 5000);
-        }, 'image/png');
-
-        /* Open Outlook (or the default mail client) with a suggested subject */
+        /* Build a .eml file — MIME multipart/mixed with the PNG
+           already attached and the signature embedded in the body.
+           Outlook / Apple Mail / Thunderbird open .eml as a new
+           draft with attachments intact, so the user just double-
+           clicks the file and their compose window opens ready to
+           send.  No drag-and-drop needed. */
+        const pngBlob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+        const pngBuf  = new Uint8Array(await pngBlob.arrayBuffer());
+        const pngB64  = _b64Lines(pngBuf);
+        const stem    = panelName.replace(/[^A-Za-z0-9]+/g, '_');
+        const pngName = 'stock_balance_' + stem + '_' + todayStr() + '.png';
+        const emlName = 'stock_balance_' + stem + '_' + todayStr() + '.eml';
         const subject = '[Hankook AU · Stock Balance Lab] '
                       + panelName + ' — ' + todayStr()
                       + ' — ' + filterSummary();
-        const body = 'Attached: ' + fname + '\n\n'
-                   + 'Snapshot of the Stock Balance Lab (' + panelName + ').\n'
-                   + 'Filter view — ' + filterSummary() + '\n'
-                   + 'Data source: {{ meta.path }} (loaded {{ meta.mtime }}).\n\n'
-                   + '(Please attach the PNG that just downloaded, drag & drop into Outlook.)\n';
-        window.location.href = 'mailto:?subject=' + encodeURIComponent(subject)
-                             + '&body=' + encodeURIComponent(body);
-        showToast('Screenshot downloaded. Outlook mail opened.');
+        const meta = (window.META || {});
+        const htmlBody = ''
+            + '<html><body style="font-family:Arial,sans-serif;font-size:13px;color:#111827">'
+            + '<p>Snapshot of the Stock Balance Lab — <b>' + panelName + '</b>.</p>'
+            + '<p><b>Filter view:</b> ' + filterSummary() + '<br>'
+            + '<b>Data as of:</b> ' + (meta.data_date || '')
+            + ' &nbsp;·&nbsp; <b>Source workbook:</b> ' + (meta.path || '') + '</p>'
+            + '<p>The dashboard snapshot is attached as <b>' + pngName + '</b>.</p>'
+            + HKAU_SIGNATURE
+            + '</body></html>';
+        const boundary = '=_HKAU_' + Math.random().toString(36).slice(2, 12);
+        /* RFC 5322 date-time, e.g. Mon, 15 Sep 2026 09:41:07 +1000 */
+        const now = new Date();
+        const rfcDate = now.toUTCString();
+        const eml = ''
+            + 'From: "Stock Balance Lab" <no-reply@localhost>\r\n'
+            + 'To: \r\n'
+            + 'Subject: ' + subject + '\r\n'
+            + 'Date: ' + rfcDate + '\r\n'
+            + 'MIME-Version: 1.0\r\n'
+            + 'X-Unsent: 1\r\n'
+            + 'Content-Type: multipart/mixed; boundary="' + boundary + '"\r\n'
+            + '\r\n'
+            + '--' + boundary + '\r\n'
+            + 'Content-Type: text/html; charset="UTF-8"\r\n'
+            + 'Content-Transfer-Encoding: 7bit\r\n'
+            + '\r\n'
+            + htmlBody + '\r\n'
+            + '\r\n'
+            + '--' + boundary + '\r\n'
+            + 'Content-Type: image/png; name="' + pngName + '"\r\n'
+            + 'Content-Transfer-Encoding: base64\r\n'
+            + 'Content-Disposition: attachment; filename="' + pngName + '"\r\n'
+            + '\r\n'
+            + pngB64 + '\r\n'
+            + '\r\n'
+            + '--' + boundary + '--\r\n';
+        const blob = new Blob([eml], { type: 'message/rfc822' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href = url; a.download = emlName;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        showToast('Downloaded ' + emlName + ' — double-click to open in Outlook');
     } catch (err) {
         console.error(err);
         showToast('Could not capture the screen: ' + err.message);
