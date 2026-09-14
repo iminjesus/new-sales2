@@ -271,7 +271,18 @@ def _scan_stock_header(ws, header_row=None):
 # This is intentionally coarse — good enough to slice the shortage
 # vs surplus board.  Falls back to "Other" so the column never blanks.
 _LINE_RULES = [
-    (r"^LH|^LK|^LS|^LI",         "Laufenn G/S/X/I Fit"),
+    # Laufenn — each 2-letter prefix maps to a SPECIFIC sub-line, not
+    # the generic "G/S/X/I Fit" umbrella.  Users kept asking why an
+    # LK-series pattern reads as "G/S/X/I Fit" — this row-by-row split
+    # settles it: LK → X Fit, LS → S Fit, LI/LW → I Fit, LG → G Fit.
+    (r"^LG|^LC",                 "Laufenn G Fit"),
+    (r"^LK|^LP",                 "Laufenn X Fit"),
+    (r"^LS|^LH",                 "Laufenn S Fit"),
+    (r"^LI|^LW",                 "Laufenn I Fit"),
+    # Hankook — pattern prefix identifies the marketing line.  Specific
+    # variant (Kinergy GT / Ventus S1 EVO3 / Dynapro AT2) is added
+    # separately by _marketing_line_from_desc() when the description
+    # carries it.
     (r"^RA|^RF|^RH0|^RH1|^RT",   "Dynapro"),
     (r"^K1\d\d",                 "Ventus"),
     (r"^K7\d\d|^K4\d\d|^K3\d\d|^KH", "Kinergy"),
@@ -291,6 +302,40 @@ def _marketing_line(pattern):
         if re.match(regex, p):
             return name
     return "Other"
+
+
+def _marketing_line_from_desc(desc, pattern):
+    """Read the marketing line from the description's 4th comma field
+    when it carries a recognisable line name (X FIT / G FIT / KINERGY
+    / VENTUS / DYNAPRO / …).  The 4th field is the human-readable
+    variant so it's the source of truth — the pattern-based mapping
+    is only a fallback for merges whose description is missing.
+
+    Example inputs:
+      '265/70R17, LF, LK41, X FIT AT, 121S'   → 'Laufenn X Fit'
+      '245/45R18, HK, K127, VENTUS S1 EVO3'   → 'Ventus'
+      '205/55R16, HK, K425, KINERGY GT, 91V'  → 'Kinergy'
+    """
+    if desc:
+        parts = str(desc).split(",")
+        if len(parts) >= 4:
+            variant = parts[3].strip().upper()
+            # Laufenn sub-lines — check "X FIT" / "G FIT" / "S FIT" /
+            # "I FIT" literals from the description.
+            if "X FIT"    in variant: return "Laufenn X Fit"
+            if "G FIT"    in variant: return "Laufenn G Fit"
+            if "S FIT"    in variant: return "Laufenn S Fit"
+            if "I FIT"    in variant: return "Laufenn I Fit"
+            # Hankook marketing lines
+            if "VENTUS"   in variant: return "Ventus"
+            if "KINERGY"  in variant: return "Kinergy"
+            if "DYNAPRO"  in variant: return "Dynapro"
+            if "WINTER"   in variant or "ICEPT" in variant: return "Winter i*cept"
+            if "OPTIMO"   in variant: return "Optimo"
+            if "SMART"    in variant or "E-CUBE" in variant or "ECUBE" in variant:
+                return "Truck / TBR"
+    # Fall back to the pattern-prefix rules for merges with no desc
+    return _marketing_line(pattern)
 
 
 def _extract_pattern(desc):
@@ -778,6 +823,32 @@ def load_stock_data():
             "history":         history,
         }
 
+    # ── Pass 1.5: build a per-merge "best product info" cache.
+    # Walk every merge that has at least one M CODE in the MM sheet
+    # and aggregate the first-seen non-empty value for each field
+    # across all its siblings' Sheet2 records.  Pass 2 then uses this
+    # as the FIRST fallback source before touching individual M CODE
+    # records — so a merge like 1156 with ten empty M CODEs and one
+    # populated sibling has that one populate ALL ten rows.
+    NEED_FIELDS = ("description", "brand", "sw", "sr", "inch",
+                   "li", "ss", "group", "factory", "origin", "au",
+                   "old_stock", "ply")
+    merge_details = {}
+    for merge_code, siblings in merge_to_mcodes.items():
+        aggregate = {}
+        for sib in siblings:
+            rec = m_master.get(sib)
+            if not rec:
+                continue
+            for f in NEED_FIELDS:
+                v = rec.get(f)
+                if v and f not in aggregate:
+                    aggregate[f] = v
+            if len(aggregate) == len(NEED_FIELDS):
+                break
+        if aggregate:
+            merge_details[merge_code] = aggregate
+
     # ── Pass 2: iterate every M CODE in MM order and emit one row
     # per M CODE, sharing the merge-level stock/demand with siblings.
     # Additionally rescue merges that appear in the stock sheet but
@@ -805,26 +876,15 @@ def load_stock_data():
         seen_merges_from_mm.add(merge_code)
         mc = merge_code
         # Take THIS M CODE's Sheet2 record as the starting point, then
-        # patch any blank field from siblings in the same Merge.
-        # Siblings share the product (same size / brand / pattern) so
-        # borrowing the missing field is safe.
+        # patch any blank field from the merge-wide aggregate built in
+        # Pass 1.5 — that already scanned every sibling once, so we
+        # don't need to re-walk them here.  Siblings within a Merge
+        # share size / brand / pattern, so borrowing is safe.
         detail = dict(m_master.get(m_code, {}))
-        need_fields = ("description", "brand", "sw", "sr", "inch",
-                       "li", "ss", "group", "factory", "origin", "au")
-        missing = [f for f in need_fields if not detail.get(f)]
-        if missing:
-            for sibling in merge_to_mcodes.get(merge_code, []):
-                if sibling == m_code:
-                    continue
-                sib = m_master.get(sibling, {})
-                if not sib:
-                    continue
-                for f in list(missing):
-                    if sib.get(f):
-                        detail[f] = sib[f]
-                        missing.remove(f)
-                if not missing:
-                    break
+        merge_agg = merge_details.get(merge_code, {})
+        for f in NEED_FIELDS:
+            if not detail.get(f) and merge_agg.get(f):
+                detail[f] = merge_agg[f]
 
         raw_desc = detail.get("description", "")
         # Ultimate description fallback: if Sheet2 has no record for
@@ -835,14 +895,25 @@ def load_stock_data():
         if not raw_desc and stk.get("ssw_desc"):
             raw_desc = stk["ssw_desc"]
         pattern  = _extract_pattern(raw_desc)
-        line     = _marketing_line(pattern)
+        # Marketing line uses the description's variant field first
+        # (so "X FIT AT" → "Laufenn X Fit" rather than the generic
+        # "G/S/X/I Fit" umbrella).  Falls back to pattern-prefix
+        # rules when the description has no useable variant field.
+        line     = _marketing_line_from_desc(raw_desc, pattern)
         eff_group = (stk["group_raw"] or detail.get("group") or "").strip()
 
         # Brand: prefer the Sheet2 Brand column, fall back to whatever
         # the description's 2nd comma field carries (HK→Hankook, KS→
         # Kingstar…) so a merge with only a Description still shows the
-        # brand.
-        brand = detail.get("brand", "") or _extract_brand(raw_desc)
+        # brand.  Sheet2's Brand column often uses the same 2-letter
+        # shorthand (LF, HK, KS, AU) so we run the whole thing through
+        # the brand-code map — a stray "LF" that survives now becomes
+        # "Laufenn" like everything else.
+        raw_brand = str(detail.get("brand", "") or "").strip()
+        if raw_brand:
+            brand = _BRAND_CODE_MAP.get(raw_brand.upper(), raw_brand)
+        else:
+            brand = _extract_brand(raw_desc)
 
         # Size: preserve whatever the Description's FIRST comma-field
         # says.  Preferred (185R14C, 205/55R16, 33X12.5R15…) — only
@@ -2545,12 +2616,20 @@ function renderTable() {
              + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>';
     };
 
-    /* Detect whether a merge has ANY product info in Sheet2 — if
-       every M CODE in the group is missing brand + line + size,
-       we surface an explicit "no info" banner cell instead of the
-       usual product columns so the user knows the workbook itself
-       is missing the record (not our parser). */
-    const mergeHasInfo = (grp) => grp.some(r => r.brand || r.line || r.size);
+    /* Info-availability checks — used to render the ⚠ badge that
+       tells the user which merges/rows the workbook itself is
+       missing.  Per-row check triggers even when siblings in the
+       same merge DO have data, so a partially-filled merge still
+       flags its truly-empty M CODEs. */
+    const rowHasInfo   = (r)   => !!(r.brand || r.line || r.size || r.pattern);
+    const mergeHasInfo = (grp) => grp.some(rowHasInfo);
+    /* Small compact badge for M CODEs whose own record is empty —
+       makes each empty row instantly identifiable in a mixed merge. */
+    const noDataBadge =
+        '<span title="Sheet2에 이 M CODE에 대한 제품 정보가 없습니다" '
+        + 'style="display:inline-block;margin-left:6px;padding:1px 6px;'
+        + 'border-radius:8px;font-size:10px;font-weight:600;'
+        + 'background:#FEF3C7;color:#92400E;white-space:nowrap">⚠ no data</span>';
 
     const rowsHtml = [];
     let mergesRendered = 0;
@@ -2575,6 +2654,17 @@ function renderTable() {
                 if (selected.has(r.merge_code)) classes.push('selected');
                 if (isFirst)                     classes.push('merge-break');
                 const bandStyle = ' style="border-left:4px solid ' + band + '"';
+                /* Three cases:
+                   1. Whole merge lacks info (`hasInfo` false) — one
+                      wide banner span replaces the product block.
+                   2. This row lacks info but siblings have it — we
+                      still render 8 product cells so the alignment
+                      stays stable; the M CODE gets a small ⚠ badge
+                      so the user can see WHICH rows are missing.
+                   3. Row has info — normal render. */
+                const thisRowHasInfo = rowHasInfo(r);
+                const mcodeCell = '<td>' + (r.m_code || '—')
+                                + (thisRowHasInfo ? '' : noDataBadge) + '</td>';
                 const productCells = hasInfo
                     ? ( '<td>' + (r.brand   || '—') + '</td>'
                       + '<td>' + (r.line    || '—') + '</td>'
@@ -2585,12 +2675,13 @@ function renderTable() {
                       + '<td>' + (r.inch    || '—') + '</td>'
                       + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>' )
                     : ( '<td class="no-info" colspan="8">'
-                      + '⚠ 정보 없음 — Sheet2에 이 Merge Code의 제품 정보(brand/line/size…)가 없습니다'
+                      + '⚠ 정보 없음 — Sheet2/Stock Sheet 어디에도 이 Merge Code의 제품 정보가 없습니다. '
+                      + 'CS가 Sheet2에 Merge ' + r.merge_code + ' 마스터 레코드를 등록해야 채워집니다.'
                       + '</td>' );
                 rowsHtml.push(
                     '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
                     + '<td' + bandStyle + '>' + r.merge_code + '</td>'
-                    + '<td>' + (r.m_code || '—') + '</td>'
+                    + mcodeCell
                     + productCells
                     + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r)
                     + '</tr>');
@@ -2622,10 +2713,16 @@ function renderTable() {
             if (r.merge_code !== prev)      classes.push('merge-break');
             prev = r.merge_code;
             const band = mergeBandColor(r.merge_code);
+            /* Per-row no-data badge — same rule as the merge-grouped
+               path: if this specific M CODE has no product info, tag
+               it inline so the empty row is instantly identifiable. */
+            const thisRowHasInfo = rowHasInfo(r);
+            const mcodeCell = '<td>' + (r.m_code || '—')
+                            + (thisRowHasInfo ? '' : noDataBadge) + '</td>';
             rowsHtml.push(
                 '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band + '">' + r.merge_code + '</td>'
-                + '<td>' + (r.m_code || '—') + '</td>'
+                + mcodeCell
                 + '<td>' + (r.brand   || '—') + '</td>'
                 + '<td>' + (r.line    || '—') + '</td>'
                 + '<td>' + (r.pattern || '—') + '</td>'
