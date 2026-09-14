@@ -783,19 +783,32 @@ def load_stock_data():
         is_low_prof   = sr_num   is not None and sr_num   < 50
         is_suv_flag   = _is_suv(line, pattern)
 
-        # F/O · OPE indicator from Sheet2's AU column.  Kept as a
-        # compact string so a filter dropdown can key on it:
-        #   'F/O' = Fade Out    'OPE'         = OE / open-market SKU
-        #   'OE A/S' = OE spare  'F/O + OPE'  = both flags set
+        # F/O · OPE indicator derived from Sheet2's AU column.  The
+        # value may be a free-form tag (multiple tokens joined by "/"
+        # or space) so we walk the string looking for the seven
+        # recognised buckets, most specific first.  The result is
+        # a compact "+"-joined string so a filter dropdown can key on
+        # any single bucket.  Recognised buckets:
+        #   F/O · OPE · M/S · Testing · Transfer · OE A/S · Price
         au = str(detail.get("au", "") or "").upper().strip()
         old_stock = str(detail.get("old_stock", "") or "").upper().strip()
         sku_flags = []
         if "FADE OUT" in au or old_stock == "YES":
             sku_flags.append("F/O")
-        if "OPE" in au and "OE A/S" not in au:
-            sku_flags.append("OPE")
-        if "OE A/S" in au:
+        # "OE A/S" is more specific than plain "OPE" — check it first
+        # so "OPE / OE A/S" doesn't double-fire.
+        if "OE A/S" in au or "OE_AS" in au or "OEA/S" in au:
             sku_flags.append("OE A/S")
+        if "OPE" in au and "OE A/S" not in au and "OE_AS" not in au and "OEA/S" not in au:
+            sku_flags.append("OPE")
+        if "M/S" in au or " MS " in " " + au + " " or au.startswith("MS ") or au.endswith(" MS") or au == "MS":
+            sku_flags.append("M/S")
+        if "TESTING" in au or "TEST" in au:
+            sku_flags.append("Testing")
+        if "TRANSFER" in au or "TRF" in au:
+            sku_flags.append("Transfer")
+        if "PRICE" in au:
+            sku_flags.append("Price")
         sku_status = " + ".join(sku_flags) if sku_flags else "Active"
 
         rows_out.append({
@@ -1254,6 +1267,18 @@ table.dt thead th { background:#ECEFF1; color:#37474F; padding:6px 8px;
                     text-transform:uppercase; letter-spacing:.04em;
                     cursor:pointer; user-select:none; white-space:nowrap; }
 table.dt thead th:hover { background:#DDE4EE; }
+/* Pipeline-detail mode has a two-row header:
+     Row 1 = state banner (NSW/QLD/VIC/WA/TOTAL) — sticks at top:0
+     Row 2 = sub-column labels (Stock/Port/Water/Factory + MOI…)
+             sticks at top: <banner-height> so the banner stays
+             visible above the labels during vertical scroll.
+   The `pipe-mode` class on <thead> switches this on. */
+table.dt thead.pipe-mode tr.state-band th {
+    top:0; z-index:3; padding:4px 6px; font-size:11px;
+    border-bottom:2px solid #0F172A; cursor:default;
+}
+table.dt thead.pipe-mode tr.state-band th:hover { filter:brightness(1.05); }
+table.dt thead.pipe-mode tr.col-labels th { top:26px; }
 table.dt thead th .sort { display:inline-block; margin-left:3px; opacity:.35;
                           font-size:9px; }
 table.dt thead th.sort-asc  .sort::after { content:'▲'; opacity:1; }
@@ -1281,11 +1306,28 @@ table.dt tbody tr.sub-total:hover td { background:#FFECB3 !important; }
    so the reader's eye traces the merge group top-to-bottom. */
 table.dt tbody tr.mc-row td:first-child { font-family:'IBM Plex Mono',monospace;
     font-weight:600; color:#37474F; }
+/* Numeric cells on an M CODE (non-total) row render in a distinct
+   blue so the reader instantly sees they are the merge's roll-up
+   value applied to this M CODE, not this SKU's own sold-per-unit
+   history.  Sub Total rows keep the default black. */
+table.dt tbody tr.mc-row td.r { color:#1D4ED8; }
+table.dt tbody tr.mc-row td.r.short { color:var(--short) !important; }
+table.dt tbody tr.mc-row td.r.sur   { color:var(--sur)   !important; }
+table.dt tbody tr.mc-row td.r.ser   { color:var(--ser)   !important; }
+/* When a merge genuinely has no product info in Sheet2, the M CODE
+   row shows a soft banner in the (very wide) description cell so
+   users can tell missing text from missing numbers. */
+table.dt tbody tr.mc-row td.no-info {
+    background:#FEF3C7 !important; color:#92400E; font-style:italic;
+    font-weight:600; font-size:10.5px; }
 /* Sticky Total row at the top of the tbody, showing sums over the
-   current filtered view. */
+   current filtered view.  Its top offset differs by header depth:
+   compact mode -> 24px (below the single header row),
+   pipeline mode -> 52px (below state banner + sub-column labels). */
 table.dt tbody tr.total-row td { background:#EEF3F8 !important;
     font-weight:700; color:var(--hdr1); border-top:2px solid var(--hdr1);
     border-bottom:2px solid var(--hdr1); position:sticky; top:24px; z-index:1; }
+table.dt.pipe-mode tbody tr.total-row td { top:52px; }
 /* Darker/blue treatment for the (3M) demand parenthesis so the
    sales figure reads as a distinct piece of data next to stock. */
 .dem-parens { color:#1976D2 !important; font-weight:600; font-size:10.5px; }
@@ -1677,14 +1719,19 @@ function buildFilterOptions() {
     });
     /* Product order: PCLT first (biggest segment), TBR next, Other last */
     const prodOrder = ['PCLT','TBR','Other'];
-    /* F/O · OPE order: Active first, then flagged buckets */
-    const skuOrder = ['Active','F/O','OPE','F/O + OPE','OE A/S'];
+    /* F/O · OPE order: Active first, then the seven flagged buckets
+       (plus any composite "A + B" values that showed up in the data) */
+    const skuBase   = ['Active','F/O','OPE','M/S','Testing','Transfer','OE A/S','Price'];
+    const seenSku   = [...values.sku_status];
+    const skuKnown  = skuBase.filter(s => values.sku_status.has(s));
+    const skuMixed  = seenSku.filter(s => !skuBase.includes(s)).sort();
+    const skuOrder  = [...skuKnown, ...skuMixed];
     return {
         status:     values.status,
         state:      values.state,
         brand:      [...values.brand].sort(),
         product:    prodOrder.filter(p => values.product.has(p)),
-        sku_status: skuOrder.filter(s => values.sku_status.has(s)),
+        sku_status: skuOrder,
         group:      [...values.group].sort(),
         line:       [...values.line].sort(),
         inch:       [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
@@ -1989,19 +2036,28 @@ function buildTableHead() {
         ['size','Size'], ['inch','Inch'], ['li_ss','LI/SS'],
     ];
     const stateColour = { NSW:'#1976D2', QLD:'#EF6C00', VIC:'#8E24AA', WA:'#00897B' };
+    /* Tag both <table> and <thead> with a `pipe-mode` class so the CSS
+       knows the header is a two-row banner and needs sticky offsets
+       (state banner top:0, sub-column labels top:26px, total-row
+       top:52px) instead of the compact single-row layout. */
+    document.getElementById('sku-thead').className = showPipeline ? 'pipe-mode' : '';
+    document.getElementById('sku-tbl').classList.toggle('pipe-mode', showPipeline);
     let h = '';
     if (showPipeline) {
         /* Two-row header: state band + sub-column labels.  Each state
            has 4 sub-columns (Stock/Port/Water/Factory) and a final
            TOTAL group sits at the far right so the reader can compare
-           per-state pipeline vs. the national roll-up in one glance. */
-        h = '<tr><th colspan="' + nonState.length + '" style="background:#F1F5F9"></th>';
+           per-state pipeline vs. the national roll-up in one glance.
+           The state-band row is marked `state-band`; the sub-label
+           row is marked `col-labels` — CSS above sticks them at 0 and
+           26px so the banner stays anchored during vertical scroll. */
+        h = '<tr class="state-band"><th colspan="' + nonState.length + '" style="background:#F1F5F9"></th>';
         STATES.forEach(s => {
             h += '<th colspan="4" class="grp-start" style="text-align:center;background:' + stateColour[s]
               + ';color:#fff;font-weight:700">' + s + '</th>';
         });
         h += '<th colspan="4" class="grp-start" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
-        h += '<th colspan="3" class="grp-start" style="background:#F1F5F9"></th></tr><tr>';
+        h += '<th colspan="7" class="grp-start" style="background:#F1F5F9"></th></tr><tr class="col-labels">';
     } else {
         h = '<tr>';
     }
@@ -2165,14 +2221,6 @@ function renderTable() {
     const ttlMOI  = ttl3M   > 0 ? (ttlStock / ttl3M)  : null;
     const ttlPPL  = ttlMax  > 0 ? (ttlAll   / ttlMax) : null;
 
-    /* ── Merge groups for Sub Total rows ──
-       Group visible src by merge_code so we can render M CODE rows
-       followed by a sub-total.  Preserves insertion order. */
-    const mergeGroups = new Map();
-    src.forEach(r => {
-        if (!mergeGroups.has(r.merge_code)) mergeGroups.set(r.merge_code, []);
-        mergeGroups.get(r.merge_code).push(r);
-    });
     /* Cosmetic left-column band — cycles through 8 quiet hues so
        adjacent merge groups are visually distinct without loud
        colour bombing.  Same merge → same band on both M CODE rows
@@ -2180,6 +2228,9 @@ function renderTable() {
     const BAND_COLOURS = ['#4A90E2','#F5A623','#7ED321','#BD10E0',
                           '#50E3C2','#B8E986','#F8A5C2','#9013FE'];
     const mergeBandColor = mc => BAND_COLOURS[Math.abs(mc) % BAND_COLOURS.length];
+    /* Apply sort BEFORE grouping so merge_code descending produces
+       descending merge groups rather than falling back to insertion
+       order. */
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -2189,6 +2240,15 @@ function renderTable() {
             return 0;
         });
     }
+    /* ── Merge groups for Sub Total rows ──
+       Group visible src by merge_code so we can render M CODE rows
+       followed by a sub-total.  Preserves the (now-sorted) order
+       of first appearance so merge_code ↑/↓ works as expected. */
+    const mergeGroups = new Map();
+    src.forEach(r => {
+        if (!mergeGroups.has(r.merge_code)) mergeGroups.set(r.merge_code, []);
+        mergeGroups.get(r.merge_code).push(r);
+    });
     /* Update sort arrows */
     document.querySelectorAll('#sku-tbl thead th').forEach(th => {
         th.classList.remove('sort-asc','sort-desc');
@@ -2255,201 +2315,182 @@ function renderTable() {
              +  '<td class="r">' + fmtF(ttl1012, 1) + '</td>'
              +  '</tr>';
 
-    /* Walk merge groups; each group emits N M-CODE rows (with the
-       stock/sales columns blanked, since the numbers are shared at
-       merge level) followed by a Sub Total row that carries the
-       merge's actual figures.  Cosmetic left band ties each merge
-       group's rows together on the leftmost column. */
-    const rowsHtml = [];
-    let mergeIdx = 0;
-    let mergesRendered = 0;
-    const ROW_CAP = 800;   /* cap on visible rows to keep the DOM light */
-    for (const [mc, groupRows] of mergeGroups) {
-        if (mergesRendered >= ROW_CAP) break;
-        mergesRendered += groupRows.length;
-        const band = mergeBandColor(mc);
-        const rep  = groupRows[0];   /* representative for merge stats */
+    /* Sub Total row visibility rule: only when the user is looking at
+       the natural merge-grouped ordering (no sort applied, or an
+       explicit ascending/descending sort by merge_code).  Sorting by a
+       material attribute (brand, pattern, size…) inter-leaves M CODEs
+       from many merges, at which point a per-merge subtotal makes no
+       sense and just looks noisy — so we hide it. */
+    const showSubTotal = (!sortCol || sortDir === 0 || sortCol === 'merge_code');
 
-        // Individual M CODE rows — product info only, stock columns dashed
-        groupRows.forEach((r, idxInGroup) => {
-            const isFirst = idxInGroup === 0;
-            const classes = ['mc-row'];
-            if (selected.has(r.merge_code)) classes.push('selected');
-            if (isFirst)                     classes.push('merge-break');
-            const selCls = ' class="' + classes.join(' ') + '"';
-            const bandStyle = ' style="border-left:4px solid ' + band + '"';
-            /* F/O · OPE pill re-rendered per row (each M CODE has its own) */
-            const skuStatus = r.sku_status || 'Active';
-            let skuPill;
-            if (skuStatus === 'Active') {
-                skuPill = '<span style="color:#78909C;font-size:10.5px">—</span>';
-            } else {
-                const tokens = skuStatus.split(/\s*\+\s*/);
-                skuPill = tokens.map(t => {
-                    const bg = t === 'F/O' ? '#FFEBEE' : t === 'OPE' ? '#FFF3E0' : '#E3F2FD';
-                    const fg = t === 'F/O' ? '#C62828' : t === 'OPE' ? '#E65100' : '#1565C0';
-                    return '<span style="display:inline-block;padding:1px 6px;'
-                         + 'border-radius:8px;font-size:10px;font-weight:600;'
-                         + 'white-space:nowrap;margin-right:2px;'
-                         + 'background:' + bg + ';color:' + fg + '">' + t + '</span>';
-                }).join('');
-            }
-            /* Blank-state cell factory: same column shape as the state
-               columns, but rendered as an em-dash so scanning down the
-               columns skips these rows.  The Sub Total row below
-               carries the actual figures. */
-            const blank = '<td class="r" style="color:#CFD8DC">—</td>';
-            const blanks = n => Array(n).fill(blank).join('');
-            let stateBlanks, totalBlanks;
-            if (showPipeline) {
-                stateBlanks = STATES.map((s,i) =>
-                    '<td class="r' + (i===0 ? ' grp-start' : '') + '" style="color:#CFD8DC">—</td>' + blanks(3)
-                ).join('');
-                totalBlanks = '<td class="r grp-start" style="color:#CFD8DC">—</td>' + blanks(3);
-            } else {
-                stateBlanks = STATES.map((s,i) =>
-                    '<td class="r' + (i===0 ? ' grp-start' : '') + '" style="color:#CFD8DC">—</td>'
-                ).join('');
-                totalBlanks = '<td class="r grp-start" style="color:#CFD8DC">—</td>';
-            }
-            const moiBlanks = '<td class="r grp-start" style="color:#CFD8DC">—</td>'
-                           + '<td class="r" style="color:#CFD8DC">—</td>'
-                           + '<td class="r" style="color:#CFD8DC">—</td>'
-                           + '<td class="r grp-start" style="color:#CFD8DC">—</td>'
-                           + '<td class="r" style="color:#CFD8DC">—</td>'
-                           + '<td class="r" style="color:#CFD8DC">—</td>'
-                           + '<td class="r" style="color:#CFD8DC">—</td>';
-            rowsHtml.push('<tr' + selCls.replace('"', '"') + ' data-mc="' + r.merge_code + '">'
-                + '<td' + bandStyle + '>' + r.merge_code + '</td>'
-                + '<td>' + (r.m_code || '—') + '</td>'
-                + '<td>' + (r.brand || '—') + '</td>'
-                + '<td>' + (r.line || '—') + '</td>'
-                + '<td>' + (r.pattern || '—') + '</td>'
-                + '<td>' + pill(r.group) + '</td>'
-                + '<td>' + skuPill + '</td>'
-                + '<td>' + (r.size || '—') + '</td>'
-                + '<td>' + (r.inch || '—') + '</td>'
-                + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
-                + stateBlanks + totalBlanks + moiBlanks
-                + '</tr>');
-        });
+    /* Palette for the F/O · OPE pill (per token).  Each bucket has
+       its own soft ground + strong foreground; unrecognised tokens
+       fall back to a neutral blue-grey. */
+    const SKU_PILL = {
+        'F/O':      { bg:'#FFEBEE', fg:'#C62828' },
+        'OPE':      { bg:'#FFF3E0', fg:'#E65100' },
+        'OE A/S':   { bg:'#E3F2FD', fg:'#1565C0' },
+        'M/S':      { bg:'#F3E5F5', fg:'#6A1B9A' },
+        'Testing':  { bg:'#FFF9C4', fg:'#827717' },
+        'Transfer': { bg:'#E0F2F1', fg:'#00695C' },
+        'Price':    { bg:'#EDE7F6', fg:'#4527A0' }
+    };
+    const renderSkuPill = (skuStatus) => {
+        const s = skuStatus || 'Active';
+        if (s === 'Active') return '<span style="color:#78909C;font-size:10.5px">—</span>';
+        return s.split(/\s*\+\s*/).map(t => {
+            const c = SKU_PILL[t] || { bg:'#ECEFF1', fg:'#455A64' };
+            return '<span style="display:inline-block;padding:1px 6px;'
+                 + 'border-radius:8px;font-size:10px;font-weight:600;'
+                 + 'white-space:nowrap;margin-right:2px;'
+                 + 'background:' + c.bg + ';color:' + c.fg + '">' + t + '</span>';
+        }).join('');
+    };
 
-        // Sub Total row for this merge — same shape as data rows but
-        // showing the aggregate figures.  Left band continues to tie
-        // it to its M CODE siblings.
-        const r = rep;
-        const cls_mo = r.status === 'shortage' ? 'short'
-                     : r.status === 'surplus'  ? 'sur'
-                     : r.status === 'serious_surplus' ? 'ser' : '';
-        let subState, subTotalGrp;
+    /* Numeric-cell factories — take a row (M CODE or Sub Total) and
+       return the state / total / MOI / period-avg TD strings.  Both
+       row types share the SAME merge-level figures; the visual
+       difference is cell colour (blue for M CODE, black for Sub
+       Total) which comes from tr.mc-row td.r vs tr.sub-total td. */
+    const stateCellsFor = (r) => {
         if (showPipeline) {
-            subState = STATES.map((s, i) => {
+            return STATES.map((s, i) => {
                 const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
                 return '<td class="r' + (i===0 ? ' grp-start' : '') + '">' + fmtI(r.state_stock[s]) + '</td>'
                      + '<td class="r">' + fmtI(pp.port)  + '</td>'
                      + '<td class="r">' + fmtI(pp.water) + '</td>'
                      + '<td class="r">' + fmtI(pp.fac)   + '</td>';
             }).join('');
-            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
-            subTotalGrp = '<td class="r grp-start">' + fmtI(r.total_stock) + '</td>'
-                        + '<td class="r">' + fmtI(tp) + '</td>'
-                        + '<td class="r">' + fmtI(tw) + '</td>'
-                        + '<td class="r">' + fmtI(tf) + '</td>';
-        } else {
-            subState = STATES.map((s, i) =>
-                '<td class="r' + (i===0 ? ' grp-start' : '') + '">'
-                + fmtI(r.state_stock[s]) + demSuffix(r.state_3m[s]) + '</td>'
-            ).join('');
-            subTotalGrp = '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
         }
-        rowsHtml.push('<tr class="sub-total" data-mc="' + r.merge_code + '">'
-            + '<td style="border-left:4px solid ' + band + ';font-weight:700;color:' + band + '" '
-            +      'colspan="10">SUB TOTAL · Merge ' + r.merge_code + '</td>'
-            + subState + subTotalGrp
-            + '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
-            + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
-            + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
-            + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
-            + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>'
-            + '</tr>');
-        mergeIdx++;
-    }
-
-    body.innerHTML = totalRow + rowsHtml.join('');
-    /* Return early — the legacy per-row loop below is no longer
-       reached. */
-    if (true) {
-        /* Update row count summary */
-        const suffix = mergeGroups.size > ROW_CAP / 3 ? ' — showing first ' + ROW_CAP + ' rows' : '';
-        document.getElementById('row-count').textContent = fmtI(src.length) + ' M-CODE rows across ' + fmtI(mergeGroups.size) + ' merges' + suffix;
-        updateSelectionSummary(src);
-        return;
-    }
-
-    /* ------- DEAD CODE (legacy row-by-row rendering) ------- */
-    let prevMerge = null;
-    body.innerHTML = totalRow + src.slice(0, 800).map(r => {
+        return STATES.map((s, i) =>
+            '<td class="r' + (i===0 ? ' grp-start' : '') + '">'
+            + fmtI(r.state_stock[s]) + demSuffix(r.state_3m[s]) + '</td>'
+        ).join('');
+    };
+    const totalGrpFor = (r) => {
+        if (showPipeline) {
+            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
+            return '<td class="r grp-start">' + fmtI(r.total_stock) + '</td>'
+                 + '<td class="r">' + fmtI(tp) + '</td>'
+                 + '<td class="r">' + fmtI(tw) + '</td>'
+                 + '<td class="r">' + fmtI(tf) + '</td>';
+        }
+        return '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
+    };
+    const moiCellsFor = (r) => {
         const cls_mo = r.status === 'shortage' ? 'short'
                      : r.status === 'surplus'  ? 'sur'
                      : r.status === 'serious_surplus' ? 'ser' : '';
-        const isNewMerge = r.merge_code !== prevMerge;
-        prevMerge = r.merge_code;
-        const classes = [];
-        if (selected.has(r.merge_code)) classes.push('selected');
-        if (isNewMerge)                 classes.push('merge-break');
-        const selCls = classes.length ? ' class="' + classes.join(' ') + '"' : '';
-        let totalGroup;
-        if (showPipeline) {
-            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
-            totalGroup = '<td class="r grp-start">' + fmtI(r.total_stock) + '</td>'
-                       + '<td class="r">'          + fmtI(tp)            + '</td>'
-                       + '<td class="r">'          + fmtI(tw)            + '</td>'
-                       + '<td class="r">'          + fmtI(tf)            + '</td>';
-        } else {
-            totalGroup = '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
+        return '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+             + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
+             + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
+             + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
+             + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
+             + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
+             + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>';
+    };
+
+    /* Detect whether a merge has ANY product info in Sheet2 — if
+       every M CODE in the group is missing brand + line + size,
+       we surface an explicit "no info" banner cell instead of the
+       usual product columns so the user knows the workbook itself
+       is missing the record (not our parser). */
+    const mergeHasInfo = (grp) => grp.some(r => r.brand || r.line || r.size);
+
+    const rowsHtml = [];
+    let mergesRendered = 0;
+    const ROW_CAP = 800;
+
+    /* Emission order depends on the sort mode.  In merge-natural
+       order (or explicit merge_code sort) we walk merge groups and
+       emit N M CODE rows + 1 Sub Total per merge.  In any other
+       sort we simply emit the sorted `src` row-by-row (no sub
+       totals). */
+    if (showSubTotal) {
+        for (const [mc, groupRows] of mergeGroups) {
+            if (mergesRendered >= ROW_CAP) break;
+            mergesRendered += groupRows.length;
+            const band  = mergeBandColor(mc);
+            const rep   = groupRows[0];
+            const hasInfo = mergeHasInfo(groupRows);
+
+            groupRows.forEach((r, idxInGroup) => {
+                const isFirst = idxInGroup === 0;
+                const classes = ['mc-row'];
+                if (selected.has(r.merge_code)) classes.push('selected');
+                if (isFirst)                     classes.push('merge-break');
+                const bandStyle = ' style="border-left:4px solid ' + band + '"';
+                const productCells = hasInfo
+                    ? ( '<td>' + (r.brand   || '—') + '</td>'
+                      + '<td>' + (r.line    || '—') + '</td>'
+                      + '<td>' + (r.pattern || '—') + '</td>'
+                      + '<td>' + pill(r.group) + '</td>'
+                      + '<td>' + renderSkuPill(r.sku_status) + '</td>'
+                      + '<td>' + (r.size    || '—') + '</td>'
+                      + '<td>' + (r.inch    || '—') + '</td>'
+                      + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>' )
+                    : ( '<td class="no-info" colspan="8">'
+                      + '⚠ 정보 없음 — Sheet2에 이 Merge Code의 제품 정보(brand/line/size…)가 없습니다'
+                      + '</td>' );
+                rowsHtml.push(
+                    '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
+                    + '<td' + bandStyle + '>' + r.merge_code + '</td>'
+                    + '<td>' + (r.m_code || '—') + '</td>'
+                    + productCells
+                    + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r)
+                    + '</tr>');
+            });
+
+            /* Sub Total row — dedicated aggregate line under each
+               merge group.  Uses the same representative row so its
+               numbers agree with the M CODE lines above. */
+            rowsHtml.push(
+                '<tr class="sub-total" data-mc="' + rep.merge_code + '">'
+                + '<td style="border-left:4px solid ' + band
+                +      ';font-weight:700;color:' + band + '" colspan="10">'
+                + 'SUB TOTAL · Merge ' + rep.merge_code + '</td>'
+                + stateCellsFor(rep) + totalGrpFor(rep) + moiCellsFor(rep)
+                + '</tr>');
         }
-        /* F/O · OPE flag — each token in the sku_status string
-           renders as its own small pill so "F/O + OPE" doesn't wrap
-           inside one bubble.  Empty / Active states show a dash. */
-        const skuStatus = r.sku_status || 'Active';
-        let skuPill;
-        if (skuStatus === 'Active') {
-            skuPill = '<span style="color:#78909C;font-size:10.5px">—</span>';
-        } else {
-            const tokens = skuStatus.split(/\s*\+\s*/);
-            skuPill = tokens.map(t => {
-                const bg  = t === 'F/O'   ? '#FFEBEE' : t === 'OPE' ? '#FFF3E0' : '#E3F2FD';
-                const fg  = t === 'F/O'   ? '#C62828' : t === 'OPE' ? '#E65100' : '#1565C0';
-                return '<span style="display:inline-block;padding:1px 6px;'
-                     + 'border-radius:8px;font-size:10px;font-weight:600;'
-                     + 'white-space:nowrap;margin-right:2px;'
-                     + 'background:' + bg + ';color:' + fg + '">' + t + '</span>';
-            }).join('');
+    } else {
+        /* Flat per-M-CODE listing (no sub totals).  Each row still
+           carries the mc-row class so the numeric cells render blue.
+           A `merge-break` accent draws a divider when the merge
+           changes between adjacent rows so groups are still visible
+           after a material-attribute sort. */
+        let prev = null;
+        for (const r of src) {
+            if (mergesRendered >= ROW_CAP) break;
+            mergesRendered++;
+            const classes = ['mc-row'];
+            if (selected.has(r.merge_code)) classes.push('selected');
+            if (r.merge_code !== prev)      classes.push('merge-break');
+            prev = r.merge_code;
+            const band = mergeBandColor(r.merge_code);
+            rowsHtml.push(
+                '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
+                + '<td style="border-left:4px solid ' + band + '">' + r.merge_code + '</td>'
+                + '<td>' + (r.m_code || '—') + '</td>'
+                + '<td>' + (r.brand   || '—') + '</td>'
+                + '<td>' + (r.line    || '—') + '</td>'
+                + '<td>' + (r.pattern || '—') + '</td>'
+                + '<td>' + pill(r.group) + '</td>'
+                + '<td>' + renderSkuPill(r.sku_status) + '</td>'
+                + '<td>' + (r.size    || '—') + '</td>'
+                + '<td>' + (r.inch    || '—') + '</td>'
+                + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
+                + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r)
+                + '</tr>');
         }
-        return '<tr' + selCls + ' data-mc="' + r.merge_code + '">'
-            + '<td>' + r.merge_code + '</td>'
-            + '<td>' + (r.m_code || '—') + '</td>'
-            + '<td>' + (r.brand || '—') + '</td>'
-            + '<td>' + (r.line || '—') + '</td>'
-            + '<td>' + (r.pattern || '—') + '</td>'
-            + '<td>' + pill(r.group) + '</td>'
-            + '<td>' + skuPill + '</td>'
-            + '<td>' + (r.size || '—') + '</td>'
-            + '<td>' + (r.inch || '—') + '</td>'
-            + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
-            + stateCells(r)
-            + totalGroup
-            + '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
-            + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
-            + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
-            + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
-            + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
-            + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>'
-            + '</tr>';
-    }).join('');
+    }
+
+    body.innerHTML = totalRow + rowsHtml.join('');
+    const suffix = mergesRendered >= ROW_CAP
+        ? ' — showing first ' + ROW_CAP + ' rows'
+        : '';
+    document.getElementById('row-count').textContent =
+        fmtI(src.length) + ' M-CODE rows across '
+        + fmtI(mergeGroups.size) + ' merges' + suffix;
 
     /* Row click: open modal (default) or toggle-select (with Ctrl/Shift/Cmd) */
     body.querySelectorAll('tr').forEach(tr => {
