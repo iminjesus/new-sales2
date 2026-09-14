@@ -162,19 +162,38 @@ def _scan_stock_header(ws, header_row=None):
 
     cmap = {"HIST": {}}
 
-    # Identify the leading identity columns by exact label match
+    # Identify the leading identity columns by exact label match.
+    # This block covers the "left-of-history" identity block on the
+    # stock sheet: Merge Code / Seg / Product Name / CODE / Description
+    # / SIZE / INCH / PTTN / OPE — some workbook variants have all of
+    # these, others only Merge Code + Group.  We store whichever we
+    # find; downstream code degrades gracefully when a column is
+    # missing.
     for c, h in enumerate(header, start=1):
         n = norm(h).upper()
-        if n in ("MERGE CODE", "MERGE_CODE"):
+        if n in ("MERGE CODE", "MERGE_CODE", "MERGECODE"):
             cmap["MERGE_CODE"] = c
-        elif n == "NEW GROUP" or n == "GROUP":
+        elif n in ("NEW GROUP", "GROUP", "SEG", "SEGMENT"):
             cmap.setdefault("GROUP", c)
         elif n == "CLASSIFICATION":
             cmap["CLASSIFICATION"] = c
+        elif n in ("CODE", "M CODE", "M_CODE", "MCODE", "MATERIAL",
+                   "MATERIAL CODE"):
+            cmap.setdefault("MCODE", c)
+        elif n in ("PRODUCT NAME", "PRODUCT_NAME", "PRODUCTNAME",
+                   "PROD NAME", "MODEL"):
+            cmap.setdefault("PRODUCT_NAME", c)
         elif n in ("DESCRIPTION", "DESC", "PRODUCTDESCRIPTION",
-                   "PRODUCT DESCRIPTION", "MATERIAL DESCRIPTION",
-                   "PRODUCT NAME", "NAME"):
+                   "PRODUCT DESCRIPTION", "MATERIAL DESCRIPTION"):
             cmap.setdefault("DESCRIPTION", c)
+        elif n in ("SIZE", "TYRE SIZE", "TIRE SIZE"):
+            cmap.setdefault("SIZE", c)
+        elif n in ("INCH", "RIM", "RIM INCH", "RIM_INCH"):
+            cmap.setdefault("INCH", c)
+        elif n in ("PTTN", "PATTERN", "PATTERN CODE"):
+            cmap.setdefault("PATTERN", c)
+        elif n in ("OPE", "OPE STATUS", "AU", "AU STATUS", "STATUS"):
+            cmap.setdefault("OPE", c)
 
     # Walk left-to-right in a small state machine.  Every time we see
     # NSW/QLD/VIC/WA in row 2 we buffer the four indices, then look at
@@ -691,6 +710,26 @@ def load_stock_data():
     c_group   = _c("GROUP",          COL_GROUP)
     c_classif = _c("CLASSIFICATION", COL_CLASSIF)
     c_desc    = cmap.get("DESCRIPTION")   # may be None — used as fallback only
+    # New (per-M-CODE workbook layout) columns: each stock row now
+    # carries the specific material's identity as well as its sales
+    # numbers, so we key by (merge, m_code) instead of merge alone.
+    c_mcode        = cmap.get("MCODE")
+    c_prod_name    = cmap.get("PRODUCT_NAME")
+    c_size         = cmap.get("SIZE")
+    c_inch         = cmap.get("INCH")
+    c_pattern      = cmap.get("PATTERN")
+    c_ope          = cmap.get("OPE")
+    _stock_load_debug["stock_columns_found"] = {
+        "merge_code":   bool(c_merge),
+        "group":        bool(c_group),
+        "m_code":       bool(c_mcode),
+        "product_name": bool(c_prod_name),
+        "description":  bool(c_desc),
+        "size":         bool(c_size),
+        "inch":         bool(c_inch),
+        "pattern":      bool(c_pattern),
+        "ope":          bool(c_ope),
+    }
 
     state_stock_cols = cmap.get("STATE_STOCK") or COL_STATE_STOCK
     state_port_cols  = cmap.get("STATE_PORT")  or {s: COL_STATE_PIPELINE[s][0] for s in STATES}
@@ -721,6 +760,18 @@ def load_stock_data():
     else:
         hist_start = HIST_COL_START
 
+    # Whether each stock-sheet row is per-M-CODE (newer workbook) or
+    # per-Merge (older).  When c_mcode is present we treat every
+    # (merge, m_code) row as its own SKU with its OWN sales / stock
+    # figures; when it isn't we fall back to the old merge-only path.
+    per_mcode_rows = c_mcode is not None
+    _stock_load_debug["per_mcode_rows"] = per_mcode_rows
+    # stock_rows collects (merge_code, m_code, detail) triples in
+    # workbook order so Pass 2 can iterate them directly.  merge-level
+    # aggregation (for Sub Total rows + KPIs) is derived from these.
+    stock_rows = []
+    stock_by_merge = {}     # kept for merge-level lookups (Sub Total etc.)
+
     for r in ws.iter_rows(min_row=data_start_row, values_only=True):
         if not r:
             continue
@@ -731,18 +782,57 @@ def load_stock_data():
             mc = int(mc)
         except Exception:
             continue
+        # In per-M-CODE mode, pull THIS row's M CODE.  Rows without a
+        # valid M CODE are skipped so junk lines don't pollute the
+        # dataset.  In merge-only mode we synthesise m_code = merge.
+        m_code_row = None
+        if per_mcode_rows:
+            v = r[c_mcode - 1] if len(r) >= c_mcode else None
+            try:
+                m_code_row = int(v) if v is not None else None
+            except (TypeError, ValueError):
+                m_code_row = None
+            if m_code_row is None:
+                continue
+        else:
+            m_code_row = mc
+
         group   = r[c_group   - 1] if len(r) >= c_group   else None
         classif = r[c_classif - 1] if len(r) >= c_classif else None
-        # Optional Description column on the stock sheet itself.
-        # Serves as a last-ditch fallback when Sheet2 has no record
-        # for any M CODE in this merge (which happens for
-        # newly-created merges where the master record hasn't been
-        # entered yet).
-        ssw_desc = ""
+        # Row-level product info from the stock sheet.  When present
+        # this is the SOURCE OF TRUTH — description / size / inch /
+        # pattern / OPE are read directly from the row and become
+        # merge_details fallback for Pass 2.
+        row_prod_name = ""
+        row_desc      = ""
+        row_size      = ""
+        row_inch      = ""
+        row_pattern   = ""
+        row_ope       = ""
+        if c_prod_name:
+            v = r[c_prod_name - 1] if len(r) >= c_prod_name else None
+            if v is not None: row_prod_name = str(v).strip()
         if c_desc:
             v = r[c_desc - 1] if len(r) >= c_desc else None
-            if v is not None:
-                ssw_desc = str(v).strip()
+            if v is not None: row_desc = str(v).strip()
+        if c_size:
+            v = r[c_size - 1] if len(r) >= c_size else None
+            if v is not None: row_size = str(v).strip()
+        if c_inch:
+            v = r[c_inch - 1] if len(r) >= c_inch else None
+            if v is not None: row_inch = str(v).strip()
+        if c_pattern:
+            v = r[c_pattern - 1] if len(r) >= c_pattern else None
+            if v is not None: row_pattern = str(v).strip()
+        if c_ope:
+            v = r[c_ope - 1] if len(r) >= c_ope else None
+            if v is not None: row_ope = str(v).strip()
+
+        # ssw_desc keeps its old meaning (merge-level fallback text)
+        # so downstream code doesn't need to change.  Prefer the
+        # row's own Description if the workbook has one, else the
+        # Product Name.
+        ssw_desc = row_desc or row_prod_name
 
         def _cell(col):
             return r[col - 1] if col and len(r) >= col else None
@@ -803,10 +893,16 @@ def load_stock_data():
         # Max-demand basis: the larger of {3M avg, "4-6M" avg, 12M avg}
         max_demand = max(total_3m, avg_6m_old, total_12m) if any([total_3m, avg_6m_old, total_12m]) else 0.0
 
-        stock_by_merge[mc] = {
+        row_bundle = {
             "group_raw":       group,
             "classification":  classif or "",
-            "ssw_desc":        ssw_desc,   # merge-level description fallback
+            "ssw_desc":        ssw_desc,
+            "row_prod_name":   row_prod_name,
+            "row_desc":        row_desc,
+            "row_size":        row_size,
+            "row_inch":        row_inch,
+            "row_pattern":     row_pattern,
+            "row_ope":         row_ope,
             "state_stock":     state_stock,
             "state_pipe_parts":state_pipe_parts,
             "state_pipe":      state_pipe,
@@ -822,6 +918,55 @@ def load_stock_data():
             "max_demand":      max_demand,
             "history":         history,
         }
+        stock_rows.append((mc, m_code_row, row_bundle))
+        # Merge-level aggregate — used for Sub Total rows and the
+        # KPI cards.  When multiple rows share a merge (the per-M-
+        # CODE workbook), sums accumulate; when they don't, the
+        # single row becomes the merge total (identical values on
+        # both).  history is stored as a per-state list of monthly
+        # SUMS across all M CODEs of the merge.
+        agg = stock_by_merge.get(mc)
+        if agg is None:
+            agg = {
+                "group_raw":       group,
+                "classification":  classif or "",
+                "ssw_desc":        ssw_desc,
+                "state_stock":     {s: 0.0 for s in STATES},
+                "state_pipe_parts":{s: {"port":0.0,"water":0.0,"fac":0.0} for s in STATES},
+                "state_pipe":      {s: 0.0 for s in STATES},
+                "state_3m":        {s: 0.0 for s in STATES},
+                "total_stock":     0.0,
+                "total_all":       0.0,
+                "total_3m":        0.0,
+                "total_12m":       0.0,
+                "p_3m":            0.0,
+                "avg_6m_old":      0.0,
+                "avg_7_9m":        0.0,
+                "avg_10_12m":      0.0,
+                "max_demand":      0.0,
+                "history":         {k: [0.0]*HIST_MONTHS for k in ("NSW","QLD","VIC","WA","TOTAL")},
+            }
+            stock_by_merge[mc] = agg
+        for s in STATES:
+            agg["state_stock"][s] += state_stock[s]
+            agg["state_pipe"][s]  += state_pipe[s]
+            agg["state_3m"][s]    += state_3m[s]
+            for leg in ("port","water","fac"):
+                agg["state_pipe_parts"][s][leg] += state_pipe_parts[s][leg]
+        agg["total_stock"] += total_stock
+        agg["total_all"]   += total_all
+        agg["total_3m"]    += total_3m
+        agg["total_12m"]   += total_12m
+        agg["p_3m"]        += p_3m
+        agg["avg_6m_old"]  += avg_6m_old
+        agg["avg_7_9m"]    += avg_7_9m
+        agg["avg_10_12m"]  += avg_10_12m
+        for k, arr in history.items():
+            for i, v in enumerate(arr):
+                agg["history"][k][i] += v
+        # max_demand recomputed at read-time (max of accumulated
+        # aggregates) so it stays a true "biggest baseline".
+        agg["max_demand"] = max(agg["total_3m"], agg["avg_6m_old"], agg["total_12m"])
 
     # ── Pass 1.5: build a per-merge "best product info" cache.
     # Walk every merge that has at least one M CODE in the MM sheet
@@ -849,31 +994,36 @@ def load_stock_data():
         if aggregate:
             merge_details[merge_code] = aggregate
 
-    # ── Pass 2: iterate every M CODE in MM order and emit one row
-    # per M CODE, sharing the merge-level stock/demand with siblings.
-    # Additionally rescue merges that appear in the stock sheet but
-    # have no entry in the MM sheet — those become one synthetic row
-    # per merge so the dashboard doesn't silently drop them.
+    # ── Pass 2: iterate every stock-sheet row (per-M-CODE when the
+    # workbook has that granularity) and emit one dashboard row per
+    # stock row.  Each row's sales / stock / MOI figures come from
+    # THAT SPECIFIC row (not the merge aggregate) so per-material
+    # numbers show correctly.  Product info still falls back through
+    # Sheet2 → merge-wide sibling aggregate → stock-sheet Description.
     rows_out = []
-    seen_pairs = set()          # avoid MM duplicates
-    seen_merges_from_mm = set() # tracks merges the MM pass covered
-    iter_pairs = list(mm_order)
-    merges_with_no_mm = [m for m in stock_by_merge.keys() if m not in merge_to_mcodes]
-    for merge_code in merges_with_no_mm:
-        # Synthetic pair: use the merge code as its own M CODE so the
-        # loop below has something to key on.  Sheet2 lookup will
-        # correctly find no record and fall back to Description.
-        iter_pairs.append((merge_code, merge_code))
-    for m_code, merge_code in iter_pairs:
+    seen_pairs = set()
+    # Fallback iteration source: if the stock sheet is per-merge only
+    # (older workbook), stock_rows carries one entry per merge and
+    # every stock row's m_code_row equals the merge code.  If we're
+    # per-M-CODE, stock_rows carries the true M CODE per row.
+    if not stock_rows:
+        # Nothing loaded (workbook malformed or empty) — return early
+        # with the empty rows list so the caller renders a clean
+        # "no data" state instead of crashing.
+        stock_rows = []
+    # Merge-level rescue: any merge in stock_by_merge that never
+    # appeared in stock_rows (should not happen, but defensive) gets
+    # a synthetic row so it isn't silently dropped.  The synthetic
+    # M CODE equals the merge code.
+    stock_row_merges = {mc for mc, _, _ in stock_rows}
+    for merge_code in stock_by_merge:
+        if merge_code not in stock_row_merges:
+            stock_rows.append((merge_code, merge_code, stock_by_merge[merge_code]))
+
+    for merge_code, m_code, stk in stock_rows:
         if (m_code, merge_code) in seen_pairs:
             continue
         seen_pairs.add((m_code, merge_code))
-        stk = stock_by_merge.get(merge_code)
-        if stk is None:
-            # Merge Code has no stock row in the worksheet — skip so the
-            # dashboard doesn't misreport a phantom SKU.
-            continue
-        seen_merges_from_mm.add(merge_code)
         mc = merge_code
         # Take THIS M CODE's Sheet2 record as the starting point, then
         # patch any blank field from the merge-wide aggregate built in
@@ -886,21 +1036,63 @@ def load_stock_data():
             if not detail.get(f) and merge_agg.get(f):
                 detail[f] = merge_agg[f]
 
+        # Row-level product info from the stock sheet takes precedence
+        # over Sheet2 fallbacks whenever the stock-sheet column is
+        # populated (this is the source of truth for the new
+        # per-M-CODE workbook layout).
+        row_pn      = stk.get("row_prod_name", "") or ""
+        row_desc    = stk.get("row_desc", "")      or ""
+        row_size_raw= stk.get("row_size", "")      or ""
+        row_inch_raw= stk.get("row_inch", "")      or ""
+        row_pat_raw = stk.get("row_pattern", "")   or ""
+        row_ope_raw = stk.get("row_ope", "")       or ""
+        # Detail fallback chain: Sheet2 → merge aggregate → stock row
+        if not detail.get("description") and row_desc:
+            detail["description"] = row_desc
+        if not detail.get("au") and row_ope_raw:
+            detail["au"] = row_ope_raw
+        if not detail.get("inch") and row_inch_raw:
+            detail["inch"] = row_inch_raw
+
         raw_desc = detail.get("description", "")
-        # Ultimate description fallback: if Sheet2 has no record for
-        # this M CODE AND its siblings, try the Description column
-        # on the Stock Status Worksheet itself.  Newly-created merges
-        # often have their name typed on the stock sheet even though
-        # the master record hasn't been entered into Sheet2 yet.
+        # Ultimate description fallback: Product Name column, then the
+        # merge-level ssw_desc.  Newly-created merges often have their
+        # name typed on the stock sheet even though the master record
+        # hasn't been entered into Sheet2 yet.
+        if not raw_desc and row_pn:
+            raw_desc = row_pn
         if not raw_desc and stk.get("ssw_desc"):
             raw_desc = stk["ssw_desc"]
-        pattern  = _extract_pattern(raw_desc)
+        pattern  = row_pat_raw or _extract_pattern(raw_desc)
         # Marketing line uses the description's variant field first
         # (so "X FIT AT" → "Laufenn X Fit" rather than the generic
         # "G/S/X/I Fit" umbrella).  Falls back to pattern-prefix
         # rules when the description has no useable variant field.
-        line     = _marketing_line_from_desc(raw_desc, pattern)
-        eff_group = (stk["group_raw"] or detail.get("group") or "").strip()
+        # For the new workbook layout, Product Name (e.g. "Ventus TD",
+        # "G FIT AS", "X FIT Van") is often the cleanest source of
+        # sub-line info, so parse it first.
+        line = ""
+        if row_pn:
+            up = row_pn.upper()
+            if   "X FIT"    in up: line = "Laufenn X Fit"
+            elif "G FIT"    in up: line = "Laufenn G Fit"
+            elif "S FIT"    in up: line = "Laufenn S Fit"
+            elif "I FIT"    in up: line = "Laufenn I Fit"
+            elif "Z FIT"    in up: line = "Laufenn Z Fit"
+            elif "VENTUS"   in up: line = "Ventus"
+            elif "KINERGY"  in up: line = "Kinergy"
+            elif "DYNAPRO"  in up: line = "Dynapro"
+            elif "OPTIMO"   in up: line = "Optimo"
+            elif "SMART"    in up or "E-CUBE" in up or "ECUBE" in up: line = "Truck / TBR"
+            elif "WINTER"   in up or "ICEPT" in up: line = "Winter i*cept"
+            elif "ION"      in up or "IONEV" in up: line = "iON"
+        if not line:
+            line = _marketing_line_from_desc(raw_desc, pattern)
+        # eff_group prefers the row's own group; falls back to Sheet2
+        # group.  Leading "1UHP&PCR", "2SUV&LTR" style codes have their
+        # rank prefix stripped for display.
+        raw_group = str(stk.get("group_raw") or detail.get("group") or "").strip()
+        eff_group = re.sub(r"^\d+\s*", "", raw_group)
 
         # Brand: prefer the Sheet2 Brand column, fall back to whatever
         # the description's 2nd comma field carries (HK→Hankook, KS→
@@ -915,10 +1107,10 @@ def load_stock_data():
         else:
             brand = _extract_brand(raw_desc)
 
-        # Size: preserve whatever the Description's FIRST comma-field
-        # says.  Preferred (185R14C, 205/55R16, 33X12.5R15…) — only
-        # composes from SW/SR/Inch if the description has nothing.
-        size = _extract_size(raw_desc)
+        # Size: prefer the stock sheet's SIZE column (source of truth
+        # in the per-M-CODE layout), fall back to the description's
+        # 1st comma-field, then to SW/SR/Inch composition.
+        size = row_size_raw or _extract_size(raw_desc)
         if not size and detail.get("sw") and detail.get("sr") and detail.get("inch"):
             try:
                 sw = int(detail["sw"]); sr = int(detail["sr"]); inch = detail["inch"]
@@ -981,14 +1173,16 @@ def load_stock_data():
         is_low_prof   = sr_num   is not None and sr_num   < 50
         is_suv_flag   = _is_suv(line, pattern)
 
-        # F/O · OPE indicator derived from Sheet2's AU column.  The
-        # value may be a free-form tag (multiple tokens joined by "/"
-        # or space) so we walk the string looking for the seven
-        # recognised buckets, most specific first.  The result is
-        # a compact "+"-joined string so a filter dropdown can key on
-        # any single bucket.  Recognised buckets:
+        # F/O · OPE indicator derived from the stock sheet's OPE
+        # column (source of truth in the new layout) with Sheet2's AU
+        # column as fallback.  The value may be a free-form tag
+        # (multiple tokens joined by "/" or space) so we walk the
+        # string looking for the seven recognised buckets, most
+        # specific first.  The result is a compact "+"-joined string
+        # so a filter dropdown can key on any single bucket.
+        # Recognised buckets:
         #   F/O · OPE · M/S · Testing · Transfer · OE A/S · Price
-        au = str(detail.get("au", "") or "").upper().strip()
+        au = str(row_ope_raw or detail.get("au", "") or "").upper().strip()
         old_stock = str(detail.get("old_stock", "") or "").upper().strip()
         sku_flags = []
         if "FADE OUT" in au or old_stock == "YES":
@@ -1019,7 +1213,7 @@ def load_stock_data():
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
             "size":           size,
-            "inch":           detail.get("inch", ""),
+            "inch":           detail.get("inch") or row_inch_raw or "",
             "sr":             detail.get("sr", ""),
             "li":             detail.get("li", ""),
             "ss":             detail.get("ss", ""),
@@ -1080,6 +1274,10 @@ def load_stock_data():
         "sheet2_rows":            _stock_load_debug.get("sheet2_rows", 0),
         "sheet2_header_row":      _stock_load_debug.get("sheet2_header_row", 1),
         "sheet2_columns_found":   _stock_load_debug.get("sheet2_columns_found", []),
+        "stock_columns_found":    sorted(
+            k for k, v in (_stock_load_debug.get("stock_columns_found") or {}).items() if v
+        ),
+        "per_mcode_rows":         _stock_load_debug.get("per_mcode_rows", False),
         "no_info_merges":         no_info_merges[:100],
         "no_info_merge_count":    len(no_info_merges),
         "total_merges":           len(seen_merges),
@@ -1681,6 +1879,9 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
     {% endif %}
     {% if meta.sheet2_rows is defined %}
       <br><span style="color:#94A3B8;font-size:11px">Sheet2 master: {{ meta.sheet2_rows }} rows · columns detected: {{ meta.sheet2_columns_found|join(', ') }}</span>
+    {% endif %}
+    {% if meta.stock_columns_found is defined %}
+      <br><span style="color:#94A3B8;font-size:11px">Stock sheet columns detected: {{ meta.stock_columns_found|join(', ') }}{% if meta.per_mcode_rows %} · per-M-CODE layout{% endif %}</span>
     {% endif %}
     </span>
   <nav class="nav">
@@ -2607,13 +2808,60 @@ function renderTable() {
         const cls_mo = r.status === 'shortage' ? 'short'
                      : r.status === 'surplus'  ? 'sur'
                      : r.status === 'serious_surplus' ? 'ser' : '';
+        // Period averages render as ROUNDED INTEGERS on M CODE rows —
+        // the user asked for individual per-material figures with
+        // decimals rounded away.  Sub Total rows keep the full merge
+        // sum with the same integer rounding.
         return '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
              + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
              + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
-             + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
-             + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
-             + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
-             + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>';
+             + '<td class="r grp-start">' + fmtI(Math.round(r.p_3m       || 0)) + '</td>'
+             + '<td class="r">'           + fmtI(Math.round(r.avg_6m_old || 0)) + '</td>'
+             + '<td class="r">'           + fmtI(Math.round(r.avg_7_9m   || 0)) + '</td>'
+             + '<td class="r">'           + fmtI(Math.round(r.avg_10_12m || 0)) + '</td>';
+    };
+    /* Build a synthetic "merge total" row from a group of M CODE
+       rows by summing the per-row figures.  Used to render the Sub
+       Total row so its numbers are the actual merge sum, not just
+       the first M CODE's individual figure. */
+    const mergeSumRow = (groupRows) => {
+        const sum = {
+            merge_code: groupRows[0].merge_code,
+            state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
+            state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+            state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
+            total_stock:0, total_all:0, total_3m:0,
+            p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
+        };
+        groupRows.forEach(r => {
+            STATES.forEach(s => {
+                sum.state_stock[s] += r.state_stock[s] || 0;
+                sum.state_3m[s]    += r.state_3m[s]    || 0;
+                const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+                sum.state_pipe_parts[s].port  += pp.port  || 0;
+                sum.state_pipe_parts[s].water += pp.water || 0;
+                sum.state_pipe_parts[s].fac   += pp.fac   || 0;
+            });
+            sum.total_stock += r.total_stock || 0;
+            sum.total_all   += r.total_all   || 0;
+            sum.total_3m    += r.total_3m    || 0;
+            sum.p_3m        += r.p_3m        || 0;
+            sum.avg_6m_old  += r.avg_6m_old  || 0;
+            sum.avg_7_9m    += r.avg_7_9m    || 0;
+            sum.avg_10_12m  += r.avg_10_12m  || 0;
+        });
+        sum.moh          = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
+        const mergeMax = Math.max(sum.total_3m, sum.avg_6m_old, 0);
+        sum.moh_plus_max = mergeMax > 0 ? sum.total_all / mergeMax : null;
+        // Sub Total's row-level status matches its own merge MOI —
+        // used to colour the MOI cells.
+        sum.status = (sum.total_3m === 0 && sum.total_stock === 0) ? 'empty'
+                   : (sum.total_3m === 0 && sum.total_stock >  0) ? 'no_move'
+                   : (sum.moh <= 1) ? 'shortage'
+                   : (sum.moh <= 3) ? 'balanced'
+                   : (sum.moh <= 6) ? 'surplus'
+                   : 'serious_surplus';
+        return sum;
     };
 
     /* Info-availability checks — used to render the ⚠ badge that
@@ -2688,14 +2936,16 @@ function renderTable() {
             });
 
             /* Sub Total row — dedicated aggregate line under each
-               merge group.  Uses the same representative row so its
-               numbers agree with the M CODE lines above. */
+               merge group.  Uses `mergeSumRow` to sum the M CODE
+               figures so the total reflects the actual merge (not
+               just the first M CODE's individual numbers). */
+            const subTotal = mergeSumRow(groupRows);
             rowsHtml.push(
-                '<tr class="sub-total" data-mc="' + rep.merge_code + '">'
+                '<tr class="sub-total" data-mc="' + subTotal.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band
                 +      ';font-weight:700;color:' + band + '" colspan="10">'
-                + 'SUB TOTAL · Merge ' + rep.merge_code + '</td>'
-                + stateCellsFor(rep) + totalGrpFor(rep) + moiCellsFor(rep)
+                + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
+                + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal)
                 + '</tr>');
         }
     } else {
