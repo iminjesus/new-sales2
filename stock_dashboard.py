@@ -113,13 +113,19 @@ def _detect_header_row(ws, max_scan=10):
 
     This makes the loader resilient to blank leader rows being added
     or removed above the header — a common Excel edit that would
-    otherwise break every column lookup below."""
-    KEY_LABELS = {"MERGE CODE", "NSW", "QLD", "VIC", "WA"}
-    STATE_STOCK_MARKERS = {"N.STOCK", "Q.STOCK", "V.STOCK", "W.STOCK", "STOCK"}
+    otherwise break every column lookup below.  Labels are normalised
+    (upper + punctuation stripped) so 'Merge Code', 'Merge_Code',
+    'Merge-Code' all score the same."""
+    KEY_LABELS = {"MERGECODE", "MERGECD", "NSW", "QLD", "VIC", "WA"}
+    STATE_STOCK_MARKERS = {"NSTOCK", "QSTOCK", "VSTOCK", "WSTOCK", "STOCK"}
+    def _n(v):
+        s = str(v or "").strip().upper()
+        for ch in (" ", ".", "_", "-", "/", "\\"):
+            s = s.replace(ch, "")
+        return s
     best_row, best_score = 2, 0
     for r in range(1, max_scan + 1):
-        vals = [str(ws.cell(row=r, column=c).value or "").strip().upper()
-                for c in range(1, ws.max_column + 1)]
+        vals = [_n(ws.cell(row=r, column=c).value) for c in range(1, ws.max_column + 1)]
         vset = set(vals)
         score = sum(1 for k in KEY_LABELS if k in vset)
         score += sum(1 for k in STATE_STOCK_MARKERS if k in vset)
@@ -160,40 +166,43 @@ def _scan_stock_header(ws, header_row=None):
     def norm(v):
         return str(v).strip() if v is not None else ""
 
+    # Aggressively normalised form of the header (upper-case with
+    # whitespace / dots / underscores / hyphens / slashes stripped)
+    # so "Merge Code" / "Merge_Code" / "Merge-Code" / "MergeCode" all
+    # match the same alias.  Used by the identity-column detection
+    # below AND by the label-based section walker further down.
+    def snorm(v):
+        s = str(v or "").strip().upper()
+        for ch in (" ", ".", "_", "-", "/", "\\"):
+            s = s.replace(ch, "")
+        return s
+
     cmap = {"HIST": {}}
 
-    # Identify the leading identity columns by exact label match.
-    # This block covers the "left-of-history" identity block on the
-    # stock sheet: Merge Code / Seg / Product Name / CODE / Description
-    # / SIZE / INCH / PTTN / OPE — some workbook variants have all of
-    # these, others only Merge Code + Group.  We store whichever we
-    # find; downstream code degrades gracefully when a column is
-    # missing.
+    # Identity columns on the LEFT of the stock sheet.  These are the
+    # per-M-CODE product columns the newer workbook layout added on
+    # top of Merge Code + Group.  Alias sets are matched against the
+    # aggressively-normalised header so a typo or a hyphenated variant
+    # still maps to the right slot.
+    IDENTITY_ALIASES = {
+        "MERGE_CODE":   ("MERGECODE", "MERGECD"),
+        "GROUP":        ("NEWGROUP", "GROUP", "SEG", "SEGMENT"),
+        "CLASSIFICATION": ("CLASSIFICATION", "CLASS"),
+        "MCODE":        ("CODE", "MCODE", "MATERIAL", "MATERIALCODE"),
+        "PRODUCT_NAME": ("PRODUCTNAME", "PRODNAME", "MODEL", "PRODUCT"),
+        "DESCRIPTION":  ("DESCRIPTION", "DESC", "PRODUCTDESCRIPTION",
+                         "MATERIALDESCRIPTION"),
+        "SIZE":         ("SIZE", "TYRESIZE", "TIRESIZE"),
+        "INCH":         ("INCH", "RIM", "RIMINCH", "RIMDIAM"),
+        "PATTERN":      ("PTTN", "PATTERN", "PATTERNCODE"),
+        "OPE":          ("OPE", "OPESTATUS", "AU", "AUSTATUS", "STATUS"),
+    }
     for c, h in enumerate(header, start=1):
-        n = norm(h).upper()
-        if n in ("MERGE CODE", "MERGE_CODE", "MERGECODE"):
-            cmap["MERGE_CODE"] = c
-        elif n in ("NEW GROUP", "GROUP", "SEG", "SEGMENT"):
-            cmap.setdefault("GROUP", c)
-        elif n == "CLASSIFICATION":
-            cmap["CLASSIFICATION"] = c
-        elif n in ("CODE", "M CODE", "M_CODE", "MCODE", "MATERIAL",
-                   "MATERIAL CODE"):
-            cmap.setdefault("MCODE", c)
-        elif n in ("PRODUCT NAME", "PRODUCT_NAME", "PRODUCTNAME",
-                   "PROD NAME", "MODEL"):
-            cmap.setdefault("PRODUCT_NAME", c)
-        elif n in ("DESCRIPTION", "DESC", "PRODUCTDESCRIPTION",
-                   "PRODUCT DESCRIPTION", "MATERIAL DESCRIPTION"):
-            cmap.setdefault("DESCRIPTION", c)
-        elif n in ("SIZE", "TYRE SIZE", "TIRE SIZE"):
-            cmap.setdefault("SIZE", c)
-        elif n in ("INCH", "RIM", "RIM INCH", "RIM_INCH"):
-            cmap.setdefault("INCH", c)
-        elif n in ("PTTN", "PATTERN", "PATTERN CODE"):
-            cmap.setdefault("PATTERN", c)
-        elif n in ("OPE", "OPE STATUS", "AU", "AU STATUS", "STATUS"):
-            cmap.setdefault("OPE", c)
+        n = snorm(h)
+        for slot, aliases in IDENTITY_ALIASES.items():
+            if n in aliases:
+                cmap.setdefault(slot, c)
+                break
 
     # Walk left-to-right in a small state machine.  Every time we see
     # NSW/QLD/VIC/WA in row 2 we buffer the four indices, then look at
@@ -290,13 +299,13 @@ def _scan_stock_header(ws, header_row=None):
 # This is intentionally coarse — good enough to slice the shortage
 # vs surplus board.  Falls back to "Other" so the column never blanks.
 _LINE_RULES = [
-    # Laufenn — each 2-letter prefix maps to a SPECIFIC sub-line, not
-    # the generic "G/S/X/I Fit" umbrella.  Users kept asking why an
-    # LK-series pattern reads as "G/S/X/I Fit" — this row-by-row split
-    # settles it: LK → X Fit, LS → S Fit, LI/LW → I Fit, LG → G Fit.
-    (r"^LG|^LC",                 "Laufenn G Fit"),
+    # Laufenn — each 2-letter pattern prefix maps to a SPECIFIC
+    # sub-line, not the generic "G/S/X/I Fit" umbrella.  Based on
+    # actual pattern codes seen in the AU workbook: LH41 = G FIT AS,
+    # LK41 = X FIT AT, LS = S Fit EQ, LI = I Fit ICE.
+    (r"^LG|^LC|^LH",             "Laufenn G Fit"),
     (r"^LK|^LP",                 "Laufenn X Fit"),
-    (r"^LS|^LH",                 "Laufenn S Fit"),
+    (r"^LS",                     "Laufenn S Fit"),
     (r"^LI|^LW",                 "Laufenn I Fit"),
     # Hankook — pattern prefix identifies the marketing line.  Specific
     # variant (Kinergy GT / Ventus S1 EVO3 / Dynapro AT2) is added
@@ -387,17 +396,42 @@ _BRAND_CODE_MAP = {
 }
 
 def _extract_brand(desc):
-    """Pull the brand out of the 2nd comma field.  Returns "" when the
-    description is empty or doesn't look right."""
+    """Pull the brand from a JAX / stock-sheet description.
+
+    Two known formats co-exist:
+      • Old JAX ("265/70R17, HK, VENTUS AT ATL RF11, 121S")
+        — brand is the 2nd comma field.
+      • New stock sheet ("205/55R16V,04,LH41,L,B,-,LF")
+        — brand is the LAST comma field.
+
+    We look at the last field first — if it maps to a known brand
+    code (HK / LF / KS / AU / KL / MI / …), we use that.  Otherwise
+    we fall back to the 2nd field.  Never returns a numeric "04"
+    or a single-letter code.
+    """
     if not desc:
         return ""
-    parts = str(desc).split(",")
+    parts = [p.strip() for p in str(desc).split(",")]
     if len(parts) < 2:
         return ""
-    b = parts[1].strip().upper()
-    if not b or b.startswith("#"):
+    def _pick(token):
+        if not token or token.startswith("#") or token.isdigit() or len(token) < 2:
+            return ""
+        u = token.upper()
+        # Reject single letters or clearly non-brand tokens.
+        if len(u) == 1:
+            return ""
+        # Known-code fast path
+        if u in _BRAND_CODE_MAP:
+            return _BRAND_CODE_MAP[u]
+        # Alpha-only tokens 2-8 chars are plausible brand strings
+        if u.isalpha() and 2 <= len(u) <= 12:
+            return u.title()
         return ""
-    return _BRAND_CODE_MAP.get(b, b.title())
+    last = _pick(parts[-1])
+    if last:
+        return last
+    return _pick(parts[1])
 
 
 def _extract_size(desc):
@@ -499,8 +533,11 @@ def _latest_stock_xlsm():
 def _parse_data_date(path):
     """Extract the "as-of" date from the filename.
 
-    The stock file convention is 'Stock_report_updated_MMDDYYYY.xlsm' —
-    e.g. '11092026' → 9 November 2026.  Returns a datetime or None."""
+    Australian workbook naming uses DDMMYYYY (e.g. 'Stock report
+    updated 15092026.xlsm' = 15 September 2026).  Some earlier files
+    used MMDDYYYY, so we try DDMMYYYY first and fall back to
+    MMDDYYYY if that ordering isn't a valid calendar date.  Returns
+    a datetime or None."""
     if not path:
         return None
     name = os.path.basename(path)
@@ -508,11 +545,20 @@ def _parse_data_date(path):
     if not m:
         return None
     s = m.group(1)
-    try:
-        mm, dd, yyyy = int(s[:2]), int(s[2:4]), int(s[4:])
-        return datetime(yyyy, mm, dd)
-    except (ValueError, TypeError):
-        return None
+    a, b, yyyy = int(s[:2]), int(s[2:4]), int(s[4:])
+    # DDMMYYYY (preferred) — succeeds when a is a valid day.
+    if 1 <= b <= 12 and 1 <= a <= 31:
+        try:
+            return datetime(yyyy, b, a)
+        except (ValueError, TypeError):
+            pass
+    # Fallback: MMDDYYYY.
+    if 1 <= a <= 12 and 1 <= b <= 31:
+        try:
+            return datetime(yyyy, a, b)
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 _cache = {"path": None, "mtime": 0, "rows": None, "meta": None}
@@ -1255,18 +1301,18 @@ def load_stock_data():
     else:
         data_date_str = "unknown"
     # Diagnostics — which merges still ended up with no product info?
-    # Count them per-merge (not per-row) and keep the first 20 codes
-    # so the dashboard can surface them for CS to fix in the workbook.
-    no_info_merges = []
-    seen_merges = set()
+    # Count them per-merge (not per-row).  A merge counts as "no info"
+    # only when EVERY M CODE row in it lacks product identifiers
+    # (brand / line / size / product name / pattern) — a partially-
+    # filled merge doesn't get flagged.
+    merge_any_info = {}
     for row in rows_out:
         mc = row["merge_code"]
-        if mc in seen_merges:
-            continue
-        seen_merges.add(mc)
-        if not (row.get("brand") or row.get("line") or row.get("size")
-                or row.get("product_name") or row.get("pattern")):
-            no_info_merges.append(mc)
+        has_info = bool(row.get("brand") or row.get("line") or row.get("size")
+                        or row.get("product_name") or row.get("pattern"))
+        merge_any_info[mc] = merge_any_info.get(mc, False) or has_info
+    no_info_merges = [mc for mc, has in merge_any_info.items() if not has]
+    seen_merges = merge_any_info
     meta = {
         "path":       os.path.basename(path),
         "path_dir":   os.path.dirname(path),
