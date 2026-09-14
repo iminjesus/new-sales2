@@ -1383,6 +1383,7 @@ def _aggregate(rows):
             "description":    r["description"] or f"MC {r['merge_code']}",
             "group":          r["group"],
             "line":           r["line"],
+            "product_name":   r.get("product_name", ""),
             "pattern":        r["pattern"],
             "brand":          r["brand"],
             "size":           r["size"],
@@ -2004,8 +2005,8 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
       <h3>SKU drill-down
         <span class="hint">click any row for the monthly-by-state view</span>
         <span class="icons">
-          <button class="icon-btn" onclick="downloadXLSX()" title="Download the current view as XLSX (recommended — opens directly in Excel with formatted headers)">⬇ XLSX</button>
-          <button class="icon-btn" onclick="downloadCSV()" title="Download the current view as CSV (one value per cell)">⬇ CSV</button>
+          <button id="btn-dl-xlsx" class="icon-btn" onclick="downloadXLSX()" title="Download the current view as XLSX (recommended — opens directly in Excel with formatted headers). Select rows first to download just those.">⬇ XLSX</button>
+          <button id="btn-dl-csv"  class="icon-btn" onclick="downloadCSV()" title="Download the current view as CSV (one value per cell). Select rows first to download just those.">⬇ CSV</button>
           <button class="icon-btn" onclick="toggleExpandTable()" title="Expand table full-screen" id="btn-expand-tbl">⛶</button>
           <button class="icon-btn" onclick="emailScreen('sku-card','SKU drill-down')" title="Email this table">✉</button>
         </span>
@@ -2365,11 +2366,14 @@ function currentSetDedupedByMerge() {
 
 /* ── KPI + state cards ── */
 function recomputeKPI() {
-    /* Deduped by Merge Code so status counts + Total Stock aren't
-       multiplied by however many M CODEs each merge carries. */
-    const rows = currentSetDedupedByMerge();
+    /* KPI tiles show MERGE-level counts (sum-by-merge — a merge with
+       10 M CODEs still counts as 1 merge in each bucket).  Tab labels
+       show the ROW-level M CODE counts that match what the table
+       actually renders, so users see consistent numbers.  Both come
+       out of one pass so the two never disagree on shared filters. */
+    const mergeRows = currentSetDedupedByMerge();
     let sh=0, bl=0, su=0, se=0, nm=0, totStk=0, tot3m=0;
-    rows.forEach(r => {
+    mergeRows.forEach(r => {
         if      (r.status === 'shortage')        sh++;
         else if (r.status === 'balanced')        bl++;
         else if (r.status === 'surplus')         su++;
@@ -2384,12 +2388,24 @@ function recomputeKPI() {
     document.getElementById('kpi-ser').textContent   = fmtI(se);
     document.getElementById('kpi-nom').textContent   = fmtI(nm);
     document.getElementById('kpi-moi').textContent   = tot3m > 0 ? FMT_1.format(totStk / tot3m) : '—';
-    document.getElementById('n-short').textContent   = fmtI(sh);
-    document.getElementById('n-baltab').textContent  = fmtI(bl);
-    document.getElementById('n-sur').textContent     = fmtI(su);
-    document.getElementById('n-ser').textContent     = fmtI(se);
-    document.getElementById('n-nom').textContent     = fmtI(nm);
-    document.getElementById('n-tot').textContent     = fmtI(sh + bl + su + se + nm);
+    /* Tab counters: per-M-CODE (matches table row count).  A merge
+       whose per-M-CODE status is spread across buckets contributes
+       to each one — the tab table itself would show the same. */
+    const perRow = currentSetOfRows();
+    let rsh=0, rbl=0, rsu=0, rse=0, rnm=0;
+    perRow.forEach(r => {
+        if      (r.status === 'shortage')        rsh++;
+        else if (r.status === 'balanced')        rbl++;
+        else if (r.status === 'surplus')         rsu++;
+        else if (r.status === 'serious_surplus') rse++;
+        else if (r.status === 'no_move')         rnm++;
+    });
+    document.getElementById('n-short').textContent   = fmtI(rsh);
+    document.getElementById('n-baltab').textContent  = fmtI(rbl);
+    document.getElementById('n-sur').textContent     = fmtI(rsu);
+    document.getElementById('n-ser').textContent     = fmtI(rse);
+    document.getElementById('n-nom').textContent     = fmtI(rnm);
+    document.getElementById('n-tot').textContent     = fmtI(rsh + rbl + rsu + rse + rnm);
 }
 function renderStateCards() {
     const rows = currentSetDedupedByMerge();
@@ -3162,6 +3178,13 @@ function updateSelectionSummary(currentList) {
         : 'no rows selected — click a row to add it to the subset · use the 🔍 button in the MOI column to open the detail modal';
     document.getElementById('sel-info').classList.toggle('none-selected', !useSelected);
     document.getElementById('clear-sel').style.display = useSelected ? 'inline-block' : 'none';
+    /* Reflect the selection state on the download buttons so users
+       know at a glance whether the export will contain everything
+       filtered or just their picked subset. */
+    const xlsxBtn = document.getElementById('btn-dl-xlsx');
+    const csvBtn  = document.getElementById('btn-dl-csv');
+    if (xlsxBtn) xlsxBtn.textContent = useSelected ? ('⬇ XLSX (' + selected.size + ')') : '⬇ XLSX';
+    if (csvBtn)  csvBtn.textContent  = useSelected ? ('⬇ CSV ('  + selected.size + ')') : '⬇ CSV';
 }
 function clearSelection() {
     selected.clear();
@@ -3177,7 +3200,29 @@ function toggleExpandTable() {
     btn.title = on ? 'Return to split view' : 'Expand table full-screen';
 }
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && document.body.classList.contains('expand-table')) toggleExpandTable();
+    /* Escape hierarchy: modal wins first (its own handler further
+       down), then expanded-table view, then selection.  Only clear
+       selection when nothing "modal-ish" is on screen so users can
+       chain Esc without wiping their subset. */
+    if (e.key === 'Escape') {
+        if (document.getElementById('modal-bg').classList.contains('open')) return;
+        if (document.body.classList.contains('expand-table')) { toggleExpandTable(); return; }
+        /* Only clear selection if focus isn't inside a text input —
+           Escape should still cancel edits in the free-text search. */
+        const inField = document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+        if (!inField && selected.size > 0) { clearSelection(); return; }
+    }
+    /* Ctrl / Cmd + F → focus the free-text search box.  Prevents the
+       browser's find-in-page from stealing the keystroke since our
+       search covers merge / M CODE / brand / line / product / size /
+       description / pattern in one filter. */
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        const search = document.getElementById('fltr-search');
+        if (search) {
+            e.preventDefault();
+            search.focus(); search.select();
+        }
+    }
 });
 
 /* ── Active-filter text row (mirrors the top filter bar as text) ── */
@@ -3206,13 +3251,16 @@ function renderFilterText() {
     }
 }
 
-/* ── CSV download (current filtered view) ── */
-function downloadCSV() {
-    /* Same source the visible table draws from — status tab + top
-       filters + free-text search + current sort.  Values go into
-       separate cells so Excel opens it cleanly. */
+/* Return the source rows the current view is drawing from, sorted +
+   optionally narrowed to the current selection.  Both XLSX and CSV
+   downloads use this so an exported file always matches what the
+   user can see on screen (or the subset they explicitly picked). */
+function exportSource() {
     const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
     let src = rawSrc.filter(rowPasses);
+    if (selected.size > 0) {
+        src = src.filter(r => selected.has(r.merge_code));
+    }
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -3222,6 +3270,16 @@ function downloadCSV() {
             return 0;
         });
     }
+    return src;
+}
+
+/* ── CSV download (current filtered view) ── */
+function downloadCSV() {
+    /* Same source the visible table draws from — status tab + top
+       filters + free-text search + current sort.  When rows are
+       selected the export narrows to just those.  Values go into
+       separate cells so Excel opens it cleanly. */
+    const src = exportSource();
     const cols = [
         ['Merge',           r => r.merge_code],
         ['M CODE',          r => r.m_code || ''],
@@ -3282,15 +3340,19 @@ function downloadCSV() {
        downloaded file has provenance — some SIEM tools object to a
        leading BOM, but Excel opens UTF-8-BOM cleanly with tildes and
        Korean characters. */
+    const selSuffix = selected.size > 0 ? ' · selection only (' + selected.size + ' merges)' : '';
     const provenance = '# Stock Balance Lab · ' + curTab.replace('_',' ')
                      + ' · ' + new Date().toISOString().slice(0, 10)
-                     + ' · Filter: ' + (filterSummary() || 'all SKUs');
+                     + ' · Filter: ' + (filterSummary() || 'all SKUs')
+                     + selSuffix;
     const csv = '﻿' + provenance + '\n' + lines.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url;
-    a.download = 'stock_balance_' + curTab + '_' + todayStr() + '.csv';
+    a.download = 'stock_balance_' + curTab
+               + (selected.size > 0 ? '_selection' : '')
+               + '_' + todayStr() + '.csv';
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     showToast('Downloaded ' + a.download + ' (' + fmtI(src.length) + ' rows)');
@@ -3307,17 +3369,7 @@ function downloadXLSX() {
         showToast('XLSX library still loading — try again in a second');
         return;
     }
-    const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
-    let src = rawSrc.filter(rowPasses);
-    if (sortCol && sortDir !== 0) {
-        const dir = sortDir;
-        src = src.slice().sort((a, b) => {
-            const av = sortKey(a, sortCol), bv = sortKey(b, sortCol);
-            if (av < bv) return -1 * dir;
-            if (av > bv) return  1 * dir;
-            return 0;
-        });
-    }
+    const src = exportSource();
     /* Column list mirrors downloadCSV but returns NUMBERS as numbers
        (not toFixed strings) so Excel treats them as numeric cells. */
     const cols = [
@@ -3389,13 +3441,16 @@ function downloadXLSX() {
         ['Generated',       new Date().toISOString()],
         ['Tab',             curTab],
         ['Filter',          filterSummary() || 'all SKUs'],
+        ['Selection',       selected.size > 0 ? (selected.size + ' merges — selection only') : 'all filtered rows'],
         ['Rows',            src.length],
         ['Data as of',      (window.META && META.data_date) || ''],
         ['Source workbook', (window.META && META.path) || ''],
     ]);
     provWs['!cols'] = [{ wch: 20 }, { wch: 60 }];
     XLSX.utils.book_append_sheet(wb, provWs, 'Meta');
-    const fname = 'stock_balance_' + curTab + '_' + todayStr() + '.xlsx';
+    const fname = 'stock_balance_' + curTab
+               + (selected.size > 0 ? '_selection' : '')
+               + '_' + todayStr() + '.xlsx';
     XLSX.writeFile(wb, fname);
     showToast('Downloaded ' + fname + ' (' + fmtI(src.length) + ' rows)');
 }
