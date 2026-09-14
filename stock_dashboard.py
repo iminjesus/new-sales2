@@ -463,7 +463,7 @@ def _aggregate(rows):
     by_pclt     = {}    # marketing line within PCLT only  → main chart 1
     by_tbr      = {}    # marketing line within TBR only   → main chart 2
 
-    shortage_rows, surplus_rows, serious_rows, no_move_rows = [], [], [], []
+    shortage_rows, balanced_rows, surplus_rows, serious_rows, no_move_rows = [], [], [], [], []
     all_rows_flat = []   # every non-empty row, for the drill-down index
 
     for r in rows:
@@ -565,6 +565,8 @@ def _aggregate(rows):
         all_rows_flat.append(entry)
         if st == "shortage":
             shortage_rows.append(entry)
+        elif st == "balanced":
+            balanced_rows.append(entry)
         elif st == "surplus":
             surplus_rows.append(entry)
         elif st == "serious_surplus":
@@ -574,6 +576,8 @@ def _aggregate(rows):
 
     # Sort tables — shortage by MOI ascending (most urgent first)
     shortage_rows.sort(key=lambda e: (e["moh"] if e["moh"] is not None else 0, -e["total_3m"]))
+    # Balance by 3M demand descending — biggest movers first
+    balanced_rows.sort(key=lambda e: -e["total_3m"])
     # Surplus / Serious Surplus by MOI descending (biggest overstock first)
     surplus_rows.sort(key=lambda e: -(e["moh"] if e["moh"] is not None else 0))
     serious_rows.sort(key=lambda e: -(e["moh"] if e["moh"] is not None else 0))
@@ -613,6 +617,7 @@ def _aggregate(rows):
         "by_brand":      by_brand,
         "by_classif":    by_classif,
         "shortage_rows":        shortage_rows,
+        "balanced_rows":        balanced_rows,
         "surplus_rows":         surplus_rows,
         "serious_surplus_rows": serious_rows,
         "no_move_rows":         no_move_rows,
@@ -966,6 +971,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
   <div class="ms" data-key="status"><button class="ms-btn">Status</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="state"><button class="ms-btn">State</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="brand"><button class="ms-btn">Brand</button><div class="ms-panel"></div></div>
+  <div class="ms" data-key="product"><button class="ms-btn">Product</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="group"><button class="ms-btn">Group</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="line"><button class="ms-btn">Marketing Line</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="inch"><button class="ms-btn">Rim (inch)</button><div class="ms-panel"></div></div>
@@ -1061,9 +1067,14 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
 
       <div class="tabs">
         <div class="tab active" data-tab="shortage">🔴 Shortage <span class="n" id="n-short">0</span></div>
+        <div class="tab" data-tab="balanced">🟢 Balance <span class="n" id="n-baltab">0</span></div>
         <div class="tab" data-tab="surplus">🟠 Surplus <span class="n" id="n-sur">0</span></div>
         <div class="tab" data-tab="serious_surplus">🟥 Serious Surplus <span class="n" id="n-ser">0</span></div>
         <div class="tab" data-tab="no_move">🟣 No move <span class="n" id="n-nom">0</span></div>
+        <button class="icon-btn" style="margin-left:auto" onclick="togglePipeline()"
+                id="btn-pipeline" title="Show / hide per-state Port · Water · CY · Factory breakdown">
+          ▶ Pipeline detail
+        </button>
       </div>
 
       <div class="sel-summary" id="sel-summary">
@@ -1078,26 +1089,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
 
       <div class="tbl-wrap">
         <table class="dt" id="sku-tbl">
-          <thead>
-            <tr>
-              <th data-col="merge_code">Merge<span class="sort"></span></th>
-              <th data-col="m_code">M CODE<span class="sort"></span></th>
-              <th data-col="brand">Brand<span class="sort"></span></th>
-              <th data-col="line">Marketing Line<span class="sort"></span></th>
-              <th data-col="pattern">Pattern<span class="sort"></span></th>
-              <th data-col="group">Group<span class="sort"></span></th>
-              <th data-col="size">Size<span class="sort"></span></th>
-              <th data-col="inch">Inch<span class="sort"></span></th>
-              <th data-col="li_ss">LI/SS<span class="sort"></span></th>
-              <th class="r" data-col="nsw">NSW <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
-              <th class="r" data-col="qld">QLD <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
-              <th class="r" data-col="vic">VIC <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
-              <th class="r" data-col="wa">WA <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
-              <th class="r" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>
-              <th class="r" data-col="moh">MOI<span class="sort"></span></th>
-              <th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>
-            </tr>
-          </thead>
+          <thead id="sku-thead"></thead>
           <tbody id="tbl-body"></tbody>
         </table>
       </div>
@@ -1138,9 +1130,22 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="stat" style="margin-top:14px">State breakdown</div>
         <table class="pipe-tbl">
           <thead><tr><th>State</th><th>Stock</th><th>Port</th><th>Water</th>
+              <th title="Container Yard — not tracked in the current XLSM">CY</th>
               <th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +Pipe</th></tr></thead>
           <tbody id="m-pipe-tbl"></tbody>
         </table>
+
+        <div class="stat" style="margin-top:16px">Top 10 Ship-to customers <span style="text-transform:none;font-weight:400;color:#B0BEC5">— last month · this month</span></div>
+        <div id="m-top10" style="padding:10px 12px;background:#F8FAFC;border:1px dashed #CBD5E1;
+             border-radius:6px;color:#607D8B;font-size:11.5px;line-height:1.55;margin-top:4px">
+          <b style="color:#334155">Data source needed.</b>
+          The current Stock_report XLSM doesn't include per-customer (Ship-to)
+          shipment history — only aggregated per-state monthly sales.
+          Once a Ship-to-level file (e.g. SAP VBRK/VBRP extract or a monthly
+          Ship-to CSV) is wired in, this panel will show the top-10 buyers
+          for last month and this month with the % each takes of the
+          relevant state's demand.
+        </div>
       </div>
     </div>
   </div>
@@ -1179,31 +1184,36 @@ const filterState = {
     status:  new Set(),
     state:   new Set(),
     brand:   new Set(),
+    product: new Set(),   // PCLT / TBR / Other  (r.category)
     group:   new Set(),
     line:    new Set(),
     inch:    new Set(),
     pattern: new Set(),
 };
 const KEY_LBL = { status:'Status', state:'State', brand:'Brand',
-                  group:'Group', line:'Marketing Line', inch:'Rim (inch)',
-                  pattern:'Pattern' };
+                  product:'Product', group:'Group', line:'Marketing Line',
+                  inch:'Rim (inch)', pattern:'Pattern' };
 
 function buildFilterOptions() {
     const values = { status: ['shortage','balanced','surplus','serious_surplus','no_move'],
                      state: STATES.slice(),
-                     brand: new Set(), group: new Set(), line: new Set(),
-                     inch: new Set(), pattern: new Set() };
+                     brand: new Set(), product: new Set(), group: new Set(),
+                     line: new Set(), inch: new Set(), pattern: new Set() };
     DATA.all_rows.forEach(r => {
-        if (r.brand)   values.brand.add(r.brand);
-        if (r.group)   values.group.add(r.group);
-        if (r.line)    values.line.add(r.line);
-        if (r.inch)    values.inch.add(r.inch);
-        if (r.pattern) values.pattern.add(r.pattern);
+        if (r.brand)    values.brand.add(r.brand);
+        if (r.category) values.product.add(r.category);
+        if (r.group)    values.group.add(r.group);
+        if (r.line)     values.line.add(r.line);
+        if (r.inch)     values.inch.add(r.inch);
+        if (r.pattern)  values.pattern.add(r.pattern);
     });
+    /* Product order: PCLT first (biggest segment), TBR next, Other last */
+    const prodOrder = ['PCLT','TBR','Other'];
     return {
         status:  values.status,
         state:   values.state,
         brand:   [...values.brand].sort(),
+        product: prodOrder.filter(p => values.product.has(p)),
         group:   [...values.group].sort(),
         line:    [...values.line].sort(),
         inch:    [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
@@ -1274,9 +1284,10 @@ function resetFilters() {
 
 /* ── Row filter (used by every derived section) ── */
 function rowPasses(r) {
-    if (filterState.status.size  && !filterState.status.has(r.status))   return false;
-    if (filterState.brand.size   && !filterState.brand.has(r.brand))     return false;
-    if (filterState.group.size   && !filterState.group.has(r.group))     return false;
+    if (filterState.status.size  && !filterState.status.has(r.status))     return false;
+    if (filterState.brand.size   && !filterState.brand.has(r.brand))       return false;
+    if (filterState.product.size && !filterState.product.has(r.category))  return false;
+    if (filterState.group.size   && !filterState.group.has(r.group))       return false;
     if (filterState.line.size    && !filterState.line.has(r.line))       return false;
     if (filterState.inch.size    && !filterState.inch.has(r.inch))       return false;
     if (filterState.pattern.size && !filterState.pattern.has(r.pattern)) return false;
@@ -1321,6 +1332,7 @@ function recomputeKPI() {
     document.getElementById('kpi-nom').textContent   = fmtI(nm);
     document.getElementById('kpi-moi').textContent   = tot3m > 0 ? FMT_1.format(totStk / tot3m) : '—';
     document.getElementById('n-short').textContent   = fmtI(sh);
+    document.getElementById('n-baltab').textContent  = fmtI(bl);
     document.getElementById('n-sur').textContent     = fmtI(su);
     document.getElementById('n-ser').textContent     = fmtI(se);
     document.getElementById('n-nom').textContent     = fmtI(nm);
@@ -1459,12 +1471,92 @@ function toggleChartMode(which) {
     renderCharts();
 }
 
-/* ── SKU table (sorting + row selection + summary + tabs) ── */
+/* ── SKU table (sorting + row selection + summary + tabs + pipeline expansion) ── */
 let curTab = 'shortage';
 let sortCol = null, sortDir = 0;     // 0 = none, 1 = asc, -1 = desc
+let showPipeline = false;            // toggled by "▶ Pipeline detail"
 const selected = new Set();
 
+function togglePipeline() {
+    showPipeline = !showPipeline;
+    const btn = document.getElementById('btn-pipeline');
+    btn.innerHTML = showPipeline ? '◀ Hide pipeline' : '▶ Pipeline detail';
+    btn.classList.toggle('active', showPipeline);
+    renderTable();
+}
+
+/* Build the <thead> row.  When showPipeline is on, each state
+   expands into a 5-cell group: Stock / Port / Water / CY / Factory.
+   A slim colored header band above the sub-cells identifies which
+   state the group belongs to. */
+function buildTableHead() {
+    const nonState = [
+        ['merge_code','Merge'], ['m_code','M CODE'], ['brand','Brand'],
+        ['line','Marketing Line'], ['pattern','Pattern'],
+        ['group','Group'], ['size','Size'], ['inch','Inch'],
+        ['li_ss','LI/SS'],
+    ];
+    const stateColour = { NSW:'#1976D2', QLD:'#EF6C00', VIC:'#8E24AA', WA:'#00897B' };
+    let h = '';
+    if (showPipeline) {
+        /* Two-row header: state band + sub-column labels */
+        h = '<tr><th colspan="' + nonState.length + '" style="background:#F1F5F9"></th>';
+        STATES.forEach(s => {
+            h += '<th colspan="5" style="text-align:center;background:' + stateColour[s]
+              + ';color:#fff;font-weight:700">' + s + '</th>';
+        });
+        h += '<th colspan="4" style="background:#F1F5F9"></th></tr><tr>';
+    } else {
+        h = '<tr>';
+    }
+    nonState.forEach(([col, label]) => {
+        h += '<th data-col="' + col + '">' + label + '<span class="sort"></span></th>';
+    });
+    if (showPipeline) {
+        STATES.forEach(s => {
+            /* 5 sub-columns per state.  CY is a placeholder — the
+               source XLSM only tracks Port / Water / Factory, so the
+               CY cells render "—" for now.  Hover the header for the
+               note. */
+            const dc = s.toLowerCase();
+            h += '<th class="r" data-col="' + dc + '">Stock<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_port">Port<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_water">Water<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_cy" title="CY (Container Yard) — not tracked in the current XLSM">CY<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_fac">Factory<span class="sort"></span></th>';
+        });
+        h += '<th class="r" data-col="total_stock">Total Stock<span class="sort"></span></th>';
+    } else {
+        STATES.forEach(s => {
+            const dc = s.toLowerCase();
+            h += '<th class="r" data-col="' + dc + '">' + s + ' <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
+        });
+        h += '<th class="r" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
+    }
+    h += '<th class="r" data-col="moh">MOI<span class="sort"></span></th>'
+      +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>';
+    h += '</tr>';
+    document.getElementById('sku-thead').innerHTML = h;
+    /* Re-wire sort handlers on the freshly built headers */
+    document.querySelectorAll('#sku-tbl thead th[data-col]').forEach(th => {
+        th.addEventListener('click', () => {
+            const col = th.dataset.col;
+            if (sortCol === col) sortDir = sortDir === 1 ? -1 : (sortDir === -1 ? 0 : 1);
+            else { sortCol = col; sortDir = 1; }
+            renderTable();
+        });
+    });
+}
+
 function sortKey(r, col) {
+    /* Pipeline sub-columns: nsw_port / qld_water / wa_fac … */
+    const m = /^(nsw|qld|vic|wa)_(port|water|fac|cy)$/.exec(col);
+    if (m) {
+        const state = m[1].toUpperCase(), leg = m[2];
+        if (leg === 'cy') return 0;   // CY not tracked in source
+        const pp = r.state_pipe_parts?.[state];
+        return pp ? (pp[leg] || 0) : 0;
+    }
     switch (col) {
         case 'nsw': return r.state_stock.NSW || 0;
         case 'qld': return r.state_stock.QLD || 0;
@@ -1473,20 +1565,15 @@ function sortKey(r, col) {
         case 'li_ss': return (parseFloat(r.li) || 0);
         case 'inch':  return (parseFloat(r.inch) || 0);
         case 'moh':       return r.moh == null ? -1 : r.moh;
-        case 'merge_moi': return r.moh == null ? -1 : r.moh;   // same underlying value
+        case 'merge_moi': return r.moh == null ? -1 : r.moh;
         case 'total_3m':  return r.total_3m || 0;
         case 'total_stock': return r.total_stock || 0;
         default:      return r[col] == null ? '' : r[col];
     }
 }
-document.querySelectorAll('#sku-tbl thead th').forEach(th => {
-    th.addEventListener('click', () => {
-        const col = th.dataset.col;
-        if (sortCol === col) sortDir = sortDir === 1 ? -1 : (sortDir === -1 ? 0 : 1);
-        else { sortCol = col; sortDir = 1; }
-        renderTable();
-    });
-});
+/* (Sort click handlers are wired inside buildTableHead so they attach
+   to the freshly rebuilt <th> nodes every time the pipeline toggle
+   changes.) */
 
 document.querySelectorAll('.tab').forEach(t => {
     t.addEventListener('click', () => {
@@ -1498,6 +1585,7 @@ document.querySelectorAll('.tab').forEach(t => {
 });
 
 function renderTable() {
+    buildTableHead();
     let src = DATA[curTab + '_rows'].filter(rowPasses);
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
@@ -1514,12 +1602,33 @@ function renderTable() {
         if (th.dataset.col === sortCol) th.classList.add(sortDir === 1 ? 'sort-asc' : 'sort-desc');
     });
 
+    /* State-cell factory — compact form (Stock + inline 3M) or the
+       expanded 5-cell form (Stock / Port / Water / CY / Factory). */
+    const stateCells = r => {
+        if (!showPipeline) {
+            return STATES.map(s =>
+                '<td class="r">' + fmtI(r.state_stock[s]) + demSuffix(r.state_3m[s]) + '</td>'
+            ).join('');
+        }
+        return STATES.map(s => {
+            const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
+            return '<td class="r">' + fmtI(r.state_stock[s]) + '</td>'
+                 + '<td class="r">' + fmtI(pp.port)          + '</td>'
+                 + '<td class="r">' + fmtI(pp.water)         + '</td>'
+                 + '<td class="r" style="color:#B0BEC5">—</td>'   /* CY — no source */
+                 + '<td class="r">' + fmtI(pp.fac)           + '</td>';
+        }).join('');
+    };
+
     const body = document.getElementById('tbl-body');
     body.innerHTML = src.slice(0, 800).map(r => {
         const cls_mo = r.status === 'shortage' ? 'short'
                      : r.status === 'surplus'  ? 'sur'
                      : r.status === 'serious_surplus' ? 'ser' : '';
         const selCls = selected.has(r.merge_code) ? ' class="selected"' : '';
+        const totalCell = showPipeline
+            ? '<td class="r">' + fmtI(r.total_stock) + '</td>'
+            : '<td class="r">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
         return '<tr' + selCls + ' data-mc="' + r.merge_code + '">'
             + '<td>' + r.merge_code + '</td>'
             + '<td>' + (r.m_code || '—') + '</td>'
@@ -1530,11 +1639,8 @@ function renderTable() {
             + '<td>' + (r.size || '—') + '</td>'
             + '<td>' + (r.inch || '—') + '</td>'
             + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.NSW) + demSuffix(r.state_3m.NSW) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.QLD) + demSuffix(r.state_3m.QLD) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.VIC) + demSuffix(r.state_3m.VIC) + '</td>'
-            + '<td class="r">' + fmtI(r.state_stock.WA)  + demSuffix(r.state_3m.WA)  + '</td>'
-            + '<td class="r">' + fmtI(r.total_stock)     + demSuffix(r.total_3m)     + '</td>'
+            + stateCells(r)
+            + totalCell
             + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
             + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
             + '</tr>';
@@ -1765,6 +1871,7 @@ function openModal(mergeCode) {
             + '<td>' + fmtI(stock) + '</td>'
             + '<td>' + fmtI(pp.port) + '</td>'
             + '<td>' + fmtI(pp.water) + '</td>'
+            + '<td style="color:#B0BEC5">—</td>'   /* CY: no source yet */
             + '<td>' + fmtI(pp.fac) + '</td>'
             + '<td>' + fmtI(p) + '</td>'
             + '<td>' + fmtF(dem, 1) + '</td>'
@@ -1780,7 +1887,8 @@ function openModal(mergeCode) {
     document.getElementById('m-pipe-tbl').innerHTML = rows
       + '<tr class="tot"><td class="st">Total</td><td>' + fmtI(totStock)
       + '</td><td>' + fmtI(totPort) + '</td><td>' + fmtI(totWater)
-      + '</td><td>' + fmtI(totFac)  + '</td><td>' + fmtI(totPipe)
+      + '</td><td style="color:#B0BEC5">—</td>'
+      + '<td>' + fmtI(totFac)  + '</td><td>' + fmtI(totPipe)
       + '</td><td>' + fmtF(r.total_3m, 1) + '</td>'
       + '<td>' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
       + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td></tr>';
