@@ -384,17 +384,23 @@ def load_stock_data():
         # alternate demand basis for Merge_MOI(PPL/3M).
         total_12m = _num(r[COL_TOTAL_12M - 1]) if COL_TOTAL_12M else 0.0
 
-        # "6M-old" average = average of months -6, -5, -4 (the OLDER
-        # half of the 6-month window, i.e. before the current 3-month
-        # rolling average kicks in).  The user's MOI calc uses this
-        # figure so that a recent demand shock doesn't hide the older
-        # baseline.  history["TOTAL"] is indexed -12M(0) … -1M(11), so
-        # months -6/-5/-4 sit at indices 6, 7, 8.
+        # ── Period-average demand ─────────────────────────────────
+        # Every period average is computed the SAME way — sum three
+        # consecutive months from history["TOTAL"] and divide by 3 —
+        # so the four "3M / 4-6M / 7-9M / 10-12M" columns are truly
+        # comparable across the row.  history["TOTAL"] is indexed
+        # -12M(0), -11M(1), -10M(2), -9M(3), -8M(4), -7M(5), -6M(6),
+        # -5M(7), -4M(8), -3M(9), -2M(10), -1M(11).
         h_tot = history["TOTAL"]
-        old_6m_vals = [h_tot[6], h_tot[7], h_tot[8]] if len(h_tot) >= 12 else []
-        avg_6m_old = sum(old_6m_vals) / 3.0 if old_6m_vals else 0.0
+        if len(h_tot) >= 12:
+            p_3m       = (h_tot[9]  + h_tot[10] + h_tot[11]) / 3.0   # months -1 .. -3
+            avg_6m_old = (h_tot[6]  + h_tot[7]  + h_tot[8])  / 3.0   # months -4 .. -6
+            avg_7_9m   = (h_tot[3]  + h_tot[4]  + h_tot[5])  / 3.0   # months -7 .. -9
+            avg_10_12m = (h_tot[0]  + h_tot[1]  + h_tot[2])  / 3.0   # months -10 .. -12
+        else:
+            p_3m = avg_6m_old = avg_7_9m = avg_10_12m = 0.0
 
-        # Max-demand basis: the larger of {3M avg, "6M-old" avg, 12M avg}
+        # Max-demand basis: the larger of {3M avg, "4-6M" avg, 12M avg}
         max_demand = max(total_3m, avg_6m_old, total_12m) if any([total_3m, avg_6m_old, total_12m]) else 0.0
 
         # Enrich via MM → Sheet2
@@ -490,8 +496,11 @@ def load_stock_data():
             "history":           history,    # 12 months by state
             "total_stock":       total_stock,
             "total_all":         total_all,
-            "total_3m":          total_3m,
+            "total_3m":          total_3m,           # sheet's pre-computed 3M_A (MOI basis)
+            "p_3m":              round(p_3m, 2),     # history-derived 3M avg (period column)
             "avg_6m_old":        round(avg_6m_old, 2),
+            "avg_7_9m":          round(avg_7_9m, 2),
+            "avg_10_12m":        round(avg_10_12m, 2),
             "total_12m":         round(total_12m, 2),
             "max_demand":        round(max_demand, 2),
             "moh":               round(moh, 2)          if moh          is not None else None,
@@ -626,7 +635,10 @@ def _aggregate(rows):
             "total_stock":    r["total_stock"],
             "total_all":      r["total_all"],
             "total_3m":       round(r["total_3m"], 2),
+            "p_3m":           r["p_3m"],
             "avg_6m_old":     r["avg_6m_old"],
+            "avg_7_9m":       r["avg_7_9m"],
+            "avg_10_12m":     r["avg_10_12m"],
             "total_12m":      r["total_12m"],
             "max_demand":     r["max_demand"],
             "moh":            r["moh"],
@@ -1639,6 +1651,11 @@ function buildTableHead() {
       +      'title="(Stock on hand + Port + Water + Factory) ÷ MAX(3M avg, 6M-old avg (months −6 to −4), 12M avg). '
       +      'Using the LARGEST of the three demand baselines protects against under-stocking when the recent 3-month rolling average has dipped.">'
       +      'Merge_MOI(PPL/3M)<span class="sort"></span></th>';
+    /* Period-average demand break-down (divider block on the far right) */
+    h += '<th class="r grp-start" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M Avg<span class="sort"></span></th>'
+      +  '<th class="r" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M Avg<span class="sort"></span></th>'
+      +  '<th class="r" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M Avg<span class="sort"></span></th>'
+      +  '<th class="r" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M Avg<span class="sort"></span></th>';
     h += '</tr>';
     document.getElementById('sku-thead').innerHTML = h;
     /* Re-wire sort handlers on the freshly built headers */
@@ -1677,6 +1694,10 @@ function sortKey(r, col) {
         case 'moh':            return r.moh          == null ? -1 : r.moh;
         case 'merge_moi':      return r.moh          == null ? -1 : r.moh;
         case 'merge_moi_ppl':  return r.moh_plus_max == null ? -1 : r.moh_plus_max;
+        case 'p_3m':           return r.p_3m        || 0;
+        case 'p_4_6m':         return r.avg_6m_old  || 0;
+        case 'p_7_9m':         return r.avg_7_9m    || 0;
+        case 'p_10_12m':       return r.avg_10_12m  || 0;
         case 'total_3m':  return r.total_3m || 0;
         case 'total_stock': return r.total_stock || 0;
         default:      return r[col] == null ? '' : r[col];
@@ -1768,6 +1789,10 @@ function renderTable() {
             + '<td class="r grp-start ' + cls_mo + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
             + '<td class="r ' + cls_mo + '">'           + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
             + '<td class="r ' + cls_mo + '">'           + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
+            + '<td class="r grp-start">' + fmtF(r.p_3m       || 0, 1) + '</td>'
+            + '<td class="r">'           + fmtF(r.avg_6m_old || 0, 1) + '</td>'
+            + '<td class="r">'           + fmtF(r.avg_7_9m   || 0, 1) + '</td>'
+            + '<td class="r">'           + fmtF(r.avg_10_12m || 0, 1) + '</td>'
             + '</tr>';
     }).join('');
 
@@ -1901,8 +1926,10 @@ function downloadCSV() {
         ['MOI',                r => r.moh          != null ? r.moh.toFixed(2)          : ''],
         ['Merge_MOI',          r => r.moh          != null ? r.moh.toFixed(2)          : ''],
         ['Merge_MOI(PPL/3M)',  r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
-        ['3M Avg (basis)',     r => (r.total_3m ?? 0).toFixed(2)],
-        ['6M-old Avg (basis)', r => (r.avg_6m_old ?? 0).toFixed(2)],
+        ['3M Avg (m -1..-3)',  r => (r.p_3m       ?? 0).toFixed(2)],
+        ['4-6M Avg (m -4..-6)',r => (r.avg_6m_old ?? 0).toFixed(2)],
+        ['7-9M Avg (m -7..-9)',r => (r.avg_7_9m   ?? 0).toFixed(2)],
+        ['10-12M Avg (m -10..-12)', r => (r.avg_10_12m ?? 0).toFixed(2)],
         ['12M Avg (basis)',    r => (r.total_12m ?? 0).toFixed(2)],
         ['Max demand (basis)', r => (r.max_demand ?? 0).toFixed(2)],
         ['Status',          r => STATUS_PRETTY[r.status] || r.status || ''],
