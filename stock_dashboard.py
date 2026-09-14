@@ -212,17 +212,51 @@ _SHEET2_COLS = ("M CODE", "Description", "Group", "Brand",
                 "Factory", "Origin", "AU")
 
 
+# Preferred location for the source file on Hankook AU's Windows box.
+# Set via env STOCK_DIR to override; falls back to the project dir when
+# the preferred dir doesn't exist (e.g. running on the Linux server).
+_DEFAULT_STOCK_DIR = os.environ.get(
+    "STOCK_DIR",
+    r"E:\01. work\2025\Data_Anal_Website",
+)
+
 def _latest_stock_xlsm():
-    """Glob the project directory for Stock_report_*.xlsm and return the
-    newest by mtime.  Falls back to any *.xlsm containing 'stock' in
-    the name so a user-renamed copy still works."""
-    hits = sorted(glob.glob(os.path.join(_BASE, "Stock_report_*.xlsm")),
-                  key=os.path.getmtime, reverse=True)
-    if hits:
-        return hits[0]
-    fallback = sorted(glob.glob(os.path.join(_BASE, "*[Ss]tock*.xls[mx]")),
-                      key=os.path.getmtime, reverse=True)
-    return fallback[0] if fallback else None
+    """Find the newest Stock_report file by mtime.
+
+    Looks in _DEFAULT_STOCK_DIR first, then falls back to the project
+    directory.  Filename pattern is loose so 'Stock report updated
+    <date>.xlsm', 'Stock_report_updated_<date>.xlsm' and legacy
+    'Stock_report_*.xlsm' variants all match."""
+    candidates = []
+    for base in (_DEFAULT_STOCK_DIR, _BASE):
+        if not base or not os.path.isdir(base):
+            continue
+        for pat in ("Stock report updated*.xls[mx]",
+                    "Stock_report_updated*.xls[mx]",
+                    "Stock*report*updated*.xls[mx]",
+                    "Stock_report_*.xls[mx]"):
+            candidates.extend(glob.glob(os.path.join(base, pat)))
+    candidates = sorted(set(candidates), key=os.path.getmtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def _parse_data_date(path):
+    """Extract the "as-of" date from the filename.
+
+    The stock file convention is 'Stock_report_updated_MMDDYYYY.xlsm' —
+    e.g. '11092026' → 9 November 2026.  Returns a datetime or None."""
+    if not path:
+        return None
+    name = os.path.basename(path)
+    m = re.search(r'(\d{8})', name)
+    if not m:
+        return None
+    s = m.group(1)
+    try:
+        mm, dd, yyyy = int(s[:2]), int(s[2:4]), int(s[4:])
+        return datetime(yyyy, mm, dd)
+    except (ValueError, TypeError):
+        return None
 
 
 _cache = {"path": None, "mtime": 0, "rows": None, "meta": None}
@@ -429,11 +463,19 @@ def load_stock_data():
             "status":            status,
         })
 
+    dd = _parse_data_date(path)
+    if dd:
+        # Cross-platform "9 November 2026": strip leading zero from day.
+        data_date_str = dd.strftime("%d %B %Y").lstrip("0")
+    else:
+        data_date_str = "unknown"
     meta = {
-        "path":   os.path.basename(path),
-        "mtime":  datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
-        "rows":   len(rows_out),
-        "load_s": round(time.time() - t0, 2),
+        "path":       os.path.basename(path),
+        "path_dir":   os.path.dirname(path),
+        "mtime":      datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+        "data_date":  data_date_str,
+        "rows":       len(rows_out),
+        "load_s":     round(time.time() - t0, 2),
     }
     _cache.update({"path": path, "mtime": mtime, "rows": rows_out, "meta": meta})
     return rows_out, meta
@@ -955,7 +997,8 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
 <div class="hdr">
   <h1>📦 Stock Balance Lab</h1>
   <span class="subtitle">Where we're short · where we're surplus · by state · by product<br>
-    Source: {{ meta.path }} &nbsp;·&nbsp; loaded {{ meta.mtime }} &nbsp;·&nbsp; {{ meta.rows }} rows in {{ meta.load_s }} s</span>
+    <b style="color:#FFD54F">Data as of {{ meta.data_date }}</b> &nbsp;·&nbsp; source: {{ meta.path }}
+    &nbsp;·&nbsp; loaded {{ meta.mtime }} &nbsp;·&nbsp; {{ meta.rows }} rows in {{ meta.load_s }} s</span>
   <nav class="nav">
     <button class="icon-btn" onclick="emailScreen('page','Full dashboard')"
             title="Capture the whole screen and start an Outlook mail">✉ Email screen</button>
@@ -1008,6 +1051,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
   <div class="state-col">
     <div class="card">
       <h3>Stock across states
+        <span class="hint">as of {{ meta.data_date }}</span>
         <span class="icons">
           <button class="icon-btn" onclick="emailScreen('state-card','State overview')" title="Email this panel">✉</button>
         </span>
@@ -1071,8 +1115,9 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="tab" data-tab="surplus">🟠 Surplus <span class="n" id="n-sur">0</span></div>
         <div class="tab" data-tab="serious_surplus">🟥 Serious Surplus <span class="n" id="n-ser">0</span></div>
         <div class="tab" data-tab="no_move">🟣 No move <span class="n" id="n-nom">0</span></div>
+        <div class="tab" data-tab="total">🔵 Total <span class="n" id="n-tot">0</span></div>
         <button class="icon-btn" style="margin-left:auto" onclick="togglePipeline()"
-                id="btn-pipeline" title="Show / hide per-state Port · Water · CY · Factory breakdown">
+                id="btn-pipeline" title="Show / hide per-state Stock · Port · Water · Factory (plus National Total)">
           ▶ Pipeline detail
         </button>
       </div>
@@ -1130,8 +1175,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="stat" style="margin-top:14px">State breakdown</div>
         <table class="pipe-tbl">
           <thead><tr><th>State</th><th>Stock</th><th>Port</th><th>Water</th>
-              <th title="Container Yard — not tracked in the current XLSM">CY</th>
-              <th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +Pipe</th></tr></thead>
+              <th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +PPL</th></tr></thead>
           <tbody id="m-pipe-tbl"></tbody>
         </table>
 
@@ -1336,6 +1380,7 @@ function recomputeKPI() {
     document.getElementById('n-sur').textContent     = fmtI(su);
     document.getElementById('n-ser').textContent     = fmtI(se);
     document.getElementById('n-nom').textContent     = fmtI(nm);
+    document.getElementById('n-tot').textContent     = fmtI(sh + bl + su + se + nm);
 }
 function renderStateCards() {
     const rows = currentSetOfRows();
@@ -1499,13 +1544,17 @@ function buildTableHead() {
     const stateColour = { NSW:'#1976D2', QLD:'#EF6C00', VIC:'#8E24AA', WA:'#00897B' };
     let h = '';
     if (showPipeline) {
-        /* Two-row header: state band + sub-column labels */
+        /* Two-row header: state band + sub-column labels.  Each state
+           has 4 sub-columns (Stock/Port/Water/Factory) and a final
+           TOTAL group sits at the far right so the reader can compare
+           per-state pipeline vs. the national roll-up in one glance. */
         h = '<tr><th colspan="' + nonState.length + '" style="background:#F1F5F9"></th>';
         STATES.forEach(s => {
-            h += '<th colspan="5" style="text-align:center;background:' + stateColour[s]
+            h += '<th colspan="4" style="text-align:center;background:' + stateColour[s]
               + ';color:#fff;font-weight:700">' + s + '</th>';
         });
-        h += '<th colspan="4" style="background:#F1F5F9"></th></tr><tr>';
+        h += '<th colspan="4" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
+        h += '<th colspan="2" style="background:#F1F5F9"></th></tr><tr>';
     } else {
         h = '<tr>';
     }
@@ -1514,18 +1563,17 @@ function buildTableHead() {
     });
     if (showPipeline) {
         STATES.forEach(s => {
-            /* 5 sub-columns per state.  CY is a placeholder — the
-               source XLSM only tracks Port / Water / Factory, so the
-               CY cells render "—" for now.  Hover the header for the
-               note. */
             const dc = s.toLowerCase();
             h += '<th class="r" data-col="' + dc + '">Stock<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_port">Port<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_water">Water<span class="sort"></span></th>'
-              +  '<th class="r" data-col="' + dc + '_cy" title="CY (Container Yard) — not tracked in the current XLSM">CY<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_fac">Factory<span class="sort"></span></th>';
         });
-        h += '<th class="r" data-col="total_stock">Total Stock<span class="sort"></span></th>';
+        /* National Total group (right of the state groups) */
+        h += '<th class="r" data-col="total_stock">Stock<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_port">Port<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_water">Water<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_fac">Factory<span class="sort"></span></th>';
     } else {
         STATES.forEach(s => {
             const dc = s.toLowerCase();
@@ -1534,7 +1582,8 @@ function buildTableHead() {
         h += '<th class="r" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
     }
     h += '<th class="r" data-col="moh">MOI<span class="sort"></span></th>'
-      +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>';
+      +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>'
+      +  '<th class="r" data-col="merge_moi_ppl" title="Merge-level MOI including Port + Water + Factory pipeline (Stock+PPL ÷ 3M demand)">Merge_MOI(PPL)<span class="sort"></span></th>';
     h += '</tr>';
     document.getElementById('sku-thead').innerHTML = h;
     /* Re-wire sort handlers on the freshly built headers */
@@ -1548,15 +1597,21 @@ function buildTableHead() {
     });
 }
 
+function totalPipe(r, leg) {
+    if (!r.state_pipe_parts) return 0;
+    return STATES.reduce((s, k) => s + (r.state_pipe_parts[k]?.[leg] || 0), 0);
+}
 function sortKey(r, col) {
     /* Pipeline sub-columns: nsw_port / qld_water / wa_fac … */
-    const m = /^(nsw|qld|vic|wa)_(port|water|fac|cy)$/.exec(col);
+    const m = /^(nsw|qld|vic|wa)_(port|water|fac)$/.exec(col);
     if (m) {
         const state = m[1].toUpperCase(), leg = m[2];
-        if (leg === 'cy') return 0;   // CY not tracked in source
         const pp = r.state_pipe_parts?.[state];
         return pp ? (pp[leg] || 0) : 0;
     }
+    /* National-Total pipeline sub-columns */
+    const t = /^total_(port|water|fac)$/.exec(col);
+    if (t) return totalPipe(r, t[1]);
     switch (col) {
         case 'nsw': return r.state_stock.NSW || 0;
         case 'qld': return r.state_stock.QLD || 0;
@@ -1564,8 +1619,9 @@ function sortKey(r, col) {
         case 'wa':  return r.state_stock.WA  || 0;
         case 'li_ss': return (parseFloat(r.li) || 0);
         case 'inch':  return (parseFloat(r.inch) || 0);
-        case 'moh':       return r.moh == null ? -1 : r.moh;
-        case 'merge_moi': return r.moh == null ? -1 : r.moh;
+        case 'moh':            return r.moh      == null ? -1 : r.moh;
+        case 'merge_moi':      return r.moh      == null ? -1 : r.moh;
+        case 'merge_moi_ppl':  return r.moh_plus == null ? -1 : r.moh_plus;
         case 'total_3m':  return r.total_3m || 0;
         case 'total_stock': return r.total_stock || 0;
         default:      return r[col] == null ? '' : r[col];
@@ -1586,7 +1642,10 @@ document.querySelectorAll('.tab').forEach(t => {
 
 function renderTable() {
     buildTableHead();
-    let src = DATA[curTab + '_rows'].filter(rowPasses);
+    /* Total tab = every non-empty SKU (Shortage + Balance + Surplus +
+       Serious Surplus + No move rolled into one). */
+    const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
+    let src = rawSrc.filter(rowPasses);
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -1603,7 +1662,8 @@ function renderTable() {
     });
 
     /* State-cell factory — compact form (Stock + inline 3M) or the
-       expanded 5-cell form (Stock / Port / Water / CY / Factory). */
+       expanded 4-cell form (Stock / Port / Water / Factory).  A
+       national TOTAL group is emitted separately below. */
     const stateCells = r => {
         if (!showPipeline) {
             return STATES.map(s =>
@@ -1615,7 +1675,6 @@ function renderTable() {
             return '<td class="r">' + fmtI(r.state_stock[s]) + '</td>'
                  + '<td class="r">' + fmtI(pp.port)          + '</td>'
                  + '<td class="r">' + fmtI(pp.water)         + '</td>'
-                 + '<td class="r" style="color:#B0BEC5">—</td>'   /* CY — no source */
                  + '<td class="r">' + fmtI(pp.fac)           + '</td>';
         }).join('');
     };
@@ -1626,9 +1685,16 @@ function renderTable() {
                      : r.status === 'surplus'  ? 'sur'
                      : r.status === 'serious_surplus' ? 'ser' : '';
         const selCls = selected.has(r.merge_code) ? ' class="selected"' : '';
-        const totalCell = showPipeline
-            ? '<td class="r">' + fmtI(r.total_stock) + '</td>'
-            : '<td class="r">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
+        let totalGroup;
+        if (showPipeline) {
+            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
+            totalGroup = '<td class="r">' + fmtI(r.total_stock) + '</td>'
+                       + '<td class="r">' + fmtI(tp)            + '</td>'
+                       + '<td class="r">' + fmtI(tw)            + '</td>'
+                       + '<td class="r">' + fmtI(tf)            + '</td>';
+        } else {
+            totalGroup = '<td class="r">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
+        }
         return '<tr' + selCls + ' data-mc="' + r.merge_code + '">'
             + '<td>' + r.merge_code + '</td>'
             + '<td>' + (r.m_code || '—') + '</td>'
@@ -1640,9 +1706,10 @@ function renderTable() {
             + '<td>' + (r.inch || '—') + '</td>'
             + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
             + stateCells(r)
-            + totalCell
-            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
-            + '<td class="r ' + cls_mo + '">' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
+            + totalGroup
+            + '<td class="r ' + cls_mo + '">' + (r.moh      != null ? fmtF(r.moh, 1)      : '—') + '</td>'
+            + '<td class="r ' + cls_mo + '">' + (r.moh      != null ? fmtF(r.moh, 1)      : '—') + '</td>'
+            + '<td class="r ' + cls_mo + '">' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td>'
             + '</tr>';
     }).join('');
 
@@ -1729,7 +1796,8 @@ function downloadCSV() {
     /* Same source the visible table draws from — status tab + top
        filters + free-text search + current sort.  Values go into
        separate cells so Excel opens it cleanly. */
-    let src = DATA[curTab + '_rows'].filter(rowPasses);
+    const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
+    let src = rawSrc.filter(rowPasses);
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
         src = src.slice().sort((a, b) => {
@@ -1871,7 +1939,6 @@ function openModal(mergeCode) {
             + '<td>' + fmtI(stock) + '</td>'
             + '<td>' + fmtI(pp.port) + '</td>'
             + '<td>' + fmtI(pp.water) + '</td>'
-            + '<td style="color:#B0BEC5">—</td>'   /* CY: no source yet */
             + '<td>' + fmtI(pp.fac) + '</td>'
             + '<td>' + fmtI(p) + '</td>'
             + '<td>' + fmtF(dem, 1) + '</td>'
@@ -1887,8 +1954,7 @@ function openModal(mergeCode) {
     document.getElementById('m-pipe-tbl').innerHTML = rows
       + '<tr class="tot"><td class="st">Total</td><td>' + fmtI(totStock)
       + '</td><td>' + fmtI(totPort) + '</td><td>' + fmtI(totWater)
-      + '</td><td style="color:#B0BEC5">—</td>'
-      + '<td>' + fmtI(totFac)  + '</td><td>' + fmtI(totPipe)
+      + '</td><td>' + fmtI(totFac)  + '</td><td>' + fmtI(totPipe)
       + '</td><td>' + fmtF(r.total_3m, 1) + '</td>'
       + '<td>' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
       + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td></tr>';
