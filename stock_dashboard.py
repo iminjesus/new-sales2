@@ -1209,7 +1209,9 @@ def load_stock_data():
             "group":          eff_group,
             "classification": classif or "",
             "brand":          brand,
-            "line":           line,           # Marketing line (Kinergy / Dynapro / Ventus…)
+            "line":           line,           # Marketing line umbrella (Kinergy / Dynapro / Ventus / Laufenn X Fit…)
+            "product_name":   row_pn,         # Specific variant name straight from stock sheet
+                                              # ("Ventus TD", "Dynapro HP3", "G FIT AS", "SMaRT FLeX DH35")
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
             "size":           size,
@@ -1708,6 +1710,13 @@ table.dt tbody tr:nth-child(even) td { background:#F5F7FA; }
 table.dt tbody tr:hover td { background:var(--hover); }
 table.dt tbody tr.selected td { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td { background:#BFDBFE; }
+/* Merge-group cohover: when the mouse is over any row of a Merge,
+   every other row of the same Merge (its M CODE siblings + Sub
+   Total) gets a subtle indigo tint so the reader can trace the
+   group across the very wide table without scrolling around. */
+table.dt tbody tr.merge-cohover td { background:#EEF2FF !important; }
+table.dt tbody tr.merge-cohover.selected td { background:#C7D2FE !important; }
+table.dt tbody tr.merge-cohover.sub-total td { background:#E0E7FF !important; }
 /* Merge-code separator: first row of each new Merge Code carries
    `merge-break` and draws a heavy top border so the merge groups
    read cleanly. */
@@ -2273,7 +2282,8 @@ function rowPasses(r) {
     if (fq) {
         const hay = ((r.description||'') + ' ' + (r.size||'') + ' '
                    + (r.m_code||'') + ' ' + (r.merge_code||'') + ' '
-                   + (r.pattern||'') + ' ' + (r.line||'')).toLowerCase();
+                   + (r.pattern||'') + ' ' + (r.line||'') + ' '
+                   + (r.product_name||'') + ' ' + (r.brand||'')).toLowerCase();
         if (!hay.includes(fq)) return false;
     }
     return true;
@@ -2483,7 +2493,8 @@ function togglePipeline() {
 function buildTableHead() {
     const nonState = [
         ['merge_code','Merge'], ['m_code','M CODE'], ['brand','Brand'],
-        ['line','Marketing Line'], ['pattern','Pattern'],
+        ['line','Marketing Line'], ['product_name','Product Name'],
+        ['pattern','Pattern'],
         ['group','Group'], ['sku_status','F/O·OPE'],
         ['size','Size'], ['inch','Inch'], ['li_ss','LI/SS'],
     ];
@@ -2731,9 +2742,10 @@ function renderTable() {
     const body = document.getElementById('tbl-body');
 
     /* ── Total row (rendered at the top) ── */
-    const nonStateCount = 10;   /* Merge / M CODE / Brand / Line /
-                                   Pattern / Group / F/O·OPE / Size /
-                                   Inch / LI·SS = 10 non-numeric cols */
+    const nonStateCount = 11;   /* Merge / M CODE / Brand / Line /
+                                   Product Name / Pattern / Group /
+                                   F/O·OPE / Size / Inch / LI·SS
+                                   = 11 non-numeric cols */
     let totalRow = '<tr class="total-row"><td colspan="' + nonStateCount + '">TOTAL IN VIEW · '
                  + fmtI(src.length) + ' rows</td>';
     /* State cells for the Total row */
@@ -2946,15 +2958,16 @@ function renderTable() {
                 const mcodeCell = '<td>' + (r.m_code || '—')
                                 + (thisRowHasInfo ? '' : noDataBadge) + '</td>';
                 const productCells = hasInfo
-                    ? ( '<td>' + (r.brand   || '—') + '</td>'
-                      + '<td>' + (r.line    || '—') + '</td>'
-                      + '<td>' + (r.pattern || '—') + '</td>'
+                    ? ( '<td>' + (r.brand        || '—') + '</td>'
+                      + '<td>' + (r.line         || '—') + '</td>'
+                      + '<td>' + (r.product_name || '—') + '</td>'
+                      + '<td>' + (r.pattern      || '—') + '</td>'
                       + '<td>' + pill(r.group) + '</td>'
                       + '<td>' + renderSkuPill(r.sku_status) + '</td>'
-                      + '<td>' + (r.size    || '—') + '</td>'
-                      + '<td>' + (r.inch    || '—') + '</td>'
+                      + '<td>' + (r.size         || '—') + '</td>'
+                      + '<td>' + (r.inch         || '—') + '</td>'
                       + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>' )
-                    : ( '<td class="no-info" colspan="8">'
+                    : ( '<td class="no-info" colspan="9">'
                       + '⚠ 정보 없음 — Sheet2/Stock Sheet 어디에도 이 Merge Code의 제품 정보가 없습니다. '
                       + 'CS가 Sheet2에 Merge ' + r.merge_code + ' 마스터 레코드를 등록해야 채워집니다.'
                       + '</td>' );
@@ -2975,7 +2988,7 @@ function renderTable() {
             rowsHtml.push(
                 '<tr class="sub-total" data-mc="' + subTotal.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band
-                +      ';font-weight:700;color:' + band + '" colspan="10">'
+                +      ';font-weight:700;color:' + band + '" colspan="11">'
                 + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
                 + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
                 + '</tr>');
@@ -3005,13 +3018,14 @@ function renderTable() {
                 '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band + '">' + r.merge_code + '</td>'
                 + mcodeCell
-                + '<td>' + (r.brand   || '—') + '</td>'
-                + '<td>' + (r.line    || '—') + '</td>'
-                + '<td>' + (r.pattern || '—') + '</td>'
+                + '<td>' + (r.brand        || '—') + '</td>'
+                + '<td>' + (r.line         || '—') + '</td>'
+                + '<td>' + (r.product_name || '—') + '</td>'
+                + '<td>' + (r.pattern      || '—') + '</td>'
                 + '<td>' + pill(r.group) + '</td>'
                 + '<td>' + renderSkuPill(r.sku_status) + '</td>'
-                + '<td>' + (r.size    || '—') + '</td>'
-                + '<td>' + (r.inch    || '—') + '</td>'
+                + '<td>' + (r.size         || '—') + '</td>'
+                + '<td>' + (r.inch         || '—') + '</td>'
                 + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>'
                 + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r, true)
                 + '</tr>');
@@ -3047,6 +3061,26 @@ function renderTable() {
             e.stopPropagation();
             const mc = +btn.dataset.openMc;
             if (!Number.isNaN(mc)) openModal(mc);
+        });
+    });
+    /* Merge-group cohover — pointing at any row of a Merge tints
+       every other row that carries the same data-mc so the wide
+       table lets the reader trace groups visually.  We index rows
+       by merge_code once here so each mouseenter is O(1). */
+    const rowsByMerge = new Map();
+    body.querySelectorAll('tr[data-mc]').forEach(tr => {
+        const mc = tr.dataset.mc;
+        if (!rowsByMerge.has(mc)) rowsByMerge.set(mc, []);
+        rowsByMerge.get(mc).push(tr);
+    });
+    body.querySelectorAll('tr[data-mc]').forEach(tr => {
+        tr.addEventListener('mouseenter', () => {
+            const siblings = rowsByMerge.get(tr.dataset.mc) || [];
+            siblings.forEach(x => { if (x !== tr) x.classList.add('merge-cohover'); });
+        });
+        tr.addEventListener('mouseleave', () => {
+            const siblings = rowsByMerge.get(tr.dataset.mc) || [];
+            siblings.forEach(x => x.classList.remove('merge-cohover'));
         });
     });
     updateSelectionSummary(src);
@@ -3135,6 +3169,7 @@ function downloadCSV() {
         ['M CODE',          r => r.m_code || ''],
         ['Brand',           r => r.brand || ''],
         ['Marketing Line',  r => r.line || ''],
+        ['Product Name',    r => r.product_name || ''],
         ['Pattern',         r => r.pattern || ''],
         ['Group',           r => r.group || ''],
         ['Size',            r => r.size || ''],
@@ -3232,6 +3267,7 @@ function downloadXLSX() {
         ['M CODE',                 r => r.m_code || ''],
         ['Brand',                  r => r.brand || ''],
         ['Marketing Line',         r => r.line || ''],
+        ['Product Name',           r => r.product_name || ''],
         ['Pattern',                r => r.pattern || ''],
         ['Group',                  r => r.group || ''],
         ['Size',                   r => r.size || ''],
@@ -3373,8 +3409,15 @@ function openModal(mergeCode) {
     const mcRows = siblingRows(mergeCode);
     const r = aggregateMerge(mcRows) || findRow(mergeCode);
     if (!r) return;
+    /* Prefer the specific Product Name (e.g. "Ventus TD") over the
+       umbrella Marketing Line for the modal title.  When both are
+       present we show line + product name; otherwise just whichever
+       one exists. */
+    const pnRep = mcRows.map(x => x.product_name).find(x => x) || r.product_name || '';
+    const lineRep = r.line || 'Other';
+    const idParts = pnRep && pnRep !== lineRep ? [lineRep, pnRep] : [lineRep];
     document.getElementById('m-title').textContent =
-        (r.brand || '—') + ' · ' + (r.line || 'Other') + ' · ' + (r.pattern || '—')
+        (r.brand || '—') + ' · ' + idParts.join(' · ') + ' · ' + (r.pattern || '—')
         + '  ·  ' + (r.size || '') + '  ·  LI/SS ' + (r.li||'—') + '/' + (r.ss||'—');
     document.getElementById('m-sub').textContent =
         'Merge ' + r.merge_code + ' · ' + mcRows.length + ' M CODE'
@@ -3458,7 +3501,7 @@ function openModal(mergeCode) {
     const mcRowsHtml = mcRows.map(mc => {
         const mohCls = mc.moh == null ? '' :
             mc.moh <= 1 ? 'short' : mc.moh <= 3 ? '' : mc.moh <= 6 ? 'sur' : 'ser';
-        const productBits = [mc.brand, mc.line, mc.pattern, mc.size]
+        const productBits = [mc.brand, mc.product_name || mc.line, mc.pattern, mc.size]
             .filter(x => x).join(' · ') || '—';
         return '<tr>'
             + '<td>' + (mc.m_code || '—') + '</td>'
