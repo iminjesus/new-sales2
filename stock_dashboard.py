@@ -730,8 +730,12 @@ _HTML = r"""<!DOCTYPE html>
     --ground:#F4F6F9; --card:#FFFFFF; --border:#E1E5EB;
     --ink:#263238; --muted:#607D8B;
     --hdr1:#0E3F5F; --hdr2:#1F4E79;
-    --short:#F57F17;   --short-fg:#FFF8E1;  /* bright amber-yellow — warning without alarm */
-    --short-line:#F9A825;                    /* used in charts + chips */
+    /* Pure lemon-yellow so Shortage stays visually far from Surplus
+       (dark orange).  Text uses a deep mustard for readability on
+       white; chip background is a pale lemon; chart bars use the
+       vivid mid-yellow. */
+    --short:#854D0E;   --short-fg:#FEF3C7;
+    --short-line:#FACC15;
     --bal:#2E7D32;     --bal-fg:#E8F5E9;
     --sur:#EF6C00;     --sur-fg:#FFF3E0;
     --ser:#B71C1C;     --ser-fg:#FDE0E0;
@@ -1150,7 +1154,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
       </div>
 
       <div class="tabs">
-        <div class="tab active" data-tab="shortage">🔴 Shortage <span class="n" id="n-short">0</span></div>
+        <div class="tab active" data-tab="shortage">🟡 Shortage <span class="n" id="n-short">0</span></div>
         <div class="tab" data-tab="balanced">🟢 Balance <span class="n" id="n-baltab">0</span></div>
         <div class="tab" data-tab="surplus">🟠 Surplus <span class="n" id="n-sur">0</span></div>
         <div class="tab" data-tab="serious_surplus">🟥 Serious Surplus <span class="n" id="n-ser">0</span></div>
@@ -1497,7 +1501,7 @@ function drawStackedBar(canvas_id, by, order, mode) {
     return new Chart(document.getElementById(canvas_id), {
         type: 'bar',
         data: { labels, datasets: [
-            { label: 'Shortage', data: short, backgroundColor: '#F9A825' },
+            { label: 'Shortage', data: short, backgroundColor: '#FACC15' },
             { label: 'Balance',  data: bal,   backgroundColor: '#66BB6A' },
             { label: 'Surplus',  data: sur,   backgroundColor: '#FB8C00' },
             { label: 'Serious',  data: ser,   backgroundColor: '#B71C1C' },
