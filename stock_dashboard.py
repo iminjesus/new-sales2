@@ -171,6 +171,10 @@ def _scan_stock_header(ws, header_row=None):
             cmap.setdefault("GROUP", c)
         elif n == "CLASSIFICATION":
             cmap["CLASSIFICATION"] = c
+        elif n in ("DESCRIPTION", "DESC", "PRODUCTDESCRIPTION",
+                   "PRODUCT DESCRIPTION", "MATERIAL DESCRIPTION",
+                   "PRODUCT NAME", "NAME"):
+            cmap.setdefault("DESCRIPTION", c)
 
     # Walk left-to-right in a small state machine.  Every time we see
     # NSW/QLD/VIC/WA in row 2 we buffer the four indices, then look at
@@ -303,6 +307,44 @@ def _extract_pattern(desc):
     return p if p and not p.startswith("#") else ""
 
 
+# Brand-code shorthand → full brand name.  These are the codes that
+# appear in the 2nd comma field of Sheet2 descriptions.  Hankook (HK),
+# Kingstar (KS), Aurora (AU), Laufenn (LF).  Any unknown code passes
+# through as-is so the column never blanks.
+_BRAND_CODE_MAP = {
+    "HK":       "Hankook",
+    "HANKOOK":  "Hankook",
+    "KS":       "Kingstar",
+    "KINGSTAR": "Kingstar",
+    "AU":       "Aurora",
+    "AURORA":   "Aurora",
+    "LF":       "Laufenn",
+    "LAUFENN":  "Laufenn",
+}
+
+def _extract_brand(desc):
+    """Pull the brand out of the 2nd comma field.  Returns "" when the
+    description is empty or doesn't look right."""
+    if not desc:
+        return ""
+    parts = str(desc).split(",")
+    if len(parts) < 2:
+        return ""
+    b = parts[1].strip().upper()
+    if not b or b.startswith("#"):
+        return ""
+    return _BRAND_CODE_MAP.get(b, b.title())
+
+
+def _extract_size(desc):
+    """Pull the size out of the 1st comma field (185R14C, 205/55R16…)."""
+    if not desc:
+        return ""
+    parts = str(desc).split(",")
+    first = parts[0].strip()
+    return first if first and not first.startswith("#") else ""
+
+
 # Groups that fall under the PCLT bucket (Passenger Car / Light Truck).
 # Anything else with a truck pattern rolls into TBR.
 _PCLT_GROUPS = {"SP", "HP", "UHP", "LS", "LV", "RUNFLAT", "RACING"}
@@ -411,6 +453,11 @@ def _parse_data_date(path):
 
 _cache = {"path": None, "mtime": 0, "rows": None, "meta": None}
 
+# Populated fresh during load_stock_data(); exposed on the meta object
+# so the dashboard can surface "why is my product info blank?" without
+# users needing to poke at the .xlsm.
+_stock_load_debug = {}
+
 
 def load_stock_data():
     """Read (and cache) the latest stock XLSM into a list of row dicts.
@@ -472,49 +519,96 @@ def load_stock_data():
             mc_to_mcode.setdefault(merge_i, code_i)
 
     # ── Sheet2 SKU master ─────────────────────────────────────────
-    # Locate the header row by looking for the "M CODE" label; the
-    # SKU rows start on the line right after.  Column order is picked
-    # up from the header row itself so re-ordered / renamed columns
-    # still parse (matching on the label, not the position).
+    # Locate the header row by looking for the "M CODE" label (very
+    # forgiving — whitespace / punctuation / case are all normalised
+    # away).  Column-name lookup is likewise case-insensitive so
+    # "AU" / " au " / "A/U" / "OLD Stock" all resolve to the same
+    # bucket.  This survives a lot of accidental workbook edits.
     m_master = {}
+    def _norm_hdr(v):
+        """Aggressively normalise a header label so lookups tolerate
+        case, spaces, hyphens, dots and slashes."""
+        s = str(v or "").strip().upper()
+        for ch in (" ", ".", "_", "-", "/", "\\"):
+            s = s.replace(ch, "")
+        return s
+    # Any of these normalised forms means "M CODE"
+    MCODE_ALIASES = {"MCODE", "M CODE", "MATERIAL", "MATERIALCODE"}
     if "Sheet2" in wb.sheetnames:
         ws = wb["Sheet2"]
         header = None
         header_row_s2 = 1
-        for r in range(1, min(6, ws.max_row + 1)):
+        for r in range(1, min(8, ws.max_row + 1)):
             vals = [ws.cell(row=r, column=c).value for c in range(1, ws.max_column + 1)]
-            up = [str(v or "").strip().upper() for v in vals]
-            if "M CODE" in up or "M_CODE" in up or "MCODE" in up:
+            up = [_norm_hdr(v) for v in vals]
+            if any(m in up for m in MCODE_ALIASES):
                 header = vals
                 header_row_s2 = r
                 break
         if header is None:
             header = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
             header_row_s2 = 1
-        idx = {name: i for i, name in enumerate(header) if isinstance(name, str)}
+        # Build a normalised-name → index map so lookups tolerate
+        # whitespace / punctuation / case differences in the header.
+        idx = {}
+        for i, name in enumerate(header):
+            key = _norm_hdr(name)
+            if key and key not in idx:
+                idx[key] = i
+        # Locate the M CODE column dynamically — Sheet2 doesn't always
+        # put M CODE in column 1 (users routinely add a leading "no."
+        # column), and hard-coding r[0] silently mis-keys the whole
+        # master.
+        mcode_col = None
+        for alias in MCODE_ALIASES:
+            if alias in idx:
+                mcode_col = idx[alias]; break
+        if mcode_col is None:
+            mcode_col = 0    # last-ditch fallback
+        # Aliases per semantic field.  Multiple keys map to the same
+        # slot so renamed columns still get picked up.
+        FIELD_ALIASES = {
+            "description": ("DESCRIPTION", "DESC", "PRODUCTDESCRIPTION",
+                            "PRODUCTNAME", "NAME", "MATERIALDESCRIPTION"),
+            "group":       ("GROUP", "NEWGROUP", "SEGMENT", "CATEGORY"),
+            "brand":       ("BRAND", "MAKE"),
+            "li":          ("LI", "LOADINDEX"),
+            "ss":          ("SS", "SPEEDSYMBOL", "SPEEDRATING"),
+            "ply":         ("PLY", "PR"),
+            "sw":          ("SW", "SECTIONWIDTH", "WIDTH"),
+            "sr":          ("SR", "SECTIONRATIO", "ASPECT", "ASPECTRATIO"),
+            "inch":        ("INCH", "RIM", "RIMDIAMETER", "DIAM"),
+            "factory":     ("FACTORY", "PLANT", "FACTORYORIGIN"),
+            "origin":      ("ORIGIN", "COUNTRY", "MADEIN"),
+            "au":          ("AU", "AUSTATUS", "STATUS", "AUFLAG",
+                            "USAGE", "USE"),
+            "old_stock":   ("OLDSTOCK", "OLDST", "FADEOUT", "F/O"),
+        }
+        def _pick(row, keys):
+            for k in keys:
+                if k in idx:
+                    ci = idx[k]
+                    if ci < len(row) and row[ci] not in (None, ""):
+                        return row[ci]
+            return ""
+        n_master_rows = 0
         for r in ws.iter_rows(min_row=header_row_s2 + 1, values_only=True):
-            if not r or r[0] is None:
+            if not r:
                 continue
-            m = r[0]
+            mval = r[mcode_col] if mcode_col < len(r) else None
+            if mval is None:
+                continue
             try:
-                m = int(m)
+                m = int(mval)
             except Exception:
                 continue
-            m_master[m] = {
-                "description": r[idx["Description"]] if "Description" in idx else "",
-                "group":       r[idx["Group"]]       if "Group"       in idx else "",
-                "brand":       r[idx["Brand"]]       if "Brand"       in idx else "",
-                "li":          r[idx["LI"]]          if "LI"          in idx else "",
-                "ss":          r[idx["SS"]]          if "SS"          in idx else "",
-                "ply":         r[idx["PLY"]]         if "PLY"         in idx else "",
-                "sw":          r[idx["S.W"]]         if "S.W"         in idx else "",
-                "sr":          r[idx["SR"]]          if "SR"          in idx else "",
-                "inch":        r[idx["Inch"]]        if "Inch"        in idx else "",
-                "factory":     r[idx["Factory"]]     if "Factory"     in idx else "",
-                "origin":      r[idx["Origin"]]      if "Origin"      in idx else "",
-                "au":          r[idx["AU"]]          if "AU"          in idx else "",
-                "old_stock":   r[idx["OLD STOCK"]]   if "OLD STOCK"   in idx else "",
-            }
+            m_master[m] = {name: _pick(r, keys) for name, keys in FIELD_ALIASES.items()}
+            n_master_rows += 1
+        _stock_load_debug["sheet2_rows"] = n_master_rows
+        _stock_load_debug["sheet2_header_row"] = header_row_s2
+        _stock_load_debug["sheet2_columns_found"] = sorted(
+            f for f, keys in FIELD_ALIASES.items() if any(k in idx for k in keys)
+        )
 
     def _num(v):
         if v is None:
@@ -551,6 +645,7 @@ def load_stock_data():
     c_merge   = _c("MERGE_CODE",     COL_MERGE_CODE)
     c_group   = _c("GROUP",          COL_GROUP)
     c_classif = _c("CLASSIFICATION", COL_CLASSIF)
+    c_desc    = cmap.get("DESCRIPTION")   # may be None — used as fallback only
 
     state_stock_cols = cmap.get("STATE_STOCK") or COL_STATE_STOCK
     state_port_cols  = cmap.get("STATE_PORT")  or {s: COL_STATE_PIPELINE[s][0] for s in STATES}
@@ -593,6 +688,16 @@ def load_stock_data():
             continue
         group   = r[c_group   - 1] if len(r) >= c_group   else None
         classif = r[c_classif - 1] if len(r) >= c_classif else None
+        # Optional Description column on the stock sheet itself.
+        # Serves as a last-ditch fallback when Sheet2 has no record
+        # for any M CODE in this merge (which happens for
+        # newly-created merges where the master record hasn't been
+        # entered yet).
+        ssw_desc = ""
+        if c_desc:
+            v = r[c_desc - 1] if len(r) >= c_desc else None
+            if v is not None:
+                ssw_desc = str(v).strip()
 
         def _cell(col):
             return r[col - 1] if col and len(r) >= col else None
@@ -656,6 +761,7 @@ def load_stock_data():
         stock_by_merge[mc] = {
             "group_raw":       group,
             "classification":  classif or "",
+            "ssw_desc":        ssw_desc,   # merge-level description fallback
             "state_stock":     state_stock,
             "state_pipe_parts":state_pipe_parts,
             "state_pipe":      state_pipe,
@@ -674,9 +780,20 @@ def load_stock_data():
 
     # ── Pass 2: iterate every M CODE in MM order and emit one row
     # per M CODE, sharing the merge-level stock/demand with siblings.
+    # Additionally rescue merges that appear in the stock sheet but
+    # have no entry in the MM sheet — those become one synthetic row
+    # per merge so the dashboard doesn't silently drop them.
     rows_out = []
-    seen_pairs = set()   # avoid MM duplicates
-    for m_code, merge_code in mm_order:
+    seen_pairs = set()          # avoid MM duplicates
+    seen_merges_from_mm = set() # tracks merges the MM pass covered
+    iter_pairs = list(mm_order)
+    merges_with_no_mm = [m for m in stock_by_merge.keys() if m not in merge_to_mcodes]
+    for merge_code in merges_with_no_mm:
+        # Synthetic pair: use the merge code as its own M CODE so the
+        # loop below has something to key on.  Sheet2 lookup will
+        # correctly find no record and fall back to Description.
+        iter_pairs.append((merge_code, merge_code))
+    for m_code, merge_code in iter_pairs:
         if (m_code, merge_code) in seen_pairs:
             continue
         seen_pairs.add((m_code, merge_code))
@@ -685,6 +802,7 @@ def load_stock_data():
             # Merge Code has no stock row in the worksheet — skip so the
             # dashboard doesn't misreport a phantom SKU.
             continue
+        seen_merges_from_mm.add(merge_code)
         mc = merge_code
         # Take THIS M CODE's Sheet2 record as the starting point, then
         # patch any blank field from siblings in the same Merge.
@@ -709,18 +827,27 @@ def load_stock_data():
                     break
 
         raw_desc = detail.get("description", "")
+        # Ultimate description fallback: if Sheet2 has no record for
+        # this M CODE AND its siblings, try the Description column
+        # on the Stock Status Worksheet itself.  Newly-created merges
+        # often have their name typed on the stock sheet even though
+        # the master record hasn't been entered into Sheet2 yet.
+        if not raw_desc and stk.get("ssw_desc"):
+            raw_desc = stk["ssw_desc"]
         pattern  = _extract_pattern(raw_desc)
         line     = _marketing_line(pattern)
         eff_group = (stk["group_raw"] or detail.get("group") or "").strip()
 
+        # Brand: prefer the Sheet2 Brand column, fall back to whatever
+        # the description's 2nd comma field carries (HK→Hankook, KS→
+        # Kingstar…) so a merge with only a Description still shows the
+        # brand.
+        brand = detail.get("brand", "") or _extract_brand(raw_desc)
+
         # Size: preserve whatever the Description's FIRST comma-field
         # says.  Preferred (185R14C, 205/55R16, 33X12.5R15…) — only
         # composes from SW/SR/Inch if the description has nothing.
-        size = ""
-        if raw_desc:
-            first = raw_desc.split(",", 1)[0].strip()
-            if first:
-                size = first
+        size = _extract_size(raw_desc)
         if not size and detail.get("sw") and detail.get("sr") and detail.get("inch"):
             try:
                 sw = int(detail["sw"]); sr = int(detail["sr"]); inch = detail["inch"]
@@ -816,7 +943,7 @@ def load_stock_data():
             "m_code":         m_code,
             "group":          eff_group,
             "classification": classif or "",
-            "brand":          detail.get("brand", ""),
+            "brand":          brand,
             "line":           line,           # Marketing line (Kinergy / Dynapro / Ventus…)
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
@@ -860,6 +987,18 @@ def load_stock_data():
         data_date_str = dd.strftime("%d %B %Y").lstrip("0")
     else:
         data_date_str = "unknown"
+    # Diagnostics — which merges still ended up with no product info?
+    # Count them per-merge (not per-row) and keep the first 20 codes
+    # so the dashboard can surface them for CS to fix in the workbook.
+    no_info_merges = []
+    seen_merges = set()
+    for row in rows_out:
+        mc = row["merge_code"]
+        if mc in seen_merges:
+            continue
+        seen_merges.add(mc)
+        if not (row.get("brand") or row.get("line") or row.get("size")):
+            no_info_merges.append(mc)
     meta = {
         "path":       os.path.basename(path),
         "path_dir":   os.path.dirname(path),
@@ -867,6 +1006,12 @@ def load_stock_data():
         "data_date":  data_date_str,
         "rows":       len(rows_out),
         "load_s":     round(time.time() - t0, 2),
+        "sheet2_rows":            _stock_load_debug.get("sheet2_rows", 0),
+        "sheet2_header_row":      _stock_load_debug.get("sheet2_header_row", 1),
+        "sheet2_columns_found":   _stock_load_debug.get("sheet2_columns_found", []),
+        "no_info_merges":         no_info_merges[:100],
+        "no_info_merge_count":    len(no_info_merges),
+        "total_merges":           len(seen_merges),
     }
     _cache.update({"path": path, "mtime": mtime, "rows": rows_out, "meta": meta})
     return rows_out, meta
@@ -1456,7 +1601,17 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
   <h1>📦 Stock Balance Lab</h1>
   <span class="subtitle">Where we're short · where we're surplus · by state · by product<br>
     <b style="color:#FFD54F">Data as of {{ meta.data_date }}</b> &nbsp;·&nbsp; source: {{ meta.path }}
-    &nbsp;·&nbsp; loaded {{ meta.mtime }} &nbsp;·&nbsp; {{ meta.rows }} rows in {{ meta.load_s }} s</span>
+    &nbsp;·&nbsp; loaded {{ meta.mtime }} &nbsp;·&nbsp; {{ meta.rows }} rows in {{ meta.load_s }} s
+    {% if meta.no_info_merge_count and meta.no_info_merge_count > 0 %}
+      <br><span style="color:#FDE68A;font-size:11.5px" title="These merges have neither a Sheet2 record nor a Description on the Stock Status Worksheet — CS needs to enter their master data.">
+        ⚠ {{ meta.no_info_merge_count }} of {{ meta.total_merges }} merges have no product info in the workbook
+        {% if meta.no_info_merges %}(e.g. {{ meta.no_info_merges[:8]|join(', ') }}{% if meta.no_info_merges|length > 8 %}, …{% endif %}){% endif %}
+      </span>
+    {% endif %}
+    {% if meta.sheet2_rows is defined %}
+      <br><span style="color:#94A3B8;font-size:11px">Sheet2 master: {{ meta.sheet2_rows }} rows · columns detected: {{ meta.sheet2_columns_found|join(', ') }}</span>
+    {% endif %}
+    </span>
   <nav class="nav">
     <button class="icon-btn" onclick="location.reload()"
             title="Reload the page — the server picks up the newest Stock_report file automatically">🔄 Refresh</button>
