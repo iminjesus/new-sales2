@@ -414,20 +414,13 @@ def load_stock_data():
             except Exception:
                 pass
 
-        # Status bucket (MOI = months of inventory)
+        # Stock-only MOI kept as a diagnostic figure, but classification
+        # is now based on the more holistic Merge_MOI(PPL/3M) —
+        # (Stock + Port + Water + Factory) ÷ MAX(3M, 6M-old, 12M).  This
+        # honours the user's request that Shortage → No move buckets be
+        # computed at Merge-Code level in a way that credits the
+        # incoming pipeline and uses the largest observed demand.
         moh = (total_stock / total_3m) if total_3m > 0 else None
-        if total_3m == 0 and total_stock == 0:
-            status = "empty"
-        elif total_3m == 0 and total_stock > 0:
-            status = "no_move"
-        elif moh is not None and moh <= STATUS_SHORTAGE_MOI:
-            status = "shortage"
-        elif moh is not None and moh <= STATUS_BALANCE_MOI:
-            status = "balanced"
-        elif moh is not None and moh <= STATUS_SURPLUS_MOI:
-            status = "surplus"
-        else:
-            status = "serious_surplus"
 
         raw_desc = detail.get("description", "")
         pattern  = _extract_pattern(raw_desc)
@@ -443,6 +436,23 @@ def load_stock_data():
         # baseline — planners keep enough stock to cover the biggest
         # observed monthly draw.
         moh_plus_max = (total_all / max_demand) if max_demand > 0 else None
+
+        # Status classification uses Merge_MOI (== moh = merge-level
+        # Stock ÷ 3M demand).  This matches the user's request that
+        # Shortage → No Move buckets be calculated from the plain
+        # Merge_MOI figure, not from the pipeline-inclusive variant.
+        if total_3m == 0 and total_stock == 0:
+            status = "empty"
+        elif total_3m == 0 and total_stock > 0:
+            status = "no_move"
+        elif moh is not None and moh <= STATUS_SHORTAGE_MOI:
+            status = "shortage"
+        elif moh is not None and moh <= STATUS_BALANCE_MOI:
+            status = "balanced"
+        elif moh is not None and moh <= STATUS_SURPLUS_MOI:
+            status = "surplus"
+        else:
+            status = "serious_surplus"
 
         # Product characteristics for the quick-filter chips
         category = _product_category(eff_group, line)
@@ -552,17 +562,11 @@ def _aggregate(rows):
             # Per-state status: local MOH
             sd = r["state_3m"][s]
             ss = r["state_stock"][s]
-            if sd == 0 and ss == 0:
-                pass
-            elif sd == 0 and ss > 0:
-                state_totals[s]["no_move"] += 1
-            else:
-                s_moh = ss / sd if sd > 0 else None
-                if   s_moh is None:                        pass
-                elif s_moh <= STATUS_SHORTAGE_MOI:         state_totals[s]["shortage"] += 1
-                elif s_moh <= STATUS_BALANCE_MOI:          state_totals[s]["balanced"] += 1
-                elif s_moh <= STATUS_SURPLUS_MOI:          state_totals[s]["surplus"] += 1
-                else:                                      state_totals[s]["serious_surplus"] += 1
+            # State counts credit the SKU's MERGE-CODE status wherever
+            # the SKU has activity — either non-zero stock or non-zero
+            # 3M demand in that state.
+            if (sd > 0 or ss > 0) and r["status"] in state_totals[s]:
+                state_totals[s][r["status"]] += 1
 
         # Group breakdowns
         g = r["group"] or "—"
@@ -1437,14 +1441,14 @@ function renderStateCards() {
             acc[s].stock     += r.state_stock[s]    || 0;
             acc[s].pipeline  += r.state_pipeline[s] || 0;
             acc[s].demand_3m += r.state_3m[s]       || 0;
+            /* Status chip counts now use the SKU's MERGE-CODE status
+               (from Merge_MOI(PPL/3M)) rather than a re-computed
+               per-state MOI.  A SKU is credited to a state only if it
+               has stock or 3M demand there — matches how planners
+               think about "the shortage list in NSW". */
             const sd = r.state_3m[s] || 0, ss = r.state_stock[s] || 0;
-            if      (sd === 0 && ss > 0)   acc[s].no_move++;
-            else if (sd  >  0) {
-                const m = ss / sd;
-                if      (m <= 1) acc[s].shortage++;
-                else if (m <= 3) acc[s].balanced++;
-                else if (m <= 6) acc[s].surplus++;
-                else             acc[s].serious_surplus++;
+            if (sd > 0 || ss > 0) {
+                if (r.status && acc[s][r.status] !== undefined) acc[s][r.status]++;
             }
         });
     });
