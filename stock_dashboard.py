@@ -302,9 +302,11 @@ _LINE_RULES = [
     # Laufenn — each 2-letter pattern prefix maps to a SPECIFIC
     # sub-line, not the generic "G/S/X/I Fit" umbrella.  Based on
     # actual pattern codes seen in the AU workbook: LH41 = G FIT AS,
-    # LK41 = X FIT AT, LS = S Fit EQ, LI = I Fit ICE.
+    # LK41 = X FIT AT, LS = S Fit EQ, LI = I Fit ICE, LV01 = X FIT
+    # VAN.  Users kept asking why an LK-series pattern reads as the
+    # umbrella — this row-by-row split settles it.
     (r"^LG|^LC|^LH",             "Laufenn G Fit"),
-    (r"^LK|^LP",                 "Laufenn X Fit"),
+    (r"^LK|^LP|^LV",             "Laufenn X Fit"),
     (r"^LS",                     "Laufenn S Fit"),
     (r"^LI|^LW",                 "Laufenn I Fit"),
     # Hankook — pattern prefix identifies the marketing line.  Specific
@@ -463,7 +465,9 @@ def _product_category(group, line):
     if line in ("Truck / TBR",):
         return "TBR"
     if line in ("Kinergy", "Ventus", "Dynapro", "Winter i*cept",
-                "Laufenn G/S/X/I Fit", "Optimo (legacy)"):
+                "Optimo (legacy)",
+                "Laufenn G Fit", "Laufenn X Fit",
+                "Laufenn S Fit", "Laufenn I Fit"):
         return "PCLT"
     return "Other"
 
