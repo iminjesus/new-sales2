@@ -425,7 +425,11 @@ def _extract_pattern(desc):
 # the full name resolve to the short form here.  Any unknown token
 # passes through uppercased so the column never blanks.
 _BRAND_CODE_MAP = {
+    # Hankook variants — HR / HL are internal codes that identify the
+    # same brand (Hankook) as HK, so the master roll-up normalises all
+    # three to a single "HK" bucket.
     "HK": "HK", "HANKOOK":     "HK",
+    "HR": "HK", "HL":          "HK",
     "LF": "LF", "LAUFENN":     "LF",
     "KS": "KS", "KINGSTAR":    "KS",
     "AU": "AU", "AURORA":      "AU",
@@ -1323,6 +1327,35 @@ def load_stock_data():
         seen_plan.add((merge_code, merge_code))
 
     iter_plan = []
+    # Empty stock bundle for merge-shared siblings that have no per-M-
+    # CODE row of their own — used only in per-M-CODE workbook layouts
+    # so sibling rows without their own stock read zero instead of
+    # inheriting (and visually duplicating) the merge total.  We keep
+    # a one-time reference to the merge aggregate on the FIRST merge-
+    # shared sibling per merge so the Sub Total row still has the
+    # correct merge total to display.
+    def _zero_bundle(src):
+        return {
+            "group_raw":       src.get("group_raw"),
+            "classification":  src.get("classification", ""),
+            "ssw_desc":        src.get("ssw_desc", ""),
+            "row_prod_name":   src.get("row_prod_name", ""),
+            "row_desc":        src.get("row_desc", ""),
+            "row_size":        src.get("row_size", ""),
+            "row_inch":        src.get("row_inch", ""),
+            "row_pattern":     src.get("row_pattern", ""),
+            "row_ope":         src.get("row_ope", ""),
+            "state_stock":     {s: 0.0 for s in STATES},
+            "state_pipe_parts":{s: {"port":0.0,"water":0.0,"fac":0.0} for s in STATES},
+            "state_pipe":      {s: 0.0 for s in STATES},
+            "state_3m":        {s: 0.0 for s in STATES},
+            "total_stock":     0.0, "total_all":     0.0,
+            "total_3m":        0.0, "total_12m":     0.0,
+            "p_3m":            0.0, "avg_6m_old":    0.0,
+            "avg_7_9m":        0.0, "avg_10_12m":    0.0,
+            "max_demand":      0.0,
+            "history":         {k: [0.0]*HIST_MONTHS for k in ("NSW","QLD","VIC","WA","TOTAL")},
+        }
     for (merge_code, m_code) in pair_order:
         stk = stock_by_merge.get(merge_code)
         if stk is None:
@@ -1332,9 +1365,16 @@ def load_stock_data():
             # Per-M-CODE bundle exists — this row carries its own
             # unique stock/demand figures.
             iter_plan.append((merge_code, m_code, pair_stk, False))
+        elif per_mcode_rows:
+            # Per-M-CODE workbook layout but THIS sibling has no
+            # stock row of its own.  Show zeros so the user sees the
+            # row is genuinely empty at material-code level; the
+            # merge total still shows via the Sub Total row.
+            iter_plan.append((merge_code, m_code, _zero_bundle(stk), True))
         else:
-            # No per-M-CODE row in the stock sheet — inherit the
-            # merge aggregate (all siblings share the same numbers).
+            # Per-merge workbook layout — every sibling legitimately
+            # inherits the merge aggregate (that IS the material's
+            # data, there's no finer split available).
             iter_plan.append((merge_code, m_code, stk, True))
 
     for merge_code, m_code, stk, merge_shared in iter_plan:
@@ -1536,7 +1576,16 @@ def load_stock_data():
             sku_flags.append("Transfer")
         if "PRICE" in au:
             sku_flags.append("Price")
-        sku_status = " + ".join(sku_flags) if sku_flags else "Active"
+        # Collapse multi-flag rows to a SINGLE label — F/O + OPE, for
+        # example, shows as just "OPE" (the more actionable status).
+        # Priority order: OE A/S > OPE > M/S > Testing > Transfer >
+        # Price > F/O.  A material that carries both a phase-out (F/O)
+        # and an OPE tag is really an OPE material with a fade-out
+        # note; users don't need two pills to see that.
+        _PICK_PRIORITY = ("OE A/S", "OPE", "M/S", "Testing", "Transfer",
+                          "Price", "F/O")
+        primary = next((f for f in _PICK_PRIORITY if f in sku_flags), None)
+        sku_status = primary if primary else "Active"
 
         rows_out.append({
             "merge_code":     mc,
