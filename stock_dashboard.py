@@ -813,10 +813,45 @@ def load_stock_data():
     # Each Merge Code carries the stock/demand aggregates; the pass
     # that emits per-M-CODE rows will look up these values by merge.
     stock_by_merge = {}
-    ws = wb["Stock Status Worksheet"]
-    # Auto-detect the header row and build a semantic column map so
-    # inserted/moved columns don't break the loader.
-    cmap = _scan_stock_header(ws)
+    # Pick the sheet with the richest identity block — Excel workbooks
+    # can carry BOTH an old-layout "Stock Status Worksheet" (row 2
+    # header, Merge Code + Group + Classification only) and a newer
+    # per-M-CODE-layout sheet (row 5 header, adds Product Name / CODE /
+    # SIZE / INCH / PATTERN / OPE) side-by-side.  Scoring by identity-
+    # slot count lets us prefer whichever sheet gives more per-material
+    # data; the plain "Stock Status Worksheet" is the fallback when no
+    # sibling scores higher.
+    def _score_sheet_layout(sheet):
+        try:
+            cm = _scan_stock_header(sheet)
+        except Exception:
+            return -1, None
+        wanted = ("MCODE", "PRODUCT_NAME", "SIZE", "INCH", "PATTERN", "OPE")
+        n = sum(1 for k in wanted if cm.get(k))
+        return n, cm
+    candidate_sheets = []
+    for name in wb.sheetnames:
+        if name in ("MM", "Sheet2"):
+            continue
+        try:
+            candidate_sheets.append((name, wb[name]))
+        except Exception:
+            pass
+    best_name, best_ws, best_cmap, best_score = None, None, None, -1
+    for name, sh in candidate_sheets:
+        score, cm = _score_sheet_layout(sh)
+        if score > best_score:
+            best_name, best_ws, best_cmap, best_score = name, sh, cm, score
+    if best_ws is not None and best_score > 0:
+        ws = best_ws
+        cmap = best_cmap
+        _stock_load_debug["stock_sheet_used"] = best_name
+    else:
+        ws = wb["Stock Status Worksheet"] if "Stock Status Worksheet" in wb.sheetnames \
+             else (best_ws or wb[wb.sheetnames[0]])
+        cmap = _scan_stock_header(ws)
+        _stock_load_debug["stock_sheet_used"] = ws.title
+    _stock_load_debug["workbook_sheets"] = list(wb.sheetnames)
     header_row_ssw = cmap.pop("_HEADER_ROW", 2)
     header_cells_ssw = cmap.pop("_HEADER_CELLS", [])
     data_start_row = header_row_ssw + 1
@@ -1593,6 +1628,8 @@ def load_stock_data():
         "stock_header_row":       _stock_load_debug.get("header_row", 0),
         "stock_header_cells":     _stock_load_debug.get("header_first_cells", []),
         "stock_identity_cols":    _stock_load_debug.get("identity_col_map", {}),
+        "stock_sheet_used":       _stock_load_debug.get("stock_sheet_used", ""),
+        "workbook_sheets":        _stock_load_debug.get("workbook_sheets", []),
         "per_mcode_rows":         _stock_load_debug.get("per_mcode_rows", False),
         "no_info_merges":         no_info_merges[:100],
         "no_info_merge_count":    len(no_info_merges),
@@ -2416,6 +2453,9 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
     {% endif %}
     {% if meta.stock_header_cells is defined and meta.stock_header_cells %}
       <br><span style="color:#94A3B8;font-size:11px" title="Raw header cells the loader read for columns 1-12">Header cells: {% for h in meta.stock_header_cells %}{% if loop.index0 > 0 %} · {% endif %}<code style="background:#F1F5F9;padding:0 4px;border-radius:3px">{{ loop.index }}={{ h or '∅' }}</code>{% endfor %}</span>
+    {% endif %}
+    {% if meta.workbook_sheets is defined and meta.workbook_sheets %}
+      <br><span style="color:#94A3B8;font-size:11px">Workbook sheets: {% for s in meta.workbook_sheets %}{% if loop.index0 > 0 %}, {% endif %}<code style="background:{% if s == meta.stock_sheet_used %}#DCFCE7;color:#15803D{% else %}#F1F5F9;color:#334155{% endif %};padding:0 5px;border-radius:3px">{{ s }}{% if s == meta.stock_sheet_used %} ✓{% endif %}</code>{% endfor %}</span>
     {% endif %}
     </span>
   <nav class="nav">
