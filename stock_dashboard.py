@@ -1899,6 +1899,15 @@ table.dt thead th { background:#ECEFF1; color:#37474F; padding:6px 8px;
                     text-transform:uppercase; letter-spacing:.04em;
                     cursor:pointer; user-select:none; white-space:nowrap; }
 table.dt thead th:hover { background:#DDE4EE; }
+/* Column-resize drag handle on the right edge of every header
+   cell.  Grab and drag to widen a column when content clips. */
+table.dt thead th { position:sticky; position:-webkit-sticky; }
+.col-resize-handle {
+    position:absolute; top:0; right:0; bottom:0; width:6px;
+    cursor:col-resize; z-index:8; user-select:none;
+}
+.col-resize-handle:hover { background:#94A3B8; opacity:.5; }
+table.dt thead th { padding-right:12px; }   /* room for the handle */
 /* Pipeline-detail mode has a two-row header:
      Row 1 = state banner (NSW/QLD/VIC/WA/TOTAL) — sticks at top:0
      Row 2 = sub-column labels (Stock/Port/Water/Factory + MOI…)
@@ -3091,11 +3100,59 @@ function buildTableHead() {
     document.getElementById('sku-thead').innerHTML = h;
     /* Re-wire sort handlers on the freshly built headers */
     document.querySelectorAll('#sku-tbl thead th[data-col]').forEach(th => {
-        th.addEventListener('click', () => {
+        th.addEventListener('click', (e) => {
+            /* Ignore clicks that landed on the drag handle — those
+               are for column resize, not sort. */
+            if (e.target.classList && e.target.classList.contains('col-resize-handle')) return;
             const col = th.dataset.col;
             if (sortCol === col) sortDir = sortDir === 1 ? -1 : (sortDir === -1 ? 0 : 1);
             else { sortCol = col; sortDir = 1; }
             renderTable();
+        });
+    });
+    /* Attach draggable resize handles to every header cell so users
+       can widen a column when its content is clipped.  Each handle
+       tracks the <col> element at the SAME index inside <colgroup>
+       and rewrites its `style.width` as the pointer moves. */
+    const allTh = Array.from(document.querySelectorAll('#sku-tbl thead tr:last-child th'));
+    const cols  = Array.from(document.querySelectorAll('#sku-colgroup col'));
+    allTh.forEach((th, idx) => {
+        const handle = document.createElement('div');
+        handle.className = 'col-resize-handle';
+        th.appendChild(handle);
+        handle.addEventListener('mousedown', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            const startX = e.clientX;
+            const col = cols[idx];
+            const startW = col ? parseInt(col.style.width, 10) || col.offsetWidth || 60 : 60;
+            const onMove = (ev) => {
+                const newW = Math.max(28, startW + (ev.clientX - startX));
+                if (col) col.style.width = newW + 'px';
+                /* Recompute the sticky-left offsets for the frozen
+                   identity block if a frozen col was resized (idx<10).
+                   Nudges other frozen cols leftward/rightward so they
+                   stay contiguous.  For data cols (idx>=10) sticky
+                   offsets don't apply, so the column just widens. */
+                if (idx < 10) {
+                    let acc = 0;
+                    for (let i = 0; i < 10; i++) {
+                        const w = cols[i] ? parseInt(cols[i].style.width, 10) : 60;
+                        document.querySelectorAll(
+                            '#sku-tbl thead th:nth-child(' + (i+1) + '),'
+                          + '#sku-tbl tbody td:nth-child(' + (i+1) + ')'
+                        ).forEach(el => { el.style.left = acc + 'px'; });
+                        acc += w;
+                    }
+                }
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup',   onUp);
+                document.body.style.cursor = '';
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup',   onUp);
+            document.body.style.cursor = 'col-resize';
         });
     });
 }
@@ -3279,7 +3336,10 @@ function renderTable() {
     /* State cells for the Total row */
     if (showPipeline) {
         STATES.forEach((s, i) => {
-            totalRow += '<td class="r' + (i === 0 ? ' grp-start' : '') + '">' + fmtI(ttlStateStock[s]) + '</td>'
+            /* Every state's STK cell in the Total row gets grp-start
+               too so the TOTAL IN VIEW summary shows the same
+               state-group dividers as the rows below it. */
+            totalRow += '<td class="r grp-start">' + fmtI(ttlStateStock[s]) + '</td>'
                      +  '<td class="r">' + fmtI(ttlPipe[s].port)  + '</td>'
                      +  '<td class="r">' + fmtI(ttlPipe[s].water) + '</td>'
                      +  '<td class="r">' + fmtI(ttlPipe[s].fac)   + '</td>';
@@ -3347,9 +3407,16 @@ function renderTable() {
        Total) which comes from tr.mc-row td.r vs tr.sub-total td. */
     const stateCellsFor = (r) => {
         if (showPipeline) {
+            /* Pipeline mode: every state's FIRST sub-cell (STK) gets
+               `grp-start` so a vertical divider draws BETWEEN state
+               groups — NSW | QLD | VIC | WA — and the other three
+               sub-cells (PRT / WTR / FAC) stay borderless inside the
+               group.  Fixes the earlier bug where only NSW STK had
+               the divider so the four state groups looked like one
+               continuous stripe of numbers. */
             return STATES.map((s, i) => {
                 const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
-                return '<td class="r' + (i===0 ? ' grp-start' : '') + '">' + fmtI(r.state_stock[s]) + '</td>'
+                return '<td class="r grp-start">' + fmtI(r.state_stock[s]) + '</td>'
                      + '<td class="r">' + fmtI(pp.port)  + '</td>'
                      + '<td class="r">' + fmtI(pp.water) + '</td>'
                      + '<td class="r">' + fmtI(pp.fac)   + '</td>';
