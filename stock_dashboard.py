@@ -2513,18 +2513,6 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         {% if meta.no_info_merges %}(e.g. {{ meta.no_info_merges[:8]|join(', ') }}{% if meta.no_info_merges|length > 8 %}, …{% endif %}){% endif %}
       </span>
     {% endif %}
-    {% if meta.sheet2_rows is defined %}
-      <br><span style="color:#94A3B8;font-size:11px">Sheet2 master: {{ meta.sheet2_rows }} rows · columns detected: {{ meta.sheet2_columns_found|join(', ') }}</span>
-    {% endif %}
-    {% if meta.stock_columns_found is defined %}
-      <br><span style="color:#94A3B8;font-size:11px">Stock sheet columns detected: {{ meta.stock_columns_found|join(', ') }}{% if meta.per_mcode_rows %} · per-M-CODE layout{% endif %}{% if meta.stock_header_row %} · header row {{ meta.stock_header_row }}{% endif %}</span>
-    {% endif %}
-    {% if meta.stock_header_cells is defined and meta.stock_header_cells %}
-      <br><span style="color:#94A3B8;font-size:11px" title="Raw header cells the loader read for columns 1-12">Header cells: {% for h in meta.stock_header_cells %}{% if loop.index0 > 0 %} · {% endif %}<code style="background:#F1F5F9;padding:0 4px;border-radius:3px">{{ loop.index }}={{ h or '∅' }}</code>{% endfor %}</span>
-    {% endif %}
-    {% if meta.workbook_sheets is defined and meta.workbook_sheets %}
-      <br><span style="color:#94A3B8;font-size:11px">Workbook sheets: {% for s in meta.workbook_sheets %}{% if loop.index0 > 0 %}, {% endif %}<code style="background:{% if s == meta.stock_sheet_used %}#DCFCE7;color:#15803D{% else %}#F1F5F9;color:#334155{% endif %};padding:0 5px;border-radius:3px">{{ s }}{% if s == meta.stock_sheet_used %} ✓{% endif %}</code>{% endfor %}</span>
-    {% endif %}
     </span>
   <nav class="nav">
     <button class="icon-btn" onclick="location.reload()"
