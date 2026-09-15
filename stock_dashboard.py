@@ -1642,6 +1642,31 @@ def load_stock_data():
             "status":            status,
         })
 
+    # Sort within each merge by F/O · OPE priority so the material with
+    # the most actionable status surfaces first.  Priority (0 = first):
+    # OPE → OE A/S → M/S → Transfer → Testing → F/O → Price → Active.
+    # Merge order in the stream is preserved — this is a stable sort
+    # keyed only on the tie-breaker between siblings of the same merge.
+    _FO_OPE_ORDER = {
+        "OPE": 0, "OE A/S": 1, "M/S": 2, "Transfer": 3,
+        "Testing": 4, "F/O": 5, "Price": 6, "Active": 7,
+    }
+    def _fo_ope_rank(r):
+        return _FO_OPE_ORDER.get(r.get("sku_status") or "Active", 7)
+    # Group rows by merge preserving first-appearance order, sort each
+    # bucket by the priority above, then flatten.
+    _bucket_order = []
+    _buckets = {}
+    for r in rows_out:
+        mc = r.get("merge_code")
+        if mc not in _buckets:
+            _buckets[mc] = []
+            _bucket_order.append(mc)
+        _buckets[mc].append(r)
+    for mc in _bucket_order:
+        _buckets[mc].sort(key=_fo_ope_rank)
+    rows_out = [r for mc in _bucket_order for r in _buckets[mc]]
+
     dd = _parse_data_date(path)
     if dd:
         # Cross-platform "9 November 2026": strip leading zero from day.
@@ -2247,22 +2272,16 @@ table.dt tbody tr.total-row td:nth-child(n+2) {
     left: auto !important; right: auto !important; z-index: 1 !important;
 }
 /* ── Uniform LI/SS → state-block divider ──
-   Draw ONE 2px line at the LI/SS column's right edge across every
-   row type — header, M CODE, Sub Total, TOTAL IN VIEW — so the line
-   thickness is identical everywhere.  Two selectors reach both cell
-   layouts:
-     • Non-colspan rows (header + M CODE): LI/SS is td/th:nth-child(10)
-     • Sub Total / TOTAL rows: LI/SS position is the first-child cell
-       (its colspan=10 label ends at the col-10 right edge)
-   We also cancel grp-start's border-left contribution at the same
-   boundary (first state cell, col 11 in normal rows or col 2 in
-   colspan rows) so the two 2px borders don't stack into a 4px
-   double line on Sub Total rows. */
+   Draw ONE 1px hairline at the LI/SS column's right edge across
+   every row type so the boundary reads as a discrete separator, not
+   a heavy wall.  grp-start's contribution at that same boundary is
+   cancelled so the borders don't stack.  Other state-group dividers
+   (QLD/VIC/WA/TOTAL) still use grp-start. */
 table.dt th:nth-child(10),
 table.dt td:nth-child(10),
 table.dt tbody tr.sub-total td:first-child,
 table.dt tbody tr.total-row td:first-child {
-    border-right: 2px solid #90A4AE;
+    border-right: 1px solid #B0BEC5;
 }
 table.dt th:nth-child(11).grp-start,
 table.dt td:nth-child(11).grp-start,
@@ -2364,8 +2383,8 @@ table.dt .r { text-align:right; font-family:'IBM Plex Mono',monospace;
    cell of each column group.  In the compact view the boundaries
    sit between state columns; in Pipeline-detail mode they sit
    between state groups + before the national TOTAL group. */
-table.dt .grp-start { border-left:2px solid #90A4AE; }
-table.dt thead th.grp-start { border-left:2px solid #90A4AE; }
+table.dt .grp-start { border-left:1px solid #B0BEC5; }
+table.dt thead th.grp-start { border-left:1px solid #B0BEC5; }
 /* Suppressed divider — kills any inherited border between the four
    period-avg columns so 4-6M / 7-9M / 10-12M read as one block. */
 table.dt .no-div { border-left:none !important; border-right:none !important; }
@@ -3033,19 +3052,22 @@ function currentSetDedupedByMerge() {
 
 /* ── KPI + state cards ── */
 function recomputeKPI() {
-    /* KPI tiles show MERGE-level counts (sum-by-merge — a merge with
-       10 M CODEs still counts as 1 merge in each bucket).  Tab labels
-       show the ROW-level M CODE counts that match what the table
-       actually renders, so users see consistent numbers.  Both come
-       out of one pass so the two never disagree on shared filters. */
+    /* KPI tiles show ROW-level M CODE counts — same as the tab labels
+       and the table itself — so users can trust one number.  A merge
+       with 10 M CODEs contributes 10 separate SKUs to the counts, not
+       one.  Stock/demand aggregates use the merge-deduped set below so
+       shared merge totals aren't multi-counted. */
     const mergeRows = currentSetDedupedByMerge();
+    const materialRows = currentSetOfRows();
     let sh=0, bl=0, su=0, se=0, nm=0, totStk=0, tot3m=0;
-    mergeRows.forEach(r => {
+    materialRows.forEach(r => {
         if      (r.status === 'shortage')        sh++;
         else if (r.status === 'balanced')        bl++;
         else if (r.status === 'surplus')         su++;
         else if (r.status === 'serious_surplus') se++;
         else if (r.status === 'no_move')         nm++;
+    });
+    mergeRows.forEach(r => {
         totStk += r.total_stock; tot3m += r.total_3m;
     });
     document.getElementById('kpi-sku').textContent   = fmtI(sh+bl+su+se+nm);
