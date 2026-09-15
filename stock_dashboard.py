@@ -314,6 +314,7 @@ def _scan_stock_header(ws, header_row=None):
         i += 1
 
     cmap["_HEADER_ROW"] = header_row
+    cmap["_HEADER_CELLS"] = header
     return cmap
 
 
@@ -817,6 +818,7 @@ def load_stock_data():
     # inserted/moved columns don't break the loader.
     cmap = _scan_stock_header(ws)
     header_row_ssw = cmap.pop("_HEADER_ROW", 2)
+    header_cells_ssw = cmap.pop("_HEADER_CELLS", [])
     data_start_row = header_row_ssw + 1
 
     # Convenience lookups, with fallback to the hard-coded defaults
@@ -853,9 +855,9 @@ def load_stock_data():
     # + a compact pointer to whichever column each identity slot mapped
     # onto.  Surfaced in the UI meta line so the user can see instantly
     # when the detector attaches to the wrong row / mis-labels a slot.
-    _stock_load_debug["header_row"] = header_row
+    _stock_load_debug["header_row"] = header_row_ssw
     _stock_load_debug["header_first_cells"] = [
-        str(h) if h is not None else "" for h in header[:12]
+        str(h) if h is not None else "" for h in header_cells_ssw[:12]
     ]
     _stock_load_debug["identity_col_map"] = {
         "MERGE_CODE":   c_merge,
@@ -3155,13 +3157,16 @@ function buildTableHead() {
        to MOI (both = Stock ÷ 3M), so we consolidate to two columns
        and use terse labels so they fit at 56 px. */
     h += '<th class="r grp-start" data-col="moh" title="Stock ÷ 3M Avg">MOI<span class="sort"></span></th>'
-      +  '<th class="r" data-col="merge_moi_ppl" '
+      +  '<th class="r grp-start" data-col="merge_moi_ppl" '
       +      'title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg).">'
       +      'MOI(PPL)<span class="sort"></span></th>';
     /* Period-average demand break-down — short "3M / 4-6M / 7-9M /
        10-12M" labels (no "Avg" suffix) so the four columns fit in
-       ~56 px each without the browser truncating them. */
-    h += '<th class="r no-div" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M<span class="sort"></span></th>'
+       ~56 px each without the browser truncating them.  The 3M column
+       gets a leading divider so the period-avg block is visually
+       separate from MOI(PPL); the other three stay borderless so the
+       four periods read as one continuous group. */
+    h += '<th class="r grp-start" data-col="p_3m"  title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M<span class="sort"></span></th>'
       +  '<th class="r no-div" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M<span class="sort"></span></th>'
       +  '<th class="r no-div" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M<span class="sort"></span></th>'
       +  '<th class="r no-div" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M<span class="sort"></span></th>';
@@ -3487,11 +3492,11 @@ function renderTable() {
         totalRow += '<td class="r grp-start">' + fmtI(ttlStock) + demSuffix(ttl3M) + '</td>';
     }
     totalRow += '<td class="r grp-start" style="' + moiBar(ttlMOI)    + '">' + (ttlMOI != null ? fmtF(ttlMOI, 1) : '—') + '</td>'
-             +  '<td class="r"           style="' + moiBarPPL(ttlPPL) + '">' + (ttlPPL != null ? fmtF(ttlPPL, 1) : '—') + '</td>'
-             +  '<td class="r no-div">' + fmtF(ttl3M,   1) + '</td>'
-             +  '<td class="r no-div">' + fmtF(ttl6,    1) + '</td>'
-             +  '<td class="r no-div">' + fmtF(ttl79,   1) + '</td>'
-             +  '<td class="r no-div">' + fmtF(ttl1012, 1) + '</td>'
+             +  '<td class="r grp-start" style="' + moiBarPPL(ttlPPL) + '">' + (ttlPPL != null ? fmtF(ttlPPL, 1) : '—') + '</td>'
+             +  '<td class="r grp-start">' + fmtF(ttl3M,   1) + '</td>'
+             +  '<td class="r no-div">'   + fmtF(ttl6,    1) + '</td>'
+             +  '<td class="r no-div">'   + fmtF(ttl79,   1) + '</td>'
+             +  '<td class="r no-div">'   + fmtF(ttl1012, 1) + '</td>'
              +  '</tr>';
 
     /* Sub Total row visibility rule: sorting now sorts merge GROUPS
@@ -3578,11 +3583,11 @@ function renderTable() {
         // decimals rounded away.  Sub Total rows keep the full merge
         // sum with the same integer rounding.
         return '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + detailBtn + '</td>'
-             + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
-             + '<td class="r no-div">' + fmtI(Math.round(r.p_3m       || 0)) + '</td>'
-             + '<td class="r no-div">' + fmtI(Math.round(r.avg_6m_old || 0)) + '</td>'
-             + '<td class="r no-div">' + fmtI(Math.round(r.avg_7_9m   || 0)) + '</td>'
-             + '<td class="r no-div">' + fmtI(Math.round(r.avg_10_12m || 0)) + '</td>';
+             + '<td class="r grp-start ' + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
+             + '<td class="r grp-start">' + fmtI(Math.round(r.p_3m       || 0)) + '</td>'
+             + '<td class="r no-div">'   + fmtI(Math.round(r.avg_6m_old || 0)) + '</td>'
+             + '<td class="r no-div">'   + fmtI(Math.round(r.avg_7_9m   || 0)) + '</td>'
+             + '<td class="r no-div">'   + fmtI(Math.round(r.avg_10_12m || 0)) + '</td>';
     };
     /* Build a synthetic "merge total" row from a group of M CODE
        rows by summing the per-row figures.  Used to render the Sub
