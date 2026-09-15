@@ -840,6 +840,77 @@ def load_stock_data():
     c_inch         = cmap.get("INCH")
     c_pattern      = cmap.get("PATTERN")
     c_ope          = cmap.get("OPE")
+
+    # ── Data-driven MCODE column fallback ──
+    # When the stock-sheet header doesn't advertise a "CODE" / "M CODE"
+    # column (typo, merged-cell header, hidden character we didn't
+    # anticipate), scan the first few data rows and pick whichever
+    # column carries values that also appear in Sheet2's M CODE master
+    # (m_master).  Same idea for PRODUCT_NAME — if the header didn't
+    # match, look for a column that carries string values matching
+    # Sheet2's descriptions.  We only touch slots that are still None;
+    # explicit header matches always win.
+    def _peek_rows(n=20):
+        rows = []
+        for row in ws.iter_rows(min_row=header_row_ssw + 1, values_only=True):
+            rows.append(row)
+            if len(rows) >= n:
+                break
+        return rows
+    _peek = None
+    if c_mcode is None and m_master:
+        _peek = _peek_rows()
+        candidate_scores = {}
+        mcode_set = {int(k) for k in m_master.keys() if isinstance(k, (int, float))}
+        # Skip cols already claimed by other identity slots (Merge/
+        # Group/Classification/etc.) so we don't clobber them.
+        claimed = {c_merge, c_group, c_classif, c_prod_name,
+                   c_size, c_inch, c_pattern, c_ope, c_desc}
+        for row in _peek:
+            if not row:
+                continue
+            for ci, v in enumerate(row, start=1):
+                if ci in claimed:
+                    continue
+                try:
+                    iv = int(v) if isinstance(v, (int, float)) else None
+                except (TypeError, ValueError):
+                    iv = None
+                if iv is not None and iv in mcode_set:
+                    candidate_scores[ci] = candidate_scores.get(ci, 0) + 1
+        if candidate_scores:
+            best_col = max(candidate_scores, key=candidate_scores.get)
+            if candidate_scores[best_col] >= 2:
+                c_mcode = best_col
+                _stock_load_debug["mcode_auto_detected"] = best_col
+    if c_prod_name is None:
+        # Scan for a text column that shows different string values on
+        # different rows (variety > 3 distinct values).  Skip claimed
+        # columns.  This picks up "Product Name" columns whose header
+        # cell reads blank/junk in the header row but where the data
+        # itself is clearly product names.
+        if _peek is None:
+            _peek = _peek_rows()
+        claimed = {c_merge, c_group, c_classif, c_mcode,
+                   c_size, c_inch, c_pattern, c_ope, c_desc}
+        text_variety = {}
+        for row in _peek:
+            if not row:
+                continue
+            for ci, v in enumerate(row, start=1):
+                if ci in claimed or ci > 30:
+                    continue
+                if isinstance(v, str) and 2 <= len(v.strip()) <= 40 and any(c.isalpha() for c in v):
+                    text_variety.setdefault(ci, set()).add(v.strip())
+        # Pick the col with the most distinct strings and require >= 3
+        best = None
+        best_n = 0
+        for ci, s in text_variety.items():
+            if len(s) > best_n:
+                best_n = len(s); best = ci
+        if best and best_n >= 3:
+            c_prod_name = best
+            _stock_load_debug["product_name_auto_detected"] = best
     _stock_load_debug["stock_columns_found"] = {
         "merge_code":   bool(c_merge),
         "group":        bool(c_group),
@@ -2079,15 +2150,34 @@ table.dt thead.pipe-mode tr.state-band th:nth-child(n+2) {
 table.dt tbody tr.sub-total td:first-child,
 table.dt tbody tr.total-row td:first-child {
     left: 0 !important; z-index: 6 !important;
-    /* Continues the vertical divider that runs down the right edge
-       of the LI/SS column (col 10) across the Sub Total / Total
-       banner rows too — otherwise the colspan cell has no right edge
-       and the divider visually breaks at every Sub Total row. */
-    border-right: 2px solid #90A4AE;
 }
 table.dt tbody tr.sub-total td:nth-child(n+2),
 table.dt tbody tr.total-row td:nth-child(n+2) {
     left: auto !important; right: auto !important; z-index: 1 !important;
+}
+/* ── Uniform LI/SS → state-block divider ──
+   Draw ONE 2px line at the LI/SS column's right edge across every
+   row type — header, M CODE, Sub Total, TOTAL IN VIEW — so the line
+   thickness is identical everywhere.  Two selectors reach both cell
+   layouts:
+     • Non-colspan rows (header + M CODE): LI/SS is td/th:nth-child(10)
+     • Sub Total / TOTAL rows: LI/SS position is the first-child cell
+       (its colspan=10 label ends at the col-10 right edge)
+   We also cancel grp-start's border-left contribution at the same
+   boundary (first state cell, col 11 in normal rows or col 2 in
+   colspan rows) so the two 2px borders don't stack into a 4px
+   double line on Sub Total rows. */
+table.dt th:nth-child(10),
+table.dt td:nth-child(10),
+table.dt tbody tr.sub-total td:first-child,
+table.dt tbody tr.total-row td:first-child {
+    border-right: 2px solid #90A4AE;
+}
+table.dt th:nth-child(11).grp-start,
+table.dt td:nth-child(11).grp-start,
+table.dt tbody tr.sub-total td:nth-child(2).grp-start,
+table.dt tbody tr.total-row td:nth-child(2).grp-start {
+    border-left: none;
 }
 /* Cumulative left offsets — running sum of the widths above.
    Total = 46+68+36+92+92+52+68+80+40+56 = 630 px */
