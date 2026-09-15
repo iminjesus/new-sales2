@@ -1271,7 +1271,7 @@ def load_stock_data():
         # a longer-horizon planning metric than the current MOI.
         moh_plus = (total_all / total_3m) if total_3m > 0 else None
 
-        # Merge_MOI(PPL/3M): Stock ÷ MAX(3M avg, 4-6M avg, 7-9M avg,
+        # Merge_MOI(PPL): Stock ÷ MAX(3M avg, 4-6M avg, 7-9M avg,
         # 10-12M avg) — divides on-hand stock by the biggest recent
         # monthly draw so planners keep enough stock to cover the
         # busiest of the last four periods.
@@ -2300,7 +2300,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="figv" id="m-3m">—</div>
         <div class="stat">MOI — stock on hand only</div>
         <div class="figv" id="m-moi">—</div>
-        <div class="stat" title="(Stock + Port + Water + Factory) ÷ MAX(3M avg, 6M-old avg months −6 to −4, 12M avg)">Merge_MOI(PPL/3M) — Stock+Pipeline ÷ max(3M · 6M-old · 12M) demand</div>
+        <div class="stat" title="Stock on hand ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg)">Merge_MOI(PPL) — Stock ÷ max of four period averages</div>
         <div class="figv" id="m-moiplus">—</div>
       </div>
       <div>
@@ -2709,7 +2709,7 @@ function renderStateCards() {
             acc[s].pipeline  += r.state_pipeline[s] || 0;
             acc[s].demand_3m += r.state_3m[s]       || 0;
             /* Status chip counts now use the SKU's MERGE-CODE status
-               (from Merge_MOI(PPL/3M)) rather than a re-computed
+               (from Merge_MOI(PPL)) rather than a re-computed
                per-state MOI.  A SKU is credited to a state only if it
                has stock or 3M demand there — matches how planners
                think about "the shortage list in NSW". */
@@ -2936,7 +2936,7 @@ function buildTableHead() {
       +  '<th class="r" data-col="merge_moi_ppl" '
       +      'title="Stock on hand ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg). '
       +      'Divides on-hand stock by the biggest recent monthly draw so planners keep enough stock to cover the busiest of the last four periods.">'
-      +      'Merge_MOI(PPL/3M)<span class="sort"></span></th>';
+      +      'Merge_MOI(PPL)<span class="sort"></span></th>';
     /* Period-average demand break-down.  No vertical dividers
        between the four period columns per user request — the block
        reads as a single stripe of 4 numbers. */
@@ -3014,7 +3014,7 @@ function renderTable() {
 
     /* ── MOI data-bar scale — INDEPENDENT per column ──
        Each of the three MOI columns computes its own reference max
-       so a small value in Merge_MOI(PPL/3M) still gets a visible
+       so a small value in Merge_MOI(PPL) still gets a visible
        bar when the plain MOI column has an outlier and vice-versa.
        Each scale is capped at 12 months so one giant SKU can't
        compress the rest into invisible slivers. */
@@ -3637,7 +3637,7 @@ function downloadCSV() {
         ['WA Factory',      r => r.state_pipe_parts?.WA?.fac    || 0],
         ['MOI',                r => r.moh          != null ? r.moh.toFixed(2)          : ''],
         ['Merge_MOI',          r => r.moh          != null ? r.moh.toFixed(2)          : ''],
-        ['Merge_MOI(PPL/3M)',  r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
+        ['Merge_MOI(PPL)',     r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
         ['3M Avg (m -1..-3)',  r => (r.p_3m       ?? 0).toFixed(2)],
         ['4-6M Avg (m -4..-6)',r => (r.avg_6m_old ?? 0).toFixed(2)],
         ['7-9M Avg (m -7..-9)',r => (r.avg_7_9m   ?? 0).toFixed(2)],
@@ -3728,7 +3728,7 @@ function downloadXLSX() {
         ['WA Water',               r => r.state_pipe_parts?.WA?.water  || 0],
         ['WA Factory',             r => r.state_pipe_parts?.WA?.fac    || 0],
         ['MOI',                    r => r.moh          == null ? null : r.moh],
-        ['Merge_MOI(PPL/3M)',      r => r.moh_plus_max == null ? null : r.moh_plus_max],
+        ['Merge_MOI(PPL)',         r => r.moh_plus_max == null ? null : r.moh_plus_max],
         ['3M Avg (m -1..-3)',      r => r.p_3m       || 0],
         ['4-6M Avg (m -4..-6)',    r => r.avg_6m_old || 0],
         ['7-9M Avg (m -7..-9)',    r => r.avg_7_9m   || 0],
