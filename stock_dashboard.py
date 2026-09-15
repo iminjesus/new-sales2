@@ -1948,11 +1948,13 @@ table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:56px;  width:56
    still get their fixed widths above via the same `<colgroup>`. */
 table.dt.pipe-mode th:nth-child(n+11),
 table.dt.pipe-mode td:nth-child(n+11) {
-    min-width:44px; overflow:hidden; text-overflow:ellipsis;
+    min-width:52px; padding:5px 4px;
+    overflow:hidden; text-overflow:ellipsis;
 }
 table.dt:not(.pipe-mode) th:nth-child(n+11),
 table.dt:not(.pipe-mode) td:nth-child(n+11) {
-    min-width:56px; overflow:hidden; text-overflow:ellipsis;
+    min-width:64px; padding:5px 6px;
+    overflow:hidden; text-overflow:ellipsis;
 }
 
 /* z-index ordering:
@@ -3007,8 +3009,8 @@ function buildTableHead() {
        colgroup and the sticky-left offsets stay in sync. */
     const IDENTITY_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];
     const nDataCols = showPipeline
-        ? (STATES.length * 4 + 4 + 3 + 4)  // 4 states × 4 sub + total × 4 + MOI×3 + period×4
-        : (STATES.length + 1 + 3 + 4);      // state stock + STOCK + MOI×3 + period×4
+        ? (STATES.length * 4 + 4 + 2 + 4)  // 4 states × 4 sub + total × 4 + MOI×2 + period×4 = 26
+        : (STATES.length + 1 + 2 + 4);      // state stock + STOCK + MOI×2 + period×4 = 11
     const colgroup = document.getElementById('sku-colgroup');
     colgroup.innerHTML = IDENTITY_WIDTHS.map(w => '<col style="width:' + w + 'px">').join('')
         + Array(nDataCols).fill('<col>').join('');
@@ -3027,7 +3029,7 @@ function buildTableHead() {
               + ';color:#fff;font-weight:700">' + s + '</th>';
         });
         h += '<th colspan="4" class="grp-start" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
-        h += '<th colspan="7" class="grp-start" style="background:#F1F5F9"></th></tr><tr class="col-labels">';
+        h += '<th colspan="6" class="grp-start" style="background:#F1F5F9"></th></tr><tr class="col-labels">';
     } else {
         h = '<tr>';
     }
@@ -3037,17 +3039,20 @@ function buildTableHead() {
     if (showPipeline) {
         STATES.forEach(s => {
             const dc = s.toLowerCase();
-            /* Vertical divider before each state's first sub-column */
-            h += '<th class="r grp-start" data-col="' + dc + '">Stock<span class="sort"></span></th>'
-              +  '<th class="r" data-col="' + dc + '_port">Port<span class="sort"></span></th>'
-              +  '<th class="r" data-col="' + dc + '_water">Water<span class="sort"></span></th>'
-              +  '<th class="r" data-col="' + dc + '_fac">Factory<span class="sort"></span></th>';
+            /* Short 3-char sub-column labels — with 27 data columns
+               the viewport can't fit "Stock/Port/Water/Factory" in
+               every state group without truncating.  STK/PRT/WTR/FAC
+               reads clearly at 52 px each. */
+            h += '<th class="r grp-start" data-col="' + dc + '" title="' + s + ' Stock">STK<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_port" title="' + s + ' Port">PRT<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_water" title="' + s + ' Water">WTR<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_fac" title="' + s + ' Factory">FAC<span class="sort"></span></th>';
         });
         /* National Total group divider */
-        h += '<th class="r grp-start" data-col="total_stock">Stock<span class="sort"></span></th>'
-          +  '<th class="r" data-col="total_port">Port<span class="sort"></span></th>'
-          +  '<th class="r" data-col="total_water">Water<span class="sort"></span></th>'
-          +  '<th class="r" data-col="total_fac">Factory<span class="sort"></span></th>';
+        h += '<th class="r grp-start" data-col="total_stock" title="Total Stock">STK<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_port" title="Total Port">PRT<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_water" title="Total Water">WTR<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_fac" title="Total Factory">FAC<span class="sort"></span></th>';
     } else {
         STATES.forEach((s, i) => {
             const dc = s.toLowerCase();
@@ -3057,21 +3062,20 @@ function buildTableHead() {
         /* Divider before Stock total */
         h += '<th class="r grp-start" data-col="total_stock">Stock <span style="opacity:.55;font-weight:400">(3M)</span><span class="sort"></span></th>';
     }
-    /* Divider before MOI block */
-    h += '<th class="r grp-start" data-col="moh">MOI<span class="sort"></span></th>'
-      +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>'
+    /* MOI + MOI(PPL) — the earlier MERGE_MOI column was identical
+       to MOI (both = Stock ÷ 3M), so we consolidate to two columns
+       and use terse labels so they fit at 56 px. */
+    h += '<th class="r grp-start" data-col="moh" title="Stock ÷ 3M Avg">MOI<span class="sort"></span></th>'
       +  '<th class="r" data-col="merge_moi_ppl" '
-      +      'title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg). '
-      +      'Uses the full available inventory (on-hand + all incoming) over the biggest recent monthly draw so planners see coverage against the busiest of the last four periods.">'
-      +      'Merge_MOI(PPL)<span class="sort"></span></th>';
-    /* Period-average demand break-down.  No vertical dividers
-       anywhere in the block per user request — 3M Avg through
-       10-12M Avg reads as a single stripe of four numbers with
-       no line between any of them (or between it and MOI). */
-    h += '<th class="r no-div" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M Avg<span class="sort"></span></th>'
-      +  '<th class="r no-div" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M Avg<span class="sort"></span></th>'
-      +  '<th class="r no-div" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M Avg<span class="sort"></span></th>'
-      +  '<th class="r no-div" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M Avg<span class="sort"></span></th>';
+      +      'title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg).">'
+      +      'MOI(PPL)<span class="sort"></span></th>';
+    /* Period-average demand break-down — short "3M / 4-6M / 7-9M /
+       10-12M" labels (no "Avg" suffix) so the four columns fit in
+       ~56 px each without the browser truncating them. */
+    h += '<th class="r no-div" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M<span class="sort"></span></th>'
+      +  '<th class="r no-div" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M<span class="sort"></span></th>'
+      +  '<th class="r no-div" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M<span class="sort"></span></th>'
+      +  '<th class="r no-div" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M<span class="sort"></span></th>';
     h += '</tr>';
     document.getElementById('sku-thead').innerHTML = h;
     /* Re-wire sort handlers on the freshly built headers */
@@ -3109,7 +3113,6 @@ function sortKey(r, col) {
         case 'inch':  return (parseFloat(r.inch) || 0);
         case 'sku_status':     return r.sku_status || 'Active';
         case 'moh':            return r.moh          == null ? -1 : r.moh;
-        case 'merge_moi':      return r.moh          == null ? -1 : r.moh;
         case 'merge_moi_ppl':  return r.moh_plus_max == null ? -1 : r.moh_plus_max;
         case 'p_3m':           return r.p_3m        || 0;
         case 'p_4_6m':         return r.avg_6m_old  || 0;
@@ -3284,13 +3287,12 @@ function renderTable() {
         });
         totalRow += '<td class="r grp-start">' + fmtI(ttlStock) + demSuffix(ttl3M) + '</td>';
     }
-    totalRow += '<td class="r grp-start" style="' + moiBar(ttlMOI) + '">' + (ttlMOI != null ? fmtF(ttlMOI, 1) : '—') + '</td>'
-             +  '<td class="r"           style="' + moiBar(ttlMOI) + '">' + (ttlMOI != null ? fmtF(ttlMOI, 1) : '—') + '</td>'
+    totalRow += '<td class="r grp-start" style="' + moiBar(ttlMOI)    + '">' + (ttlMOI != null ? fmtF(ttlMOI, 1) : '—') + '</td>'
              +  '<td class="r"           style="' + moiBarPPL(ttlPPL) + '">' + (ttlPPL != null ? fmtF(ttlPPL, 1) : '—') + '</td>'
-             +  '<td class="r grp-start">' + fmtF(ttl3M,   1) + '</td>'
-             +  '<td class="r">' + fmtF(ttl6,    1) + '</td>'
-             +  '<td class="r">' + fmtF(ttl79,   1) + '</td>'
-             +  '<td class="r">' + fmtF(ttl1012, 1) + '</td>'
+             +  '<td class="r no-div">' + fmtF(ttl3M,   1) + '</td>'
+             +  '<td class="r no-div">' + fmtF(ttl6,    1) + '</td>'
+             +  '<td class="r no-div">' + fmtF(ttl79,   1) + '</td>'
+             +  '<td class="r no-div">' + fmtF(ttl1012, 1) + '</td>'
              +  '</tr>';
 
     /* Sub Total row visibility rule: only when the user is looking at
@@ -3373,12 +3375,11 @@ function renderTable() {
         // decimals rounded away.  Sub Total rows keep the full merge
         // sum with the same integer rounding.
         return '<td class="r grp-start ' + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + detailBtn + '</td>'
-             + '<td class="r '           + cls_mo + '" style="' + moiBar(r.moh)             + '">' + (r.moh          != null ? fmtF(r.moh, 1)          : '—') + '</td>'
              + '<td class="r '           + cls_mo + '" style="' + moiBarPPL(r.moh_plus_max) + '">' + (r.moh_plus_max != null ? fmtF(r.moh_plus_max, 1) : '—') + '</td>'
-             + '<td class="r grp-start">' + fmtI(Math.round(r.p_3m       || 0)) + '</td>'
-             + '<td class="r">'           + fmtI(Math.round(r.avg_6m_old || 0)) + '</td>'
-             + '<td class="r">'           + fmtI(Math.round(r.avg_7_9m   || 0)) + '</td>'
-             + '<td class="r">'           + fmtI(Math.round(r.avg_10_12m || 0)) + '</td>';
+             + '<td class="r no-div">' + fmtI(Math.round(r.p_3m       || 0)) + '</td>'
+             + '<td class="r no-div">' + fmtI(Math.round(r.avg_6m_old || 0)) + '</td>'
+             + '<td class="r no-div">' + fmtI(Math.round(r.avg_7_9m   || 0)) + '</td>'
+             + '<td class="r no-div">' + fmtI(Math.round(r.avg_10_12m || 0)) + '</td>';
     };
     /* Build a synthetic "merge total" row from a group of M CODE
        rows by summing the per-row figures.  Used to render the Sub
@@ -3764,8 +3765,7 @@ function downloadCSV() {
         ['WA Water',        r => r.state_pipe_parts?.WA?.water  || 0],
         ['WA Factory',      r => r.state_pipe_parts?.WA?.fac    || 0],
         ['MOI',                r => r.moh          != null ? r.moh.toFixed(2)          : ''],
-        ['Merge_MOI',          r => r.moh          != null ? r.moh.toFixed(2)          : ''],
-        ['Merge_MOI(PPL)',     r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
+        ['MOI(PPL)',           r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
         ['3M Avg (m -1..-3)',  r => (r.p_3m       ?? 0).toFixed(2)],
         ['4-6M Avg (m -4..-6)',r => (r.avg_6m_old ?? 0).toFixed(2)],
         ['7-9M Avg (m -7..-9)',r => (r.avg_7_9m   ?? 0).toFixed(2)],
@@ -3856,7 +3856,7 @@ function downloadXLSX() {
         ['WA Water',               r => r.state_pipe_parts?.WA?.water  || 0],
         ['WA Factory',             r => r.state_pipe_parts?.WA?.fac    || 0],
         ['MOI',                    r => r.moh          == null ? null : r.moh],
-        ['Merge_MOI(PPL)',         r => r.moh_plus_max == null ? null : r.moh_plus_max],
+        ['MOI(PPL)',               r => r.moh_plus_max == null ? null : r.moh_plus_max],
         ['3M Avg (m -1..-3)',      r => r.p_3m       || 0],
         ['4-6M Avg (m -4..-6)',    r => r.avg_6m_old || 0],
         ['7-9M Avg (m -7..-9)',    r => r.avg_7_9m   || 0],
