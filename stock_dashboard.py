@@ -1966,6 +1966,11 @@ table.dt thead th { background:#ECEFF1; color:#37474F; padding:6px 8px;
                     border-bottom:1px solid #CFD8DC; font-size:10.5px;
                     text-transform:uppercase; letter-spacing:.04em;
                     cursor:pointer; user-select:none; white-space:nowrap; }
+/* Numeric column headers (state stock, MOI, MOI(PPL), 3M/4-6M/7-9M/
+   10-12M, pipeline STK/PRT/WTR/FAC) center their title so the label
+   reads over the middle of the data below.  Body cells still use
+   right alignment for the numbers via `.r` on <td>. */
+table.dt thead th.r { text-align:center; }
 table.dt thead th:hover { background:#DDE4EE; }
 /* Column-resize drag handle on the right edge of every header
    cell.  Grab and drag to widen a column when content clips. */
