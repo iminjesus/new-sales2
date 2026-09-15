@@ -660,8 +660,10 @@ def load_stock_data():
         for ch in (" ", ".", "_", "-", "/", "\\"):
             s = s.replace(ch, "")
         return s
-    # Any of these normalised forms means "M CODE"
-    MCODE_ALIASES = {"MCODE", "M CODE", "MATERIAL", "MATERIALCODE"}
+    # Any of these normalised forms means "M CODE".  Sheet2 in the
+    # Sep-15 workbook labels this column simply "CODE" (matching the
+    # stock sheet), so "CODE" is included as a top-level alias too.
+    MCODE_ALIASES = {"CODE", "MCODE", "MATERIAL", "MATERIALCODE"}
     if "Sheet2" in wb.sheetnames:
         ws = wb["Sheet2"]
         header = None
@@ -1902,15 +1904,29 @@ table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:110px; width:11
 table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:48px;  width:48px;  }
 table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:64px;  width:64px;  }
 
-table.dt tbody td:nth-child(-n+10) { position:sticky; background:#fff; z-index:1; }
-table.dt thead th:nth-child(-n+10) { position:sticky; z-index:4; }
-/* Preserve zebra / selection colours on the sticky cells */
-/* (zebra suppressed — see comment further below) */
+/* z-index ordering matters here:
+     • state-band th          → z-index: 3  (vertical sticky)
+     • col-labels th          → z-index: 2  (vertical sticky)
+     • Frozen tbody cells     → z-index: 5  (MUST be > state-band so
+                                             the scrolling state
+                                             banner text stays HIDDEN
+                                             behind the frozen block
+                                             during horizontal pan.)
+     • Frozen thead cells     → z-index: 7  (above frozen tbody so
+                                             column labels don't get
+                                             painted over by rows.)
+     • Frozen total-row cells → z-index: 6  (between tbody frozen
+                                             and thead frozen so the
+                                             sticky TOTAL row sits
+                                             above M CODE rows but
+                                             below the header). */
+table.dt tbody td:nth-child(-n+10) { position:sticky; background:#fff; z-index:5; }
+table.dt thead th:nth-child(-n+10) { position:sticky; z-index:7; }
 table.dt tbody tr:hover td:nth-child(-n+10) { background:var(--hover); }
 table.dt tbody tr.selected td:nth-child(-n+10) { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
 table.dt tbody tr.sub-total td:nth-child(-n+10) { background:#FFF8E1; }
-table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:3; }
+table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:6; }
 table.dt tbody tr.merge-cohover td:nth-child(-n+10) { background:#EEF2FF; }
 /* Cumulative left offsets — sum of the widths above */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
