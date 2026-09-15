@@ -1637,13 +1637,18 @@ def _aggregate(rows):
     for r in rows:
         st = r["status"]
         kpi_status[st] += 1
-        if st == "empty":
-            continue
+        # Empty-status rows (total_stock == 0 AND total_3m == 0) used to
+        # be dropped entirely.  Keep them in `all_rows_flat` so the
+        # Total tab and drill-down index still surface every merge the
+        # workbook knows about — but skip the stock/demand aggregates
+        # below (there's nothing to aggregate).
+        skip_aggregates_empty = (st == "empty")
 
         # Skip stock-total accumulation for shared rows we've already
         # counted at the merge level.  Status counts still increment
-        # per row so the tab labels match what the table shows.
-        skip_stock = False
+        # per row so the tab labels match what the table shows.  Also
+        # skip aggregates for empty-status rows (nothing to add).
+        skip_stock = skip_aggregates_empty
         if r.get("merge_shared"):
             if r["merge_code"] in _shared_stock_seen:
                 skip_stock = True
