@@ -3276,27 +3276,46 @@ function renderTable() {
     const BAND_COLOURS = ['#4A90E2','#F5A623','#7ED321','#BD10E0',
                           '#50E3C2','#B8E986','#F8A5C2','#9013FE'];
     const mergeBandColor = mc => BAND_COLOURS[Math.abs(mc) % BAND_COLOURS.length];
-    /* Apply sort BEFORE grouping so merge_code descending produces
-       descending merge groups rather than falling back to insertion
-       order. */
-    if (sortCol && sortDir !== 0) {
-        const dir = sortDir;
-        src = src.slice().sort((a, b) => {
-            const av = sortKey(a, sortCol), bv = sortKey(b, sortCol);
-            if (av < bv) return -1 * dir;
-            if (av > bv) return  1 * dir;
-            return 0;
-        });
-    }
-    /* ── Merge groups for Sub Total rows ──
-       Group visible src by merge_code so we can render M CODE rows
-       followed by a sub-total.  Preserves the (now-sorted) order
-       of first appearance so merge_code ↑/↓ works as expected. */
+    /* ── Merge-group aware sort ──
+       Sorting must never break up a merge group — M CODE rows for the
+       same merge always stay side-by-side.  We (1) bucket rows by
+       merge_code preserving insertion order, (2) rank each bucket by an
+       aggregate of the chosen column across the group's rows (numeric
+       columns use max, string columns use the first non-empty), and
+       (3) sort the buckets, then flatten back to rows.  Rows inside a
+       bucket keep their original relative order so the loader's
+       per-M-CODE ordering shows through. */
     const mergeGroups = new Map();
     src.forEach(r => {
         if (!mergeGroups.has(r.merge_code)) mergeGroups.set(r.merge_code, []);
         mergeGroups.get(r.merge_code).push(r);
     });
+    if (sortCol && sortDir !== 0) {
+        const dir = sortDir;
+        /* Group-level aggregate for the current sortCol.  Numeric →
+           use the max across siblings so a group with a big-mover
+           surfaces above quiet groups; string → first non-empty. */
+        const groupKey = (rows) => {
+            const vals = rows.map(r => sortKey(r, sortCol));
+            const nums = vals.filter(v => typeof v === 'number' && !isNaN(v));
+            if (nums.length === vals.length && nums.length > 0) {
+                return Math.max.apply(null, nums);
+            }
+            const nonEmpty = vals.find(v => v !== '' && v != null);
+            return nonEmpty == null ? '' : nonEmpty;
+        };
+        const buckets = Array.from(mergeGroups.entries()).map(([mc, rows]) => ({
+            mc, rows, key: groupKey(rows)
+        }));
+        buckets.sort((a, b) => {
+            if (a.key < b.key) return -1 * dir;
+            if (a.key > b.key) return  1 * dir;
+            return 0;
+        });
+        mergeGroups.clear();
+        buckets.forEach(b => mergeGroups.set(b.mc, b.rows));
+        src = [].concat.apply([], buckets.map(b => b.rows));
+    }
     /* Update sort arrows */
     document.querySelectorAll('#sku-tbl thead th').forEach(th => {
         th.classList.remove('sort-asc','sort-desc');
@@ -3366,13 +3385,10 @@ function renderTable() {
              +  '<td class="r no-div">' + fmtF(ttl1012, 1) + '</td>'
              +  '</tr>';
 
-    /* Sub Total row visibility rule: only when the user is looking at
-       the natural merge-grouped ordering (no sort applied, or an
-       explicit ascending/descending sort by merge_code).  Sorting by a
-       material attribute (brand, pattern, size…) inter-leaves M CODEs
-       from many merges, at which point a per-merge subtotal makes no
-       sense and just looks noisy — so we hide it. */
-    const showSubTotal = (!sortCol || sortDir === 0 || sortCol === 'merge_code');
+    /* Sub Total row visibility rule: sorting now sorts merge GROUPS
+       (rows within a merge stay together), so Sub Total rows stay
+       useful in every sort orientation.  Always show them. */
+    const showSubTotal = true;
 
     /* Palette for the F/O · OPE pill (per token).  Each bucket has
        its own soft ground + strong foreground; unrecognised tokens
@@ -3798,13 +3814,34 @@ function exportSource() {
         src = src.filter(r => selected.has(r.merge_code));
     }
     if (sortCol && sortDir !== 0) {
+        /* Same merge-group aware sort as the on-screen view — rows for
+           the same merge always export together, and buckets are
+           ranked by the max (numeric) / first non-empty (string) of
+           the sortCol across siblings. */
         const dir = sortDir;
-        src = src.slice().sort((a, b) => {
-            const av = sortKey(a, sortCol), bv = sortKey(b, sortCol);
-            if (av < bv) return -1 * dir;
-            if (av > bv) return  1 * dir;
+        const groups = new Map();
+        src.forEach(r => {
+            if (!groups.has(r.merge_code)) groups.set(r.merge_code, []);
+            groups.get(r.merge_code).push(r);
+        });
+        const groupKey = (rows) => {
+            const vals = rows.map(r => sortKey(r, sortCol));
+            const nums = vals.filter(v => typeof v === 'number' && !isNaN(v));
+            if (nums.length === vals.length && nums.length > 0) {
+                return Math.max.apply(null, nums);
+            }
+            const nonEmpty = vals.find(v => v !== '' && v != null);
+            return nonEmpty == null ? '' : nonEmpty;
+        };
+        const buckets = Array.from(groups.entries()).map(([mc, rows]) => ({
+            mc, rows, key: groupKey(rows)
+        }));
+        buckets.sort((a, b) => {
+            if (a.key < b.key) return -1 * dir;
+            if (a.key > b.key) return  1 * dir;
             return 0;
         });
+        src = [].concat.apply([], buckets.map(b => b.rows));
     }
     return src;
 }
