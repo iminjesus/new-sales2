@@ -1870,7 +1870,7 @@ body { font-family:'IBM Plex Sans','Segoe UI',system-ui,sans-serif;
    banner would slide out of view when the user scrolled — that's
    what the user was hitting). */
 table.dt { width:100%; border-collapse:separate; border-spacing:0;
-           font-size:11.5px; }
+           font-size:11.5px; table-layout:fixed; }
 table.dt thead th { background:#ECEFF1; color:#37474F; padding:6px 8px;
                     text-align:left; position:sticky; top:0; z-index:2;
                     border-bottom:1px solid #CFD8DC; font-size:10.5px;
@@ -1909,6 +1909,25 @@ table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:110px; width:11
 table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:110px; width:110px; }
 table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:48px;  width:48px;  }
 table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:64px;  width:64px;  }
+
+/* ── Data columns (nth-child 11+) — elastic uniform width ──
+   User asked that numeric columns share the remaining viewport
+   evenly instead of one column ("10-12M AVG") ballooning while
+   its neighbours stay tight.  `table-layout: fixed` on `<table>`
+   plus a `<colgroup>` injected by the JS forces every data
+   column to the same width, computed as
+     (viewport − identity block width) ÷ (# data columns).
+   Cells beyond that width just clip or wrap — which is fine for
+   the small integers the numeric columns carry.  Identity columns
+   still get their fixed widths above via the same `<colgroup>`. */
+table.dt.pipe-mode th:nth-child(n+11),
+table.dt.pipe-mode td:nth-child(n+11) {
+    min-width:44px; overflow:hidden; text-overflow:ellipsis;
+}
+table.dt:not(.pipe-mode) th:nth-child(n+11),
+table.dt:not(.pipe-mode) td:nth-child(n+11) {
+    min-width:56px; overflow:hidden; text-overflow:ellipsis;
+}
 
 /* z-index ordering:
      • state-band th          → z-index: 3  (vertical sticky only)
@@ -2322,6 +2341,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
 
       <div class="tbl-wrap">
         <table class="dt" id="sku-tbl">
+          <colgroup id="sku-colgroup"></colgroup>
           <thead id="sku-thead"></thead>
           <tbody id="tbl-body"></tbody>
         </table>
@@ -2939,6 +2959,20 @@ function buildTableHead() {
        top:52px) instead of the compact single-row layout. */
     document.getElementById('sku-thead').className = showPipeline ? 'pipe-mode' : '';
     document.getElementById('sku-tbl').classList.toggle('pipe-mode', showPipeline);
+    /* Rebuild <colgroup> so `table-layout: fixed` has explicit
+       widths per column.  The 10 identity columns use the fixed
+       pixel widths declared in CSS, and the data columns share
+       the remaining viewport evenly via `width: 1fr`-style
+       distribution (each gets `width: *px` where the browser
+       ignores nothing — with table-layout:fixed each column with
+       no width gets an equal share of the remainder). */
+    const IDENTITY_WIDTHS = [56, 80, 52, 128, 110, 72, 110, 110, 48, 64];
+    const nDataCols = showPipeline
+        ? (STATES.length * 4 + 4 + 3 + 4)  // 4 states × 4 sub + total × 4 + MOI×3 + period×4
+        : (STATES.length + 1 + 3 + 4);      // state stock + STOCK + MOI×3 + period×4
+    const colgroup = document.getElementById('sku-colgroup');
+    colgroup.innerHTML = IDENTITY_WIDTHS.map(w => '<col style="width:' + w + 'px">').join('')
+        + Array(nDataCols).fill('<col>').join('');
     let h = '';
     if (showPipeline) {
         /* Two-row header: state band + sub-column labels.  Each state
