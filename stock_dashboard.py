@@ -1904,22 +1904,15 @@ table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:110px; width:11
 table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:48px;  width:48px;  }
 table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:64px;  width:64px;  }
 
-/* z-index ordering matters here:
-     • state-band th          → z-index: 3  (vertical sticky)
-     • col-labels th          → z-index: 2  (vertical sticky)
-     • Frozen tbody cells     → z-index: 5  (MUST be > state-band so
-                                             the scrolling state
-                                             banner text stays HIDDEN
-                                             behind the frozen block
-                                             during horizontal pan.)
-     • Frozen thead cells     → z-index: 7  (above frozen tbody so
-                                             column labels don't get
-                                             painted over by rows.)
-     • Frozen total-row cells → z-index: 6  (between tbody frozen
-                                             and thead frozen so the
-                                             sticky TOTAL row sits
-                                             above M CODE rows but
-                                             below the header). */
+/* z-index ordering:
+     • state-band th          → z-index: 3  (vertical sticky only)
+     • col-labels th          → z-index: 2  (vertical sticky only)
+     • Frozen tbody cells     → z-index: 5  (occlude state banner
+                                             sliding into the freeze
+                                             area during horizontal
+                                             pan)
+     • Frozen thead cells     → z-index: 7  (over frozen tbody)
+     • Frozen total-row cells → z-index: 6  (between the above two) */
 table.dt tbody td:nth-child(-n+10) { position:sticky; background:#fff; z-index:5; }
 table.dt thead th:nth-child(-n+10) { position:sticky; z-index:7; }
 table.dt tbody tr:hover td:nth-child(-n+10) { background:var(--hover); }
@@ -1928,6 +1921,23 @@ table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
 table.dt tbody tr.sub-total td:nth-child(-n+10) { background:#FFF8E1; }
 table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:6; }
 table.dt tbody tr.merge-cohover td:nth-child(-n+10) { background:#EEF2FF; }
+/* State-band row uses colspan, so its nth-child positions don't
+   line up with data columns.
+   • nth-child(1) is a wide placeholder covering the 10 frozen
+     identity columns → sticks left:0, z-index 7 so state banner
+     cells (NSW/QLD/…) scrolling in from the right disappear
+     behind it.
+   • nth-child(n+2) are NSW/QLD/VIC/WA/TOTAL/trailing placeholder
+     that span data columns 11+ → must scroll horizontally, so we
+     cancel the `left:56px`/`left:136px`… offsets they inherit
+     from the generic nth-child rules and pin z-index at 3 so
+     they're painted UNDER the frozen block. */
+table.dt thead.pipe-mode tr.state-band th:first-child {
+    left: 0 !important; z-index: 7 !important;
+}
+table.dt thead.pipe-mode tr.state-band th:nth-child(n+2) {
+    left: auto !important; right: auto !important; z-index: 3 !important;
+}
 /* Cumulative left offsets — sum of the widths above */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
 table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:56px; }
