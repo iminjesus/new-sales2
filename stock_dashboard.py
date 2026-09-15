@@ -385,19 +385,26 @@ def _extract_pattern(desc):
     return p if p and not p.startswith("#") else ""
 
 
-# Brand-code shorthand → full brand name.  These are the codes that
-# appear in the 2nd comma field of Sheet2 descriptions.  Hankook (HK),
-# Kingstar (KS), Aurora (AU), Laufenn (LF).  Any unknown code passes
-# through as-is so the column never blanks.
+# Brand-code shorthand → canonical 2-letter code.  Hankook (HK),
+# Laufenn (LF), Kingstar (KS), Aurora (AU), Kumho (KL), Michelin (MI),
+# Bridgestone (BS), Yokohama (YH), Continental (CN), Goodyear (GY),
+# Dunlop (DL), Pirelli (PI).  User asked for the short code in the
+# Brand column instead of the full name, so BOTH the raw code AND
+# the full name resolve to the short form here.  Any unknown token
+# passes through uppercased so the column never blanks.
 _BRAND_CODE_MAP = {
-    "HK":       "Hankook",
-    "HANKOOK":  "Hankook",
-    "KS":       "Kingstar",
-    "KINGSTAR": "Kingstar",
-    "AU":       "Aurora",
-    "AURORA":   "Aurora",
-    "LF":       "Laufenn",
-    "LAUFENN":  "Laufenn",
+    "HK": "HK", "HANKOOK":     "HK",
+    "LF": "LF", "LAUFENN":     "LF",
+    "KS": "KS", "KINGSTAR":    "KS",
+    "AU": "AU", "AURORA":      "AU",
+    "KL": "KL", "KUMHO":       "KL",
+    "MI": "MI", "MICHELIN":    "MI",
+    "BS": "BS", "BRIDGESTONE": "BS",
+    "YH": "YH", "YOKOHAMA":    "YH",
+    "CN": "CN", "CONTINENTAL": "CN",
+    "GY": "GY", "GOODYEAR":    "GY",
+    "DL": "DL", "DUNLOP":      "DL",
+    "PI": "PI", "PIRELLI":     "PI",
 }
 
 def _extract_brand(desc):
@@ -430,8 +437,12 @@ def _extract_brand(desc):
         if u in _BRAND_CODE_MAP:
             return _BRAND_CODE_MAP[u]
         # Alpha-only tokens 2-8 chars are plausible brand strings
+        # Alpha-only tokens 2-8 chars are plausible brand codes.
+        # We uppercase them so downstream consumers see a compact
+        # canonical short form (HK / LF / KS / AU / …) rather than
+        # a mix of "Hankook" / "HK".
         if u.isalpha() and 2 <= len(u) <= 12:
-            return u.title()
+            return u
         return ""
     last = _pick(parts[-1])
     if last:
@@ -943,8 +954,12 @@ def load_stock_data():
         else:
             p_3m = avg_6m_old = avg_7_9m = avg_10_12m = 0.0
 
-        # Max-demand basis: the larger of {3M avg, "4-6M" avg, 12M avg}
-        max_demand = max(total_3m, avg_6m_old, total_12m) if any([total_3m, avg_6m_old, total_12m]) else 0.0
+        # Max-demand basis: the LARGEST of the four period averages
+        # (3M · 4-6M · 7-9M · 10-12M), per user request.  Using the
+        # biggest recent baseline protects against under-stocking
+        # when the most recent 3M avg has temporarily dipped.
+        max_demand = max(p_3m, avg_6m_old, avg_7_9m, avg_10_12m,
+                         0.0) if any([p_3m, avg_6m_old, avg_7_9m, avg_10_12m]) else 0.0
 
         row_bundle = {
             "group_raw":       group,
@@ -1041,9 +1056,10 @@ def load_stock_data():
         for k, arr in history.items():
             for i, v in enumerate(arr):
                 agg["history"][k][i] += v
-        # max_demand recomputed at read-time (max of accumulated
-        # aggregates) so it stays a true "biggest baseline".
-        agg["max_demand"] = max(agg["total_3m"], agg["avg_6m_old"], agg["total_12m"])
+        # max_demand recomputed at read-time from the FOUR summed
+        # period averages so it stays a true "biggest baseline".
+        agg["max_demand"] = max(agg["p_3m"], agg["avg_6m_old"],
+                                agg["avg_7_9m"], agg["avg_10_12m"], 0.0)
 
     # ── Pass 1.5: build a per-merge "best product info" cache.
     # Walk every merge that has at least one M CODE in the MM sheet
@@ -1255,11 +1271,11 @@ def load_stock_data():
         # a longer-horizon planning metric than the current MOI.
         moh_plus = (total_all / total_3m) if total_3m > 0 else None
 
-        # Merge_MOI(PPL/3M): (Stock + Pipeline) ÷ MAX(3M avg, 6M-old avg, 12M avg)
-        # so demand shocks in the recent 3 months don't hide the older
-        # baseline — planners keep enough stock to cover the biggest
-        # observed monthly draw.
-        moh_plus_max = (total_all / max_demand) if max_demand > 0 else None
+        # Merge_MOI(PPL/3M): Stock ÷ MAX(3M avg, 4-6M avg, 7-9M avg,
+        # 10-12M avg) — divides on-hand stock by the biggest recent
+        # monthly draw so planners keep enough stock to cover the
+        # busiest of the last four periods.
+        moh_plus_max = (total_stock / max_demand) if max_demand > 0 else None
 
         # Status classification uses Merge_MOI (== moh = merge-level
         # Stock ÷ 3M demand).  This matches the user's request that
@@ -1859,51 +1875,49 @@ table.dt thead.pipe-mode tr.state-band th:hover { filter:brightness(1.05); }
 table.dt thead.pipe-mode tr.col-labels th { top:26px; }
 
 /* ── Frozen identity columns (Merge → LI/SS) ──
-   The first 11 cells of every row (Merge Code, M CODE, Brand,
-   Marketing Line, Product Name, Pattern, Group, F/O·OPE, Size,
-   Inch, LI/SS) stick to the left of the scroll container so they
-   stay visible when the user pans the state / MOI / period-avg
-   block horizontally.  Each column has a fixed width and a
-   pre-computed `left` offset (accumulated width of preceding
-   frozen columns).  `nth-child(N)` matches by ordinal position
-   which is stable regardless of pipeline mode. */
+   The first 10 cells of every row (Merge Code, M CODE, Brand,
+   Marketing Line, Product Name, Pattern, F/O·OPE, Size, Inch,
+   LI/SS) stick to the left of the scroll container so they stay
+   visible when the user pans the state / MOI / period-avg block
+   horizontally.  Each column has a fixed width and a pre-computed
+   `left` offset (accumulated width of preceding frozen columns).
+   `nth-child(N)` matches by ordinal position which is stable
+   regardless of pipeline mode. */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:56px;  width:56px;  }
 table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:80px;  width:80px;  }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:64px;  width:64px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:52px;  width:52px;  }
 table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:128px; width:128px; }
 table.dt th:nth-child(5),  table.dt td:nth-child(5)  { min-width:110px; width:110px; }
 table.dt th:nth-child(6),  table.dt td:nth-child(6)  { min-width:72px;  width:72px;  }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:56px;  width:56px;  }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:110px; width:110px; }
 table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:110px; width:110px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:110px; width:110px; }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:48px;  width:48px;  }
-table.dt th:nth-child(11), table.dt td:nth-child(11) { min-width:64px;  width:64px;  }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:48px;  width:48px;  }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:64px;  width:64px;  }
 
-table.dt tbody td:nth-child(-n+11) { position:sticky; background:#fff; z-index:1; }
-table.dt thead th:nth-child(-n+11) { position:sticky; z-index:4; }
+table.dt tbody td:nth-child(-n+10) { position:sticky; background:#fff; z-index:1; }
+table.dt thead th:nth-child(-n+10) { position:sticky; z-index:4; }
 /* Preserve zebra / selection colours on the sticky cells */
-table.dt tbody tr:nth-child(even) td:nth-child(-n+11) { background:#F5F7FA; }
-table.dt tbody tr:hover td:nth-child(-n+11) { background:var(--hover); }
-table.dt tbody tr.selected td:nth-child(-n+11) { background:#DBEAFE; }
-table.dt tbody tr.selected:hover td:nth-child(-n+11) { background:#BFDBFE; }
-table.dt tbody tr.sub-total td:nth-child(-n+11) { background:#FFF8E1; }
-table.dt tbody tr.total-row td:nth-child(-n+11) { background:#EEF3F8; z-index:3; }
-table.dt tbody tr.merge-cohover td:nth-child(-n+11) { background:#EEF2FF; }
+table.dt tbody tr:nth-child(even) td:nth-child(-n+10) { background:#F5F7FA; }
+table.dt tbody tr:hover td:nth-child(-n+10) { background:var(--hover); }
+table.dt tbody tr.selected td:nth-child(-n+10) { background:#DBEAFE; }
+table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
+table.dt tbody tr.sub-total td:nth-child(-n+10) { background:#FFF8E1; }
+table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:3; }
+table.dt tbody tr.merge-cohover td:nth-child(-n+10) { background:#EEF2FF; }
 /* Cumulative left offsets — sum of the widths above */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
 table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:56px; }
 table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:136px; }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:200px; }
-table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:328px; }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:438px; }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:510px; }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:566px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:676px; }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { left:786px; }
-table.dt th:nth-child(11), table.dt td:nth-child(11) { left:834px; }
-/* Right edge marker on the last frozen column so users see the
-   freeze boundary as they scroll horizontally. */
-table.dt th:nth-child(11), table.dt td:nth-child(11) { border-right:2px solid #94A3B8; }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:188px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:316px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:426px; }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:498px; }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:608px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:718px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { left:766px; }
+/* Right edge marker on the last frozen column — thin (1px) per
+   user request so it doesn't dominate visually. */
+table.dt th:nth-child(10), table.dt td:nth-child(10) { border-right:1px solid #CBD5E1; }
 
 table.dt thead th .sort { display:inline-block; margin-left:3px; opacity:.35;
                           font-size:9px; }
@@ -1982,6 +1996,10 @@ table.dt .r { text-align:right; font-family:'IBM Plex Mono',monospace;
    between state groups + before the national TOTAL group. */
 table.dt .grp-start { border-left:2px solid #90A4AE; }
 table.dt thead th.grp-start { border-left:2px solid #90A4AE; }
+/* Suppressed divider — kills any inherited border between the four
+   period-avg columns so 4-6M / 7-9M / 10-12M read as one block. */
+table.dt .no-div { border-left:none !important; border-right:none !important; }
+table.dt thead th.no-div { border-left:none !important; border-right:none !important; }
 table.dt .r.short { color:var(--short); font-weight:700; }
 table.dt .r.sur   { color:var(--sur);   font-weight:700; }
 table.dt .r.ser   { color:var(--ser);   font-weight:700; }
@@ -2131,7 +2149,6 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
   <div class="ms" data-key="brand"><button class="ms-btn">Brand</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="product"><button class="ms-btn">Product</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="sku_status"><button class="ms-btn">F/O · OPE</button><div class="ms-panel"></div></div>
-  <div class="ms" data-key="group"><button class="ms-btn">Group</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="line"><button class="ms-btn">Marketing Line</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="inch"><button class="ms-btn">Rim (inch)</button><div class="ms-panel"></div></div>
   <div class="ms" data-key="pattern"><button class="ms-btn">Pattern</button><div class="ms-panel"></div></div>
@@ -2367,7 +2384,6 @@ const filterState = {
     brand:      new Set(),
     product:    new Set(),      // PCLT / TBR / Other  (r.category)
     sku_status: new Set(),      // Active / F/O / OPE / OE A/S
-    group:      new Set(),
     line:       new Set(),
     inch:       new Set(),
     pattern:    new Set(),
@@ -2404,19 +2420,18 @@ function clearAllFilters() {
 }
 const KEY_LBL = { status:'Status', state:'State', brand:'Brand',
                   product:'Product', sku_status:'F/O · OPE',
-                  group:'Group', line:'Marketing Line',
+                  line:'Marketing Line',
                   inch:'Rim (inch)', pattern:'Pattern' };
 
 function buildFilterOptions() {
     const values = { status: ['shortage','balanced','surplus','serious_surplus','no_move'],
                      state: STATES.slice(),
                      brand: new Set(), product: new Set(), sku_status: new Set(),
-                     group: new Set(), line: new Set(), inch: new Set(), pattern: new Set() };
+                     line: new Set(), inch: new Set(), pattern: new Set() };
     DATA.all_rows.forEach(r => {
         if (r.brand)      values.brand.add(r.brand);
         if (r.category)   values.product.add(r.category);
         if (r.sku_status) values.sku_status.add(r.sku_status);
-        if (r.group)      values.group.add(r.group);
         if (r.line)       values.line.add(r.line);
         if (r.inch)       values.inch.add(r.inch);
         if (r.pattern)    values.pattern.add(r.pattern);
@@ -2436,7 +2451,6 @@ function buildFilterOptions() {
         brand:      [...values.brand].sort(),
         product:    prodOrder.filter(p => values.product.has(p)),
         sku_status: skuOrder,
-        group:      [...values.group].sort(),
         line:       [...values.line].sort(),
         inch:       [...values.inch].sort((a,b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b)),
         pattern:    [...values.pattern].sort(),
@@ -2520,7 +2534,6 @@ function rowPasses(r) {
     if (filterState.brand.size      && !filterState.brand.has(r.brand))           return false;
     if (filterState.product.size    && !filterState.product.has(r.category))      return false;
     if (filterState.sku_status.size && !filterState.sku_status.has(r.sku_status)) return false;
-    if (filterState.group.size      && !filterState.group.has(r.group))           return false;
     if (filterState.line.size    && !filterState.line.has(r.line))       return false;
     if (filterState.inch.size    && !filterState.inch.has(r.inch))       return false;
     if (filterState.pattern.size && !filterState.pattern.has(r.pattern)) return false;
@@ -2629,7 +2642,7 @@ function currentSetDedupedByMerge() {
     for (const agg of bucket.values()) {
         agg.moh          = agg.total_3m > 0 ? agg.total_stock / agg.total_3m : null;
         agg.moh_plus     = agg.total_3m > 0 ? agg.total_all   / agg.total_3m : null;
-        agg.moh_plus_max = agg.max_demand > 0 ? agg.total_all / agg.max_demand : null;
+        agg.moh_plus_max = agg.max_demand > 0 ? agg.total_stock / agg.max_demand : null;
         if      (agg.total_3m === 0 && agg.total_stock === 0) agg.status = 'empty';
         else if (agg.total_3m === 0 && agg.total_stock  >  0) agg.status = 'no_move';
         else if (agg.moh <= 1)  agg.status = 'shortage';
@@ -2862,7 +2875,7 @@ function buildTableHead() {
         ['merge_code','Merge'], ['m_code','M CODE'], ['brand','Brand'],
         ['line','Marketing Line'], ['product_name','Product Name'],
         ['pattern','Pattern'],
-        ['group','Group'], ['sku_status','F/O·OPE'],
+        ['sku_status','F/O·OPE'],
         ['size','Size'], ['inch','Inch'], ['li_ss','LI/SS'],
     ];
     const stateColour = { NSW:'#1976D2', QLD:'#EF6C00', VIC:'#8E24AA', WA:'#00897B' };
@@ -2921,14 +2934,16 @@ function buildTableHead() {
     h += '<th class="r grp-start" data-col="moh">MOI<span class="sort"></span></th>'
       +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>'
       +  '<th class="r" data-col="merge_moi_ppl" '
-      +      'title="(Stock on hand + Port + Water + Factory) ÷ MAX(3M avg, 6M-old avg (months −6 to −4), 12M avg). '
-      +      'Using the LARGEST of the three demand baselines protects against under-stocking when the recent 3-month rolling average has dipped.">'
+      +      'title="Stock on hand ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg). '
+      +      'Divides on-hand stock by the biggest recent monthly draw so planners keep enough stock to cover the busiest of the last four periods.">'
       +      'Merge_MOI(PPL/3M)<span class="sort"></span></th>';
-    /* Period-average demand break-down (divider block on the far right) */
+    /* Period-average demand break-down.  No vertical dividers
+       between the four period columns per user request — the block
+       reads as a single stripe of 4 numbers. */
     h += '<th class="r grp-start" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M Avg<span class="sort"></span></th>'
-      +  '<th class="r" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M Avg<span class="sort"></span></th>'
-      +  '<th class="r" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M Avg<span class="sort"></span></th>'
-      +  '<th class="r" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M Avg<span class="sort"></span></th>';
+      +  '<th class="r no-div" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M Avg<span class="sort"></span></th>'
+      +  '<th class="r no-div" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M Avg<span class="sort"></span></th>'
+      +  '<th class="r no-div" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M Avg<span class="sort"></span></th>';
     h += '</tr>';
     document.getElementById('sku-thead').innerHTML = h;
     /* Re-wire sort handlers on the freshly built headers */
@@ -3113,10 +3128,10 @@ function renderTable() {
     const body = document.getElementById('tbl-body');
 
     /* ── Total row (rendered at the top) ── */
-    const nonStateCount = 11;   /* Merge / M CODE / Brand / Line /
-                                   Product Name / Pattern / Group /
-                                   F/O·OPE / Size / Inch / LI·SS
-                                   = 11 non-numeric cols */
+    const nonStateCount = 10;   /* Merge / M CODE / Brand / Line /
+                                   Product Name / Pattern / F/O·OPE
+                                   / Size / Inch / LI·SS
+                                   = 10 non-numeric cols */
     let totalRow = '<tr class="total-row"><td colspan="' + nonStateCount + '">TOTAL IN VIEW · '
                  + fmtI(src.length) + ' rows</td>';
     /* State cells for the Total row */
@@ -3275,8 +3290,9 @@ function renderTable() {
             sum.avg_10_12m  += r.avg_10_12m  || 0;
         });
         sum.moh          = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
-        const mergeMax = Math.max(sum.total_3m, sum.avg_6m_old, 0);
-        sum.moh_plus_max = mergeMax > 0 ? sum.total_all / mergeMax : null;
+        const mergeMax = Math.max(sum.p_3m, sum.avg_6m_old,
+                                  sum.avg_7_9m, sum.avg_10_12m, 0);
+        sum.moh_plus_max = mergeMax > 0 ? sum.total_stock / mergeMax : null;
         // Sub Total's row-level status matches its own merge MOI —
         // used to colour the MOI cells.
         sum.status = (sum.total_3m === 0 && sum.total_stock === 0) ? 'empty'
@@ -3344,12 +3360,11 @@ function renderTable() {
                       + '<td>' + (r.line         || '—') + '</td>'
                       + '<td>' + (r.product_name || '—') + '</td>'
                       + '<td>' + (r.pattern      || '—') + '</td>'
-                      + '<td>' + pill(r.group) + '</td>'
                       + '<td>' + renderSkuPill(r.sku_status) + '</td>'
                       + '<td>' + (r.size         || '—') + '</td>'
                       + '<td>' + (r.inch         || '—') + '</td>'
                       + '<td>' + (r.li ? r.li : '—') + (r.ss ? '/' + r.ss : '') + '</td>' )
-                    : ( '<td class="no-info" colspan="9">'
+                    : ( '<td class="no-info" colspan="8">'
                       + '⚠ 정보 없음 — Sheet2/Stock Sheet 어디에도 이 Merge Code의 제품 정보가 없습니다. '
                       + 'CS가 Sheet2에 Merge ' + r.merge_code + ' 마스터 레코드를 등록해야 채워집니다.'
                       + '</td>' );
@@ -3370,7 +3385,7 @@ function renderTable() {
             rowsHtml.push(
                 '<tr class="sub-total" data-mc="' + subTotal.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band
-                +      ';font-weight:700;color:' + band + '" colspan="11">'
+                +      ';font-weight:700;color:' + band + '" colspan="10">'
                 + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
                 + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
                 + '</tr>');
@@ -3404,7 +3419,6 @@ function renderTable() {
                 + '<td>' + (r.line         || '—') + '</td>'
                 + '<td>' + (r.product_name || '—') + '</td>'
                 + '<td>' + (r.pattern      || '—') + '</td>'
-                + '<td>' + pill(r.group) + '</td>'
                 + '<td>' + renderSkuPill(r.sku_status) + '</td>'
                 + '<td>' + (r.size         || '—') + '</td>'
                 + '<td>' + (r.inch         || '—') + '</td>'
@@ -3595,7 +3609,6 @@ function downloadCSV() {
         ['Marketing Line',  r => r.line || ''],
         ['Product Name',    r => r.product_name || ''],
         ['Pattern',         r => r.pattern || ''],
-        ['Group',           r => r.group || ''],
         ['Size',            r => r.size || ''],
         ['Inch',            r => r.inch || ''],
         ['LI',              r => r.li || ''],
@@ -3687,7 +3700,6 @@ function downloadXLSX() {
         ['Marketing Line',         r => r.line || ''],
         ['Product Name',           r => r.product_name || ''],
         ['Pattern',                r => r.pattern || ''],
-        ['Group',                  r => r.group || ''],
         ['Size',                   r => r.size || ''],
         ['Inch',                   r => r.inch || ''],
         ['LI',                     r => r.li || ''],
@@ -3827,7 +3839,7 @@ function aggregateMerge(mcRows) {
     });
     sum.moh          = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
     sum.moh_plus     = sum.total_3m > 0 ? sum.total_all   / sum.total_3m : null;
-    sum.moh_plus_max = sum.max_demand > 0 ? sum.total_all / sum.max_demand : null;
+    sum.moh_plus_max = sum.max_demand > 0 ? sum.total_stock / sum.max_demand : null;
     return sum;
 }
 
