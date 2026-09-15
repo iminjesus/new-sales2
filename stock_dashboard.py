@@ -1198,13 +1198,23 @@ def load_stock_data():
         # Row-level product info from the stock sheet takes precedence
         # over Sheet2 fallbacks whenever the stock-sheet column is
         # populated (this is the source of truth for the new
-        # per-M-CODE workbook layout).
-        row_pn      = stk.get("row_prod_name", "") or ""
-        row_desc    = stk.get("row_desc", "")      or ""
-        row_size_raw= stk.get("row_size", "")      or ""
-        row_inch_raw= stk.get("row_inch", "")      or ""
-        row_pat_raw = stk.get("row_pattern", "")   or ""
-        row_ope_raw = stk.get("row_ope", "")       or ""
+        # per-M-CODE workbook layout).  Per-M-CODE rows can have blank
+        # cells (e.g. only the first sibling has an OPE flag), so we
+        # fall back to the merge-wide first-non-empty aggregate stored
+        # on stock_by_merge — this is the same aggregate that already
+        # feeds merge-shared rows in Pass 1.
+        merge_stk = stock_by_merge.get(merge_code, {}) if not merge_shared else stk
+        def _pick(field):
+            v = stk.get(field, "") or ""
+            if v:
+                return v
+            return merge_stk.get(field, "") or ""
+        row_pn      = _pick("row_prod_name")
+        row_desc    = _pick("row_desc")
+        row_size_raw= _pick("row_size")
+        row_inch_raw= _pick("row_inch")
+        row_pat_raw = _pick("row_pattern")
+        row_ope_raw = _pick("row_ope")
         # Detail fallback chain: Sheet2 → merge aggregate → stock row
         if not detail.get("description") and row_desc:
             detail["description"] = row_desc
@@ -1384,8 +1394,11 @@ def load_stock_data():
             "classification": classif or "",
             "brand":          brand,
             "line":           line,           # Marketing line umbrella (Kinergy / Dynapro / Ventus / Laufenn X Fit…)
-            "product_name":   row_pn,         # Specific variant name straight from stock sheet
-                                              # ("Ventus TD", "Dynapro HP3", "G FIT AS", "SMaRT FLeX DH35")
+            # Prefer the stock sheet's Product Name column; fall back
+            # to the marketing line so the column is never blank when
+            # the production workbook doesn't carry a Product Name
+            # column at all.
+            "product_name":   row_pn or line,
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
             "size":           size,
@@ -3278,30 +3291,70 @@ function renderTable() {
     const mergeBandColor = mc => BAND_COLOURS[Math.abs(mc) % BAND_COLOURS.length];
     /* ── Merge-group aware sort ──
        Sorting must never break up a merge group — M CODE rows for the
-       same merge always stay side-by-side.  We (1) bucket rows by
-       merge_code preserving insertion order, (2) rank each bucket by an
-       aggregate of the chosen column across the group's rows (numeric
-       columns use max, string columns use the first non-empty), and
-       (3) sort the buckets, then flatten back to rows.  Rows inside a
-       bucket keep their original relative order so the loader's
-       per-M-CODE ordering shows through. */
+       same merge always stay side-by-side.  We rank each merge by the
+       value shown on its SUB TOTAL row so the visible order matches
+       what the user sees in that row (stock/pipe columns sum siblings;
+       MOI columns use the true merge-level ratio; string columns use
+       the first non-empty across siblings). */
     const mergeGroups = new Map();
     src.forEach(r => {
         if (!mergeGroups.has(r.merge_code)) mergeGroups.set(r.merge_code, []);
         mergeGroups.get(r.merge_code).push(r);
     });
+    /* Build a summary object (mirrors what mergeSumRow does further
+       down) for every merge group.  We sum stock / pipe / period
+       demand fields respecting the merge_shared flag, then derive
+       moh and moh_plus_max from the summed pieces so the ratio the
+       Sub Total row displays IS the sort key. */
+    const buildSummary = (rows) => {
+        const sum = {
+            merge_code: rows[0].merge_code,
+            state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
+            state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+            state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
+            total_stock:0, total_all:0, total_3m:0,
+            p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
+        };
+        const sharedSeen = new Set();
+        rows.forEach(r => {
+            if (r.merge_shared) {
+                if (sharedSeen.has(r.merge_code)) return;
+                sharedSeen.add(r.merge_code);
+            }
+            STATES.forEach(s => {
+                sum.state_stock[s] += r.state_stock[s] || 0;
+                sum.state_3m[s]    += r.state_3m[s]    || 0;
+                const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+                sum.state_pipe_parts[s].port  += pp.port  || 0;
+                sum.state_pipe_parts[s].water += pp.water || 0;
+                sum.state_pipe_parts[s].fac   += pp.fac   || 0;
+            });
+            sum.total_stock += r.total_stock || 0;
+            sum.total_all   += r.total_all   || 0;
+            sum.total_3m    += r.total_3m    || 0;
+            sum.p_3m        += r.p_3m        || 0;
+            sum.avg_6m_old  += r.avg_6m_old  || 0;
+            sum.avg_7_9m    += r.avg_7_9m    || 0;
+            sum.avg_10_12m  += r.avg_10_12m  || 0;
+        });
+        sum.moh = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
+        const mergeMax = Math.max(sum.p_3m, sum.avg_6m_old, sum.avg_7_9m, sum.avg_10_12m, 0);
+        sum.moh_plus_max = mergeMax > 0 ? sum.total_all / mergeMax : null;
+        return sum;
+    };
     if (sortCol && sortDir !== 0) {
         const dir = sortDir;
-        /* Group-level aggregate for the current sortCol.  Numeric →
-           use the max across siblings so a group with a big-mover
-           surfaces above quiet groups; string → first non-empty. */
+        /* Rank each merge by the SORT COLUMN's value on the merge's
+           SUB TOTAL row (via sortKey against the summary object).
+           String columns fall back to first non-empty across
+           siblings since the summary has no string identity fields. */
         const groupKey = (rows) => {
+            const summary = buildSummary(rows);
+            const v = sortKey(summary, sortCol);
+            if (typeof v === 'number' && !isNaN(v)) return v;
+            /* String column — use the first non-empty across siblings. */
             const vals = rows.map(r => sortKey(r, sortCol));
-            const nums = vals.filter(v => typeof v === 'number' && !isNaN(v));
-            if (nums.length === vals.length && nums.length > 0) {
-                return Math.max.apply(null, nums);
-            }
-            const nonEmpty = vals.find(v => v !== '' && v != null);
+            const nonEmpty = vals.find(x => x !== '' && x != null);
             return nonEmpty == null ? '' : nonEmpty;
         };
         const buckets = Array.from(mergeGroups.entries()).map(([mc, rows]) => ({
@@ -3814,23 +3867,57 @@ function exportSource() {
         src = src.filter(r => selected.has(r.merge_code));
     }
     if (sortCol && sortDir !== 0) {
-        /* Same merge-group aware sort as the on-screen view — rows for
-           the same merge always export together, and buckets are
-           ranked by the max (numeric) / first non-empty (string) of
-           the sortCol across siblings. */
+        /* Same merge-group aware, sub-total-anchored sort as the
+           on-screen view — rows for the same merge always export
+           together and buckets rank by the sortCol's value on the
+           merge's SUB TOTAL row. */
         const dir = sortDir;
         const groups = new Map();
         src.forEach(r => {
             if (!groups.has(r.merge_code)) groups.set(r.merge_code, []);
             groups.get(r.merge_code).push(r);
         });
+        const summaryOf = (rows) => {
+            const sum = {
+                merge_code: rows[0].merge_code,
+                state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
+                state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+                state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
+                total_stock:0, total_all:0, total_3m:0,
+                p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
+            };
+            const sharedSeen = new Set();
+            rows.forEach(r => {
+                if (r.merge_shared) {
+                    if (sharedSeen.has(r.merge_code)) return;
+                    sharedSeen.add(r.merge_code);
+                }
+                ['NSW','QLD','VIC','WA'].forEach(s => {
+                    sum.state_stock[s] += r.state_stock[s] || 0;
+                    sum.state_3m[s]    += r.state_3m[s]    || 0;
+                    const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+                    sum.state_pipe_parts[s].port  += pp.port  || 0;
+                    sum.state_pipe_parts[s].water += pp.water || 0;
+                    sum.state_pipe_parts[s].fac   += pp.fac   || 0;
+                });
+                sum.total_stock += r.total_stock || 0;
+                sum.total_all   += r.total_all   || 0;
+                sum.total_3m    += r.total_3m    || 0;
+                sum.p_3m        += r.p_3m        || 0;
+                sum.avg_6m_old  += r.avg_6m_old  || 0;
+                sum.avg_7_9m    += r.avg_7_9m    || 0;
+                sum.avg_10_12m  += r.avg_10_12m  || 0;
+            });
+            sum.moh = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
+            const mm = Math.max(sum.p_3m, sum.avg_6m_old, sum.avg_7_9m, sum.avg_10_12m, 0);
+            sum.moh_plus_max = mm > 0 ? sum.total_all / mm : null;
+            return sum;
+        };
         const groupKey = (rows) => {
+            const v = sortKey(summaryOf(rows), sortCol);
+            if (typeof v === 'number' && !isNaN(v)) return v;
             const vals = rows.map(r => sortKey(r, sortCol));
-            const nums = vals.filter(v => typeof v === 'number' && !isNaN(v));
-            if (nums.length === vals.length && nums.length > 0) {
-                return Math.max.apply(null, nums);
-            }
-            const nonEmpty = vals.find(v => v !== '' && v != null);
+            const nonEmpty = vals.find(x => x !== '' && x != null);
             return nonEmpty == null ? '' : nonEmpty;
         };
         const buckets = Array.from(groups.entries()).map(([mc, rows]) => ({
