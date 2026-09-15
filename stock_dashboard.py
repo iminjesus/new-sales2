@@ -1287,19 +1287,25 @@ def load_stock_data():
         # of the last four periods.
         moh_plus_max = (total_all / max_demand) if max_demand > 0 else None
 
-        # Status classification uses Merge_MOI (== moh = merge-level
-        # Stock ÷ 3M demand).  This matches the user's request that
-        # Shortage → No Move buckets be calculated from the plain
-        # Merge_MOI figure, not from the pipeline-inclusive variant.
-        if total_3m == 0 and total_stock == 0:
+        # Status classification uses the MERGE-level MOI so every
+        # sibling M CODE in a merge lands in the same tab.  The row's
+        # own moh (which can differ per M CODE) drives the numeric
+        # colour on the row, but the filter bucket comes from the
+        # merge total — otherwise one Balance-shaped M CODE would
+        # split off from its Surplus-shaped siblings and confuse the
+        # merge grouping the user reads by.
+        merge_stock = stock_by_merge[merge_code]["total_stock"]
+        merge_3m    = stock_by_merge[merge_code]["total_3m"]
+        merge_moh   = (merge_stock / merge_3m) if merge_3m > 0 else None
+        if merge_3m == 0 and merge_stock == 0:
             status = "empty"
-        elif total_3m == 0 and total_stock > 0:
+        elif merge_3m == 0 and merge_stock > 0:
             status = "no_move"
-        elif moh is not None and moh <= STATUS_SHORTAGE_MOI:
+        elif merge_moh is not None and merge_moh <= STATUS_SHORTAGE_MOI:
             status = "shortage"
-        elif moh is not None and moh <= STATUS_BALANCE_MOI:
+        elif merge_moh is not None and merge_moh <= STATUS_BALANCE_MOI:
             status = "balanced"
-        elif moh is not None and moh <= STATUS_SURPLUS_MOI:
+        elif merge_moh is not None and merge_moh <= STATUS_SURPLUS_MOI:
             status = "surplus"
         else:
             status = "serious_surplus"
