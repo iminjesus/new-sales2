@@ -3008,12 +3008,23 @@ function buildTableHead() {
     /* Widths MUST match the CSS nth-child(N) rules above so the
        colgroup and the sticky-left offsets stay in sync. */
     const IDENTITY_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];
+    /* Give each data column an EXPLICIT width so `table-layout: fixed`
+       renders headers wide enough to read ("STK / PRT / MOI / 3M /
+       4-6M …") without truncating.  If the viewport isn't wide enough
+       the table overflows horizontally — the freeze pane keeps the
+       identity columns visible, so a scroll bar is fine. */
+    const DATA_COL_WIDTH = showPipeline ? 60 : 72;
     const nDataCols = showPipeline
         ? (STATES.length * 4 + 4 + 2 + 4)  // 4 states × 4 sub + total × 4 + MOI×2 + period×4 = 26
         : (STATES.length + 1 + 2 + 4);      // state stock + STOCK + MOI×2 + period×4 = 11
     const colgroup = document.getElementById('sku-colgroup');
     colgroup.innerHTML = IDENTITY_WIDTHS.map(w => '<col style="width:' + w + 'px">').join('')
-        + Array(nDataCols).fill('<col>').join('');
+        + Array(nDataCols).fill('<col style="width:' + DATA_COL_WIDTH + 'px">').join('');
+    /* Table needs to grow past 100% width when data cols need more
+       than the viewport provides — force width to the summed total
+       so horizontal scroll kicks in cleanly. */
+    const totalWidth = IDENTITY_WIDTHS.reduce((a,b)=>a+b, 0) + nDataCols * DATA_COL_WIDTH;
+    document.getElementById('sku-tbl').style.width = totalWidth + 'px';
     let h = '';
     if (showPipeline) {
         /* Two-row header: state band + sub-column labels.  Each state
@@ -3561,9 +3572,16 @@ function renderTable() {
     const suffix = mergesRendered >= ROW_CAP
         ? ' — showing first ' + ROW_CAP + ' rows'
         : '';
-    document.getElementById('row-count').textContent =
-        fmtI(src.length) + ' M-CODE rows across '
-        + fmtI(mergeGroups.size) + ' merges' + suffix;
+    /* row-count element is optional — some layouts drop it.  Guard
+       so a missing target doesn't throw and abort the render
+       (which would leave the SKU table body wired without the
+       magnifier click handlers attached below). */
+    const rowCountEl = document.getElementById('row-count');
+    if (rowCountEl) {
+        rowCountEl.textContent =
+            fmtI(src.length) + ' M-CODE rows across '
+            + fmtI(mergeGroups.size) + ' merges' + suffix;
+    }
 
     /* Row click behaviour split into two:
          • Anywhere on the row → toggle-select the merge.
