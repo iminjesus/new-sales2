@@ -2079,6 +2079,11 @@ table.dt thead.pipe-mode tr.state-band th:nth-child(n+2) {
 table.dt tbody tr.sub-total td:first-child,
 table.dt tbody tr.total-row td:first-child {
     left: 0 !important; z-index: 6 !important;
+    /* Continues the vertical divider that runs down the right edge
+       of the LI/SS column (col 10) across the Sub Total / Total
+       banner rows too — otherwise the colspan cell has no right edge
+       and the divider visually breaks at every Sub Total row. */
+    border-right: 2px solid #90A4AE;
 }
 table.dt tbody tr.sub-total td:nth-child(n+2),
 table.dt tbody tr.total-row td:nth-child(n+2) {
