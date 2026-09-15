@@ -912,6 +912,12 @@ def load_stock_data():
         state_3m   = {s: _num(_cell(state_3m_map[s])) for s in STATES}
         total_stock = _num(_cell(total_stock_col))
         total_all   = _num(_cell(total_all_col))
+        # Fallback: if the workbook doesn't populate a national
+        # TOTAL column (Stock + Port + Water + Factory), compute it
+        # ourselves from the per-state pipeline parts so
+        # Merge_MOI(PPL) never comes out identically zero.
+        if total_all == 0 and total_stock > 0:
+            total_all = total_stock + sum(state_pipe.values())
         total_3m    = _num(_cell(total_3m_col))
 
         # 12-month sales history per state.  Prefer the scanned per-
@@ -1271,11 +1277,13 @@ def load_stock_data():
         # a longer-horizon planning metric than the current MOI.
         moh_plus = (total_all / total_3m) if total_3m > 0 else None
 
-        # Merge_MOI(PPL): Stock ÷ MAX(3M avg, 4-6M avg, 7-9M avg,
-        # 10-12M avg) — divides on-hand stock by the biggest recent
-        # monthly draw so planners keep enough stock to cover the
-        # busiest of the last four periods.
-        moh_plus_max = (total_stock / max_demand) if max_demand > 0 else None
+        # Merge_MOI(PPL): (Stock + Port + Water + Factory) ÷
+        # MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg).  Uses the
+        # full available inventory (on-hand + all incoming) as the
+        # numerator and the biggest recent monthly draw as the
+        # denominator, so planners see coverage against the busiest
+        # of the last four periods.
+        moh_plus_max = (total_all / max_demand) if max_demand > 0 else None
 
         # Status classification uses Merge_MOI (== moh = merge-level
         # Stock ÷ 3M demand).  This matches the user's request that
@@ -1897,7 +1905,7 @@ table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:64px;  width:64
 table.dt tbody td:nth-child(-n+10) { position:sticky; background:#fff; z-index:1; }
 table.dt thead th:nth-child(-n+10) { position:sticky; z-index:4; }
 /* Preserve zebra / selection colours on the sticky cells */
-table.dt tbody tr:nth-child(even) td:nth-child(-n+10) { background:#F5F7FA; }
+/* (zebra suppressed — see comment further below) */
 table.dt tbody tr:hover td:nth-child(-n+10) { background:var(--hover); }
 table.dt tbody tr.selected td:nth-child(-n+10) { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
@@ -1928,7 +1936,10 @@ table.dt tbody td { padding:5px 8px; border-bottom:1px solid #F1F3F5;
 table.dt tbody tr { cursor:pointer; }
 /* Zebra stripes on even rows (soft grey) so the wide table stays
    scannable across many columns. */
-table.dt tbody tr:nth-child(even) td { background:#F5F7FA; }
+/* Zebra stripes removed per user request — every row keeps the
+   default white background so gold Sub Total, indigo cohover, and
+   the M CODE freeze band stay the only horizontal cues. */
+/* table.dt tbody tr:nth-child(even) td { background:#F5F7FA; } */
 table.dt tbody tr:hover td { background:var(--hover); }
 table.dt tbody tr.selected td { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td { background:#BFDBFE; }
@@ -2300,7 +2311,7 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
         <div class="figv" id="m-3m">—</div>
         <div class="stat">MOI — stock on hand only</div>
         <div class="figv" id="m-moi">—</div>
-        <div class="stat" title="Stock on hand ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg)">Merge_MOI(PPL) — Stock ÷ max of four period averages</div>
+        <div class="stat" title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg)">Merge_MOI(PPL) — (Stock+Pipeline) ÷ max of four period averages</div>
         <div class="figv" id="m-moiplus">—</div>
       </div>
       <div>
@@ -2642,7 +2653,7 @@ function currentSetDedupedByMerge() {
     for (const agg of bucket.values()) {
         agg.moh          = agg.total_3m > 0 ? agg.total_stock / agg.total_3m : null;
         agg.moh_plus     = agg.total_3m > 0 ? agg.total_all   / agg.total_3m : null;
-        agg.moh_plus_max = agg.max_demand > 0 ? agg.total_stock / agg.max_demand : null;
+        agg.moh_plus_max = agg.max_demand > 0 ? agg.total_all / agg.max_demand : null;
         if      (agg.total_3m === 0 && agg.total_stock === 0) agg.status = 'empty';
         else if (agg.total_3m === 0 && agg.total_stock  >  0) agg.status = 'no_move';
         else if (agg.moh <= 1)  agg.status = 'shortage';
@@ -2934,13 +2945,14 @@ function buildTableHead() {
     h += '<th class="r grp-start" data-col="moh">MOI<span class="sort"></span></th>'
       +  '<th class="r" data-col="merge_moi">Merge_MOI<span class="sort"></span></th>'
       +  '<th class="r" data-col="merge_moi_ppl" '
-      +      'title="Stock on hand ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg). '
-      +      'Divides on-hand stock by the biggest recent monthly draw so planners keep enough stock to cover the busiest of the last four periods.">'
+      +      'title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg). '
+      +      'Uses the full available inventory (on-hand + all incoming) over the biggest recent monthly draw so planners see coverage against the busiest of the last four periods.">'
       +      'Merge_MOI(PPL)<span class="sort"></span></th>';
     /* Period-average demand break-down.  No vertical dividers
-       between the four period columns per user request — the block
-       reads as a single stripe of 4 numbers. */
-    h += '<th class="r grp-start" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M Avg<span class="sort"></span></th>'
+       anywhere in the block per user request — 3M Avg through
+       10-12M Avg reads as a single stripe of four numbers with
+       no line between any of them (or between it and MOI). */
+    h += '<th class="r no-div" data-col="p_3m"      title="Monthly avg over months −1 · −2 · −3 (the most recent 3 months)">3M Avg<span class="sort"></span></th>'
       +  '<th class="r no-div" data-col="p_4_6m"   title="Monthly avg over months −4 · −5 · −6">4-6M Avg<span class="sort"></span></th>'
       +  '<th class="r no-div" data-col="p_7_9m"   title="Monthly avg over months −7 · −8 · −9">7-9M Avg<span class="sort"></span></th>'
       +  '<th class="r no-div" data-col="p_10_12m" title="Monthly avg over months −10 · −11 · −12">10-12M Avg<span class="sort"></span></th>';
@@ -3292,7 +3304,7 @@ function renderTable() {
         sum.moh          = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
         const mergeMax = Math.max(sum.p_3m, sum.avg_6m_old,
                                   sum.avg_7_9m, sum.avg_10_12m, 0);
-        sum.moh_plus_max = mergeMax > 0 ? sum.total_stock / mergeMax : null;
+        sum.moh_plus_max = mergeMax > 0 ? sum.total_all / mergeMax : null;
         // Sub Total's row-level status matches its own merge MOI —
         // used to colour the MOI cells.
         sum.status = (sum.total_3m === 0 && sum.total_stock === 0) ? 'empty'
@@ -3839,7 +3851,7 @@ function aggregateMerge(mcRows) {
     });
     sum.moh          = sum.total_3m > 0 ? sum.total_stock / sum.total_3m : null;
     sum.moh_plus     = sum.total_3m > 0 ? sum.total_all   / sum.total_3m : null;
-    sum.moh_plus_max = sum.max_demand > 0 ? sum.total_stock / sum.max_demand : null;
+    sum.moh_plus_max = sum.max_demand > 0 ? sum.total_all / sum.max_demand : null;
     return sum;
 }
 
