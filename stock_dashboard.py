@@ -1899,16 +1899,20 @@ table.dt thead.pipe-mode tr.col-labels th { top:26px; }
    `left` offset (accumulated width of preceding frozen columns).
    `nth-child(N)` matches by ordinal position which is stable
    regardless of pipeline mode. */
-table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:56px;  width:56px;  }
-table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:80px;  width:80px;  }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:52px;  width:52px;  }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:128px; width:128px; }
-table.dt th:nth-child(5),  table.dt td:nth-child(5)  { min-width:110px; width:110px; }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { min-width:72px;  width:72px;  }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:110px; width:110px; }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:110px; width:110px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:48px;  width:48px;  }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:64px;  width:64px;  }
+/* Identity column widths — packed tight per user request so the
+   freeze block reserves as little horizontal room as possible.
+   Sum ≈ 630px versus the old 830px, freeing 200px for the
+   elastic data columns to the right. */
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:46px;  width:46px;  }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:68px;  width:68px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:36px;  width:36px;  }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:92px;  width:92px;  }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { min-width:92px;  width:92px;  }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { min-width:52px;  width:52px;  }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:68px;  width:68px;  }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:80px;  width:80px;  }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:40px;  width:40px;  }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:56px;  width:56px;  }
 
 /* ── Data columns (nth-child 11+) — elastic uniform width ──
    User asked that numeric columns share the remaining viewport
@@ -1974,17 +1978,18 @@ table.dt tbody tr.sub-total td:nth-child(n+2),
 table.dt tbody tr.total-row td:nth-child(n+2) {
     left: auto !important; right: auto !important; z-index: 1 !important;
 }
-/* Cumulative left offsets — sum of the widths above */
+/* Cumulative left offsets — running sum of the widths above.
+   Total = 46+68+36+92+92+52+68+80+40+56 = 630 px */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
-table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:56px; }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:136px; }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:188px; }
-table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:316px; }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:426px; }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:498px; }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:608px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:718px; }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { left:766px; }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:46px; }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:114px; }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:150px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:242px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:334px; }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:386px; }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:454px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:534px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { left:574px; }
 /* Right edge marker on the last frozen column — thin (1px) per
    user request so it doesn't dominate visually. */
 table.dt th:nth-child(10), table.dt td:nth-child(10) { border-right:1px solid #CBD5E1; }
@@ -2966,7 +2971,9 @@ function buildTableHead() {
        distribution (each gets `width: *px` where the browser
        ignores nothing — with table-layout:fixed each column with
        no width gets an equal share of the remainder). */
-    const IDENTITY_WIDTHS = [56, 80, 52, 128, 110, 72, 110, 110, 48, 64];
+    /* Widths MUST match the CSS nth-child(N) rules above so the
+       colgroup and the sticky-left offsets stay in sync. */
+    const IDENTITY_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];
     const nDataCols = showPipeline
         ? (STATES.length * 4 + 4 + 3 + 4)  // 4 states × 4 sub + total × 4 + MOI×3 + period×4
         : (STATES.length + 1 + 3 + 4);      // state stock + STOCK + MOI×3 + period×4
