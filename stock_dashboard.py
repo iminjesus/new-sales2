@@ -1927,22 +1927,33 @@ table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
 table.dt tbody tr.sub-total td:nth-child(-n+10) { background:#FFF8E1; }
 table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:6; }
 table.dt tbody tr.merge-cohover td:nth-child(-n+10) { background:#EEF2FF; }
-/* State-band row uses colspan, so its nth-child positions don't
-   line up with data columns.
-   • nth-child(1) is a wide placeholder covering the 10 frozen
-     identity columns → sticks left:0, z-index 7 so state banner
-     cells (NSW/QLD/…) scrolling in from the right disappear
-     behind it.
-   • nth-child(n+2) are NSW/QLD/VIC/WA/TOTAL/trailing placeholder
-     that span data columns 11+ → must scroll horizontally, so we
-     cancel the `left:56px`/`left:136px`… offsets they inherit
-     from the generic nth-child rules and pin z-index at 3 so
-     they're painted UNDER the frozen block. */
+/* Rows that use colspan (state-band + Sub Total + Total-in-View)
+   don't line their nth-child positions up with data columns.
+   Their FIRST cell is one wide label spanning the 10 frozen
+   identity columns; nth-child(2) onwards are numeric cells that
+   belong at data columns 11+ and must SCROLL horizontally.
+   Without this override, those numeric cells inherit the freeze
+   offsets (left:56px, 136px, 188px, …) from the generic nth-child
+   rules and lock into the frozen area — the user reported this as
+   Sub Total numbers "밀려서" landing under Size / Inch / LI/SS
+   instead of NSW / QLD / VIC.  We cancel left/right offsets on
+   those cells and push their z-index below the frozen block so
+   they disappear behind it as they scroll in.
+   The FIRST cell of each row gets z-index high enough to cover
+   the scrolling siblings while it stays sticky at left:0. */
 table.dt thead.pipe-mode tr.state-band th:first-child {
     left: 0 !important; z-index: 7 !important;
 }
 table.dt thead.pipe-mode tr.state-band th:nth-child(n+2) {
     left: auto !important; right: auto !important; z-index: 3 !important;
+}
+table.dt tbody tr.sub-total td:first-child,
+table.dt tbody tr.total-row td:first-child {
+    left: 0 !important; z-index: 6 !important;
+}
+table.dt tbody tr.sub-total td:nth-child(n+2),
+table.dt tbody tr.total-row td:nth-child(n+2) {
+    left: auto !important; right: auto !important; z-index: 1 !important;
 }
 /* Cumulative left offsets — sum of the widths above */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
