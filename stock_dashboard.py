@@ -497,6 +497,28 @@ def _is_suv(line, pattern):
     return False
 
 
+def _normalize_inch(v):
+    """Normalise the rim-inch column.
+
+    The workbook stores some inch cells as the natural human value
+    ("17", "22.5") but others as that value × 100 ("1700", "2250").
+    We accept both.  Anything numerically >= 100 is treated as
+    x100 and divided down; the result is rendered as an integer
+    when the fractional part is zero and one decimal otherwise
+    (so "1700" → "17" and "2250" → "22.5")."""
+    if v is None or v == "":
+        return ""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return str(v).strip()
+    if n >= 100:
+        n = n / 100.0
+    if abs(n - round(n)) < 0.05:
+        return str(int(round(n)))
+    return f"{n:.1f}"
+
+
 def _num_or_none(v):
     """Best-effort numeric coercion for LI / SR / Inch cells.  Returns
     None on '#N/A' / blank / string junk."""
@@ -1367,7 +1389,7 @@ def load_stock_data():
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
             "size":           size,
-            "inch":           detail.get("inch") or row_inch_raw or "",
+            "inch":           _normalize_inch(detail.get("inch") or row_inch_raw or ""),
             "sr":             detail.get("sr", ""),
             "li":             detail.get("li", ""),
             "ss":             detail.get("ss", ""),
@@ -2901,21 +2923,31 @@ function drawStackedBar(canvas_id, by, order, mode) {
     });
 }
 function renderCharts() {
-    /* Charts count SKUs — Merge Code is the SKU, so dedupe. */
-    const rows = currentSetDedupedByMerge();
-    if (_lineChart) _lineChart.destroy();
-    if (_inchChart) _inchChart.destroy();
-    const byLine = computeBy(rows, r => r.line || 'Other');
-    const lineOrder = Object.keys(byLine).sort((a,b) => (byLine[b].shortage||0) - (byLine[a].shortage||0));
-    _lineChart = drawStackedBar('chart-line', byLine, lineOrder, chartMode.line);
+    /* Charts count SKUs — Merge Code is the SKU, so dedupe.
+       Guarded so a missing Chart.js library doesn't kill the whole
+       refresh() chain (the tabs / table / KPI would go dark). */
+    if (typeof Chart === 'undefined') {
+        return;
+    }
+    try {
+        const rows = currentSetDedupedByMerge();
+        if (_lineChart) _lineChart.destroy();
+        if (_inchChart) _inchChart.destroy();
+        const byLine = computeBy(rows, r => r.line || 'Other');
+        const lineOrder = Object.keys(byLine).sort((a,b) => (byLine[b].shortage||0) - (byLine[a].shortage||0));
+        _lineChart = drawStackedBar('chart-line', byLine, lineOrder, chartMode.line);
 
-    const byInch = computeBy(rows, r => r.inch || '—');
-    const inchOrder = Object.keys(byInch).sort((a,b) => {
-        const na = parseFloat(a), nb = parseFloat(b);
-        if (!isNaN(na) && !isNaN(nb)) return na - nb;
-        return a.localeCompare(b);
-    });
-    _inchChart = drawStackedBar('chart-inch', byInch, inchOrder, chartMode.inch);
+        const byInch = computeBy(rows, r => r.inch || '—');
+        const inchOrder = Object.keys(byInch).sort((a,b) => {
+            const na = parseFloat(a), nb = parseFloat(b);
+            if (!isNaN(na) && !isNaN(nb)) return na - nb;
+            return a.localeCompare(b);
+        });
+        _inchChart = drawStackedBar('chart-inch', byInch, inchOrder, chartMode.inch);
+    } catch (err) {
+        console.warn('main charts skipped:', err);
+        return;
+    }
 
     document.getElementById('chart-line-hint').textContent =
         chartMode.line === 'pct' ? 'SKU % mix · each bar sums to 100' : 'SKU count · stacked by status';
@@ -3975,28 +4007,43 @@ function openModal(mergeCode) {
         backgroundColor: stateColour[s], borderColor: stateColour[s],
         borderWidth: 0, stack: 'monthly',
     }));
-    _modalChart = new Chart(document.getElementById('m-chart'), {
-        type: 'bar',
-        data: { labels: MONTH_LABELS, datasets },
-        options: {
-            responsive: true, maintainAspectRatio: false,
-            plugins: {
-                legend: { position: 'top', labels: { boxWidth: 14, font: { size: 11 } } },
-                tooltip: {
-                    callbacks: {
-                        footer: (items) => {
-                            const sum = items.reduce((s, it) => s + it.parsed.y, 0);
-                            return 'Total: ' + FMT_INT.format(Math.round(sum));
+    /* Chart.js may fail to load on restricted networks / air-gapped
+       installs.  Wrap the constructor so a missing library never
+       kills the modal — the numeric tables below still render and
+       the user gets a graceful fallback message on the canvas. */
+    try {
+        if (typeof Chart === 'undefined') throw new Error('Chart.js not loaded');
+        _modalChart = new Chart(document.getElementById('m-chart'), {
+            type: 'bar',
+            data: { labels: MONTH_LABELS, datasets },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top', labels: { boxWidth: 14, font: { size: 11 } } },
+                    tooltip: {
+                        callbacks: {
+                            footer: (items) => {
+                                const sum = items.reduce((s, it) => s + it.parsed.y, 0);
+                                return 'Total: ' + FMT_INT.format(Math.round(sum));
+                            }
                         }
                     }
+                },
+                scales: {
+                    y: { beginAtZero: true, stacked: true, ticks: { font: { size: 10 } } },
+                    x: { stacked: true, ticks: { font: { size: 10 } } }
                 }
-            },
-            scales: {
-                y: { beginAtZero: true, stacked: true, ticks: { font: { size: 10 } } },
-                x: { stacked: true, ticks: { font: { size: 10 } } }
             }
+        });
+    } catch (err) {
+        console.warn('modal chart skipped:', err);
+        const cvs = document.getElementById('m-chart');
+        if (cvs && cvs.parentElement) {
+            cvs.parentElement.innerHTML =
+                '<div style="padding:24px;color:#94A3B8;font-size:12px;text-align:center">'
+              + 'Chart library unavailable — numeric breakdown below.</div>';
         }
-    });
+    }
 
     const rows = STATES.map(s => {
         const pp = r.state_pipe_parts[s], stock = r.state_stock[s];
