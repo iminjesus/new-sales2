@@ -120,7 +120,8 @@ def _detect_header_row(ws, max_scan=10):
     STATE_STOCK_MARKERS = {"NSTOCK", "QSTOCK", "VSTOCK", "WSTOCK", "STOCK"}
     def _n(v):
         s = str(v or "").strip().upper()
-        for ch in (" ", ".", "_", "-", "/", "\\"):
+        for ch in (" ", "\t", "\n", "\r", "\xa0", "​", "‌",
+                  "‍", "﻿", ".", "_", "-", "/", "\\", "(", ")"):
             s = s.replace(ch, "")
         return s
     best_row, best_score = 2, 0
@@ -163,6 +164,25 @@ def _scan_stock_header(ws, header_row=None):
         header_row = _detect_header_row(ws)
     header = [ws.cell(row=header_row, column=c).value for c in range(1, ws.max_column + 1)]
 
+    # Merged-cell header fallback: when the header row's cell for a
+    # column reads as None (or an empty string), walk up to two rows
+    # above and adopt whichever ancestor cell carries a non-empty label
+    # — Excel-authored stock reports frequently use a stacked header
+    # (row 4: section banner, row 5: column names) where a section
+    # like "Product Name" is written into a merged range spanning both
+    # rows.  openpyxl reports the label only on the top-left cell of a
+    # merge, so C5 comes back as None while C4 has "Product Name".
+    for c in range(1, ws.max_column + 1):
+        v = header[c - 1]
+        if v is None or (isinstance(v, str) and not v.strip()):
+            for above in range(1, 3):
+                if header_row - above < 1:
+                    break
+                anc = ws.cell(row=header_row - above, column=c).value
+                if anc is not None and (not isinstance(anc, str) or anc.strip()):
+                    header[c - 1] = anc
+                    break
+
     def norm(v):
         return str(v).strip() if v is not None else ""
 
@@ -170,10 +190,14 @@ def _scan_stock_header(ws, header_row=None):
     # whitespace / dots / underscores / hyphens / slashes stripped)
     # so "Merge Code" / "Merge_Code" / "Merge-Code" / "MergeCode" all
     # match the same alias.  Used by the identity-column detection
-    # below AND by the label-based section walker further down.
+    # below AND by the label-based section walker further down.  We
+    # also strip non-breaking space (\xa0), zero-width space, tab and
+    # newline — Excel-authored headers frequently carry those hidden
+    # characters and they would otherwise defeat the alias match.
     def snorm(v):
         s = str(v or "").strip().upper()
-        for ch in (" ", ".", "_", "-", "/", "\\"):
+        for ch in (" ", "\t", "\n", "\r", "\xa0", "​", "‌",
+                  "‍", "﻿", ".", "_", "-", "/", "\\", "(", ")"):
             s = s.replace(ch, "")
         return s
 
@@ -189,7 +213,14 @@ def _scan_stock_header(ws, header_row=None):
         "GROUP":        ("NEWGROUP", "GROUP", "SEG", "SEGMENT"),
         "CLASSIFICATION": ("CLASSIFICATION", "CLASS"),
         "MCODE":        ("CODE", "MCODE", "MATERIAL", "MATERIALCODE"),
-        "PRODUCT_NAME": ("PRODUCTNAME", "PRODNAME", "MODEL", "PRODUCT"),
+        # Product Name is the material's variant name.  Broad alias set
+        # so Excel-authored headers like "Product Name", "PROD NAME",
+        # "Product_Name", "ProductName", "Model Name", "PROD" all map to
+        # the same slot.  A pure "NAME" header would be ambiguous so we
+        # keep it out unless a "PRODUCT" prefix appears.
+        "PRODUCT_NAME": ("PRODUCTNAME", "PRODNAME", "MODEL", "PRODUCT",
+                         "MODELNAME", "PRODUCTMODEL", "MODELPRODUCT",
+                         "ITEMNAME", "PROD", "PRODUCTNM", "PRDNAME"),
         "DESCRIPTION":  ("DESCRIPTION", "DESC", "PRODUCTDESCRIPTION",
                          "MATERIALDESCRIPTION"),
         "SIZE":         ("SIZE", "TYRESIZE", "TIRESIZE"),
@@ -817,6 +848,25 @@ def load_stock_data():
         "inch":         bool(c_inch),
         "pattern":      bool(c_pattern),
         "ope":          bool(c_ope),
+    }
+    # Diagnostic: record the raw header cells for the first 12 columns
+    # + a compact pointer to whichever column each identity slot mapped
+    # onto.  Surfaced in the UI meta line so the user can see instantly
+    # when the detector attaches to the wrong row / mis-labels a slot.
+    _stock_load_debug["header_row"] = header_row
+    _stock_load_debug["header_first_cells"] = [
+        str(h) if h is not None else "" for h in header[:12]
+    ]
+    _stock_load_debug["identity_col_map"] = {
+        "MERGE_CODE":   c_merge,
+        "GROUP":        c_group,
+        "MCODE":        c_mcode,
+        "PRODUCT_NAME": c_prod_name,
+        "DESCRIPTION":  c_desc,
+        "SIZE":         c_size,
+        "INCH":         c_inch,
+        "PATTERN":      c_pattern,
+        "OPE":          c_ope,
     }
 
     state_stock_cols = cmap.get("STATE_STOCK") or COL_STATE_STOCK
@@ -1467,6 +1517,9 @@ def load_stock_data():
         "stock_columns_found":    sorted(
             k for k, v in (_stock_load_debug.get("stock_columns_found") or {}).items() if v
         ),
+        "stock_header_row":       _stock_load_debug.get("header_row", 0),
+        "stock_header_cells":     _stock_load_debug.get("header_first_cells", []),
+        "stock_identity_cols":    _stock_load_debug.get("identity_col_map", {}),
         "per_mcode_rows":         _stock_load_debug.get("per_mcode_rows", False),
         "no_info_merges":         no_info_merges[:100],
         "no_info_merge_count":    len(no_info_merges),
@@ -2252,7 +2305,10 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
       <br><span style="color:#94A3B8;font-size:11px">Sheet2 master: {{ meta.sheet2_rows }} rows · columns detected: {{ meta.sheet2_columns_found|join(', ') }}</span>
     {% endif %}
     {% if meta.stock_columns_found is defined %}
-      <br><span style="color:#94A3B8;font-size:11px">Stock sheet columns detected: {{ meta.stock_columns_found|join(', ') }}{% if meta.per_mcode_rows %} · per-M-CODE layout{% endif %}</span>
+      <br><span style="color:#94A3B8;font-size:11px">Stock sheet columns detected: {{ meta.stock_columns_found|join(', ') }}{% if meta.per_mcode_rows %} · per-M-CODE layout{% endif %}{% if meta.stock_header_row %} · header row {{ meta.stock_header_row }}{% endif %}</span>
+    {% endif %}
+    {% if meta.stock_header_cells is defined and meta.stock_header_cells %}
+      <br><span style="color:#94A3B8;font-size:11px" title="Raw header cells the loader read for columns 1-12">Header cells: {% for h in meta.stock_header_cells %}{% if loop.index0 > 0 %} · {% endif %}<code style="background:#F1F5F9;padding:0 4px;border-radius:3px">{{ loop.index }}={{ h or '∅' }}</code>{% endfor %}</span>
     {% endif %}
     </span>
   <nav class="nav">
