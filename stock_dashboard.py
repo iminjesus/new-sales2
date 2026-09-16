@@ -851,48 +851,59 @@ def load_stock_data():
         except (TypeError, ValueError):
             return 0.0
 
-    # ── Pass 1: read Stock Status Worksheet, keyed by Merge Code ──
-    # Each Merge Code carries the stock/demand aggregates; the pass
-    # that emits per-M-CODE rows will look up these values by merge.
+    # ── Pass 1: read the "Simulation" sheet, keyed by Merge Code ──
+    # Per user request we always pull stock/demand aggregates from the
+    # sheet named "Simulation" (matched case-insensitively / with any
+    # hidden whitespace stripped).  If the workbook doesn't carry a
+    # Simulation sheet we fall back to whichever sheet has the richest
+    # identity block, and finally to "Stock Status Worksheet".
     stock_by_merge = {}
-    # Pick the sheet with the richest identity block — Excel workbooks
-    # can carry BOTH an old-layout "Stock Status Worksheet" (row 2
-    # header, Merge Code + Group + Classification only) and a newer
-    # per-M-CODE-layout sheet (row 5 header, adds Product Name / CODE /
-    # SIZE / INCH / PATTERN / OPE) side-by-side.  Scoring by identity-
-    # slot count lets us prefer whichever sheet gives more per-material
-    # data; the plain "Stock Status Worksheet" is the fallback when no
-    # sibling scores higher.
-    def _score_sheet_layout(sheet):
-        try:
-            cm = _scan_stock_header(sheet)
-        except Exception:
-            return -1, None
-        wanted = ("MCODE", "PRODUCT_NAME", "SIZE", "INCH", "PATTERN", "OPE")
-        n = sum(1 for k in wanted if cm.get(k))
-        return n, cm
-    candidate_sheets = []
+    def _sheet_key(name):
+        s = str(name or "").strip().upper()
+        for ch in (" ", "\t", "\n", "\r", "\xa0", "_", "-", "."):
+            s = s.replace(ch, "")
+        return s
+    ws = None
+    cmap = None
+    sheet_used = ""
     for name in wb.sheetnames:
-        if name in ("MM", "Sheet2"):
-            continue
-        try:
-            candidate_sheets.append((name, wb[name]))
-        except Exception:
-            pass
-    best_name, best_ws, best_cmap, best_score = None, None, None, -1
-    for name, sh in candidate_sheets:
-        score, cm = _score_sheet_layout(sh)
-        if score > best_score:
-            best_name, best_ws, best_cmap, best_score = name, sh, cm, score
-    if best_ws is not None and best_score > 0:
-        ws = best_ws
-        cmap = best_cmap
-        _stock_load_debug["stock_sheet_used"] = best_name
-    else:
-        ws = wb["Stock Status Worksheet"] if "Stock Status Worksheet" in wb.sheetnames \
-             else (best_ws or wb[wb.sheetnames[0]])
-        cmap = _scan_stock_header(ws)
-        _stock_load_debug["stock_sheet_used"] = ws.title
+        if _sheet_key(name) == "SIMULATION":
+            ws = wb[name]
+            cmap = _scan_stock_header(ws)
+            sheet_used = name
+            break
+    if ws is None:
+        # No Simulation sheet — score every non-master sheet by how
+        # many identity slots its header surfaces, pick the richest.
+        def _score_sheet_layout(sheet):
+            try:
+                cm = _scan_stock_header(sheet)
+            except Exception:
+                return -1, None
+            wanted = ("MCODE", "PRODUCT_NAME", "SIZE", "INCH", "PATTERN", "OPE")
+            n = sum(1 for k in wanted if cm.get(k))
+            return n, cm
+        candidate_sheets = []
+        for name in wb.sheetnames:
+            if name in ("MM", "Sheet2"):
+                continue
+            try:
+                candidate_sheets.append((name, wb[name]))
+            except Exception:
+                pass
+        best_name, best_ws, best_cmap, best_score = None, None, None, -1
+        for name, sh in candidate_sheets:
+            score, cm = _score_sheet_layout(sh)
+            if score > best_score:
+                best_name, best_ws, best_cmap, best_score = name, sh, cm, score
+        if best_ws is not None and best_score > 0:
+            ws, cmap, sheet_used = best_ws, best_cmap, best_name
+        else:
+            ws = wb["Stock Status Worksheet"] if "Stock Status Worksheet" in wb.sheetnames \
+                 else (best_ws or wb[wb.sheetnames[0]])
+            cmap = _scan_stock_header(ws)
+            sheet_used = ws.title
+    _stock_load_debug["stock_sheet_used"] = sheet_used
     _stock_load_debug["workbook_sheets"] = list(wb.sheetnames)
     header_row_ssw = cmap.pop("_HEADER_ROW", 2)
     header_cells_ssw = cmap.pop("_HEADER_CELLS", [])
