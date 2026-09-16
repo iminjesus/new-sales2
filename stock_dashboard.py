@@ -340,10 +340,10 @@ _LINE_RULES = [
     # LK41 = X FIT AT, LS = S Fit EQ, LI = I Fit ICE, LV01 = X FIT
     # VAN.  Users kept asking why an LK-series pattern reads as the
     # umbrella — this row-by-row split settles it.
-    (r"^LG|^LC|^LH",             "Laufenn G Fit"),
-    (r"^LK|^LP|^LV",             "Laufenn X Fit"),
-    (r"^LS",                     "Laufenn S Fit"),
-    (r"^LI|^LW",                 "Laufenn I Fit"),
+    # Laufenn — collapsed to the single umbrella brand.  Sub-lines
+    # (X Fit / G Fit / S Fit / I Fit) still show up in Product Name
+    # and Pattern, so Marketing Line stays uncluttered.
+    (r"^LG|^LC|^LH|^LK|^LP|^LV|^LS|^LI|^LW",  "Laufenn"),
     # Hankook — pattern prefix identifies the marketing line.  Specific
     # variant (Kinergy GT / Ventus S1 EVO3 / Dynapro AT2) is added
     # separately by _marketing_line_from_desc() when the description
@@ -385,12 +385,13 @@ def _marketing_line_from_desc(desc, pattern):
         parts = str(desc).split(",")
         if len(parts) >= 4:
             variant = parts[3].strip().upper()
-            # Laufenn sub-lines — check "X FIT" / "G FIT" / "S FIT" /
-            # "I FIT" literals from the description.
-            if "X FIT"    in variant: return "Laufenn X Fit"
-            if "G FIT"    in variant: return "Laufenn G Fit"
-            if "S FIT"    in variant: return "Laufenn S Fit"
-            if "I FIT"    in variant: return "Laufenn I Fit"
+            # Laufenn — every sub-line (X FIT / G FIT / S FIT / I FIT)
+            # collapses to the single umbrella "Laufenn" in the
+            # marketing-line column.  The specific sub-line still
+            # surfaces via Product Name + Pattern.
+            if ("X FIT" in variant or "G FIT" in variant
+                or "S FIT" in variant or "I FIT" in variant):
+                return "Laufenn"
             # Hankook marketing lines
             if "VENTUS"   in variant: return "Ventus"
             if "KINERGY"  in variant: return "Kinergy"
@@ -515,9 +516,7 @@ def _product_category(group, line):
     if line in ("Truck / TBR",):
         return "TBR"
     if line in ("Kinergy", "Ventus", "Dynapro", "Winter i*cept",
-                "Optimo (legacy)",
-                "Laufenn G Fit", "Laufenn X Fit",
-                "Laufenn S Fit", "Laufenn I Fit"):
+                "Optimo (legacy)", "Laufenn", "Vantra"):
         return "PCLT"
     return "Other"
 
@@ -1484,13 +1483,14 @@ def load_stock_data():
             # marketing line from Dynapro even though some products
             # historically got tagged with Dynapro in Sheet2.  Match it
             # BEFORE the generic "DYNAPRO" check so "Vantra LT" /
-            # "Vantra Transit" rows classify correctly.
+            # "Vantra Transit" rows classify correctly.  Laufenn — any
+            # sub-line variant (X/G/S/I/Z FIT or the LAUFENN literal)
+            # collapses to the single umbrella "Laufenn".
             if   "VANTRA"   in up: line = "Vantra"
-            elif "X FIT"    in up: line = "Laufenn X Fit"
-            elif "G FIT"    in up: line = "Laufenn G Fit"
-            elif "S FIT"    in up: line = "Laufenn S Fit"
-            elif "I FIT"    in up: line = "Laufenn I Fit"
-            elif "Z FIT"    in up: line = "Laufenn Z Fit"
+            elif ("X FIT" in up or "G FIT" in up or "S FIT" in up
+                  or "I FIT" in up or "Z FIT" in up
+                  or "LAUFENN" in up):
+                line = "Laufenn"
             elif "VENTUS"   in up: line = "Ventus"
             elif "KINERGY"  in up: line = "Kinergy"
             elif "DYNAPRO"  in up: line = "Dynapro"
@@ -4187,42 +4187,73 @@ function toggleExpandTable() {
     btn.innerHTML = on ? '✕' : '⛶';
     btn.title = on ? 'Return to split view' : 'Expand table full-screen';
 }
-/* Excel-style column autofit.  For every <col> in the sku-tbl colgroup,
-   walk the header cell + every body cell in that column and pick the
-   widest rendered content, then set that column's width to it plus a
-   small padding.  Uses getBoundingClientRect for actual pixel width so
-   truncated content ("102/…") widens to the full string. */
+/* Column autofit — TWO-STAGE strategy per user request:
+     Stage 1: try to fit every column into the AVAILABLE viewport
+              width (container.clientWidth).  Measure each column's
+              natural content width, then scale all data-column
+              widths down proportionally until the table total <=
+              container width.  Frozen identity columns (idx < 10)
+              stay at their canonical widths so the left band still
+              lines up with the freeze CSS.
+     Stage 2: only when a column would end up narrower than its
+              natural content, keep it at its natural width so
+              text isn't hidden — the table then extends beyond
+              the container (horizontal scroll) and the user can
+              still drag individual columns wider by the resize
+              handle.
+   No column ever ends up narrower than 32 px. */
 function autofitColumns() {
     const tbl = document.getElementById('sku-tbl');
     if (!tbl) return;
     const cols = tbl.querySelectorAll('#sku-colgroup col');
     const headerCells = tbl.querySelectorAll('thead tr:last-child th');
     const rowCells = tbl.querySelectorAll('tbody tr');
-    /* Temporarily remove explicit widths so cells can grow to their
-       natural content width.  We snapshot the resulting widths, then
-       write them back onto the <col> elements. */
-    cols.forEach(c => { c.dataset._prevWidth = c.style.width || ''; c.style.width = ''; });
+    const IDENT_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
+    const IDENT_COUNT  = IDENT_WIDTHS.length;
+    /* Blank all col widths first so cells grow to natural content. */
+    cols.forEach(c => { c.style.width = ''; });
     tbl.style.width = '';
-    /* Measure after one frame so the layout settles. */
     requestAnimationFrame(() => {
-        const widths = [];
+        /* Measure natural width for EVERY column (header + body). */
+        const natural = [];
         headerCells.forEach((th, idx) => {
-            const w = th.getBoundingClientRect().width;
-            widths[idx] = w;
+            natural[idx] = th.getBoundingClientRect().width;
         });
         rowCells.forEach(tr => {
-            const tds = tr.querySelectorAll('td');
-            tds.forEach((td, i) => {
-                /* Skip cells with colspan — they'd inflate the first
-                   column's target width way past what's useful. */
+            tr.querySelectorAll('td').forEach((td, i) => {
                 if (td.colSpan && td.colSpan > 1) return;
                 const w = td.getBoundingClientRect().width;
-                if (w > (widths[i] || 0)) widths[i] = w;
+                if (w > (natural[i] || 0)) natural[i] = w;
             });
         });
+        /* Add padding for breathing room + the drag handle. */
+        const need = natural.map(w => Math.ceil((w || 60) + 12));
+        /* Available width = the sku-card body's inner width, minus a
+           small guard for scrollbar / border. */
+        const card = tbl.closest('.card') || tbl.parentElement;
+        const avail = Math.max(600,
+                     (card ? card.clientWidth : window.innerWidth) - 32);
+        const identSum = IDENT_WIDTHS.reduce((a, b) => a + b, 0);
+        const dataNeed = need.slice(IDENT_COUNT).reduce((a, b) => a + b, 0);
+        const dataAvail = Math.max(160, avail - identSum);
+        /* Uniform scale factor for the data block so proportions
+           between columns are preserved.  Cap at 1.0 — we shrink to
+           fit but don't expand past natural width. */
+        let scale = dataAvail / (dataNeed || 1);
+        if (scale > 1) scale = 1;
         let total = 0;
         cols.forEach((c, i) => {
-            const w = Math.min(320, Math.max(28, Math.ceil((widths[i] || 60) + 14)));
+            let w;
+            if (i < IDENT_COUNT) {
+                w = IDENT_WIDTHS[i];
+            } else {
+                /* Scaled width, but never below 32 px so numeric
+                   cells stay legible.  If scaling would drop a
+                   column below its natural width the shortfall shows
+                   as clipped digits — the user can widen it by
+                   dragging or by expanding the card. */
+                w = Math.max(32, Math.floor(need[i] * scale));
+            }
             c.style.width = w + 'px';
             total += w;
         });
