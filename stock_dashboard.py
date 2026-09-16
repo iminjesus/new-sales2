@@ -707,6 +707,11 @@ def load_stock_data():
     merge_to_mcodes = {}
     mc_to_mcode = {}
     mm_order = []
+    # Provenance map — for each M CODE, the sheet + 1-based row we
+    # first saw it in.  Fed into the row bundle as m_code_source so
+    # the UI can show "which cell did this M CODE come from" when
+    # the user asks why a specific material is showing up.
+    m_source = {}
     if "MM" in wb.sheetnames:
         ws = wb["MM"]
         code_col = merge_col = None
@@ -724,7 +729,8 @@ def load_stock_data():
                 break
         if code_col is None:
             code_col, merge_col, header_row_mm = 1, 2, 1
-        for r in ws.iter_rows(min_row=header_row_mm + 1, values_only=True):
+        for row_idx, r in enumerate(ws.iter_rows(min_row=header_row_mm + 1, values_only=True),
+                                    start=header_row_mm + 1):
             if not r:
                 continue
             code = r[code_col  - 1] if len(r) >= code_col  else None
@@ -741,6 +747,9 @@ def load_stock_data():
             merge_to_mcodes.setdefault(merge_i, []).append(code_i)
             mm_order.append((code_i, merge_i))
             mc_to_mcode.setdefault(merge_i, code_i)
+            if code_i not in m_source:
+                from openpyxl.utils import get_column_letter as _gcl
+                m_source[code_i] = f"MM!{_gcl(code_col)}{row_idx}"
 
     # ── Sheet2 SKU master ─────────────────────────────────────────
     # Locate the header row by looking for the "M CODE" label (very
@@ -818,7 +827,9 @@ def load_stock_data():
                         return row[ci]
             return ""
         n_master_rows = 0
-        for r in ws.iter_rows(min_row=header_row_s2 + 1, values_only=True):
+        from openpyxl.utils import get_column_letter as _gcl2
+        for row_idx, r in enumerate(ws.iter_rows(min_row=header_row_s2 + 1, values_only=True),
+                                    start=header_row_s2 + 1):
             if not r:
                 continue
             mval = r[mcode_col] if mcode_col < len(r) else None
@@ -830,6 +841,9 @@ def load_stock_data():
                 continue
             m_master[m] = {name: _pick(r, keys) for name, keys in FIELD_ALIASES.items()}
             n_master_rows += 1
+            # 0-based mcode_col → 1-based column letter for the diagnostic
+            if m not in m_source:
+                m_source[m] = f"Sheet2!{_gcl2(mcode_col + 1)}{row_idx}"
         _stock_load_debug["sheet2_rows"] = n_master_rows
         _stock_load_debug["sheet2_header_row"] = header_row_s2
         _stock_load_debug["sheet2_columns_found"] = sorted(
@@ -1070,8 +1084,11 @@ def load_stock_data():
     # aggregation (for Sub Total rows + KPIs) is derived from these.
     stock_rows = []
     stock_by_merge = {}     # kept for merge-level lookups (Sub Total etc.)
+    _stock_sheet_name = sheet_used
+    from openpyxl.utils import get_column_letter as _gcl3
 
-    for r in ws.iter_rows(min_row=data_start_row, values_only=True):
+    for row_idx, r in enumerate(ws.iter_rows(min_row=data_start_row, values_only=True),
+                                start=data_start_row):
         if not r:
             continue
         mc = r[c_merge - 1] if len(r) >= c_merge else None
@@ -1093,6 +1110,11 @@ def load_stock_data():
                 m_code_row = None
             if m_code_row is None:
                 continue
+            # Simulation's per-M-CODE row is the strongest provenance
+            # — overwrite any earlier MM / Sheet2 pointer for this
+            # M CODE so the diagnostic tells the user this is where
+            # the STOCK/DEMAND numbers came from.
+            m_source[m_code_row] = f"{_stock_sheet_name}!{_gcl3(c_mcode)}{row_idx}"
         else:
             m_code_row = mc
 
@@ -1659,6 +1681,11 @@ def load_stock_data():
         rows_out.append({
             "merge_code":     mc,
             "m_code":         m_code,
+            # Which cell in the workbook first surfaced this M CODE
+            # (Simulation per-M-CODE row → MM mapping → Sheet2 master),
+            # so the UI can tell the user why a specific material is
+            # showing up.
+            "m_code_source":  m_source.get(m_code, "?"),
             # `merge_shared` = true when the row inherits the merge
             # total (per-merge workbook layout) instead of carrying
             # its own per-M-CODE numbers.  The frontend uses this
@@ -1910,6 +1937,7 @@ def _aggregate(rows):
         entry = {
             "merge_code":     r["merge_code"],
             "m_code":         r["m_code"],
+            "m_code_source":  r.get("m_code_source", ""),
             "merge_shared":   r.get("merge_shared", False),
             "description":    r["description"] or f"MC {r['merge_code']}",
             "group":          r["group"],
@@ -4081,7 +4109,10 @@ function renderTable() {
                       so the user can see WHICH rows are missing.
                    3. Row has info — normal render. */
                 const thisRowHasInfo = rowHasInfo(r);
-                const mcodeCell = '<td>' + (r.m_code || '—')
+                const srcTip = r.m_code_source
+                    ? ' title="This M CODE was first seen at ' + r.m_code_source + '"'
+                    : '';
+                const mcodeCell = '<td' + srcTip + '>' + (r.m_code || '—')
                                 + (thisRowHasInfo ? '' : noDataBadge) + '</td>';
                 const productCells = hasInfo
                     ? ( '<td>' + (r.brand        || '—') + '</td>'
@@ -4157,7 +4188,10 @@ function renderTable() {
                path: if this specific M CODE has no product info, tag
                it inline so the empty row is instantly identifiable. */
             const thisRowHasInfo = rowHasInfo(r);
-            const mcodeCell = '<td>' + (r.m_code || '—')
+            const srcTip2 = r.m_code_source
+                ? ' title="This M CODE was first seen at ' + r.m_code_source + '"'
+                : '';
+            const mcodeCell = '<td' + srcTip2 + '>' + (r.m_code || '—')
                             + (thisRowHasInfo ? '' : noDataBadge) + '</td>';
             const rowCheckHtml = '<input type="checkbox" class="row-check" '
                 + 'data-mcode="' + r.m_code + '" '
