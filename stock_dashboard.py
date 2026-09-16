@@ -533,6 +533,45 @@ def _is_suv(line, pattern):
     return False
 
 
+def _dedupe_line_prefix(pn, line):
+    """Strip the marketing-line word from the start (or end) of a
+    Product Name so the two columns don't visually repeat.
+
+    "Dynapro AT2" with line "Dynapro"  →  "AT2"
+    "Vantra LT"   with line "Vantra"   →  "LT"
+    "Ventus"      with line "Ventus"   →  "Ventus"   (single word — kept)
+    "SMaRT FLeX TH31" with line "Truck / TBR" → "SMaRT FLeX TH31"
+
+    The line word is matched case-insensitively.  For multi-word lines
+    ("Laufenn X Fit"), we try the LAST word ("Fit") too because the
+    Product Name usually starts with the specific variant ("X FIT Van")
+    rather than the umbrella brand ("Laufenn").
+    """
+    if not pn or not line:
+        return pn or ""
+    text = str(pn).strip()
+    if not text:
+        return ""
+    tokens = text.split()
+    if len(tokens) <= 1:
+        return text
+    line_tokens = [t for t in str(line).upper().split() if t]
+    def _strip_token(toks, target):
+        if not target:
+            return toks
+        if toks and toks[0].upper() == target:
+            return toks[1:]
+        if toks and toks[-1].upper() == target:
+            return toks[:-1]
+        return toks
+    for lt in line_tokens:
+        if len(tokens) <= 1:
+            break
+        tokens = _strip_token(tokens, lt)
+    cleaned = " ".join(tokens).strip()
+    return cleaned or text
+
+
 def _normalize_inch(v):
     """Normalise the rim-inch column.
 
@@ -1441,7 +1480,13 @@ def load_stock_data():
         line = ""
         if row_pn:
             up = row_pn.upper()
-            if   "X FIT"    in up: line = "Laufenn X Fit"
+            # Vantra (Hankook's commercial-van / LT line) is a distinct
+            # marketing line from Dynapro even though some products
+            # historically got tagged with Dynapro in Sheet2.  Match it
+            # BEFORE the generic "DYNAPRO" check so "Vantra LT" /
+            # "Vantra Transit" rows classify correctly.
+            if   "VANTRA"   in up: line = "Vantra"
+            elif "X FIT"    in up: line = "Laufenn X Fit"
             elif "G FIT"    in up: line = "Laufenn G Fit"
             elif "S FIT"    in up: line = "Laufenn S Fit"
             elif "I FIT"    in up: line = "Laufenn I Fit"
@@ -1604,8 +1649,14 @@ def load_stock_data():
             # Prefer the stock sheet's Product Name column; fall back
             # to the marketing line so the column is never blank when
             # the production workbook doesn't carry a Product Name
-            # column at all.
-            "product_name":   row_pn or line,
+            # column at all.  When the Product Name literally starts
+            # with (or ends with) the marketing-line word — "Dynapro
+            # AT2" while the line is already "Dynapro", or "Vantra LT"
+            # while the line is already "Vantra" — strip that
+            # duplicated word so the two columns don't repeat.  Kept
+            # as-is when Product Name is a single word (no room to
+            # strip) so we don't blank the whole cell.
+            "product_name":   _dedupe_line_prefix(row_pn or line, line),
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
             "size":           size,
@@ -2451,7 +2502,7 @@ body.expand-table .expand-target { position:fixed !important; top:0; left:0;
 body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
 
 /* ── Modal ── */
-.modal-bg { display:none; position:fixed; inset:0; z-index:200;
+.modal-bg { display:none; position:fixed; inset:0; z-index:9999;
             background:rgba(15,25,35,0.55); }
 .modal-bg.open { display:flex; align-items:center; justify-content:center; }
 .modal { background:var(--card); width:min(1080px,96vw); max-height:92vh;
@@ -2611,12 +2662,34 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
       <h3>SKU drill-down
         <span class="hint">click any row for the monthly-by-state view</span>
         <span class="icons">
+          <button id="btn-fit-cols" class="icon-btn" onclick="autofitColumns()" title="Auto-fit column widths to their contents (Excel-style autofit)">↔ Fit</button>
+          <button id="btn-only-checked" class="icon-btn" onclick="toggleOnlyChecked()" title="Show only the rows you have checked. Click again to show everything.">☑ Checked only</button>
           <button id="btn-dl-xlsx" class="icon-btn" onclick="downloadXLSX()" title="Download the current view as XLSX (recommended — opens directly in Excel with formatted headers). Select rows first to download just those.">⬇ XLSX</button>
           <button id="btn-dl-csv"  class="icon-btn" onclick="downloadCSV()" title="Download the current view as CSV (one value per cell). Select rows first to download just those.">⬇ CSV</button>
           <button class="icon-btn" onclick="toggleExpandTable()" title="Expand table full-screen" id="btn-expand-tbl">⛶</button>
           <button class="icon-btn" onclick="emailScreen('sku-card','SKU drill-down')" title="Email this table">✉</button>
         </span>
       </h3>
+
+      <!-- Mirror of the top filter bar, embedded next to the drill-down so
+           the user can adjust filters without scrolling to the page top.
+           Same multi-select controls + Reset + Search input — behaviour is
+           shared with #topfilters (both call rowPasses / refresh). -->
+      <div class="topfilters" id="drilldown-filters" style="margin:0 0 10px 0">
+        <span class="lbl">Filter</span>
+        <div class="ms" data-key="status"><button class="ms-btn">Status</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="state"><button class="ms-btn">State</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="brand"><button class="ms-btn">Brand</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="product"><button class="ms-btn">Product</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="sku_status"><button class="ms-btn">F/O · OPE</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="line"><button class="ms-btn">Marketing Line</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="inch"><button class="ms-btn">Rim (inch)</button><div class="ms-panel"></div></div>
+        <div class="ms" data-key="pattern"><button class="ms-btn">Pattern</button><div class="ms-panel"></div></div>
+        <button class="reset" onclick="resetFilters()">Reset</button>
+        <div class="search">
+          <input id="fltr-search-2" type="text" placeholder="Search SKU / M-code / size (2055517 or 205/55R17)…">
+        </div>
+      </div>
 
       <!-- Active-filter summary — mirrors the top filter bar as plain text
            so a captured screenshot / printed page tells you what the
@@ -2846,55 +2919,68 @@ const STATUS_PRETTY = { shortage:'Shortage', balanced:'Balance', surplus:'Surplu
                         serious_surplus:'Serious Surplus', no_move:'No move' };
 
 function renderMsPanel(key) {
+    /* Renders the checkbox panel into EVERY .ms[data-key=key] holder
+       — both the top filter bar and the drill-down mirror bar — so
+       the two views stay in sync as the user checks/unchecks. */
     const opts = OPT[key];
     const chosen = filterState[key];
-    const panel = document.querySelector('.ms[data-key="'+key+'"] .ms-panel');
-    let h = '';
-    opts.forEach(v => {
-        const shown = key === 'status' ? STATUS_PRETTY[v] : v;
-        const checked = chosen.has(v) ? ' checked' : '';
-        h += '<label><input type="checkbox" value="' + v + '"' + checked + '> ' + shown + '</label>';
-    });
-    h += '<div class="ms-actions"><button data-act="all">All</button><button data-act="none">None</button></div>';
-    panel.innerHTML = h;
-    panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
-        cb.addEventListener('change', () => {
-            if (cb.checked) filterState[key].add(cb.value);
-            else            filterState[key].delete(cb.value);
-            saveFilterState();
-            updateMsBtn(key); refresh();
+    const panels = document.querySelectorAll('.ms[data-key="'+key+'"] .ms-panel');
+    panels.forEach(panel => {
+        let h = '';
+        opts.forEach(v => {
+            const shown = key === 'status' ? STATUS_PRETTY[v] : v;
+            const checked = chosen.has(v) ? ' checked' : '';
+            h += '<label><input type="checkbox" value="' + v + '"' + checked + '> ' + shown + '</label>';
         });
-    });
-    panel.querySelector('[data-act="all"]').addEventListener('click', (e) => {
-        e.stopPropagation();
-        opts.forEach(v => filterState[key].add(v));
-        saveFilterState();
-        renderMsPanel(key); updateMsBtn(key); refresh();
-    });
-    panel.querySelector('[data-act="none"]').addEventListener('click', (e) => {
-        e.stopPropagation();
-        filterState[key].clear();
-        saveFilterState();
-        renderMsPanel(key); updateMsBtn(key); refresh();
+        h += '<div class="ms-actions"><button data-act="all">All</button><button data-act="none">None</button></div>';
+        panel.innerHTML = h;
+        panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                if (cb.checked) filterState[key].add(cb.value);
+                else            filterState[key].delete(cb.value);
+                saveFilterState();
+                renderMsPanel(key); updateMsBtn(key); refresh();
+            });
+        });
+        panel.querySelector('[data-act="all"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            opts.forEach(v => filterState[key].add(v));
+            saveFilterState();
+            renderMsPanel(key); updateMsBtn(key); refresh();
+        });
+        panel.querySelector('[data-act="none"]').addEventListener('click', (e) => {
+            e.stopPropagation();
+            filterState[key].clear();
+            saveFilterState();
+            renderMsPanel(key); updateMsBtn(key); refresh();
+        });
     });
 }
 function updateMsBtn(key) {
-    const btn = document.querySelector('.ms[data-key="'+key+'"] .ms-btn');
+    /* Updates the trigger button label + active state on EVERY holder
+       so both filter bars show the same chip count. */
+    const btns = document.querySelectorAll('.ms[data-key="'+key+'"] .ms-btn');
     const chosen = filterState[key];
-    if (chosen.size === 0) { btn.classList.remove('active'); btn.innerHTML = KEY_LBL[key]; }
-    else { btn.classList.add('active'); btn.innerHTML = KEY_LBL[key] + '<span class="n">' + chosen.size + '</span>'; }
+    btns.forEach(btn => {
+        if (chosen.size === 0) { btn.classList.remove('active'); btn.innerHTML = KEY_LBL[key]; }
+        else { btn.classList.add('active'); btn.innerHTML = KEY_LBL[key] + '<span class="n">' + chosen.size + '</span>'; }
+    });
 }
 /* Restore any saved filter state BEFORE we paint the dropdowns
    for the first time — otherwise the checkboxes render unchecked
-   and users lose their view every refresh. */
+   and users lose their view every refresh.  Every .ms[data-key]
+   holder is wired independently so both the top filter bar and
+   the drill-down mirror bar respond to clicks. */
 loadFilterState();
 Object.keys(filterState).forEach(key => {
     renderMsPanel(key); updateMsBtn(key);
-    const holder = document.querySelector('.ms[data-key="'+key+'"]');
-    holder.querySelector('.ms-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        document.querySelectorAll('.ms.open').forEach(o => { if (o !== holder) o.classList.remove('open'); });
-        holder.classList.toggle('open');
+    const holders = document.querySelectorAll('.ms[data-key="'+key+'"]');
+    holders.forEach(holder => {
+        holder.querySelector('.ms-btn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            document.querySelectorAll('.ms.open').forEach(o => { if (o !== holder) o.classList.remove('open'); });
+            holder.classList.toggle('open');
+        });
     });
 });
 document.addEventListener('click', (e) => {
@@ -2906,7 +2992,7 @@ function resetFilters() {
     Object.keys(filterState).forEach(key => {
         filterState[key].clear(); renderMsPanel(key); updateMsBtn(key);
     });
-    document.getElementById('fltr-search').value = '';
+    document.querySelectorAll('#fltr-search, #fltr-search-2').forEach(el => { el.value = ''; });
     saveFilterState();
     try { localStorage.removeItem(SEARCH_LS_KEY); } catch (_) {}
     refresh();
@@ -2928,32 +3014,64 @@ function rowPasses(r) {
         });
         if (!hit) return false;
     }
-    const fq = (document.getElementById('fltr-search').value || '').trim().toLowerCase();
+    /* Read from EITHER search box (top filter bar or drill-down
+       mirror) — whichever the user typed into most recently.  The two
+       inputs are kept in sync via the input listener below so this
+       usually picks up the same value from both. */
+    const s1 = document.getElementById('fltr-search');
+    const s2 = document.getElementById('fltr-search-2');
+    const fq = ((s1 && s1.value) || (s2 && s2.value) || '').trim().toLowerCase();
     if (fq) {
         const hay = ((r.description||'') + ' ' + (r.size||'') + ' '
                    + (r.m_code||'') + ' ' + (r.merge_code||'') + ' '
                    + (r.pattern||'') + ' ' + (r.line||'') + ' '
                    + (r.product_name||'') + ' ' + (r.brand||'')).toLowerCase();
-        if (!hay.includes(fq)) return false;
+        if (hay.includes(fq)) return true;
+        /* Digit-only size search: "2055517" should match "205/55R17".
+           Strip every non-digit from both sides and compare — matches
+           regardless of the slash / R / Z separators the user typed. */
+        const digitsOnly = fq.replace(/\D+/g, '');
+        if (digitsOnly.length >= 5) {
+            const sizeDigits = (r.size || '').replace(/\D+/g, '');
+            if (sizeDigits.includes(digitsOnly)) return true;
+        }
+        return false;
     }
+    /* "Show checked-only" gate — when active, drop rows whose merge
+       code isn't in `selected`.  Toggled by the ☑ button above. */
+    if (window._onlyCheckedMode && !selected.has(r.merge_code)) return false;
     return true;
 }
 /* Persist the search box too, so a page refresh keeps the whole
    filter picture — chips AND free text.  Debounced write matches the
-   render debounce so we don't hammer localStorage on every keystroke. */
+   render debounce so we don't hammer localStorage on every keystroke.
+   Both search inputs (top bar + drill-down mirror) sync to each
+   other and share the same LS key. */
 const SEARCH_LS_KEY = 'hkau_stock_search_v1';
 try {
-    const savedSearch = localStorage.getItem(SEARCH_LS_KEY);
-    if (savedSearch) document.getElementById('fltr-search').value = savedSearch;
+    const savedSearch = localStorage.getItem(SEARCH_LS_KEY) || '';
+    document.querySelectorAll('#fltr-search, #fltr-search-2').forEach(el => {
+        el.value = savedSearch;
+    });
 } catch (_) {}
-document.getElementById('fltr-search').addEventListener('input',
-    (function() { let t; return function(e) {
-        clearTimeout(t);
-        t = setTimeout(() => {
-            try { localStorage.setItem(SEARCH_LS_KEY, e.target.value || ''); } catch (_) {}
-            refresh();
-        }, 150);
-    }; })());
+(function wireSearchInputs() {
+    let t;
+    document.querySelectorAll('#fltr-search, #fltr-search-2').forEach(el => {
+        el.addEventListener('input', function(e) {
+            const v = e.target.value || '';
+            /* Mirror to the OTHER search box immediately so both stay
+               visually in sync while the user types. */
+            document.querySelectorAll('#fltr-search, #fltr-search-2').forEach(other => {
+                if (other !== e.target) other.value = v;
+            });
+            clearTimeout(t);
+            t = setTimeout(() => {
+                try { localStorage.setItem(SEARCH_LS_KEY, v); } catch (_) {}
+                refresh();
+            }, 150);
+        });
+    });
+})();
 
 function currentSetOfRows() { return DATA.all_rows.filter(rowPasses); }
 /* Aggregate stats (KPI tiles, state cards, charts, Total row) work
@@ -4068,6 +4186,62 @@ function toggleExpandTable() {
     const btn = document.getElementById('btn-expand-tbl');
     btn.innerHTML = on ? '✕' : '⛶';
     btn.title = on ? 'Return to split view' : 'Expand table full-screen';
+}
+/* Excel-style column autofit.  For every <col> in the sku-tbl colgroup,
+   walk the header cell + every body cell in that column and pick the
+   widest rendered content, then set that column's width to it plus a
+   small padding.  Uses getBoundingClientRect for actual pixel width so
+   truncated content ("102/…") widens to the full string. */
+function autofitColumns() {
+    const tbl = document.getElementById('sku-tbl');
+    if (!tbl) return;
+    const cols = tbl.querySelectorAll('#sku-colgroup col');
+    const headerCells = tbl.querySelectorAll('thead tr:last-child th');
+    const rowCells = tbl.querySelectorAll('tbody tr');
+    /* Temporarily remove explicit widths so cells can grow to their
+       natural content width.  We snapshot the resulting widths, then
+       write them back onto the <col> elements. */
+    cols.forEach(c => { c.dataset._prevWidth = c.style.width || ''; c.style.width = ''; });
+    tbl.style.width = '';
+    /* Measure after one frame so the layout settles. */
+    requestAnimationFrame(() => {
+        const widths = [];
+        headerCells.forEach((th, idx) => {
+            const w = th.getBoundingClientRect().width;
+            widths[idx] = w;
+        });
+        rowCells.forEach(tr => {
+            const tds = tr.querySelectorAll('td');
+            tds.forEach((td, i) => {
+                /* Skip cells with colspan — they'd inflate the first
+                   column's target width way past what's useful. */
+                if (td.colSpan && td.colSpan > 1) return;
+                const w = td.getBoundingClientRect().width;
+                if (w > (widths[i] || 0)) widths[i] = w;
+            });
+        });
+        let total = 0;
+        cols.forEach((c, i) => {
+            const w = Math.min(320, Math.max(28, Math.ceil((widths[i] || 60) + 14)));
+            c.style.width = w + 'px';
+            total += w;
+        });
+        tbl.style.width = total + 'px';
+    });
+}
+/* Toggle "show only checked" mode.  Rows whose merge code isn't in
+   `selected` get filtered out; a second click restores the full view. */
+function toggleOnlyChecked() {
+    window._onlyCheckedMode = !window._onlyCheckedMode;
+    const btn = document.getElementById('btn-only-checked');
+    if (btn) {
+        btn.classList.toggle('active', window._onlyCheckedMode);
+        btn.style.background = window._onlyCheckedMode ? '#DBEAFE' : '';
+        btn.title = window._onlyCheckedMode
+            ? 'Currently showing only the rows you checked. Click to show everything again.'
+            : 'Show only the rows you have checked. Click again to show everything.';
+    }
+    refresh();
 }
 document.addEventListener('keydown', (e) => {
     /* Escape hierarchy: modal wins first (its own handler further
