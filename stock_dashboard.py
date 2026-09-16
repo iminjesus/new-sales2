@@ -2304,7 +2304,10 @@ table.dt thead th:nth-child(-n+10) { position:sticky; z-index:7; }
 table.dt tbody tr:hover td:nth-child(-n+10) { background:var(--hover); }
 table.dt tbody tr.selected td:nth-child(-n+10) { background:#DBEAFE; }
 table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
-table.dt tbody tr.sub-total td:nth-child(-n+10) { background:#FFF8E1; }
+/* Sub Total's frozen-column background comes from the sub-status
+   rules below — deliberately left transparent here so the status
+   tint reaches the first 10 columns too. */
+table.dt tbody tr.sub-total td:nth-child(-n+10) { background:transparent; }
 table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:6; }
 table.dt tbody tr.merge-cohover td:nth-child(-n+10) { background:#EEF2FF; }
 /* Rows that use colspan (state-band + Sub Total + Total-in-View)
@@ -2396,12 +2399,29 @@ table.dt tbody tr.merge-cohover.sub-total td { background:#E0E7FF !important; }
    `merge-break` and draws a heavy top border so the merge groups
    read cleanly. */
 table.dt tbody tr.merge-break td { border-top:2px solid #37474F; }
-/* Sub Total row per merge — bold, quiet gold ground, tighter
-   border above so it visually clings to its M CODE siblings. */
-table.dt tbody tr.sub-total td { background:#FFF8E1 !important;
+/* Sub Total row per merge — bold text, dashed top border, solid
+   bottom border.  Background colour is set by the sub-status-*
+   class below so each merge tints to its own status colour instead
+   of a uniform yellow. */
+table.dt tbody tr.sub-total td { background:transparent;
     font-weight:700; border-top:1px dashed #94A3B8;
     border-bottom:2px solid #94A3B8; }
-table.dt tbody tr.sub-total:hover td { background:#FFECB3 !important; }
+/* Sub Total per-status backgrounds — the strong status colour at
+   ~22% alpha so the row reads clearly muted (elegant / clean)
+   rather than saturated.  On hover the alpha bumps to ~32% so
+   you can tell you're pointing at it. */
+table.dt tbody tr.sub-total.sub-status-shortage        td { background:rgba(202,138, 4, 0.20) !important; }
+table.dt tbody tr.sub-total.sub-status-balanced        td { background:rgba( 46,125,50, 0.20) !important; }
+table.dt tbody tr.sub-total.sub-status-surplus         td { background:rgba(239,108, 0, 0.20) !important; }
+table.dt tbody tr.sub-total.sub-status-serious_surplus td { background:rgba(183, 28,28, 0.22) !important; }
+table.dt tbody tr.sub-total.sub-status-no_move         td { background:rgba(106, 27,154,0.20) !important; }
+table.dt tbody tr.sub-total.sub-status-empty           td { background:rgba(120,144,156,0.16) !important; }
+table.dt tbody tr.sub-total.sub-status-shortage:hover        td { background:rgba(202,138, 4, 0.32) !important; }
+table.dt tbody tr.sub-total.sub-status-balanced:hover        td { background:rgba( 46,125,50, 0.32) !important; }
+table.dt tbody tr.sub-total.sub-status-surplus:hover         td { background:rgba(239,108, 0, 0.32) !important; }
+table.dt tbody tr.sub-total.sub-status-serious_surplus:hover td { background:rgba(183, 28,28, 0.34) !important; }
+table.dt tbody tr.sub-total.sub-status-no_move:hover         td { background:rgba(106, 27,154,0.32) !important; }
+table.dt tbody tr.sub-total.sub-status-empty:hover           td { background:rgba(120,144,156,0.26) !important; }
 /* M CODE (non-total) rows keep a subtle band on the leftmost cell
    so the reader's eye traces the merge group top-to-bottom. */
 table.dt tbody tr.mc-row td:first-child { font-family:'IBM Plex Mono',monospace;
@@ -4065,10 +4085,17 @@ function renderTable() {
                figures so the total reflects the actual merge (not
                just the first M CODE's individual numbers). */
             const subTotal = mergeSumRow(groupRows);
+            /* Sub Total row carries a `sub-status-<status>` class so
+               CSS can tint the whole row according to the merge's
+               aggregate status (Balance = green, Serious Surplus =
+               red, etc).  The "SUB TOTAL · Merge …" label renders in
+               a single neutral dark colour so the row's status is
+               read from the ground tint, not the label colour. */
+            const stTag = 'sub-status-' + (subTotal.status || 'empty');
             rowsHtml.push(
-                '<tr class="sub-total" data-mc="' + subTotal.merge_code + '">'
+                '<tr class="sub-total ' + stTag + '" data-mc="' + subTotal.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band
-                +      ';font-weight:700;color:' + band + '" colspan="10">'
+                +      ';font-weight:700;color:#212121" colspan="10">'
                 + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
                 + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
                 + '</tr>');
