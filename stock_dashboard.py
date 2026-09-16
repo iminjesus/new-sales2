@@ -1375,6 +1375,14 @@ def load_stock_data():
     # per-M-CODE stock rows first (workbook order) then MM entries
     # not already covered.  A merge with NO M CODE anywhere gets one
     # synthetic row (merge as its own M CODE) at the end.
+    # ── Simulation-only mode ──
+    # Per user request the dashboard now shows ONLY M CODEs that
+    # appear as a per-M-CODE row in the Simulation sheet.  MM sheet
+    # entries and Sheet2 master entries no longer generate their own
+    # rows — they only supply Merge↔M CODE mapping metadata and
+    # product info for M CODEs that Simulation already carries.
+    # When Simulation is a per-merge layout (no CODE column) we still
+    # emit one row per merge so the dashboard doesn't come out empty.
     pair_order = []
     seen_plan = set()
     if per_mcode_rows:
@@ -1382,20 +1390,15 @@ def load_stock_data():
             if (mc_sr, m_sr) not in seen_plan:
                 pair_order.append((mc_sr, m_sr))
                 seen_plan.add((mc_sr, m_sr))
-    for m_code_mm, merge_code_mm in mm_order:
-        if merge_code_mm not in stock_by_merge:
-            continue        # merge has no stock row anywhere — skip
-        key = (merge_code_mm, m_code_mm)
-        if key not in seen_plan:
-            pair_order.append(key)
-            seen_plan.add(key)
-    # Merges with stock rows but no MM entry → one synthetic row.
-    merges_covered = {mc for (mc, _) in seen_plan}
-    for merge_code in stock_by_merge:
-        if merge_code in merges_covered:
-            continue
-        pair_order.append((merge_code, merge_code))
-        seen_plan.add((merge_code, merge_code))
+    else:
+        # Per-merge Simulation layout — every merge that has a stock
+        # row becomes exactly one dashboard row.  Sibling M CODEs from
+        # MM are IGNORED per the "only what's in Simulation" rule.
+        for merge_code in stock_by_merge:
+            key = (merge_code, merge_code)
+            if key not in seen_plan:
+                pair_order.append(key)
+                seen_plan.add(key)
 
     iter_plan = []
     # Empty stock bundle for merge-shared siblings that have no per-M-
