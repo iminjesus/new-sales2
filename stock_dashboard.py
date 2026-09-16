@@ -1632,6 +1632,19 @@ def load_stock_data():
         primary = next((f for f in _PICK_PRIORITY if f in sku_flags), None)
         sku_status = primary if primary else "Active"
 
+        # ── Product-name special case: Motorsport ──
+        # A material whose Product Name is nothing more than the
+        # marketing-line word ("Ventus" with line "Ventus") AND
+        # whose F/O · OPE is "M/S" is really a Motorsport tyre
+        # (competitive-slick line, no user-facing variant).  Show
+        # "Motorsport" in the Product Name column so the user sees
+        # what the row actually is instead of a duplicated brand.
+        raw_pn_for_display = _dedupe_line_prefix(row_pn or line, line)
+        if (sku_status == "M/S"
+                and raw_pn_for_display.strip().upper() == (line or "").strip().upper()
+                and (line or "").strip()):
+            raw_pn_for_display = "Motorsport"
+
         rows_out.append({
             "merge_code":     mc,
             "m_code":         m_code,
@@ -1656,7 +1669,7 @@ def load_stock_data():
             # duplicated word so the two columns don't repeat.  Kept
             # as-is when Product Name is a single word (no room to
             # strip) so we don't blank the whole cell.
-            "product_name":   _dedupe_line_prefix(row_pn or line, line),
+            "product_name":   raw_pn_for_display,
             "pattern":        pattern,        # Pattern code (K425, RA33…)
             "description":    raw_desc,
             "size":           size,
@@ -2440,6 +2453,17 @@ table.dt thead th.grp-start { border-left:1px solid #B0BEC5; }
    period-avg columns so 4-6M / 7-9M / 10-12M read as one block. */
 table.dt .no-div { border-left:none !important; border-right:none !important; }
 table.dt thead th.no-div { border-left:none !important; border-right:none !important; }
+/* Belt-and-braces: NO cell in the state / MOI / period-avg data area
+   (col 11 onwards) ever draws its own border-right.  Every vertical
+   divider in that block comes from grp-start's border-left on the
+   FIRST cell of the next group — never from the trailing cell of
+   the previous group.  This kills any leftover browser default or
+   inherited right border that would otherwise show as an extra
+   line inside a state group (e.g. between VIC STK and VIC PRT). */
+table.dt tbody td:nth-child(n+11),
+table.dt thead tr.col-labels th:nth-child(n+11) {
+    border-right: none !important;
+}
 table.dt .r.short { color:var(--short); font-weight:700; }
 table.dt .r.sur   { color:var(--sur);   font-weight:700; }
 table.dt .r.ser   { color:var(--ser);   font-weight:700; }
@@ -4187,25 +4211,36 @@ function toggleExpandTable() {
     btn.innerHTML = on ? '✕' : '⛶';
     btn.title = on ? 'Return to split view' : 'Expand table full-screen';
 }
-/* Column autofit — TWO-STAGE strategy per user request:
-     Stage 1: try to fit every column into the AVAILABLE viewport
-              width (container.clientWidth).  Measure each column's
-              natural content width, then scale all data-column
-              widths down proportionally until the table total <=
-              container width.  Frozen identity columns (idx < 10)
-              stay at their canonical widths so the left band still
-              lines up with the freeze CSS.
-     Stage 2: only when a column would end up narrower than its
-              natural content, keep it at its natural width so
-              text isn't hidden — the table then extends beyond
-              the container (horizontal scroll) and the user can
-              still drag individual columns wider by the resize
-              handle.
-   No column ever ends up narrower than 32 px. */
+/* Column autofit — TOGGLE.  First click: fit columns to container.
+   Second click: restore whatever widths the table had before the
+   first click (canonical layout, or the user's manual drag widths
+   if they'd resized before hitting Fit).  Snapshot lives on the
+   window so it survives re-renders. */
 function autofitColumns() {
     const tbl = document.getElementById('sku-tbl');
     if (!tbl) return;
-    const cols = tbl.querySelectorAll('#sku-colgroup col');
+    const cols = Array.from(tbl.querySelectorAll('#sku-colgroup col'));
+    const btn = document.getElementById('btn-fit-cols');
+    /* Restore mode: previously autofitted → return to snapshot. */
+    if (window._autofitSnapshot) {
+        cols.forEach((c, i) => {
+            c.style.width = window._autofitSnapshot.cols[i] || '';
+        });
+        tbl.style.width = window._autofitSnapshot.tbl || '';
+        window._autofitSnapshot = null;
+        if (btn) {
+            btn.classList.remove('active');
+            btn.style.background = '';
+            btn.title = 'Auto-fit column widths to their contents (Excel-style autofit)';
+        }
+        return;
+    }
+    /* Snapshot BEFORE we start modifying so the restore path can
+       reset to exactly what the user was looking at. */
+    window._autofitSnapshot = {
+        cols: cols.map(c => c.style.width || ''),
+        tbl:  tbl.style.width || '',
+    };
     const headerCells = tbl.querySelectorAll('thead tr:last-child th');
     const rowCells = tbl.querySelectorAll('tbody tr');
     const IDENT_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
@@ -4258,6 +4293,11 @@ function autofitColumns() {
             total += w;
         });
         tbl.style.width = total + 'px';
+        if (btn) {
+            btn.classList.add('active');
+            btn.style.background = '#DBEAFE';
+            btn.title = 'Restore the previous column widths.';
+        }
     });
 }
 /* Toggle "show only checked" mode.  Rows whose merge code isn't in
