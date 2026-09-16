@@ -3709,13 +3709,14 @@ function renderTable() {
     const ttlMOI  = ttl3M   > 0 ? (ttlStock / ttl3M)  : null;
     const ttlPPL  = ttlMax  > 0 ? (ttlAll   / ttlMax) : null;
 
-    /* Cosmetic left-column band — cycles through 8 quiet hues so
-       adjacent merge groups are visually distinct without loud
-       colour bombing.  Same merge → same band on both M CODE rows
-       and its Sub Total. */
-    const BAND_COLOURS = ['#4A90E2','#F5A623','#7ED321','#BD10E0',
-                          '#50E3C2','#B8E986','#F8A5C2','#9013FE'];
-    const mergeBandColor = mc => BAND_COLOURS[Math.abs(mc) % BAND_COLOURS.length];
+    /* Left-column accent band — a single dark neutral for every
+       merge.  The previous per-merge cycling colours (green / blue /
+       purple / …) carried no analytical meaning; adjacent merges are
+       already separated by the merge-break border + the Sub Total
+       row's status tint, so the accent bar just needs to say
+       "identity block" — one dark stripe reads cleanest. */
+    const MERGE_BAND = '#37474F';
+    const mergeBandColor = () => MERGE_BAND;
     /* ── Merge-group aware sort ──
        Sorting must never break up a merge group — M CODE rows for the
        same merge always stay side-by-side.  We rank each merge by the
