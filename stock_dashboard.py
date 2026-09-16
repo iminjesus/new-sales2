@@ -2258,16 +2258,17 @@ table.dt thead.pipe-mode tr.col-labels th { top:26px; }
    freeze block reserves as little horizontal room as possible.
    Sum ≈ 630px versus the old 830px, freeing 200px for the
    elastic data columns to the right. */
-table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:82px;  width:82px;  }
-table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:68px;  width:68px;  }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:36px;  width:36px;  }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:92px;  width:92px;  }
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:32px;  width:32px;  }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:52px;  width:52px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:68px;  width:68px;  }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:36px;  width:36px;  }
 table.dt th:nth-child(5),  table.dt td:nth-child(5)  { min-width:92px;  width:92px;  }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { min-width:52px;  width:52px;  }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:68px;  width:68px;  }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:80px;  width:80px;  }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:40px;  width:40px;  }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:56px;  width:56px;  }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { min-width:92px;  width:92px;  }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { min-width:52px;  width:52px;  }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { min-width:68px;  width:68px;  }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { min-width:80px;  width:80px;  }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:40px;  width:40px;  }
+table.dt th:nth-child(11), table.dt td:nth-child(11) { min-width:56px;  width:56px;  }
 
 /* ── Data columns (nth-child 11+) — elastic uniform width ──
    User asked that numeric columns share the remaining viewport
@@ -2279,13 +2280,13 @@ table.dt th:nth-child(10), table.dt td:nth-child(10) { min-width:56px;  width:56
    Cells beyond that width just clip or wrap — which is fine for
    the small integers the numeric columns carry.  Identity columns
    still get their fixed widths above via the same `<colgroup>`. */
-table.dt.pipe-mode th:nth-child(n+11),
-table.dt.pipe-mode td:nth-child(n+11) {
+table.dt.pipe-mode th:nth-child(n+12),
+table.dt.pipe-mode td:nth-child(n+12) {
     min-width:52px; padding:5px 4px;
     overflow:hidden; text-overflow:ellipsis;
 }
-table.dt:not(.pipe-mode) th:nth-child(n+11),
-table.dt:not(.pipe-mode) td:nth-child(n+11) {
+table.dt:not(.pipe-mode) th:nth-child(n+12),
+table.dt:not(.pipe-mode) td:nth-child(n+12) {
     min-width:64px; padding:5px 6px;
     overflow:hidden; text-overflow:ellipsis;
 }
@@ -2299,17 +2300,17 @@ table.dt:not(.pipe-mode) td:nth-child(n+11) {
                                              pan)
      • Frozen thead cells     → z-index: 7  (over frozen tbody)
      • Frozen total-row cells → z-index: 6  (between the above two) */
-table.dt tbody td:nth-child(-n+10) { position:sticky; background:#fff; z-index:5; }
-table.dt thead th:nth-child(-n+10) { position:sticky; z-index:7; }
-table.dt tbody tr:hover td:nth-child(-n+10) { background:var(--hover); }
-table.dt tbody tr.selected td:nth-child(-n+10) { background:#DBEAFE; }
-table.dt tbody tr.selected:hover td:nth-child(-n+10) { background:#BFDBFE; }
+table.dt tbody td:nth-child(-n+11) { position:sticky; background:#fff; z-index:5; }
+table.dt thead th:nth-child(-n+11) { position:sticky; z-index:7; }
+table.dt tbody tr:hover td:nth-child(-n+11) { background:var(--hover); }
+table.dt tbody tr.selected td:nth-child(-n+11) { background:#DBEAFE; }
+table.dt tbody tr.selected:hover td:nth-child(-n+11) { background:#BFDBFE; }
 /* Sub Total's frozen-column background comes from the sub-status
    rules below — deliberately left transparent here so the status
-   tint reaches the first 10 columns too. */
-table.dt tbody tr.sub-total td:nth-child(-n+10) { background:transparent; }
-table.dt tbody tr.total-row td:nth-child(-n+10) { background:#EEF3F8; z-index:6; }
-table.dt tbody tr.merge-cohover td:nth-child(-n+10) { background:#EEF2FF; }
+   tint reaches the first 11 columns too. */
+table.dt tbody tr.sub-total td:nth-child(-n+11) { background:transparent; }
+table.dt tbody tr.total-row td:nth-child(-n+11) { background:#EEF3F8; z-index:6; }
+table.dt tbody tr.merge-cohover td:nth-child(-n+11) { background:#EEF2FF; }
 /* Rows that use colspan (state-band + Sub Total + Total-in-View)
    don't line their nth-child positions up with data columns.
    Their FIRST cell is one wide label spanning the 10 frozen
@@ -2344,33 +2345,34 @@ table.dt tbody tr.total-row td:nth-child(n+2) {
    a heavy wall.  grp-start's contribution at that same boundary is
    cancelled so the borders don't stack.  Other state-group dividers
    (QLD/VIC/WA/TOTAL) still use grp-start. */
-table.dt th:nth-child(10),
-table.dt td:nth-child(10),
-table.dt tbody tr.sub-total td:first-child,
-table.dt tbody tr.total-row td:first-child {
+table.dt th:nth-child(11),
+table.dt td:nth-child(11),
+table.dt tbody tr.sub-total td:nth-child(2),
+table.dt tbody tr.total-row td:nth-child(2) {
     border-right: 1px solid #B0BEC5;
 }
-table.dt th:nth-child(11).grp-start,
-table.dt td:nth-child(11).grp-start,
-table.dt tbody tr.sub-total td:nth-child(2).grp-start,
-table.dt tbody tr.total-row td:nth-child(2).grp-start {
+table.dt th:nth-child(12).grp-start,
+table.dt td:nth-child(12).grp-start,
+table.dt tbody tr.sub-total td:nth-child(3).grp-start,
+table.dt tbody tr.total-row td:nth-child(3).grp-start {
     border-left: none;
 }
 /* Cumulative left offsets — running sum of the widths above.
    Total = 46+68+36+92+92+52+68+80+40+56 = 630 px */
-table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
-table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:82px;  }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:150px; }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:186px; }
-table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:278px; }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:370px; }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:422px; }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:490px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:570px; }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { left:610px; }
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0;    }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:32px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:84px;  }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:152px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:188px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:280px; }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:372px; }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:424px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:492px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { left:572px; }
+table.dt th:nth-child(11), table.dt td:nth-child(11) { left:612px; }
 /* Right edge marker on the last frozen column — thin (1px) per
    user request so it doesn't dominate visually. */
-table.dt th:nth-child(10), table.dt td:nth-child(10) { border-right:1px solid #CBD5E1; }
+table.dt th:nth-child(11), table.dt td:nth-child(11) { border-right:1px solid #CBD5E1; }
 
 table.dt thead th .sort { display:inline-block; margin-left:3px; opacity:.35;
                           font-size:9px; }
@@ -2486,8 +2488,8 @@ table.dt thead th.no-div { border-left:none !important; border-right:none !impor
    the previous group.  This kills any leftover browser default or
    inherited right border that would otherwise show as an extra
    line inside a state group (e.g. between VIC STK and VIC PRT). */
-table.dt tbody td:nth-child(n+11),
-table.dt thead tr.col-labels th:nth-child(n+11) {
+table.dt tbody td:nth-child(n+12),
+table.dt thead tr.col-labels th:nth-child(n+12) {
     border-right: none !important;
 }
 table.dt .r.short { color:var(--short); font-weight:700; }
@@ -3437,7 +3439,8 @@ function togglePipeline() {
    state the group belongs to. */
 function buildTableHead() {
     const nonState = [
-        ['merge_code','Select'], ['m_code','M CODE'], ['brand','Brand'],
+        ['_check','Check box'], ['merge_code','Merge'],
+        ['m_code','M CODE'], ['brand','Brand'],
         ['line','Marketing Line'], ['product_name','Product Name'],
         ['pattern','Pattern'],
         ['sku_status','F/O·OPE'],
@@ -3459,7 +3462,7 @@ function buildTableHead() {
        no width gets an equal share of the remainder). */
     /* Widths MUST match the CSS nth-child(N) rules above so the
        colgroup and the sticky-left offsets stay in sync. */
-    const IDENTITY_WIDTHS = [82, 68, 36, 92, 92, 52, 68, 80, 40, 56];
+    const IDENTITY_WIDTHS = [32, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];
     /* Give each data column an EXPLICIT width so `table-layout: fixed`
        renders headers wide enough to read ("STK / PRT / MOI / 3M /
        4-6M …") without truncating.  If the viewport isn't wide enough
@@ -3833,11 +3836,11 @@ function renderTable() {
     const body = document.getElementById('tbl-body');
 
     /* ── Total row (rendered at the top) ── */
-    const nonStateCount = 10;   /* Merge / M CODE / Brand / Line /
-                                   Product Name / Pattern / F/O·OPE
-                                   / Size / Inch / LI·SS
-                                   = 10 non-numeric cols */
-    let totalRow = '<tr class="total-row"><td colspan="' + nonStateCount + '">TOTAL IN VIEW · '
+    const nonStateCount = 11;   /* Check box / Merge / M CODE / Brand /
+                                   Line / Product Name / Pattern /
+                                   F/O·OPE / Size / Inch / LI·SS
+                                   = 11 non-numeric cols */
+    let totalRow = '<tr class="total-row"><td></td><td colspan="' + (nonStateCount - 1) + '">TOTAL IN VIEW · '
                  + fmtI(src.length) + ' rows</td>';
     /* State cells for the Total row */
     if (showPipeline) {
@@ -4053,7 +4056,7 @@ function renderTable() {
                 const classes = ['mc-row'];
                 if (selected.has(r.m_code)) classes.push('selected');
                 if (isFirst)                classes.push('merge-break');
-                const bandStyle = ' style="border-left:4px solid ' + band + '"';
+                const bandStyle = ' style="border-left:4px solid ' + band + ';text-align:center"';
                 const rowCheckHtml = '<input type="checkbox" class="row-check" '
                     + 'data-mcode="' + r.m_code + '" '
                     + (selected.has(r.m_code) ? 'checked ' : '')
@@ -4084,7 +4087,8 @@ function renderTable() {
                       + '</td>' );
                 rowsHtml.push(
                     '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '" data-mcode="' + r.m_code + '">'
-                    + '<td' + bandStyle + '>' + rowCheckHtml + ' ' + r.merge_code + '</td>'
+                    + '<td' + bandStyle + '>' + rowCheckHtml + '</td>'
+                    + '<td>' + r.merge_code + '</td>'
                     + mcodeCell
                     + productCells
                     + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r, true)
@@ -4117,9 +4121,8 @@ function renderTable() {
                 + 'title="Check every M CODE in this merge (or uncheck them all).">';
             rowsHtml.push(
                 '<tr class="sub-total ' + stTag + '" data-mc="' + subTotal.merge_code + '">'
-                + '<td style="border-left:4px solid ' + band
-                +      ';font-weight:700;color:#212121" colspan="10">'
-                + subCheckHtml + ' '
+                + '<td style="border-left:4px solid ' + band + ';text-align:center">' + subCheckHtml + '</td>'
+                + '<td style="font-weight:700;color:#212121" colspan="10">'
                 + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
                 + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
                 + '</tr>');
@@ -4151,7 +4154,8 @@ function renderTable() {
                 + 'title="Check this M CODE — the ☑ Checked only button then shows only checked rows.">';
             rowsHtml.push(
                 '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '" data-mcode="' + r.m_code + '">'
-                + '<td style="border-left:4px solid ' + band + '">' + rowCheckHtml + ' ' + r.merge_code + '</td>'
+                + '<td style="border-left:4px solid ' + band + ';text-align:center">' + rowCheckHtml + '</td>'
+                + '<td>' + r.merge_code + '</td>'
                 + mcodeCell
                 + '<td>' + (r.brand        || '—') + '</td>'
                 + '<td>' + (r.line         || '—') + '</td>'
@@ -4341,7 +4345,7 @@ function autofitColumns() {
     };
     const headerCells = tbl.querySelectorAll('thead tr:last-child th');
     const rowCells = tbl.querySelectorAll('tbody tr');
-    const IDENT_WIDTHS = [82, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
+    const IDENT_WIDTHS = [32, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
     const IDENT_COUNT  = IDENT_WIDTHS.length;
     /* Blank all col widths first so cells grow to natural content. */
     cols.forEach(c => { c.style.width = ''; });
