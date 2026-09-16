@@ -2399,6 +2399,12 @@ table.dt tbody tr.merge-cohover.sub-total td { background:#E0E7FF !important; }
    `merge-break` and draws a heavy top border so the merge groups
    read cleanly. */
 table.dt tbody tr.merge-break td { border-top:2px solid #37474F; }
+/* Row-check inputs — a small square shown in the Merge Code cell of
+   every M CODE row + Sub Total row.  Vertical-align so the mono
+   digits sit on the same baseline as the checkbox. */
+.row-check { vertical-align: -2px; width: 13px; height: 13px;
+             cursor: pointer; accent-color: #1D4ED8; margin-right: 4px; }
+.row-check-sub { accent-color: #37474F; }
 /* Sub Total row per merge — bold text, dashed top border, solid
    bottom border.  Background colour is set by the sub-status-*
    class below so each merge tints to its own status colour instead
@@ -3083,7 +3089,7 @@ function rowPasses(r) {
     }
     /* "Show checked-only" gate — when active, drop rows whose merge
        code isn't in `selected`.  Toggled by the ☑ button above. */
-    if (window._onlyCheckedMode && !selected.has(r.merge_code)) return false;
+    if (window._onlyCheckedMode && !selected.has(r.m_code)) return false;
     return true;
 }
 /* Persist the search box too, so a page refresh keeps the whole
@@ -4045,9 +4051,13 @@ function renderTable() {
             groupRows.forEach((r, idxInGroup) => {
                 const isFirst = idxInGroup === 0;
                 const classes = ['mc-row'];
-                if (selected.has(r.merge_code)) classes.push('selected');
-                if (isFirst)                     classes.push('merge-break');
+                if (selected.has(r.m_code)) classes.push('selected');
+                if (isFirst)                classes.push('merge-break');
                 const bandStyle = ' style="border-left:4px solid ' + band + '"';
+                const rowCheckHtml = '<input type="checkbox" class="row-check" '
+                    + 'data-mcode="' + r.m_code + '" '
+                    + (selected.has(r.m_code) ? 'checked ' : '')
+                    + 'title="Check this M CODE — the ☑ Checked only button then shows only checked rows.">';
                 /* Three cases:
                    1. Whole merge lacks info (`hasInfo` false) — one
                       wide banner span replaces the product block.
@@ -4073,8 +4083,8 @@ function renderTable() {
                       + 'CS가 Sheet2에 Merge ' + r.merge_code + ' 마스터 레코드를 등록해야 채워집니다.'
                       + '</td>' );
                 rowsHtml.push(
-                    '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
-                    + '<td' + bandStyle + '>' + r.merge_code + '</td>'
+                    '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '" data-mcode="' + r.m_code + '">'
+                    + '<td' + bandStyle + '>' + rowCheckHtml + ' ' + r.merge_code + '</td>'
                     + mcodeCell
                     + productCells
                     + stateCellsFor(r) + totalGrpFor(r) + moiCellsFor(r, true)
@@ -4093,10 +4103,23 @@ function renderTable() {
                a single neutral dark colour so the row's status is
                read from the ground tint, not the label colour. */
             const stTag = 'sub-status-' + (subTotal.status || 'empty');
+            /* Sub Total checkbox reflects "all M CODEs in this merge
+               are selected"; toggling it bulk-selects (or bulk-clears)
+               every sibling.  data-merge-mcodes carries the pipe-
+               joined m_code list so the JS handler can walk them
+               without re-querying the DOM. */
+            const groupMcodes = groupRows.map(r => r.m_code);
+            const allSelected = groupMcodes.every(mc => selected.has(mc));
+            const subCheckHtml = '<input type="checkbox" class="row-check row-check-sub" '
+                + 'data-merge="' + subTotal.merge_code + '" '
+                + 'data-merge-mcodes="' + groupMcodes.join('|') + '" '
+                + (allSelected ? 'checked ' : '')
+                + 'title="Check every M CODE in this merge (or uncheck them all).">';
             rowsHtml.push(
                 '<tr class="sub-total ' + stTag + '" data-mc="' + subTotal.merge_code + '">'
                 + '<td style="border-left:4px solid ' + band
                 +      ';font-weight:700;color:#212121" colspan="10">'
+                + subCheckHtml + ' '
                 + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
                 + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
                 + '</tr>');
@@ -4112,8 +4135,8 @@ function renderTable() {
             if (mergesRendered >= ROW_CAP) break;
             mergesRendered++;
             const classes = ['mc-row'];
-            if (selected.has(r.merge_code)) classes.push('selected');
-            if (r.merge_code !== prev)      classes.push('merge-break');
+            if (selected.has(r.m_code))  classes.push('selected');
+            if (r.merge_code !== prev)   classes.push('merge-break');
             prev = r.merge_code;
             const band = mergeBandColor(r.merge_code);
             /* Per-row no-data badge — same rule as the merge-grouped
@@ -4122,9 +4145,13 @@ function renderTable() {
             const thisRowHasInfo = rowHasInfo(r);
             const mcodeCell = '<td>' + (r.m_code || '—')
                             + (thisRowHasInfo ? '' : noDataBadge) + '</td>';
+            const rowCheckHtml = '<input type="checkbox" class="row-check" '
+                + 'data-mcode="' + r.m_code + '" '
+                + (selected.has(r.m_code) ? 'checked ' : '')
+                + 'title="Check this M CODE — the ☑ Checked only button then shows only checked rows.">';
             rowsHtml.push(
-                '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '">'
-                + '<td style="border-left:4px solid ' + band + '">' + r.merge_code + '</td>'
+                '<tr class="' + classes.join(' ') + '" data-mc="' + r.merge_code + '" data-mcode="' + r.m_code + '">'
+                + '<td style="border-left:4px solid ' + band + '">' + rowCheckHtml + ' ' + r.merge_code + '</td>'
                 + mcodeCell
                 + '<td>' + (r.brand        || '—') + '</td>'
                 + '<td>' + (r.line         || '—') + '</td>'
@@ -4162,12 +4189,52 @@ function renderTable() {
     body.querySelectorAll('tr').forEach(tr => {
         tr.addEventListener('click', (e) => {
             /* Ignore clicks that originated on the detail button —
-               those are handled by the delegated listener below. */
+               those are handled by the delegated listener below.
+               Row-check inputs get their own change listener further
+               down so their click doesn't fire the tr handler too. */
             if (e.target.closest('.moi-detail-btn')) return;
-            const mc = +tr.dataset.mc;
-            if (selected.has(mc)) { selected.delete(mc); tr.classList.remove('selected'); }
-            else                  { selected.add(mc);    tr.classList.add('selected'); }
-            updateSelectionSummary(src);
+            if (e.target.closest('.row-check')) return;
+            /* Sub Total row click: bulk-toggle every M CODE in the
+               merge.  M CODE row click: toggle just that one. */
+            const subInput = tr.querySelector('.row-check-sub');
+            if (subInput) {
+                const mcodes = (subInput.dataset.mergeMcodes || '')
+                               .split('|').filter(Boolean)
+                               .map(x => Number.isNaN(+x) ? x : +x);
+                const allOn = mcodes.every(mc => selected.has(mc));
+                mcodes.forEach(mc => {
+                    if (allOn) selected.delete(mc);
+                    else       selected.add(mc);
+                });
+            } else if (tr.dataset.mcode !== undefined) {
+                const mcode = Number.isNaN(+tr.dataset.mcode) ? tr.dataset.mcode : +tr.dataset.mcode;
+                if (selected.has(mcode)) selected.delete(mcode);
+                else                     selected.add(mcode);
+            }
+            /* Re-render so both checkbox visuals and the .selected
+               classes on ALL rows in the merge stay in sync. */
+            renderTable();
+        });
+    });
+    /* Direct checkbox handlers — stopPropagation so the row click
+       above doesn't also fire.  Same semantics: sub-total checkbox
+       bulk-toggles siblings, m-code checkbox toggles just itself. */
+    body.querySelectorAll('.row-check').forEach(cb => {
+        cb.addEventListener('click', (e) => { e.stopPropagation(); });
+        cb.addEventListener('change', (e) => {
+            e.stopPropagation();
+            if (cb.classList.contains('row-check-sub')) {
+                const mcodes = (cb.dataset.mergeMcodes || '')
+                               .split('|').filter(Boolean)
+                               .map(x => Number.isNaN(+x) ? x : +x);
+                if (cb.checked) mcodes.forEach(mc => selected.add(mc));
+                else            mcodes.forEach(mc => selected.delete(mc));
+            } else {
+                const mcode = Number.isNaN(+cb.dataset.mcode) ? cb.dataset.mcode : +cb.dataset.mcode;
+                if (cb.checked) selected.add(mcode);
+                else            selected.delete(mcode);
+            }
+            renderTable();
         });
     });
     body.querySelectorAll('.moi-detail-btn').forEach(btn => {
@@ -4202,10 +4269,13 @@ function renderTable() {
 
 function updateSelectionSummary(currentList) {
     /* If nothing selected, show totals over the ENTIRE filtered set.
-       If some rows are selected, show totals over the SELECTED subset. */
+       If some rows are selected, show totals over the SELECTED subset.
+       Selection is keyed by m_code now — each material row can be
+       ticked independently and Sub Total rows bulk-toggle their
+       siblings. */
     const useSelected = selected.size > 0;
     const rows = useSelected
-        ? currentList.filter(r => selected.has(r.merge_code))
+        ? currentList.filter(r => selected.has(r.m_code))
         : currentList;
     let totStk = 0, tot3m = 0;
     rows.forEach(r => { totStk += r.total_stock; tot3m += r.total_3m; });
@@ -4215,7 +4285,7 @@ function updateSelectionSummary(currentList) {
     document.getElementById('sum-moi').textContent   = tot3m > 0 ? FMT_1.format(totStk / tot3m) : '—';
     document.getElementById('sel-info').textContent = useSelected
         ? (fmtI(rows.length) + ' rows selected — figures above cover this subset (click a row again to remove)')
-        : 'no rows selected — click a row to add it to the subset · use the 🔍 button in the MOI column to open the detail modal';
+        : 'no rows selected — tick the checkbox on any row to add it to the subset · use the 🔍 button in the MOI column to open the detail modal';
     document.getElementById('sel-info').classList.toggle('none-selected', !useSelected);
     document.getElementById('clear-sel').style.display = useSelected ? 'inline-block' : 'none';
     /* Reflect the selection state on the download buttons so users
@@ -4402,7 +4472,7 @@ function exportSource() {
     const rawSrc = curTab === 'total' ? DATA.all_rows : DATA[curTab + '_rows'];
     let src = rawSrc.filter(rowPasses);
     if (selected.size > 0) {
-        src = src.filter(r => selected.has(r.merge_code));
+        src = src.filter(r => selected.has(r.m_code));
     }
     if (sortCol && sortDir !== 0) {
         /* Same merge-group aware, sub-total-anchored sort as the
@@ -4536,7 +4606,7 @@ function downloadCSV() {
        downloaded file has provenance — some SIEM tools object to a
        leading BOM, but Excel opens UTF-8-BOM cleanly with tildes and
        Korean characters. */
-    const selSuffix = selected.size > 0 ? ' · selection only (' + selected.size + ' merges)' : '';
+    const selSuffix = selected.size > 0 ? ' · selection only (' + selected.size + ' materials)' : '';
     const provenance = '# Stock Balance Lab · ' + curTab.replace('_',' ')
                      + ' · ' + new Date().toISOString().slice(0, 10)
                      + ' · Filter: ' + (filterSummary() || 'all SKUs')
@@ -4636,7 +4706,7 @@ function downloadXLSX() {
         ['Generated',       new Date().toISOString()],
         ['Tab',             curTab],
         ['Filter',          filterSummary() || 'all SKUs'],
-        ['Selection',       selected.size > 0 ? (selected.size + ' merges — selection only') : 'all filtered rows'],
+        ['Selection',       selected.size > 0 ? (selected.size + ' materials — selection only') : 'all filtered rows'],
         ['Rows',            src.length],
         ['Data as of',      (window.META && META.data_date) || ''],
         ['Source workbook', (window.META && META.path) || ''],
