@@ -2258,7 +2258,7 @@ table.dt thead.pipe-mode tr.col-labels th { top:26px; }
    freeze block reserves as little horizontal room as possible.
    Sum ≈ 630px versus the old 830px, freeing 200px for the
    elastic data columns to the right. */
-table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:46px;  width:46px;  }
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:82px;  width:82px;  }
 table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:68px;  width:68px;  }
 table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:36px;  width:36px;  }
 table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:92px;  width:92px;  }
@@ -2359,15 +2359,15 @@ table.dt tbody tr.total-row td:nth-child(2).grp-start {
 /* Cumulative left offsets — running sum of the widths above.
    Total = 46+68+36+92+92+52+68+80+40+56 = 630 px */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0; }
-table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:46px; }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:114px; }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:150px; }
-table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:242px; }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:334px; }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:386px; }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:454px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:534px; }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { left:574px; }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:82px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:150px; }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:186px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:278px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:370px; }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:422px; }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:490px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:570px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { left:610px; }
 /* Right edge marker on the last frozen column — thin (1px) per
    user request so it doesn't dominate visually. */
 table.dt th:nth-child(10), table.dt td:nth-child(10) { border-right:1px solid #CBD5E1; }
@@ -3437,7 +3437,7 @@ function togglePipeline() {
    state the group belongs to. */
 function buildTableHead() {
     const nonState = [
-        ['merge_code','Merge'], ['m_code','M CODE'], ['brand','Brand'],
+        ['merge_code','Select'], ['m_code','M CODE'], ['brand','Brand'],
         ['line','Marketing Line'], ['product_name','Product Name'],
         ['pattern','Pattern'],
         ['sku_status','F/O·OPE'],
@@ -3459,7 +3459,7 @@ function buildTableHead() {
        no width gets an equal share of the remainder). */
     /* Widths MUST match the CSS nth-child(N) rules above so the
        colgroup and the sticky-left offsets stay in sync. */
-    const IDENTITY_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];
+    const IDENTITY_WIDTHS = [82, 68, 36, 92, 92, 52, 68, 80, 40, 56];
     /* Give each data column an EXPLICIT width so `table-layout: fixed`
        renders headers wide enough to read ("STK / PRT / MOI / 3M /
        4-6M …") without truncating.  If the viewport isn't wide enough
@@ -4341,7 +4341,7 @@ function autofitColumns() {
     };
     const headerCells = tbl.querySelectorAll('thead tr:last-child th');
     const rowCells = tbl.querySelectorAll('tbody tr');
-    const IDENT_WIDTHS = [46, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
+    const IDENT_WIDTHS = [82, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
     const IDENT_COUNT  = IDENT_WIDTHS.length;
     /* Blank all col widths first so cells grow to natural content. */
     cols.forEach(c => { c.style.width = ''; });
