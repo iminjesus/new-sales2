@@ -1080,6 +1080,14 @@ async function applyAdditionalDCToRow(rowEl){
     sold_to: soldTo, brand, qty: String(qty),
   });
   if (pg) q.set("product_group", pg);
+  // Pattern + material feed the new gates on dc_additional_customer.
+  // Rows that leave those columns blank act as wildcards, so passing
+  // an empty value is fine — the endpoint accepts absent as "match
+  // every pattern / material".
+  const pat = rowEl.dataset.pattern || "";
+  const mat = (rowEl.querySelector('[data-col="m_code"]')?.value || "").trim();
+  if (pat) q.set("pattern", pat);
+  if (mat) q.set("material", mat);
   let data;
   try {
     const r = await fetch(`/api/orders/additional_dc?${q}`, {credentials: "same-origin"});
@@ -1160,6 +1168,10 @@ function applyMaterial(rowEl, data){
   // API (neither is a visible column on the form).
   rowEl.dataset.line          = data.line || "";
   rowEl.dataset.productGroup  = data.product_group || "";
+  // Stash pattern too so applyAdditionalDCToRow can send it to
+  // /api/orders/additional_dc — the reloaded dc_additional_customer
+  // table now optionally gates rows by pattern (and material).
+  rowEl.dataset.pattern       = data.pattern || "";
   recalcRow(rowEl);
   // Now that brand + line are known, drop the correct customer Base DC
   // into this row's base_dc cell — Current Price then updates via

@@ -3220,6 +3220,10 @@ def api_orders_additional_dc():
       ?brand=…          HK | LF (row's brand from carrying_26)
       ?product_group=…  Dynapro | Kinergy | … (row's product_group)
       ?qty=…            row qty (min_qty threshold gate)
+      ?pattern=…        row's pattern (RA33, LK41 …) — matched against
+                        dc_additional_customer.pattern when present
+      ?material=…       row's m_code — matched against
+                        dc_additional_customer.material when present
 
     Returns
       { "additional_dc": 30.00, "promo": "443", "min_qty": 4,
@@ -3231,17 +3235,28 @@ def api_orders_additional_dc():
       1. Row keyed to this bill-to exactly beats a group row.
       2. Brand must match.
       3. min_qty must be <= this line's qty.
-      4. The row's promo (443, iON, …) must have at least one
+      4. If the row carries `pattern`, it must match the line's
+         pattern (blank/NULL = matches every pattern).
+      5. If the row carries `material`, it must match the line's
+         m_code (blank/NULL = matches every material).
+      6. If the row carries `valid_from` / `valid_to`, CURDATE()
+         must fall inside that window (NULL = open-ended on that
+         side).
+      7. The row's promo (443, iON, …) must have at least one
          promo_plan entry where the product_group matches (or is
          blank = all groups) AND CURDATE() falls in the plan's
-         start_date / end_date window.
+         start_date / end_date window.  If promo_plan isn't
+         loaded, this gate is skipped.
     If several rows still qualify, the highest additional_dc wins
-    (best discount for the customer).  Missing table / missing
-    plan / no match all return matched:false; the endpoint never
-    500s under normal misses."""
+    (best discount for the customer); within the same discount, a
+    row with an explicit pattern beats a wildcard row, and same for
+    material.  Missing table / missing plan / no match all return
+    matched:false; the endpoint never 500s under normal misses."""
     sold_to       = (request.args.get("sold_to") or "").strip()
     brand         = (request.args.get("brand") or "").strip()
     product_group = (request.args.get("product_group") or "").strip()
+    pattern       = (request.args.get("pattern") or "").strip()
+    material      = (request.args.get("material") or "").strip()
     try:
         qty = float((request.args.get("qty") or "0").replace(",", "").strip())
     except Exception:
@@ -3251,7 +3266,9 @@ def api_orders_additional_dc():
     out = {"additional_dc": None, "matched": False}
     if debug:
         out["_debug"] = {"sold_to": sold_to, "brand": brand,
-                         "product_group": product_group, "qty": qty}
+                         "product_group": product_group,
+                         "pattern": pattern, "material": material,
+                         "qty": qty}
     if not sold_to or not brand:
         return jsonify(out)
 
@@ -3324,6 +3341,29 @@ def api_orders_additional_dc():
                   AND (pp.start_date IS NULL OR pp.start_date <= CURDATE())
                   AND (pp.end_date   IS NULL OR pp.end_date   >= CURDATE())
               )"""
+        # ── Extra gates for the new columns on the reloaded table ──
+        # `pattern` and `material` are matched only when the row on
+        # dc_additional_customer actually carries a value — blank/NULL
+        # means "applies to every pattern / material" (wildcard).
+        # `valid_from` / `valid_to` are similarly open-ended when NULL.
+        pattern_gate = ""
+        material_gate = ""
+        if "pattern" in ac_cols:
+            pattern_gate = (
+                " AND (ac.pattern IS NULL OR TRIM(ac.pattern) = ''"
+                "      OR UPPER(TRIM(ac.pattern)) = UPPER(%s))"
+            )
+        if "material" in ac_cols:
+            material_gate = (
+                " AND (ac.material IS NULL OR TRIM(ac.material) = ''"
+                "      OR TRIM(ac.material) = TRIM(%s))"
+            )
+        date_gate = ""
+        if "valid_from" in ac_cols and "valid_to" in ac_cols:
+            date_gate = (
+                " AND (ac.valid_from IS NULL OR ac.valid_from <= CURDATE())"
+                " AND (ac.valid_to   IS NULL OR ac.valid_to   >= CURDATE())"
+            )
         # Group fallback fires only when we resolved a group code.
         group_join = ""
         params = [sold_to]
@@ -3334,6 +3374,10 @@ def api_orders_additional_dc():
             )
             params.append(group_code)
         params += [brand, qty]
+        if "pattern" in ac_cols:
+            params.append(pattern)
+        if "material" in ac_cols:
+            params.append(material)
         if pp_exists:
             params.append(product_group)
 
@@ -3341,7 +3385,21 @@ def api_orders_additional_dc():
         # Within the same tier, the biggest discount wins — the user
         # gets the best applicable rate.  min_qty DESC on ties so a
         # tighter-threshold row is preferred over a loose one at the
-        # same %.
+        # same %.  When the new pattern/material columns are present,
+        # rows that name an explicit pattern/material beat wildcard
+        # rows at the same discount (specific > generic).
+        specificity_pattern = ""
+        specificity_material = ""
+        if "pattern" in ac_cols:
+            specificity_pattern = (
+                ", CASE WHEN ac.pattern IS NULL OR TRIM(ac.pattern) = '' "
+                "THEN 0 ELSE 1 END DESC"
+            )
+        if "material" in ac_cols:
+            specificity_material = (
+                ", CASE WHEN ac.material IS NULL OR TRIM(ac.material) = '' "
+                "THEN 0 ELSE 1 END DESC"
+            )
         sql = f"""
             SELECT ac.additional_dc, ac.min_qty, ac.promo,
                    ac.customer_grp, ac.sold_to, ac.brand,
@@ -3355,14 +3413,20 @@ def api_orders_additional_dc():
                   )
               AND UPPER(TRIM(ac.brand)) = UPPER(%s)
               AND (ac.min_qty IS NULL OR ac.min_qty <= %s)
+              {pattern_gate}
+              {material_gate}
+              {date_gate}
               {promo_gate}
-            ORDER BY tier ASC,
-                     ABS(ac.additional_dc) DESC,
+            ORDER BY tier ASC
+                     {specificity_material}
+                     {specificity_pattern}
+                     , ABS(ac.additional_dc) DESC,
                      ac.min_qty DESC
             LIMIT 1
         """
         # Params order: source CASE, tier CASE, WHERE sold_to,
-        # [group_code], brand, qty, [product_group].
+        # [group_code], brand, qty, [pattern], [material],
+        # [product_group].
         exec_params = [sold_to, sold_to] + params
         cur.execute(sql, tuple(exec_params))
         row = cur.fetchone()
