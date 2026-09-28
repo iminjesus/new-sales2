@@ -2090,8 +2090,25 @@ _HTML = r"""<!DOCTYPE html>
 <title>Stock Balance Lab</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<!-- SheetJS Community Edition — CSV export writes .xlsx directly. -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- xlsx-js-style — drop-in fork of SheetJS Community Edition that
+     ACTUALLY writes cell styles (fills, fonts, borders, alignment)
+     into the .xlsx.  Same XLSX.utils.* API as the vanilla community
+     build, so downloadXLSX / downloadCSV code paths are unchanged;
+     the difference is that Excel now renders our bold headers, gold
+     sub-total rows and status colours instead of dropping the .s
+     hints silently.  A tiny fallback loads the plain community
+     build if the CDN is blocked so a locked-down network still
+     gets an unstyled export instead of nothing. -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script>
+window.addEventListener("DOMContentLoaded", () => {
+  if (typeof XLSX === "undefined"){
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    document.head.appendChild(s);
+  }
+});
+</script>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -4747,32 +4764,103 @@ function downloadCSV() {
     showToast('Downloaded ' + a.download + ' (' + fmtI(src.length) + ' rows)');
 }
 
+/* ── Merge-group Sub Total aggregator ──
+   Same rules the on-screen renderer uses in _aggregate + renderTable:
+   sum state_stock / state_3m / state_pipe_parts / total_* / p_3m /
+   avg_* across every M CODE in the merge, skipping merge_shared
+   siblings after the first so the Sub Total isn't double-counted.
+   MOI = total_stock / total_3m ; MOI(PPL) = total_all / max(p_3m,
+   avg_6m_old, avg_7_9m, avg_10_12m).  Merge-level status is picked
+   from the winning MOI bucket via classify() so the row can be
+   coloured to match its on-screen tint. */
+function _mergeSubTotal(mergeCode, rows) {
+    const t = {
+        _isSubTotal: true,
+        merge_code:  mergeCode,
+        state_stock: { NSW: 0, QLD: 0, VIC: 0, WA: 0 },
+        state_3m:    { NSW: 0, QLD: 0, VIC: 0, WA: 0 },
+        state_pipe_parts: {
+            NSW: { port: 0, water: 0, fac: 0 },
+            QLD: { port: 0, water: 0, fac: 0 },
+            VIC: { port: 0, water: 0, fac: 0 },
+            WA:  { port: 0, water: 0, fac: 0 },
+        },
+        total_stock: 0, total_all: 0, total_3m: 0,
+        p_3m: 0, avg_6m_old: 0, avg_7_9m: 0, avg_10_12m: 0,
+        total_12m: 0, max_demand: 0,
+    };
+    const sharedSeen = new Set();
+    rows.forEach(r => {
+        if (r.merge_shared) {
+            if (sharedSeen.has(r.merge_code)) return;
+            sharedSeen.add(r.merge_code);
+        }
+        ['NSW', 'QLD', 'VIC', 'WA'].forEach(s => {
+            t.state_stock[s] += r.state_stock[s] || 0;
+            t.state_3m[s]    += r.state_3m[s]    || 0;
+            const pp = r.state_pipe_parts?.[s] || { port: 0, water: 0, fac: 0 };
+            t.state_pipe_parts[s].port  += pp.port  || 0;
+            t.state_pipe_parts[s].water += pp.water || 0;
+            t.state_pipe_parts[s].fac   += pp.fac   || 0;
+        });
+        t.total_stock += r.total_stock || 0;
+        t.total_all   += r.total_all   || 0;
+        t.total_3m    += r.total_3m    || 0;
+        t.p_3m        += r.p_3m        || 0;
+        t.avg_6m_old  += r.avg_6m_old  || 0;
+        t.avg_7_9m    += r.avg_7_9m    || 0;
+        t.avg_10_12m  += r.avg_10_12m  || 0;
+        t.total_12m   += r.total_12m   || 0;
+        t.max_demand   = Math.max(t.max_demand, r.max_demand || 0);
+    });
+    t.moh = t.total_3m > 0 ? t.total_stock / t.total_3m : null;
+    const mm = Math.max(t.p_3m, t.avg_6m_old, t.avg_7_9m, t.avg_10_12m, 0);
+    t.moh_plus_max = mm > 0 ? t.total_all / mm : null;
+    /* Merge-level status — every M CODE in a merge is assigned the
+       SAME merge-total status by the server (_aggregate uses the
+       merge's stock ÷ 3M-avg for the shortage/surplus decision),
+       so we can lift it straight off any sibling row.  Fallback to
+       'balanced' when the group happens to be empty. */
+    t.status = (rows[0] && rows[0].status) || 'balanced';
+    /* Product-name fields on the sub-total pull the first M CODE's
+       label so the row still reads meaningfully in a spreadsheet. */
+    const first = rows[0] || {};
+    t.brand        = first.brand        || '';
+    t.line         = first.line         || '';
+    t.product_name = first.product_name || '';
+    t.pattern      = first.pattern      || '';
+    t.description  = 'Sub Total · ' + rows.length + ' M CODE' + (rows.length === 1 ? '' : 's');
+    return t;
+}
+
 /* ── XLSX download (current filtered view) ──
    Uses the same column list as downloadCSV so downstream users see
    identical fields regardless of format.  Numbers are written as
    Excel-native numeric cells (not strings) so pivot tables and
-   filters just work, and the header row gets a bold navy fill so
-   the file looks report-ready without extra formatting. */
+   filters just work.  Sub Total rows are interleaved after every
+   merge group so the exported sheet mirrors the on-screen table
+   1:1 — M CODE rows, then their merge's Sub Total, repeat.  Cell
+   styling relies on xlsx-js-style: bold navy header, gold sub-
+   total rows, status colours on the Status cell so a reader can
+   scan the shortage / surplus split without a legend. */
 function downloadXLSX() {
     if (typeof XLSX === 'undefined') {
         showToast('XLSX library still loading — try again in a second');
         return;
     }
     const src = exportSource();
-    /* Column list mirrors downloadCSV but returns NUMBERS as numbers
-       (not toFixed strings) so Excel treats them as numeric cells. */
     const cols = [
         ['Merge',                  r => r.merge_code],
-        ['M CODE',                 r => r.m_code || ''],
+        ['M CODE',                 r => r._isSubTotal ? 'Sub Total' : (r.m_code || '')],
         ['Brand',                  r => r.brand || ''],
         ['Marketing Line',         r => r.line || ''],
         ['Product Name',           r => r.product_name || ''],
         ['Pattern',                r => r.pattern || ''],
-        ['Size',                   r => r.size || ''],
-        ['Inch',                   r => r.inch || ''],
-        ['LI',                     r => r.li || ''],
-        ['SS',                     r => r.ss || ''],
-        ['F/O · OPE',              r => r.sku_status || 'Active'],
+        ['Size',                   r => r._isSubTotal ? '' : (r.size || '')],
+        ['Inch',                   r => r._isSubTotal ? '' : (r.inch || '')],
+        ['LI',                     r => r._isSubTotal ? '' : (r.li || '')],
+        ['SS',                     r => r._isSubTotal ? '' : (r.ss || '')],
+        ['F/O · OPE',              r => r._isSubTotal ? '' : (r.sku_status || 'Active')],
         ['NSW Stock',              r => r.state_stock.NSW || 0],
         ['NSW 3M Avg',             r => r.state_3m.NSW || 0],
         ['QLD Stock',              r => r.state_stock.QLD || 0],
@@ -4806,41 +4894,159 @@ function downloadXLSX() {
         ['Status',                 r => STATUS_PRETTY[r.status] || r.status || ''],
         ['Description',            r => r.description || ''],
     ];
+
+    /* ── Interleave Sub Total rows ──
+       Walk src in order, group by merge_code, emit each group's M
+       CODE rows followed by a Sub Total row.  Source is already
+       merge-group sorted by exportSource() so a single pass works. */
+    const bundled = [];
+    let curMerge = null, curGroup = [];
+    const flush = () => {
+        if (!curGroup.length) return;
+        curGroup.forEach(r => bundled.push(r));
+        bundled.push(_mergeSubTotal(curMerge, curGroup));
+        curGroup = [];
+    };
+    src.forEach(r => {
+        if (r.merge_code !== curMerge) {
+            flush();
+            curMerge = r.merge_code;
+        }
+        curGroup.push(r);
+    });
+    flush();
+
     /* Build the sheet as an array-of-arrays; row 1 is the header. */
     const aoa = [cols.map(c => c[0])];
-    src.forEach(r => aoa.push(cols.map(c => c[1](r))));
+    bundled.forEach(r => aoa.push(cols.map(c => c[1](r))));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
-    /* Style header row bold + freeze it. */
+
+    /* ── Styling — mirrors the on-screen palette ── */
+    /* Status-tint fills for Sub Total rows (light versions of the
+       card colours the dashboard uses).  Text stays dark so numbers
+       remain readable at reduced zoom. */
+    /* Server tags rows with statuses "shortage"/"balanced"/"surplus"/
+       "serious_surplus"/"no_move" — keys here match exactly so the
+       Sub Total and Status cells pick up the right tint. */
+    const SUB_FILL = {
+        shortage:        'FFFCE7E7',   // light red
+        balanced:        'FFE8F3E4',   // light green
+        surplus:         'FFFDECC8',   // light orange
+        serious_surplus: 'FFF9D6D6',   // stronger red
+        no_move:         'FFEDE9FE',   // light purple
+    };
+    const STATUS_FG = {
+        shortage:        'FF991B1B',
+        balanced:        'FF166534',
+        surplus:         'FF9A3412',
+        serious_surplus: 'FF7F1D1D',
+        no_move:         'FF5B21B6',
+    };
+    const headerStyle = {
+        font: { bold: true, color: { rgb: 'FFFFFFFF' }, sz: 11 },
+        fill: { patternType: 'solid', fgColor: { rgb: 'FF1E3A8A' } },
+        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+        border: {
+            top:    { style: 'thin', color: { rgb: 'FF334155' } },
+            bottom: { style: 'thin', color: { rgb: 'FF334155' } },
+            left:   { style: 'thin', color: { rgb: 'FF334155' } },
+            right:  { style: 'thin', color: { rgb: 'FF334155' } },
+        },
+    };
+    /* Header row */
     const range = XLSX.utils.decode_range(ws['!ref']);
     for (let c = range.s.c; c <= range.e.c; c++) {
-        const addr = XLSX.utils.encode_cell({r: 0, c});
-        if (ws[addr]) ws[addr].s = { font: { bold: true } };
+        const addr = XLSX.utils.encode_cell({ r: 0, c });
+        if (ws[addr]) ws[addr].s = headerStyle;
     }
+    /* Body rows — number formatting + sub-total tints */
+    const NUM_COLS_INT = new Set([                       // integer stock counts
+        'NSW Stock','QLD Stock','VIC Stock','WA Stock','Total Stock',
+        'NSW Port','NSW Water','NSW Factory',
+        'QLD Port','QLD Water','QLD Factory',
+        'VIC Port','VIC Water','VIC Factory',
+        'WA Port','WA Water','WA Factory',
+    ]);
+    const NUM_COLS_1DP = new Set([                       // 1-decimal averages
+        'NSW 3M Avg','QLD 3M Avg','VIC 3M Avg','WA 3M Avg','Total 3M Avg',
+        '3M Avg (m -1..-3)','4-6M Avg (m -4..-6)',
+        '7-9M Avg (m -7..-9)','10-12M Avg (m -10..-12)',
+        '12M Avg (basis)','Max demand (basis)',
+    ]);
+    const NUM_COLS_MOI = new Set(['MOI','MOI(PPL)']);
+    const statusColIdx = cols.findIndex(c => c[0] === 'Status');
+    const mCodeColIdx  = cols.findIndex(c => c[0] === 'M CODE');
+    bundled.forEach((r, i) => {
+        const rowIdx = i + 1;  // +1 for header
+        const isSub = !!r._isSubTotal;
+        const fillRgb = isSub ? (SUB_FILL[r.status] || 'FFFFF3C7') : null;
+        for (let c = range.s.c; c <= range.e.c; c++) {
+            const addr = XLSX.utils.encode_cell({ r: rowIdx, c });
+            if (!ws[addr]) continue;
+            const colName = cols[c][0];
+            const style = { alignment: { vertical: 'center' } };
+            if (NUM_COLS_INT.has(colName)) style.numFmt = '#,##0';
+            else if (NUM_COLS_1DP.has(colName)) style.numFmt = '#,##0.0';
+            else if (NUM_COLS_MOI.has(colName)) style.numFmt = '0.0';
+            if (isSub) {
+                style.font = { bold: true };
+                style.fill = { patternType: 'solid', fgColor: { rgb: fillRgb } };
+                style.border = {
+                    top:    { style: 'medium', color: { rgb: 'FF334155' } },
+                    bottom: { style: 'thin',   color: { rgb: 'FF64748B' } },
+                };
+            }
+            /* Status column gets its own strong colour block so a
+               reader can spot the shortage / surplus split at a
+               glance — matches the card tints on the state cards. */
+            if (c === statusColIdx && r.status) {
+                style.fill = {
+                    patternType: 'solid',
+                    fgColor: { rgb: SUB_FILL[r.status] || 'FFF1F5F9' },
+                };
+                style.font = Object.assign({ bold: true, color: { rgb: STATUS_FG[r.status] || 'FF334155' } }, style.font || {});
+                style.alignment = { horizontal: 'center', vertical: 'center' };
+            }
+            ws[addr].s = style;
+        }
+    });
+
     ws['!freeze'] = { xSplit: 0, ySplit: 1 };
-    /* Reasonable column widths — 12 for numeric, 26 for description. */
     ws['!cols'] = cols.map(([name]) =>
-        ({ wch: name === 'Description' ? 26 : name.length > 12 ? 16 : 12 }));
+        ({ wch: name === 'Description' ? 30
+             : name === 'Product Name' ? 22
+             : name.length > 14 ? 16
+             : 11 }));
+    /* Taller header row so the wrapped column titles breathe. */
+    ws['!rows'] = [{ hpx: 32 }];
+
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, curTab === 'total' ? 'All' : curTab);
-    /* Data-provenance sheet: filter, tab, timestamp — a downstream
-       viewer can trace what generated the file. */
-    const provWs = XLSX.utils.aoa_to_sheet([
+    /* Data-provenance sheet — same info, now with a bit of style. */
+    const provAoa = [
         ['Property',        'Value'],
         ['Generated',       new Date().toISOString()],
         ['Tab',             curTab],
         ['Filter',          filterSummary() || 'all SKUs'],
         ['Selection',       selected.size > 0 ? (selected.size + ' materials — selection only') : 'all filtered rows'],
-        ['Rows',            src.length],
+        ['M CODE rows',     src.length],
+        ['Sub Total rows',  bundled.length - src.length],
         ['Data as of',      (window.META && META.data_date) || ''],
         ['Source workbook', (window.META && META.path) || ''],
-    ]);
+    ];
+    const provWs = XLSX.utils.aoa_to_sheet(provAoa);
     provWs['!cols'] = [{ wch: 20 }, { wch: 60 }];
+    for (let c = 0; c <= 1; c++) {
+        const a = XLSX.utils.encode_cell({ r: 0, c });
+        if (provWs[a]) provWs[a].s = headerStyle;
+    }
     XLSX.utils.book_append_sheet(wb, provWs, 'Meta');
     const fname = 'stock_balance_' + curTab
                + (selected.size > 0 ? '_selection' : '')
                + '_' + todayStr() + '.xlsx';
     XLSX.writeFile(wb, fname);
-    showToast('Downloaded ' + fname + ' (' + fmtI(src.length) + ' rows)');
+    const subN = bundled.length - src.length;
+    showToast('Downloaded ' + fname + ' (' + fmtI(src.length) + ' M CODE rows · ' + subN + ' Sub Total rows)');
 }
 
 /* ── Central refresh ── */
