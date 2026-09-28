@@ -52,6 +52,46 @@
   #agedStockPanel .as-total {
     color: #64748b; font-size: 11px; margin-bottom: 6px;
   }
+  /* Cute iconic hint — a soft amber badge that tells the BDE the
+     rows are double-clickable.  Only rendered while the panel has
+     aged rows (JS toggles the `hidden` attribute).  Small pulse on
+     the pointer emoji so it catches the eye without shouting.  Two
+     stops on the gradient plus a rounded pill shape keep it
+     "이쁘게 iconic한 깜찍한" — light and friendly. */
+  #agedStockPanel .as-hint {
+    display: flex; align-items: center; gap: 8px;
+    margin: 4px 0 8px;
+    padding: 7px 10px 7px 9px;
+    background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+    border: 1px solid #f59e0b;
+    border-radius: 999px;
+    box-shadow: 0 1px 2px rgba(217, 119, 6, 0.15);
+    font-size: 11px; line-height: 1.35; color: #78350f;
+    font-weight: 600; letter-spacing: 0.1px;
+    cursor: default; user-select: none;
+    position: relative;
+  }
+  #agedStockPanel .as-hint .as-hint-emoji {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; flex: 0 0 22px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 2px rgba(217, 119, 6, 0.25);
+    font-size: 13px;
+    animation: agedHintTap 1.8s ease-in-out infinite;
+  }
+  #agedStockPanel .as-hint b {
+    color: #b45309;
+    font-weight: 800;
+  }
+  #agedStockPanel .as-hint[hidden] { display: none; }
+  @keyframes agedHintTap {
+    0%, 100% { transform: scale(1); }
+    45%      { transform: scale(1.15); }
+    50%      { transform: scale(0.92); }
+    55%      { transform: scale(1.15); }
+    65%      { transform: scale(1); }
+  }
   #agedStockPanel table { width: 100%; border-collapse: collapse; font-size: 11px; }
   #agedStockPanel th, #agedStockPanel td {
     padding: 3px 5px; text-align: left; border-bottom: 1px solid #f1f5f9;
@@ -386,6 +426,13 @@
     <span>Aged stock <span class="as-scope" id="asScope">—</span></span>
     <button type="button" id="asClose" class="as-close" title="Hide aged-stock panel">×</button>
   </h3>
+  <!-- Iconic double-click tip — hidden until aged rows load; JS in
+       renderAgedStock flips `hidden` off once the table has content. -->
+  <div class="as-hint" id="asHint" hidden
+       title="Double-click any aged row to append it to the order form as a new line.">
+    <span class="as-hint-emoji" aria-hidden="true">👆</span>
+    <span><b>Double-click</b> a row to add it to the order form</span>
+  </div>
   <div class="as-total" id="asTotal">Load a customer to see aged stock at their state plant.</div>
   <div class="as-search" hidden id="asSearchWrap">
     <input id="asSearch" type="text" placeholder="Search M-code, pattern, size…" autocomplete="off">
@@ -881,7 +928,8 @@ let _agedStockCache = null;
 function _renderAgedStockRows(filterTerm){
   const body  = document.getElementById("asBody");
   const total = document.getElementById("asTotal");
-  if (!_agedStockCache) return;
+  const hint  = document.getElementById("asHint");
+  if (!_agedStockCache) { if (hint) hint.hidden = true; return; }
   const {rows, plant, total: totalUnits} = _agedStockCache;
   const q = String(filterTerm || "").trim().toLowerCase();
   const filtered = q
@@ -897,6 +945,10 @@ function _renderAgedStockRows(filterTerm){
   } else {
     total.innerHTML = `Plant <b>${plant}</b> · ${rows.length} SKU-tier rows · ${fmtQty(totalUnits)} units aged 19M+.`;
   }
+  // Show the double-click tip whenever there is at least one clickable
+  // row — hide it during an empty search so the reader isn't left with
+  // a dangling instruction that doesn't apply.
+  if (hint) hint.hidden = filtered.length === 0;
   if (!filtered.length) {
     body.innerHTML = `<div class="as-empty">No matches.</div>`;
     return;
@@ -919,7 +971,7 @@ function _renderAgedStockRows(filterTerm){
         ${filtered.map(r => `
           <tr class="as-clickable"
               data-mcode="${r.m_code}" data-tier="${r.tier}"
-              title="Click to add this row to the order (auto-DC ${AGING_TARGET_DC[r.tier] || "—"}%)">
+              title="Double-click to add this row to the order (auto-DC ${AGING_TARGET_DC[r.tier] || "—"}%)">
             <td>${r.m_code}</td>
             <td>${r.pattern || "—"}</td>
             <td>${r.size || "—"}</td>
@@ -928,9 +980,11 @@ function _renderAgedStockRows(filterTerm){
           </tr>`).join("")}
       </tbody>
     </table>`;
-  // Delegate clicks — one listener for every row in the panel.
+  // Double-click adds the row to the order form.  Single click is
+  // kept as a soft-select (visual feedback only) so an accidental
+  // tap while scrolling doesn't append an unwanted line.
   body.querySelectorAll("tr.as-clickable").forEach(tr => {
-    tr.addEventListener("click", () => {
+    tr.addEventListener("dblclick", () => {
       const mc   = tr.dataset.mcode;
       const tier = tr.dataset.tier;
       if (mc && tier) pushAgedStockRow(mc, tier);
@@ -967,6 +1021,8 @@ async function fillAgedStockPanel(state){
   if (searchWrap) searchWrap.hidden = true;
   if (searchInp)  searchInp.value   = "";
   if (searchClr)  searchClr.hidden  = true;
+  const hint = document.getElementById("asHint");
+  if (hint) hint.hidden = true;
   _agedStockCache = null;
   let data;
   try {
