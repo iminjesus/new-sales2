@@ -126,6 +126,8 @@
             <th style="width:60px" class="center">State</th>
             <th style="width:70px" class="num">Qty</th>
             <th style="width:110px" class="num">Grand Total</th>
+            <th style="width:70px" class="num" title="Additional (chained-extra) DC beyond customer base + MTH + Volume, qty-weighted">Add DC%</th>
+            <th style="width:70px" class="num" title="Total chained DC applied to list price, qty-weighted">Total DC%</th>
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
             <th style="width:130px">Approver</th>
@@ -133,7 +135,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="12" class="empty">Loading…</td></tr>
+          <tr><td colspan="14" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -165,18 +167,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="12" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="14" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="12" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="14" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="12" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="14" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -190,7 +192,7 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="12" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="14" class="empty">No orders match.</td></tr>`;
   } else {
     const meEmail = (_me.email || "").toLowerCase();
     const isAll   = (_me.role  || "").toUpperCase() === "ALL";
@@ -203,25 +205,35 @@ function renderRows(){
       const editCell  = canEdit
         ? `<a class="edit-link" href="/order?id=${r.id}&edit=1" onclick="event.stopPropagation()">Edit</a>`
         : `<span class="edit-dash">—</span>`;
-      // Approver cell — "Standard Pricing" pill when the order has
-      // no additional DC (base + mth + volume only, no promo /
-      // manual / aging).  Otherwise show the first-approver-wins
-      // name or a pending pill.
+      // Approver cell — "Standard" pill when the order has no
+      // additional DC (base + mth + volume only, no promo / manual /
+      // aging).  Otherwise show the first-approver-wins name or a
+      // pending pill; when Total DC ≥ 64 the pending pill flips red
+      // to make the mandatory MD gate visually obvious.
       let apprCell = "—";
+      const totDC = +r.avg_dc_pct || 0;
+      const addDC = +r.add_dc_pct || 0;
       if (!r.has_additional_dc){
-        apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard Pricing</span>`;
+        apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard</span>`;
       } else if (r.approved_by_name){
         const at = (r.approved_at || "").slice(0, 16);
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
                    (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
       } else if (r.needs_mgmt_approval === "Y"){
-        apprCell = `<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">⏳ Pending</span>`;
+        const isMd = totDC >= 64;
+        const bg   = isMd ? "#fee2e2" : "#fef3c7";
+        const fg   = isMd ? "#991b1b" : "#92400e";
+        const lb   = isMd ? "⚑ MD only" : "⏳ Pending";
+        apprCell = `<span style="background:${bg};color:${fg};padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">${lb}</span>`;
       }
       const rebPill = r.rebateable === "Y"
         ? `<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Y</span>`
         : (r.rebateable === "N"
           ? `<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">N</span>`
           : "—");
+      // Total DC turns red once it hits the 64 % MD threshold so the
+      // reader spots the gated orders at a glance.
+      const totDcStyle = totDC >= 64 ? "color:#991b1b;font-weight:800" : "";
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
@@ -232,6 +244,8 @@ function renderRows(){
         <td class="center">${escapeHtml(r.state || "")}</td>
         <td class="num">${fmtQty(r.total_qty)}</td>
         <td class="num">${fmtMoney(r.grand_total)}</td>
+        <td class="num">${addDC ? addDC.toFixed(2) + "%" : "—"}</td>
+        <td class="num" style="${totDcStyle}">${totDC ? totDC.toFixed(2) + "%" : "—"}</td>
         <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
         <td>${apprCell}</td>

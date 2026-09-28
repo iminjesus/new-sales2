@@ -472,13 +472,16 @@
         <div class="lbl">Mobile Number</div>
         <div class="val"><input id="mobile" placeholder="—"/></div>
 
-        <div class="lbl">Rebate-able</div>
+        <div class="lbl">Rebate-able <span style="color:#dc2626;font-weight:800">*</span></div>
         <div class="val" style="padding:0">
-          <div class="rebate">
+          <!-- Rebate-able Y/N is REQUIRED — the wrapper gets a bright red
+               border while both cells are empty so the BDE cannot miss
+               it, and pulses on submit failure via #rebateWrap.error. -->
+          <div id="rebateWrap" class="rebate" style="border:2px solid #dc2626;border-radius:3px">
             <div class="yes">YES</div>
-            <div><input id="rebate_yes" placeholder="" style="border:none;width:100%;background:transparent;text-align:center"/></div>
+            <div><input id="rebate_yes" placeholder="Y" style="border:none;width:100%;background:transparent;text-align:center;font-weight:700"/></div>
             <div class="no">NO</div>
-            <div><input id="rebate_no"  placeholder="" style="border:none;width:100%;background:transparent;text-align:center"/></div>
+            <div><input id="rebate_no"  placeholder="N" style="border:none;width:100%;background:transparent;text-align:center;font-weight:700"/></div>
           </div>
         </div>
       </div>
@@ -511,27 +514,20 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
-        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:center;position:relative">
-          <span>Management Approval / Reason Behind Pricing</span>
-          <label id="needsApprovalWrap"
-                 style="position:absolute;right:12px;display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;color:#0f172a">
-            <input type="checkbox" id="needs_mgmt_approval" style="cursor:pointer;transform:translateY(1px)"/>
-            <span>Request approval</span>
-          </label>
+        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:flex-start">
+          Reason / Notes for Approver (optional)
         </div>
 
         <div class="val" style="grid-column: span 4;padding:0">
           <textarea id="mgmt_reason" rows="3"
-                    placeholder="If Approval is requested, explain why (e.g. deep DC on aged stock, fleet retention, competitor match)."
+                    placeholder="Optional — if extra DC is being applied, briefly explain why (e.g. aged stock, fleet retention, competitor match).  Standard-pricing orders can leave this blank."
                     style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea>
         </div>
-        <!-- Approval-status band — hidden until we know the order needs
-             approval; then rendered by JS with per-approver Y/N chips. -->
+        <!-- Approval-status band — auto-shows on submitted orders that
+             carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
+             line).  Standard-pricing submissions leave it hidden. -->
         <div id="approvalPanel" hidden
              style="grid-column: span 4;padding:8px 10px;background:#fffbeb;border:1px solid #f59e0b;border-radius:3px;margin-top:6px">
-          <div style="font-weight:700;color:#92400e;font-size:11.5px;margin-bottom:4px">
-            Management Approval &nbsp;·&nbsp; parallel — either approver can approve independently
-          </div>
           <div id="approvalRow" style="display:flex;gap:14px;font-size:12px;color:#78350f;flex-wrap:wrap"></div>
         </div>
       </div>
@@ -1285,32 +1281,31 @@ function recalcRow(row){
   updateTotals();
 }
 function updateTotals(){
-  let sumQty = 0, sumAmt = 0, weightedDC = 0, sovdQty = 0;
+  let sumQty = 0, sumAmt = 0, weightedDC = 0, weightedAddDC = 0, sovdQty = 0;
   let hasAdditional = false;
   $$("#linesBody tr").forEach(r => {
-    const q   = toNum(r.querySelector('[data-col="qty"]').value);
-    const amt = toNum(r.querySelector('[data-col="total_amount"]').value);
-    const dc  = toNum(r.querySelector('[data-col="proposed_dc"]').value);
-    sumQty     += q;
-    sumAmt     += amt;
-    weightedDC += dc * q;   // qty-weighted so a big-qty line drives the avg
-    // SOVD TTL: only rows whose auto-applied additional-DC promo
-    // matched dc_additional_customer.promo = 'SOVD' contribute.
+    const q      = toNum(r.querySelector('[data-col="qty"]').value);
+    const amt    = toNum(r.querySelector('[data-col="total_amount"]').value);
+    const totDC  = toNum(r.querySelector('[data-col="proposed_dc"]').value);
+    const curDC  = toNum(r.querySelector('[data-col="current_dc"]').value);
+    // Per-row additional (chained-extra) DC in percentage points —
+    // Total DC minus Current DC.  This is the delta the MD gate is
+    // measured against for approval routing.
+    const addDCrow = Math.max(0, totDC - curDC);
+    sumQty        += q;
+    sumAmt        += amt;
+    weightedDC    += totDC   * q;   // qty-weighted total DC
+    weightedAddDC += addDCrow * q;  // qty-weighted extra DC
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
-    // "Additional DC" = anything beyond the customer's base+mth+
-    // volume normal rate: sp_dc (443/promo), add_dc (manual), or
-    // aging_dc (aged-stock tier).  When ALL rows leave those three
-    // at zero the order is at Standard Pricing → no approval path.
     const sp  = toNum(r.querySelector('[data-col="sp_dc"]').value);
     const ad  = toNum(r.querySelector('[data-col="add_dc"]').value);
     const ag  = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
     if (q > 0 && (sp > 0 || ad > 0 || ag > 0)) hasAdditional = true;
   });
-  const avgDC        = sumQty > 0 ? weightedDC / sumQty : 0;
+  const avgDC        = sumQty > 0 ? weightedDC    / sumQty : 0;
+  const avgAddDC     = sumQty > 0 ? weightedAddDC / sumQty : 0;
   const totalIncGst  = sumAmt * 1.10;
   const freightFlag  = ($("#freightFlag")?.value || "").trim().toUpperCase();
-  // Freight = 10 % of the ex-GST subtotal when the BDE types "Y" —
-  // matches the Excel workbook the Order form is derived from.
   const freight      = freightFlag === "Y" ? sumAmt * 0.10 : 0;
   const finalTotal   = totalIncGst + freight;
 
@@ -1322,28 +1317,78 @@ function updateTotals(){
   $("#freightChg").textContent  = freight ? fmtMoney(freight) : "";
   $("#finalTotal").textContent  = sumAmt ? fmtMoney(finalTotal) : "0.00";
 
-  // ── Approval-path banner ──
-  // Standard Pricing wins when no line carries an additional DC.
-  // Otherwise the 64 % threshold splits into Hayden/Kenny territory
-  // vs Managing Director (JunJong-only) territory.  The banner
-  // updates live via updateTotals so the BDE sees the impact of
-  // every keystroke before submitting.
+  // Cached for serializeOrder + wireApprovalPanel — front-end
+  // decides the approval route from these two numbers, no
+  // separate "Request approval" checkbox needed.
+  window._orderHasAdditional = hasAdditional;
+  window._orderAvgDC         = avgDC;
+  window._orderAvgAddDC      = avgAddDC;
+
+  // ── Approval-route banner ──
+  //   • no extra DC on any line       → Standard Pricing (no approval)
+  //   • extra DC + Total DC <  64 %   → Hayden or Kenny can approve
+  //   • extra DC + Total DC >= 64 %   → JunJong (MD) only — mandatory
+  //  Both Total DC and Additional DC are shown so the BDE can watch
+  //  the chained calc live as they key values into MTH / SP / Vol /
+  //  Add / Aging cells.
   const el = $("#approvalPathText");
   if (el){
+    const dcBadge =
+      `<span style="background:#f1f5f9;border:1px solid #cbd5e1;padding:2px 8px;border-radius:12px;margin-left:8px;font-weight:700">`
+        + `Total DC ${avgDC.toFixed(2)}%</span>`
+      + `<span style="background:#fef3c7;border:1px solid #f59e0b;padding:2px 8px;border-radius:12px;margin-left:6px;font-weight:700;color:#92400e">`
+        + `Additional DC ${avgAddDC.toFixed(2)}%</span>`;
     if (!hasAdditional){
-      el.innerHTML = `<span style="color:#065f46;font-weight:700">Standard Pricing</span> — no approval required.`;
-      window._orderApprovalPath = "standard";
+      el.innerHTML =
+        `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required. `
+        + dcBadge;
     } else if (avgDC >= 64){
-      el.innerHTML = `<span style="color:#7f1d1d;font-weight:700">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> — total DC is <b>${avgDC.toFixed(2)}%</b> (≥ 64 %). Only <b>JunJong (MD)</b> can approve this order.`;
-      window._orderApprovalPath = "md";
+      el.innerHTML =
+        `<span style="color:#fff;background:#7f1d1d;padding:2px 8px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
+        + `— Total DC ${avgDC.toFixed(2)}% (≥ 64 %). Only <b>JunJong (MD)</b> can approve. `
+        + dcBadge;
+      // Popup once per crossing so the BDE cannot miss the MD gate.
+      if (!window._mdPopupShown){
+        window._mdPopupShown = true;
+        setTimeout(() => alert(
+          "Total DC has reached " + avgDC.toFixed(2) + "% (≥ 64 %).\n\n" +
+          "Managing Director approval is now required.\n" +
+          "Only JunJong can approve this order."), 50);
+      }
     } else {
-      el.innerHTML = `Total DC <b>${avgDC.toFixed(2)}%</b> — <b>Hayden</b> or <b>Kenny</b> can approve.`;
-      window._orderApprovalPath = "std";
+      el.innerHTML =
+        `<b>Hayden or Kenny</b> can approve. `
+        + dcBadge;
+      window._mdPopupShown = false;
     }
   }
 }
 // Freight flag drives the last two rows — recompute on every keystroke.
 document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
+
+// Rebate-able wiring — the wrapper carries a red border until ONE of
+// the two cells has a value; auto-clears the border on first entry
+// and enforces mutual exclusion (typing in YES clears NO and vice
+// versa) so the payload always reads either Y or N, never both.
+["rebate_yes","rebate_no"].forEach(id => {
+  document.getElementById(id)?.addEventListener("input", (e) => {
+    const otherId = id === "rebate_yes" ? "rebate_no" : "rebate_yes";
+    const val = (e.target.value || "").trim();
+    if (val){
+      // Normalise to a single letter Y/N so the UI stays tidy.
+      e.target.value = id === "rebate_yes" ? "Y" : "N";
+      const other = document.getElementById(otherId);
+      if (other) other.value = "";
+    }
+    const wrap = document.getElementById("rebateWrap");
+    if (wrap){
+      const anyFilled = (document.getElementById("rebate_yes")?.value || "").trim()
+                     || (document.getElementById("rebate_no")?.value  || "").trim();
+      wrap.style.borderColor = anyFilled ? "#16a34a" : "#dc2626";
+      wrap.style.background  = "";
+    }
+  });
+});
 
 /* ────────────────────────── row template ────────────────────────── */
 function newRow(){
@@ -1604,9 +1649,9 @@ const HEADER_FIELDS = [
   // a single top-level "rebateable" field on the payload below.
   "rebateable",
 ];
-// Boolean-ish fields on the header that need special handling
-// (checkbox instead of .value).
-const HEADER_BOOL_FIELDS = ["needs_mgmt_approval"];
+// needs_mgmt_approval is auto-derived in serializeOrder from the
+// per-line DC data — no separate checkbox / boolean field is
+// serialised from the DOM any more.
 // Base DC readonly cells sit outside HEADER_FIELDS because they're
 // derived — captured separately so the printed copy still shows them.
 const BASE_DC_FIELDS = ["basedc_hkpclt", "basedc_tbr", "basedc_lfpclt"];
@@ -1627,9 +1672,10 @@ const LINE_FIELDS = [
 function serializeOrder(){
   const header = {};
   HEADER_FIELDS.forEach(id => { header[id] = $("#"+id)?.value || ""; });
-  HEADER_BOOL_FIELDS.forEach(id => {
-    header[id] = $("#"+id)?.checked ? "Y" : "N";
-  });
+  // Auto-derive needs_mgmt_approval from what actually got typed —
+  // any line carrying sp_dc / add_dc / aging_dc > 0 trips the flag.
+  // Cached by updateTotals so we don't re-scan the rows here.
+  header.needs_mgmt_approval = window._orderHasAdditional ? "Y" : "N";
   // Alias state / order_date to a friendlier name for the list page.
   header.state      = header.ship_to_state || "";
   header.order_date = header.doc_date      || "";
@@ -1665,6 +1711,9 @@ function serializeOrder(){
     freight_amount: $("#freightChg")?.textContent  || "0.00",
     grand_total:    $("#finalTotal")?.textContent  || "0.00",
     avg_dc_pct:     ($("#avgDC")?.textContent      || "0").replace("%",""),
+    // Additional DC — the qty-weighted delta (Total DC − Current DC)
+    // cached by updateTotals.  Standard-pricing orders send 0.
+    add_dc_pct:     (window._orderAvgAddDC || 0).toFixed(2),
     freight_flag:   $("#freightFlag")?.value       || "",
   };
   return {header, base_dc, totals, lines};
@@ -1686,10 +1735,21 @@ $("#btnSubmit").addEventListener("click", async () => {
   }
   // Rebate-able Y/N is REQUIRED — refuse to send an Order Request
   // without it so downstream (order-number suffix + rebate flow) is
-  // unambiguous.  Alert + toast so the BDE can't miss the miss.
+  // unambiguous.  On failure we: pulse the red border, scroll the
+  // BDE up to the box, then alert.  Belt-and-braces because BDEs
+  // have been submitting without ticking it.
   if (!payload.header.rebateable){
-    alert("Please mark Rebate-able (YES or NO) before submitting the Order Request.");
-    setStatus("Rebate-able (YES or NO) is required before submitting.", "warn");
+    const wrap = $("#rebateWrap");
+    if (wrap){
+      wrap.style.transition = "background 0.15s, border-color 0.15s";
+      wrap.style.background = "#fee2e2";
+      wrap.style.borderColor = "#dc2626";
+      wrap.scrollIntoView({behavior:"smooth", block:"center"});
+      setTimeout(() => { wrap.style.background = ""; }, 900);
+      const yesInp = $("#rebate_yes"); if (yesInp) yesInp.focus();
+    }
+    alert("Please mark Rebate-able (Y or N) before submitting the Order Request.\n\nType 'Y' in the YES cell or 'N' in the NO cell.");
+    setStatus("Rebate-able (Y or N) is required before submitting.", "warn");
     return;
   }
   btn.disabled = true; btn.textContent = "Submitting…";
@@ -1741,12 +1801,16 @@ async function hydrateSubmittedOrder(oid, editMode){
   });
   // Rebate-able Y/N — hydrate the yes/no cells from the persisted
   // flag (data.rebateable is the DB column, falls back to the
-  // header snapshot in payload_json for older rows).
+  // header snapshot in payload_json for older rows).  Once populated
+  // the wrapper switches to a green border so it no longer flags an
+  // error state for the reader.
   const rebFlag = String(data.rebateable || (p.header && p.header.rebateable) || "").toUpperCase();
   const rY = $("#rebate_yes"); const rN = $("#rebate_no");
   if (rY && rN){
     if (rebFlag === "Y"){ rY.value = "Y"; rN.value = ""; }
     else if (rebFlag === "N"){ rY.value = ""; rN.value = "N"; }
+    const wrap = $("#rebateWrap");
+    if (wrap && (rY.value || rN.value)) wrap.style.borderColor = "#16a34a";
   }
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
@@ -1841,12 +1905,18 @@ function wireApprovalPanel(order, who){
   const panel = $("#approvalPanel");
   const row   = $("#approvalRow");
   if (!panel || !row) return;
+  // Standard Pricing orders (no additional DC) never entered an
+  // approval flow — hide the panel entirely so the reader sees a
+  // clean "Standard Pricing" stamp on the Approval route banner
+  // instead of a bureaucratic block.
   if (order.needs_mgmt_approval !== "Y"){
     panel.hidden = true;
+    const el = $("#approvalPathText");
+    if (el) el.innerHTML =
+      `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required.`;
     return;
   }
-  // Tiny HTML-escape so approver names / timestamps land safe in
-  // the banner even though they come from a trusted whitelist.
+  panel.hidden = false;
   const esc = s => String(s || "").replace(/[&<>"']/g,
     ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
   const chip = (nm, done, at) => {

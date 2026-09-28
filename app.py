@@ -3832,11 +3832,21 @@ def api_orders_submit():
         except Exception:
             return 0.0
 
-    # Management-approval flag comes from the header block; the reason
-    # is a copy of the yellow textarea (mgmt_reason).  Both are stored
-    # as top-level columns so the list page and email templates can
-    # read them without unpacking payload_json.
-    needs_approval = "Y" if (header.get("needs_mgmt_approval") in ("Y", "y", True, "true", "1")) else "N"
+    # Management-approval flag is AUTO-DERIVED from the actual line
+    # data — any row whose sp_dc / add_dc / aging_dc goes above zero
+    # trips the flag.  The old "Request approval" checkbox on the
+    # form was removed for this reason: pricing itself decides.
+    # Standard-pricing orders (base + mth + volume only) come through
+    # as N and never enter an approval queue.
+    def _has_add(ln):
+        try:
+            for key in ("sp_dc", "add_dc", "aging_dc"):
+                s = str(ln.get(key) or "0").replace(",", "").replace("%", "").strip()
+                if float(s or 0) > 0: return True
+        except Exception: pass
+        return False
+    has_additional = any(_has_add(ln) for ln in lines)
+    needs_approval = "Y" if has_additional else "N"
     mgmt_reason    = (header.get("mgmt_reason") or "").strip()
     # Rebate-able Y/N is REQUIRED on submit — the front-end enforces
     # it too but this backend gate protects against direct API POSTs.
@@ -3982,6 +3992,11 @@ def api_orders_list():
         # as "Standard Pricing" in place of the approver name.
         brand_split_by_id = {i: {} for i in ids}
         has_add_by_id     = {i: False for i in ids}
+        # add_dc_pct per row = qty-weighted (proposed_dc − current_dc)
+        # across the order's lines.  Stored so orders_list.html can
+        # print both Total DC% and Additional DC% columns.
+        add_dc_weighted   = {i: 0.0 for i in ids}
+        add_dc_qty        = {i: 0.0 for i in ids}
         if ids:
             fmt = ",".join(["%s"] * len(ids))
             try:
@@ -4008,6 +4023,15 @@ def api_orders_list():
                             except Exception: return 0.0
                         if _f(ln.get("sp_dc")) > 0 or _f(ln.get("add_dc")) > 0 or _f(ln.get("aging_dc")) > 0:
                             has_add_by_id[pr["id"]] = True
+                        # Additional DC = proposed_dc − current_dc, per line,
+                        # clamped at 0.  qty-weighted so a big line drives the avg.
+                        q     = _f(ln.get("qty"))
+                        totDC = _f(ln.get("proposed_dc"))
+                        curDC = _f(ln.get("current_dc"))
+                        addDC = max(0.0, totDC - curDC)
+                        if q > 0:
+                            add_dc_weighted[pr["id"]] += addDC * q
+                            add_dc_qty[pr["id"]]      += q
             except Exception:
                 pass
         for r in rows:
@@ -4022,6 +4046,8 @@ def api_orders_list():
             r["grand_total_tbr"]  = round(tbr_by_id.get(r["id"],  0.0), 2)
             r["brand_split"]      = {k: round(v, 2) for k, v in brand_split_by_id.get(r["id"], {}).items()}
             r["has_additional_dc"] = bool(has_add_by_id.get(r["id"], False))
+            q_sum = add_dc_qty.get(r["id"], 0.0)
+            r["add_dc_pct"] = round(add_dc_weighted.get(r["id"], 0.0) / q_sum, 2) if q_sum > 0 else 0.0
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4182,7 +4208,17 @@ def api_orders_update(oid):
         # behalf and the front-end doesn't need a second click.  Also
         # auto-prepend a short remark to mgmt_reason so approvers /
         # reviewers see who touched the numbers ("Pamela corrected").
-        needs_approval = "Y" if (header.get("needs_mgmt_approval") in ("Y","y",True,"true","1")) else "N"
+        # needs_approval is AUTO-DERIVED from the edited line data —
+        # any row whose sp_dc / add_dc / aging_dc > 0 trips the flag.
+        def _has_add(ln):
+            try:
+                for key in ("sp_dc", "add_dc", "aging_dc"):
+                    s = str(ln.get(key) or "0").replace(",", "").replace("%", "").strip()
+                    if float(s or 0) > 0: return True
+            except Exception: pass
+            return False
+        has_additional = any(_has_add(ln) for ln in lines)
+        needs_approval = "Y" if has_additional else "N"
         mgmt_reason    = (header.get("mgmt_reason") or "").strip()
         editor_name = PRICE_EDITOR_EMAILS.get(who, "")
         if is_editor:
@@ -4459,9 +4495,9 @@ def api_orders_list_excel():
             wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(
-            f"SELECT order_no, submitted_at, submitted_by_bde, "
+            f"SELECT id, order_no, submitted_at, submitted_by_bde, "
             f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
-            f"       total_qty, grand_total, avg_dc_pct, "
+            f"       total_qty, grand_total, avg_dc_pct, payload_json, "
             f"       rebateable, status_sap, needs_mgmt_approval, "
             f"       approved_by_name, approved_at, mgmt_reason "
             f"FROM submitted_orders {where_sql} "
@@ -4475,10 +4511,28 @@ def api_orders_list_excel():
         try: conn.close()
         except: pass
 
+    # Compute Add DC% per row from payload_json (proposed − current,
+    # qty-weighted) so the Excel matches what orders_list.html shows.
+    import json as _json_x
+    def _f(v):
+        try: return float(str(v or "0").replace(",", "").replace("%", ""))
+        except Exception: return 0.0
+    add_dc_by_id = {}
+    for r in rows:
+        try: pj = _json_x.loads(r.get("payload_json") or "{}")
+        except Exception: pj = {}
+        w, q = 0.0, 0.0
+        for ln in (pj.get("lines") or []):
+            lq = _f(ln.get("qty"))
+            if lq <= 0: continue
+            add = max(0.0, _f(ln.get("proposed_dc")) - _f(ln.get("current_dc")))
+            w += add * lq; q += lq
+        add_dc_by_id[r["id"]] = round(w / q, 2) if q > 0 else 0.0
+
     wb = Workbook(); ws = wb.active; ws.title = "Orders"
     headers = ["Order #", "Submitted", "BDE", "Sold-to", "Sold-to Name",
                "Ship-to", "Ship-to Name", "State", "Qty", "Grand Total",
-               "Avg DC %", "Rebateable", "SAP Status",
+               "Add DC %", "Total DC %", "Rebateable", "SAP Status",
                "Needs Approval", "Approved By", "Approved At", "Remark"]
     ws.append(headers)
     for c, _ in enumerate(headers, start=1):
@@ -4497,6 +4551,7 @@ def api_orders_list_excel():
             r.get("state") or "",
             r.get("total_qty") or 0,
             float(r.get("grand_total") or 0),
+            float(add_dc_by_id.get(r["id"], 0.0)),
             float(r.get("avg_dc_pct") or 0),
             r.get("rebateable") or "",
             r.get("status_sap") or "",
