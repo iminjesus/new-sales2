@@ -215,6 +215,13 @@
   .rebate > div:last-child{border-right:none}
   .rebate .yes{background:#eaf6ea;font-weight:700}
   .rebate .no{background:#fdecec;font-weight:700}
+  /* V-check style — YES / NO cells become clickable and light up
+     with a big ✓ when picked.  Mutually exclusive, no typing. */
+  .rebate .pick{cursor:pointer;user-select:none;font-weight:800;font-size:18px;color:#94a3b8;transition:all .12s}
+  .rebate .pick:hover{background:#f1f5f9}
+  .rebate .pick.on{color:#fff}
+  .rebate .pick.on.yes-on{background:#16a34a}
+  .rebate .pick.on.no-on {background:#dc2626}
 
   /* sovd summary strip */
   .sovd{
@@ -475,13 +482,17 @@
         <div class="lbl">Rebate-able <span style="color:#dc2626;font-weight:800">*</span></div>
         <div class="val" style="padding:0">
           <!-- Rebate-able Y/N is REQUIRED — the wrapper gets a bright red
-               border while both cells are empty so the BDE cannot miss
-               it, and pulses on submit failure via #rebateWrap.error. -->
+               border while neither pick is made, and the two picker
+               cells light up with a big ✓ when clicked (mutually
+               exclusive).  Hidden inputs #rebate_yes / #rebate_no
+               keep the existing serializeOrder wiring unchanged. -->
           <div id="rebateWrap" class="rebate" style="border:2px solid #dc2626;border-radius:3px">
             <div class="yes">YES</div>
-            <div><input id="rebate_yes" placeholder="Y" style="border:none;width:100%;background:transparent;text-align:center;font-weight:700"/></div>
+            <div id="rebatePickYes" class="pick" title="Click to mark as Rebate-able">—</div>
             <div class="no">NO</div>
-            <div><input id="rebate_no"  placeholder="N" style="border:none;width:100%;background:transparent;text-align:center;font-weight:700"/></div>
+            <div id="rebatePickNo"  class="pick" title="Click to mark as NOT Rebate-able">—</div>
+            <input type="hidden" id="rebate_yes"/>
+            <input type="hidden" id="rebate_no"/>
           </div>
         </div>
       </div>
@@ -1284,23 +1295,25 @@ function updateTotals(){
   let sumQty = 0, sumAmt = 0, weightedDC = 0, weightedAddDC = 0, sovdQty = 0;
   let hasAdditional = false;
   $$("#linesBody tr").forEach(r => {
-    const q      = toNum(r.querySelector('[data-col="qty"]').value);
-    const amt    = toNum(r.querySelector('[data-col="total_amount"]').value);
-    const totDC  = toNum(r.querySelector('[data-col="proposed_dc"]').value);
-    const curDC  = toNum(r.querySelector('[data-col="current_dc"]').value);
-    // Per-row additional (chained-extra) DC in percentage points —
-    // Total DC minus Current DC.  This is the delta the MD gate is
-    // measured against for approval routing.
-    const addDCrow = Math.max(0, totDC - curDC);
+    const q     = toNum(r.querySelector('[data-col="qty"]').value);
+    const amt   = toNum(r.querySelector('[data-col="total_amount"]').value);
+    const totDC = toNum(r.querySelector('[data-col="proposed_dc"]').value);
+    // Per-row Additional DC = MTH + Volume + Additional Special + Aging.
+    // SP (443DC / promo) is the customer's auto-applied contract
+    // promo, NOT an "additional" the BDE stacked on — so it stays
+    // out of Add DC and out of the Standard-Pricing detector.  This
+    // matches the highlighted red-boxed columns on the SPRF sheet.
+    const mth = toNum(r.querySelector('[data-col="mth_dc"]')?.value);
+    const vol = toNum(r.querySelector('[data-col="vol_dc"]')?.value);
+    const ad  = toNum(r.querySelector('[data-col="add_dc"]')?.value);
+    const ag  = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
+    const addDCrow = mth + vol + ad + ag;
     sumQty        += q;
     sumAmt        += amt;
-    weightedDC    += totDC   * q;   // qty-weighted total DC
-    weightedAddDC += addDCrow * q;  // qty-weighted extra DC
+    weightedDC    += totDC    * q;   // qty-weighted total (chained) DC
+    weightedAddDC += addDCrow * q;   // qty-weighted MTH+Vol+Add+Aging sum
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
-    const sp  = toNum(r.querySelector('[data-col="sp_dc"]').value);
-    const ad  = toNum(r.querySelector('[data-col="add_dc"]').value);
-    const ag  = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
-    if (q > 0 && (sp > 0 || ad > 0 || ag > 0)) hasAdditional = true;
+    if (q > 0 && addDCrow > 0) hasAdditional = true;
   });
   const avgDC        = sumQty > 0 ? weightedDC    / sumQty : 0;
   const avgAddDC     = sumQty > 0 ? weightedAddDC / sumQty : 0;
@@ -1366,28 +1379,37 @@ function updateTotals(){
 // Freight flag drives the last two rows — recompute on every keystroke.
 document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
 
-// Rebate-able wiring — the wrapper carries a red border until ONE of
-// the two cells has a value; auto-clears the border on first entry
-// and enforces mutual exclusion (typing in YES clears NO and vice
-// versa) so the payload always reads either Y or N, never both.
-["rebate_yes","rebate_no"].forEach(id => {
-  document.getElementById(id)?.addEventListener("input", (e) => {
-    const otherId = id === "rebate_yes" ? "rebate_no" : "rebate_yes";
-    const val = (e.target.value || "").trim();
-    if (val){
-      // Normalise to a single letter Y/N so the UI stays tidy.
-      e.target.value = id === "rebate_yes" ? "Y" : "N";
-      const other = document.getElementById(otherId);
-      if (other) other.value = "";
-    }
-    const wrap = document.getElementById("rebateWrap");
-    if (wrap){
-      const anyFilled = (document.getElementById("rebate_yes")?.value || "").trim()
-                     || (document.getElementById("rebate_no")?.value  || "").trim();
-      wrap.style.borderColor = anyFilled ? "#16a34a" : "#dc2626";
-      wrap.style.background  = "";
-    }
-  });
+// Rebate-able V-check wiring — YES / NO cells act like radio buttons.
+// Clicking either flips its picker to a big ✓ on a coloured background,
+// stamps the hidden input, clears the other side, and turns the red
+// border green.  A second click on the same side clears the pick and
+// puts the box back into its "please choose" red state.
+function setRebate(pick){
+  const yesInp = document.getElementById("rebate_yes");
+  const noInp  = document.getElementById("rebate_no");
+  const yesPick = document.getElementById("rebatePickYes");
+  const noPick  = document.getElementById("rebatePickNo");
+  const wrap    = document.getElementById("rebateWrap");
+  if (!yesInp || !noInp || !yesPick || !noPick || !wrap) return;
+  // Reset both.
+  yesInp.value = ""; noInp.value = "";
+  yesPick.classList.remove("on","yes-on"); yesPick.textContent = "—";
+  noPick .classList.remove("on","no-on");  noPick .textContent = "—";
+  if (pick === "Y"){
+    yesInp.value = "Y";
+    yesPick.classList.add("on","yes-on"); yesPick.textContent = "✓";
+  } else if (pick === "N"){
+    noInp.value = "N";
+    noPick.classList.add("on","no-on");   noPick.textContent = "✓";
+  }
+  wrap.style.borderColor = pick ? "#16a34a" : "#dc2626";
+  wrap.style.background  = "";
+}
+document.getElementById("rebatePickYes")?.addEventListener("click", () => {
+  setRebate(document.getElementById("rebate_yes").value === "Y" ? "" : "Y");
+});
+document.getElementById("rebatePickNo")?.addEventListener("click", () => {
+  setRebate(document.getElementById("rebate_no").value === "N" ? "" : "N");
 });
 
 /* ────────────────────────── row template ────────────────────────── */
@@ -1799,19 +1821,12 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (el.type === "checkbox") el.checked = (v === "Y" || v === true || v === "true");
     else el.value = v || "";
   });
-  // Rebate-able Y/N — hydrate the yes/no cells from the persisted
-  // flag (data.rebateable is the DB column, falls back to the
-  // header snapshot in payload_json for older rows).  Once populated
-  // the wrapper switches to a green border so it no longer flags an
-  // error state for the reader.
+  // Rebate-able Y/N — hydrate the picker + wrapper from the persisted
+  // flag (data.rebateable is the DB column, falls back to the header
+  // snapshot in payload_json for older rows).  setRebate handles the
+  // picker cells, hidden inputs and border colour.
   const rebFlag = String(data.rebateable || (p.header && p.header.rebateable) || "").toUpperCase();
-  const rY = $("#rebate_yes"); const rN = $("#rebate_no");
-  if (rY && rN){
-    if (rebFlag === "Y"){ rY.value = "Y"; rN.value = ""; }
-    else if (rebFlag === "N"){ rY.value = ""; rN.value = "N"; }
-    const wrap = $("#rebateWrap");
-    if (wrap && (rY.value || rN.value)) wrap.style.borderColor = "#16a34a";
-  }
+  if (rebFlag === "Y" || rebFlag === "N") setRebate(rebFlag);
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
     const el = $("#"+k); if (el) el.value = v || "";

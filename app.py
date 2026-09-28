@@ -3833,19 +3833,20 @@ def api_orders_submit():
             return 0.0
 
     # Management-approval flag is AUTO-DERIVED from the actual line
-    # data — any row whose sp_dc / add_dc / aging_dc goes above zero
-    # trips the flag.  The old "Request approval" checkbox on the
-    # form was removed for this reason: pricing itself decides.
-    # Standard-pricing orders (base + mth + volume only) come through
-    # as N and never enter an approval queue.
-    def _has_add(ln):
+    # data — any row whose MTH + Vol + Add + Aging sums to > 0 trips
+    # the flag.  SP (443 promo) is the customer's auto contract promo
+    # and does NOT count as additional; a row with only SP > 0 stays
+    # at Standard Pricing.  This matches the SPRF sheet's red-boxed
+    # "Additional" columns.
+    def _add_sum(ln):
         try:
-            for key in ("sp_dc", "add_dc", "aging_dc"):
+            tot = 0.0
+            for key in ("mth_dc", "vol_dc", "add_dc", "aging_dc"):
                 s = str(ln.get(key) or "0").replace(",", "").replace("%", "").strip()
-                if float(s or 0) > 0: return True
-        except Exception: pass
-        return False
-    has_additional = any(_has_add(ln) for ln in lines)
+                tot += float(s or 0)
+            return tot
+        except Exception: return 0.0
+    has_additional = any(_add_sum(ln) > 0 for ln in lines)
     needs_approval = "Y" if has_additional else "N"
     mgmt_reason    = (header.get("mgmt_reason") or "").strip()
     # Rebate-able Y/N is REQUIRED on submit — the front-end enforces
@@ -3965,7 +3966,8 @@ def api_orders_list():
         cur.execute(
             f"SELECT id, order_no, submitted_at, submitted_by_bde, submitted_by_email, "
             f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
-            f"       total_qty, grand_total, status_sap, status_changed_at, "
+            f"       total_qty, grand_total, avg_dc_pct, "
+            f"       status_sap, status_changed_at, "
             f"       status_changed_by, needs_mgmt_approval, "
             f"       approved_a, approved_b, approved_c, "
             f"       approved_by_email, approved_by_name, approved_at, "
@@ -3992,9 +3994,10 @@ def api_orders_list():
         # as "Standard Pricing" in place of the approver name.
         brand_split_by_id = {i: {} for i in ids}
         has_add_by_id     = {i: False for i in ids}
-        # add_dc_pct per row = qty-weighted (proposed_dc − current_dc)
-        # across the order's lines.  Stored so orders_list.html can
-        # print both Total DC% and Additional DC% columns.
+        # add_dc_pct per row = qty-weighted (MTH + Vol + Add + Aging)
+        # across the order's lines.  SP (443 promo) is the customer's
+        # auto contract promo, so it stays OUT of Add DC — matches
+        # the SPRF sheet's red-boxed "Additional" columns.
         add_dc_weighted   = {i: 0.0 for i in ids}
         add_dc_qty        = {i: 0.0 for i in ids}
         if ids:
@@ -4007,8 +4010,10 @@ def api_orders_list():
                     for ln in (pj.get("lines") or []):
                         tag = str(ln.get("_line") or ln.get("line") or "").upper()
                         brand = str(ln.get("brand") or "").strip().upper()
-                        try: amt = float(str(ln.get("total_amount") or "0").replace(",", "").replace("$", "") or 0)
-                        except Exception: amt = 0.0
+                        def _f(v):
+                            try:  return float(str(v or "0").replace(",", "").replace("%", "").replace("$", ""))
+                            except Exception: return 0.0
+                        amt = _f(ln.get("total_amount"))
                         if tag == "PCLT":
                             pclt_by_id[pr["id"]] = pclt_by_id.get(pr["id"], 0.0) + amt
                         elif tag == "TBR":
@@ -4016,21 +4021,16 @@ def api_orders_list():
                         if brand and tag in ("PCLT", "TBR"):
                             key = f"{brand}-{tag}"
                             brand_split_by_id[pr["id"]][key] = brand_split_by_id[pr["id"]].get(key, 0.0) + amt
-                        # Any promo / manual / aging DC on any line
-                        # flips has_add for the whole order.
-                        def _f(v):
-                            try:  return float(str(v or "0").replace(",", "").replace("%", ""))
-                            except Exception: return 0.0
-                        if _f(ln.get("sp_dc")) > 0 or _f(ln.get("add_dc")) > 0 or _f(ln.get("aging_dc")) > 0:
-                            has_add_by_id[pr["id"]] = True
-                        # Additional DC = proposed_dc − current_dc, per line,
-                        # clamped at 0.  qty-weighted so a big line drives the avg.
-                        q     = _f(ln.get("qty"))
-                        totDC = _f(ln.get("proposed_dc"))
-                        curDC = _f(ln.get("current_dc"))
-                        addDC = max(0.0, totDC - curDC)
+                        # Add DC = MTH + Vol + Add + Aging per line
+                        # (BDE-added extras, excluding the SP auto promo).
+                        # Any line where that sum > 0 flips has_add and
+                        # takes the order out of Standard Pricing.
+                        add_line = _f(ln.get("mth_dc")) + _f(ln.get("vol_dc")) \
+                                 + _f(ln.get("add_dc")) + _f(ln.get("aging_dc"))
+                        if add_line > 0: has_add_by_id[pr["id"]] = True
+                        q = _f(ln.get("qty"))
                         if q > 0:
-                            add_dc_weighted[pr["id"]] += addDC * q
+                            add_dc_weighted[pr["id"]] += add_line * q
                             add_dc_qty[pr["id"]]      += q
             except Exception:
                 pass
@@ -4209,15 +4209,17 @@ def api_orders_update(oid):
         # auto-prepend a short remark to mgmt_reason so approvers /
         # reviewers see who touched the numbers ("Pamela corrected").
         # needs_approval is AUTO-DERIVED from the edited line data —
-        # any row whose sp_dc / add_dc / aging_dc > 0 trips the flag.
-        def _has_add(ln):
+        # any row whose MTH+Vol+Add+Aging > 0 trips the flag.  SP
+        # (443 promo) is auto contract and doesn't count.
+        def _add_sum(ln):
             try:
-                for key in ("sp_dc", "add_dc", "aging_dc"):
+                tot = 0.0
+                for key in ("mth_dc", "vol_dc", "add_dc", "aging_dc"):
                     s = str(ln.get(key) or "0").replace(",", "").replace("%", "").strip()
-                    if float(s or 0) > 0: return True
-            except Exception: pass
-            return False
-        has_additional = any(_has_add(ln) for ln in lines)
+                    tot += float(s or 0)
+                return tot
+            except Exception: return 0.0
+        has_additional = any(_add_sum(ln) > 0 for ln in lines)
         needs_approval = "Y" if has_additional else "N"
         mgmt_reason    = (header.get("mgmt_reason") or "").strip()
         editor_name = PRICE_EDITOR_EMAILS.get(who, "")
@@ -4511,8 +4513,9 @@ def api_orders_list_excel():
         try: conn.close()
         except: pass
 
-    # Compute Add DC% per row from payload_json (proposed − current,
-    # qty-weighted) so the Excel matches what orders_list.html shows.
+    # Compute Add DC% per row from payload_json (MTH+Vol+Add+Aging,
+    # qty-weighted) — matches orders_list.html's Add DC% column.  SP
+    # promo excluded, consistent with the SPRF sheet's red boxes.
     import json as _json_x
     def _f(v):
         try: return float(str(v or "0").replace(",", "").replace("%", ""))
@@ -4525,7 +4528,8 @@ def api_orders_list_excel():
         for ln in (pj.get("lines") or []):
             lq = _f(ln.get("qty"))
             if lq <= 0: continue
-            add = max(0.0, _f(ln.get("proposed_dc")) - _f(ln.get("current_dc")))
+            add = _f(ln.get("mth_dc")) + _f(ln.get("vol_dc")) \
+                + _f(ln.get("add_dc")) + _f(ln.get("aging_dc"))
             w += add * lq; q += lq
         add_dc_by_id[r["id"]] = round(w / q, 2) if q > 0 else 0.0
 
