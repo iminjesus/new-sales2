@@ -486,6 +486,16 @@
 
     <!-- ─── Order# column ─── -->
     <div class="col">
+      <!-- ─ Approval-path preview — updates live as recalcRow fires so
+           the BDE sees WHO can sign off (or that no approval is needed)
+           before hitting Submit.  Rules:
+             • no additional DC on any line             → Standard Pricing
+             • avg total DC < 64 %                       → Hayden or Kenny
+             • avg total DC ≥ 64 %                       → JunJong (MD)
+                                                         only — mandatory  -->
+      <div id="approvalPath" style="background:#f1f5f9;border:1px solid #cbd5e1;border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:12px;color:#0f172a">
+        <b>Approval route</b>: <span id="approvalPathText">—</span>
+      </div>
       <div class="grid" style="grid-template-columns:150px 1fr 90px 1fr">
         <div class="lbl">Purchase Order #</div>
         <div class="val" style="grid-column: span 3"><input id="po_number" placeholder=""/></div>
@@ -1276,6 +1286,7 @@ function recalcRow(row){
 }
 function updateTotals(){
   let sumQty = 0, sumAmt = 0, weightedDC = 0, sovdQty = 0;
+  let hasAdditional = false;
   $$("#linesBody tr").forEach(r => {
     const q   = toNum(r.querySelector('[data-col="qty"]').value);
     const amt = toNum(r.querySelector('[data-col="total_amount"]').value);
@@ -1286,6 +1297,14 @@ function updateTotals(){
     // SOVD TTL: only rows whose auto-applied additional-DC promo
     // matched dc_additional_customer.promo = 'SOVD' contribute.
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
+    // "Additional DC" = anything beyond the customer's base+mth+
+    // volume normal rate: sp_dc (443/promo), add_dc (manual), or
+    // aging_dc (aged-stock tier).  When ALL rows leave those three
+    // at zero the order is at Standard Pricing → no approval path.
+    const sp  = toNum(r.querySelector('[data-col="sp_dc"]').value);
+    const ad  = toNum(r.querySelector('[data-col="add_dc"]').value);
+    const ag  = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
+    if (q > 0 && (sp > 0 || ad > 0 || ag > 0)) hasAdditional = true;
   });
   const avgDC        = sumQty > 0 ? weightedDC / sumQty : 0;
   const totalIncGst  = sumAmt * 1.10;
@@ -1302,6 +1321,26 @@ function updateTotals(){
   $("#totalIncGst").textContent = sumAmt ? fmtMoney(totalIncGst) : "0.00";
   $("#freightChg").textContent  = freight ? fmtMoney(freight) : "";
   $("#finalTotal").textContent  = sumAmt ? fmtMoney(finalTotal) : "0.00";
+
+  // ── Approval-path banner ──
+  // Standard Pricing wins when no line carries an additional DC.
+  // Otherwise the 64 % threshold splits into Hayden/Kenny territory
+  // vs Managing Director (JunJong-only) territory.  The banner
+  // updates live via updateTotals so the BDE sees the impact of
+  // every keystroke before submitting.
+  const el = $("#approvalPathText");
+  if (el){
+    if (!hasAdditional){
+      el.innerHTML = `<span style="color:#065f46;font-weight:700">Standard Pricing</span> — no approval required.`;
+      window._orderApprovalPath = "standard";
+    } else if (avgDC >= 64){
+      el.innerHTML = `<span style="color:#7f1d1d;font-weight:700">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> — total DC is <b>${avgDC.toFixed(2)}%</b> (≥ 64 %). Only <b>JunJong (MD)</b> can approve this order.`;
+      window._orderApprovalPath = "md";
+    } else {
+      el.innerHTML = `Total DC <b>${avgDC.toFixed(2)}%</b> — <b>Hayden</b> or <b>Kenny</b> can approve.`;
+      window._orderApprovalPath = "std";
+    }
+  }
 }
 // Freight flag drives the last two rows — recompute on every keystroke.
 document.getElementById("freightFlag")?.addEventListener("input", updateTotals);

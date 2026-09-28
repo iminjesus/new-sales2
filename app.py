@@ -3668,128 +3668,129 @@ def _next_order_no(cur, rebateable_flag: str) -> str:
 
 
 def _approval_email_html(oid, order, approver_name, approver_email, base_url):
-    """Standalone email fired the moment ONE approver clicks Approve.
-    Lists what the order is + who approved it so the whole thread
-    (Harry, other approvers, BDE, read-only reviewers) sees the
-    outcome without opening the link."""
+    """Compact horizontal-chip email fired the moment ONE approver clicks
+    Approve.  Matches the layout of the submit notification so the
+    whole thread (Harry, other approvers, BDE, read-only reviewers)
+    sees the outcome without scrolling."""
     order_no = order.get("order_no") or f"#{oid}"
-    sold_to_name = _esc_html(order.get("sold_to_name") or "")
-    sold_to = _esc_html(order.get("sold_to") or "")
-    bde = _esc_html(order.get("submitted_by_bde") or "")
+    sold_to_name = order.get("sold_to_name") or ""
+    sold_to = order.get("sold_to") or ""
+    bde   = order.get("submitted_by_bde") or ""
     grand = order.get("grand_total") or ""
-    link = f"{base_url}/orders_list#o={oid}" if base_url else ""
-    ts = datetime.now().strftime("%d/%m/%Y %H:%M")
+    avg_dc = order.get("avg_dc_pct") or ""
+    reb   = (order.get("rebateable") or "").upper() or "?"
+    link  = f"{base_url}/orders_list#o={oid}" if base_url else ""
+    ts    = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    def _chip(label, value, colour="#0f172a"):
+        return (f'<span style="display:inline-block;margin:0 10px 4px 0">'
+                f'<span style="color:#6b7280;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;margin-right:4px">{_esc_html(label)}</span>'
+                f'<b style="color:{colour};font-size:12.5px">{_esc_html(value)}</b>'
+                f'</span>')
     return f"""
-      <div style="font-family:Arial,sans-serif;font-size:13px;color:#111">
-        <div style="background:#dcfce7;border:1px solid #16a34a;padding:12px 16px;border-radius:4px;margin-bottom:14px">
-          <div style="font-weight:800;color:#166534;font-size:15px;margin-bottom:4px">
-            ✓ SPRF approved by {_esc_html(approver_name)}
-          </div>
-          <div style="color:#166534;font-size:12.5px">
-            {_esc_html(ts)} · Order <b>{_esc_html(order_no)}</b> · BDE <b>{bde}</b>
-            · Customer <b>{sold_to_name} ({sold_to})</b>
-            · Grand total <b>${_esc_html(str(grand))}</b>
-          </div>
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:900px">
+      <div style="background:#16a34a;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
+        ✓ SPRF {_esc_html(order_no)} — approved by {_esc_html(approver_name)}
+      </div>
+      <div style="padding:10px 12px;background:#f0fdf4;border:1px solid #16a34a;border-top:none">
+        <div style="line-height:1.8">
+          {_chip("Approved",  ts, "#166534")}
+          {_chip("Approver",  approver_name, "#166534")}
+          {_chip("BDE",       bde)}
+          {_chip("Customer",  f"{sold_to_name} ({sold_to})")}
+          {_chip("Reb",       reb, "#065f46" if reb == "Y" else "#991b1b")}
+          {_chip("Grand",     grand, "#0b3d91")}
+          {_chip("Avg DC",    (str(avg_dc) + "%") if avg_dc != "" else "—", "#b45309")}
         </div>
-        <div style="color:#374151;font-size:12.5px">
-          {'<a href="' + link + '" style="color:#1d4ed8;font-weight:700">Open in Orders list →</a>' if link else ''}
-        </div>
-        <div style="color:#6b7280;font-size:11px;margin-top:10px">
-          This is a parallel-approver workflow — the first approver
-          to click Approve finalises the order.  Approver of record:
-          <b>{_esc_html(approver_name)}</b> ({_esc_html(approver_email)}).
+        <div style="margin-top:8px;font-size:11.5px">
+          {'<a href="' + link + '" style="background:#16a34a;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open in Orders list</a>' if link else ''}
+          <span style="color:#6b7280;margin-left:12px">Parallel-approver workflow — first approver finalises. Approver of record: <b>{_esc_html(approver_name)}</b> ({_esc_html(approver_email)}).</span>
         </div>
       </div>
+    </div>
     """.strip()
 
 def _submitted_order_email_html(oid, order, base_url):
-    """HTML body of the notification email — mirrors the compact
-    header + lines summary in the form.  Link lands on the Orders
-    list page (harry can click through to the detail from there)."""
+    """Compact HTML notification — horizontal chip layout instead of a
+    tall label/value table.  Fits everything the approver needs to
+    triage in the first screenful without scrolling."""
     header = order.get("header") or {}
     totals = order.get("totals") or {}
     lines  = order.get("lines")  or []
-    def _row(lbl, val):
-        return (f'<tr><td style="padding:4px 10px;color:#6b7280;font-size:11px;'
-                f'text-transform:uppercase;letter-spacing:.4px;width:140px;">{_esc_html(lbl)}</td>'
-                f'<td style="padding:4px 10px;color:#111;font-size:13px;">{_esc_html(val)}</td></tr>')
+    order_no = order.get("order_no") or f"#{oid}"
+    reb = (order.get("rebateable") or "").upper() or "?"
+    def _chip(label, value, colour="#0f172a"):
+        return (f'<span style="display:inline-block;margin:0 10px 4px 0">'
+                f'<span style="color:#6b7280;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;margin-right:4px">{_esc_html(label)}</span>'
+                f'<b style="color:{colour};font-size:12.5px">{_esc_html(value)}</b>'
+                f'</span>')
+    # 6-column line rows — the table stays compact even on wide
+    # orders because each row is a single line of text.
     line_rows = []
     for ln in lines:
         line_rows.append(
-            f'<tr>'
-            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;font-family:monospace">{_esc_html(ln.get("m_code",""))}</td>'
-            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("qty",""))}</td>'
-            f'<td style="padding:6px 8px;border:1px solid #e5e7eb">{_esc_html(ln.get("description","") or ln.get("product_name",""))}</td>'
-            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("list_price",""))}</td>'
-            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("proposed_dc",""))}</td>'
-            f'<td style="padding:6px 8px;border:1px solid #e5e7eb;text-align:right">{_esc_html(ln.get("total_amount",""))}</td>'
-            f'</tr>'
+            '<tr>'
+            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;font-family:monospace;font-size:11.5px">{_esc_html(ln.get("m_code",""))}</td>'
+            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px">{_esc_html(ln.get("qty",""))}</td>'
+            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:11.5px">{_esc_html((ln.get("brand","") or "") + " " + (ln.get("pattern","") or "") + " " + (ln.get("description","") or ln.get("product_name","")))}</td>'
+            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px">{_esc_html(ln.get("list_price",""))}</td>'
+            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px;color:#b45309;font-weight:600">{_esc_html(ln.get("proposed_dc",""))}</td>'
+            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px;font-weight:700">{_esc_html(ln.get("total_amount",""))}</td>'
+            '</tr>'
         )
-    list_url   = f"{base_url}/orders_list"
     detail_url = f"{base_url}/order?id={oid}"
-    # Approval-needed banner + reason block — only rendered when the
-    # BDE ticked "Management Approval needed" so the two approvers
-    # (Hayden + JunJong + Kenny) immediately see WHAT they're being
-    # asked to approve and WHY.
+    list_url   = f"{base_url}/orders_list"
+    # Approval banner + reason — kept but slimmed to one line + reason.
     approval_block = ""
-    if (order.get("needs_mgmt_approval") == "Y"):
+    if order.get("needs_mgmt_approval") == "Y":
+        try: avg_dc = float(str(totals.get("avg_dc_pct") or 0))
+        except Exception: avg_dc = 0.0
+        route = ("<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JunJong only</b> (total DC ≥ 64%)"
+                 if avg_dc >= 64.0
+                 else "Hayden or Kenny can approve (total DC &lt; 64%)")
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
-        approval_block = f"""
-        <div style="background:#fef3c7;border:1px solid #f59e0b;padding:10px 14px;margin-bottom:14px;border-radius:4px">
-          <div style="font-weight:800;color:#92400e;margin-bottom:6px">⚑ Management Approval Requested</div>
-          <div style="color:#78350f;font-size:12.5px;margin-bottom:6px">
-            The BDE has flagged this order for parallel approval by Hayden Begbie, JunJong Cho and Kenny Kim.
-          </div>
-          <div style="background:#fff;border:1px solid #fbbf24;padding:8px 10px;border-radius:3px;font-size:12.5px;color:#111">
-            <b>Reason:</b><br>{reason_html}
-          </div>
-        </div>
-        """
+        approval_block = (
+            '<div style="background:#fef3c7;border:1px solid #f59e0b;padding:6px 10px;'
+            'margin:8px 0;border-radius:3px;font-size:12px;color:#92400e">'
+            f'<b>⚑ Approval requested</b> — {route}. '
+            f'<span style="color:#78350f">Reason: {reason_html}</span></div>'
+        )
     return f"""
-    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:820px">
-      <div style="background:#f5c518;padding:12px 16px;font-weight:800;color:#000">
-        Special Price Request Form &nbsp; #{oid}
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:900px">
+      <div style="background:#f5c518;padding:8px 12px;font-weight:800;color:#000;font-size:13.5px">
+        SPRF {_esc_html(order_no)} · {_esc_html(header.get('sold_to_name',''))} ({_esc_html(header.get('sold_to',''))})
       </div>
-      <div style="padding:14px 16px;background:#fff;border:1px solid #e5e7eb">
+      <div style="padding:10px 12px;background:#fff;border:1px solid #e5e7eb;border-top:none">
+        <div style="line-height:1.8">
+          {_chip("Submitted", order.get("submitted_at") or "")}
+          {_chip("BDE",       header.get("bde_name") or "")}
+          {_chip("State",     header.get("state") or "")}
+          {_chip("Ship-to",   header.get("ship_to_name") or "")}
+          {_chip("PO",        header.get("po_number") or "—")}
+          {_chip("Reb",       reb, "#065f46" if reb == "Y" else "#991b1b")}
+          {_chip("Qty",       totals.get("total_qty") or 0)}
+          {_chip("Grand",     totals.get("grand_total") or "0.00", "#0b3d91")}
+          {_chip("Avg DC",    (str(totals.get("avg_dc_pct") or 0) + "%"), "#b45309")}
+        </div>
         {approval_block}
-        <table style="border-collapse:collapse;width:100%;margin-bottom:14px">
-          {_row("Submitted",      order.get("submitted_at") or "")}
-          {_row("BDE",            header.get("bde_name") or "")}
-          {_row("Sold-to",        f'{header.get("sold_to","")} — {header.get("sold_to_name","")}')}
-          {_row("Ship-to",        f'{header.get("ship_to","")} — {header.get("ship_to_name","")}')}
-          {_row("State",          header.get("state") or "")}
-          {_row("PO #",           header.get("po_number") or "—")}
-          {_row("Order date",     header.get("order_date") or "")}
-          {_row("Total qty",      totals.get("total_qty") or 0)}
-          {_row("SOVD qty",       totals.get("sovd_qty") or 0)}
-          {_row("Subtotal",       totals.get("subtotal") or "0.00")}
-          {_row("Total inc GST",  totals.get("total_inc_gst") or "0.00")}
-          {_row("Freight",        totals.get("freight_amount") or "0.00")}
-          {_row("Grand total",    totals.get("grand_total") or "0.00")}
-          {_row("Avg proposed DC", (str(totals.get("avg_dc_pct") or 0) + "%"))}
-        </table>
-        <table style="border-collapse:collapse;width:100%;font-size:12px">
+        <table style="border-collapse:collapse;width:100%;margin-top:6px">
           <thead>
-            <tr style="background:#374151;color:#fff">
-              <th style="padding:6px 8px;border:1px solid #374151;text-align:left">M-Code</th>
-              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">Qty</th>
-              <th style="padding:6px 8px;border:1px solid #374151;text-align:left">Description</th>
-              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">List</th>
-              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">Proposed DC</th>
-              <th style="padding:6px 8px;border:1px solid #374151;text-align:right">Total</th>
+            <tr style="background:#374151;color:#fff;font-size:11px">
+              <th style="padding:4px 6px;text-align:left">M-Code</th>
+              <th style="padding:4px 6px;text-align:right">Qty</th>
+              <th style="padding:4px 6px;text-align:left">Brand · Pattern · Description</th>
+              <th style="padding:4px 6px;text-align:right">List</th>
+              <th style="padding:4px 6px;text-align:right">DC</th>
+              <th style="padding:4px 6px;text-align:right">Total</th>
             </tr>
           </thead>
-          <tbody>{"".join(line_rows) or '<tr><td colspan="6" style="padding:10px;color:#6b7280">No lines.</td></tr>'}</tbody>
+          <tbody>{"".join(line_rows) or '<tr><td colspan="6" style="padding:6px;color:#6b7280">No lines.</td></tr>'}</tbody>
         </table>
-        <p style="margin:16px 0 4px;font-size:12px;color:#374151">
-          Once this order is keyed into SAP, please flip the status flag
-          to <b>Y</b> on the Orders page.
-        </p>
-        <p style="margin:2px 0;font-size:12px">
-          <a href="{detail_url}" style="background:#2563eb;color:#fff;padding:8px 14px;border-radius:4px;text-decoration:none;font-weight:700">Open this order</a>
-          &nbsp;
-          <a href="{list_url}" style="color:#2563eb">View all orders</a>
-        </p>
+        <div style="margin-top:10px;font-size:11.5px">
+          <a href="{detail_url}" style="background:#2563eb;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open order</a>
+          &nbsp;·&nbsp;
+          <a href="{list_url}" style="color:#2563eb">All orders</a>
+        </div>
       </div>
     </div>
     """
@@ -3974,6 +3975,13 @@ def api_orders_list():
         ids = tuple(r["id"] for r in rows)
         pclt_by_id = {i: 0.0 for i in ids}
         tbr_by_id  = {i: 0.0 for i in ids}
+        # Brand × line breakdown so the summary can show HK-PCLT /
+        # HK-TBR / LF-PCLT / etc.  Also track whether the order had
+        # ANY additional DC (sp_dc / add_dc / aging_dc > 0 on any
+        # line) so the list page can label pure-base-rate orders
+        # as "Standard Pricing" in place of the approver name.
+        brand_split_by_id = {i: {} for i in ids}
+        has_add_by_id     = {i: False for i in ids}
         if ids:
             fmt = ",".join(["%s"] * len(ids))
             try:
@@ -3983,12 +3991,23 @@ def api_orders_list():
                     except Exception: pj = {}
                     for ln in (pj.get("lines") or []):
                         tag = str(ln.get("_line") or ln.get("line") or "").upper()
+                        brand = str(ln.get("brand") or "").strip().upper()
                         try: amt = float(str(ln.get("total_amount") or "0").replace(",", "").replace("$", "") or 0)
                         except Exception: amt = 0.0
                         if tag == "PCLT":
                             pclt_by_id[pr["id"]] = pclt_by_id.get(pr["id"], 0.0) + amt
                         elif tag == "TBR":
                             tbr_by_id[pr["id"]]  = tbr_by_id.get(pr["id"], 0.0)  + amt
+                        if brand and tag in ("PCLT", "TBR"):
+                            key = f"{brand}-{tag}"
+                            brand_split_by_id[pr["id"]][key] = brand_split_by_id[pr["id"]].get(key, 0.0) + amt
+                        # Any promo / manual / aging DC on any line
+                        # flips has_add for the whole order.
+                        def _f(v):
+                            try:  return float(str(v or "0").replace(",", "").replace("%", ""))
+                            except Exception: return 0.0
+                        if _f(ln.get("sp_dc")) > 0 or _f(ln.get("add_dc")) > 0 or _f(ln.get("aging_dc")) > 0:
+                            has_add_by_id[pr["id"]] = True
             except Exception:
                 pass
         for r in rows:
@@ -4001,6 +4020,8 @@ def api_orders_list():
             except Exception: r["grand_total"] = 0
             r["grand_total_pclt"] = round(pclt_by_id.get(r["id"], 0.0), 2)
             r["grand_total_tbr"]  = round(tbr_by_id.get(r["id"],  0.0), 2)
+            r["brand_split"]      = {k: round(v, 2) for k, v in brand_split_by_id.get(r["id"], {}).items()}
+            r["has_additional_dc"] = bool(has_add_by_id.get(r["id"], False))
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4273,7 +4294,12 @@ def api_orders_approve(oid):
     approver acted, but approved_by_email / approved_by_name /
     approved_at are populated from THIS caller and left untouched
     by subsequent approvers.  Body: {} (approver is inferred from
-    the request identity)."""
+    the request identity).
+
+    64 % gate — a total DC of 64 % or more is Managing-Director
+    territory: only JunJong can sign off.  Hayden and Kenny get 403
+    with a message telling the front-end to escalate.  Under 64 %,
+    all three approvers can act (first-wins still applies)."""
     who = (_bde_from_request() or "").strip().lower()
     approver_col = None
     approver_name = None
@@ -4285,6 +4311,26 @@ def api_orders_approve(oid):
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     order_snapshot = None
     try:
+        # Pre-flight — pull the order's average DC to enforce the
+        # 64 % gate BEFORE we flip any slot.  A row missing
+        # avg_dc_pct is treated as 0 (approver can still sign off).
+        try:
+            cur.execute(
+                "SELECT avg_dc_pct FROM submitted_orders WHERE id = %s LIMIT 1",
+                (oid,),
+            )
+            pre = cur.fetchone() or {}
+            avg_dc = float(pre.get("avg_dc_pct") or 0)
+        except Exception:
+            avg_dc = 0.0
+        if avg_dc >= 64.0 and approver_col != "approved_b":
+            return jsonify({
+                "error": (f"Total DC {avg_dc:.2f}% is at or above the 64% "
+                          f"threshold — Managing Director approval is "
+                          f"required.  Only JunJong can approve this order."),
+                "requires_md": True,
+                "avg_dc_pct": avg_dc,
+            }), 403
         # Set the named slot AND, if no earlier approver has locked
         # the order yet, record this caller as the official
         # approved_by.  A COALESCE-guarded UPDATE means the SECOND

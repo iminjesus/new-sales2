@@ -108,6 +108,12 @@
         <span>Avg DC: <b id="sumAvgDc">0.00%</b></span>
       </span>
     </div>
+    <!-- Brand × PCLT/TBR breakdown — auto-populated by renderRows so
+         HK-PCLT, HK-TBR, LF-PCLT etc. each get their own subtotal.
+         Hidden until at least one brand shows a non-zero total. -->
+    <div id="brandBreakdown" style="padding:6px 12px;background:#f8fafc;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;font-size:12px;color:#334155;display:none">
+      <b>Brand × Line breakdown:</b> <span id="brandBreakdownRow"></span>
+    </div>
     <div id="listWrap">
       <table class="list">
         <thead>
@@ -197,10 +203,14 @@ function renderRows(){
       const editCell  = canEdit
         ? `<a class="edit-link" href="/order?id=${r.id}&edit=1" onclick="event.stopPropagation()">Edit</a>`
         : `<span class="edit-dash">—</span>`;
-      // Approver cell — show name + date if someone approved, or a
-      // "pending" pill when approval is needed but not done.
+      // Approver cell — "Standard Pricing" pill when the order has
+      // no additional DC (base + mth + volume only, no promo /
+      // manual / aging).  Otherwise show the first-approver-wins
+      // name or a pending pill.
       let apprCell = "—";
-      if (r.approved_by_name){
+      if (!r.has_additional_dc){
+        apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard Pricing</span>`;
+      } else if (r.approved_by_name){
         const at = (r.approved_at || "").slice(0, 16);
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
                    (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
@@ -233,15 +243,17 @@ function renderRows(){
   // splits pulled from each row's payload_json when the list endpoint
   // provides them (falls back to Grand Total only when missing).
   let sumAll = 0, sumPclt = 0, sumTbr = 0, sumDcPct = 0, dcN = 0;
+  const brandTotals = {};   // { "HK-PCLT": 12345, "LF-TBR": 456, … }
   filtered.forEach(r => {
     sumAll += +r.grand_total || 0;
-    // The list endpoint returns aggregated pclt/tbr grand totals when
-    // available; if not, we estimate from the submitted breakdown.
     sumPclt += +r.grand_total_pclt || 0;
     sumTbr  += +r.grand_total_tbr  || 0;
     if (r.avg_dc_pct != null && !isNaN(+r.avg_dc_pct)){
       sumDcPct += +r.avg_dc_pct; dcN++;
     }
+    Object.entries(r.brand_split || {}).forEach(([k, v]) => {
+      brandTotals[k] = (brandTotals[k] || 0) + (+v || 0);
+    });
   });
   $("#cntTotal").textContent   = _rowsCache.length;
   $("#cntPending").textContent = _rowsCache.filter(r => r.status_sap !== "Y").length;
@@ -250,6 +262,24 @@ function renderRows(){
   $("#sumPclt").textContent    = fmtMoney(sumPclt);
   $("#sumTbr").textContent     = fmtMoney(sumTbr);
   $("#sumAvgDc").textContent   = dcN ? (sumDcPct / dcN).toFixed(2) + "%" : "—";
+  // Brand × line panel — ordered HK-PCLT · HK-TBR · LF-PCLT · LF-TBR
+  // · KS-* · AU-* · then anything else alphabetically.
+  const brandRow = $("#brandBreakdownRow");
+  const panel    = $("#brandBreakdown");
+  if (brandRow && panel){
+    const known = ["HK-PCLT","HK-TBR","LF-PCLT","LF-TBR","KS-PCLT","KS-TBR","AU-PCLT","AU-TBR"];
+    const rest  = Object.keys(brandTotals).filter(k => !known.includes(k)).sort();
+    const order = known.concat(rest);
+    const bits = order
+      .filter(k => (brandTotals[k] || 0) !== 0)
+      .map(k => `<span style="margin-right:14px"><b>${escapeHtml(k)}</b>: ${fmtMoney(brandTotals[k])}</span>`);
+    if (bits.length){
+      brandRow.innerHTML = bits.join("");
+      panel.style.display = "block";
+    } else {
+      panel.style.display = "none";
+    }
+  }
 }
 
 function escapeHtml(s){
