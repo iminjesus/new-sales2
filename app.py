@@ -3534,11 +3534,25 @@ def api_orders_additional_dc():
 # order form and the list page both read/write via /api/orders/* below.
 # ══════════════════════════════════════════════════════════════════════
 HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
-# Parallel approvers — either can approve independently; the front-end
-# shows both statuses side-by-side.
+# Parallel approvers — each can approve independently; the front-end
+# shows every status side-by-side.  Adding a new approver here needs
+# a matching approved_<slot> column on submitted_orders (see
+# _ensure_submitted_orders_table below) and a mapping in
+# api_orders_approve + api_orders_whoami.
 MGMT_APPROVER_EMAILS = [
     "hayden.begbie@hankooktyre.com.au",
     "junjong.cho@hankooktyre.com.au",
+    "kenny.kim@hankooktyre.com.au",
+]
+# Read-only reviewers — cc'd on every SPRF (whether approval-needed
+# or not) so they can watch the flow.  They do NOT see an Approve
+# button and cannot POST to /api/orders/detail/*/approve — the 403
+# gate in api_orders_approve() rejects any email that isn't in
+# MGMT_APPROVER_EMAILS.  Add / remove freely — no schema impact.
+SPRF_READONLY_CC = [
+    "brian.park@hankooktyre.com.au",
+    "minku.lee@hankooktyre.com.au",
+    "pamela.lau@hankooktyre.com.au",
 ]
 
 def _ensure_submitted_orders_table():
@@ -3577,8 +3591,11 @@ def _ensure_submitted_orders_table():
         # Parallel management-approval columns — added idempotently so
         # older deployments upgrade without a separate migration.
         # needs_mgmt_approval = 'Y' when the BDE ticked the box on the
-        # form.  approved_a / approved_b track the two named approvers
-        # independently (Hayden = approver A, JunJong = approver B).
+        # form.  approved_a / approved_b / approved_c track the three
+        # named approvers independently (Hayden = A, JunJong = B,
+        # Kenny = C).  Adding a new approver here needs a matching
+        # entry in MGMT_APPROVER_EMAILS + api_orders_approve slot
+        # mapping + api_orders_whoami flag.
         # mgmt_reason is a copy of the yellow "reason behind pricing"
         # textarea, surfaced as a column so it's queryable / visible in
         # the list without unpacking payload_json.
@@ -3589,6 +3606,8 @@ def _ensure_submitted_orders_table():
             ("approved_a_at",       "DATETIME NULL"),
             ("approved_b",          "CHAR(1) NOT NULL DEFAULT 'N'"),
             ("approved_b_at",       "DATETIME NULL"),
+            ("approved_c",          "CHAR(1) NOT NULL DEFAULT 'N'"),
+            ("approved_c_at",       "DATETIME NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -3626,8 +3645,8 @@ def _submitted_order_email_html(oid, order, base_url):
     detail_url = f"{base_url}/order?id={oid}"
     # Approval-needed banner + reason block — only rendered when the
     # BDE ticked "Management Approval needed" so the two approvers
-    # (Hayden + JunJong) immediately see WHAT they're being asked to
-    # approve and WHY.
+    # (Hayden + JunJong + Kenny) immediately see WHAT they're being
+    # asked to approve and WHY.
     approval_block = ""
     if (order.get("needs_mgmt_approval") == "Y"):
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
@@ -3635,7 +3654,7 @@ def _submitted_order_email_html(oid, order, base_url):
         <div style="background:#fef3c7;border:1px solid #f59e0b;padding:10px 14px;margin-bottom:14px;border-radius:4px">
           <div style="font-weight:800;color:#92400e;margin-bottom:6px">⚑ Management Approval Requested</div>
           <div style="color:#78350f;font-size:12.5px;margin-bottom:6px">
-            The BDE has flagged this order for parallel approval by Hayden Begbie and JunJong Cho.
+            The BDE has flagged this order for parallel approval by Hayden Begbie, JunJong Cho and Kenny Kim.
           </div>
           <div style="background:#fff;border:1px solid #fbbf24;padding:8px 10px;border-radius:3px;font-size:12.5px;color:#111">
             <b>Reason:</b><br>{reason_html}
@@ -3792,13 +3811,16 @@ def api_orders_submit():
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload_for_mail["needs_mgmt_approval"] = needs_approval
     payload_for_mail["mgmt_reason"]         = mgmt_reason
-    # When approval is needed, put both approvers on To alongside
+    # When approval is needed, put every approver on To alongside
     # Harry so everyone who has to act sees it in their inbox
-    # directly.  Otherwise it's Harry-only (BDE on Cc).
+    # directly.  Otherwise it's Harry-only.  BDE + the read-only
+    # reviewers (Brian, Minku, Pamela) always go on Cc so the flow
+    # stays visible without giving them an Approve button.
     to_list = [HARRY_CS_EMAIL]
     if needs_approval == "Y":
         to_list += MGMT_APPROVER_EMAILS
     cc = [submitted_by_email] if submitted_by_email else []
+    cc += SPRF_READONLY_CC
     try:
         _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
@@ -3829,7 +3851,7 @@ def api_orders_list():
             f"SELECT id, submitted_at, submitted_by_bde, submitted_by_email, "
             f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
             f"       total_qty, grand_total, status_sap, status_changed_at, "
-            f"       status_changed_by, needs_mgmt_approval, approved_a, approved_b "
+            f"       status_changed_by, needs_mgmt_approval, approved_a, approved_b, approved_c "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -3870,6 +3892,7 @@ def api_orders_detail(oid):
             "       status_sap, status_changed_at, status_changed_by, "
             "       needs_mgmt_approval, mgmt_reason, "
             "       approved_a, approved_a_at, approved_b, approved_b_at, "
+            "       approved_c, approved_c_at, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -3877,7 +3900,7 @@ def api_orders_detail(oid):
         if not row:
             return jsonify({"error": "not found"}), 404
         for k in ("submitted_at", "status_changed_at",
-                  "approved_a_at", "approved_b_at"):
+                  "approved_a_at", "approved_b_at", "approved_c_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -3996,6 +4019,7 @@ def api_orders_update(oid):
                 "  needs_mgmt_approval=%s, mgmt_reason=%s, "
                 "  approved_a='N', approved_a_at=NULL, "
                 "  approved_b='N', approved_b_at=NULL, "
+                "  approved_c='N', approved_c_at=NULL, "
                 "  payload_json=%s "
                 "WHERE id=%s",
                 (
@@ -4050,6 +4074,7 @@ def api_orders_update(oid):
     if needs_approval == "Y":
         to_list += MGMT_APPROVER_EMAILS
     cc = [who] if who else []
+    cc += SPRF_READONLY_CC
     try:
         _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
@@ -4062,13 +4087,14 @@ def api_orders_update(oid):
 
 @app.post("/api/orders/detail/<int:oid>/approve")
 def api_orders_approve(oid):
-    """Mark this order approved by the caller (Hayden or JunJong).
+    """Mark this order approved by the caller (Hayden, JunJong or Kenny).
     Parallel approval — each slot moves independently.  Body: {}
     (approver is inferred from the request identity)."""
     who = (_bde_from_request() or "").strip().lower()
     approver_col = None
     if   who == MGMT_APPROVER_EMAILS[0]: approver_col = "approved_a"   # Hayden
     elif who == MGMT_APPROVER_EMAILS[1]: approver_col = "approved_b"   # JunJong
+    elif who == MGMT_APPROVER_EMAILS[2]: approver_col = "approved_c"   # Kenny
     if not approver_col:
         return jsonify({"error": "only the named approvers can approve"}), 403
     conn = get_connection(); cur = conn.cursor()
@@ -4097,7 +4123,7 @@ def api_orders_whoami():
     """Front-end reads this to decide whether to show the status
     toggle (Harry-only) and to auto-fill submitted_by.  Also
     surfaces is_approver_a / is_approver_b so the detail page can
-    render the Approve button only for Hayden / JunJong."""
+    render the Approve button only for Hayden / JunJong / Kenny."""
     who = (_bde_from_request() or "").strip().lower()
     name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
     return jsonify({
@@ -4111,6 +4137,7 @@ def api_orders_whoami():
         "is_harry":      who == HARRY_CS_EMAIL,
         "is_approver_a": who == MGMT_APPROVER_EMAILS[0],   # Hayden
         "is_approver_b": who == MGMT_APPROVER_EMAILS[1],   # JunJong
+        "is_approver_c": who == MGMT_APPROVER_EMAILS[2],   # Kenny
     })
 
 

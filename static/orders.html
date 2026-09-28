@@ -1789,13 +1789,15 @@ function wireApprovalPanel(order, who){
   row.innerHTML = [
     chip("Hayden",  order.approved_a, order.approved_a_at),
     chip("JunJong", order.approved_b, order.approved_b_at),
+    chip("Kenny",   order.approved_c, order.approved_c_at),
   ].join("");
 
-  // Approve button — only for the two named approvers, and only when
+  // Approve button — only for the named approvers, and only when
   // their own slot is still Pending.  Adds inline so the click target
   // sits next to their chip.
   const myMissing = (who.is_approver_a && order.approved_a !== "Y")
-                  || (who.is_approver_b && order.approved_b !== "Y");
+                  || (who.is_approver_b && order.approved_b !== "Y")
+                  || (who.is_approver_c && order.approved_c !== "Y");
   if (myMissing){
     const btn = document.createElement("button");
     btn.textContent = "Approve";
@@ -1815,8 +1817,10 @@ function wireApprovalPanel(order, who){
         const now = new Date().toISOString().slice(0,16).replace("T"," ");
         if (j.slot === "approved_a"){
           order.approved_a = "Y"; order.approved_a_at = now;
-        } else {
+        } else if (j.slot === "approved_b"){
           order.approved_b = "Y"; order.approved_b_at = now;
+        } else if (j.slot === "approved_c"){
+          order.approved_c = "Y"; order.approved_c_at = now;
         }
         setStatus("Approval recorded.", "ok");
         wireApprovalPanel(order, who);
