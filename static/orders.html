@@ -1561,6 +1561,9 @@ const HEADER_FIELDS = [
   "phone_email", "mobile",
   "po_number", "doc_date", "bde_name",
   "special_instruction", "mgmt_reason", "ship_to_state",
+  // Rebateable Y/N — captured via the yes/no cells and normalised into
+  // a single top-level "rebateable" field on the payload below.
+  "rebateable",
 ];
 // Boolean-ish fields on the header that need special handling
 // (checkbox instead of .value).
@@ -1591,6 +1594,11 @@ function serializeOrder(){
   // Alias state / order_date to a friendlier name for the list page.
   header.state      = header.ship_to_state || "";
   header.order_date = header.doc_date      || "";
+  // Rebateable Y/N — pick whichever of the yes / no cells has a value.
+  // Empty in both cells → header.rebateable = "" (submit will refuse).
+  const rebY = ($("#rebate_yes")?.value || "").trim();
+  const rebN = ($("#rebate_no")?.value  || "").trim();
+  header.rebateable = rebY ? "Y" : (rebN ? "N" : "");
   const base_dc = {};
   BASE_DC_FIELDS.forEach(id => { base_dc[id] = $("#"+id)?.value || ""; });
 
@@ -1636,6 +1644,14 @@ $("#btnSubmit").addEventListener("click", async () => {
   }
   if (!payload.lines.length){
     setStatus("Add at least one order line before submitting.", "warn"); return;
+  }
+  // Rebate-able Y/N is REQUIRED — refuse to send an Order Request
+  // without it so downstream (order-number suffix + rebate flow) is
+  // unambiguous.  Alert + toast so the BDE can't miss the miss.
+  if (!payload.header.rebateable){
+    alert("Please mark Rebate-able (YES or NO) before submitting the Order Request.");
+    setStatus("Rebate-able (YES or NO) is required before submitting.", "warn");
+    return;
   }
   btn.disabled = true; btn.textContent = "Submitting…";
   try {
@@ -1684,6 +1700,15 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (el.type === "checkbox") el.checked = (v === "Y" || v === true || v === "true");
     else el.value = v || "";
   });
+  // Rebate-able Y/N — hydrate the yes/no cells from the persisted
+  // flag (data.rebateable is the DB column, falls back to the
+  // header snapshot in payload_json for older rows).
+  const rebFlag = String(data.rebateable || (p.header && p.header.rebateable) || "").toUpperCase();
+  const rY = $("#rebate_yes"); const rN = $("#rebate_no");
+  if (rY && rN){
+    if (rebFlag === "Y"){ rY.value = "Y"; rN.value = ""; }
+    else if (rebFlag === "N"){ rY.value = ""; rN.value = "N"; }
+  }
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
     const el = $("#"+k); if (el) el.value = v || "";
@@ -1781,12 +1806,23 @@ function wireApprovalPanel(order, who){
     panel.hidden = true;
     return;
   }
+  // Tiny HTML-escape so approver names / timestamps land safe in
+  // the banner even though they come from a trusted whitelist.
+  const esc = s => String(s || "").replace(/[&<>"']/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
   const chip = (nm, done, at) => {
     const bg = done === "Y" ? "#16a34a" : "#94a3b8";
     const lb = done === "Y" ? `✓ Approved ${at || ""}` : "⏳ Pending";
     return `<span><b>${nm}:</b> <span style="background:${bg};color:#fff;padding:2px 8px;border-radius:3px;font-weight:700;font-size:11px">${lb}</span></span>`;
   };
-  row.innerHTML = [
+  // "Approver of record" banner — first-approver-wins, so once
+  // approved_by_name is set we highlight it so downstream readers
+  // know who signed off (Hayden / JunJong / Kenny — or an editor
+  // if Pamela / Brian corrected the order after submission).
+  const recordBanner = order.approved_by_name
+    ? `<div style="width:100%;background:#dcfce7;border:1px solid #16a34a;color:#166534;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✓ Approved by ${esc(order.approved_by_name)}${order.approved_at ? " · " + esc(order.approved_at) : ""}</div>`
+    : "";
+  row.innerHTML = recordBanner + [
     chip("Hayden",  order.approved_a, order.approved_a_at),
     chip("JunJong", order.approved_b, order.approved_b_at),
     chip("Kenny",   order.approved_c, order.approved_c_at),
@@ -1795,9 +1831,16 @@ function wireApprovalPanel(order, who){
   // Approve button — only for the named approvers, and only when
   // their own slot is still Pending.  Adds inline so the click target
   // sits next to their chip.
-  const myMissing = (who.is_approver_a && order.approved_a !== "Y")
-                  || (who.is_approver_b && order.approved_b !== "Y")
-                  || (who.is_approver_c && order.approved_c !== "Y");
+  // First-approver-wins: once approved_by_name is set, the order is
+  // fully approved — the Approve button is hidden for everyone,
+  // including the other named approvers.  Only when the record is
+  // still pending AND the viewer is a named approver whose own slot
+  // hasn't flipped do we render the button.
+  const alreadyApproved = !!order.approved_by_name;
+  const myMissing = !alreadyApproved && (
+      (who.is_approver_a && order.approved_a !== "Y")
+   || (who.is_approver_b && order.approved_b !== "Y")
+   || (who.is_approver_c && order.approved_c !== "Y"));
   if (myMissing){
     const btn = document.createElement("button");
     btn.textContent = "Approve";

@@ -88,19 +88,31 @@
         <option value="N">Pending (N)</option>
         <option value="Y">SAP entered (Y)</option>
       </select>
+      <span class="lbl">From:</span>
+      <input id="fDateFrom" type="date" title="Include orders submitted on/after this date">
+      <span class="lbl">To:</span>
+      <input id="fDateTo" type="date" title="Include orders submitted on/before this date">
       <span class="lbl">Search:</span>
-      <input id="fSearch" type="text" placeholder="BDE, sold-to, ship-to, code…" style="min-width:260px">
+      <input id="fSearch" type="text" placeholder="BDE, sold-to, ship-to, code…" style="min-width:220px">
+      <button id="btnExcel" title="Download the currently-filtered orders as an XLSX file"
+              style="margin-left:8px;padding:4px 12px;background:#0f766e;color:#fff;border:1px solid #115e59;border-radius:4px;font-weight:700;cursor:pointer">
+        ⬇ Excel
+      </button>
       <span class="totals-line">
         <span><b id="cntTotal">0</b> orders</span>
         <span>Pending: <b id="cntPending">0</b></span>
         <span>SAP entered: <b id="cntDone">0</b></span>
+        <span>Total: <b id="sumTotal">$0.00</b></span>
+        <span>PCLT: <b id="sumPclt">$0.00</b></span>
+        <span>TBR: <b id="sumTbr">$0.00</b></span>
+        <span>Avg DC: <b id="sumAvgDc">0.00%</b></span>
       </span>
     </div>
     <div id="listWrap">
       <table class="list">
         <thead>
           <tr>
-            <th style="width:70px">#</th>
+            <th style="width:110px">Order #</th>
             <th style="width:130px">Submitted</th>
             <th>BDE</th>
             <th>Sold-to</th>
@@ -108,12 +120,14 @@
             <th style="width:60px" class="center">State</th>
             <th style="width:70px" class="num">Qty</th>
             <th style="width:110px" class="num">Grand Total</th>
+            <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
+            <th style="width:130px">Approver</th>
             <th style="width:70px" class="center">Edit</th>
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="10" class="empty">Loading…</td></tr>
+          <tr><td colspan="12" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -137,48 +151,70 @@ async function loadWhoAmI(){
 }
 
 async function loadOrders(){
-  const status = $("#fStatus").value;
+  const status   = $("#fStatus").value;
+  const dateFrom = $("#fDateFrom").value;
+  const dateTo   = $("#fDateTo").value;
   const qs = new URLSearchParams();
-  if (status) qs.set("status", status);
+  if (status)   qs.set("status", status);
+  if (dateFrom) qs.set("date_from", dateFrom);
+  if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="10" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="12" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="10" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="12" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="10" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="12" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
 function renderRows(){
   const q = ($("#fSearch").value || "").toLowerCase().trim();
   const filtered = q ? _rowsCache.filter(r => {
-    return [r.submitted_by_bde, r.sold_to, r.sold_to_name, r.ship_to, r.ship_to_name, r.state, String(r.id)]
+    return [r.submitted_by_bde, r.sold_to, r.sold_to_name, r.ship_to,
+            r.ship_to_name, r.state, String(r.id), r.order_no,
+            r.approved_by_name]
       .some(v => String(v || "").toLowerCase().includes(q));
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="10" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="12" class="empty">No orders match.</td></tr>`;
   } else {
     const meEmail = (_me.email || "").toLowerCase();
     const isAll   = (_me.role  || "").toUpperCase() === "ALL";
+    const isEditor = !!_me.is_price_editor;
     body.innerHTML = filtered.map(r => {
-      // Edit cell — only the original submitter (or ALL-role) gets a
-      // clickable Edit link.  Everyone else sees a subtle dash.
+      // Edit cell — the original submitter, an ALL-role admin, or a
+      // designated price editor (Brian / Pamela) get the link.
       const submitter = (r.submitted_by_email || "").toLowerCase();
-      const canEdit   = (meEmail && submitter && meEmail === submitter) || isAll;
+      const canEdit   = (meEmail && submitter && meEmail === submitter) || isAll || isEditor;
       const editCell  = canEdit
         ? `<a class="edit-link" href="/order?id=${r.id}&edit=1" onclick="event.stopPropagation()">Edit</a>`
         : `<span class="edit-dash">—</span>`;
+      // Approver cell — show name + date if someone approved, or a
+      // "pending" pill when approval is needed but not done.
+      let apprCell = "—";
+      if (r.approved_by_name){
+        const at = (r.approved_at || "").slice(0, 16);
+        apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
+                   (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
+      } else if (r.needs_mgmt_approval === "Y"){
+        apprCell = `<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">⏳ Pending</span>`;
+      }
+      const rebPill = r.rebateable === "Y"
+        ? `<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Y</span>`
+        : (r.rebateable === "N"
+          ? `<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">N</span>`
+          : "—");
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
-        <td class="id-col">#${r.id}</td>
+        <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
         <td>${r.submitted_at || ""}</td>
         <td>${escapeHtml(r.submitted_by_bde || "—")}</td>
         <td class="name-cell"><b>${escapeHtml(r.sold_to_name || "—")}</b><small>${escapeHtml(r.sold_to || "")}</small></td>
@@ -186,14 +222,34 @@ function renderRows(){
         <td class="center">${escapeHtml(r.state || "")}</td>
         <td class="num">${fmtQty(r.total_qty)}</td>
         <td class="num">${fmtMoney(r.grand_total)}</td>
+        <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
+        <td>${apprCell}</td>
         <td class="center">${editCell}</td>
       </tr>`;
     }).join("");
   }
+  // Summary line — Total across the filtered set, plus PCLT / TBR
+  // splits pulled from each row's payload_json when the list endpoint
+  // provides them (falls back to Grand Total only when missing).
+  let sumAll = 0, sumPclt = 0, sumTbr = 0, sumDcPct = 0, dcN = 0;
+  filtered.forEach(r => {
+    sumAll += +r.grand_total || 0;
+    // The list endpoint returns aggregated pclt/tbr grand totals when
+    // available; if not, we estimate from the submitted breakdown.
+    sumPclt += +r.grand_total_pclt || 0;
+    sumTbr  += +r.grand_total_tbr  || 0;
+    if (r.avg_dc_pct != null && !isNaN(+r.avg_dc_pct)){
+      sumDcPct += +r.avg_dc_pct; dcN++;
+    }
+  });
   $("#cntTotal").textContent   = _rowsCache.length;
   $("#cntPending").textContent = _rowsCache.filter(r => r.status_sap !== "Y").length;
   $("#cntDone").textContent    = _rowsCache.filter(r => r.status_sap === "Y").length;
+  $("#sumTotal").textContent   = fmtMoney(sumAll);
+  $("#sumPclt").textContent    = fmtMoney(sumPclt);
+  $("#sumTbr").textContent     = fmtMoney(sumTbr);
+  $("#sumAvgDc").textContent   = dcN ? (sumDcPct / dcN).toFixed(2) + "%" : "—";
 }
 
 function escapeHtml(s){
@@ -203,7 +259,19 @@ function escapeHtml(s){
 }
 
 $("#fStatus").addEventListener("change", loadOrders);
+$("#fDateFrom").addEventListener("change", loadOrders);
+$("#fDateTo").addEventListener("change", loadOrders);
 $("#fSearch").addEventListener("input",  renderRows);
+$("#btnExcel").addEventListener("click", () => {
+  const qs = new URLSearchParams();
+  const st = $("#fStatus").value;
+  const df = $("#fDateFrom").value;
+  const dt = $("#fDateTo").value;
+  if (st) qs.set("status", st);
+  if (df) qs.set("date_from", df);
+  if (dt) qs.set("date_to",   dt);
+  window.location.href = `/api/orders/list_excel?${qs}`;
+});
 // Load whoami first so the initial render knows which rows to
 // decorate with the Edit link.
 (async () => {

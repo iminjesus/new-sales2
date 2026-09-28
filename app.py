@@ -3534,11 +3534,15 @@ def api_orders_additional_dc():
 # order form and the list page both read/write via /api/orders/* below.
 # ══════════════════════════════════════════════════════════════════════
 HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
-# Parallel approvers — each can approve independently; the front-end
-# shows every status side-by-side.  Adding a new approver here needs
-# a matching approved_<slot> column on submitted_orders (see
-# _ensure_submitted_orders_table below) and a mapping in
-# api_orders_approve + api_orders_whoami.
+# Parallel approvers — each can approve independently; the FIRST
+# approver to click Approve finalises the order and their name is
+# recorded on approved_by_email / approved_by_name / approved_at.
+# The individual approved_a / _b / _c slots continue to track WHO
+# approved (so the UI can show "Kenny approved on <date>") but the
+# order is treated as fully approved as soon as ANY slot flips.
+# Adding a new approver here needs a matching approved_<slot>
+# column on submitted_orders + a mapping in api_orders_approve +
+# a flag in api_orders_whoami.
 MGMT_APPROVER_EMAILS = [
     "hayden.begbie@hankooktyre.com.au",
     "junjong.cho@hankooktyre.com.au",
@@ -3554,6 +3558,15 @@ SPRF_READONLY_CC = [
     "minku.lee@hankooktyre.com.au",
     "pamela.lau@hankooktyre.com.au",
 ]
+# Price editors — only these people can PATCH an already-submitted
+# order's prices via /api/orders/detail/<oid>/update.  An edit by
+# any of them ALSO acts as an approval on their behalf (rule:
+# "editor becomes approver").  Their edit auto-stamps a remark on
+# the mgmt_reason so approvers see who touched the numbers.
+PRICE_EDITOR_EMAILS = {
+    "brian.park@hankooktyre.com.au":  "Brian",
+    "pamela.lau@hankooktyre.com.au":  "Pamela",
+}
 
 def _ensure_submitted_orders_table():
     try:
@@ -3608,6 +3621,21 @@ def _ensure_submitted_orders_table():
             ("approved_b_at",       "DATETIME NULL"),
             ("approved_c",          "CHAR(1) NOT NULL DEFAULT 'N'"),
             ("approved_c_at",       "DATETIME NULL"),
+            # First-approver-wins fields — populated on the FIRST
+            # slot to flip (or on an editor's implicit approval).
+            # The name lets the list / detail pages show "Approved
+            # by Kenny · 26/09/26 14:32" without a re-lookup.
+            ("approved_by_email",   "VARCHAR(120) NULL"),
+            ("approved_by_name",    "VARCHAR(60) NULL"),
+            ("approved_at",         "DATETIME NULL"),
+            # Order-number suffix — human-friendly identifier that
+            # encodes submit date + daily sequence + rebateable flag
+            # (e.g. 260926_003Y = 3rd rebateable order on 26/09/26).
+            ("order_no",            "VARCHAR(20) NULL"),
+            # Rebate-able Y/N captured on the SPRF header.  NULL
+            # only while an old row that predates the column is
+            # still on file — new rows always carry Y or N.
+            ("rebateable",          "CHAR(1) NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -3617,6 +3645,62 @@ def _ensure_submitted_orders_table():
     except Exception as e:
         print(f"[submitted_orders] schema init failed: {e}")
 
+
+def _next_order_no(cur, rebateable_flag: str) -> str:
+    """Generate the next per-day order number in `YYMMDD_NNN(Y|N)` form.
+
+    Sequence counts orders where order_no starts with today's YYMMDD
+    prefix regardless of the trailing Y/N.  If today has 3 rows so
+    far and the caller is rebateable=Y, this returns `260926_004Y`.
+    Falls back to `_001<flag>` when the count query errors so the
+    submit never dies over the sequence lookup."""
+    today = datetime.now().strftime("%y%m%d")
+    flag = "Y" if str(rebateable_flag or "").upper().startswith("Y") else "N"
+    try:
+        cur.execute(
+            "SELECT COUNT(*) FROM submitted_orders WHERE order_no LIKE %s",
+            (today + "_%",),
+        )
+        n = int((cur.fetchone() or [0])[0]) + 1
+    except Exception:
+        n = 1
+    return f"{today}_{n:03d}{flag}"
+
+
+def _approval_email_html(oid, order, approver_name, approver_email, base_url):
+    """Standalone email fired the moment ONE approver clicks Approve.
+    Lists what the order is + who approved it so the whole thread
+    (Harry, other approvers, BDE, read-only reviewers) sees the
+    outcome without opening the link."""
+    order_no = order.get("order_no") or f"#{oid}"
+    sold_to_name = _esc_html(order.get("sold_to_name") or "")
+    sold_to = _esc_html(order.get("sold_to") or "")
+    bde = _esc_html(order.get("submitted_by_bde") or "")
+    grand = order.get("grand_total") or ""
+    link = f"{base_url}/orders_list#o={oid}" if base_url else ""
+    ts = datetime.now().strftime("%d/%m/%Y %H:%M")
+    return f"""
+      <div style="font-family:Arial,sans-serif;font-size:13px;color:#111">
+        <div style="background:#dcfce7;border:1px solid #16a34a;padding:12px 16px;border-radius:4px;margin-bottom:14px">
+          <div style="font-weight:800;color:#166534;font-size:15px;margin-bottom:4px">
+            ✓ SPRF approved by {_esc_html(approver_name)}
+          </div>
+          <div style="color:#166534;font-size:12.5px">
+            {_esc_html(ts)} · Order <b>{_esc_html(order_no)}</b> · BDE <b>{bde}</b>
+            · Customer <b>{sold_to_name} ({sold_to})</b>
+            · Grand total <b>${_esc_html(str(grand))}</b>
+          </div>
+        </div>
+        <div style="color:#374151;font-size:12.5px">
+          {'<a href="' + link + '" style="color:#1d4ed8;font-weight:700">Open in Orders list →</a>' if link else ''}
+        </div>
+        <div style="color:#6b7280;font-size:11px;margin-top:10px">
+          This is a parallel-approver workflow — the first approver
+          to click Approve finalises the order.  Approver of record:
+          <b>{_esc_html(approver_name)}</b> ({_esc_html(approver_email)}).
+        </div>
+      </div>
+    """.strip()
 
 def _submitted_order_email_html(oid, order, base_url):
     """HTML body of the notification email — mirrors the compact
@@ -3753,17 +3837,25 @@ def api_orders_submit():
     # read them without unpacking payload_json.
     needs_approval = "Y" if (header.get("needs_mgmt_approval") in ("Y", "y", True, "true", "1")) else "N"
     mgmt_reason    = (header.get("mgmt_reason") or "").strip()
+    # Rebate-able Y/N is REQUIRED on submit — the front-end enforces
+    # it too but this backend gate protects against direct API POSTs.
+    rebateable = str(header.get("rebateable") or "").upper().strip()
+    if rebateable not in ("Y", "N"):
+        return jsonify({"error": "rebateable (Y or N) is required — please mark Rebate-able before submitting"}), 400
 
     conn = get_connection(); cur = conn.cursor()
     try:
+        # Generate the per-day order number BEFORE the INSERT so we
+        # can persist it on the same row.  Format: YYMMDD_NNN(Y|N).
+        order_no = _next_order_no(cur, rebateable)
         cur.execute(
             "INSERT INTO submitted_orders "
             "(submitted_by_bde, submitted_by_email, sold_to, sold_to_name, "
             " ship_to, ship_to_name, state, po_number, order_date, "
             " subtotal, total_inc_gst, freight_amount, grand_total, "
             " total_qty, sovd_qty, avg_dc_pct, status_sap, "
-            " needs_mgmt_approval, mgmt_reason, payload_json) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'N',%s,%s,%s)",
+            " needs_mgmt_approval, mgmt_reason, order_no, rebateable, payload_json) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'N',%s,%s,%s,%s,%s)",
             (
                 submitted_by_bde[:120],
                 submitted_by_email[:255],
@@ -3783,6 +3875,8 @@ def api_orders_submit():
                 _num(totals.get("avg_dc_pct")),
                 needs_approval,
                 mgmt_reason,
+                order_no,
+                rebateable,
                 _json.dumps(payload, ensure_ascii=False, default=str),
             ),
         )
@@ -3805,12 +3899,14 @@ def api_orders_submit():
     except Exception:
         base_url = ""
     subject_prefix = "[SPRF APPROVAL NEEDED" if needs_approval == "Y" else "[SPRF"
-    subject = (f"{subject_prefix} #{oid}] {submitted_by_bde or 'BDE'} → "
+    subject = (f"{subject_prefix} {order_no}] {submitted_by_bde or 'BDE'} → "
                f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
     payload_for_mail = dict(payload)
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload_for_mail["needs_mgmt_approval"] = needs_approval
     payload_for_mail["mgmt_reason"]         = mgmt_reason
+    payload_for_mail["order_no"]            = order_no
+    payload_for_mail["rebateable"]          = rebateable
     # When approval is needed, put every approver on To alongside
     # Harry so everyone who has to act sees it in their inbox
     # directly.  Otherwise it's Harry-only.  BDE + the read-only
@@ -3834,9 +3930,13 @@ def api_orders_submit():
 def api_orders_list():
     """List submitted orders, most recent first.
       ?status=Y|N       filter by SAP-entered flag (default: all)
+      ?date_from=YYYY-MM-DD   include orders submitted on/after this date
+      ?date_to=YYYY-MM-DD     include orders submitted on/before this date
       ?limit=…          default 200
     Returns list of small rows suited for the /orders page table."""
     status = (request.args.get("status") or "").strip().upper()
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to   = (request.args.get("date_to")   or "").strip()
     try:
         limit = min(int(request.args.get("limit") or 200), 1000)
     except Exception:
@@ -3846,26 +3946,61 @@ def api_orders_list():
         wh, p = [], []
         if status in ("Y", "N"):
             wh.append("status_sap = %s"); p.append(status)
+        if date_from:
+            wh.append("DATE(submitted_at) >= %s"); p.append(date_from)
+        if date_to:
+            wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(
-            f"SELECT id, submitted_at, submitted_by_bde, submitted_by_email, "
+            f"SELECT id, order_no, submitted_at, submitted_by_bde, submitted_by_email, "
             f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
             f"       total_qty, grand_total, status_sap, status_changed_at, "
-            f"       status_changed_by, needs_mgmt_approval, approved_a, approved_b, approved_c "
+            f"       status_changed_by, needs_mgmt_approval, "
+            f"       approved_a, approved_b, approved_c, "
+            f"       approved_by_email, approved_by_name, approved_at, "
+            f"       rebateable, mgmt_reason "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
         )
         rows = cur.fetchall() or []
         # Normalise datetime -> string so JSON serialises cleanly.
+        # Pull each row's payload_json in a second pass so the list
+        # response can carry PCLT / TBR grand-total splits alongside
+        # the overall grand_total.  Payload lines carry a `line`
+        # field ('PCLT' or 'TBR') the front-end SPRF sets from
+        # carrying_26; we sum `total_amount` per bucket.
+        import json as _json_local
+        ids = tuple(r["id"] for r in rows)
+        pclt_by_id = {i: 0.0 for i in ids}
+        tbr_by_id  = {i: 0.0 for i in ids}
+        if ids:
+            fmt = ",".join(["%s"] * len(ids))
+            try:
+                cur.execute(f"SELECT id, payload_json FROM submitted_orders WHERE id IN ({fmt})", ids)
+                for pr in cur.fetchall() or []:
+                    try: pj = _json_local.loads(pr.get("payload_json") or "{}")
+                    except Exception: pj = {}
+                    for ln in (pj.get("lines") or []):
+                        tag = str(ln.get("_line") or ln.get("line") or "").upper()
+                        try: amt = float(str(ln.get("total_amount") or "0").replace(",", "").replace("$", "") or 0)
+                        except Exception: amt = 0.0
+                        if tag == "PCLT":
+                            pclt_by_id[pr["id"]] = pclt_by_id.get(pr["id"], 0.0) + amt
+                        elif tag == "TBR":
+                            tbr_by_id[pr["id"]]  = tbr_by_id.get(pr["id"], 0.0)  + amt
+            except Exception:
+                pass
         for r in rows:
-            for k in ("submitted_at", "status_changed_at"):
+            for k in ("submitted_at", "status_changed_at", "approved_at"):
                 v = r.get(k)
                 if v is not None:
                     try: r[k] = v.strftime("%Y-%m-%d %H:%M")
                     except Exception: r[k] = str(v)
             try: r["grand_total"] = float(r.get("grand_total") or 0)
             except Exception: r["grand_total"] = 0
+            r["grand_total_pclt"] = round(pclt_by_id.get(r["id"], 0.0), 2)
+            r["grand_total_tbr"]  = round(tbr_by_id.get(r["id"],  0.0), 2)
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -3893,6 +4028,8 @@ def api_orders_detail(oid):
             "       needs_mgmt_approval, mgmt_reason, "
             "       approved_a, approved_a_at, approved_b, approved_b_at, "
             "       approved_c, approved_c_at, "
+            "       approved_by_email, approved_by_name, approved_at, "
+            "       order_no, rebateable, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -3900,7 +4037,8 @@ def api_orders_detail(oid):
         if not row:
             return jsonify({"error": "not found"}), 404
         for k in ("submitted_at", "status_changed_at",
-                  "approved_a_at", "approved_b_at", "approved_c_at"):
+                  "approved_a_at", "approved_b_at", "approved_c_at",
+                  "approved_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -3990,11 +4128,16 @@ def api_orders_update(oid):
             return jsonify({"error": "not found"}), 404
         # Ownership check — an ALL-role admin can edit on behalf of a
         # BDE who's stuck (e.g., left the company); everyone else must
-        # be the original submitter.
+        # be the original submitter OR a designated price editor
+        # (Brian / Pamela).  Price-editor edits also count as an
+        # implicit approval on the row (rule: editor becomes
+        # approver), so we track that intent here for the UPDATE
+        # branch below.
         original = (row.get("submitted_by_email") or "").strip().lower()
         role     = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
-        if who != original and role != "ALL":
-            return jsonify({"error": "only the original submitter can edit this order"}), 403
+        is_editor = who in PRICE_EDITOR_EMAILS
+        if who != original and role != "ALL" and not is_editor:
+            return jsonify({"error": "only the original submitter or a designated price editor can edit this order"}), 403
 
         def _num(v):
             try:
@@ -4003,10 +4146,30 @@ def api_orders_update(oid):
             except Exception:
                 return 0.0
 
-        # Edited content invalidates any prior approvals — reset both
-        # sides so the approvers see the new version cleanly.
+        # Rebate-able Y/N — carry the incoming header value through the
+        # edit so re-hydration doesn't strip it.  Empty stays empty
+        # (an existing row that predates the column keeps its previous
+        # value via COALESCE below).
+        rebateable = str(header.get("rebateable") or "").upper().strip()
+        if rebateable not in ("Y", "N"):
+            rebateable = ""
+
+        # Edited content invalidates any prior approvals — reset every
+        # slot so the approvers see the new version cleanly.  If a
+        # price editor is doing the edit, we then IMMEDIATELY re-stamp
+        # their approval on top so the order is auto-approved on their
+        # behalf and the front-end doesn't need a second click.  Also
+        # auto-prepend a short remark to mgmt_reason so approvers /
+        # reviewers see who touched the numbers ("Pamela corrected").
         needs_approval = "Y" if (header.get("needs_mgmt_approval") in ("Y","y",True,"true","1")) else "N"
         mgmt_reason    = (header.get("mgmt_reason") or "").strip()
+        editor_name = PRICE_EDITOR_EMAILS.get(who, "")
+        if is_editor:
+            remark_tag = f"{editor_name} corrected"
+            # Prepend, but only if the exact tag isn't already sitting
+            # at the front (avoid duplicating on repeated saves).
+            if not mgmt_reason.startswith(remark_tag):
+                mgmt_reason = (remark_tag + (" · " + mgmt_reason if mgmt_reason else "")).strip()
         cur2 = conn.cursor()
         try:
             cur2.execute(
@@ -4017,9 +4180,11 @@ def api_orders_update(oid):
                 "  total_qty=%s, sovd_qty=%s, avg_dc_pct=%s, "
                 "  status_sap='N', status_changed_at=NOW(), status_changed_by=%s, "
                 "  needs_mgmt_approval=%s, mgmt_reason=%s, "
+                "  rebateable = COALESCE(NULLIF(%s, ''), rebateable), "
                 "  approved_a='N', approved_a_at=NULL, "
                 "  approved_b='N', approved_b_at=NULL, "
                 "  approved_c='N', approved_c_at=NULL, "
+                "  approved_by_email=NULL, approved_by_name=NULL, approved_at=NULL, "
                 "  payload_json=%s "
                 "WHERE id=%s",
                 (
@@ -4040,10 +4205,24 @@ def api_orders_update(oid):
                     who[:255],
                     needs_approval,
                     mgmt_reason,
+                    rebateable,
                     _json.dumps(payload, ensure_ascii=False, default=str),
                     oid,
                 ),
             )
+            # Editor-becomes-approver: stamp Brian/Pamela's approval
+            # on the row so the order comes out already approved from
+            # their edit.  The approved_by_* fields become the record
+            # of who signed off.
+            if is_editor and needs_approval == "Y":
+                cur2.execute(
+                    "UPDATE submitted_orders SET "
+                    "  approved_by_email = %s, "
+                    "  approved_by_name  = %s, "
+                    "  approved_at       = NOW() "
+                    "WHERE id = %s",
+                    (who, editor_name, oid),
+                )
             conn.commit()
         finally:
             cur2.close()
@@ -4088,26 +4267,54 @@ def api_orders_update(oid):
 @app.post("/api/orders/detail/<int:oid>/approve")
 def api_orders_approve(oid):
     """Mark this order approved by the caller (Hayden, JunJong or Kenny).
-    Parallel approval — each slot moves independently.  Body: {}
-    (approver is inferred from the request identity)."""
+    Parallel approval — the FIRST approver to click Approve
+    finalises the order.  We still write the individual
+    approved_<slot> column so the detail UI can show which named
+    approver acted, but approved_by_email / approved_by_name /
+    approved_at are populated from THIS caller and left untouched
+    by subsequent approvers.  Body: {} (approver is inferred from
+    the request identity)."""
     who = (_bde_from_request() or "").strip().lower()
     approver_col = None
-    if   who == MGMT_APPROVER_EMAILS[0]: approver_col = "approved_a"   # Hayden
-    elif who == MGMT_APPROVER_EMAILS[1]: approver_col = "approved_b"   # JunJong
-    elif who == MGMT_APPROVER_EMAILS[2]: approver_col = "approved_c"   # Kenny
+    approver_name = None
+    if   who == MGMT_APPROVER_EMAILS[0]: approver_col, approver_name = "approved_a", "Hayden"
+    elif who == MGMT_APPROVER_EMAILS[1]: approver_col, approver_name = "approved_b", "JunJong"
+    elif who == MGMT_APPROVER_EMAILS[2]: approver_col, approver_name = "approved_c", "Kenny"
     if not approver_col:
         return jsonify({"error": "only the named approvers can approve"}), 403
-    conn = get_connection(); cur = conn.cursor()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    order_snapshot = None
     try:
+        # Set the named slot AND, if no earlier approver has locked
+        # the order yet, record this caller as the official
+        # approved_by.  A COALESCE-guarded UPDATE means the SECOND
+        # approver doesn't overwrite the FIRST — first-wins.
         cur.execute(
             f"UPDATE submitted_orders SET {approver_col} = 'Y', "
-            f"  {approver_col}_at = NOW() "
+            f"  {approver_col}_at = NOW(), "
+            f"  approved_by_email = COALESCE(approved_by_email, %s), "
+            f"  approved_by_name  = COALESCE(approved_by_name,  %s), "
+            f"  approved_at       = COALESCE(approved_at,       NOW()) "
             f"WHERE id = %s AND needs_mgmt_approval = 'Y'",
-            (oid,))
+            (who, approver_name, oid),
+        )
         if cur.rowcount == 0:
             return jsonify({"error": "not found or doesn't need approval"}), 404
         conn.commit()
-        return jsonify({"ok": True, "slot": approver_col, "by": who})
+        # Pull the freshly-updated row so the confirmation email has
+        # every field it needs (order_no, sold_to_name, grand_total,
+        # bde name…) without a separate round-trip.
+        try:
+            cur.execute(
+                "SELECT id, order_no, submitted_by_bde, submitted_by_email, "
+                "       sold_to, sold_to_name, grand_total, "
+                "       approved_by_email, approved_by_name, approved_at "
+                "FROM submitted_orders WHERE id = %s LIMIT 1",
+                (oid,),
+            )
+            order_snapshot = cur.fetchone()
+        except Exception:
+            order_snapshot = None
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -4117,13 +4324,47 @@ def api_orders_approve(oid):
         try: conn.close()
         except: pass
 
+    # Fire the approval-confirmation email OUTSIDE the DB block so a
+    # mail failure never rolls back the approval itself.  Recipients:
+    # Harry + the other approvers + BDE + read-only reviewers so the
+    # whole thread sees the outcome in one message.
+    if order_snapshot is not None:
+        try:
+            base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+        except Exception:
+            base_url = ""
+        order_no = order_snapshot.get("order_no") or f"#{oid}"
+        bde_email = (order_snapshot.get("submitted_by_email") or "").strip().lower()
+        to_list = [HARRY_CS_EMAIL] + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
+        cc      = [bde_email] if bde_email else []
+        cc     += SPRF_READONLY_CC
+        subject = (f"[SPRF APPROVED {order_no}] {approver_name} · "
+                   f"{order_snapshot.get('sold_to_name','')} "
+                   f"({order_snapshot.get('sold_to','')})")
+        try:
+            _send_mail_async(
+                to_list, cc, subject,
+                _approval_email_html(oid, order_snapshot,
+                                     approver_name, who, base_url),
+            )
+        except Exception as e:
+            print(f"[approve] mail queue failed: {e}")
+
+    return jsonify({
+        "ok": True, "slot": approver_col, "by": who,
+        "by_name": approver_name,
+        "approved_by_email": (order_snapshot or {}).get("approved_by_email") or who,
+        "approved_by_name":  (order_snapshot or {}).get("approved_by_name")  or approver_name,
+    })
+
 
 @app.get("/api/orders/whoami")
 def api_orders_whoami():
     """Front-end reads this to decide whether to show the status
     toggle (Harry-only) and to auto-fill submitted_by.  Also
-    surfaces is_approver_a / is_approver_b so the detail page can
-    render the Approve button only for Hayden / JunJong / Kenny."""
+    surfaces is_approver_a / is_approver_b / is_approver_c and
+    is_price_editor so the detail page can render the Approve /
+    Edit buttons only for the right people."""
     who = (_bde_from_request() or "").strip().lower()
     name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
     return jsonify({
@@ -4138,7 +4379,101 @@ def api_orders_whoami():
         "is_approver_a": who == MGMT_APPROVER_EMAILS[0],   # Hayden
         "is_approver_b": who == MGMT_APPROVER_EMAILS[1],   # JunJong
         "is_approver_c": who == MGMT_APPROVER_EMAILS[2],   # Kenny
+        # Price-editor gate — only these people can PATCH an already-
+        # submitted order's prices.  The editor-name is returned so
+        # the front-end can label the auto-appended remark.
+        "is_price_editor":  who in PRICE_EDITOR_EMAILS,
+        "price_editor_name": PRICE_EDITOR_EMAILS.get(who, ""),
     })
+
+
+@app.get("/api/orders/list_excel")
+def api_orders_list_excel():
+    """Download the currently-filtered orders list as an XLSX.  Accepts
+    the same status / date_from / date_to filters as /api/orders/list.
+    Filename encodes the filter range so multiple downloads don't
+    overwrite each other."""
+    import io
+    status    = (request.args.get("status") or "").strip().upper()
+    date_from = (request.args.get("date_from") or "").strip()
+    date_to   = (request.args.get("date_to")   or "").strip()
+    try:
+        limit = min(int(request.args.get("limit") or 1000), 5000)
+    except Exception:
+        limit = 1000
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        wh, p = [], []
+        if status in ("Y", "N"):
+            wh.append("status_sap = %s"); p.append(status)
+        if date_from:
+            wh.append("DATE(submitted_at) >= %s"); p.append(date_from)
+        if date_to:
+            wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
+        where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
+        cur.execute(
+            f"SELECT order_no, submitted_at, submitted_by_bde, "
+            f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
+            f"       total_qty, grand_total, avg_dc_pct, "
+            f"       rebateable, status_sap, needs_mgmt_approval, "
+            f"       approved_by_name, approved_at, mgmt_reason "
+            f"FROM submitted_orders {where_sql} "
+            f"ORDER BY submitted_at DESC LIMIT %s",
+            tuple(p + [limit])
+        )
+        rows = cur.fetchall() or []
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    wb = Workbook(); ws = wb.active; ws.title = "Orders"
+    headers = ["Order #", "Submitted", "BDE", "Sold-to", "Sold-to Name",
+               "Ship-to", "Ship-to Name", "State", "Qty", "Grand Total",
+               "Avg DC %", "Rebateable", "SAP Status",
+               "Needs Approval", "Approved By", "Approved At", "Remark"]
+    ws.append(headers)
+    for c, _ in enumerate(headers, start=1):
+        ws.cell(row=1, column=c).font = Font(bold=True)
+        ws.cell(row=1, column=c).fill = PatternFill("solid", fgColor="FFD54F")
+    fmt = lambda v: v.strftime("%Y-%m-%d %H:%M") if hasattr(v, "strftime") else (v or "")
+    for r in rows:
+        ws.append([
+            r.get("order_no") or "",
+            fmt(r.get("submitted_at")),
+            r.get("submitted_by_bde") or "",
+            r.get("sold_to") or "",
+            r.get("sold_to_name") or "",
+            r.get("ship_to") or "",
+            r.get("ship_to_name") or "",
+            r.get("state") or "",
+            r.get("total_qty") or 0,
+            float(r.get("grand_total") or 0),
+            float(r.get("avg_dc_pct") or 0),
+            r.get("rebateable") or "",
+            r.get("status_sap") or "",
+            r.get("needs_mgmt_approval") or "",
+            r.get("approved_by_name") or "",
+            fmt(r.get("approved_at")),
+            (r.get("mgmt_reason") or "")[:500],
+        ])
+    for c in range(1, len(headers) + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 18
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+
+    filename_bits = ["orders"]
+    if date_from: filename_bits.append(date_from)
+    if date_to:   filename_bits.append(date_to)
+    if status:    filename_bits.append(status)
+    fname = "_".join(filename_bits) + ".xlsx"
+    return send_file(
+        buf,
+        as_attachment=True,
+        download_name=fname,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @app.route("/orders_list")
