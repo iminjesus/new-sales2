@@ -1021,6 +1021,24 @@ async function fillBaseDC(soldTo){
   // Cache the customer's sold_to so per-row additional-DC lookups
   // can key off it without walking back up to the customer form.
   window._orderSoldTo = soldTo || "";
+  // Rule 2 gate — check that TODAY falls inside the dc_basic_customer
+  // valid_from / valid_to window for this customer.  If no row
+  // qualifies, the pricing master hasn't been loaded for the current
+  // month; the form throws the standard alert and refuses to
+  // populate any base-DC cells.  A blank sold_to skips the check
+  // (nothing to look up yet).
+  if (soldTo) {
+    try {
+      const chk = await apiGet(`/api/orders/pricing_window_check?sold_to=${encodeURIComponent(soldTo)}`);
+      if (chk && chk.matched === false) {
+        alert(chk.message || "pricing master for this month does not exist, please contact the admin");
+        const clear = (id) => { const el = document.getElementById(id); if (el) el.value = ""; };
+        clear("basedc_hkpclt"); clear("basedc_tbr"); clear("basedc_lfpclt");
+        window._baseDCPct = { HK_PCLT: null, LF_PCLT: null, TBR: null };
+        return;
+      }
+    } catch(_e) { /* fall through — server error shouldn't hard-block */ }
+  }
   const data = await apiGet(`/api/orders/base_dc?sold_to=${encodeURIComponent(soldTo)}`);
   const fmtPct = v => (v == null) ? "" : `+${(+v).toFixed(2)}%`;
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };

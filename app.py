@@ -3212,46 +3212,141 @@ def api_orders_base_dc():
         except: pass
 
 
+@app.get("/api/orders/pricing_window_check")
+def api_orders_pricing_window_check():
+    """Rule 2 gate — tells the front-end whether TODAY falls within
+    the dc_basic_customer valid_from / valid_to window for this
+    sold-to (or its customer group).  A miss means the pricing
+    master hasn't been loaded for the current month and the form
+    should refuse to open with a "please contact the admin" toast.
+
+      ?sold_to=…   the bill-to code selected on the Order form
+
+    Returns
+      { "matched": true }                        — proceed normally
+      { "matched": false, "message": "pricing master for this month
+        does not exist, please contact the admin" }
+    """
+    sold_to = (request.args.get("sold_to") or "").strip()
+    debug = request.args.get("debug") in ("1", "true", "yes")
+    msg = "pricing master for this month does not exist, please contact the admin"
+    out = {"matched": False, "message": msg}
+    if debug:
+        out["_debug"] = {"sold_to": sold_to}
+    if not sold_to:
+        return jsonify(out)
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        try:
+            cur.execute("SHOW TABLES LIKE 'dc_basic_customer'")
+            if not cur.fetchone():
+                return jsonify(out)
+        except Exception:
+            return jsonify(out)
+
+        cols = _list_columns(cur, "dc_basic_customer")
+        group_col = next((c for c in [
+            "customer_grp", "customer_group", "sold_to_group",
+            "bill_to_group", "customer", "customer_code",
+            "group_code", "grouping", "cust_group", "cust_grp",
+        ] if c in cols), None)
+
+        # Resolve the customer's group so we can accept a group-level
+        # row when there's no sold-to-specific row.
+        group_code = ""
+        try:
+            cur.execute(
+                "SELECT MAX(NULLIF(TRIM(sold_to_group), '')) AS grp "
+                "FROM customer WHERE sold_to = %s",
+                (sold_to,),
+            )
+            gr = cur.fetchone()
+            if gr:
+                group_code = (gr.get("grp") or "").strip()
+        except Exception:
+            pass
+        if debug:
+            out["_debug"]["group_code"] = group_code
+
+        params = [sold_to]
+        where_group = ""
+        if group_col and group_code:
+            where_group = (
+                f" OR ((bill_to_partner IS NULL OR TRIM(bill_to_partner) = '')"
+                f"     AND UPPER(TRIM({group_col})) = UPPER(%s))"
+            )
+            params.append(group_code)
+        cur.execute(
+            f"SELECT 1 FROM dc_basic_customer "
+            f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
+            f"  AND (valid_from IS NULL OR valid_from <= CURDATE()) "
+            f"  AND (valid_to   IS NULL OR valid_to   >= CURDATE()) "
+            f"LIMIT 1",
+            tuple(params),
+        )
+        if cur.fetchone():
+            return jsonify({"matched": True})
+        return jsonify(out)
+    except Exception as e:
+        if debug:
+            out["_debug"]["error"] = str(e)
+        return jsonify(out)
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 @app.get("/api/orders/additional_dc")
 def api_orders_additional_dc():
     """Look up an Additional Special DC % for one order line.
 
-      ?sold_to=…        bill-to code on the customer master
-      ?brand=…          HK | LF (row's brand from carrying_26)
-      ?product_group=…  Dynapro | Kinergy | … (row's product_group)
-      ?qty=…            row qty (min_qty threshold gate)
-      ?pattern=…        row's pattern (RA33, LK41 …) — matched against
-                        dc_additional_customer.pattern when present
-      ?material=…       row's m_code — matched against
-                        dc_additional_customer.material when present
+    Pricing spec (current):
+      1. `promo_plan` is IGNORED — this endpoint no longer joins or
+         gates against it in any way.
+      2. The dc_basic_customer date-window check is delegated to
+         /api/orders/pricing_window_check; this endpoint assumes the
+         form has already passed that gate.
+      3. If no row in dc_additional_customer matches the sold-to (or
+         its customer group), return matched=false — the form's
+         additional-DC cell stays blank and only base_dc applies.
+      4. When rows exist, the discount is picked by 4-TIER
+         specificity fallback — the row's material / pattern /
+         product_group / brand columns say how narrow it is:
+
+           tier 1: material  populated → must match line's m_code
+           tier 2: material  blank, pattern populated → must match
+                   line's pattern
+           tier 3: material + pattern blank, product_group populated
+                   → must match line's product_group
+           tier 4: material + pattern + product_group all blank,
+                   brand populated → must match line's brand
+
+         Rows less specific than the winning tier are IGNORED — a
+         brand-only row never contributes when a pattern row exists.
+         Within a tier, sold_to match beats customer_grp match, then
+         the biggest discount wins.
+
+    Query params:
+      sold_to (required) — bill-to code
+      brand (required)   — HK | LF | KS | AU
+      product_group      — Dynapro / Kinergy / …
+      pattern            — RA33 / LK41 / …
+      material           — the line's m_code
+      qty                — line qty (min_qty threshold gate)
 
     Returns
-      { "additional_dc": 30.00, "promo": "443", "min_qty": 4,
-        "source": "sold_to" | "customer_grp", "matched": true }
+      { "additional_dc": 30.00, "min_qty": 4,
+        "source": "sold_to" | "customer_grp",
+        "tier": "material" | "pattern" | "product_group" | "brand",
+        "matched": true }
       or { "additional_dc": null, "matched": false } when nothing
-      qualifies (form leaves the add_dc cell alone).
-
-    Lookup joins dc_additional_customer × promo_plan:
-      1. Row keyed to this bill-to exactly beats a group row.
-      2. Brand must match.
-      3. min_qty must be <= this line's qty.
-      4. If the row carries `pattern`, it must match the line's
-         pattern (blank/NULL = matches every pattern).
-      5. If the row carries `material`, it must match the line's
-         m_code (blank/NULL = matches every material).
-      6. If the row carries `valid_from` / `valid_to`, CURDATE()
-         must fall inside that window (NULL = open-ended on that
-         side).
-      7. The row's promo (443, iON, …) must have at least one
-         promo_plan entry where the product_group matches (or is
-         blank = all groups) AND CURDATE() falls in the plan's
-         start_date / end_date window.  If promo_plan isn't
-         loaded, this gate is skipped.
-    If several rows still qualify, the highest additional_dc wins
-    (best discount for the customer); within the same discount, a
-    row with an explicit pattern beats a wildcard row, and same for
-    material.  Missing table / missing plan / no match all return
-    matched:false; the endpoint never 500s under normal misses."""
+      qualifies.  Missing table / no match all return matched:false;
+      the endpoint never 500s under normal misses.
+    """
     sold_to       = (request.args.get("sold_to") or "").strip()
     brand         = (request.args.get("brand") or "").strip()
     product_group = (request.args.get("product_group") or "").strip()
@@ -3275,16 +3370,16 @@ def api_orders_additional_dc():
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        # Silently no-op when the table isn't loaded — the form still
-        # functions with the cell blank.
         try:
             cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
             if not cur.fetchone():
+                # Rule 3: no table → no additional discount.
                 return jsonify(out)
         except Exception:
             return jsonify(out)
 
-        # Resolve customer group for the group-fallback tier.
+        # Resolve customer group so tier-fallback (row.customer_grp
+        # matches this customer's group) works.
         group_code = ""
         try:
             cur.execute(
@@ -3299,139 +3394,111 @@ def api_orders_additional_dc():
         if debug:
             out["_debug"]["group_code"] = group_code
 
-        # Column names are pinned to what the CSV shipped with
-        # (customer_grp / sold_to / promo / brand / min_qty /
-        # additional_dc).  If a deployment renames one, this endpoint
-        # will silently miss — small enough surface that a rename is
-        # a code change here.
         ac_cols = _list_columns(cur, "dc_additional_customer")
-        needed = {"customer_grp", "sold_to", "promo", "brand",
-                  "min_qty", "additional_dc"}
+        needed = {"customer_grp", "sold_to", "brand", "min_qty", "additional_dc"}
         if not needed.issubset(ac_cols):
             if debug:
                 out["_debug"]["missing_cols"] = sorted(needed - ac_cols)
                 out["_debug"]["cols"] = sorted(ac_cols)
             return jsonify(out)
 
-        # Also check promo_plan exists — the endpoint only makes sense
-        # with the join.  If missing, ignore the promo gate (treat as
-        # always in-plan) so an early rollout still surfaces something.
-        pp_exists = False
-        try:
-            cur.execute("SHOW TABLES LIKE 'promo_plan'")
-            pp_exists = bool(cur.fetchone())
-        except Exception:
-            pp_exists = False
-        if debug:
-            out["_debug"]["promo_plan"] = pp_exists
+        has_pattern       = "pattern"       in ac_cols
+        has_material      = "material"      in ac_cols
+        has_product_group = "product_group" in ac_cols
+        has_dates         = ("valid_from" in ac_cols and "valid_to" in ac_cols)
 
-        # Build the promo gate — pp.product_group blank = "applies to
-        # every product group" (matches how the existing promo filter
-        # in _promo_filter_clauses treats blank).  Dates NULL/blank
-        # treated as open-ended.
-        promo_gate = ""
-        if pp_exists:
-            promo_gate = """
-              AND EXISTS (
-                SELECT 1 FROM promo_plan pp
-                WHERE pp.promo = ac.promo
-                  AND (pp.product_group IS NULL
-                       OR TRIM(pp.product_group) = ''
-                       OR UPPER(TRIM(pp.product_group)) = UPPER(%s))
-                  AND (pp.start_date IS NULL OR pp.start_date <= CURDATE())
-                  AND (pp.end_date   IS NULL OR pp.end_date   >= CURDATE())
-              )"""
-        # ── Extra gates for the new columns on the reloaded table ──
-        # `pattern` and `material` are matched only when the row on
-        # dc_additional_customer actually carries a value — blank/NULL
-        # means "applies to every pattern / material" (wildcard).
-        # `valid_from` / `valid_to` are similarly open-ended when NULL.
-        pattern_gate = ""
-        material_gate = ""
-        if "pattern" in ac_cols:
-            pattern_gate = (
-                " AND (ac.pattern IS NULL OR TRIM(ac.pattern) = ''"
-                "      OR UPPER(TRIM(ac.pattern)) = UPPER(%s))"
-            )
-        if "material" in ac_cols:
-            material_gate = (
-                " AND (ac.material IS NULL OR TRIM(ac.material) = ''"
-                "      OR TRIM(ac.material) = TRIM(%s))"
-            )
-        date_gate = ""
-        if "valid_from" in ac_cols and "valid_to" in ac_cols:
-            date_gate = (
+        # Shared WHERE fragments across all four tiers.  The customer
+        # gate accepts either an exact sold_to match or a group-level
+        # row (blank sold_to, customer_grp matches the customer's
+        # group_code).  gc falls back to sold_to when no group resolves
+        # so the second sub-clause becomes a no-op instead of an
+        # accidental wildcard.
+        gc = group_code or sold_to
+        customer_gate = (
+            " (TRIM(ac.sold_to) = %s"
+            "  OR ((ac.sold_to IS NULL OR TRIM(ac.sold_to) = '')"
+            "      AND UPPER(TRIM(ac.customer_grp)) = UPPER(%s)))"
+        )
+        common_gate = (
+            " AND UPPER(TRIM(ac.brand)) = UPPER(%s)"
+            " AND (ac.min_qty IS NULL OR ac.min_qty <= %s)"
+        )
+        if has_dates:
+            common_gate += (
                 " AND (ac.valid_from IS NULL OR ac.valid_from <= CURDATE())"
                 " AND (ac.valid_to   IS NULL OR ac.valid_to   >= CURDATE())"
             )
-        # Group fallback fires only when we resolved a group code.
-        group_join = ""
-        params = [sold_to]
-        if group_code:
-            group_join = (
-                " OR ((ac.sold_to IS NULL OR TRIM(ac.sold_to) = '')"
-                "     AND UPPER(TRIM(ac.customer_grp)) = UPPER(%s))"
-            )
-            params.append(group_code)
-        params += [brand, qty]
-        if "pattern" in ac_cols:
-            params.append(pattern)
-        if "material" in ac_cols:
-            params.append(material)
-        if pp_exists:
-            params.append(product_group)
+        # Standard ordering: sold_to match beats customer_grp match,
+        # then bigger discount wins on ties, then tighter min_qty.
+        order_by = (
+            " ORDER BY CASE WHEN TRIM(ac.sold_to) = %s THEN 0 ELSE 1 END,"
+            "          ABS(ac.additional_dc) DESC,"
+            "          ac.min_qty DESC"
+            " LIMIT 1"
+        )
+        base_params = [sold_to, gc, brand, qty]
 
-        # Tier 1 (sold_to match) sorts ahead of tier 2 (group match).
-        # Within the same tier, the biggest discount wins — the user
-        # gets the best applicable rate.  min_qty DESC on ties so a
-        # tighter-threshold row is preferred over a loose one at the
-        # same %.  When the new pattern/material columns are present,
-        # rows that name an explicit pattern/material beat wildcard
-        # rows at the same discount (specific > generic).
-        specificity_pattern = ""
-        specificity_material = ""
-        if "pattern" in ac_cols:
-            specificity_pattern = (
-                ", CASE WHEN ac.pattern IS NULL OR TRIM(ac.pattern) = '' "
-                "THEN 0 ELSE 1 END DESC"
+        def _tier(sql_extra, extra_params, tier_name):
+            sql = (
+                "SELECT ac.additional_dc, ac.min_qty, ac.customer_grp,"
+                " ac.sold_to,"
+                " CASE WHEN TRIM(ac.sold_to) = %s THEN 'sold_to'"
+                "      ELSE 'customer_grp' END AS source"
+                " FROM dc_additional_customer ac"
+                " WHERE " + customer_gate + common_gate + sql_extra + order_by
             )
-        if "material" in ac_cols:
-            specificity_material = (
-                ", CASE WHEN ac.material IS NULL OR TRIM(ac.material) = '' "
-                "THEN 0 ELSE 1 END DESC"
+            params = [sold_to] + base_params + extra_params + [sold_to]
+            cur.execute(sql, tuple(params))
+            r = cur.fetchone()
+            if r:
+                r["tier"] = tier_name
+            return r
+
+        row = None
+        # Tier 1 — Material specific.  Row.material must be populated
+        # AND equal to the line's material.
+        if has_material and material:
+            row = _tier(
+                " AND ac.material IS NOT NULL"
+                " AND TRIM(ac.material) <> ''"
+                " AND TRIM(ac.material) = TRIM(%s)",
+                [material],
+                "material",
             )
-        sql = f"""
-            SELECT ac.additional_dc, ac.min_qty, ac.promo,
-                   ac.customer_grp, ac.sold_to, ac.brand,
-                   CASE WHEN TRIM(ac.sold_to) = %s THEN 'sold_to'
-                        ELSE 'customer_grp' END AS source,
-                   CASE WHEN TRIM(ac.sold_to) = %s THEN 1 ELSE 2 END AS tier
-            FROM dc_additional_customer ac
-            WHERE (
-                    TRIM(ac.sold_to) = %s
-                    {group_join}
-                  )
-              AND UPPER(TRIM(ac.brand)) = UPPER(%s)
-              AND (ac.min_qty IS NULL OR ac.min_qty <= %s)
-              {pattern_gate}
-              {material_gate}
-              {date_gate}
-              {promo_gate}
-            ORDER BY tier ASC
-                     {specificity_material}
-                     {specificity_pattern}
-                     , ABS(ac.additional_dc) DESC,
-                     ac.min_qty DESC
-            LIMIT 1
-        """
-        # Params order: source CASE, tier CASE, WHERE sold_to,
-        # [group_code], brand, qty, [pattern], [material],
-        # [product_group].
-        exec_params = [sold_to, sold_to] + params
-        cur.execute(sql, tuple(exec_params))
-        row = cur.fetchone()
+        # Tier 2 — Pattern specific, material blank.
+        if not row and has_pattern and pattern:
+            extra = (
+                " AND ac.pattern IS NOT NULL"
+                " AND TRIM(ac.pattern) <> ''"
+                " AND UPPER(TRIM(ac.pattern)) = UPPER(%s)"
+            )
+            if has_material:
+                extra = " AND (ac.material IS NULL OR TRIM(ac.material) = '')" + extra
+            row = _tier(extra, [pattern], "pattern")
+        # Tier 3 — Product Group specific, pattern + material blank.
+        if not row and has_product_group and product_group:
+            extra = (
+                " AND ac.product_group IS NOT NULL"
+                " AND TRIM(ac.product_group) <> ''"
+                " AND UPPER(TRIM(ac.product_group)) = UPPER(%s)"
+            )
+            if has_material:
+                extra = " AND (ac.material IS NULL OR TRIM(ac.material) = '')" + extra
+            if has_pattern:
+                extra = " AND (ac.pattern  IS NULL OR TRIM(ac.pattern)  = '')" + extra
+            row = _tier(extra, [product_group], "product_group")
+        # Tier 4 — Brand only.  Every narrower column must be blank.
+        if not row:
+            extra = ""
+            if has_material:
+                extra += " AND (ac.material      IS NULL OR TRIM(ac.material)      = '')"
+            if has_pattern:
+                extra += " AND (ac.pattern       IS NULL OR TRIM(ac.pattern)       = '')"
+            if has_product_group:
+                extra += " AND (ac.product_group IS NULL OR TRIM(ac.product_group) = '')"
+            row = _tier(extra, [], "brand")
+
         if debug:
-            out["_debug"]["sql_params"] = exec_params
             out["_debug"]["row"] = row
         if not row:
             return jsonify(out)
@@ -3441,14 +3508,13 @@ def api_orders_additional_dc():
             add_dc = None
         if add_dc is None:
             return jsonify(out)
-        # additional_dc is stored positive on the feed (30.00 = 30%
-        # discount); pass it through as-is so the form adds it to the
-        # DC stack directly.
+        # additional_dc stored positive on the feed (30.00 = 30%
+        # discount); pass through as-is.
         out["additional_dc"] = abs(add_dc)
         out["matched"]       = True
-        out["promo"]         = row.get("promo")
         out["min_qty"]       = row.get("min_qty")
         out["source"]        = row.get("source")
+        out["tier"]          = row.get("tier")
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
