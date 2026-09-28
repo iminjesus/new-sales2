@@ -4021,12 +4021,24 @@ def api_orders_list():
                         if brand and tag in ("PCLT", "TBR"):
                             key = f"{brand}-{tag}"
                             brand_split_by_id[pr["id"]][key] = brand_split_by_id[pr["id"]].get(key, 0.0) + amt
-                        # Add DC = MTH + Vol + Add + Aging per line
-                        # (BDE-added extras, excluding the SP auto promo).
-                        # Any line where that sum > 0 flips has_add and
-                        # takes the order out of Standard Pricing.
-                        add_line = _f(ln.get("mth_dc")) + _f(ln.get("vol_dc")) \
-                                 + _f(ln.get("add_dc")) + _f(ln.get("aging_dc"))
+                        # Add DC per line = chained (multiplicative)
+                        # combination of MTH + Vol + Add + Aging:
+                        #   1 - (1-MTH)(1-Vol)(1-Add)(1-Aging)
+                        # Values are percentages (MTH=20 means 20 %),
+                        # so each is divided by 100 in the chain and
+                        # the result multiplied back to a percentage.
+                        # SP (443 promo) is the customer's auto contract
+                        # promo and stays out — a row whose only extra
+                        # is SP remains Standard Pricing.
+                        mth = _f(ln.get("mth_dc"))
+                        vol = _f(ln.get("vol_dc"))
+                        adx = _f(ln.get("add_dc"))
+                        agg = _f(ln.get("aging_dc"))
+                        add_line = 100.0 * (1.0
+                            - (1.0 - mth / 100.0)
+                            * (1.0 - vol / 100.0)
+                            * (1.0 - adx / 100.0)
+                            * (1.0 - agg / 100.0))
                         if add_line > 0: has_add_by_id[pr["id"]] = True
                         q = _f(ln.get("qty"))
                         if q > 0:
@@ -4513,9 +4525,10 @@ def api_orders_list_excel():
         try: conn.close()
         except: pass
 
-    # Compute Add DC% per row from payload_json (MTH+Vol+Add+Aging,
-    # qty-weighted) — matches orders_list.html's Add DC% column.  SP
-    # promo excluded, consistent with the SPRF sheet's red boxes.
+    # Compute Add DC% per row from payload_json — same chained
+    # (multiplicative) formula the front-end uses:
+    #   1 - (1-MTH)(1-Vol)(1-Add)(1-Aging), qty-weighted across lines.
+    # SP promo excluded (customer's auto contract, not a BDE extra).
     import json as _json_x
     def _f(v):
         try: return float(str(v or "0").replace(",", "").replace("%", ""))
@@ -4528,8 +4541,15 @@ def api_orders_list_excel():
         for ln in (pj.get("lines") or []):
             lq = _f(ln.get("qty"))
             if lq <= 0: continue
-            add = _f(ln.get("mth_dc")) + _f(ln.get("vol_dc")) \
-                + _f(ln.get("add_dc")) + _f(ln.get("aging_dc"))
+            mth = _f(ln.get("mth_dc"))
+            vol = _f(ln.get("vol_dc"))
+            adx = _f(ln.get("add_dc"))
+            agg = _f(ln.get("aging_dc"))
+            add = 100.0 * (1.0
+                - (1.0 - mth / 100.0)
+                * (1.0 - vol / 100.0)
+                * (1.0 - adx / 100.0)
+                * (1.0 - agg / 100.0))
             w += add * lq; q += lq
         add_dc_by_id[r["id"]] = round(w / q, 2) if q > 0 else 0.0
 

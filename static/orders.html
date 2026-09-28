@@ -1307,7 +1307,15 @@ function updateTotals(){
     const vol = toNum(r.querySelector('[data-col="vol_dc"]')?.value);
     const ad  = toNum(r.querySelector('[data-col="add_dc"]')?.value);
     const ag  = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
-    const addDCrow = mth + vol + ad + ag;
+    // Chained (multiplicative) Additional DC:
+    //   1 - (1-MTH)(1-Vol)(1-Add)(1-Aging)
+    // MTH=20 alone → 20 %.  MTH=20 + Vol=10 → 28 % (not 30).  This
+    // matches how the SPRF sheet compounds discounts on list price.
+    const addDCrow = 100 * (1
+      - (1 - mth/100)
+      * (1 - vol/100)
+      * (1 - ad /100)
+      * (1 - ag /100));
     sumQty        += q;
     sumAmt        += amt;
     weightedDC    += totDC    * q;   // qty-weighted total (chained) DC
