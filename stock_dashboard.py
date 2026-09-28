@@ -2715,46 +2715,54 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
     <a href="/stock_balance" class="active">Stock Balance</a>
   </nav>
 </div>
-<!-- Navigation overlay — invisible until goDashboard() flips its hidden
-     attribute.  Full-screen dim + spinner so the user knows the click
-     landed and the browser is now fetching the Sales Dashboard. -->
-<div id="navOverlay" hidden
-     style="position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,0.55);
-            display:flex;flex-direction:column;align-items:center;justify-content:center;
-            color:#fff;font-family:'IBM Plex Sans',Arial,sans-serif">
+<!-- Navigation overlay — invisible until goDashboard() flips .show on.
+     We do NOT use the HTML `hidden` attribute here because an inline
+     `display:flex` on the same element would beat it (the UA rule
+     `[hidden]{display:none}` is a plain author rule that inline
+     styles override).  So start with an explicit `display:none` and
+     let the .show class enable the flex layout. -->
+<style>
+  #navOverlay{position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,0.55);
+              flex-direction:column;align-items:center;justify-content:center;
+              color:#fff;font-family:'IBM Plex Sans',Arial,sans-serif;
+              display:none}
+  #navOverlay.show{display:flex}
+  @keyframes navSpin{to{transform:rotate(360deg)}}
+</style>
+<div id="navOverlay" aria-hidden="true">
   <div style="width:56px;height:56px;border:5px solid rgba(255,255,255,0.35);
               border-top-color:#FFD54F;border-radius:50%;
               animation:navSpin 0.8s linear infinite"></div>
   <div style="margin-top:14px;font-size:14px;font-weight:700">Loading Sales Dashboard…</div>
   <div style="margin-top:4px;font-size:11.5px;color:#e5e7eb">First render pulls a few months of data — this can take a moment.</div>
 </div>
-<style>@keyframes navSpin{to{transform:rotate(360deg)}}</style>
 <script>
 function goDashboard(e){
   // Fire the overlay THEN let the browser follow the href.  We don't
   // preventDefault — the anchor's own navigation is the cleanest way
   // to unload the current page.  If the browser is somehow still busy
-  // (a slow SKU-drill xhr, a pending resource), a hard fallback kicks
-  // in after 8 s and forces window.location so the user is never
-  // stranded on a dimmed screen.
+  // an 8-second hard fallback forces window.location so the user is
+  // never stranded on a dimmed screen.
   try {
     const ov = document.getElementById("navOverlay");
-    if (ov) ov.hidden = false;
-    // Any lingering XHR aborts on unload anyway, but we also proactively
-    // stop the loader for the SKU drill-down so its worker doesn't hold
-    // onto the browser's per-host connection slots while we navigate.
-    if (window.stop) setTimeout(() => { /* no-op: keep click flowing */ }, 0);
+    if (ov){ ov.classList.add("show"); ov.setAttribute("aria-hidden","false"); }
     setTimeout(() => {
-      // If we're still here 8 s after the click, the navigation
-      // stalled — force it via location so nothing keeps us pinned.
-      if (document.getElementById("navOverlay") &&
-          !document.getElementById("navOverlay").hidden){
+      const ov2 = document.getElementById("navOverlay");
+      if (ov2 && ov2.classList.contains("show")){
         window.location.href = "/";
       }
     }, 8000);
   } catch(_) { /* overlay is a nice-to-have; never block the click */ }
   // No preventDefault — the <a href="/"> continues to navigate.
 }
+/* If the user comes BACK to this page via the browser back button,
+   the bfcache restores the DOM with .show still on the overlay from
+   the click that unloaded us.  Clear it on pageshow so the tab
+   doesn't reopen with a stuck dim overlay. */
+window.addEventListener("pageshow", () => {
+  const ov = document.getElementById("navOverlay");
+  if (ov){ ov.classList.remove("show"); ov.setAttribute("aria-hidden","true"); }
+});
 </script>
 
 <!-- Top persistent filter bar (multi-select checkbox dropdowns) -->
