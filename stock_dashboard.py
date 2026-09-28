@@ -4904,25 +4904,28 @@ function downloadXLSX() {
     ];
 
     /* ── Interleave Sub Total rows ──
-       Walk src in order, group by merge_code, emit each group's M
-       CODE rows followed by a Sub Total row.  Source is already
-       merge-group sorted by exportSource() so a single pass works. */
-    const bundled = [];
-    let curMerge = null, curGroup = [];
-    const flush = () => {
-        if (!curGroup.length) return;
-        curGroup.forEach(r => bundled.push(r));
-        bundled.push(_mergeSubTotal(curMerge, curGroup));
-        curGroup = [];
-    };
+       IMPORTANT: for tabs like Shortage the source is sorted by MOI,
+       so M CODEs for the same merge are scattered across the list.
+       We must REGROUP by merge_code (preserving each merge's first-
+       seen position) BEFORE interleaving, otherwise the export would
+       emit "M CODE + Sub Total" for every row and split a real
+       merge into single-M-CODE pseudo-groups.  This is the same
+       mergeGroups map the on-screen renderer builds in renderTable. */
+    const mergeOrder = [];
+    const mergeMap   = new Map();
     src.forEach(r => {
-        if (r.merge_code !== curMerge) {
-            flush();
-            curMerge = r.merge_code;
+        if (!mergeMap.has(r.merge_code)) {
+            mergeMap.set(r.merge_code, []);
+            mergeOrder.push(r.merge_code);
         }
-        curGroup.push(r);
+        mergeMap.get(r.merge_code).push(r);
     });
-    flush();
+    const bundled = [];
+    mergeOrder.forEach(mc => {
+        const groupRows = mergeMap.get(mc);
+        groupRows.forEach(r => bundled.push(r));
+        bundled.push(_mergeSubTotal(mc, groupRows));
+    });
 
     /* Build the sheet as an array-of-arrays; row 1 is the header. */
     const aoa = [cols.map(c => c[0])];
