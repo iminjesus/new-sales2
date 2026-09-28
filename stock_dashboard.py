@@ -676,6 +676,16 @@ def _parse_data_date(path):
 
 
 _cache = {"path": None, "mtime": 0, "rows": None, "meta": None}
+# Thread-lock around the cache-miss path.  Without it, two concurrent
+# requests that both miss the cache (e.g. first hit + a tab reload,
+# or the user clicking Dashboard while the previous /stock_balance
+# is still parsing) each do a full 13-second openpyxl parse in
+# parallel, blocking Flask's worker threads and stealing CPU from
+# every other endpoint — including the / route the Dashboard button
+# is trying to reach.  With this lock, only one parse runs; the
+# second caller waits for it to finish and then hits the warm cache.
+import threading as _stock_threading
+_cache_lock = _stock_threading.Lock()
 
 # Populated fresh during load_stock_data(); exposed on the meta object
 # so the dashboard can surface "why is my product info blank?" without
@@ -694,8 +704,23 @@ def load_stock_data():
         return [], {"error": "No Stock_report_*.xlsm found in "
                              f"{_BASE!r}. Drop the latest report there."}
     mtime = os.path.getmtime(path)
+    # Fast-path: cache hit, no lock needed.
     if _cache["path"] == path and _cache["mtime"] == mtime and _cache["rows"] is not None:
         return _cache["rows"], _cache["meta"]
+    # Cache miss — serialise parses across threads.  A second caller
+    # arriving here after the lock is dropped will see the warm cache
+    # and return immediately.
+    with _cache_lock:
+        if _cache["path"] == path and _cache["mtime"] == mtime and _cache["rows"] is not None:
+            return _cache["rows"], _cache["meta"]
+        return _load_stock_data_uncached(path, mtime)
+
+
+def _load_stock_data_uncached(path, mtime):
+    """Real body of load_stock_data — called with _cache_lock held so
+    only one parse runs at a time.  Every early return path from the
+    original body still lands here; the outer wrapper handles the
+    cache-hit shortcut."""
 
     import openpyxl
     t0 = time.time()
@@ -2664,10 +2689,56 @@ body.expand-table .expand-target .tbl-wrap { max-height:calc(100vh - 160px); }
             title="Reload the page — the server picks up the newest Stock_report file automatically">🔄 Refresh</button>
     <button class="icon-btn" onclick="emailScreen('page','Full dashboard')"
             title="Capture the whole screen and start an Outlook mail">✉ Email screen</button>
-    <a href="/">Dashboard</a>
+    <!-- Dashboard link: show a full-screen loading overlay immediately
+         so the user gets instant feedback even when the target page
+         (index.html + 10 parallel chart-data fetches) takes a couple
+         of seconds to paint.  Prevents the "did I click? nothing's
+         happening" impression that reads as a hang. -->
+    <a href="/" id="navDashboardBtn" onclick="goDashboard(event)">Dashboard</a>
     <a href="/stock_balance" class="active">Stock Balance</a>
   </nav>
 </div>
+<!-- Navigation overlay — invisible until goDashboard() flips its hidden
+     attribute.  Full-screen dim + spinner so the user knows the click
+     landed and the browser is now fetching the Sales Dashboard. -->
+<div id="navOverlay" hidden
+     style="position:fixed;inset:0;z-index:9999;background:rgba(15,23,42,0.55);
+            display:flex;flex-direction:column;align-items:center;justify-content:center;
+            color:#fff;font-family:'IBM Plex Sans',Arial,sans-serif">
+  <div style="width:56px;height:56px;border:5px solid rgba(255,255,255,0.35);
+              border-top-color:#FFD54F;border-radius:50%;
+              animation:navSpin 0.8s linear infinite"></div>
+  <div style="margin-top:14px;font-size:14px;font-weight:700">Loading Sales Dashboard…</div>
+  <div style="margin-top:4px;font-size:11.5px;color:#e5e7eb">First render pulls a few months of data — this can take a moment.</div>
+</div>
+<style>@keyframes navSpin{to{transform:rotate(360deg)}}</style>
+<script>
+function goDashboard(e){
+  // Fire the overlay THEN let the browser follow the href.  We don't
+  // preventDefault — the anchor's own navigation is the cleanest way
+  // to unload the current page.  If the browser is somehow still busy
+  // (a slow SKU-drill xhr, a pending resource), a hard fallback kicks
+  // in after 8 s and forces window.location so the user is never
+  // stranded on a dimmed screen.
+  try {
+    const ov = document.getElementById("navOverlay");
+    if (ov) ov.hidden = false;
+    // Any lingering XHR aborts on unload anyway, but we also proactively
+    // stop the loader for the SKU drill-down so its worker doesn't hold
+    // onto the browser's per-host connection slots while we navigate.
+    if (window.stop) setTimeout(() => { /* no-op: keep click flowing */ }, 0);
+    setTimeout(() => {
+      // If we're still here 8 s after the click, the navigation
+      // stalled — force it via location so nothing keeps us pinned.
+      if (document.getElementById("navOverlay") &&
+          !document.getElementById("navOverlay").hidden){
+        window.location.href = "/";
+      }
+    }, 8000);
+  } catch(_) { /* overlay is a nice-to-have; never block the click */ }
+  // No preventDefault — the <a href="/"> continues to navigate.
+}
+</script>
 
 <!-- Top persistent filter bar (multi-select checkbox dropdowns) -->
 <div class="topfilters" id="topfilters">
