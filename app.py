@@ -2648,8 +2648,12 @@ def api_orders_material():
         c_product_group = pick("product_group")
         c_pattern      = pick("pattern")
         c_line         = pick("line")
-        c_load         = pick("load_speed", "load", "load_index")
-        c_speed        = pick("speed", "speed_rating")
+        c_load         = pick("load_speed", "load", "load_index",
+                               "loadindex", "load_idx", "li",
+                               "li_si", "loadspeed", "load_speed_idx")
+        c_speed        = pick("speed", "speed_rating",
+                               "speedrating", "speed_index", "si",
+                               "speed_idx", "speedcode")
         c_list_price   = pick("list_price", "price")
         c_s_code       = pick("s_code")
         c_operation    = pick("operation")
@@ -2812,6 +2816,22 @@ def api_orders_material():
             )
             if m:
                 row["load_speed"] = m.group(1)
+            else:
+                # Bare-token fallback for datasets whose description
+                # is just the size ("175/65R14") and load/speed lives
+                # in its own column ("82T").  Any of carrying_26's
+                # text columns can carry it; we accept the first
+                # token that reads as a plausible load-index + speed
+                # pattern.  Speed letter restricted to real tyre
+                # speed codes to keep random 3-digit words out
+                # (product codes, price rows, etc.).
+                m2 = _re_ls.search(
+                    r"\b(\d{2,3}(?:/\d{2,3})?)"
+                    r"(Z?[A-HJK-Y])\b(?!\s*[A-Za-z])",
+                    wide_src,
+                )
+                if m2:
+                    row["load_speed"] = m2.group(1) + m2.group(2)
         return jsonify(row)
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -3683,7 +3703,11 @@ def _ensure_submitted_orders_table():
         # textarea, surfaced as a column so it's queryable / visible in
         # the list without unpacking payload_json.
         _add_cols = [
-            ("needs_mgmt_approval", "CHAR(1) NOT NULL DEFAULT 'N'"),
+            # VARCHAR(10) — needs to fit both the CHAR(1) flags (Y/N)
+            # AND the Save-as-Draft marker 'temp'.  A pre-existing
+            # CHAR(1) column is widened below so drafts stop being
+            # truncated to 't' on INSERT.
+            ("needs_mgmt_approval", "VARCHAR(10) NOT NULL DEFAULT 'N'"),
             ("mgmt_reason",         "TEXT NULL"),
             ("approved_a",          "CHAR(1) NOT NULL DEFAULT 'N'"),
             ("approved_a_at",       "DATETIME NULL"),
@@ -3711,6 +3735,40 @@ def _ensure_submitted_orders_table():
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
             if not cur.fetchone():
                 cur.execute(f"ALTER TABLE submitted_orders ADD COLUMN {col} {ddl}")
+        # needs_mgmt_approval started life as CHAR(1); the Save-as-Draft
+        # workflow needs it wide enough to store 'temp' (4 chars).  A
+        # MODIFY is idempotent — no-op when the column is already the
+        # wider VARCHAR — so this runs safely every startup.
+        try:
+            cur.execute(
+                "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "  AND table_name = 'submitted_orders' "
+                "  AND column_name = 'needs_mgmt_approval' "
+                "LIMIT 1"
+            )
+            _row = cur.fetchone() or (None, None)
+            _dt  = (str(_row[0] or "")).lower()
+            _len = int(_row[1] or 0)
+            if _dt in ("char", "varchar") and _len < 4:
+                cur.execute(
+                    "ALTER TABLE submitted_orders "
+                    "MODIFY COLUMN needs_mgmt_approval "
+                    "VARCHAR(10) NOT NULL DEFAULT 'N'"
+                )
+                # Restore any 'temp' rows that were truncated on
+                # earlier saves — order_no starting with 'T' is the
+                # canonical draft marker, so any row wearing it and
+                # left flagged 't' can be safely re-inflated.
+                cur.execute(
+                    "UPDATE submitted_orders "
+                    "SET needs_mgmt_approval = 'temp' "
+                    "WHERE order_no LIKE 'T%' "
+                    "  AND needs_mgmt_approval = 't'"
+                )
+        except Exception as _e:
+            print(f"[submitted_orders] widen needs_mgmt_approval: {_e}")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         print(f"[submitted_orders] schema init failed: {e}")

@@ -1926,6 +1926,15 @@ function applySOVDRatesToRows(){
 }
 
 function updateTotals(){
+  /* Apply the SOVD ladder rate to eligible rows FIRST so the row loop
+     below reads the post-SOVD sp_dc / current_amount / total_amount
+     cells.  applySOVDRatesToRows is guarded (_sovdBusy) so any
+     recalcRow → updateTotals recursion it fires short-circuits its
+     own SOVD pass; the outer's row-loop then paints the final tfoot
+     against the settled row state.  Doing this AFTER the row loop
+     leaves the outer with stale pre-SOVD sums (bug: List Total /
+     Current Order Amount painted as 0.00). */
+  applySOVDRatesToRows();
   let sumQty = 0, sumAmt = 0, sumCurAmt = 0, sumListAmt = 0, weightedDC = 0, sovdQty = 0;
   let hasAdditional = false;
   /* MD-gate rule (simplified per user request): MD approval is
@@ -1986,12 +1995,6 @@ function updateTotals(){
   const finalTotal   = totalIncGst + freight;
 
   $("#sovd_ttl").value                  = fmtQty(sovdQty);
-  /* Apply the SOVD ladder rate to eligible rows.  Guarded so an
-     inner recalcRow → updateTotals loop can't re-enter.  Runs after
-     the totals write above so the UI reflects the pre-SOVD state
-     for a tick; when applySOVDRatesToRows fires recalcRow, the
-     re-triggered updateTotals then paints the final numbers. */
-  applySOVDRatesToRows();
   $("#ttlQty").textContent              = fmtQty(sumQty);
   $("#grandTotal").textContent          = fmtMoney(sumAmt);
   $("#grandListAmt").textContent        = sumListAmt ? fmtMoney(sumListAmt) : "0.00";
@@ -2826,16 +2829,17 @@ async function hydrateSubmittedOrder(oid, editMode){
       lockAgedRow(tr);
     }
   });
-  // 3. Totals — trust the persisted snapshot rather than recomputing.
+  // 3. Totals — seed the persisted snapshot first so freight_flag /
+  //    sovd_qty carry through, then re-run recalcRow + updateTotals so
+  //    every tfoot cell (grandListAmt, grandCurrentAmt, grandCurDCPct,
+  //    grandAddSupport) paints from the just-hydrated row cells.
+  //    Without this pass the read-only view leaves those four cells at
+  //    their HTML default "0.00" / "".
   const t = p.totals || {};
-  $("#ttlQty").textContent      = t.total_qty      || "0";
   $("#sovd_ttl").value          = t.sovd_qty       || "0";
-  $("#grandTotal").textContent  = t.subtotal       || "0.00";
-  $("#totalIncGst").textContent = t.total_inc_gst  || "0.00";
-  $("#freightChg").textContent  = t.freight_amount || "";
-  $("#finalTotal").textContent  = t.grand_total    || "0.00";
-  $("#avgDC").textContent       = t.avg_dc_pct ? t.avg_dc_pct + "%" : "";
   if (t.freight_flag) $("#freightFlag").value = t.freight_flag;
+  $$("#linesBody tr").forEach(tr => recalcRow(tr));
+  updateTotals();
 
   // 4. Decide view vs edit mode.  Edit needs both the URL flag and
   // the current user to be the original submitter (or ALL-role).
@@ -2876,9 +2880,8 @@ async function hydrateSubmittedOrder(oid, editMode){
       const draftBtn = $("#btnSaveTemp");
       if (draftBtn) draftBtn.hidden = true;
     }
-    // Trigger recalcRow so any user tweak updates totals live.
-    $$("#linesBody tr").forEach(tr => recalcRow(tr));
-    updateTotals();
+    // recalcRow + updateTotals already ran above (unconditional
+    // hydrate pass) so every tfoot cell is already painted.
     const label = isTempDraft
       ? `Editing saved draft <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at || ""} · click Submit to file for approval`
       : `Editing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b> (will reset to N on save)`;
