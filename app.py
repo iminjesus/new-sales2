@@ -3310,6 +3310,66 @@ def api_orders_pricing_window_check():
         except: pass
 
 
+@app.get("/api/orders/customer_has_sovd")
+def api_orders_customer_has_sovd():
+    """Return { has_sovd: bool } indicating whether the given sold-to
+    (or its customer group) carries a SOVD-tagged row in
+    dc_additional_customer.  The SPRF frontend uses this to decide
+    whether the "Trueblu (HK PCLTs) TTL" ladder should be applied at
+    all — a customer with no SOVD promo listed shouldn't have the
+    12/18 % auto-price kick in even when they have HK-PCLT lines."""
+    sold_to = (request.args.get("sold_to") or "").strip()
+    if not sold_to:
+        return jsonify({"has_sovd": False})
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        try:
+            cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
+            if not cur.fetchone():
+                return jsonify({"has_sovd": False})
+        except Exception:
+            return jsonify({"has_sovd": False})
+        ac_cols = _list_columns(cur, "dc_additional_customer")
+        if "promo" not in ac_cols:
+            return jsonify({"has_sovd": False})
+        # Resolve the customer's group so SOVD rows registered against
+        # the group (not the individual sold_to) are also detected.
+        group_code = ""
+        try:
+            cur.execute(
+                "SELECT MAX(NULLIF(TRIM(sold_to_group), '')) AS grp "
+                "FROM customer WHERE sold_to = %s",
+                (sold_to,))
+            gr = cur.fetchone()
+            if gr:
+                group_code = (gr.get("grp") or "").strip()
+        except Exception:
+            pass
+        # SOVD is a per-row tag.  A single hit — whether by sold_to or
+        # by customer_grp — is enough to say the customer is Trueblu-
+        # eligible.  LIKE '%SOVD%' catches the odd 'SOVD_2026' or
+        # 'SOVD-A' variants the feed sometimes ships.
+        params = [sold_to]
+        gate = "TRIM(ac.sold_to) = %s"
+        if group_code and "customer_grp" in ac_cols:
+            gate = "(TRIM(ac.sold_to) = %s OR TRIM(ac.customer_grp) = %s)"
+            params.append(group_code)
+        cur.execute(
+            f"SELECT 1 FROM dc_additional_customer ac "
+            f"WHERE {gate} AND UPPER(ac.promo) LIKE '%SOVD%' LIMIT 1",
+            tuple(params),
+        )
+        return jsonify({"has_sovd": cur.fetchone() is not None})
+    except Exception:
+        return jsonify({"has_sovd": False})
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 @app.get("/api/orders/additional_dc")
 def api_orders_additional_dc():
     """Look up an Additional Special DC % for one order line.

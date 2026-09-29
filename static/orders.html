@@ -1446,6 +1446,22 @@ async function fillBaseDC(soldTo){
   // Cache the customer's sold_to so per-row additional-DC lookups
   // can key off it without walking back up to the customer form.
   window._orderSoldTo = soldTo || "";
+  /* SOVD (Trueblu) eligibility is a customer-level flag: the ladder
+     only applies to customers with a SOVD-tagged row in
+     dc_additional_customer.  Reset to false on every customer swap
+     and re-check via the dedicated endpoint.  isSOVDEligible reads
+     this flag before adding a line to the Trueblu TTL count. */
+  window._customerHasSOVD = false;
+  if (soldTo) {
+    try {
+      const j = await apiGet(`/api/orders/customer_has_sovd?sold_to=${encodeURIComponent(soldTo)}`);
+      window._customerHasSOVD = !!(j && j.has_sovd);
+    } catch(_e){ /* keep flag false on lookup error */ }
+  }
+  /* Recompute Trueblu totals in case rows were already on the form
+     — clear our SOVD auto-stamps when the new customer isn't SOVD-
+     eligible.  applySOVDRatesToRows self-guards against re-entry. */
+  applySOVDRatesToRows && applySOVDRatesToRows();
   // Rule 2 gate — check that TODAY falls inside the dc_basic_customer
   // valid_from / valid_to window for this customer.  If no row
   // qualifies, the pricing master hasn't been loaded for the current
@@ -1846,6 +1862,12 @@ function unlockAgedRow(row){
    Rows we auto-set carry data-sovd-auto="1" so a manual keystroke
    is still respected (see the sp_dc input handler further down). */
 function isSOVDEligible(r){
+  /* SOVD (Trueblu) ladder is a per-CUSTOMER promo — we only run it
+     against customers whose dc_additional_customer entries include
+     a SOVD tag (window._customerHasSOVD is set by fillBaseDC after
+     it consults /api/orders/customer_has_sovd).  Non-SOVD customers
+     and the pre-sold-to state skip the whole ladder. */
+  if (!window._customerHasSOVD) return false;
   const q       = toNum(r.querySelector('[data-col="qty"]')?.value);
   if (q <= 0) return false;
   const brand   = (r.querySelector('[data-col="brand"]')?.value || "").toUpperCase().trim();
@@ -2584,6 +2606,58 @@ function showMdNoticeModal(){
   });
 }
 
+/* Generic centred Notice modal — replaces the browser alert() for
+   simple "please do X" prompts.  Reuses the mdNoticeOverlay chrome
+   but swaps the header to a plain "Notice", empties the exemptions
+   block and hides the Cancel button.  Message is plain text; a
+   trailing "\n" becomes a paragraph break. */
+function showNotice(msg){
+  return new Promise(resolve => {
+    const ov = document.getElementById("mdNoticeOverlay");
+    const hdr = document.getElementById("mdNoticeTitle");
+    const bodyEl = document.getElementById("mdNoticeBody");
+    const exempt = ov?.querySelector(".exempt");
+    const okBtn = document.getElementById("mdNoticeOK");
+    const cancelBtn = document.getElementById("mdNoticeCancel");
+    if (!ov || !okBtn) { alert(msg); resolve(true); return; }
+    /* Snapshot the original MD-mode content so we can restore it
+       after the notice closes — the same overlay is used by the
+       MD approval flow. */
+    const savedHdrText   = hdr ? hdr.textContent : "";
+    const savedBodyHtml  = bodyEl ? bodyEl.innerHTML : "";
+    const savedExemptHid = exempt ? exempt.hidden : false;
+    const savedCancelHid = cancelBtn ? cancelBtn.hidden : false;
+    const savedOkText    = okBtn.textContent;
+    if (hdr) hdr.textContent = "Notice";
+    if (bodyEl){
+      const paras = String(msg || "").split(/\n\n+|\n/).filter(Boolean);
+      bodyEl.innerHTML = paras.map(p => `<div style="margin-bottom:6px">${p.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}</div>`).join("");
+    }
+    if (exempt)    exempt.hidden = true;
+    if (cancelBtn) cancelBtn.hidden = true;
+    okBtn.textContent = "OK";
+    ov.classList.add("show");
+    const cleanup = () => {
+      ov.classList.remove("show");
+      okBtn.removeEventListener("click", onOk);
+      document.removeEventListener("keydown", onKey);
+      /* Restore the MD-mode content so the next MD prompt still
+         reads correctly. */
+      if (hdr)     hdr.textContent = savedHdrText;
+      if (bodyEl)  bodyEl.innerHTML = savedBodyHtml;
+      if (exempt)  exempt.hidden = savedExemptHid;
+      if (cancelBtn) cancelBtn.hidden = savedCancelHid;
+      okBtn.textContent = savedOkText;
+      resolve(true);
+    };
+    const onOk  = () => cleanup();
+    const onKey = e => { if (e.key === "Escape" || e.key === "Enter") cleanup(); };
+    okBtn.addEventListener("click", onOk);
+    document.addEventListener("keydown", onKey);
+    setTimeout(() => okBtn.focus(), 0);
+  });
+}
+
 $("#btnSubmit").addEventListener("click", async () => {
   // Edit mode routes to the update endpoint instead of creating a new
   // row — driven by dataset.mode / dataset.oid set in hydrateSubmittedOrder.
@@ -2613,7 +2687,7 @@ $("#btnSubmit").addEventListener("click", async () => {
       setTimeout(() => { wrap.style.background = ""; }, 900);
       const yesInp = $("#rebate_yes"); if (yesInp) yesInp.focus();
     }
-    alert("Please mark Rebate-able (Y or N) before submitting the Order Request.\n\nType 'Y' in the YES cell or 'N' in the NO cell.");
+    showNotice("Please mark Rebate-able (Y or N) before submitting the Order Request.\n\nType 'Y' in the YES cell or 'N' in the NO cell.");
     setStatus("Rebate-able (Y or N) is required before submitting.", "warn");
     return;
   }

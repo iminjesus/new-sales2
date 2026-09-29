@@ -8,7 +8,12 @@
   :root{--bg:#f5f5f7;--panel:#fff;--border:#e5e7eb;--muted:#6b7280;}
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#111;background:var(--bg);}
-  .wrap{max-width:1400px;margin:16px auto;padding:0 12px 40px;}
+  /* Wrap widens to the full viewport so the top nav / header / filter
+     block hugs the same right edge as the wide Submitted-Orders table
+     below.  A generous 24 px gutter on each side keeps the content
+     breathing on very-wide monitors. */
+  .wrap{max-width:none;margin:16px 24px;padding:0 0 40px;}
+  #listWrap{overflow-x:auto}
   .pagenav{
     display:flex;flex-wrap:wrap;gap:6px;align-items:center;
     padding:8px 12px;background:#fff;border:1px solid var(--border);
