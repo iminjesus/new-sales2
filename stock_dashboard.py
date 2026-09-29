@@ -4897,6 +4897,22 @@ function downloadXLSX() {
        columns and Description are hidden entirely. */
     const HDR_STATE   = { NSW:'FFEEF6FF', QLD:'FFFEF2F2', VIC:'FFF0FDF4', WA:'FFFEFCE8' };
     const cols = [
+        /* Row-selection state, hidden by default in column A.  On
+           unhide it becomes the leftmost column so a downstream
+           reader can filter it in place ("=✓" for the picked rows,
+           "=all"/"=some" for a merge summary) without scrolling to
+           the far end of the sheet.  Populated later via mergeMap;
+           see the getter closure at the bottom of the array. */
+        ['Checked',
+            r => {
+                if (r._isSubTotal) {
+                    const grp = mergeMap.get(r.merge_code) || [];
+                    const on  = grp.filter(x => selected.has(x.m_code)).length;
+                    return on === 0 ? '' : on === grp.length ? 'all' : 'some';
+                }
+                return selected.has(r.m_code) ? '✓' : '';
+            },
+            { wch:8, hidden:true, headerFill:'FFE0E7FF' }],
         ['Merge',                  r => r.merge_code,                                 { wch:9,  right:'medium', num:null }],
         ['M CODE',                 r => r._isSubTotal ? 'Sub Total' : (r.m_code || ''), { wch:12, right:'medium', num:null }],
         ['Brand',                  r => r.brand || '',                                { wch:8 }],
@@ -4942,24 +4958,6 @@ function downloadXLSX() {
         ['Max demand (basis)',     r => r.max_demand || 0,                            { wch:11, num:'1dp', hidden:true, level:1, group:'basis', right:'medium' }],
         ['Status',                 r => STATUS_PRETTY[r.status] || r.status || '',    { wch:14 }],
         ['Description',            r => r.description || '',                          { wch:30, hidden:true }],
-        /* Selection state, appended AFTER the visible payload and
-           hidden by default.  For each M CODE row: "✓" if the user
-           ticked its checkbox on the drill-down, blank otherwise.
-           Sub Total rows show "all" when every sibling M CODE is
-           checked, "some" for a partial group, and blank for none —
-           lets a downstream reader unhide the column, filter for "✓"
-           or "all", and instantly see the picked subset without
-           losing the merge context. */
-        ['Checked',
-            r => {
-                if (r._isSubTotal) {
-                    const grp = mergeMap.get(r.merge_code) || [];
-                    const on  = grp.filter(x => selected.has(x.m_code)).length;
-                    return on === 0 ? '' : on === grp.length ? 'all' : 'some';
-                }
-                return selected.has(r.m_code) ? '✓' : '';
-            },
-            { wch:8, hidden:true }],
     ];
 
     /* ── Interleave Sub Total rows ──
@@ -5150,24 +5148,19 @@ function downloadXLSX() {
         if (meta.level)  col.level  = meta.level;
         return col;
     });
-    /* Freeze pane at L2 — the header row (row 1) plus the entire
-       identity block (Merge, M CODE, Brand, Marketing Line,
-       Product Name, Pattern, Size, Inch, LI, SS, F/O · OPE — 11
-       columns, A..K) stay pinned while the user scrolls right into
-       the state stocks, MOI, and period-demand blocks.
-
-       xlsx-js-style writes freeze panes by splicing the fields
-       straight into the <sheetView><pane .../></sheetView> XML, so
-       every attribute Excel needs must be present: xSplit / ySplit
-       for the split point, topLeftCell for what appears in the
-       bottom-right pane after scrolling, activePane telling Excel
-       which pane owns focus, and state="frozen" so the split is
-       locked (not just a movable divider).  Values go in as strings
-       because that's how the writer concatenates them. */
+    /* Freeze pane at M2 — the header row (row 1) plus the entire
+       identity block stay pinned while the user scrolls right into
+       the numeric block.  The hidden Checked column at A counts
+       toward xSplit even though it doesn't occupy visible width,
+       so xSplit is 12 (A..L: Checked, Merge, M CODE, Brand,
+       Marketing Line, Product Name, Pattern, Size, Inch, LI, SS,
+       F/O · OPE) and the top-left of the scrollable pane is M2.
+       Values go in as strings because that's how the SheetJS
+       XML writer concatenates them. */
     ws['!freeze'] = {
-        xSplit:       '11',
+        xSplit:       '12',
         ySplit:       '1',
-        topLeftCell:  'L2',
+        topLeftCell:  'M2',
         activePane:   'bottomRight',
         state:        'frozen',
     };
@@ -5188,7 +5181,7 @@ function downloadXLSX() {
     if (!wb.Workbook)       wb.Workbook = {};
     if (!wb.Workbook.Views) wb.Workbook.Views = [];
     wb.Workbook.Views[0] = Object.assign(wb.Workbook.Views[0] || {}, {
-        xSplit: 11, ySplit: 1, topLeftCell: 'L2', state: 'frozen',
+        xSplit: 12, ySplit: 1, topLeftCell: 'M2', state: 'frozen',
     });
     /* Data-provenance sheet — same info, now with a bit of style. */
     const provAoa = [
@@ -5240,7 +5233,7 @@ function downloadXLSX() {
         const froze = (typeof JSZip !== 'undefined');
         showToast('Downloaded ' + fname
                   + ' (' + fmtI(src.length) + ' M CODE rows · ' + subN + ' Sub Total rows'
-                  + (froze ? ' · freeze pane at L2' : '') + ')');
+                  + (froze ? ' · freeze pane at M2' : '') + ')');
       } catch (err) {
         console.error('XLSX post-process failed, falling back:', err);
         XLSX.writeFile(wb, fname);
@@ -5268,10 +5261,10 @@ async function _injectFreezePane(xlsxBuf) {
     const paneBlock =
       '<sheetViews>'
       + '<sheetView tabSelected="1" workbookViewId="0">'
-      +   '<pane xSplit="11" ySplit="1" topLeftCell="L2" activePane="bottomRight" state="frozen"/>'
-      +   '<selection pane="topRight"    activeCell="L1" sqref="L1"/>'
+      +   '<pane xSplit="12" ySplit="1" topLeftCell="M2" activePane="bottomRight" state="frozen"/>'
+      +   '<selection pane="topRight"    activeCell="M1" sqref="M1"/>'
       +   '<selection pane="bottomLeft"  activeCell="A2" sqref="A2"/>'
-      +   '<selection pane="bottomRight" activeCell="L2" sqref="L2"/>'
+      +   '<selection pane="bottomRight" activeCell="M2" sqref="M2"/>'
       + '</sheetView>'
       + '</sheetViews>';
     if (/<sheetViews\b[\s\S]*?<\/sheetViews>/.test(sheetXml)) {
