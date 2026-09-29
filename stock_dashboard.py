@@ -2098,8 +2098,14 @@ _HTML = r"""<!DOCTYPE html>
      sub-total rows and status colours instead of dropping the .s
      hints silently.  A tiny fallback loads the plain community
      build if the CDN is blocked so a locked-down network still
-     gets an unstyled export instead of nothing. -->
+     gets an unstyled export instead of nothing.
+
+     JSZip is loaded separately so downloadXLSX can post-process the
+     workbook and inject a proper <sheetView><pane .../></sheetView>
+     block — neither SheetJS Community nor xlsx-js-style writes
+     freeze panes out of the box, so we do it ourselves. -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
 window.addEventListener("DOMContentLoaded", () => {
   if (typeof XLSX === "undefined"){
@@ -5179,9 +5185,78 @@ function downloadXLSX() {
     const fname = 'stock_balance_' + curTab
                + (selected.size > 0 ? '_selection' : '')
                + '_' + todayStr() + '.xlsx';
-    XLSX.writeFile(wb, fname);
     const subN = bundled.length - src.length;
-    showToast('Downloaded ' + fname + ' (' + fmtI(src.length) + ' M CODE rows · ' + subN + ' Sub Total rows)');
+    /* Write to an in-memory buffer, post-process the ZIP to inject
+       the freeze pane XML (neither SheetJS Community nor xlsx-js-
+       style writes sheetView panes), then trigger the download.
+       If JSZip isn't loaded (offline / blocked CDN) we fall back to
+       the plain writeFile without freeze panes and warn the user. */
+    (async () => {
+      try {
+        const wbBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        const finalBuf = (typeof JSZip !== 'undefined')
+          ? await _injectFreezePane(wbBuf)
+          : wbBuf;
+        const blob = new Blob([finalBuf], {
+          type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = fname;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+        const froze = (typeof JSZip !== 'undefined');
+        showToast('Downloaded ' + fname
+                  + ' (' + fmtI(src.length) + ' M CODE rows · ' + subN + ' Sub Total rows'
+                  + (froze ? ' · freeze pane at L2' : '') + ')');
+      } catch (err) {
+        console.error('XLSX post-process failed, falling back:', err);
+        XLSX.writeFile(wb, fname);
+        showToast('Downloaded ' + fname + ' (freeze pane omitted — see console)');
+      }
+    })();
+}
+
+/* Post-process an XLSX ArrayBuffer to inject a freeze pane on the
+   first worksheet.  Freezes 11 columns × 1 row so cell L2 is the
+   top-left of the scrollable pane.  Rewrites the ZIP entry in place
+   and returns a new ArrayBuffer.  Only called when JSZip is present. */
+async function _injectFreezePane(xlsxBuf) {
+    const zip = await JSZip.loadAsync(xlsxBuf);
+    /* xlsx-js-style always writes the first data sheet as
+       xl/worksheets/sheet1.xml.  Guard against future changes by
+       falling back to whatever sheet1-ish path exists. */
+    let sheetPath = 'xl/worksheets/sheet1.xml';
+    if (!zip.file(sheetPath)) {
+        const cand = zip.file(/^xl\/worksheets\/sheet\d+\.xml$/);
+        if (!cand.length) return xlsxBuf;
+        sheetPath = cand[0].name;
+    }
+    let sheetXml = await zip.file(sheetPath).async('string');
+    const paneBlock =
+      '<sheetViews>'
+      + '<sheetView tabSelected="1" workbookViewId="0">'
+      +   '<pane xSplit="11" ySplit="1" topLeftCell="L2" activePane="bottomRight" state="frozen"/>'
+      +   '<selection pane="topRight"    activeCell="L1" sqref="L1"/>'
+      +   '<selection pane="bottomLeft"  activeCell="A2" sqref="A2"/>'
+      +   '<selection pane="bottomRight" activeCell="L2" sqref="L2"/>'
+      + '</sheetView>'
+      + '</sheetViews>';
+    if (/<sheetViews\b[\s\S]*?<\/sheetViews>/.test(sheetXml)) {
+        sheetXml = sheetXml.replace(/<sheetViews\b[\s\S]*?<\/sheetViews>/, paneBlock);
+    } else {
+        /* Insert immediately after </dimension> (always present), or
+           failing that before <sheetFormatPr> / <cols> / <sheetData>. */
+        if (/<\/dimension>/.test(sheetXml)) {
+            sheetXml = sheetXml.replace('</dimension>', '</dimension>' + paneBlock);
+        } else {
+            const marker = ['<sheetFormatPr', '<cols', '<sheetData'].find(m => sheetXml.includes(m));
+            if (!marker) return xlsxBuf;
+            sheetXml = sheetXml.replace(marker, paneBlock + marker);
+        }
+    }
+    zip.file(sheetPath, sheetXml);
+    return await zip.generateAsync({ type: 'arraybuffer' });
 }
 
 /* ── Central refresh ── */
