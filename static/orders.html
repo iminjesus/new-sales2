@@ -159,6 +159,15 @@
   #linesBody tr.aged-row td:first-child {
     box-shadow: inset 3px 0 0 #f59e0b;
   }
+  /* Cells the BDE cannot edit while a row is aged-locked — a soft
+     amber wash so it's obvious the price came from the aged-stock
+     ladder and clearing Aging DC% is the only way to unlock. */
+  #linesBody input.locked-cell {
+    background: #fef3c7 !important;
+    color: #78350f !important;
+    cursor: not-allowed;
+  }
+  #linesBody tr.aged-locked td[title]::after { content: none; }
   /* When the aged-stock sidebar is visible on wide screens, reserve
      a right-hand gutter so the fixed panel doesn't overlap the form.
      The wrap keeps its centered look inside the remaining space. */
@@ -622,7 +631,8 @@
           <th class="mid">Current Price</th>
           <th class="olive narrow">Additional<br>Special DC %</th>
           <th class="amber narrow" title="Aging-stock DC — customer-independent; overrides every other DC on this row when set.">Aging<br>DC %</th>
-          <th class="mid">Proposed Price</th>
+          <th class="narrow" title="Total Additional Support DC% — chained delta between the price under non-editable columns (Base + 443/promo) and the Proposed Price.  What the customer gets on TOP of their normal contract.">Total<br>Additional<br>Support %</th>
+          <th class="mid" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed Price</th>
           <th class="mid">Total Amount</th>
           <th class="narrow">Proposed DC %</th>
           <th class="stock narrow" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
@@ -642,14 +652,14 @@
           <td></td>
           <td class="label">Total</td>
           <td class="num center" id="ttlQty">0</td>
-          <td colspan="15"></td>
+          <td colspan="16"></td>
           <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
           <td class="num center" id="avgDC"></td>
           <td colspan="4"></td>
         </tr>
         <!-- Total inc GST (subtotal + 10%). -->
         <tr class="total-row summary-row">
-          <td colspan="15" class="summary-blank"></td>
+          <td colspan="16" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
           <td colspan="5" class="summary-blank"></td>
@@ -663,13 +673,13 @@
           <td class="center summary-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
           </td>
-          <td class="label right-lbl summary-lbl" colspan="3">Freight Charge (10%) if any</td>
+          <td class="label right-lbl summary-lbl" colspan="4">Freight Charge (10%) if any</td>
           <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
           <td colspan="5" class="summary-blank"></td>
         </tr>
         <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="15" class="summary-blank"></td>
+          <td colspan="16" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
           <td colspan="5" class="summary-blank"></td>
@@ -908,17 +918,38 @@ function applyAgingDC(row) {
   if (!tier) return;
   const target = AGING_TARGET_DC[tier];
   if (target == null) return;
-  // Aging DC lives in its own column now — writes straight to
-  // `aging_dc`, which recalcRow treats as a full override for the
-  // customer-side DC stack.  Clear any leftover add_dc so a re-drop
-  // on the same row doesn't stack surprises.
+  // Aging DC is now a DISPLAY marker on the row — the actual price
+  // effect is baked into the Additional Special DC% cell (add_dc)
+  // as a chained value.  We solve add_dc so:
+  //   list * (1 - baseDC/100) * (1 - spDC/100) * (1 - add/100)
+  //     ==  list * (1 - targetAgingDC/100)
+  //   →  add = 100 * (1 - (1 - target/100) / ((1 - base/100)*(1 - sp/100)))
+  // The BDE sees "this row is aged" (Aging DC% cell shows the
+  // target ladder value) and reads how much extra support that
+  // implied (Additional Special DC% cell + Total Additional Support
+  // % column).  Clearing Aging DC% unlocks the row so the BDE can
+  // renegotiate manually.
+  const list   = toNum(row.querySelector('[data-col="list_price"]').value);
+  const baseDC = toNum(row.querySelector('[data-col="base_dc"]').value);
+  const spDC   = toNum(row.querySelector('[data-col="sp_dc"]').value);
+  const baseFactor = (1 - baseDC/100) * (1 - spDC/100);
   const agingEl = row.querySelector('[data-col="aging_dc"]');
   if (agingEl) agingEl.value = target.toFixed(2);
   const addEl = row.querySelector('[data-col="add_dc"]');
-  if (addEl) addEl.value = "";
-  // Aging overrides every other DC — kick the auto-DC lookup so it
-  // clears any promo % it previously stamped into sp_dc.
-  applyAdditionalDCToRow(row);
+  if (addEl && baseFactor > 0) {
+    const addDC = 100 * (1 - (1 - target/100) / baseFactor);
+    addEl.value = Math.max(0, addDC).toFixed(2);
+  }
+  /* MTH / Volume start blank on an aged row — the aged path is a
+     pure "list → aged" chain that doesn't want stacked customer-
+     side extras.  If the BDE later clears Aging DC%, the row
+     unlocks and they can key MTH / Vol / Add manually. */
+  ["mth_dc","vol_dc"].forEach(c => {
+    const el = row.querySelector(`[data-col="${c}"]`);
+    if (el) el.value = "";
+  });
+  recalcRow(row);
+  lockAgedRow(row);
 }
 
 // Cache of the last-loaded aged-stock rows + plant so the search
@@ -1303,7 +1334,21 @@ async function fillStockForRow(rowEl, mcode){
   }
 }
 
-/* ────────────────────────── row math ────────────────────────── */
+/* ────────────────────────── row math ──────────────────────────
+   Chained-only pricing.  Aging DC% is no longer a full-override —
+   the aged-stock double-click computes the chained Additional
+   Special DC% that reaches the aged target and stores that in
+   add_dc.  Aging DC% cell now just displays the aged target so the
+   BDE can see "this row is under aged discount"; when they clear
+   it the row unlocks and the chained numbers keep flowing.
+
+   Chain:
+     currentPrice   = list  * (1 - (base + mth + vol)/100)    // additive DC
+     baselinePrice  = list  * (1 -  base/100) * (1 - sp/100)  // non-editable only
+     proposedPrice  = currentPrice * (1 - sp/100) * (1 - add/100)
+     proposedDC     = 100 * (1 - proposedPrice / list)
+     add_support    = 100 * (1 - proposedPrice / baselinePrice)
+   */
 function recalcRow(row){
   const q       = toNum(row.querySelector('[data-col="qty"]').value);
   const list    = toNum(row.querySelector('[data-col="list_price"]').value);
@@ -1312,40 +1357,84 @@ function recalcRow(row){
   const spDC    = toNum(row.querySelector('[data-col="sp_dc"]').value);
   const volDC   = toNum(row.querySelector('[data-col="vol_dc"]').value);
   const addDC   = toNum(row.querySelector('[data-col="add_dc"]').value);
-  const agingDC = toNum(row.querySelector('[data-col="aging_dc"]')?.value);
 
-  // Customer-side DC stack — Base + MTH + Volume are additive
-  // percentage-points against list price; represents the customer's
-  // normal discount before any promo.  sp_dc (the 443 / promo cell)
-  // is NOT included here because it's compound, not additive (see
-  // below).
   const currentDC    = baseDC + mthDC + volDC;
   const currentPrice = list * (1 - currentDC/100);
-
-  // Proposed = customer's Current Price after the 443 promo (sp_dc)
-  // and manual Additional (add_dc) are applied.  These two compound
-  // multiplicatively on top of Current Price — a 30% promo on top of
-  // a 56% Base DC means "44% of list × 0.70 = 30.8% of list", not
-  // "add 30 percentage-points".  Aging DC still overrides everything
-  // (customer-independent tier ladder).
-  let proposedPrice, proposedDC;
-  if (agingDC > 0){
-    proposedDC    = agingDC;
-    proposedPrice = list * (1 - agingDC/100);
-  } else {
-    proposedPrice = currentPrice * (1 - spDC/100) * (1 - addDC/100);
-    // Effective total DC shown for reference — the value the BDE
-    // reads to know "how deep did we go overall".
-    proposedDC    = list > 0 ? (100 * (1 - proposedPrice / list)) : currentDC;
-  }
+  const proposedPrice = currentPrice * (1 - spDC/100) * (1 - addDC/100);
+  const proposedDC    = list > 0 ? (100 * (1 - proposedPrice / list)) : currentDC;
+  // Baseline price = list × (1 - base/100) × (1 - sp/100).  Aging is
+  // excluded because Aging isn't in the chain anymore; the aged-
+  // discount effect lives inside add_dc.
+  const baselinePrice = list * (1 - baseDC/100) * (1 - spDC/100);
+  const addSupport   = baselinePrice > 0
+    ? (100 * (1 - proposedPrice / baselinePrice))
+    : 0;
   const totalAmount = q * proposedPrice;
 
   row.querySelector('[data-col="current_dc"]').value    = currentDC ? currentDC.toFixed(2) : "";
   row.querySelector('[data-col="current_price"]').value = list ? fmtMoney(currentPrice) : "";
-  row.querySelector('[data-col="proposed_price"]').value= list ? fmtMoney(proposedPrice) : "";
+  /* Only rewrite proposed_price when the user isn't actively editing
+     it (their input handler already wrote the target value; we'd
+     otherwise clobber their keystrokes with the rounded / re-solved
+     value on every recalc). */
+  const propEl = row.querySelector('[data-col="proposed_price"]');
+  if (propEl && document.activeElement !== propEl) {
+    propEl.value = list ? fmtMoney(proposedPrice) : "";
+  }
   row.querySelector('[data-col="total_amount"]').value  = list ? fmtMoney(totalAmount) : "";
   row.querySelector('[data-col="proposed_dc"]').value   = proposedDC ? proposedDC.toFixed(2)+"%" : "";
+  const addSupEl = row.querySelector('[data-col="add_support"]');
+  if (addSupEl) addSupEl.value = (Math.abs(addSupport) > 0.005) ? addSupport.toFixed(2)+"%" : "";
   updateTotals();
+}
+
+/* Back-solve add_dc so the chain lands on the price the user just
+   typed into proposed_price.  Called from the row's proposed_price
+   input handler.  Values below zero clamp to 0 (never "up-discount"
+   the row); above 100 clamp to 100. */
+function reverseSolveAddDC(row, targetStr){
+  const list    = toNum(row.querySelector('[data-col="list_price"]').value);
+  const baseDC  = toNum(row.querySelector('[data-col="base_dc"]').value);
+  const mthDC   = toNum(row.querySelector('[data-col="mth_dc"]').value);
+  const spDC    = toNum(row.querySelector('[data-col="sp_dc"]').value);
+  const volDC   = toNum(row.querySelector('[data-col="vol_dc"]').value);
+  const targetPrice = toNum(targetStr);
+  const currentPrice = list * (1 - (baseDC + mthDC + volDC)/100);
+  const denom        = currentPrice * (1 - spDC/100);
+  if (!(denom > 0) || !isFinite(targetPrice) || targetPrice <= 0) return;
+  let addDC = 100 * (1 - targetPrice / denom);
+  if (addDC < 0)   addDC = 0;
+  if (addDC > 100) addDC = 100;
+  const addEl = row.querySelector('[data-col="add_dc"]');
+  if (addEl) addEl.value = addDC.toFixed(2);
+  /* Skip recalcRow's rewrite of proposed_price while the user is
+     typing; recalcRow's guard on activeElement handles that.  Every
+     other derived cell (add_support, proposed_dc, total_amount)
+     still updates. */
+  recalcRow(row);
+}
+
+/* Lock every editable cell on a row so an aged-stock line reads as
+   "this price came from the aged-discount ladder — don't fiddle".
+   Aging DC% stays writable so the BDE can clear it, which unlocks
+   the row via unlockAgedRow. */
+function lockAgedRow(row){
+  if (!row) return;
+  row.classList.add("aged-locked");
+  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price"].forEach(c => {
+    const el = row.querySelector(`[data-col="${c}"]`);
+    if (el) { el.readOnly = true; el.classList.add("locked-cell"); }
+  });
+}
+function unlockAgedRow(row){
+  if (!row) return;
+  row.classList.remove("aged-locked");
+  row.classList.remove("aged-row");
+  delete row.dataset.agingTier;
+  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price"].forEach(c => {
+    const el = row.querySelector(`[data-col="${c}"]`);
+    if (el) { el.readOnly = false; el.classList.remove("locked-cell"); }
+  });
 }
 function updateTotals(){
   let sumQty = 0, sumAmt = 0, weightedDC = 0, weightedAddDC = 0, sovdQty = 0;
@@ -1513,7 +1602,13 @@ function newRow(){
     {c:"current_price",  cls:"num red-num readonly", ro:true},
     {c:"add_dc",         cls:"pct-cell"},
     {c:"aging_dc",       cls:"pct-cell aging-cell"},
-    {c:"proposed_price", cls:"num red-num readonly", ro:true},
+    {c:"add_support",    cls:"num readonly", ro:true},
+    /* Proposed Price is user-editable — typing a value here triggers
+       reverseSolveAddDC (see below), which back-solves the value the
+       Additional Special DC% cell needs so the chained calc reaches
+       the price the user just set.  Cell stays writable in every
+       state EXCEPT when the row is aged-locked. */
+    {c:"proposed_price", cls:"num red-num"},
     {c:"total_amount",   cls:"total-cell num readonly", ro:true},
     {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
     {c:"stock_nsw",      cls:"stock-cell readonly", ro:true},
@@ -1551,12 +1646,27 @@ function newRow(){
   tr.querySelector('[data-col="sp_dc"]')?.addEventListener("input", (e) => {
     if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
   });
-  // Aging DC change → re-run the auto-DC lookup.  If aging is now
-  // set, applyAdditionalDCToRow clears sp_dc; if aging is cleared,
-  // it re-populates sp_dc from the promo lookup so the row snaps
-  // back to the customer's normal promo % automatically.
+  // Aging DC change — special path when the row is aged-locked:
+  // clearing the Aging DC% cell unlocks the row so the BDE can
+  // adjust MTH / Volume / Additional Special manually.  The chained
+  // Additional Special value that was computed at add-time is left
+  // in place; the BDE can rewrite it now that inputs are unlocked.
+  tr.querySelector('[data-col="aging_dc"]')?.addEventListener("input", () => {
+    const agingEl = tr.querySelector('[data-col="aging_dc"]');
+    if (tr.classList.contains("aged-locked") && !(+agingEl.value)) {
+      unlockAgedRow(tr);
+    }
+  });
   tr.querySelector('[data-col="aging_dc"]')?.addEventListener("change", () => {
     if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
+  });
+  // Proposed Price — user override.  Back-solve the Additional
+  // Special DC% cell so the chained calc lands on the price they
+  // just typed.  Fires on `input` so numbers snap live; also
+  // re-runs recalcRow so Total Additional Support / Total Amount /
+  // Proposed DC% all follow.
+  tr.querySelector('[data-col="proposed_price"]')?.addEventListener("input", (e) => {
+    reverseSolveAddDC(tr, e.target.value);
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
@@ -1750,7 +1860,7 @@ const LINE_FIELDS = [
   "pattern", "load_speed", "list_price",
   "base_dc", "mth_dc", "sp_dc", "vol_dc",
   "current_dc", "current_price",
-  "add_dc", "aging_dc",
+  "add_dc", "aging_dc", "add_support",
   "proposed_price", "total_amount", "proposed_dc",
   "stock_nsw", "stock_qld", "stock_vic", "stock_wa",
 ];
@@ -1907,6 +2017,14 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (ln._line)          tr.dataset.line         = ln._line;
     if (ln._product_group) tr.dataset.productGroup = ln._product_group;
     if (ln._promo)         tr.dataset.promo        = ln._promo;
+    /* Re-lock aged rows on hydration — if the row was submitted with
+       an Aging DC% value, it came in from the aged-stock ladder and
+       stays read-only until the reviewer clears the Aging cell. */
+    const agingVal = toNum(tr.querySelector('[data-col="aging_dc"]')?.value);
+    if (agingVal > 0) {
+      tr.classList.add("aged-row");
+      lockAgedRow(tr);
+    }
   });
   // 3. Totals — trust the persisted snapshot rather than recomputing.
   const t = p.totals || {};
