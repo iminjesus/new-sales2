@@ -3783,6 +3783,17 @@ def _submitted_order_email_html(oid, order, base_url):
     # Route decision uses the same MD-gate rule the front-end shows:
     # any non-aged, non-Standard line with Proposed DC ≥ 64 % ⇒ MD.
     approval_block = ""
+    if order.get("needs_mgmt_approval") != "Y":
+        # Standard-pricing (no negotiated concession on any line) — no
+        # approver needs to act.  Say so at the top of the email so a
+        # recipient doesn't wait around for a Kenny/Hayden nudge that
+        # will never come.
+        approval_block = (
+            '<div style="background:#f0fdf4;border:1px solid #16a34a;padding:6px 10px;'
+            'margin:8px 0;border-radius:3px;font-size:12px;color:#166534">'
+            '<b>Standard Order</b> — not needing any approval.'
+            '</div>'
+        )
     if order.get("needs_mgmt_approval") == "Y":
         def _fmail(v):
             try:  return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))

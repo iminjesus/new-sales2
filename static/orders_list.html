@@ -74,13 +74,33 @@
     <button onclick="location.href='/price'">Price</button>
     <button onclick="location.href='/meeting'">Meeting</button>
     <button onclick="location.href='/claims'">Claims</button>
-    <button onclick="location.href='/order'">📝 Order</button>
-    <button class="here">📋 Orders</button>
+    <button class="here">📄 SPRF</button>
     <button onclick="location.href='/highlights'">📊 Highlights</button>
   </div>
   <div class="panel">
-    <h1>Submitted Orders</h1>
-    <div class="sub">Special Price Request Forms submitted by BDEs. Click a row to open the full order. CS (Harry) can flip the SAP-entered flag from the detail view.</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+      <div>
+        <h1>Submitted Orders</h1>
+        <div class="sub">Special Price Request Forms submitted by BDEs. Click a row to open the full order. CS (Harry) can flip the SAP-entered flag from the detail view.</div>
+      </div>
+      <!-- Prominent CTA for starting a new SPRF — the only entry
+           point to the Order form now that the Order button was
+           removed from the page-nav. -->
+      <a href="/order" class="new-sprf-btn" style="
+           display:inline-flex;align-items:center;gap:10px;
+           background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);
+           color:#fff;text-decoration:none;font-weight:800;font-size:13.5px;
+           padding:12px 20px;border-radius:8px;
+           box-shadow:0 4px 12px rgba(217,119,6,0.35);
+           border:1px solid #b45309;
+           transition:transform .1s,box-shadow .1s;letter-spacing:.2px;
+         " onmouseover="this.style.transform='translateY(-1px)';this.style.boxShadow='0 6px 16px rgba(217,119,6,0.45)'"
+           onmouseout="this.style.transform='';this.style.boxShadow='0 4px 12px rgba(217,119,6,0.35)'"
+           title="Start a fresh Special Price Request Form">
+        <span style="font-size:18px;line-height:1">📝</span>
+        <span>Populate a Special Price Request Form</span>
+      </a>
+    </div>
     <div class="filters">
       <span class="lbl">Status:</span>
       <select id="fStatus">
