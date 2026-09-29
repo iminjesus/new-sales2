@@ -168,6 +168,53 @@
     cursor: not-allowed;
   }
   #linesBody tr.aged-locked td[title]::after { content: none; }
+  /* MD Approval Notice modal — replaces the browser's built-in alert()
+     "127.0.0.1:5000 says …" chrome with a centred, branded panel.
+     Header is a plain "Notice"; body carries the MD-approval message
+     plus the aged-stock / Standard-pricing exemptions.  Fires on
+     Submit only (see showMdNoticeModal). */
+  #mdNoticeOverlay{
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(15,23,42,0.55);
+    display: none; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  }
+  #mdNoticeOverlay.show{ display: flex; }
+  #mdNoticeOverlay .modal{
+    background: #fff; border-radius: 8px; box-shadow: 0 24px 64px rgba(0,0,0,.35);
+    width: min(520px, 92vw); overflow: hidden;
+    animation: mdNoticeIn 0.14s ease-out;
+  }
+  @keyframes mdNoticeIn { from { transform: scale(0.95); opacity: 0 } }
+  #mdNoticeOverlay .hdr{
+    background: #7f1d1d; color: #fff; padding: 10px 16px;
+    font-weight: 800; font-size: 14px; letter-spacing: .3px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #mdNoticeOverlay .hdr::before{ content: "⚑"; font-size: 16px; }
+  #mdNoticeOverlay .body{
+    padding: 16px 18px; color: #0f172a; font-size: 13px; line-height: 1.55;
+  }
+  #mdNoticeOverlay .body b{ color: #7f1d1d; }
+  #mdNoticeOverlay .body .exempt{
+    margin-top: 10px; padding: 8px 10px; background: #f8fafc;
+    border-left: 3px solid #94a3b8; font-size: 12.5px; color: #334155;
+  }
+  #mdNoticeOverlay .foot{
+    padding: 10px 16px; text-align: right; border-top: 1px solid #e5e7eb;
+    background: #f9fafb;
+  }
+  #mdNoticeOverlay .foot button{
+    background: #7f1d1d; color: #fff; border: none; border-radius: 4px;
+    padding: 6px 18px; font-weight: 700; cursor: pointer; font-size: 12.5px;
+    transition: background .1s;
+  }
+  #mdNoticeOverlay .foot button:hover{ background: #991b1b; }
+  #mdNoticeOverlay .foot button.cancel{
+    background: #fff; color: #64748b; border: 1px solid #cbd5e1;
+    margin-right: 8px;
+  }
+  #mdNoticeOverlay .foot button.cancel:hover{ background: #f1f5f9; color: #0f172a; }
   /* When the aged-stock sidebar is visible on wide screens, reserve
      a right-hand gutter so the fixed panel doesn't overlap the form.
      The wrap keeps its centered look inside the remaining space. */
@@ -462,6 +509,37 @@
 <button type="button" id="agedStockReopen" title="Show aged-stock panel">
   ↤ Aged stock
 </button>
+<!-- MD Approval Notice modal.  Shown ONLY when the BDE hits Submit
+     on an order that trips the MD gate.  Header is a plain "Notice";
+     the body spells out the exemptions so a BDE reading the message
+     understands aged deals and Standard-pricing orders are not
+     subject to it. -->
+<div id="mdNoticeOverlay" role="dialog" aria-modal="true" aria-labelledby="mdNoticeTitle">
+  <div class="modal">
+    <div class="hdr" id="mdNoticeTitle">Notice</div>
+    <div class="body">
+      <div id="mdNoticeBody">
+        This order requires <b>Managing Director approval</b>.
+        Non-aged deep-discount lines (Proposed DC ≥ 64&#8239;%) account for
+        <b id="mdNoticeShare">—</b> of the order value (over the 5&#8239;% ceiling
+        that Hayden or Kenny can approve).
+      </div>
+      <div class="exempt">
+        <b>Exempt</b> from this requirement:
+        <ul style="margin:4px 0 0 18px;padding:0">
+          <li>Deals whose ≥&#8239;64&#8239;% discount comes entirely from <b>Aging DC%</b>
+              (aged-stock ladder).</li>
+          <li>Orders priced under <b>Standard Pricing</b> (no MTH / Volume /
+              Additional Special / Aging).</li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot">
+      <button type="button" class="cancel" id="mdNoticeCancel">Back to edit</button>
+      <button type="button" id="mdNoticeOK">Acknowledge &amp; continue</button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
 
   <!-- ═══════════════ Page nav (jump to other views) ═══════════════ -->
@@ -1496,6 +1574,11 @@ function unlockAgedRow(row){
 function updateTotals(){
   let sumQty = 0, sumAmt = 0, sumCurAmt = 0, weightedDC = 0, sovdQty = 0;
   let hasAdditional = false;
+  /* MD-gate accounting.  A line only contributes to the MD gate when
+     it is NOT aged AND its own Proposed DC hits 64 %+.  If those
+     lines together are ≤ 5 % of the whole order value, MD approval
+     is NOT required — see the mdRequired check below. */
+  let mdGateAmt = 0;
   $$("#linesBody tr").forEach(r => {
     const q      = toNum(r.querySelector('[data-col="qty"]').value);
     const amt    = toNum(r.querySelector('[data-col="total_amount"]').value);
@@ -1511,6 +1594,11 @@ function updateTotals(){
     weightedDC += totDC * q;   // qty-weighted total (chained) DC
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
     if (q > 0 && (mth > 0 || vol > 0 || ad > 0 || ag > 0)) hasAdditional = true;
+    /* Only non-aged rows with their OWN proposed DC ≥ 64 feed the
+       MD gate.  Aging DC% is capped at 88 via the ladder but should
+       never force MD approval — it's the customer-independent aged-
+       stock discount, not a negotiated concession. */
+    if (q > 0 && ag === 0 && totDC >= 64) mdGateAmt += amt;
   });
   const avgDC = sumQty > 0 ? weightedDC / sumQty : 0;
   /* Order-wide Additional Support % — NOT a qty-weighted average
@@ -1553,6 +1641,16 @@ function updateTotals(){
   //  Both Total DC and Additional DC are shown so the BDE can watch
   //  the chained calc live as they key values into MTH / SP / Vol /
   //  Add / Aging cells.
+  /* MD-gate ratio — non-aged, ≥64 % lines as a fraction of the
+     order.  When this is ≤ 5 % the concession is small enough that
+     Hayden or Kenny can approve; above 5 % (or when the order-wide
+     avg itself is 64 %+, provided that avg is NOT explained purely
+     by aged rows) it kicks up to JunJong. */
+  const mdGateRatio = sumAmt > 0 ? (mdGateAmt / sumAmt) : 0;
+  const mdRequired  = hasAdditional && mdGateRatio > 0.05;
+  window._orderMdRequired  = mdRequired;
+  window._orderMdGatePct   = mdGateRatio * 100;
+
   const el = $("#approvalPathText");
   if (el){
     const dcBadge =
@@ -1564,24 +1662,17 @@ function updateTotals(){
       el.innerHTML =
         `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required. `
         + dcBadge;
-    } else if (avgDC >= 64){
+    } else if (mdRequired){
       el.innerHTML =
         `<span style="color:#fff;background:#7f1d1d;padding:2px 8px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
-        + `— Total DC ${avgDC.toFixed(2)}% (≥ 64 %). Only <b>JunJong (MD)</b> can approve. `
+        + `— non-aged deep-discount lines (Proposed DC ≥ 64 %) account for `
+        + `<b>${(mdGateRatio*100).toFixed(1)}%</b> of the order value (> 5 %). `
+        + `Only <b>JunJong (MD)</b> can approve. `
         + dcBadge;
-      // Popup once per crossing so the BDE cannot miss the MD gate.
-      if (!window._mdPopupShown){
-        window._mdPopupShown = true;
-        setTimeout(() => alert(
-          "Total DC has reached " + avgDC.toFixed(2) + "% (≥ 64 %).\n\n" +
-          "Managing Director approval is now required.\n" +
-          "Only JunJong can approve this order."), 50);
-      }
     } else {
       el.innerHTML =
         `<b>Hayden or Kenny</b> can approve. `
         + dcBadge;
-      window._mdPopupShown = false;
     }
   }
 }
@@ -1986,6 +2077,45 @@ function serializeOrder(){
   return {header, base_dc, totals, lines};
 }
 
+/* Show the MD-approval Notice modal at Submit time.  Returns a
+   Promise that resolves to true when the BDE acknowledges (proceed)
+   and false when they cancel or close the modal (go back to edit).
+   Fills the share pill from window._orderMdGatePct so the number in
+   the message matches the on-screen banner. */
+function showMdNoticeModal(){
+  return new Promise(resolve => {
+    const ov = document.getElementById("mdNoticeOverlay");
+    const okBtn = document.getElementById("mdNoticeOK");
+    const cancelBtn = document.getElementById("mdNoticeCancel");
+    const shareEl = document.getElementById("mdNoticeShare");
+    if (!ov || !okBtn || !cancelBtn) { resolve(true); return; }
+    const share = window._orderMdGatePct;
+    if (shareEl){
+      shareEl.textContent = (typeof share === "number" && share >= 0)
+        ? share.toFixed(1) + "%"
+        : "—";
+    }
+    ov.classList.add("show");
+    const cleanup = (val) => {
+      ov.classList.remove("show");
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      document.removeEventListener("keydown", onKey);
+      resolve(val);
+    };
+    const onOk     = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onKey    = (e) => {
+      if (e.key === "Escape") cleanup(false);
+      if (e.key === "Enter")  cleanup(true);
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    document.addEventListener("keydown", onKey);
+    setTimeout(() => okBtn.focus(), 0);
+  });
+}
+
 $("#btnSubmit").addEventListener("click", async () => {
   // Edit mode routes to the update endpoint instead of creating a new
   // row — driven by dataset.mode / dataset.oid set in hydrateSubmittedOrder.
@@ -2018,6 +2148,18 @@ $("#btnSubmit").addEventListener("click", async () => {
     alert("Please mark Rebate-able (Y or N) before submitting the Order Request.\n\nType 'Y' in the YES cell or 'N' in the NO cell.");
     setStatus("Rebate-able (Y or N) is required before submitting.", "warn");
     return;
+  }
+  /* MD-approval acknowledgement.  When the current line-up trips the
+     MD gate (non-aged Proposed-DC ≥ 64 % lines are > 5 % of the order
+     value), we show a centred custom Notice modal before firing the
+     submit.  The BDE clicks OK to acknowledge, then the submit
+     proceeds.  Aged-only and Standard-pricing orders never see this
+     dialog — the gate skips them.  We remember the ack so a second
+     click on Submit within the same session doesn't re-prompt. */
+  if (window._orderMdRequired && !window._mdAcknowledged){
+    const ack = await showMdNoticeModal();
+    if (!ack) return;   // BDE dismissed → don't submit
+    window._mdAcknowledged = true;
   }
   btn.disabled = true; btn.textContent = "Submitting…";
   try {

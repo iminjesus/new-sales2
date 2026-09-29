@@ -3741,13 +3741,29 @@ def _submitted_order_email_html(oid, order, base_url):
     detail_url = f"{base_url}/order?id={oid}"
     list_url   = f"{base_url}/orders_list"
     # Approval banner + reason — kept but slimmed to one line + reason.
+    # Route decision uses the same MD-gate rule the front-end shows:
+    # non-aged lines with own Proposed DC ≥ 64 % accounting for > 5 %
+    # of order value → MD only.  We recompute from the payload lines
+    # so aged rows correctly opt out.
     approval_block = ""
     if order.get("needs_mgmt_approval") == "Y":
-        try: avg_dc = float(str(totals.get("avg_dc_pct") or 0))
-        except Exception: avg_dc = 0.0
-        route = ("<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JunJong only</b> (total DC ≥ 64%)"
-                 if avg_dc >= 64.0
-                 else "Hayden or Kenny can approve (total DC &lt; 64%)")
+        def _fmail(v):
+            try:  return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
+            except Exception: return 0.0
+        _md_amt = 0.0; _ord_amt = 0.0
+        for _ln in lines:
+            _amt   = _fmail(_ln.get("total_amount"))
+            _aging = _fmail(_ln.get("aging_dc"))
+            _rowDC = _fmail(_ln.get("proposed_dc"))
+            _ord_amt += _amt
+            if _aging == 0 and _rowDC >= 64.0:
+                _md_amt += _amt
+        _md_share = (_md_amt / _ord_amt * 100.0) if _ord_amt > 0 else 0.0
+        _md_required = _md_share > 5.0
+        route = (f"<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JunJong only</b> "
+                 f"(non-aged ≥64% lines are {_md_share:.1f}% of order, > 5% ceiling)"
+                 if _md_required
+                 else "Hayden or Kenny can approve")
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
         approval_block = (
             '<div style="background:#fef3c7;border:1px solid #f59e0b;padding:6px 10px;'
@@ -4346,10 +4362,20 @@ def api_orders_approve(oid):
     by subsequent approvers.  Body: {} (approver is inferred from
     the request identity).
 
-    64 % gate — a total DC of 64 % or more is Managing-Director
-    territory: only JunJong can sign off.  Hayden and Kenny get 403
-    with a message telling the front-end to escalate.  Under 64 %,
-    all three approvers can act (first-wins still applies)."""
+    MD gate — an order needs the Managing Director's sign-off when
+    NON-AGED lines whose OWN Proposed DC hits 64 %+ account for more
+    than 5 % of the order value.  Two exemptions:
+      • Aged lines (aging_dc > 0) — the aged-stock ladder is the
+        customer-independent discount, not a negotiated concession,
+        so an aged deep-discount NEVER forces MD approval.
+      • Standard-pricing orders — no MTH / Volume / Additional
+        Special / Aging on any line — don't enter approval at all
+        (needs_mgmt_approval = 'N').
+    Below the 5 % threshold Hayden / JunJong / Kenny can all sign
+    off (first-approver-wins).  At or above it, only JunJong (the
+    MD) can act; Hayden and Kenny get a 403 telling the front-end
+    to escalate."""
+    import json as _json_md
     who = (_bde_from_request() or "").strip().lower()
     approver_col = None
     approver_name = None
@@ -4361,25 +4387,58 @@ def api_orders_approve(oid):
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     order_snapshot = None
     try:
-        # Pre-flight — pull the order's average DC to enforce the
-        # 64 % gate BEFORE we flip any slot.  A row missing
-        # avg_dc_pct is treated as 0 (approver can still sign off).
+        # Pre-flight — recompute the MD gate from the persisted
+        # payload_json so aged / non-aged and per-line Proposed DC
+        # are all available.  Falls back gracefully to avg_dc_pct
+        # if payload_json is missing or unparseable.
         try:
             cur.execute(
-                "SELECT avg_dc_pct FROM submitted_orders WHERE id = %s LIMIT 1",
+                "SELECT avg_dc_pct, payload_json FROM submitted_orders "
+                "WHERE id = %s LIMIT 1",
                 (oid,),
             )
             pre = cur.fetchone() or {}
             avg_dc = float(pre.get("avg_dc_pct") or 0)
+            pj_raw = pre.get("payload_json") or "{}"
         except Exception:
             avg_dc = 0.0
-        if avg_dc >= 64.0 and approver_col != "approved_b":
+            pj_raw = "{}"
+        def _f(v):
+            try:
+                return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
+            except Exception:
+                return 0.0
+        md_gate_amt = 0.0
+        order_amt   = 0.0
+        try:
+            pj = _json_md.loads(pj_raw)
+            for ln in (pj.get("lines") or []):
+                amt   = _f(ln.get("total_amount"))
+                aging = _f(ln.get("aging_dc"))
+                rowDC = _f(ln.get("proposed_dc"))
+                order_amt += amt
+                if aging == 0 and rowDC >= 64.0:
+                    md_gate_amt += amt
+        except Exception:
+            # Payload unparseable → fall back to whole-order avg check.
+            order_amt   = 0.0
+            md_gate_amt = 0.0
+        md_ratio = (md_gate_amt / order_amt) if order_amt > 0 else 0.0
+        md_required = (md_ratio > 0.05) if order_amt > 0 else (avg_dc >= 64.0)
+        if md_required and approver_col != "approved_b":
             return jsonify({
-                "error": (f"Total DC {avg_dc:.2f}% is at or above the 64% "
-                          f"threshold — Managing Director approval is "
-                          f"required.  Only JunJong can approve this order."),
-                "requires_md": True,
-                "avg_dc_pct": avg_dc,
+                "error": (
+                    f"Non-aged deep-discount lines (Proposed DC ≥ 64 %) make up "
+                    f"{md_ratio*100:.1f} % of this order — above the 5 % ceiling "
+                    f"that Hayden or Kenny can approve.  Only JunJong (MD) can "
+                    f"sign off.  Aged-only deals and Standard-pricing orders "
+                    f"are exempt from this rule."
+                ),
+                "requires_md":     True,
+                "md_gate_ratio":   md_ratio,
+                "md_gate_amount":  round(md_gate_amt, 2),
+                "order_amount":    round(order_amt, 2),
+                "avg_dc_pct":      avg_dc,
             }), 403
         # Set the named slot AND, if no earlier approver has locked
         # the order yet, record this caller as the official
