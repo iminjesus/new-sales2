@@ -359,8 +359,26 @@
   /* Aging-DC cell — amber tint so it visually pairs with its column
      header, plus a light background when populated so the reader
      spots "this row uses the aging price ladder" instantly. */
-  table.lines td.aging-cell input{background:#fef3c7;font-weight:700;color:#78350f;}
+  /* Aging DC Guide cell — plain white background like every other
+     regular cell.  The row-level "aged-row" amber left border is
+     what tells the reader "this row is under the aged ladder"; the
+     cell no longer wears its own yellow highlight. */
+  table.lines td.aging-cell input{background:#fff;font-weight:700;color:#78350f;}
   table.lines td.aging-cell input:placeholder-shown{background:#fff;font-weight:400;color:#1f2937;}
+  /* 443DC / TBR Special% column — sky-blue tint on the whole body
+     column so it visually pairs with its sky-blue header.  Cell is
+     writable so the promo/443 auto-fill and any BDE override live
+     on the same soft blue background. */
+  table.lines tbody td.sky-cell input{
+    background:#e0f2fe;color:#0369a1;font-weight:700;text-align:right;
+  }
+  /* MTH Special DC% + Volume DC% cells — light yellow to match
+     their editable yellow headers, so the concession block reads
+     as one connected stack visually. */
+  table.lines tbody td.mth-cell input,
+  table.lines tbody td.vol-cell input{
+    background:#fef9c3;color:#713f12;font-weight:700;text-align:right;
+  }
   table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
   table.lines thead th.narrow{width:60px}
   table.lines thead th.mid{width:90px}
@@ -745,13 +763,24 @@
           <td></td>
           <td class="label">Total</td>
           <td class="num center" id="ttlQty">0</td>
-          <td colspan="12"></td>
+          <td colspan="5"></td>
+          <!-- List Price grand total = Σ (list × qty).  The "would-
+               have-cost-at-list" baseline before any DC touches it. -->
+          <td class="total-cell"><div class="totalv" id="grandListAmt">0.00</div></td>
+          <td colspan="2"></td>
+          <!-- Order-wide Current DC % — true chained savings ratio
+               from list to Current Order Amount:
+                   1 − Σ Current Order Amount / Σ (list × qty)
+               Shows what fraction of list is being taken off by
+               the customer contract stack (Base + 443/SP) at the
+               order level. -->
+          <td class="num center" id="grandCurDCPct"></td>
+          <td></td>
           <!-- Current Order Amount grand total — pure "would-have-paid"
                figure over the whole SPRF, matching the sum of every
                line's Current Unit Price × Qty. -->
           <td class="total-cell"><div class="totalv" id="grandCurrentAmt">0.00</div></td>
-          <td></td>
-          <td></td>
+          <td colspan="4"></td>
           <!-- Order-wide Additional Support % — NOT a qty-weighted
                average of per-row Additional Support; instead the true
                savings ratio between what the order WOULD cost at
@@ -1303,21 +1332,15 @@ async function applyAdditionalDCToRow(rowEl){
   const spEl  = rowEl.querySelector('[data-col="sp_dc"]');
   const agEl  = rowEl.querySelector('[data-col="aging_dc"]');
   if (!brand || !spEl) return;
-  // Aging DC completely overrides every other DC on the row (customer-
-  // independent tier ladder).  When it's set, we don't fetch or stamp
-  // sp_dc — and we clear any prior auto-fill so the cell stops looking
-  // like the promo % is being applied on top of aging.
+  /* Aged rows STILL get the 443/promo lookup — the monthly promo
+     (e.g. JAX Dynapro on-road 443) is a customer-contract discount
+     that applies whether or not the row is under the aged ladder.
+     Reflecting it in sp_dc means the chained aged Additional
+     Special DC% (baked in by applyAgingDC) prices against the
+     right baseline.  If a match comes back on an aged row, we
+     re-run applyAgingDC afterwards so add_dc catches the fresh
+     sp_dc.  Only skip the lookup when there's no brand or spEl. */
   const agingDC = toNum(agEl?.value || 0);
-  if (agingDC > 0){
-    if (spEl.dataset.autoSpDc === "1"){
-      spEl.value = "";
-      spEl.title = "";
-      delete spEl.dataset.autoSpDc;
-    }
-    delete rowEl.dataset.promo;
-    recalcRow(rowEl);
-    return;
-  }
   const qty = toNum(qtyEl?.value || 0);
   const q = new URLSearchParams({
     sold_to: soldTo, brand, qty: String(qty),
@@ -1357,6 +1380,14 @@ async function applyAdditionalDCToRow(rowEl){
       delete spEl.dataset.autoSpDc;
     }
     delete rowEl.dataset.promo;
+  }
+  /* Aged row after a fresh promo lookup — re-solve the chained
+     Additional Special DC% so the aged target price is still hit
+     even though sp_dc just changed.  applyAgingDC internally calls
+     recalcRow + lockAgedRow, so the row stays consistent. */
+  if (agingDC > 0 && rowEl.dataset.agingTier) {
+    applyAgingDC(rowEl);
+    return;
   }
   recalcRow(rowEl);
 }
@@ -1604,7 +1635,7 @@ function unlockAgedRow(row){
   if (agingEl) agingEl.readOnly = true;
 }
 function updateTotals(){
-  let sumQty = 0, sumAmt = 0, sumCurAmt = 0, weightedDC = 0, sovdQty = 0;
+  let sumQty = 0, sumAmt = 0, sumCurAmt = 0, sumListAmt = 0, weightedDC = 0, sovdQty = 0;
   let hasAdditional = false;
   /* MD-gate accounting.  A line only contributes to the MD gate when
      it is NOT aged AND its own Proposed DC hits 64 %+.  If those
@@ -1613,6 +1644,7 @@ function updateTotals(){
   let mdGateAmt = 0;
   $$("#linesBody tr").forEach(r => {
     const q      = toNum(r.querySelector('[data-col="qty"]').value);
+    const list   = toNum(r.querySelector('[data-col="list_price"]')?.value);
     const amt    = toNum(r.querySelector('[data-col="total_amount"]').value);
     const curAmt = toNum(r.querySelector('[data-col="current_amount"]')?.value);
     const totDC  = toNum(r.querySelector('[data-col="proposed_dc"]').value);
@@ -1623,6 +1655,7 @@ function updateTotals(){
     sumQty     += q;
     sumAmt     += amt;
     sumCurAmt  += curAmt;
+    sumListAmt += list * q;
     weightedDC += totDC * q;   // qty-weighted total (chained) DC
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
     if (q > 0 && (mth > 0 || vol > 0 || ad > 0 || ag > 0)) hasAdditional = true;
@@ -1632,6 +1665,13 @@ function updateTotals(){
        stock discount, not a negotiated concession. */
     if (q > 0 && ag === 0 && totDC >= 64) mdGateAmt += amt;
   });
+  /* Order-wide Current DC % — chained savings from list to Current
+     Order Amount.  Answers "how much has the customer's normal
+     contract already taken off the sticker before we even talk
+     concession?" */
+  const grandCurDC = sumListAmt > 0
+    ? 100 * (1 - sumCurAmt / sumListAmt)
+    : 0;
   const avgDC = sumQty > 0 ? weightedDC / sumQty : 0;
   /* Order-wide Additional Support % — NOT a qty-weighted average
      of per-row Support values.  Instead, the true savings ratio:
@@ -1652,6 +1692,8 @@ function updateTotals(){
   $("#sovd_ttl").value                  = fmtQty(sovdQty);
   $("#ttlQty").textContent              = fmtQty(sumQty);
   $("#grandTotal").textContent          = fmtMoney(sumAmt);
+  $("#grandListAmt").textContent        = sumListAmt ? fmtMoney(sumListAmt) : "0.00";
+  $("#grandCurDCPct").textContent       = sumListAmt > 0 ? grandCurDC.toFixed(2) + "%" : "";
   $("#grandCurrentAmt").textContent     = sumCurAmt ? fmtMoney(sumCurAmt) : "0.00";
   $("#grandAddSupport").textContent     = sumCurAmt > 0 ? avgAddDC.toFixed(2) + "%" : "";
   $("#avgDC").textContent               = sumAmt ? avgDC.toFixed(2) + "%" : "";
@@ -1774,7 +1816,7 @@ function newRow(){
     {c:"load_speed",     cls:"center readonly", ro:true},
     {c:"list_price",     cls:"num readonly", ro:true},
     {c:"base_dc",        cls:"num"},
-    {c:"sp_dc",          cls:"num"},
+    {c:"sp_dc",          cls:"num sky-cell"},
     {c:"current_dc",     cls:"num readonly", ro:true},
     {c:"current_price",  cls:"num red-num readonly", ro:true},
     /* Current Order Amount = Current Unit Price × Qty per row.  Read-
@@ -1784,8 +1826,8 @@ function newRow(){
        concessions on TOP of the customer contract (Base + 443/SP),
        not part of the contract itself.  Chained with Additional
        Special DC% into a single "Total Additional Support%". */
-    {c:"mth_dc",         cls:"num"},
-    {c:"vol_dc",         cls:"num"},
+    {c:"mth_dc",         cls:"num mth-cell"},
+    {c:"vol_dc",         cls:"num vol-cell"},
     {c:"add_dc",         cls:"pct-cell"},
     /* Aging DC% starts read-only — only the aged-stock double-click
        flow can drop a value in.  applyAgingDC removes the readonly
