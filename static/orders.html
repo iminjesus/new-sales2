@@ -349,22 +349,39 @@
      while keeping its own colour identity. */
   table.lines thead th.sky{background:#0ea5e9;color:#fff;}
   /* Bright-yellow "you can type in this column" header hint.  Used on
-     every editable data-column (MTH / 443·SP / Volume / Additional
-     Special / Aging / Proposed Unit Price / Total Amount) so a BDE
-     scans the row once and knows exactly where they can override. */
+     every editable data-column in the yellow concession block
+     (MTH / Volume / Additional Special / Aging DC Guide + the
+     Total Additional Support readout) so the BDE scans the row
+     once and knows where to override. */
   table.lines thead th.editable{
     background:#fde047 !important; color:#78350f !important;
     box-shadow: inset 0 -2px 0 #f59e0b;
   }
+  /* Pink header — matches the pink body on Proposed Unit Price and
+     Total Amount so those two "final price" columns read as one
+     block from header to totals row. */
+  table.lines thead th.pink-hdr{
+    background:#fbcfe8 !important; color:#831843 !important;
+    box-shadow: inset 0 -2px 0 #db2777;
+  }
   /* Aging-DC cell — amber tint so it visually pairs with its column
      header, plus a light background when populated so the reader
      spots "this row uses the aging price ladder" instantly. */
-  /* Aging DC Guide cell — plain white background like every other
-     regular cell.  The row-level "aged-row" amber left border is
-     what tells the reader "this row is under the aged ladder"; the
-     cell no longer wears its own yellow highlight. */
-  table.lines td.aging-cell input{background:#fff;font-weight:700;color:#78350f;}
-  table.lines td.aging-cell input:placeholder-shown{background:#fff;font-weight:400;color:#1f2937;}
+  /* Aging DC Guide body cell — light yellow to match the rest of
+     the concession block (MTH / Volume / Additional Special /
+     Total Additional Support all wear the same ground).  The
+     row-level amber left border on the first cell of an aged row
+     still tells the reader "this row is aged"; the Guide cell
+     itself is just another editable concession input. */
+  table.lines td.aging-cell input{background:#fef9c3;font-weight:700;color:#78350f;}
+  table.lines td.aging-cell input:placeholder-shown{background:#fef9c3;font-weight:400;color:#1f2937;}
+  /* Total Additional Support readout — light yellow to close out
+     the concession block visually.  The cell is readonly; recalcRow
+     writes it every keystroke. */
+  table.lines tbody td[data-col-body="add_support"] input,
+  table.lines tbody td.total-supp-cell input{
+    background:#fef9c3;color:#713f12;font-weight:700;text-align:right;
+  }
   /* 443DC / TBR Special% column — sky-blue tint on the whole body
      column so it visually pairs with its sky-blue header.  Cell is
      writable so the promo/443 auto-fill and any BDE override live
@@ -388,8 +405,24 @@
   table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
   table.lines thead th.narrow{width:60px}
   table.lines thead th.mid{width:90px}
-  table.lines thead th.mcode{width:120px}
+  table.lines thead th.mcode{width:110px;min-width:110px}
   table.lines thead th.wide{width:200px}
+  /* Ensure the body cell under the M-Code header inherits a min-
+     width so 7–8-digit material numbers can't be clipped when the
+     browser competes for horizontal space with the aged-stock
+     side panel. */
+  table.lines tbody td:nth-child(2){min-width:110px}
+  /* Resize handle — a 6 px hit-target on the right edge of every
+     header cell.  Cursor changes to col-resize on hover; the JS
+     resizer down in the script section watches mousedown/mousemove
+     to drag the column width live.  Behind the input, so a click
+     inside the header still selects text normally. */
+  table.lines thead th{position:relative}
+  table.lines thead th .col-resizer{
+    position:absolute; top:0; right:-3px; width:6px; height:100%;
+    cursor:col-resize; user-select:none; z-index:2;
+  }
+  table.lines thead th .col-resizer:hover{background:rgba(255,255,255,0.25)}
   table.lines tbody td.stock-cell input{
     background:#eefaf1;color:#1e3a2f;font-weight:700;text-align:right;
     font-variant-numeric:tabular-nums;
@@ -627,7 +660,7 @@
         This order requires <b>Managing Director approval</b>.
         <b id="mdNoticeShare">—</b> on this order carry a Proposed DC of
         <b>64&#8239;%</b> or more with a negotiated concession — outside
-        the level Hayden or Kenny can approve.
+        the level Kenny or Hayden can approve.
       </div>
       <div class="exempt">
         <b>Exempt</b> from this requirement (per line):
@@ -801,9 +834,6 @@
     <input id="sovd_ttl" readonly value="0"/>
   </div>
 
-  <!-- ═══════════════ Order Details band ═══════════════ -->
-  <div class="band">Order Details (all prices are ex GST)</div>
-
   <div class="lines-wrap">
     <table class="lines" id="linesTable">
       <thead>
@@ -826,9 +856,9 @@
           <th class="narrow editable">Volume<br>DC %</th>
           <th class="olive narrow editable">Additional<br>Special DC %</th>
           <th class="amber narrow editable" title="Aging-stock target DC — populated by double-clicking an aged-stock row.  Displayed as a GUIDE for the ladder; the actual price effect is baked into the Additional Special DC% cell.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC<br>Guide&nbsp;%</th>
-          <th class="narrow" title="Total Additional Support DC % — chained combined DC of MTH + Volume + Additional Special DC.  The negotiated concession stacked ON TOP of the customer's contract (Current DC %).">Total<br>Additional<br>Support %</th>
-          <th class="mid editable" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
-          <th class="mid editable" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
+          <th class="narrow editable" title="Total Additional Support DC % — chained combined DC of MTH + Volume + Additional Special DC.  The negotiated concession stacked ON TOP of the customer's contract (Current DC %).">Total<br>Additional<br>Support %</th>
+          <th class="mid pink-hdr" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
+          <th class="mid pink-hdr" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
           <th class="narrow">Proposed DC %</th>
           <th class="stock narrow" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
           <th class="stock narrow" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
@@ -1174,14 +1204,34 @@ function applyAgingDC(row) {
     const addDC = 100 * (1 - (1 - target/100) / baseFactor);
     addEl.value = fmtPct(Math.max(0, addDC));
   }
-  /* MTH / Volume start blank on an aged row — the aged path is a
-     pure "list → aged" chain that doesn't want stacked customer-
-     side extras.  If the BDE later clears Aging DC%, the row
-     unlocks and they can key MTH / Vol / Add manually. */
-  ["mth_dc","vol_dc"].forEach(c => {
-    const el = row.querySelector(`[data-col="${c}"]`);
-    if (el) el.value = "";
-  });
+  recalcRow(row);
+  lockAgedRow(row);
+}
+
+/* Manual-entry twin of applyAgingDC.  Used when the BDE types a
+   value directly into Aging DC Guide% instead of double-clicking
+   an aged-stock row.  Solves add_dc against the SAME chained
+   formula (Base × 443/SP × (1-add) = target) so the on-screen
+   Proposed Unit Price matches list × (1 − target/100).  MTH and
+   Volume are LEFT ALONE — per the review, the BDE keeps typing
+   additional stacked concessions on aged rows.  Unlike the ladder
+   path we do NOT rewrite the Aging cell (the BDE's typed value
+   is authoritative and stays where they put it, formatted on
+   blur by the DC%-pct handler). */
+function applyAgingDCManual(row, target){
+  if (!(+target > 0)) return;
+  const list   = toNum(row.querySelector('[data-col="list_price"]').value);
+  const baseDC = toNum(row.querySelector('[data-col="base_dc"]').value);
+  const spDC   = toNum(row.querySelector('[data-col="sp_dc"]').value);
+  const mthDC  = toNum(row.querySelector('[data-col="mth_dc"]').value);
+  const volDC  = toNum(row.querySelector('[data-col="vol_dc"]').value);
+  const factor = (1 - baseDC/100) * (1 - spDC/100)
+               * (1 - mthDC/100)  * (1 - volDC/100);
+  const addEl = row.querySelector('[data-col="add_dc"]');
+  if (addEl && factor > 0) {
+    const addDC = 100 * (1 - (1 - target/100) / factor);
+    addEl.value = fmtPct(Math.max(0, addDC));
+  }
   recalcRow(row);
   lockAgedRow(row);
 }
@@ -1692,12 +1742,16 @@ function reverseSolveFromTotalAmt(row, targetStr){
 function lockAgedRow(row){
   if (!row) return;
   row.classList.add("aged-locked");
-  /* Aging DC% cell was set to readonly by newRow so the BDE cannot
-     type into it on regular rows.  On an aged-locked row we FLIP it
-     writable so the BDE can clear it (which auto-unlocks the row).
-     Every other editable input on the line gets readOnly=true and a
-     locked-cell tint. */
-  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price","total_amount"].forEach(c => {
+  /* Locked cells on an aged row: the auto-solved add_dc and the
+     downstream price outputs.  MTH Special DC% and Volume DC%
+     stay writable per the review — the BDE can stack an extra
+     concession on top of an aged base without clearing Aging DC
+     Guide first.  When they do, applyAgingDC re-solves add_dc so
+     the chain still lands on the aged target price minus their
+     extra factor.  Aging DC Guide% + sp_dc stay writable too:
+     Aging so the BDE can clear it (which un-locks the row), and
+     sp_dc so a live promo lookup can still write to the cell. */
+  ["add_dc","proposed_price","total_amount"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = true; el.classList.add("locked-cell"); }
   });
@@ -1709,14 +1763,12 @@ function unlockAgedRow(row){
   row.classList.remove("aged-locked");
   row.classList.remove("aged-row");
   delete row.dataset.agingTier;
-  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price","total_amount"].forEach(c => {
+  ["add_dc","proposed_price","total_amount"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = false; el.classList.remove("locked-cell"); }
   });
-  /* Return Aging DC% to its default read-only state — the aged-stock
-     ladder is the only path that fills it. */
-  const agingEl = row.querySelector('[data-col="aging_dc"]');
-  if (agingEl) agingEl.readOnly = true;
+  /* Aging DC Guide stays user-writable in both states — the aged
+     ladder is one entry point and manual typing is another. */
 }
 function updateTotals(){
   let sumQty = 0, sumAmt = 0, sumCurAmt = 0, sumListAmt = 0, weightedDC = 0, sovdQty = 0;
@@ -1828,11 +1880,11 @@ function updateTotals(){
       el.innerHTML =
         `<span style="color:#fff;background:#7f1d1d;padding:2px 8px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
         + `— <b>${mdDeepLineCount}</b> non-aged, non-Standard line${s} with Proposed DC ≥ 64 %. `
-        + `Only <b>JunJong (MD)</b> can approve. `
+        + `Only <b>JJ (MD)</b> can approve. `
         + dcBadge;
     } else {
       el.innerHTML =
-        `<b>Hayden or Kenny</b> can approve. `
+        `<b>Kenny or Hayden</b> can approve. `
         + dcBadge;
     }
   }
@@ -1872,6 +1924,62 @@ document.getElementById("rebatePickYes")?.addEventListener("click", () => {
 document.getElementById("rebatePickNo")?.addEventListener("click", () => {
   setRebate(document.getElementById("rebate_no").value === "N" ? "" : "N");
 });
+
+/* ────────────────────────── column resizer ──────────────────────────
+   Adds a 6 px drag zone to the right edge of every <th> in the Order
+   Details table.  Drag left/right widens or narrows the column live
+   by mutating the header's inline width — the tbody cells follow via
+   the same colgroup (or, absent a colgroup, via natural table layout).
+   Runs once on DOMContentLoaded; the .col-resizer div is idempotent
+   because we skip a header that already has one. */
+function initColumnResizers(){
+  const tbl = document.getElementById("linesTable");
+  if (!tbl) return;
+  tbl.querySelectorAll("thead th").forEach(th => {
+    if (th.querySelector(".col-resizer")) return;
+    const handle = document.createElement("div");
+    handle.className = "col-resizer";
+    handle.title = "Drag to resize this column";
+    th.appendChild(handle);
+    handle.addEventListener("mousedown", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const startX = e.clientX;
+      const startW = th.getBoundingClientRect().width;
+      document.body.style.cursor = "col-resize";
+      const onMove = (mv) => {
+        const w = Math.max(48, startW + (mv.clientX - startX));
+        th.style.width    = w + "px";
+        th.style.minWidth = w + "px";
+      };
+      const onUp = () => {
+        document.body.style.cursor = "";
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    /* Double-click auto-fits the column to the widest current cell,
+       so a truncated M-Code column can be snapped back to fit with
+       one gesture instead of dragging blind. */
+    handle.addEventListener("dblclick", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const idx = Array.from(th.parentElement.children).indexOf(th);
+      let widest = 0;
+      tbl.querySelectorAll("tbody tr").forEach(tr => {
+        const td = tr.children[idx];
+        if (!td) return;
+        const inp = td.querySelector("input");
+        const val = inp ? inp.value : td.textContent;
+        widest = Math.max(widest, (val || "").length);
+      });
+      const w = Math.max(60, Math.min(320, widest * 8 + 20));
+      th.style.width    = w + "px";
+      th.style.minWidth = w + "px";
+    });
+  });
+}
+document.addEventListener("DOMContentLoaded", initColumnResizers);
 
 /* ────────────────────────── row template ────────────────────────── */
 function newRow(){
@@ -1916,12 +2024,13 @@ function newRow(){
     {c:"mth_dc",         cls:"num mth-cell"},
     {c:"vol_dc",         cls:"num vol-cell"},
     {c:"add_dc",         cls:"pct-cell"},
-    /* Aging DC% starts read-only — only the aged-stock double-click
-       flow can drop a value in.  applyAgingDC removes the readonly
-       so the BDE can later CLEAR the cell (which un-locks the row);
-       unlockAgedRow re-applies readonly. */
-    {c:"aging_dc",       cls:"pct-cell aging-cell readonly", ro:true},
-    {c:"add_support",    cls:"num readonly", ro:true},
+    /* Aging DC Guide% is now user-editable in both directions:
+       the aged-stock double-click still fills it automatically, but
+       the BDE can ALSO type a value directly.  A value > 0 triggers
+       the same aged-lock + chained add_dc solve as the double-click;
+       clearing the cell un-locks the row. */
+    {c:"aging_dc",       cls:"pct-cell aging-cell"},
+    {c:"add_support",    cls:"num readonly total-supp-cell", ro:true},
     /* Proposed Unit Price + Total Amount are both user-editable:
        typing in either back-solves Additional Special DC% via
        reverseSolveAddDC / reverseSolveFromTotalAmt so the chain lands
@@ -1956,6 +2065,19 @@ function newRow(){
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => recalcRow(tr));
   });
+  /* On aged-locked rows, edits to MTH or Volume have to re-solve
+     the chained add_dc so the row's Proposed Price still lands on
+     the aged target (list × (1 − aging/100)).  We re-run the
+     manual applier which reads Aging + Base + SP + the new MTH/Vol
+     and rewrites add_dc. */
+  ["mth_dc","vol_dc"].forEach(c => {
+    tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => {
+      if (tr.classList.contains("aged-locked")) {
+        const target = toNum(tr.querySelector('[data-col="aging_dc"]').value);
+        if (target > 0) applyAgingDCManual(tr, target);
+      }
+    });
+  });
   // Qty change → re-run the Additional DC lookup so a row that crosses
   // (or drops below) a min_qty threshold picks up (or loses) its %.
   tr.querySelector('[data-col="qty"]')?.addEventListener("change", () => {
@@ -1971,11 +2093,33 @@ function newRow(){
   // adjust MTH / Volume / Additional Special manually.  The chained
   // Additional Special value that was computed at add-time is left
   // in place; the BDE can rewrite it now that inputs are unlocked.
+  /* Aging DC Guide%:
+       • Clearing the cell on a locked row unlocks it.
+       • Typing a value on ANY row (aged-locked or fresh) triggers
+         the same chained aged-target math applyAgingDC does.  That
+         gives the BDE two ways to price an aged deal — double-
+         click on the panel, or type the target here. */
   tr.querySelector('[data-col="aging_dc"]')?.addEventListener("input", () => {
     const agingEl = tr.querySelector('[data-col="aging_dc"]');
-    if (tr.classList.contains("aged-locked") && !(+agingEl.value)) {
-      unlockAgedRow(tr);
+    const v = toNum(agingEl.value);
+    if (v <= 0) {
+      if (tr.classList.contains("aged-locked")) unlockAgedRow(tr);
+      return;
     }
+    /* Manual aged entry — mirror pushAgedStockRow's tagging so the
+       promo re-lookup path (applyAdditionalDCToRow) picks it up,
+       then solve add_dc and lock the row.  If no ladder tier fits
+       the typed value we still tag "manual" so downstream flows
+       treat the row as aged. */
+    if (!tr.dataset.agingTier) {
+      let tier = "";
+      for (const t of Object.keys(AGING_TARGET_DC)) {
+        if (Math.abs(AGING_TARGET_DC[t] - v) < 0.01) { tier = t; break; }
+      }
+      tr.dataset.agingTier = tier || "manual";
+      tr.classList.add("aged-row");
+    }
+    applyAgingDCManual(tr, v);
   });
   tr.querySelector('[data-col="aging_dc"]')?.addEventListener("change", () => {
     if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
@@ -2523,9 +2667,13 @@ function wireApprovalPanel(order, who){
     ? `<div style="width:100%;background:#dcfce7;border:1px solid #16a34a;color:#166534;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✓ Approved by ${esc(order.approved_by_name)}${order.approved_at ? " · " + esc(order.approved_at) : ""}</div>`
     : "";
   row.innerHTML = recordBanner + [
-    chip("Hayden",  order.approved_a, order.approved_a_at),
-    chip("JunJong", order.approved_b, order.approved_b_at),
+    /* Display order (per review): Kenny → Hayden → JJ.  Slot
+       columns in the DB are approved_a=Hayden, approved_b=JunJong,
+       approved_c=Kenny — that assignment stays; only the render
+       order changes, and JunJong is now displayed as "JJ". */
     chip("Kenny",   order.approved_c, order.approved_c_at),
+    chip("Hayden",  order.approved_a, order.approved_a_at),
+    chip("JJ",      order.approved_b, order.approved_b_at),
   ].join("");
 
   // Approve button — only for the named approvers, and only when

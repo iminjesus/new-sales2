@@ -3790,10 +3790,10 @@ def _submitted_order_email_html(oid, order, base_url):
                 _md_lines += 1
         _md_required = _md_lines > 0
         _s = "" if _md_lines == 1 else "s"
-        route = (f"<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JunJong only</b> "
+        route = (f"<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JJ only</b> "
                  f"({_md_lines} non-aged, non-Standard line{_s} at Proposed DC ≥ 64%)"
                  if _md_required
-                 else "Hayden or Kenny can approve")
+                 else "Kenny or Hayden can approve")
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
         approval_block = (
             '<div style="background:#fef3c7;border:1px solid #f59e0b;padding:6px 10px;'
@@ -4449,7 +4449,7 @@ def api_orders_approve(oid):
     approver_col = None
     approver_name = None
     if   who == MGMT_APPROVER_EMAILS[0]: approver_col, approver_name = "approved_a", "Hayden"
-    elif who == MGMT_APPROVER_EMAILS[1]: approver_col, approver_name = "approved_b", "JunJong"
+    elif who == MGMT_APPROVER_EMAILS[1]: approver_col, approver_name = "approved_b", "JJ"
     elif who == MGMT_APPROVER_EMAILS[2]: approver_col, approver_name = "approved_c", "Kenny"
     if not approver_col:
         return jsonify({"error": "only the named approvers can approve"}), 403
@@ -4501,7 +4501,7 @@ def api_orders_approve(oid):
                 "error": (
                     f"{md_lines} non-aged, non-Standard line{_plural} on this order "
                     f"carr{'ies' if md_lines == 1 else 'y'} a Proposed DC of 64 % or "
-                    f"more — Managing Director sign-off is required.  Only JunJong "
+                    f"more — Managing Director sign-off is required.  Only JJ "
                     f"(MD) can approve.  Aged lines and per-line Standard-pricing "
                     f"lines (Base + 443/promo only) are exempt from this rule."
                 ),
