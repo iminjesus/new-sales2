@@ -3582,6 +3582,26 @@ let curTab = 'shortage';
 let sortCol = null, sortDir = 0;     // 0 = none, 1 = asc, -1 = desc
 let showPipeline = false;            // toggled by "▶ Pipeline detail"
 const selected = new Set();
+/* Merge codes whose Sub Total row the user has explicitly unchecked
+   while in Checked-only mode.  Only relevant in that mode; a Sub
+   Total in this set is hidden even if every M CODE of the merge is
+   ticked.  Auto-cleared when the merge stops being fully selected. */
+window._suppressedSubTotals = new Set();
+/* Cache: merge_code → array of every M CODE that shares it in
+   DATA.all_rows.  Used to decide whether a merge is "fully selected"
+   for the Checked-only visibility rule.  Built lazily. */
+window._mergeAllMcodesCache = null;
+function _allMcodesForMerge(mc) {
+    if (!window._mergeAllMcodesCache) {
+        window._mergeAllMcodesCache = new Map();
+        DATA.all_rows.forEach(r => {
+            const arr = window._mergeAllMcodesCache.get(r.merge_code) || [];
+            arr.push(r.m_code);
+            window._mergeAllMcodesCache.set(r.merge_code, arr);
+        });
+    }
+    return window._mergeAllMcodesCache.get(mc) || [];
+}
 
 function togglePipeline() {
     showPipeline = !showPipeline;
@@ -4259,34 +4279,58 @@ function renderTable() {
             /* Sub Total row — dedicated aggregate line under each
                merge group.  Uses `mergeSumRow` to sum the M CODE
                figures so the total reflects the actual merge (not
-               just the first M CODE's individual numbers). */
-            const subTotal = mergeSumRow(groupRows);
-            /* Sub Total row carries a `sub-status-<status>` class so
-               CSS can tint the whole row according to the merge's
-               aggregate status (Balance = green, Serious Surplus =
-               red, etc).  The "SUB TOTAL · Merge …" label renders in
-               a single neutral dark colour so the row's status is
-               read from the ground tint, not the label colour. */
-            const stTag = 'sub-status-' + (subTotal.status || 'empty');
-            /* Sub Total checkbox reflects "all M CODEs in this merge
-               are selected"; toggling it bulk-selects (or bulk-clears)
-               every sibling.  data-merge-mcodes carries the pipe-
-               joined m_code list so the JS handler can walk them
-               without re-querying the DOM. */
-            const groupMcodes = groupRows.map(r => r.m_code);
-            const allSelected = groupMcodes.every(mc => selected.has(mc));
-            const subCheckHtml = '<input type="checkbox" class="row-check row-check-sub" '
-                + 'data-merge="' + subTotal.merge_code + '" '
-                + 'data-merge-mcodes="' + groupMcodes.join('|') + '" '
-                + (allSelected ? 'checked ' : '')
-                + 'title="Check every M CODE in this merge (or uncheck them all).">';
-            rowsHtml.push(
-                '<tr class="sub-total ' + stTag + '" data-mc="' + subTotal.merge_code + '">'
-                + '<td style="border-left:4px solid ' + band + ';text-align:center">' + subCheckHtml + '</td>'
-                + '<td style="font-weight:700;color:#212121" colspan="10">'
-                + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
-                + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
-                + '</tr>');
+               just the first M CODE's individual numbers).
+
+               Visibility rules (Checked-only mode changes the rules):
+                 • Normal mode → always emit the sub total.
+                 • Checked-only mode → emit only when EVERY M CODE of
+                   this merge (in DATA.all_rows, not just the filtered
+                   subset) is in `selected`.  A partially-selected
+                   merge shows just its ticked M CODE rows and NO
+                   sub total, because a sub total over a subset would
+                   read as a lie against the merge label.
+                 • Checked-only mode + user has explicitly unchecked
+                   the sub total (see the click handler further down)
+                   → hidden even if the merge is fully selected, until
+                   the merge stops being fully selected (which auto-
+                   clears the suppression so a later re-selection
+                   restores the natural behaviour). */
+            let emitSubTotal = true;
+            if (window._onlyCheckedMode) {
+                const allMcs = _allMcodesForMerge(mc);
+                const fullySelected = allMcs.length > 0
+                    && allMcs.every(m => selected.has(m));
+                if (!fullySelected) {
+                    /* Auto-clean suppression when merge falls out of
+                       full-selection so the sub total can re-appear
+                       naturally next time the merge is fully ticked. */
+                    if (window._suppressedSubTotals) {
+                        window._suppressedSubTotals.delete(mc);
+                    }
+                    emitSubTotal = false;
+                } else if (window._suppressedSubTotals
+                        && window._suppressedSubTotals.has(mc)) {
+                    emitSubTotal = false;
+                }
+            }
+            if (emitSubTotal) {
+                const subTotal = mergeSumRow(groupRows);
+                const stTag = 'sub-status-' + (subTotal.status || 'empty');
+                const groupMcodes = groupRows.map(r => r.m_code);
+                const allSelected = groupMcodes.every(mc2 => selected.has(mc2));
+                const subCheckHtml = '<input type="checkbox" class="row-check row-check-sub" '
+                    + 'data-merge="' + subTotal.merge_code + '" '
+                    + 'data-merge-mcodes="' + groupMcodes.join('|') + '" '
+                    + (allSelected ? 'checked ' : '')
+                    + 'title="Check every M CODE in this merge (or uncheck them all).">';
+                rowsHtml.push(
+                    '<tr class="sub-total ' + stTag + '" data-mc="' + subTotal.merge_code + '">'
+                    + '<td style="border-left:4px solid ' + band + ';text-align:center">' + subCheckHtml + '</td>'
+                    + '<td style="font-weight:700;color:#212121" colspan="10">'
+                    + 'SUB TOTAL · Merge ' + subTotal.merge_code + '</td>'
+                    + stateCellsFor(subTotal) + totalGrpFor(subTotal) + moiCellsFor(subTotal, true)
+                    + '</tr>');
+            }
         }
     } else {
         /* Flat per-M-CODE listing (no sub totals).  Each row still
@@ -4363,17 +4407,32 @@ function renderTable() {
             if (e.target.closest('.moi-detail-btn')) return;
             if (e.target.closest('.row-check')) return;
             /* Sub Total row click: bulk-toggle every M CODE in the
-               merge.  M CODE row click: toggle just that one. */
+               merge.  M CODE row click: toggle just that one.
+               Checked-only mode is special: if the current toggle
+               is an UNCHECK on the sub total, we don't clear the
+               sibling M CODEs (they were carefully picked); we just
+               suppress THIS Sub Total row via _suppressedSubTotals
+               so the click hides the row alone. */
             const subInput = tr.querySelector('.row-check-sub');
             if (subInput) {
                 const mcodes = (subInput.dataset.mergeMcodes || '')
                                .split('|').filter(Boolean)
                                .map(x => Number.isNaN(+x) ? x : +x);
                 const allOn = mcodes.every(mc => selected.has(mc));
-                mcodes.forEach(mc => {
-                    if (allOn) selected.delete(mc);
-                    else       selected.add(mc);
-                });
+                const mergeCode = subInput.dataset.merge;
+                const mergeKey = Number.isNaN(+mergeCode) ? mergeCode : +mergeCode;
+                if (window._onlyCheckedMode && allOn) {
+                    /* All ticked → this click is an UNCHECK.  Just
+                       hide the sub total, leave siblings intact. */
+                    window._suppressedSubTotals.add(mergeKey);
+                } else {
+                    mcodes.forEach(mc => {
+                        if (allOn) selected.delete(mc);
+                        else       selected.add(mc);
+                    });
+                    /* Re-checking the sub total also un-suppresses it. */
+                    if (!allOn) window._suppressedSubTotals.delete(mergeKey);
+                }
             } else if (tr.dataset.mcode !== undefined) {
                 const mcode = Number.isNaN(+tr.dataset.mcode) ? tr.dataset.mcode : +tr.dataset.mcode;
                 if (selected.has(mcode)) selected.delete(mcode);
@@ -4386,7 +4445,9 @@ function renderTable() {
     });
     /* Direct checkbox handlers — stopPropagation so the row click
        above doesn't also fire.  Same semantics: sub-total checkbox
-       bulk-toggles siblings, m-code checkbox toggles just itself. */
+       bulk-toggles siblings, m-code checkbox toggles just itself.
+       Checked-only mode: unchecking the sub total does NOT clear
+       the siblings — it just suppresses that Sub Total row. */
     body.querySelectorAll('.row-check').forEach(cb => {
         cb.addEventListener('click', (e) => { e.stopPropagation(); });
         cb.addEventListener('change', (e) => {
@@ -4395,8 +4456,18 @@ function renderTable() {
                 const mcodes = (cb.dataset.mergeMcodes || '')
                                .split('|').filter(Boolean)
                                .map(x => Number.isNaN(+x) ? x : +x);
-                if (cb.checked) mcodes.forEach(mc => selected.add(mc));
-                else            mcodes.forEach(mc => selected.delete(mc));
+                const mergeCode = cb.dataset.merge;
+                const mergeKey = Number.isNaN(+mergeCode) ? mergeCode : +mergeCode;
+                if (window._onlyCheckedMode && !cb.checked) {
+                    /* Just hide THIS sub total row; keep the sibling
+                       M CODE picks so the user's subset survives. */
+                    window._suppressedSubTotals.add(mergeKey);
+                } else if (cb.checked) {
+                    mcodes.forEach(mc => selected.add(mc));
+                    window._suppressedSubTotals.delete(mergeKey);
+                } else {
+                    mcodes.forEach(mc => selected.delete(mc));
+                }
             } else {
                 const mcode = Number.isNaN(+cb.dataset.mcode) ? cb.dataset.mcode : +cb.dataset.mcode;
                 if (cb.checked) selected.add(mcode);
@@ -4433,6 +4504,15 @@ function renderTable() {
         });
     });
     updateSelectionSummary(src);
+    /* Preserve autofit / expand layout across re-render — buildTableHead
+       (called at the top) resets column widths to IDENTITY_WIDTHS +
+       DATA_COL_WIDTH, which visually collapses a fullscreen-expanded
+       table back to natural width after a checkbox click.  Re-run the
+       fit if the user was in autofit mode so the layout stays where
+       they left it. */
+    if (window._autofitSnapshot) {
+        _applyAutofitLayoutOnce();
+    }
 }
 
 function updateSelectionSummary(currentList) {
@@ -4466,6 +4546,10 @@ function updateSelectionSummary(currentList) {
 }
 function clearSelection() {
     selected.clear();
+    /* Wipe sub-total suppression along with the selection so the
+       next time the user picks a merge the sub total shows up
+       naturally again. */
+    if (window._suppressedSubTotals) window._suppressedSubTotals.clear();
     document.querySelectorAll('#sku-tbl tbody tr.selected').forEach(tr => tr.classList.remove('selected'));
     updateSelectionSummary(DATA[curTab + '_rows'].filter(rowPasses));
 }
@@ -4482,6 +4566,59 @@ function toggleExpandTable() {
    first click (canonical layout, or the user's manual drag widths
    if they'd resized before hitting Fit).  Snapshot lives on the
    window so it survives re-renders. */
+/* Measure + apply the autofit layout ONCE against the current DOM,
+   without touching _autofitSnapshot.  Split out so renderTable can
+   re-run the fit after buildTableHead rebuilds column widths — an
+   otherwise transparent re-render (e.g. after ticking a checkbox
+   in fullscreen expand mode) would collapse the table back to its
+   natural width, which reads visually as "expand state was lost". */
+function _applyAutofitLayoutOnce() {
+    const tbl = document.getElementById('sku-tbl');
+    if (!tbl) return;
+    const cols = Array.from(tbl.querySelectorAll('#sku-colgroup col'));
+    const headerCells = tbl.querySelectorAll('thead tr:last-child th');
+    const rowCells = tbl.querySelectorAll('tbody tr');
+    const IDENT_WIDTHS = [44, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];
+    const IDENT_COUNT  = IDENT_WIDTHS.length;
+    /* Blank widths first so getBoundingClientRect returns natural size. */
+    cols.forEach(c => { c.style.width = ''; });
+    tbl.style.width = '';
+    requestAnimationFrame(() => {
+        const natural = [];
+        headerCells.forEach((th, idx) => {
+            natural[idx] = th.getBoundingClientRect().width;
+        });
+        rowCells.forEach(tr => {
+            tr.querySelectorAll('td').forEach((td, i) => {
+                if (td.colSpan && td.colSpan > 1) return;
+                const w = td.getBoundingClientRect().width;
+                if (w > (natural[i] || 0)) natural[i] = w;
+            });
+        });
+        const need = natural.map(w => Math.ceil((w || 60) + 12));
+        const card = tbl.closest('.card') || tbl.parentElement;
+        const avail = Math.max(600,
+                     (card ? card.clientWidth : window.innerWidth) - 32);
+        const identSum = IDENT_WIDTHS.reduce((a, b) => a + b, 0);
+        const dataNeed = need.slice(IDENT_COUNT).reduce((a, b) => a + b, 0);
+        const dataAvail = Math.max(160, avail - identSum);
+        let scale = dataAvail / (dataNeed || 1);
+        if (scale > 1) scale = 1;
+        let total = 0;
+        cols.forEach((c, i) => {
+            let w;
+            if (i < IDENT_COUNT) {
+                w = IDENT_WIDTHS[i];
+            } else {
+                w = Math.max(32, Math.floor(need[i] * scale));
+            }
+            c.style.width = w + 'px';
+            total += w;
+        });
+        tbl.style.width = total + 'px';
+    });
+}
+
 function autofitColumns() {
     const tbl = document.getElementById('sku-tbl');
     if (!tbl) return;
@@ -4507,58 +4644,10 @@ function autofitColumns() {
         cols: cols.map(c => c.style.width || ''),
         tbl:  tbl.style.width || '',
     };
-    const headerCells = tbl.querySelectorAll('thead tr:last-child th');
-    const rowCells = tbl.querySelectorAll('tbody tr');
-    const IDENT_WIDTHS = [44, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
-    const IDENT_COUNT  = IDENT_WIDTHS.length;
-    /* Blank all col widths first so cells grow to natural content. */
-    cols.forEach(c => { c.style.width = ''; });
-    tbl.style.width = '';
+    _applyAutofitLayoutOnce();
+    /* The rAF inside _applyAutofitLayoutOnce sets widths a tick later;
+       stamp the button now so users get instant feedback. */
     requestAnimationFrame(() => {
-        /* Measure natural width for EVERY column (header + body). */
-        const natural = [];
-        headerCells.forEach((th, idx) => {
-            natural[idx] = th.getBoundingClientRect().width;
-        });
-        rowCells.forEach(tr => {
-            tr.querySelectorAll('td').forEach((td, i) => {
-                if (td.colSpan && td.colSpan > 1) return;
-                const w = td.getBoundingClientRect().width;
-                if (w > (natural[i] || 0)) natural[i] = w;
-            });
-        });
-        /* Add padding for breathing room + the drag handle. */
-        const need = natural.map(w => Math.ceil((w || 60) + 12));
-        /* Available width = the sku-card body's inner width, minus a
-           small guard for scrollbar / border. */
-        const card = tbl.closest('.card') || tbl.parentElement;
-        const avail = Math.max(600,
-                     (card ? card.clientWidth : window.innerWidth) - 32);
-        const identSum = IDENT_WIDTHS.reduce((a, b) => a + b, 0);
-        const dataNeed = need.slice(IDENT_COUNT).reduce((a, b) => a + b, 0);
-        const dataAvail = Math.max(160, avail - identSum);
-        /* Uniform scale factor for the data block so proportions
-           between columns are preserved.  Cap at 1.0 — we shrink to
-           fit but don't expand past natural width. */
-        let scale = dataAvail / (dataNeed || 1);
-        if (scale > 1) scale = 1;
-        let total = 0;
-        cols.forEach((c, i) => {
-            let w;
-            if (i < IDENT_COUNT) {
-                w = IDENT_WIDTHS[i];
-            } else {
-                /* Scaled width, but never below 32 px so numeric
-                   cells stay legible.  If scaling would drop a
-                   column below its natural width the shortfall shows
-                   as clipped digits — the user can widen it by
-                   dragging or by expanding the card. */
-                w = Math.max(32, Math.floor(need[i] * scale));
-            }
-            c.style.width = w + 'px';
-            total += w;
-        });
-        tbl.style.width = total + 'px';
         if (btn) {
             btn.classList.add('active');
             btn.style.background = '#DBEAFE';
@@ -4570,6 +4659,13 @@ function autofitColumns() {
    `selected` get filtered out; a second click restores the full view. */
 function toggleOnlyChecked() {
     window._onlyCheckedMode = !window._onlyCheckedMode;
+    /* Any Sub Total the user hid while in Checked-only mode is a
+       "hide just this row" gesture that only makes sense inside
+       that mode.  Switching out clears the suppression so normal
+       mode isn't left with weirdly-missing sub totals. */
+    if (!window._onlyCheckedMode && window._suppressedSubTotals) {
+        window._suppressedSubTotals.clear();
+    }
     const btn = document.getElementById('btn-only-checked');
     if (btn) {
         btn.classList.toggle('active', window._onlyCheckedMode);
