@@ -5058,7 +5058,11 @@ function downloadXLSX() {
         const status = r.status || '';
         for (let c = range.s.c; c <= range.e.c; c++) {
             const addr = XLSX.utils.encode_cell({ r: rowIdx, c });
-            if (!ws[addr]) continue;
+            /* aoa_to_sheet skips cells whose value is null/undefined
+               (MOI with null moh, empty sub-total Size/Inch/etc.).
+               For the border grid to be continuous we FORCE-CREATE a
+               blank cell at every position so it can carry a style. */
+            if (!ws[addr]) ws[addr] = { t: 's', v: '' };
             const meta = cols[c][2] || {};
             const style = {
                 alignment: {
@@ -5112,10 +5116,23 @@ function downloadXLSX() {
        identity block (Merge, M CODE, Brand, Marketing Line,
        Product Name, Pattern, Size, Inch, LI, SS, F/O · OPE — 11
        columns, A..K) stay pinned while the user scrolls right into
-       the state stocks, MOI, and period-demand blocks.  Excel reads
-       xSplit as the number of columns to freeze on the left; L is
-       column index 11. */
-    ws['!freeze'] = { xSplit: 11, ySplit: 1 };
+       the state stocks, MOI, and period-demand blocks.
+
+       xlsx-js-style writes freeze panes by splicing the fields
+       straight into the <sheetView><pane .../></sheetView> XML, so
+       every attribute Excel needs must be present: xSplit / ySplit
+       for the split point, topLeftCell for what appears in the
+       bottom-right pane after scrolling, activePane telling Excel
+       which pane owns focus, and state="frozen" so the split is
+       locked (not just a movable divider).  Values go in as strings
+       because that's how the writer concatenates them. */
+    ws['!freeze'] = {
+        xSplit:       '11',
+        ySplit:       '1',
+        topLeftCell:  'L2',
+        activePane:   'bottomRight',
+        state:        'frozen',
+    };
     /* Newer SheetJS looks at ws['!view'].state / ySplit; xlsx-js-style
        prefers !cols outline-summaryBelow OFF so the +/- handle sits
        to the LEFT of the group (matching Excel's default for column
@@ -5127,6 +5144,14 @@ function downloadXLSX() {
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, curTab === 'total' ? 'All' : curTab);
+    /* Workbook-level SheetView entry — some XLSX readers ignore the
+       per-worksheet !freeze block and only pick up freeze panes from
+       wb.Workbook.Views.  Setting both belt-and-braces. */
+    if (!wb.Workbook)       wb.Workbook = {};
+    if (!wb.Workbook.Views) wb.Workbook.Views = [];
+    wb.Workbook.Views[0] = Object.assign(wb.Workbook.Views[0] || {}, {
+        xSplit: 11, ySplit: 1, topLeftCell: 'L2', state: 'frozen',
+    });
     /* Data-provenance sheet — same info, now with a bit of style. */
     const provAoa = [
         ['Property',        'Value'],
