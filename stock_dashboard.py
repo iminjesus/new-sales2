@@ -4857,60 +4857,77 @@ function downloadXLSX() {
         return;
     }
     const src = exportSource();
+
+    /* ── Column definitions ──
+       Each entry: [header, getter, { wch, hidden, level, right,
+                                       headerFill, num, group }]
+         wch        column width in characters
+         hidden     column hidden by default (still in the sheet)
+         level      outline level (1 = folded under a group toggle so
+                    Excel shows a +/- summary at the column header)
+         right      right-border weight (matches the vertical dividers
+                    the on-screen table uses at group boundaries)
+         headerFill override fill for this column's header only
+         num        number format ('int' / '1dp' / 'moi' / null)
+         group      logical group tag — used to tint state / pipe
+                    cells uniformly across body rows
+       Result: only the on-screen columns are visible when the file
+       opens; the Port/Water/Factory pipe splits sit inside outline
+       group 1 (click the + at the top to reveal), the 12M-basis
+       columns and Description are hidden entirely. */
+    const HDR_STATE   = { NSW:'FFEEF6FF', QLD:'FFFEF2F2', VIC:'FFF0FDF4', WA:'FFFEFCE8' };
     const cols = [
-        ['Merge',                  r => r.merge_code],
-        ['M CODE',                 r => r._isSubTotal ? 'Sub Total' : (r.m_code || '')],
-        ['Brand',                  r => r.brand || ''],
-        ['Marketing Line',         r => r.line || ''],
-        ['Product Name',           r => r.product_name || ''],
-        ['Pattern',                r => r.pattern || ''],
-        ['Size',                   r => r._isSubTotal ? '' : (r.size || '')],
-        ['Inch',                   r => r._isSubTotal ? '' : (r.inch || '')],
-        ['LI',                     r => r._isSubTotal ? '' : (r.li || '')],
-        ['SS',                     r => r._isSubTotal ? '' : (r.ss || '')],
-        ['F/O · OPE',              r => r._isSubTotal ? '' : (r.sku_status || 'Active')],
-        ['NSW Stock',              r => r.state_stock.NSW || 0],
-        ['NSW 3M Avg',             r => r.state_3m.NSW || 0],
-        ['QLD Stock',              r => r.state_stock.QLD || 0],
-        ['QLD 3M Avg',             r => r.state_3m.QLD || 0],
-        ['VIC Stock',              r => r.state_stock.VIC || 0],
-        ['VIC 3M Avg',             r => r.state_3m.VIC || 0],
-        ['WA Stock',               r => r.state_stock.WA  || 0],
-        ['WA 3M Avg',              r => r.state_3m.WA  || 0],
-        ['Total Stock',            r => r.total_stock || 0],
-        ['Total 3M Avg',           r => r.total_3m || 0],
-        ['NSW Port',               r => r.state_pipe_parts?.NSW?.port  || 0],
-        ['NSW Water',              r => r.state_pipe_parts?.NSW?.water || 0],
-        ['NSW Factory',            r => r.state_pipe_parts?.NSW?.fac   || 0],
-        ['QLD Port',               r => r.state_pipe_parts?.QLD?.port  || 0],
-        ['QLD Water',              r => r.state_pipe_parts?.QLD?.water || 0],
-        ['QLD Factory',            r => r.state_pipe_parts?.QLD?.fac   || 0],
-        ['VIC Port',               r => r.state_pipe_parts?.VIC?.port  || 0],
-        ['VIC Water',              r => r.state_pipe_parts?.VIC?.water || 0],
-        ['VIC Factory',            r => r.state_pipe_parts?.VIC?.fac   || 0],
-        ['WA Port',                r => r.state_pipe_parts?.WA?.port   || 0],
-        ['WA Water',               r => r.state_pipe_parts?.WA?.water  || 0],
-        ['WA Factory',             r => r.state_pipe_parts?.WA?.fac    || 0],
-        ['MOI',                    r => r.moh          == null ? null : r.moh],
-        ['MOI(PPL)',               r => r.moh_plus_max == null ? null : r.moh_plus_max],
-        ['3M Avg (m -1..-3)',      r => r.p_3m       || 0],
-        ['4-6M Avg (m -4..-6)',    r => r.avg_6m_old || 0],
-        ['7-9M Avg (m -7..-9)',    r => r.avg_7_9m   || 0],
-        ['10-12M Avg (m -10..-12)',r => r.avg_10_12m || 0],
-        ['12M Avg (basis)',        r => r.total_12m  || 0],
-        ['Max demand (basis)',     r => r.max_demand || 0],
-        ['Status',                 r => STATUS_PRETTY[r.status] || r.status || ''],
-        ['Description',            r => r.description || ''],
+        ['Merge',                  r => r.merge_code,                                 { wch:9,  right:'medium', num:null }],
+        ['M CODE',                 r => r._isSubTotal ? 'Sub Total' : (r.m_code || ''), { wch:12, right:'medium', num:null }],
+        ['Brand',                  r => r.brand || '',                                { wch:8 }],
+        ['Marketing Line',         r => r.line || '',                                 { wch:14 }],
+        ['Product Name',           r => r.product_name || '',                         { wch:22 }],
+        ['Pattern',                r => r.pattern || '',                              { wch:10 }],
+        ['Size',                   r => r._isSubTotal ? '' : (r.size || ''),          { wch:12 }],
+        ['Inch',                   r => r._isSubTotal ? '' : (r.inch || ''),          { wch:6 }],
+        ['LI',                     r => r._isSubTotal ? '' : (r.li || ''),            { wch:9 }],
+        ['SS',                     r => r._isSubTotal ? '' : (r.ss || ''),            { wch:5 }],
+        ['F/O · OPE',              r => r._isSubTotal ? '' : (r.sku_status || 'Active'), { wch:9, right:'medium' }],
+        ['NSW Stock',              r => r.state_stock.NSW || 0,                       { wch:10, num:'int', headerFill:HDR_STATE.NSW, group:'st_NSW' }],
+        ['NSW 3M Avg',             r => r.state_3m.NSW || 0,                          { wch:10, num:'1dp', headerFill:HDR_STATE.NSW, group:'st_NSW', right:'thin' }],
+        ['QLD Stock',              r => r.state_stock.QLD || 0,                       { wch:10, num:'int', headerFill:HDR_STATE.QLD, group:'st_QLD' }],
+        ['QLD 3M Avg',             r => r.state_3m.QLD || 0,                          { wch:10, num:'1dp', headerFill:HDR_STATE.QLD, group:'st_QLD', right:'thin' }],
+        ['VIC Stock',              r => r.state_stock.VIC || 0,                       { wch:10, num:'int', headerFill:HDR_STATE.VIC, group:'st_VIC' }],
+        ['VIC 3M Avg',             r => r.state_3m.VIC || 0,                          { wch:10, num:'1dp', headerFill:HDR_STATE.VIC, group:'st_VIC', right:'thin' }],
+        ['WA Stock',               r => r.state_stock.WA || 0,                        { wch:10, num:'int', headerFill:HDR_STATE.WA,  group:'st_WA'  }],
+        ['WA 3M Avg',              r => r.state_3m.WA || 0,                           { wch:10, num:'1dp', headerFill:HDR_STATE.WA,  group:'st_WA', right:'thin' }],
+        ['Total Stock',            r => r.total_stock || 0,                           { wch:11, num:'int', headerFill:'FFDBEAFE', group:'st_total' }],
+        ['Total 3M Avg',           r => r.total_3m || 0,                              { wch:11, num:'1dp', headerFill:'FFDBEAFE', group:'st_total', right:'medium' }],
+        /* Pipeline detail — hidden + outlined so Excel shows a "+"
+           handle in the column header the user can click to expand. */
+        ['NSW Port',               r => r.state_pipe_parts?.NSW?.port  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW' }],
+        ['NSW Water',              r => r.state_pipe_parts?.NSW?.water || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW' }],
+        ['NSW Factory',            r => r.state_pipe_parts?.NSW?.fac   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW', right:'thin' }],
+        ['QLD Port',               r => r.state_pipe_parts?.QLD?.port  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD' }],
+        ['QLD Water',              r => r.state_pipe_parts?.QLD?.water || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD' }],
+        ['QLD Factory',            r => r.state_pipe_parts?.QLD?.fac   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD', right:'thin' }],
+        ['VIC Port',               r => r.state_pipe_parts?.VIC?.port  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC' }],
+        ['VIC Water',              r => r.state_pipe_parts?.VIC?.water || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC' }],
+        ['VIC Factory',            r => r.state_pipe_parts?.VIC?.fac   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC', right:'thin' }],
+        ['WA Port',                r => r.state_pipe_parts?.WA?.port   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA' }],
+        ['WA Water',               r => r.state_pipe_parts?.WA?.water  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA' }],
+        ['WA Factory',             r => r.state_pipe_parts?.WA?.fac    || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA',  right:'medium' }],
+        ['MOI',                    r => r.moh          == null ? null : r.moh,        { wch:7,  num:'moi', headerFill:'FFE0E7FF' }],
+        ['MOI(PPL)',               r => r.moh_plus_max == null ? null : r.moh_plus_max,{ wch:9, num:'moi', headerFill:'FFE0E7FF', right:'medium' }],
+        ['3M Avg (m -1..-3)',      r => r.p_3m       || 0,                            { wch:10, num:'1dp' }],
+        ['4-6M Avg (m -4..-6)',    r => r.avg_6m_old || 0,                            { wch:10, num:'1dp' }],
+        ['7-9M Avg (m -7..-9)',    r => r.avg_7_9m   || 0,                            { wch:10, num:'1dp' }],
+        ['10-12M Avg (m -10..-12)',r => r.avg_10_12m || 0,                            { wch:10, num:'1dp', right:'thin' }],
+        ['12M Avg (basis)',        r => r.total_12m  || 0,                            { wch:11, num:'1dp', hidden:true, level:1, group:'basis' }],
+        ['Max demand (basis)',     r => r.max_demand || 0,                            { wch:11, num:'1dp', hidden:true, level:1, group:'basis', right:'medium' }],
+        ['Status',                 r => STATUS_PRETTY[r.status] || r.status || '',    { wch:14 }],
+        ['Description',            r => r.description || '',                          { wch:30, hidden:true }],
     ];
 
     /* ── Interleave Sub Total rows ──
-       IMPORTANT: for tabs like Shortage the source is sorted by MOI,
-       so M CODEs for the same merge are scattered across the list.
-       We must REGROUP by merge_code (preserving each merge's first-
-       seen position) BEFORE interleaving, otherwise the export would
-       emit "M CODE + Sub Total" for every row and split a real
-       merge into single-M-CODE pseudo-groups.  This is the same
-       mergeGroups map the on-screen renderer builds in renderTable. */
+       Regroup by merge_code (preserving first-seen order) before
+       emitting so status-tab sorts (which scatter merges) still
+       produce contiguous merge groups in the output. */
     const mergeOrder = [];
     const mergeMap   = new Map();
     src.forEach(r => {
@@ -4921,8 +4938,13 @@ function downloadXLSX() {
         mergeMap.get(r.merge_code).push(r);
     });
     const bundled = [];
+    /* Track the first ROW INDEX of every merge so we can paint an
+       amber left-border on those rows — same "merge-break" indicator
+       the on-screen renderer uses. */
+    const mergeBreakRows = new Set();
     mergeOrder.forEach(mc => {
         const groupRows = mergeMap.get(mc);
+        if (groupRows.length) mergeBreakRows.add(bundled.length);
         groupRows.forEach(r => bundled.push(r));
         bundled.push(_mergeSubTotal(mc, groupRows));
     });
@@ -4932,19 +4954,13 @@ function downloadXLSX() {
     bundled.forEach(r => aoa.push(cols.map(c => c[1](r))));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-    /* ── Styling — mirrors the on-screen palette ── */
-    /* Status-tint fills for Sub Total rows (light versions of the
-       card colours the dashboard uses).  Text stays dark so numbers
-       remain readable at reduced zoom. */
-    /* Server tags rows with statuses "shortage"/"balanced"/"surplus"/
-       "serious_surplus"/"no_move" — keys here match exactly so the
-       Sub Total and Status cells pick up the right tint. */
+    /* ── Palette — matches the on-screen cards / drill-down table ── */
     const SUB_FILL = {
-        shortage:        'FFFCE7E7',   // light red
-        balanced:        'FFE8F3E4',   // light green
-        surplus:         'FFFDECC8',   // light orange
-        serious_surplus: 'FFF9D6D6',   // stronger red
-        no_move:         'FFEDE9FE',   // light purple
+        shortage:        'FFFCE7E7',
+        balanced:        'FFE8F3E4',
+        surplus:         'FFFDECC8',
+        serious_surplus: 'FFF9D6D6',
+        no_move:         'FFEDE9FE',
     };
     const STATUS_FG = {
         shortage:        'FF991B1B',
@@ -4953,83 +4969,148 @@ function downloadXLSX() {
         serious_surplus: 'FF7F1D1D',
         no_move:         'FF5B21B6',
     };
-    const headerStyle = {
-        font: { bold: true, color: { rgb: 'FFFFFFFF' }, sz: 11 },
-        fill: { patternType: 'solid', fgColor: { rgb: 'FF1E3A8A' } },
-        alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
-        border: {
-            top:    { style: 'thin', color: { rgb: 'FF334155' } },
-            bottom: { style: 'thin', color: { rgb: 'FF334155' } },
-            left:   { style: 'thin', color: { rgb: 'FF334155' } },
-            right:  { style: 'thin', color: { rgb: 'FF334155' } },
-        },
+    /* Softer MOI band fills — used for MOI + MOI(PPL) cells on every
+       row so the shortage / balance / surplus ladder reads at a
+       glance (poor-man's conditional formatting).  Sub Total rows
+       already get the same status tint via SUB_FILL. */
+    const MOI_FILL = {
+        shortage:        'FFFEE2E2',
+        balanced:        'FFDCFCE7',
+        surplus:         'FFFED7AA',
+        serious_surplus: 'FFFCA5A5',
+        no_move:         'FFE9D5FF',
     };
-    /* Header row */
+    const HEADER_FILL_DEFAULT = 'FF1E3A8A';   // dark navy
+    const HEADER_FG_DEFAULT   = 'FFFFFFFF';
+    const HEADER_FG_STATE     = 'FF0F172A';   // dark ink for lighter state headers
+    const AMBER_MERGE_BREAK   = 'FFF59E0B';
+    const GRID_LINE           = 'FFE2E8F0';   // subtle grid between rows
+
+    /* Utility — returns the border object for a given cell coordinate.
+       Vertical dividers come from col.right; the merge-break amber
+       left border is painted only on the first M CODE row of a merge
+       and only on col 0 (Merge column) to echo the on-screen indicator
+       without leaking colour into the middle of the row. */
+    const borderFor = (colIdx, rowInBundle, isSub, isHeader, isMergeBreak) => {
+        const b = {};
+        const meta = cols[colIdx][2] || {};
+        if (meta.right) {
+            b.right = { style: meta.right, color: { rgb: 'FF334155' } };
+        }
+        if (isHeader) {
+            b.top    = { style: 'thin', color: { rgb: 'FF334155' } };
+            b.bottom = { style: 'medium', color: { rgb: 'FF334155' } };
+            if (!b.right) b.right = { style: 'thin', color: { rgb: 'FF334155' } };
+            b.left   = { style: 'thin', color: { rgb: 'FF334155' } };
+            return b;
+        }
+        if (isSub) {
+            b.top    = { style: 'medium', color: { rgb: 'FF334155' } };
+            b.bottom = { style: 'thin',   color: { rgb: 'FF64748B' } };
+        } else {
+            b.bottom = { style: 'hair', color: { rgb: GRID_LINE } };
+        }
+        if (isMergeBreak && colIdx === 0) {
+            b.left = { style: 'thick', color: { rgb: AMBER_MERGE_BREAK } };
+        }
+        return b;
+    };
+    const numFmtFor = kind =>
+          kind === 'int' ? '#,##0'
+        : kind === '1dp' ? '#,##0.0'
+        : kind === 'moi' ? '0.00'
+        : undefined;
+    const NUM_KINDS_ALIGN_RIGHT = new Set(['int','1dp','moi']);
+
+    /* ── Header row ── */
     const range = XLSX.utils.decode_range(ws['!ref']);
     for (let c = range.s.c; c <= range.e.c; c++) {
         const addr = XLSX.utils.encode_cell({ r: 0, c });
-        if (ws[addr]) ws[addr].s = headerStyle;
+        if (!ws[addr]) continue;
+        const meta = cols[c][2] || {};
+        const fillRgb = meta.headerFill || HEADER_FILL_DEFAULT;
+        const fgRgb   = meta.headerFill ? HEADER_FG_STATE : HEADER_FG_DEFAULT;
+        ws[addr].s = {
+            font: { bold: true, color: { rgb: fgRgb }, sz: 11 },
+            fill: { patternType: 'solid', fgColor: { rgb: fillRgb } },
+            alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+            border: borderFor(c, -1, false, true, false),
+        };
     }
-    /* Body rows — number formatting + sub-total tints */
-    const NUM_COLS_INT = new Set([                       // integer stock counts
-        'NSW Stock','QLD Stock','VIC Stock','WA Stock','Total Stock',
-        'NSW Port','NSW Water','NSW Factory',
-        'QLD Port','QLD Water','QLD Factory',
-        'VIC Port','VIC Water','VIC Factory',
-        'WA Port','WA Water','WA Factory',
-    ]);
-    const NUM_COLS_1DP = new Set([                       // 1-decimal averages
-        'NSW 3M Avg','QLD 3M Avg','VIC 3M Avg','WA 3M Avg','Total 3M Avg',
-        '3M Avg (m -1..-3)','4-6M Avg (m -4..-6)',
-        '7-9M Avg (m -7..-9)','10-12M Avg (m -10..-12)',
-        '12M Avg (basis)','Max demand (basis)',
-    ]);
-    const NUM_COLS_MOI = new Set(['MOI','MOI(PPL)']);
+
+    /* ── Body rows ── */
     const statusColIdx = cols.findIndex(c => c[0] === 'Status');
     const mCodeColIdx  = cols.findIndex(c => c[0] === 'M CODE');
+    const moiColIdx    = cols.findIndex(c => c[0] === 'MOI');
+    const moiPplColIdx = cols.findIndex(c => c[0] === 'MOI(PPL)');
     bundled.forEach((r, i) => {
-        const rowIdx = i + 1;  // +1 for header
+        const rowIdx = i + 1;                     // +1 for header
         const isSub = !!r._isSubTotal;
-        const fillRgb = isSub ? (SUB_FILL[r.status] || 'FFFFF3C7') : null;
+        const isMergeBreak = mergeBreakRows.has(i);
+        const status = r.status || '';
         for (let c = range.s.c; c <= range.e.c; c++) {
             const addr = XLSX.utils.encode_cell({ r: rowIdx, c });
             if (!ws[addr]) continue;
-            const colName = cols[c][0];
-            const style = { alignment: { vertical: 'center' } };
-            if (NUM_COLS_INT.has(colName)) style.numFmt = '#,##0';
-            else if (NUM_COLS_1DP.has(colName)) style.numFmt = '#,##0.0';
-            else if (NUM_COLS_MOI.has(colName)) style.numFmt = '0.0';
+            const meta = cols[c][2] || {};
+            const style = {
+                alignment: {
+                    vertical: 'center',
+                    horizontal: NUM_KINDS_ALIGN_RIGHT.has(meta.num) ? 'right' : 'left',
+                },
+                border: borderFor(c, i, isSub, false, isMergeBreak),
+            };
+            const nf = numFmtFor(meta.num);
+            if (nf) style.numFmt = nf;
+            /* Sub Total: bold + status tint across the whole row */
             if (isSub) {
-                style.font = { bold: true };
-                style.fill = { patternType: 'solid', fgColor: { rgb: fillRgb } };
-                style.border = {
-                    top:    { style: 'medium', color: { rgb: 'FF334155' } },
-                    bottom: { style: 'thin',   color: { rgb: 'FF64748B' } },
-                };
+                style.font = { bold: true, color: { rgb: 'FF0F172A' } };
+                style.fill = { patternType: 'solid', fgColor: { rgb: SUB_FILL[status] || 'FFFFF3C7' } };
             }
-            /* Status column gets its own strong colour block so a
-               reader can spot the shortage / surplus split at a
-               glance — matches the card tints on the state cards. */
-            if (c === statusColIdx && r.status) {
-                style.fill = {
-                    patternType: 'solid',
-                    fgColor: { rgb: SUB_FILL[r.status] || 'FFF1F5F9' },
-                };
-                style.font = Object.assign({ bold: true, color: { rgb: STATUS_FG[r.status] || 'FF334155' } }, style.font || {});
+            /* M CODE column on regular rows: monospace-ish blue text */
+            if (!isSub && c === mCodeColIdx) {
+                style.font = { color: { rgb: 'FF1D4ED8' }, bold: true };
+                style.alignment = { horizontal: 'center', vertical: 'center' };
+            }
+            /* Poor-man's conditional formatting for MOI + MOI(PPL) —
+               every row gets a soft band matching the row's status
+               so the shortage / balance / surplus ladder is visible
+               without a filter panel. */
+            if ((c === moiColIdx || c === moiPplColIdx) && !isSub && status) {
+                style.fill = { patternType: 'solid', fgColor: { rgb: MOI_FILL[status] || 'FFF1F5F9' } };
+                style.font = Object.assign({ bold: true, color: { rgb: STATUS_FG[status] || 'FF334155' } }, style.font || {});
+            }
+            /* Status column: strong tint so the ladder pops even in
+               a small viewport. */
+            if (c === statusColIdx && status) {
+                style.fill = { patternType: 'solid', fgColor: { rgb: SUB_FILL[status] || 'FFF1F5F9' } };
+                style.font = Object.assign({ bold: true, color: { rgb: STATUS_FG[status] || 'FF334155' } }, style.font || {});
                 style.alignment = { horizontal: 'center', vertical: 'center' };
             }
             ws[addr].s = style;
         }
     });
 
-    ws['!freeze'] = { xSplit: 0, ySplit: 1 };
-    ws['!cols'] = cols.map(([name]) =>
-        ({ wch: name === 'Description' ? 30
-             : name === 'Product Name' ? 22
-             : name.length > 14 ? 16
-             : 11 }));
+    /* ── Column widths + outline + hidden ──
+       Excel's !cols[i] takes wch (width), hidden and level (outline).
+       Consecutive columns sharing the same level become a group with
+       a +/- toggle at the top of the sheet. */
+    ws['!cols'] = cols.map(([, , meta = {}]) => {
+        const col = { wch: meta.wch || 11 };
+        if (meta.hidden) col.hidden = true;
+        if (meta.level)  col.level  = meta.level;
+        return col;
+    });
+    /* Freeze pane at C2 — keeps the header row (row 1) and the
+       Merge + M CODE columns (A + B) locked in place while scrolling. */
+    ws['!freeze'] = { xSplit: 2, ySplit: 1 };
+    /* Newer SheetJS looks at ws['!view'].state / ySplit; xlsx-js-style
+       prefers !cols outline-summaryBelow OFF so the +/- handle sits
+       to the LEFT of the group (matching Excel's default for column
+       groups).  Setting outlinePr on the worksheet reads the same on
+       every viewer. */
+    ws['!outline'] = { summaryBelow: false, summaryRight: false };
     /* Taller header row so the wrapped column titles breathe. */
-    ws['!rows'] = [{ hpx: 32 }];
+    ws['!rows'] = [{ hpx: 34 }];
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, curTab === 'total' ? 'All' : curTab);
@@ -5047,9 +5128,14 @@ function downloadXLSX() {
     ];
     const provWs = XLSX.utils.aoa_to_sheet(provAoa);
     provWs['!cols'] = [{ wch: 20 }, { wch: 60 }];
+    const provHeaderStyle = {
+        font: { bold: true, color: { rgb: HEADER_FG_DEFAULT }, sz: 11 },
+        fill: { patternType: 'solid', fgColor: { rgb: HEADER_FILL_DEFAULT } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+    };
     for (let c = 0; c <= 1; c++) {
         const a = XLSX.utils.encode_cell({ r: 0, c });
-        if (provWs[a]) provWs[a].s = headerStyle;
+        if (provWs[a]) provWs[a].s = provHeaderStyle;
     }
     XLSX.utils.book_append_sheet(wb, provWs, 'Meta');
     const fname = 'stock_balance_' + curTab
