@@ -295,6 +295,14 @@
   table.lines thead th.pink{background:#c8548a;color:#fff;}
   table.lines thead th.olive{background:#a08b3c;color:#fff;}
   table.lines thead th.amber{background:#d97706;color:#fff;}
+  /* Bright-yellow "you can type in this column" header hint.  Used on
+     every editable data-column (MTH / 443·SP / Volume / Additional
+     Special / Aging / Proposed Unit Price / Total Amount) so a BDE
+     scans the row once and knows exactly where they can override. */
+  table.lines thead th.editable{
+    background:#fde047 !important; color:#78350f !important;
+    box-shadow: inset 0 -2px 0 #f59e0b;
+  }
   /* Aging-DC cell — amber tint so it visually pairs with its column
      header, plus a light background when populated so the reader
      spots "this row uses the aging price ladder" instantly. */
@@ -624,16 +632,17 @@
           <th class="mid">Load / Speed</th>
           <th class="mid">List Price</th>
           <th class="narrow">Base DC %</th>
-          <th class="narrow">MTH Special DC %</th>
-          <th class="pink narrow">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
-          <th class="narrow">Volume DC %</th>
+          <th class="narrow editable">MTH Special<br>DC %</th>
+          <th class="pink narrow editable">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
+          <th class="narrow editable">Volume<br>DC %</th>
           <th class="narrow">Current DC %</th>
-          <th class="mid">Current Price</th>
-          <th class="olive narrow">Additional<br>Special DC %</th>
-          <th class="amber narrow" title="Aging-stock DC — customer-independent; overrides every other DC on this row when set.">Aging<br>DC %</th>
-          <th class="narrow" title="Total Additional Support DC% — chained delta between the price under non-editable columns (Base + 443/promo) and the Proposed Price.  What the customer gets on TOP of their normal contract.">Total<br>Additional<br>Support %</th>
-          <th class="mid" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed Price</th>
-          <th class="mid">Total Amount</th>
+          <th class="mid">Current<br>Unit Price</th>
+          <th class="mid" title="Current Unit Price × Qty — how much the customer would spend at their normal contract price for this line.">Current<br>Order Amount</th>
+          <th class="olive narrow editable">Additional<br>Special DC %</th>
+          <th class="amber narrow editable" title="Aging-stock DC — populated by double-clicking an aged-stock row.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC %</th>
+          <th class="narrow" title="Total Additional Support DC% — chained delta between the price under non-editable columns (Base + 443/promo) and the Proposed Unit Price.  What the customer gets on TOP of their normal contract.">Total<br>Additional<br>Support %</th>
+          <th class="mid editable" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
+          <th class="mid editable" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
           <th class="narrow">Proposed DC %</th>
           <th class="stock narrow" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
           <th class="stock narrow" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
@@ -652,14 +661,27 @@
           <td></td>
           <td class="label">Total</td>
           <td class="num center" id="ttlQty">0</td>
-          <td colspan="16"></td>
+          <td colspan="12"></td>
+          <!-- Current Order Amount grand total — pure "would-have-paid"
+               figure over the whole SPRF, matching the sum of every
+               line's Current Unit Price × Qty. -->
+          <td class="total-cell"><div class="totalv" id="grandCurrentAmt">0.00</div></td>
+          <td></td>
+          <td></td>
+          <!-- Order-wide Additional Support % — NOT a qty-weighted
+               average of per-row Additional Support; instead the true
+               savings ratio between what the order WOULD cost at
+               Current Order Amount and what it ACTUALLY costs at
+               Total Amount.  updateTotals() writes this cell. -->
+          <td class="num center" id="grandAddSupport"></td>
+          <td></td>
           <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
           <td class="num center" id="avgDC"></td>
           <td colspan="4"></td>
         </tr>
         <!-- Total inc GST (subtotal + 10%). -->
         <tr class="total-row summary-row">
-          <td colspan="16" class="summary-blank"></td>
+          <td colspan="17" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
           <td colspan="5" class="summary-blank"></td>
@@ -673,13 +695,13 @@
           <td class="center summary-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
           </td>
-          <td class="label right-lbl summary-lbl" colspan="4">Freight Charge (10%) if any</td>
+          <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10%) if any</td>
           <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
           <td colspan="5" class="summary-blank"></td>
         </tr>
         <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="16" class="summary-blank"></td>
+          <td colspan="17" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
           <td colspan="5" class="summary-blank"></td>
@@ -1373,6 +1395,8 @@ function recalcRow(row){
 
   row.querySelector('[data-col="current_dc"]').value    = currentDC ? currentDC.toFixed(2) : "";
   row.querySelector('[data-col="current_price"]').value = list ? fmtMoney(currentPrice) : "";
+  const currentAmtEl = row.querySelector('[data-col="current_amount"]');
+  if (currentAmtEl) currentAmtEl.value = list ? fmtMoney(currentPrice * q) : "";
   /* Only rewrite proposed_price when the user isn't actively editing
      it (their input handler already wrote the target value; we'd
      otherwise clobber their keystrokes with the rounded / re-solved
@@ -1381,7 +1405,10 @@ function recalcRow(row){
   if (propEl && document.activeElement !== propEl) {
     propEl.value = list ? fmtMoney(proposedPrice) : "";
   }
-  row.querySelector('[data-col="total_amount"]').value  = list ? fmtMoney(totalAmount) : "";
+  const totAmtEl = row.querySelector('[data-col="total_amount"]');
+  if (totAmtEl && document.activeElement !== totAmtEl) {
+    totAmtEl.value = list ? fmtMoney(totalAmount) : "";
+  }
   row.querySelector('[data-col="proposed_dc"]').value   = proposedDC ? proposedDC.toFixed(2)+"%" : "";
   const addSupEl = row.querySelector('[data-col="add_support"]');
   if (addSupEl) addSupEl.value = (Math.abs(addSupport) > 0.005) ? addSupport.toFixed(2)+"%" : "";
@@ -1414,6 +1441,25 @@ function reverseSolveAddDC(row, targetStr){
   recalcRow(row);
 }
 
+/* Back-solve add_dc when the user types a value into Total Amount:
+   Total Amount = qty × proposedPrice, so proposedPrice = target/qty
+   and we then reverse-solve add_dc via the same chain math.  Total
+   Amount cell stays the source of truth while the user's cursor is
+   still in it — recalcRow's activeElement guard leaves it alone. */
+function reverseSolveFromTotalAmt(row, targetStr){
+  const q     = toNum(row.querySelector('[data-col="qty"]').value);
+  const total = toNum(targetStr);
+  if (!(q > 0) || !isFinite(total) || total <= 0) return;
+  const targetUnit = total / q;
+  /* Push the derived per-unit price into the Proposed Unit Price
+     cell so the two match, then let reverseSolveAddDC do the DC
+     back-solve.  We keep the user's exact total in the cell by
+     NOT reformatting through fmtMoney here. */
+  const propEl = row.querySelector('[data-col="proposed_price"]');
+  if (propEl) propEl.value = targetUnit.toFixed(2);
+  reverseSolveAddDC(row, targetUnit.toFixed(2));
+}
+
 /* Lock every editable cell on a row so an aged-stock line reads as
    "this price came from the aged-discount ladder — don't fiddle".
    Aging DC% stays writable so the BDE can clear it, which unlocks
@@ -1421,67 +1467,77 @@ function reverseSolveAddDC(row, targetStr){
 function lockAgedRow(row){
   if (!row) return;
   row.classList.add("aged-locked");
-  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price"].forEach(c => {
+  /* Aging DC% cell was set to readonly by newRow so the BDE cannot
+     type into it on regular rows.  On an aged-locked row we FLIP it
+     writable so the BDE can clear it (which auto-unlocks the row).
+     Every other editable input on the line gets readOnly=true and a
+     locked-cell tint. */
+  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price","total_amount"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = true; el.classList.add("locked-cell"); }
   });
+  const agingEl = row.querySelector('[data-col="aging_dc"]');
+  if (agingEl) agingEl.readOnly = false;
 }
 function unlockAgedRow(row){
   if (!row) return;
   row.classList.remove("aged-locked");
   row.classList.remove("aged-row");
   delete row.dataset.agingTier;
-  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price"].forEach(c => {
+  ["mth_dc","sp_dc","vol_dc","add_dc","proposed_price","total_amount"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = false; el.classList.remove("locked-cell"); }
   });
+  /* Return Aging DC% to its default read-only state — the aged-stock
+     ladder is the only path that fills it. */
+  const agingEl = row.querySelector('[data-col="aging_dc"]');
+  if (agingEl) agingEl.readOnly = true;
 }
 function updateTotals(){
-  let sumQty = 0, sumAmt = 0, weightedDC = 0, weightedAddDC = 0, sovdQty = 0;
+  let sumQty = 0, sumAmt = 0, sumCurAmt = 0, weightedDC = 0, sovdQty = 0;
   let hasAdditional = false;
   $$("#linesBody tr").forEach(r => {
-    const q     = toNum(r.querySelector('[data-col="qty"]').value);
-    const amt   = toNum(r.querySelector('[data-col="total_amount"]').value);
-    const totDC = toNum(r.querySelector('[data-col="proposed_dc"]').value);
-    // Per-row Additional DC = MTH + Volume + Additional Special + Aging.
-    // SP (443DC / promo) is the customer's auto-applied contract
-    // promo, NOT an "additional" the BDE stacked on — so it stays
-    // out of Add DC and out of the Standard-Pricing detector.  This
-    // matches the highlighted red-boxed columns on the SPRF sheet.
+    const q      = toNum(r.querySelector('[data-col="qty"]').value);
+    const amt    = toNum(r.querySelector('[data-col="total_amount"]').value);
+    const curAmt = toNum(r.querySelector('[data-col="current_amount"]')?.value);
+    const totDC  = toNum(r.querySelector('[data-col="proposed_dc"]').value);
     const mth = toNum(r.querySelector('[data-col="mth_dc"]')?.value);
     const vol = toNum(r.querySelector('[data-col="vol_dc"]')?.value);
     const ad  = toNum(r.querySelector('[data-col="add_dc"]')?.value);
     const ag  = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
-    // Chained (multiplicative) Additional DC:
-    //   1 - (1-MTH)(1-Vol)(1-Add)(1-Aging)
-    // MTH=20 alone → 20 %.  MTH=20 + Vol=10 → 28 % (not 30).  This
-    // matches how the SPRF sheet compounds discounts on list price.
-    const addDCrow = 100 * (1
-      - (1 - mth/100)
-      * (1 - vol/100)
-      * (1 - ad /100)
-      * (1 - ag /100));
-    sumQty        += q;
-    sumAmt        += amt;
-    weightedDC    += totDC    * q;   // qty-weighted total (chained) DC
-    weightedAddDC += addDCrow * q;   // qty-weighted MTH+Vol+Add+Aging sum
+    sumQty     += q;
+    sumAmt     += amt;
+    sumCurAmt  += curAmt;
+    weightedDC += totDC * q;   // qty-weighted total (chained) DC
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
-    if (q > 0 && addDCrow > 0) hasAdditional = true;
+    if (q > 0 && (mth > 0 || vol > 0 || ad > 0 || ag > 0)) hasAdditional = true;
   });
-  const avgDC        = sumQty > 0 ? weightedDC    / sumQty : 0;
-  const avgAddDC     = sumQty > 0 ? weightedAddDC / sumQty : 0;
+  const avgDC = sumQty > 0 ? weightedDC / sumQty : 0;
+  /* Order-wide Additional Support % — NOT a qty-weighted average
+     of per-row Support values.  Instead, the true savings ratio:
+       1 − ΣTotalAmount / ΣCurrentOrderAmount
+     i.e. "how much of what the customer WOULD have paid at their
+     normal contract price is being taken off by extra support?"
+     Falls back to 0 when there's no baseline yet (no rows priced).
+     This is the number that lands in both the tfoot's Additional
+     Support column AND the Approval-route banner. */
+  const avgAddDC = sumCurAmt > 0
+    ? 100 * (1 - sumAmt / sumCurAmt)
+    : 0;
   const totalIncGst  = sumAmt * 1.10;
   const freightFlag  = ($("#freightFlag")?.value || "").trim().toUpperCase();
   const freight      = freightFlag === "Y" ? sumAmt * 0.10 : 0;
   const finalTotal   = totalIncGst + freight;
 
-  $("#sovd_ttl").value          = fmtQty(sovdQty);
-  $("#ttlQty").textContent      = fmtQty(sumQty);
-  $("#grandTotal").textContent  = fmtMoney(sumAmt);
-  $("#avgDC").textContent       = sumAmt ? avgDC.toFixed(2) + "%" : "";
-  $("#totalIncGst").textContent = sumAmt ? fmtMoney(totalIncGst) : "0.00";
-  $("#freightChg").textContent  = freight ? fmtMoney(freight) : "";
-  $("#finalTotal").textContent  = sumAmt ? fmtMoney(finalTotal) : "0.00";
+  $("#sovd_ttl").value                  = fmtQty(sovdQty);
+  $("#ttlQty").textContent              = fmtQty(sumQty);
+  $("#grandTotal").textContent          = fmtMoney(sumAmt);
+  $("#grandCurrentAmt").textContent     = sumCurAmt ? fmtMoney(sumCurAmt) : "0.00";
+  $("#grandAddSupport").textContent     = sumCurAmt > 0 ? avgAddDC.toFixed(2) + "%" : "";
+  $("#avgDC").textContent               = sumAmt ? avgDC.toFixed(2) + "%" : "";
+  $("#totalIncGst").textContent         = sumAmt ? fmtMoney(totalIncGst) : "0.00";
+  $("#freightChg").textContent          = freight ? fmtMoney(freight) : "";
+  $("#finalTotal").textContent          = sumAmt ? fmtMoney(finalTotal) : "0.00";
 
   // Cached for serializeOrder + wireApprovalPanel — front-end
   // decides the approval route from these two numbers, no
@@ -1600,16 +1656,23 @@ function newRow(){
     {c:"vol_dc",         cls:"num"},
     {c:"current_dc",     cls:"num readonly", ro:true},
     {c:"current_price",  cls:"num red-num readonly", ro:true},
+    /* Current Order Amount = Current Unit Price × Qty per row.  Read-
+       only; recalcRow writes this every time the row math runs. */
+    {c:"current_amount", cls:"num readonly", ro:true},
     {c:"add_dc",         cls:"pct-cell"},
-    {c:"aging_dc",       cls:"pct-cell aging-cell"},
+    /* Aging DC% starts read-only — only the aged-stock double-click
+       flow can drop a value in.  applyAgingDC removes the readonly
+       so the BDE can later CLEAR the cell (which un-locks the row);
+       unlockAgedRow re-applies readonly. */
+    {c:"aging_dc",       cls:"pct-cell aging-cell readonly", ro:true},
     {c:"add_support",    cls:"num readonly", ro:true},
-    /* Proposed Price is user-editable — typing a value here triggers
-       reverseSolveAddDC (see below), which back-solves the value the
-       Additional Special DC% cell needs so the chained calc reaches
-       the price the user just set.  Cell stays writable in every
-       state EXCEPT when the row is aged-locked. */
+    /* Proposed Unit Price + Total Amount are both user-editable:
+       typing in either back-solves Additional Special DC% via
+       reverseSolveAddDC / reverseSolveFromTotalAmt so the chain lands
+       on the value the BDE set.  Both are locked when the row is
+       aged-locked. */
     {c:"proposed_price", cls:"num red-num"},
-    {c:"total_amount",   cls:"total-cell num readonly", ro:true},
+    {c:"total_amount",   cls:"total-cell num"},
     {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
     {c:"stock_nsw",      cls:"stock-cell readonly", ro:true},
     {c:"stock_qld",      cls:"stock-cell readonly", ro:true},
@@ -1667,6 +1730,14 @@ function newRow(){
   // Proposed DC% all follow.
   tr.querySelector('[data-col="proposed_price"]')?.addEventListener("input", (e) => {
     reverseSolveAddDC(tr, e.target.value);
+  });
+  // Total Amount — same idea as Proposed Unit Price, but at
+  // order-line level.  Derives the per-unit price by dividing by
+  // Qty, pushes that into Proposed Unit Price, then back-solves
+  // Additional Special DC%.  Editing here is the shortest path when
+  // the customer negotiated a round total rather than a unit price.
+  tr.querySelector('[data-col="total_amount"]')?.addEventListener("input", (e) => {
+    reverseSolveFromTotalAmt(tr, e.target.value);
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
@@ -1859,7 +1930,7 @@ const LINE_FIELDS = [
   "m_code", "qty", "description", "brand", "product_name",
   "pattern", "load_speed", "list_price",
   "base_dc", "mth_dc", "sp_dc", "vol_dc",
-  "current_dc", "current_price",
+  "current_dc", "current_price", "current_amount",
   "add_dc", "aging_dc", "add_support",
   "proposed_price", "total_amount", "proposed_dc",
   "stock_nsw", "stock_qld", "stock_vic", "stock_wa",
