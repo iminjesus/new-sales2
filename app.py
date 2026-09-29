@@ -4010,12 +4010,16 @@ def api_orders_list():
         # as "Standard Pricing" in place of the approver name.
         brand_split_by_id = {i: {} for i in ids}
         has_add_by_id     = {i: False for i in ids}
-        # add_dc_pct per row = qty-weighted (MTH + Vol + Add + Aging)
-        # across the order's lines.  SP (443 promo) is the customer's
-        # auto contract promo, so it stays OUT of Add DC — matches
-        # the SPRF sheet's red-boxed "Additional" columns.
-        add_dc_weighted   = {i: 0.0 for i in ids}
-        add_dc_qty        = {i: 0.0 for i in ids}
+        # Order-level aggregates for the list view — computed by summing
+        # per-line list × qty, current × qty and total_amount, so:
+        #   Current DC % = 1 − Σ(current × qty) / Σ(list × qty)
+        #   Add Support% = 1 − Σ(total_amount) / Σ(current × qty)
+        #   Proposed DC% = 1 − Σ(total_amount) / Σ(list × qty)
+        # This is the same "true chained savings ratio" the SPRF's
+        # tfoot shows at Total row, so the list matches the form.
+        list_amt_by_id    = {i: 0.0 for i in ids}
+        current_amt_by_id = {i: 0.0 for i in ids}
+        total_amt_by_id   = {i: 0.0 for i in ids}
         if ids:
             fmt = ",".join(["%s"] * len(ids))
             try:
@@ -4029,7 +4033,17 @@ def api_orders_list():
                         def _f(v):
                             try:  return float(str(v or "0").replace(",", "").replace("%", "").replace("$", ""))
                             except Exception: return 0.0
-                        amt = _f(ln.get("total_amount"))
+                        amt      = _f(ln.get("total_amount"))
+                        qty      = _f(ln.get("qty"))
+                        listp    = _f(ln.get("list_price"))
+                        curp     = _f(ln.get("current_price"))
+                        # Fallback for older payloads that don't carry
+                        # current_amount — compute it inline.
+                        cur_amt_line  = _f(ln.get("current_amount")) or (curp * qty)
+                        list_amt_line = listp * qty
+                        list_amt_by_id[pr["id"]]    += list_amt_line
+                        current_amt_by_id[pr["id"]] += cur_amt_line
+                        total_amt_by_id[pr["id"]]   += amt
                         if tag == "PCLT":
                             pclt_by_id[pr["id"]] = pclt_by_id.get(pr["id"], 0.0) + amt
                         elif tag == "TBR":
@@ -4037,29 +4051,15 @@ def api_orders_list():
                         if brand and tag in ("PCLT", "TBR"):
                             key = f"{brand}-{tag}"
                             brand_split_by_id[pr["id"]][key] = brand_split_by_id[pr["id"]].get(key, 0.0) + amt
-                        # Add DC per line = chained (multiplicative)
-                        # combination of MTH + Vol + Add + Aging:
-                        #   1 - (1-MTH)(1-Vol)(1-Add)(1-Aging)
-                        # Values are percentages (MTH=20 means 20 %),
-                        # so each is divided by 100 in the chain and
-                        # the result multiplied back to a percentage.
-                        # SP (443 promo) is the customer's auto contract
-                        # promo and stays out — a row whose only extra
-                        # is SP remains Standard Pricing.
+                        # has_additional_dc — any MTH / Vol / Add /
+                        # Aging on any line marks the order as
+                        # non-Standard.  SP (443 promo) stays out.
                         mth = _f(ln.get("mth_dc"))
                         vol = _f(ln.get("vol_dc"))
                         adx = _f(ln.get("add_dc"))
                         agg = _f(ln.get("aging_dc"))
-                        add_line = 100.0 * (1.0
-                            - (1.0 - mth / 100.0)
-                            * (1.0 - vol / 100.0)
-                            * (1.0 - adx / 100.0)
-                            * (1.0 - agg / 100.0))
-                        if add_line > 0: has_add_by_id[pr["id"]] = True
-                        q = _f(ln.get("qty"))
-                        if q > 0:
-                            add_dc_weighted[pr["id"]] += add_line * q
-                            add_dc_qty[pr["id"]]      += q
+                        if mth > 0 or vol > 0 or adx > 0 or agg > 0:
+                            has_add_by_id[pr["id"]] = True
             except Exception:
                 pass
         for r in rows:
@@ -4074,8 +4074,17 @@ def api_orders_list():
             r["grand_total_tbr"]  = round(tbr_by_id.get(r["id"],  0.0), 2)
             r["brand_split"]      = {k: round(v, 2) for k, v in brand_split_by_id.get(r["id"], {}).items()}
             r["has_additional_dc"] = bool(has_add_by_id.get(r["id"], False))
-            q_sum = add_dc_qty.get(r["id"], 0.0)
-            r["add_dc_pct"] = round(add_dc_weighted.get(r["id"], 0.0) / q_sum, 2) if q_sum > 0 else 0.0
+            list_amt = list_amt_by_id.get(r["id"], 0.0)
+            cur_amt  = current_amt_by_id.get(r["id"], 0.0)
+            tot_amt  = total_amt_by_id.get(r["id"], 0.0)
+            r["list_amount"]    = round(list_amt, 2)
+            r["current_amount"] = round(cur_amt,  2)
+            r["current_dc_pct"] = round(100.0 * (1 - cur_amt / list_amt), 2) if list_amt > 0 else 0.0
+            # add_dc_pct = order-wide Additional Support (concession
+            # side) — same "true chained savings" the SPRF grand-
+            # totals row shows.  Falls back to 0 when the order has
+            # no current_amount (empty payload, e.g.).
+            r["add_dc_pct"] = round(100.0 * (1 - tot_amt / cur_amt), 2) if cur_amt > 0 else 0.0
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4584,38 +4593,46 @@ def api_orders_list_excel():
         try: conn.close()
         except: pass
 
-    # Compute Add DC% per row from payload_json — same chained
-    # (multiplicative) formula the front-end uses:
-    #   1 - (1-MTH)(1-Vol)(1-Add)(1-Aging), qty-weighted across lines.
-    # SP promo excluded (customer's auto contract, not a BDE extra).
+    # Per-order aggregates that mirror the SPRF tfoot grand totals:
+    #   List Total       = Σ (list × qty)
+    #   Current Amount   = Σ (current × qty)
+    #   Current DC %     = 1 − current / list
+    #   Add Support %    = 1 − total / current   (concession side)
+    #   Total DC %       = 1 − total / list      (already stored in
+    #                                             avg_dc_pct, but we
+    #                                             recompute for
+    #                                             consistency).
     import json as _json_x
     def _f(v):
-        try: return float(str(v or "0").replace(",", "").replace("%", ""))
+        try: return float(str(v or "0").replace(",", "").replace("%", "").replace("$", ""))
         except Exception: return 0.0
-    add_dc_by_id = {}
+    aggs_by_id = {}
     for r in rows:
         try: pj = _json_x.loads(r.get("payload_json") or "{}")
         except Exception: pj = {}
-        w, q = 0.0, 0.0
+        L = C = T = 0.0
         for ln in (pj.get("lines") or []):
-            lq = _f(ln.get("qty"))
+            lq   = _f(ln.get("qty"))
             if lq <= 0: continue
-            mth = _f(ln.get("mth_dc"))
-            vol = _f(ln.get("vol_dc"))
-            adx = _f(ln.get("add_dc"))
-            agg = _f(ln.get("aging_dc"))
-            add = 100.0 * (1.0
-                - (1.0 - mth / 100.0)
-                * (1.0 - vol / 100.0)
-                * (1.0 - adx / 100.0)
-                * (1.0 - agg / 100.0))
-            w += add * lq; q += lq
-        add_dc_by_id[r["id"]] = round(w / q, 2) if q > 0 else 0.0
+            L   += _f(ln.get("list_price"))    * lq
+            C   += (_f(ln.get("current_amount"))
+                    or (_f(ln.get("current_price")) * lq))
+            T   += _f(ln.get("total_amount"))
+        aggs_by_id[r["id"]] = {
+            "list":    round(L, 2),
+            "current": round(C, 2),
+            "total":   round(T, 2),
+            "cur_dc":  round(100.0 * (1 - C / L), 2) if L > 0 else 0.0,
+            "add":     round(100.0 * (1 - T / C), 2) if C > 0 else 0.0,
+            "tot_dc":  round(100.0 * (1 - T / L), 2) if L > 0 else 0.0,
+        }
 
     wb = Workbook(); ws = wb.active; ws.title = "Orders"
     headers = ["Order #", "Submitted", "BDE", "Sold-to", "Sold-to Name",
-               "Ship-to", "Ship-to Name", "State", "Qty", "Grand Total",
-               "Add DC %", "Total DC %", "Rebateable", "SAP Status",
+               "Ship-to", "Ship-to Name", "State", "Qty",
+               "List Total", "Current DC %", "Current Order Amount",
+               "Add Support %", "Total Amount", "Proposed DC %",
+               "Rebateable", "SAP Status",
                "Needs Approval", "Approved By", "Approved At", "Remark"]
     ws.append(headers)
     for c, _ in enumerate(headers, start=1):
@@ -4623,6 +4640,7 @@ def api_orders_list_excel():
         ws.cell(row=1, column=c).fill = PatternFill("solid", fgColor="FFD54F")
     fmt = lambda v: v.strftime("%Y-%m-%d %H:%M") if hasattr(v, "strftime") else (v or "")
     for r in rows:
+        a = aggs_by_id.get(r["id"], {})
         ws.append([
             r.get("order_no") or "",
             fmt(r.get("submitted_at")),
@@ -4633,9 +4651,12 @@ def api_orders_list_excel():
             r.get("ship_to_name") or "",
             r.get("state") or "",
             r.get("total_qty") or 0,
-            float(r.get("grand_total") or 0),
-            float(add_dc_by_id.get(r["id"], 0.0)),
-            float(r.get("avg_dc_pct") or 0),
+            float(a.get("list")    or 0),
+            float(a.get("cur_dc")  or 0),
+            float(a.get("current") or 0),
+            float(a.get("add")     or 0),
+            float(r.get("grand_total") or a.get("total") or 0),
+            float(a.get("tot_dc")  or r.get("avg_dc_pct") or 0),
             r.get("rebateable") or "",
             r.get("status_sap") or "",
             r.get("needs_mgmt_approval") or "",

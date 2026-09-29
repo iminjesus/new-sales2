@@ -400,7 +400,16 @@
   table.lines tbody td.num input{text-align:right;font-variant-numeric:tabular-nums}
   table.lines tbody td.center input{text-align:center}
   table.lines tbody td.red-num input{color:#c62828;font-weight:600}
-  table.lines tbody td.pct-cell input{color:#b45309;background:#fff8e6;font-weight:700;text-align:right;}
+  /* Additional Special DC% cell now shares the same yellow ground
+     as MTH / Volume so the whole "negotiated concession" block
+     reads as one unified stack.  Slightly deeper amber text keeps
+     it distinguishable within the trio. */
+  table.lines tbody td.pct-cell input{color:#713f12;background:#fef9c3;font-weight:700;text-align:right;}
+  /* Reddish tint on the two "final price" cells — Proposed Unit
+     Price and Total Amount — so the reader's eye is pulled to the
+     result columns without needing to hunt through the yellow
+     concession block. */
+  table.lines tbody td.reddish-cell input{background:#fee2e2;color:#991b1b;text-align:right;font-weight:700}
   table.lines tbody td.total-cell input{background:#fff8e6;text-align:right;font-weight:700}
   /* Delete-row column — tiny leading gutter with an × button visible
      on row hover (or always dim so the affordance is discoverable). */
@@ -1838,10 +1847,11 @@ function newRow(){
     /* Proposed Unit Price + Total Amount are both user-editable:
        typing in either back-solves Additional Special DC% via
        reverseSolveAddDC / reverseSolveFromTotalAmt so the chain lands
-       on the value the BDE set.  Both are locked when the row is
-       aged-locked. */
-    {c:"proposed_price", cls:"num red-num"},
-    {c:"total_amount",   cls:"total-cell num"},
+       on the value the BDE set.  Both wear a soft reddish ground so
+       the "final price" columns pop out of the yellow concession
+       block; both are locked (readOnly) when the row is aged-locked. */
+    {c:"proposed_price", cls:"num reddish-cell"},
+    {c:"total_amount",   cls:"num reddish-cell"},
     {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
     {c:"stock_nsw",      cls:"stock-cell readonly", ro:true},
     {c:"stock_qld",      cls:"stock-cell readonly", ro:true},

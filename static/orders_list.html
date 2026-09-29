@@ -125,9 +125,12 @@
             <th>Ship-to</th>
             <th style="width:60px" class="center">State</th>
             <th style="width:70px" class="num">Qty</th>
-            <th style="width:110px" class="num">Grand Total</th>
-            <th style="width:70px" class="num" title="Additional (chained-extra) DC beyond customer base + MTH + Volume, qty-weighted">Add DC%</th>
-            <th style="width:70px" class="num" title="Total chained DC applied to list price, qty-weighted">Total DC%</th>
+            <th style="width:110px" class="num" title="Σ(list × qty) — total ex-GST if the customer paid full sticker">List Total</th>
+            <th style="width:65px" class="num" title="Order-wide chained Current DC% = 1 − Σ(current × qty) / Σ(list × qty).  Fraction of list already taken off by the customer contract stack (Base + 443/promo).">Current DC%</th>
+            <th style="width:110px" class="num" title="Σ(current × qty) — what the customer would spend at their normal contract price">Current Order Amt</th>
+            <th style="width:70px" class="num" title="Order-wide Additional Support % = 1 − Σ(total) / Σ(current).  The negotiated concession stacked on top of the contract.">Add Support%</th>
+            <th style="width:110px" class="num" title="Σ(total) — actual price the customer pays for this order (ex-GST)">Total Amount</th>
+            <th style="width:70px" class="num" title="Order-wide chained Proposed DC% = 1 − Σ(total) / Σ(list × qty)">Proposed DC%</th>
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
             <th style="width:130px">Approver</th>
@@ -135,7 +138,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="14" class="empty">Loading…</td></tr>
+          <tr><td colspan="17" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -167,18 +170,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="14" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="17" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="14" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="17" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="14" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="17" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -192,7 +195,7 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="14" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="17" class="empty">No orders match.</td></tr>`;
   } else {
     const meEmail = (_me.email || "").toLowerCase();
     const isAll   = (_me.role  || "").toUpperCase() === "ALL";
@@ -234,6 +237,7 @@ function renderRows(){
       // Total DC turns red once it hits the 64 % MD threshold so the
       // reader spots the gated orders at a glance.
       const totDcStyle = totDC >= 64 ? "color:#991b1b;font-weight:800" : "";
+      const curDC = +r.current_dc_pct || 0;
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
@@ -243,8 +247,11 @@ function renderRows(){
         <td class="name-cell"><b>${escapeHtml(r.ship_to_name || "—")}</b><small>${escapeHtml(r.ship_to || "")}</small></td>
         <td class="center">${escapeHtml(r.state || "")}</td>
         <td class="num">${fmtQty(r.total_qty)}</td>
-        <td class="num">${fmtMoney(r.grand_total)}</td>
+        <td class="num">${r.list_amount ? fmtMoney(r.list_amount) : "—"}</td>
+        <td class="num">${curDC ? curDC.toFixed(2) + "%" : "—"}</td>
+        <td class="num">${r.current_amount ? fmtMoney(r.current_amount) : "—"}</td>
         <td class="num">${addDC ? addDC.toFixed(2) + "%" : "—"}</td>
+        <td class="num">${fmtMoney(r.grand_total)}</td>
         <td class="num" style="${totDcStyle}">${totDC ? totDC.toFixed(2) + "%" : "—"}</td>
         <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
