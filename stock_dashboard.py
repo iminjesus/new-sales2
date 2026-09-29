@@ -4987,26 +4987,34 @@ function downloadXLSX() {
     const GRID_LINE           = 'FFE2E8F0';   // subtle grid between rows
 
     /* Utility — returns the border object for a given cell coordinate.
-       Vertical dividers come from col.right; the merge-break amber
-       left border is painted only on the first M CODE row of a merge
-       and only on col 0 (Merge column) to echo the on-screen indicator
-       without leaking colour into the middle of the row. */
+       Every cell now gets a right border so Excel draws a vertical
+       divider on every column boundary (col.right upgrades certain
+       boundaries to medium for the group breaks the on-screen table
+       highlights).  The merge-break amber left border sits on col 0
+       only, echoing the on-screen indicator.  Sub Total rows carry
+       a thin top border and a thick bottom border — the top blends
+       into the last M CODE row above; the bottom clearly closes the
+       merge group off. */
     const borderFor = (colIdx, rowInBundle, isSub, isHeader, isMergeBreak) => {
         const b = {};
         const meta = cols[colIdx][2] || {};
-        if (meta.right) {
-            b.right = { style: meta.right, color: { rgb: 'FF334155' } };
-        }
+        /* Universal vertical grid — every column gets a right border.
+           col.right upgrades it to medium at group boundaries. */
+        b.right = meta.right
+            ? { style: meta.right, color: { rgb: 'FF334155' } }
+            : { style: 'thin',    color: { rgb: GRID_LINE  } };
         if (isHeader) {
-            b.top    = { style: 'thin', color: { rgb: 'FF334155' } };
+            b.top    = { style: 'thin',   color: { rgb: 'FF334155' } };
             b.bottom = { style: 'medium', color: { rgb: 'FF334155' } };
-            if (!b.right) b.right = { style: 'thin', color: { rgb: 'FF334155' } };
-            b.left   = { style: 'thin', color: { rgb: 'FF334155' } };
+            b.left   = { style: 'thin',   color: { rgb: 'FF334155' } };
             return b;
         }
         if (isSub) {
-            b.top    = { style: 'medium', color: { rgb: 'FF334155' } };
-            b.bottom = { style: 'thin',   color: { rgb: 'FF64748B' } };
+            /* User asked for a THIN top + THICK bottom on Sub Total
+               rows so the group's closing edge is the heaviest line
+               and the transition INTO the sub total is soft. */
+            b.top    = { style: 'thin',  color: { rgb: 'FF94A3B8' } };
+            b.bottom = { style: 'thick', color: { rgb: 'FF1E293B' } };
         } else {
             b.bottom = { style: 'hair', color: { rgb: GRID_LINE } };
         }
@@ -5100,9 +5108,14 @@ function downloadXLSX() {
         if (meta.level)  col.level  = meta.level;
         return col;
     });
-    /* Freeze pane at C2 — keeps the header row (row 1) and the
-       Merge + M CODE columns (A + B) locked in place while scrolling. */
-    ws['!freeze'] = { xSplit: 2, ySplit: 1 };
+    /* Freeze pane at L2 — the header row (row 1) plus the entire
+       identity block (Merge, M CODE, Brand, Marketing Line,
+       Product Name, Pattern, Size, Inch, LI, SS, F/O · OPE — 11
+       columns, A..K) stay pinned while the user scrolls right into
+       the state stocks, MOI, and period-demand blocks.  Excel reads
+       xSplit as the number of columns to freeze on the left; L is
+       column index 11. */
+    ws['!freeze'] = { xSplit: 11, ySplit: 1 };
     /* Newer SheetJS looks at ws['!view'].state / ySplit; xlsx-js-style
        prefers !cols outline-summaryBelow OFF so the +/- handle sits
        to the LEFT of the group (matching Excel's default for column
