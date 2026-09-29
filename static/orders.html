@@ -342,6 +342,12 @@
   table.lines thead th.pink{background:#c8548a;color:#fff;}
   table.lines thead th.olive{background:#a08b3c;color:#fff;}
   table.lines thead th.amber{background:#d97706;color:#fff;}
+  /* Sky-blue header — used for the 443DC/TBR/PCLT-SOVD column so
+     the "customer contract auto-promo" reads visually as part of
+     the same stack as Base DC.  With the editable-header yellow
+     underline underneath, the cell still marks itself as writable
+     while keeping its own colour identity. */
+  table.lines thead th.sky{background:#0ea5e9;color:#fff;}
   /* Bright-yellow "you can type in this column" header hint.  Used on
      every editable data-column (MTH / 443·SP / Volume / Additional
      Special / Aging / Proposed Unit Price / Total Amount) so a BDE
@@ -710,15 +716,15 @@
           <th class="mid">Load / Speed</th>
           <th class="mid">List Price</th>
           <th class="narrow">Base DC %</th>
-          <th class="narrow editable">MTH Special<br>DC %</th>
-          <th class="pink narrow editable">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
-          <th class="narrow editable">Volume<br>DC %</th>
-          <th class="narrow">Current DC %</th>
+          <th class="sky narrow editable" title="443DC / TBR Special / PCLT-SOVD — the customer's automatic contract promo.  Chained with Base DC to give Current DC %.">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
+          <th class="narrow" title="Current DC % — chained combined DC from Base DC and 443/TBR/PCLT-SOVD.  Reflects the customer's CONTRACT price before any negotiated concession.">Current DC %</th>
           <th class="mid">Current<br>Unit Price</th>
           <th class="mid" title="Current Unit Price × Qty — how much the customer would spend at their normal contract price for this line.">Current<br>Order Amount</th>
+          <th class="narrow editable">MTH Special<br>DC %</th>
+          <th class="narrow editable">Volume<br>DC %</th>
           <th class="olive narrow editable">Additional<br>Special DC %</th>
           <th class="amber narrow editable" title="Aging-stock target DC — populated by double-clicking an aged-stock row.  Displayed as a GUIDE for the ladder; the actual price effect is baked into the Additional Special DC% cell.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC<br>Guide&nbsp;%</th>
-          <th class="narrow" title="Total Additional Support DC% — chained delta between the price under non-editable columns (Base + 443/promo) and the Proposed Unit Price.  What the customer gets on TOP of their normal contract.">Total<br>Additional<br>Support %</th>
+          <th class="narrow" title="Total Additional Support DC % — chained combined DC of MTH + Volume + Additional Special DC.  The negotiated concession stacked ON TOP of the customer's contract (Current DC %).">Total<br>Additional<br>Support %</th>
           <th class="mid editable" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
           <th class="mid editable" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
           <th class="narrow">Proposed DC %</th>
@@ -1450,20 +1456,23 @@ async function fillStockForRow(rowEl, mcode){
 }
 
 /* ────────────────────────── row math ──────────────────────────
-   Chained-only pricing.  Aging DC% is no longer a full-override —
-   the aged-stock double-click computes the chained Additional
-   Special DC% that reaches the aged target and stores that in
-   add_dc.  Aging DC% cell now just displays the aged target so the
-   BDE can see "this row is under aged discount"; when they clear
-   it the row unlocks and the chained numbers keep flowing.
+   Fully chained pricing across two stacks:
 
-   Chain:
-     currentPrice   = list  * (1 - (base + mth + vol)/100)    // additive DC
-     baselinePrice  = list  * (1 -  base/100) * (1 - sp/100)  // non-editable only
-     proposedPrice  = currentPrice * (1 - sp/100) * (1 - add/100)
-     proposedDC     = 100 * (1 - proposedPrice / list)
-     add_support    = 100 * (1 - proposedPrice / baselinePrice)
-   */
+     Customer contract (Current DC%):
+       currentFactor = (1 − base/100) × (1 − sp/100)
+       currentPrice  = list × currentFactor
+       currentDC     = 100 × (1 − currentFactor)
+
+     Negotiated concession (Total Additional Support %):
+       concessionF   = (1 − mth/100) × (1 − vol/100) × (1 − add/100)
+       proposedPrice = currentPrice × concessionF
+       addSupport    = 100 × (1 − concessionF)      // (or 1 − prop/curr)
+       proposedDC    = 100 × (1 − proposedPrice / list)
+
+   The Aging DC Guide% cell is a display marker only — the aged-stock
+   double-click bakes the aged concession into add_dc as a chained
+   value; clearing the Guide cell un-locks the row.
+*/
 function recalcRow(row){
   const q       = toNum(row.querySelector('[data-col="qty"]').value);
   const list    = toNum(row.querySelector('[data-col="list_price"]').value);
@@ -1473,17 +1482,17 @@ function recalcRow(row){
   const volDC   = toNum(row.querySelector('[data-col="vol_dc"]').value);
   const addDC   = toNum(row.querySelector('[data-col="add_dc"]').value);
 
-  const currentDC    = baseDC + mthDC + volDC;
-  const currentPrice = list * (1 - currentDC/100);
-  const proposedPrice = currentPrice * (1 - spDC/100) * (1 - addDC/100);
+  // Customer contract — Base and 443/SP chain into Current DC.
+  const currentFactor = (1 - baseDC/100) * (1 - spDC/100);
+  const currentPrice  = list * currentFactor;
+  const currentDC     = 100 * (1 - currentFactor);
+
+  // Concession stack — MTH, Volume and Additional Special DC%
+  // compound on top of Current Price into the Proposed Unit Price.
+  const concessionF  = (1 - mthDC/100) * (1 - volDC/100) * (1 - addDC/100);
+  const proposedPrice = currentPrice * concessionF;
   const proposedDC    = list > 0 ? (100 * (1 - proposedPrice / list)) : currentDC;
-  // Baseline price = list × (1 - base/100) × (1 - sp/100).  Aging is
-  // excluded because Aging isn't in the chain anymore; the aged-
-  // discount effect lives inside add_dc.
-  const baselinePrice = list * (1 - baseDC/100) * (1 - spDC/100);
-  const addSupport   = baselinePrice > 0
-    ? (100 * (1 - proposedPrice / baselinePrice))
-    : 0;
+  const addSupport    = 100 * (1 - concessionF);   // same as (curr - prop)/curr
   const totalAmount = q * proposedPrice;
 
   row.querySelector('[data-col="current_dc"]').value    = fmtPct(currentDC);
@@ -1511,7 +1520,15 @@ function recalcRow(row){
 /* Back-solve add_dc so the chain lands on the price the user just
    typed into proposed_price.  Called from the row's proposed_price
    input handler.  Values below zero clamp to 0 (never "up-discount"
-   the row); above 100 clamp to 100. */
+   the row); above 100 clamp to 100.
+
+   Under the two-stack model, Base and 443/SP form the customer
+   contract (Current Price), and MTH / Volume / Additional Special
+   DC compose the concession stack:
+     currentPrice = list × (1 − base/100) × (1 − sp/100)
+     denom        = currentPrice × (1 − mth/100) × (1 − vol/100)
+     add          = 100 × (1 − targetPrice / denom)
+*/
 function reverseSolveAddDC(row, targetStr){
   const list    = toNum(row.querySelector('[data-col="list_price"]').value);
   const baseDC  = toNum(row.querySelector('[data-col="base_dc"]').value);
@@ -1519,8 +1536,8 @@ function reverseSolveAddDC(row, targetStr){
   const spDC    = toNum(row.querySelector('[data-col="sp_dc"]').value);
   const volDC   = toNum(row.querySelector('[data-col="vol_dc"]').value);
   const targetPrice = toNum(targetStr);
-  const currentPrice = list * (1 - (baseDC + mthDC + volDC)/100);
-  const denom        = currentPrice * (1 - spDC/100);
+  const currentPrice = list * (1 - baseDC/100) * (1 - spDC/100);
+  const denom        = currentPrice * (1 - mthDC/100) * (1 - volDC/100);
   if (!(denom > 0) || !isFinite(targetPrice) || targetPrice <= 0) return;
   let addDC = 100 * (1 - targetPrice / denom);
   if (addDC < 0)   addDC = 0;
@@ -1757,14 +1774,18 @@ function newRow(){
     {c:"load_speed",     cls:"center readonly", ro:true},
     {c:"list_price",     cls:"num readonly", ro:true},
     {c:"base_dc",        cls:"num"},
-    {c:"mth_dc",         cls:"num"},
     {c:"sp_dc",          cls:"num"},
-    {c:"vol_dc",         cls:"num"},
     {c:"current_dc",     cls:"num readonly", ro:true},
     {c:"current_price",  cls:"num red-num readonly", ro:true},
     /* Current Order Amount = Current Unit Price × Qty per row.  Read-
        only; recalcRow writes this every time the row math runs. */
     {c:"current_amount", cls:"num readonly", ro:true},
+    /* MTH + Volume moved here from before 443DC — they're negotiated
+       concessions on TOP of the customer contract (Base + 443/SP),
+       not part of the contract itself.  Chained with Additional
+       Special DC% into a single "Total Additional Support%". */
+    {c:"mth_dc",         cls:"num"},
+    {c:"vol_dc",         cls:"num"},
     {c:"add_dc",         cls:"pct-cell"},
     /* Aging DC% starts read-only — only the aged-stock double-click
        flow can drop a value in.  applyAgingDC removes the readonly
