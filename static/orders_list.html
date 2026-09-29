@@ -163,9 +163,13 @@ const fmtQty   = v => (Number(v)||0).toLocaleString("en-AU");
    two "YYYY-MM-DD HH:MM" strings (the format api_orders_list returns).
    No start → "—".  No end → measure against NOW so a pending order
    still shows how long it's been waiting; the value is postfixed with
-   "…" to hint it's still counting.  Negative gaps (end before start,
-   shouldn't happen but be defensive) → "—".  Output drops "0d" / "0h"
-   pieces so a two-hour gap reads "2h" and a four-day gap reads "4d". */
+   "…" to hint it's still counting.  Negative gaps → "—".
+
+   Rendering: the "Nd" and "Nh" parts land in two right-aligned
+   inline-block columns of fixed width, so days align under days and
+   hours under hours across the whole table (a 2-hour gap renders as
+   "     2h" — space in the days column, "2h" flush right in the
+   hours column).  Tabular-nums keeps the digit widths uniform. */
 function fmtElapsed(startStr, endStr){
   if (!startStr) return "—";
   const a = Date.parse(startStr.replace(" ", "T"));
@@ -176,9 +180,17 @@ function fmtElapsed(startStr, endStr){
   const mins = Math.floor((bTs - a) / 60000);
   const days = Math.floor(mins / (60 * 24));
   const hrs  = Math.floor((mins - days * 60 * 24) / 60);
-  const body = (days === 0 && hrs === 0)
-    ? "&lt;1h"
-    : `${days ? days + "d " : ""}${hrs ? hrs + "h" : ""}`.trim();
+  const colStyle = "display:inline-block;min-width:2.6em;text-align:right;"
+                 + "font-variant-numeric:tabular-nums";
+  let dCell, hCell;
+  if (days === 0 && hrs === 0) {
+    dCell = `<span style="${colStyle}"></span>`;
+    hCell = `<span style="${colStyle}">&lt;1h</span>`;
+  } else {
+    dCell = `<span style="${colStyle}">${days ? days + "d" : ""}</span>`;
+    hCell = `<span style="${colStyle}">${hrs  ? hrs  + "h" : ""}</span>`;
+  }
+  const body = `${dCell} ${hCell}`;
   return pending
     ? `<span style="color:#92400e" title="Awaiting approval — counting from Requested time">${body} …</span>`
     : body;
