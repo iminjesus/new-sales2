@@ -831,7 +831,7 @@
 
   <!-- ═══════════════ SOVD strip ═══════════════ -->
   <div class="sovd">
-    SOVD TTL &nbsp;→
+    Trueblu (HK PCLTs) TTL &nbsp;→
     <input id="sovd_ttl" readonly value="0"/>
   </div>
 
@@ -1871,7 +1871,7 @@ function applySOVDRatesToRows(){
           spEl.value = fmtPct(rate);
           spEl.dataset.sovdAuto  = "1";
           spEl.dataset.autoSpDc  = "1";
-          spEl.title = `SOVD ladder — ${rate}% (SOVD TTL = ${sovdQty})`;
+          spEl.title = `Trueblu (HK PCLT) ladder — ${rate}% (Trueblu TTL = ${sovdQty})`;
           r.dataset.promo = "SOVD";
           recalcRow(r);
         }
