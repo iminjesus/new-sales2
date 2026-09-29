@@ -4033,6 +4033,22 @@ def api_orders_list():
         limit = min(int(request.args.get("limit") or 200), 1000)
     except Exception:
         limit = 200
+    # Role-based scope (per review):
+    #   • MGMT_APPROVER_EMAILS (Kenny, Hayden, JJ)      → all rows
+    #   • SPRF_READONLY_CC     (Brian, Minku, Pamela)   → all rows
+    #   • HARRY_CS_EMAIL                                → all rows
+    #   • State-manager hierarchy (not yet supplied)    → own + subs
+    #   • everyone else                                 → own rows only
+    # The hierarchy stub is easy to plug in later — the code branches
+    # on _list_scope_email() returning either the full-scope sentinel
+    # or the list of BDE emails the caller can see; the SQL then
+    # narrows by submitted_by_email.
+    who = (_bde_from_request() or "").strip().lower()
+    global_scope = (
+        who in {e.lower() for e in MGMT_APPROVER_EMAILS}
+        or who in {e.lower() for e in SPRF_READONLY_CC}
+        or who == HARRY_CS_EMAIL.lower()
+    )
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         wh, p = [], []
@@ -4042,6 +4058,12 @@ def api_orders_list():
             wh.append("DATE(submitted_at) >= %s"); p.append(date_from)
         if date_to:
             wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
+        if not global_scope:
+            # Non-global caller — surface only their own rows.  The
+            # state-manager hierarchy carve-out will slot in here
+            # once we're handed the mapping.
+            wh.append("LOWER(submitted_by_email) = %s")
+            p.append(who or "")
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(
             f"SELECT id, order_no, submitted_at, submitted_by_bde, submitted_by_email, "
@@ -4647,6 +4669,15 @@ def api_orders_list_excel():
     except Exception:
         limit = 1000
 
+    # Same role-based scoping as api_orders_list — the Excel export
+    # must reflect what the caller can see on-screen, not the whole
+    # table.
+    who = (_bde_from_request() or "").strip().lower()
+    global_scope = (
+        who in {e.lower() for e in MGMT_APPROVER_EMAILS}
+        or who in {e.lower() for e in SPRF_READONLY_CC}
+        or who == HARRY_CS_EMAIL.lower()
+    )
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         wh, p = [], []
@@ -4656,6 +4687,9 @@ def api_orders_list_excel():
             wh.append("DATE(submitted_at) >= %s"); p.append(date_from)
         if date_to:
             wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
+        if not global_scope:
+            wh.append("LOWER(submitted_by_email) = %s")
+            p.append(who or "")
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(
             f"SELECT id, order_no, submitted_at, submitted_by_bde, "
