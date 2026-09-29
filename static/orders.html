@@ -342,12 +342,12 @@
   table.lines thead th.pink{background:#c8548a;color:#fff;}
   table.lines thead th.olive{background:#a08b3c;color:#fff;}
   table.lines thead th.amber{background:#d97706;color:#fff;}
-  /* Sky-blue header — used for the 443DC/TBR/PCLT-SOVD column so
-     the "customer contract auto-promo" reads visually as part of
-     the same stack as Base DC.  With the editable-header yellow
-     underline underneath, the cell still marks itself as writable
-     while keeping its own colour identity. */
-  table.lines thead th.sky{background:#0ea5e9;color:#fff;}
+  /* Sky-blue header — used for the 443DC/TBR/PCLT-SOVD column.
+     Header and body share the same soft #e0f2fe tone (per review)
+     so the column reads as one continuous block from title down
+     to the last value; darker sky text keeps it readable against
+     the light fill. */
+  table.lines thead th.sky{background:#e0f2fe;color:#0369a1;}
   /* Bright-yellow "you can type in this column" header hint.  Used on
      every editable data-column in the yellow concession block
      (MTH / Volume / Additional Special / Aging DC Guide + the
@@ -406,12 +406,13 @@
   table.lines thead th.narrow{width:60px}
   table.lines thead th.mid{width:90px}
   table.lines thead th.mcode{width:110px;min-width:110px}
-  table.lines thead th.wide{width:200px}
-  /* Ensure the body cell under the M-Code header inherits a min-
-     width so 7–8-digit material numbers can't be clipped when the
-     browser competes for horizontal space with the aged-stock
-     side panel. */
+  table.lines thead th.wide{width:100px;min-width:100px}
+  /* Ensure the body cells under the M-Code and Size headers inherit
+     min-widths so 7-digit material numbers and full sizes like
+     "205/50R20" don't get clipped when the browser competes for
+     horizontal space with the aged-stock side panel. */
   table.lines tbody td:nth-child(2){min-width:110px}
+  table.lines tbody td:nth-child(4){min-width:100px}
   /* Resize handle — a 6 px hit-target on the right edge of every
      header cell.  Cursor changes to col-resize on hover; the JS
      resizer down in the script section watches mousedown/mousemove
@@ -1807,6 +1808,75 @@ function unlockAgedRow(row){
   /* Aging DC Guide stays user-writable in both states — the aged
      ladder is one entry point and manual typing is another. */
 }
+/* ── SOVD auto-pricing ─────────────────────────────────────────────
+   Per-review rule for SOVD (HK-PCLT ladder promo):
+     • SOVD TTL = total qty across HK-PCLT lines that (a) aren't
+       under any non-SOVD customer 443 promo and (b) aren't aged.
+     • When SOVD TTL <  4 → apply 12 % in the 443DC cell to every
+       SOVD-eligible line.
+     • When SOVD TTL >= 4 → apply 18 %.
+   The rate applies to sp_dc so the customer contract chain (Base +
+   443/SP) picks it up as if it were any other customer promo.
+   Rows we auto-set carry data-sovd-auto="1" so a manual keystroke
+   is still respected (see the sp_dc input handler further down). */
+function isSOVDEligible(r){
+  const q       = toNum(r.querySelector('[data-col="qty"]')?.value);
+  if (q <= 0) return false;
+  const brand   = (r.querySelector('[data-col="brand"]')?.value || "").toUpperCase().trim();
+  const rowLine = (r.dataset.line || "").toUpperCase().trim();
+  const ag      = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
+  const promo   = (r.dataset.promo || "").toUpperCase();
+  const spEl    = r.querySelector('[data-col="sp_dc"]');
+  const sovdAuto = spEl?.dataset.sovdAuto === "1";
+  /* Must be HK PCLT, not aged, and either have no customer promo
+     yet OR already be tagged SOVD (either from a customer-side
+     SOVD promo hit or a prior SOVD auto-run of ours). */
+  return brand === "HK" && rowLine === "PCLT" && ag === 0
+      && (promo === "" || promo === "SOVD" || sovdAuto);
+}
+let _sovdBusy = false;
+function applySOVDRatesToRows(){
+  if (_sovdBusy) return;
+  _sovdBusy = true;
+  try {
+    const rows = $$("#linesBody tr");
+    let sovdQty = 0;
+    rows.forEach(r => {
+      if (isSOVDEligible(r)) sovdQty += toNum(r.querySelector('[data-col="qty"]').value);
+    });
+    const rate = sovdQty >= 4 ? 18 : 12;
+    rows.forEach(r => {
+      const spEl = r.querySelector('[data-col="sp_dc"]');
+      if (!spEl) return;
+      if (isSOVDEligible(r)) {
+        const cur = toNum(spEl.value);
+        if (Math.abs(cur - rate) > 0.01) {
+          spEl.value = fmtPct(rate);
+          spEl.dataset.sovdAuto  = "1";
+          spEl.dataset.autoSpDc  = "1";
+          spEl.title = `SOVD ladder — ${rate}% (SOVD TTL = ${sovdQty})`;
+          r.dataset.promo = "SOVD";
+          recalcRow(r);
+        }
+      } else if (spEl.dataset.sovdAuto === "1") {
+        /* Was SOVD, no longer eligible (aging added, brand changed
+           to LF, customer 443 promo matched, etc.) — clear our
+           auto-stamp so a real customer-side value can move in. */
+        spEl.value = "";
+        spEl.title = "";
+        delete spEl.dataset.sovdAuto;
+        delete spEl.dataset.autoSpDc;
+        if (r.dataset.promo === "SOVD") delete r.dataset.promo;
+        recalcRow(r);
+      }
+    });
+    const sovdTtlEl = $("#sovd_ttl");
+    if (sovdTtlEl) sovdTtlEl.value = fmtQty(sovdQty);
+  } finally {
+    _sovdBusy = false;
+  }
+}
+
 function updateTotals(){
   let sumQty = 0, sumAmt = 0, sumCurAmt = 0, sumListAmt = 0, weightedDC = 0, sovdQty = 0;
   let hasAdditional = false;
@@ -1832,7 +1902,7 @@ function updateTotals(){
     sumCurAmt  += curAmt;
     sumListAmt += list * q;
     weightedDC += totDC * q;
-    if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
+    if (isSOVDEligible(r)) sovdQty += q;
     if (q > 0 && (mth > 0 || vol > 0 || ad > 0 || ag > 0)) hasAdditional = true;
     /* MD-line qualifier: qty > 0, NOT aged (ag == 0), NOT per-line
        Standard (has at least one concession on THIS line —
@@ -1868,6 +1938,12 @@ function updateTotals(){
   const finalTotal   = totalIncGst + freight;
 
   $("#sovd_ttl").value                  = fmtQty(sovdQty);
+  /* Apply the SOVD ladder rate to eligible rows.  Guarded so an
+     inner recalcRow → updateTotals loop can't re-enter.  Runs after
+     the totals write above so the UI reflects the pre-SOVD state
+     for a tick; when applySOVDRatesToRows fires recalcRow, the
+     re-triggered updateTotals then paints the final numbers. */
+  applySOVDRatesToRows();
   $("#ttlQty").textContent              = fmtQty(sumQty);
   $("#grandTotal").textContent          = fmtMoney(sumAmt);
   $("#grandListAmt").textContent        = sumListAmt ? fmtMoney(sumListAmt) : "0.00";
@@ -2123,7 +2199,11 @@ function newRow(){
   // Any manual keystroke on sp_dc cancels the auto-fill flag so a
   // subsequent qty/material change doesn't clobber the BDE's override.
   tr.querySelector('[data-col="sp_dc"]')?.addEventListener("input", (e) => {
+    /* A manual keystroke cancels both the customer-promo auto-fill
+       tag AND the SOVD-auto tag, so applySOVDRatesToRows leaves this
+       row's sp_dc alone from now on. */
     if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
+    if (e.target.dataset.sovdAuto === "1") delete e.target.dataset.sovdAuto;
   });
   // Aging DC change — special path when the row is aged-locked:
   // clearing the Aging DC% cell unlocks the row so the BDE can
