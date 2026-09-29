@@ -3742,26 +3742,27 @@ def _submitted_order_email_html(oid, order, base_url):
     list_url   = f"{base_url}/orders_list"
     # Approval banner + reason — kept but slimmed to one line + reason.
     # Route decision uses the same MD-gate rule the front-end shows:
-    # non-aged lines with own Proposed DC ≥ 64 % accounting for > 5 %
-    # of order value → MD only.  We recompute from the payload lines
-    # so aged rows correctly opt out.
+    # any non-aged, non-Standard line with Proposed DC ≥ 64 % ⇒ MD.
     approval_block = ""
     if order.get("needs_mgmt_approval") == "Y":
         def _fmail(v):
             try:  return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
             except Exception: return 0.0
-        _md_amt = 0.0; _ord_amt = 0.0
+        _md_lines = 0
         for _ln in lines:
-            _amt   = _fmail(_ln.get("total_amount"))
             _aging = _fmail(_ln.get("aging_dc"))
+            if _aging > 0: continue
+            _mth = _fmail(_ln.get("mth_dc"))
+            _vol = _fmail(_ln.get("vol_dc"))
+            _add = _fmail(_ln.get("add_dc"))
+            if _mth == 0 and _vol == 0 and _add == 0: continue
             _rowDC = _fmail(_ln.get("proposed_dc"))
-            _ord_amt += _amt
-            if _aging == 0 and _rowDC >= 64.0:
-                _md_amt += _amt
-        _md_share = (_md_amt / _ord_amt * 100.0) if _ord_amt > 0 else 0.0
-        _md_required = _md_share > 5.0
+            if _rowDC >= 64.0:
+                _md_lines += 1
+        _md_required = _md_lines > 0
+        _s = "" if _md_lines == 1 else "s"
         route = (f"<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JunJong only</b> "
-                 f"(non-aged ≥64% lines are {_md_share:.1f}% of order, > 5% ceiling)"
+                 f"({_md_lines} non-aged, non-Standard line{_s} at Proposed DC ≥ 64%)"
                  if _md_required
                  else "Hayden or Kenny can approve")
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
@@ -4020,6 +4021,11 @@ def api_orders_list():
         list_amt_by_id    = {i: 0.0 for i in ids}
         current_amt_by_id = {i: 0.0 for i in ids}
         total_amt_by_id   = {i: 0.0 for i in ids}
+        # Per-order count of MD-qualifying lines (non-aged, non-
+        # Standard-on-line, Proposed DC ≥ 64 %).  Drives the "⚑ MD
+        # only" pill on orders_list — a value of 0 means Hayden /
+        # Kenny can approve even if avg_dc_pct is ≥ 64 %.
+        md_deep_by_id     = {i: 0 for i in ids}
         if ids:
             fmt = ",".join(["%s"] * len(ids))
             try:
@@ -4060,6 +4066,14 @@ def api_orders_list():
                         agg = _f(ln.get("aging_dc"))
                         if mth > 0 or vol > 0 or adx > 0 or agg > 0:
                             has_add_by_id[pr["id"]] = True
+                        # MD-line qualifier — matches the simplified
+                        # rule in api_orders_approve and the front-end
+                        # updateTotals(): non-aged, non-per-line-
+                        # Standard, Proposed DC ≥ 64 %.
+                        rowDC = _f(ln.get("proposed_dc"))
+                        if (agg == 0 and (mth > 0 or vol > 0 or adx > 0)
+                                and rowDC >= 64.0):
+                            md_deep_by_id[pr["id"]] = md_deep_by_id.get(pr["id"], 0) + 1
             except Exception:
                 pass
         for r in rows:
@@ -4085,6 +4099,7 @@ def api_orders_list():
             # totals row shows.  Falls back to 0 when the order has
             # no current_amount (empty payload, e.g.).
             r["add_dc_pct"] = round(100.0 * (1 - tot_amt / cur_amt), 2) if cur_amt > 0 else 0.0
+            r["md_deep_line_count"] = int(md_deep_by_id.get(r["id"], 0))
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4371,19 +4386,22 @@ def api_orders_approve(oid):
     by subsequent approvers.  Body: {} (approver is inferred from
     the request identity).
 
-    MD gate — an order needs the Managing Director's sign-off when
-    NON-AGED lines whose OWN Proposed DC hits 64 %+ account for more
-    than 5 % of the order value.  Two exemptions:
-      • Aged lines (aging_dc > 0) — the aged-stock ladder is the
-        customer-independent discount, not a negotiated concession,
-        so an aged deep-discount NEVER forces MD approval.
-      • Standard-pricing orders — no MTH / Volume / Additional
-        Special / Aging on any line — don't enter approval at all
-        (needs_mgmt_approval = 'N').
-    Below the 5 % threshold Hayden / JunJong / Kenny can all sign
-    off (first-approver-wins).  At or above it, only JunJong (the
-    MD) can act; Hayden and Kenny get a 403 telling the front-end
-    to escalate."""
+    MD gate (simplified per user request) — an order needs the
+    Managing Director's sign-off when AT LEAST ONE line qualifies:
+      • aging_dc == 0                         (not aged)
+      • MTH + Volume + Additional Special > 0 (per-line non-Standard)
+      • Proposed DC ≥ 64 %
+    The old "> 5 % of order value" ceiling is gone; a single
+    qualifying line is enough.  Per-line exemptions:
+      • Aged lines (aging_dc > 0)          — customer-independent
+        aged-stock ladder, never triggers MD.
+      • Per-line Standard (no MTH / Vol / Add on the line)
+        — the deep DC came purely from the customer's contract
+        (Base + 443/promo), not a negotiated concession.
+    Hayden / JunJong / Kenny all sign off when no line qualifies
+    (first-approver-wins); when at least one does, only JunJong
+    (MD) can act — Hayden and Kenny get a 403 telling the front-
+    end to escalate."""
     import json as _json_md
     who = (_bde_from_request() or "").strip().lower()
     approver_col = None
@@ -4417,37 +4435,37 @@ def api_orders_approve(oid):
                 return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
             except Exception:
                 return 0.0
-        md_gate_amt = 0.0
-        order_amt   = 0.0
+        md_lines = 0
         try:
             pj = _json_md.loads(pj_raw)
             for ln in (pj.get("lines") or []):
-                amt   = _f(ln.get("total_amount"))
                 aging = _f(ln.get("aging_dc"))
+                if aging > 0: continue           # per-line aged exemption
+                mth   = _f(ln.get("mth_dc"))
+                vol   = _f(ln.get("vol_dc"))
+                adx   = _f(ln.get("add_dc"))
+                if mth == 0 and vol == 0 and adx == 0:
+                    continue                     # per-line Standard exemption
                 rowDC = _f(ln.get("proposed_dc"))
-                order_amt += amt
-                if aging == 0 and rowDC >= 64.0:
-                    md_gate_amt += amt
+                if rowDC >= 64.0:
+                    md_lines += 1
         except Exception:
             # Payload unparseable → fall back to whole-order avg check.
-            order_amt   = 0.0
-            md_gate_amt = 0.0
-        md_ratio = (md_gate_amt / order_amt) if order_amt > 0 else 0.0
-        md_required = (md_ratio > 0.05) if order_amt > 0 else (avg_dc >= 64.0)
+            md_lines = 1 if avg_dc >= 64.0 else 0
+        md_required = md_lines > 0
         if md_required and approver_col != "approved_b":
+            _plural = "" if md_lines == 1 else "s"
             return jsonify({
                 "error": (
-                    f"Non-aged deep-discount lines (Proposed DC ≥ 64 %) make up "
-                    f"{md_ratio*100:.1f} % of this order — above the 5 % ceiling "
-                    f"that Hayden or Kenny can approve.  Only JunJong (MD) can "
-                    f"sign off.  Aged-only deals and Standard-pricing orders "
-                    f"are exempt from this rule."
+                    f"{md_lines} non-aged, non-Standard line{_plural} on this order "
+                    f"carr{'ies' if md_lines == 1 else 'y'} a Proposed DC of 64 % or "
+                    f"more — Managing Director sign-off is required.  Only JunJong "
+                    f"(MD) can approve.  Aged lines and per-line Standard-pricing "
+                    f"lines (Base + 443/promo only) are exempt from this rule."
                 ),
-                "requires_md":     True,
-                "md_gate_ratio":   md_ratio,
-                "md_gate_amount":  round(md_gate_amt, 2),
-                "order_amount":    round(order_amt, 2),
-                "avg_dc_pct":      avg_dc,
+                "requires_md":       True,
+                "md_deep_line_count": md_lines,
+                "avg_dc_pct":         avg_dc,
             }), 403
         # Set the named slot AND, if no earlier approver has locked
         # the order yet, record this caller as the official

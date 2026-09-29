@@ -223,7 +223,13 @@ function renderRows(){
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
                    (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
       } else if (r.needs_mgmt_approval === "Y"){
-        const isMd = totDC >= 64;
+        /* MD-only pill only flips on when the backend counted at least
+           one MD-qualifying line (non-aged, non-Standard-on-line,
+           Proposed DC ≥ 64 %).  An order whose ≥ 64 % avg comes
+           purely from aged rows or from lines that are Standard on
+           their own stays yellow "Pending" — Hayden or Kenny can
+           approve. */
+        const isMd = (+r.md_deep_line_count || 0) > 0;
         const bg   = isMd ? "#fee2e2" : "#fef3c7";
         const fg   = isMd ? "#991b1b" : "#92400e";
         const lb   = isMd ? "⚑ MD only" : "⏳ Pending";

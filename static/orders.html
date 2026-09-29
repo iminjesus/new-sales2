@@ -368,9 +368,15 @@
   /* 443DC / TBR Special% column — sky-blue tint on the whole body
      column so it visually pairs with its sky-blue header.  Cell is
      writable so the promo/443 auto-fill and any BDE override live
-     on the same soft blue background. */
+     on the same soft blue background.  The locked-row variant
+     keeps the sky tint (would otherwise fall back to the amber
+     "locked-cell" wash) so aged rows still show the customer's
+     443 promo in its own colour block. */
   table.lines tbody td.sky-cell input{
     background:#e0f2fe;color:#0369a1;font-weight:700;text-align:right;
+  }
+  table.lines tbody td.sky-cell input.locked-cell{
+    background:#e0f2fe !important; color:#0369a1 !important;
   }
   /* MTH Special DC% + Volume DC% cells — light yellow to match
      their editable yellow headers, so the concession block reads
@@ -405,11 +411,15 @@
      reads as one unified stack.  Slightly deeper amber text keeps
      it distinguishable within the trio. */
   table.lines tbody td.pct-cell input{color:#713f12;background:#fef9c3;font-weight:700;text-align:right;}
-  /* Reddish tint on the two "final price" cells — Proposed Unit
+  /* Pink tint on the two "final price" cells — Proposed Unit
      Price and Total Amount — so the reader's eye is pulled to the
      result columns without needing to hunt through the yellow
-     concession block. */
-  table.lines tbody td.reddish-cell input{background:#fee2e2;color:#991b1b;text-align:right;font-weight:700}
+     concession block.  Kept as class name .reddish-cell (already
+     wired) but the palette is now pink. */
+  table.lines tbody td.reddish-cell input{background:#fce7f3;color:#9d174d;text-align:right;font-weight:700}
+  table.lines tbody td.reddish-cell input.locked-cell{
+    background:#fce7f3 !important; color:#9d174d !important;
+  }
   table.lines tbody td.total-cell input{background:#fff8e6;text-align:right;font-weight:700}
   /* Delete-row column — tiny leading gutter with an × button visible
      on row hover (or always dim so the affordance is discoverable). */
@@ -431,6 +441,14 @@
   table.lines tfoot tr.total-row td.label{text-align:center}
   table.lines tfoot tr.total-row td.right-lbl{text-align:right;padding-right:8px;font-size:12px;white-space:nowrap}
   table.lines tfoot tr.total-row td .totalv{padding:6px;font-size:13px;text-align:right;color:#111}
+  /* Every numeric cell in the Total row (Qty, aggregate DC%s, etc.)
+     right-aligns like the totalv divs, so the whole row reads as a
+     column of numbers instead of a mix of centred and right-flushed
+     values.  Overrides the .center helper that some cells inherit. */
+  table.lines tfoot tr.total-row td.num,
+  table.lines tfoot tr.total-row td.num.center{
+    text-align:right;padding-right:8px;font-variant-numeric:tabular-nums;
+  }
   /* Summary block on the right — label + amount cells get a clean
      border so they read as a self-contained totals card, and the
      blank cells around them stay unbordered / uncoloured so they
@@ -553,17 +571,20 @@
     <div class="body">
       <div id="mdNoticeBody">
         This order requires <b>Managing Director approval</b>.
-        Non-aged deep-discount lines (Proposed DC ≥ 64&#8239;%) account for
-        <b id="mdNoticeShare">—</b> of the order value (over the 5&#8239;% ceiling
-        that Hayden or Kenny can approve).
+        <b id="mdNoticeShare">—</b> on this order carry a Proposed DC of
+        <b>64&#8239;%</b> or more with a negotiated concession — outside
+        the level Hayden or Kenny can approve.
       </div>
       <div class="exempt">
-        <b>Exempt</b> from this requirement:
+        <b>Exempt</b> from this requirement (per line):
         <ul style="margin:4px 0 0 18px;padding:0">
-          <li>Deals whose ≥&#8239;64&#8239;% discount comes entirely from <b>Aging DC Guide%</b>
-              (aged-stock ladder).</li>
-          <li>Orders priced under <b>Standard Pricing</b> (no MTH / Volume /
-              Additional Special / Aging).</li>
+          <li>Lines whose Proposed DC came off the <b>Aging DC Guide%</b>
+              ladder — the aged-stock discount is customer-independent
+              and doesn't need MD sign-off.</li>
+          <li>Lines priced at <b>Standard Pricing</b> — Base + 443/promo
+              only, with no MTH / Volume / Additional Special DC on
+              that line — even when the resulting Proposed DC lands
+              at or above 64&#8239;%.</li>
         </ul>
       </div>
     </div>
@@ -1646,11 +1667,13 @@ function unlockAgedRow(row){
 function updateTotals(){
   let sumQty = 0, sumAmt = 0, sumCurAmt = 0, sumListAmt = 0, weightedDC = 0, sovdQty = 0;
   let hasAdditional = false;
-  /* MD-gate accounting.  A line only contributes to the MD gate when
-     it is NOT aged AND its own Proposed DC hits 64 %+.  If those
-     lines together are ≤ 5 % of the whole order value, MD approval
-     is NOT required — see the mdRequired check below. */
-  let mdGateAmt = 0;
+  /* MD-gate rule (simplified per user request): MD approval is
+     required when ANY non-aged, non-standard line has its OWN
+     Proposed DC ≥ 64 %.  A line that got there via the Aging DC
+     Guide ladder (aging_dc > 0) is exempt; a Standard-pricing
+     order (has_additional_dc == false) is exempt.  The old "≥ 5 %
+     of order value" ceiling is gone. */
+  let mdDeepLineCount = 0;
   $$("#linesBody tr").forEach(r => {
     const q      = toNum(r.querySelector('[data-col="qty"]').value);
     const list   = toNum(r.querySelector('[data-col="list_price"]')?.value);
@@ -1665,14 +1688,17 @@ function updateTotals(){
     sumAmt     += amt;
     sumCurAmt  += curAmt;
     sumListAmt += list * q;
-    weightedDC += totDC * q;   // qty-weighted total (chained) DC
+    weightedDC += totDC * q;
     if ((r.dataset.promo || "") === "SOVD") sovdQty += q;
     if (q > 0 && (mth > 0 || vol > 0 || ad > 0 || ag > 0)) hasAdditional = true;
-    /* Only non-aged rows with their OWN proposed DC ≥ 64 feed the
-       MD gate.  Aging DC% is capped at 88 via the ladder but should
-       never force MD approval — it's the customer-independent aged-
-       stock discount, not a negotiated concession. */
-    if (q > 0 && ag === 0 && totDC >= 64) mdGateAmt += amt;
+    /* MD-line qualifier: qty > 0, NOT aged (ag == 0), NOT per-line
+       Standard (has at least one concession on THIS line —
+       MTH / Volume / Additional Special), AND Proposed DC ≥ 64.
+       A line whose big DC comes purely from Base + 443/promo is
+       still customer-contract, not a negotiated concession, so
+       it stays out of the MD trigger. */
+    if (q > 0 && ag === 0 && totDC >= 64
+        && (mth > 0 || vol > 0 || ad > 0)) mdDeepLineCount += 1;
   });
   /* Order-wide Current DC % — chained savings from list to Current
      Order Amount.  Answers "how much has the customer's normal
@@ -1724,15 +1750,13 @@ function updateTotals(){
   //  Both Total DC and Additional DC are shown so the BDE can watch
   //  the chained calc live as they key values into MTH / SP / Vol /
   //  Add / Aging cells.
-  /* MD-gate ratio — non-aged, ≥64 % lines as a fraction of the
-     order.  When this is ≤ 5 % the concession is small enough that
-     Hayden or Kenny can approve; above 5 % (or when the order-wide
-     avg itself is 64 %+, provided that avg is NOT explained purely
-     by aged rows) it kicks up to JunJong. */
-  const mdGateRatio = sumAmt > 0 ? (mdGateAmt / sumAmt) : 0;
-  const mdRequired  = hasAdditional && mdGateRatio > 0.05;
-  window._orderMdRequired  = mdRequired;
-  window._orderMdGatePct   = mdGateRatio * 100;
+  /* MD-gate rule (simplified per user request): MD approval is
+     required when AT LEAST ONE line qualifies — non-aged, non-
+     standard (has MTH / Vol / Add), Proposed DC ≥ 64 %.  The
+     order-value ceiling is gone; presence alone is enough. */
+  const mdRequired = mdDeepLineCount > 0;
+  window._orderMdRequired    = mdRequired;
+  window._orderMdDeepLines   = mdDeepLineCount;
 
   const el = $("#approvalPathText");
   if (el){
@@ -1746,10 +1770,10 @@ function updateTotals(){
         `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required. `
         + dcBadge;
     } else if (mdRequired){
+      const s = mdDeepLineCount === 1 ? "" : "s";
       el.innerHTML =
         `<span style="color:#fff;background:#7f1d1d;padding:2px 8px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
-        + `— non-aged deep-discount lines (Proposed DC ≥ 64 %) account for `
-        + `<b>${(mdGateRatio*100).toFixed(1)}%</b> of the order value (> 5 %). `
+        + `— <b>${mdDeepLineCount}</b> non-aged, non-Standard line${s} with Proposed DC ≥ 64 %. `
         + `Only <b>JunJong (MD)</b> can approve. `
         + dcBadge;
     } else {
@@ -2183,8 +2207,8 @@ function serializeOrder(){
 /* Show the MD-approval Notice modal at Submit time.  Returns a
    Promise that resolves to true when the BDE acknowledges (proceed)
    and false when they cancel or close the modal (go back to edit).
-   Fills the share pill from window._orderMdGatePct so the number in
-   the message matches the on-screen banner. */
+   Fills the count pill from window._orderMdDeepLines so the number
+   in the message matches the on-screen banner. */
 function showMdNoticeModal(){
   return new Promise(resolve => {
     const ov = document.getElementById("mdNoticeOverlay");
@@ -2192,10 +2216,10 @@ function showMdNoticeModal(){
     const cancelBtn = document.getElementById("mdNoticeCancel");
     const shareEl = document.getElementById("mdNoticeShare");
     if (!ov || !okBtn || !cancelBtn) { resolve(true); return; }
-    const share = window._orderMdGatePct;
+    const cnt = window._orderMdDeepLines;
     if (shareEl){
-      shareEl.textContent = (typeof share === "number" && share >= 0)
-        ? share.toFixed(1) + "%"
+      shareEl.textContent = (typeof cnt === "number" && cnt > 0)
+        ? String(cnt) + (cnt === 1 ? " line" : " lines")
         : "—";
     }
     ov.classList.add("show");
