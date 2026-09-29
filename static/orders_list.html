@@ -161,20 +161,27 @@ const fmtMoney = v => (Number(v)||0).toLocaleString("en-AU",{style:"currency",cu
 const fmtQty   = v => (Number(v)||0).toLocaleString("en-AU");
 /* fmtElapsed(a, b) — human-readable time gap in days + hours between
    two "YYYY-MM-DD HH:MM" strings (the format api_orders_list returns).
-   Missing endpoints → "—"; a negative gap (approved before submitted,
-   which shouldn't happen but be defensive) also → "—".  Output rounds
-   the hour part down and drops "0d" / "0h" pieces so a two-hour gap
-   reads "2h" and a four-day gap reads "4d". */
+   No start → "—".  No end → measure against NOW so a pending order
+   still shows how long it's been waiting; the value is postfixed with
+   "…" to hint it's still counting.  Negative gaps (end before start,
+   shouldn't happen but be defensive) → "—".  Output drops "0d" / "0h"
+   pieces so a two-hour gap reads "2h" and a four-day gap reads "4d". */
 function fmtElapsed(startStr, endStr){
-  if (!startStr || !endStr) return "—";
+  if (!startStr) return "—";
   const a = Date.parse(startStr.replace(" ", "T"));
-  const b = Date.parse(endStr  .replace(" ", "T"));
-  if (!isFinite(a) || !isFinite(b) || b < a) return "—";
-  const mins = Math.floor((b - a) / 60000);
+  if (!isFinite(a)) return "—";
+  const pending = !endStr;
+  const bTs = pending ? Date.now() : Date.parse(endStr.replace(" ", "T"));
+  if (!isFinite(bTs) || bTs < a) return "—";
+  const mins = Math.floor((bTs - a) / 60000);
   const days = Math.floor(mins / (60 * 24));
   const hrs  = Math.floor((mins - days * 60 * 24) / 60);
-  if (days === 0 && hrs === 0) return "&lt;1h";
-  return `${days ? days + "d " : ""}${hrs ? hrs + "h" : ""}`.trim();
+  const body = (days === 0 && hrs === 0)
+    ? "&lt;1h"
+    : `${days ? days + "d " : ""}${hrs ? hrs + "h" : ""}`.trim();
+  return pending
+    ? `<span style="color:#92400e" title="Awaiting approval — counting from Requested time">${body} …</span>`
+    : body;
 }
 
 let _rowsCache = [];
