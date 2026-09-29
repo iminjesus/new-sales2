@@ -1167,6 +1167,16 @@ async function pushAgedStockRow(mcode, tier) {
   }
   row.dataset.agingTier = tier;
   row.classList.add("aged-row");
+  /* Populate Aging DC Guide% BEFORE fillMaterialFromCode fires the
+     (non-awaited) applyAdditionalDCToRow.  That way when the promo
+     lookup resolves later, agingDC is already > 0 and its aged-re-
+     solve branch triggers instead of falling through to a plain
+     recalcRow — which would otherwise leave add_dc stale against
+     the freshly-written sp_dc. */
+  const agingElEarly = row.querySelector('[data-col="aging_dc"]');
+  if (agingElEarly && AGING_TARGET_DC[tier] != null) {
+    agingElEarly.value = fmtPct(AGING_TARGET_DC[tier]);
+  }
   const mcEl = row.querySelector('[data-col="m_code"]');
   if (mcEl) mcEl.value = mcode;
   // fillMaterialFromCode also drops in Base DC via applyBaseDCToRow,
@@ -1518,8 +1528,17 @@ async function applyAdditionalDCToRow(rowEl){
   /* Aged row after a fresh promo lookup — re-solve the chained
      Additional Special DC% so the aged target price is still hit
      even though sp_dc just changed.  applyAgingDC internally calls
-     recalcRow + lockAgedRow, so the row stays consistent. */
-  if (agingDC > 0 && rowEl.dataset.agingTier) {
+     recalcRow + lockAgedRow, so the row stays consistent.
+
+     IMPORTANT: re-read aging_dc HERE (not the value captured at the
+     top of this function).  applyMaterial fires applyAdditionalDCToRow
+     without await, then pushAgedStockRow calls applyAgingDC — which
+     sets aging_dc AFTER our capture but BEFORE this fetch resolves.
+     Using the stale captured value would miss the aged branch and
+     leave add_dc stuck at whatever value applyAgingDC computed with
+     sp_dc = 0, ignoring the promo we just wrote. */
+  const agingNow = toNum(agEl?.value || 0);
+  if ((agingNow > 0 || agingDC > 0) && rowEl.dataset.agingTier) {
     applyAgingDC(rowEl);
     return;
   }
@@ -1590,6 +1609,24 @@ function applyMaterial(rowEl, data){
   // product_group + qty + customer to decide.  Auto-fills add_dc
   // only when the cell hasn't been keyed manually.
   applyAdditionalDCToRow(rowEl);
+  /* If the material is in the currently-loaded aged-stock cache
+     for this customer's state, tag the row with the matching tier
+     and populate Aging DC Guide% + the chained Additional Special
+     DC%.  Applies to rows added by ANY path (typing m-code, picking
+     a suggestion, and — with the early set above — also the aged
+     stock double-click).  Skips rows the BDE has already tagged
+     manually (dataset.agingTier already set) so we don't clobber
+     a hand-typed Aging DC Guide value. */
+  if (data.m_code && !rowEl.dataset.agingTier
+      && _agedStockCache && Array.isArray(_agedStockCache.rows)) {
+    const mcStr  = String(data.m_code);
+    const hit    = _agedStockCache.rows.find(r => String(r.m_code) === mcStr);
+    if (hit && AGING_TARGET_DC[hit.tier] != null) {
+      rowEl.dataset.agingTier = hit.tier;
+      rowEl.classList.add("aged-row");
+      applyAgingDC(rowEl);
+    }
+  }
   setStatus(`Material linked: <b>${data.m_code} — ${data.description||""}</b>`, "ok");
   // Fire-and-forget stock lookup so the row's four state columns
   // populate as soon as the material is known.  Kept separate from
