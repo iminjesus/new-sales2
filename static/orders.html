@@ -529,6 +529,60 @@
     .grid{grid-template-columns:130px 1fr}
     .hdr{grid-template-columns:1fr;text-align:center}
   }
+  /* ══════════════════════════════════════════════════════════════
+     Print / PDF stylesheet.  Two things the review asked for:
+       1. Default to landscape so the wide Order Details table fits
+          on one page instead of clipping the state-stock columns.
+       2. Force every visible border on the form + table to a solid
+          black hairline so the printer doesn't drop the light-grey
+          borders that read fine on-screen but disappear on paper.
+     Also: hide the fixed aged-stock sidebar, page-nav bar, aged-
+     stock reopen chip, the delete-row buttons and toolbar so the
+     printout is the SPRF itself, not the surrounding UI. */
+  @page { size: A4 landscape; margin: 10mm; }
+  @media print {
+    body { background: #fff !important; }
+    /* Print-forces black borders on the grid; !important because the
+       body/table cell CSS sets its own colour and we want that
+       colour REPLACED, not merged, for the print run. */
+    .grid, .grid > *,
+    .meta, .meta .col,
+    .rebate, .rebate > div,
+    table.lines, table.lines thead th, table.lines tbody td, table.lines tfoot td,
+    #approvalPath, #approvalPanel,
+    .band, .sovd { border-color: #000 !important; }
+    /* Table cell borders in particular fall back to hairlines when
+       the browser downsizes them — pin every cell edge to a solid
+       black 1 px line so the grid always prints as a grid. */
+    table.lines thead th,
+    table.lines tbody td,
+    table.lines tfoot td {
+      border: 1px solid #000 !important;
+      -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+    }
+    .grid > *,
+    .meta .col,
+    .rebate > div {
+      border: 1px solid #000 !important;
+    }
+    /* Keep the yellow / sky / amber column tints on paper — Chrome
+       and Edge strip backgrounds by default; the color-adjust hint
+       tells them to keep them. */
+    * { -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important; }
+    /* Chrome-in-tab print (used by "Print" button) — hide the URL
+       block and app chrome that would otherwise sit above the SPRF. */
+    #agedStockPanel, #agedStockReopen, .pagenav, .toolbar,
+    #btnAddRow, #btnClear, #btnPrint, #btnSubmit,
+    .status, .row-del, .row-del-cell,
+    #approvalPath { display: none !important; }
+    .wrap { max-width: none; padding: 0; margin: 0; }
+    /* Avoid awkward page breaks inside the order details table. */
+    table.lines { page-break-inside: avoid; }
+    table.lines thead { display: table-header-group; }
+    table.lines tfoot { display: table-row-group; }
+  }
 </style>
 </head>
 <body>

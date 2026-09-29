@@ -3713,7 +3713,12 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
 def _submitted_order_email_html(oid, order, base_url):
     """Compact HTML notification — horizontal chip layout instead of a
     tall label/value table.  Fits everything the approver needs to
-    triage in the first screenful without scrolling."""
+    triage in the first screenful without scrolling.  Top-level chip
+    row mirrors the Submitted-Orders list so a reader lands on the
+    same numbers they'd see on screen: Order # / Requested / BDE /
+    Sold-to / Ship-to / State / Qty / List Total / Current DC % /
+    Current Order Amount / Add Support % / Total Amount / Proposed
+    DC % / Reb / Approval route."""
     header = order.get("header") or {}
     totals = order.get("totals") or {}
     lines  = order.get("lines")  or []
@@ -3724,6 +3729,30 @@ def _submitted_order_email_html(oid, order, base_url):
                 f'<span style="color:#6b7280;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;margin-right:4px">{_esc_html(label)}</span>'
                 f'<b style="color:{colour};font-size:12.5px">{_esc_html(value)}</b>'
                 f'</span>')
+    def _money(v):
+        try:
+            return "$" + f"{float(str(v or 0).replace(',','').replace('$','').replace('%','')):,.2f}"
+        except Exception:
+            return str(v or "0.00")
+    def _fnum(v):
+        try:  return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
+        except Exception: return 0.0
+    # Recompute list_amount / current_amount / current_dc_pct from
+    # the payload lines — the front-end totals don't carry these
+    # (yet), and the email should mirror what orders_list.html
+    # shows for the same order.
+    _list_amt = 0.0
+    _cur_amt  = 0.0
+    _tot_amt  = 0.0
+    for _ln in lines:
+        _qty = _fnum(_ln.get("qty"))
+        if _qty <= 0: continue
+        _list_amt += _fnum(_ln.get("list_price")) * _qty
+        _cur_amt  += _fnum(_ln.get("current_amount")) or (_fnum(_ln.get("current_price")) * _qty)
+        _tot_amt  += _fnum(_ln.get("total_amount"))
+    _cur_dc      = 100.0 * (1 - _cur_amt / _list_amt) if _list_amt > 0 else 0.0
+    _add_support = 100.0 * (1 - _tot_amt / _cur_amt) if _cur_amt  > 0 else 0.0
+    _prop_dc     = 100.0 * (1 - _tot_amt / _list_amt) if _list_amt > 0 else 0.0
     # 6-column line rows — the table stays compact even on wide
     # orders because each row is a single line of text.
     line_rows = []
@@ -3773,21 +3802,34 @@ def _submitted_order_email_html(oid, order, base_url):
             f'<span style="color:#78350f">Reason: {reason_html}</span></div>'
         )
     return f"""
-    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:900px">
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:960px">
       <div style="background:#f5c518;padding:8px 12px;font-weight:800;color:#000;font-size:13.5px">
         SPRF {_esc_html(order_no)} · {_esc_html(header.get('sold_to_name',''))} ({_esc_html(header.get('sold_to',''))})
       </div>
       <div style="padding:10px 12px;background:#fff;border:1px solid #e5e7eb;border-top:none">
+        <!-- Row 1 — WHO / WHEN / WHERE.  Matches the left half of
+             the Submitted-Orders table (Order # is in the banner
+             above; Sold-to lives there too so it isn't repeated). -->
         <div style="line-height:1.8">
-          {_chip("Submitted", order.get("submitted_at") or "")}
-          {_chip("BDE",       header.get("bde_name") or "")}
-          {_chip("State",     header.get("state") or "")}
-          {_chip("Ship-to",   header.get("ship_to_name") or "")}
-          {_chip("PO",        header.get("po_number") or "—")}
-          {_chip("Reb",       reb, "#065f46" if reb == "Y" else "#991b1b")}
-          {_chip("Qty",       totals.get("total_qty") or 0)}
-          {_chip("Grand",     totals.get("grand_total") or "0.00", "#0b3d91")}
-          {_chip("Avg DC",    (str(totals.get("avg_dc_pct") or 0) + "%"), "#b45309")}
+          {_chip("Order #",  order_no)}
+          {_chip("Requested",order.get("submitted_at") or "")}
+          {_chip("BDE",      header.get("bde_name") or "")}
+          {_chip("Ship-to",  header.get("ship_to_name") or "")}
+          {_chip("State",    header.get("state") or "")}
+          {_chip("PO",       header.get("po_number") or "—")}
+        </div>
+        <!-- Row 2 — the money block: everything a reviewer needs to
+             judge scale + how deep the discount is.  Cascade reads
+             list → current → total left-to-right, DC% under each. -->
+        <div style="line-height:1.8;margin-top:2px;padding-top:6px;border-top:1px dashed #e5e7eb">
+          {_chip("Qty",              totals.get("total_qty") or 0)}
+          {_chip("List Total",       _money(_list_amt),        "#334155")}
+          {_chip("Current DC%",      f"{_cur_dc:.2f}%",         "#0369a1")}
+          {_chip("Current Order Amt",_money(_cur_amt),          "#334155")}
+          {_chip("Add Support%",     f"{_add_support:.2f}%",    "#b45309")}
+          {_chip("Total Amount",     _money(_tot_amt or totals.get("grand_total") or 0), "#0b3d91")}
+          {_chip("Proposed DC%",     f"{_prop_dc:.2f}%",        "#7f1d1d")}
+          {_chip("Reb",              reb, "#065f46" if reb == "Y" else "#991b1b")}
         </div>
         {approval_block}
         <table style="border-collapse:collapse;width:100%;margin-top:6px">
@@ -4651,14 +4693,31 @@ def api_orders_list_excel():
                "List Total", "Current DC %", "Current Order Amount",
                "Add Support %", "Total Amount", "Proposed DC %",
                "Rebateable", "SAP Status",
-               "Needs Approval", "Approved By", "Approved At", "Remark"]
+               "Needs Approval", "Approved By", "Approved At",
+               "SAP Created At", "Elapsed to Approval", "Remark"]
     ws.append(headers)
     for c, _ in enumerate(headers, start=1):
         ws.cell(row=1, column=c).font = Font(bold=True)
         ws.cell(row=1, column=c).fill = PatternFill("solid", fgColor="FFD54F")
     fmt = lambda v: v.strftime("%Y-%m-%d %H:%M") if hasattr(v, "strftime") else (v or "")
+    def _elapsed(a, b):
+        """Nd Nh gap between two timestamps.  Returns '' when either
+        end is missing so blank rows read cleanly in the .xlsx."""
+        try:
+            av = a if hasattr(a, "date") else None
+            bv = b if hasattr(b, "date") else None
+            if av is None or bv is None: return ""
+            secs = (bv - av).total_seconds()
+            if secs < 0: return ""
+            days  = int(secs // 86400)
+            hours = int((secs - days * 86400) // 3600)
+            if days == 0 and hours == 0: return "<1h"
+            return f"{days}d {hours}h".strip()
+        except Exception:
+            return ""
     for r in rows:
         a = aggs_by_id.get(r["id"], {})
+        sap_at = r.get("status_changed_at") if (r.get("status_sap") == "Y") else None
         ws.append([
             r.get("order_no") or "",
             fmt(r.get("submitted_at")),
@@ -4680,6 +4739,8 @@ def api_orders_list_excel():
             r.get("needs_mgmt_approval") or "",
             r.get("approved_by_name") or "",
             fmt(r.get("approved_at")),
+            fmt(sap_at),
+            _elapsed(r.get("submitted_at"), r.get("approved_at")),
             (r.get("mgmt_reason") or "")[:500],
         ])
     for c in range(1, len(headers) + 1):

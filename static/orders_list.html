@@ -135,10 +135,19 @@
             <th style="width:80px" class="center">SAP</th>
             <th style="width:130px">Approver</th>
             <th style="width:70px" class="center">Edit</th>
+            <!-- Timeline columns — read left-to-right as the SPRF's
+                 life: BDE submits → an approver signs off → Harry
+                 flips SAP-entered.  Elapsed is computed on-the-fly
+                 from Requested and Approved so nothing extra needs
+                 to be stored on the row. -->
+            <th style="width:130px" title="When the BDE submitted this Order Request">Requested</th>
+            <th style="width:130px" title="When the first approver signed off (first-approver-wins)">Approved</th>
+            <th style="width:130px" title="When Harry flipped SAP-entered to Y for this order">SAP Created</th>
+            <th style="width:90px" class="num" title="Time from Requested to Approved, in days and hours">Elapsed<br>to&nbsp;Approval</th>
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="17" class="empty">Loading…</td></tr>
+          <tr><td colspan="21" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -150,6 +159,23 @@ const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 const fmtMoney = v => (Number(v)||0).toLocaleString("en-AU",{style:"currency",currency:"AUD"});
 const fmtQty   = v => (Number(v)||0).toLocaleString("en-AU");
+/* fmtElapsed(a, b) — human-readable time gap in days + hours between
+   two "YYYY-MM-DD HH:MM" strings (the format api_orders_list returns).
+   Missing endpoints → "—"; a negative gap (approved before submitted,
+   which shouldn't happen but be defensive) also → "—".  Output rounds
+   the hour part down and drops "0d" / "0h" pieces so a two-hour gap
+   reads "2h" and a four-day gap reads "4d". */
+function fmtElapsed(startStr, endStr){
+  if (!startStr || !endStr) return "—";
+  const a = Date.parse(startStr.replace(" ", "T"));
+  const b = Date.parse(endStr  .replace(" ", "T"));
+  if (!isFinite(a) || !isFinite(b) || b < a) return "—";
+  const mins = Math.floor((b - a) / 60000);
+  const days = Math.floor(mins / (60 * 24));
+  const hrs  = Math.floor((mins - days * 60 * 24) / 60);
+  if (days === 0 && hrs === 0) return "&lt;1h";
+  return `${days ? days + "d " : ""}${hrs ? hrs + "h" : ""}`.trim();
+}
 
 let _rowsCache = [];
 let _me = {email: "", role: ""};
@@ -170,18 +196,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="17" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="21" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="17" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="21" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="17" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="21" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -195,7 +221,7 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="17" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="21" class="empty">No orders match.</td></tr>`;
   } else {
     const meEmail = (_me.email || "").toLowerCase();
     const isAll   = (_me.role  || "").toUpperCase() === "ALL";
@@ -263,6 +289,10 @@ function renderRows(){
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
         <td>${apprCell}</td>
         <td class="center">${editCell}</td>
+        <td><small style="color:#334155">${escapeHtml(r.submitted_at || "—")}</small></td>
+        <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
+        <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
+        <td class="num">${fmtElapsed(r.submitted_at, r.approved_at)}</td>
       </tr>`;
     }).join("");
   }
