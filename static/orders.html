@@ -527,7 +527,7 @@
       <div class="exempt">
         <b>Exempt</b> from this requirement:
         <ul style="margin:4px 0 0 18px;padding:0">
-          <li>Deals whose ≥&#8239;64&#8239;% discount comes entirely from <b>Aging DC%</b>
+          <li>Deals whose ≥&#8239;64&#8239;% discount comes entirely from <b>Aging DC Guide%</b>
               (aged-stock ladder).</li>
           <li>Orders priced under <b>Standard Pricing</b> (no MTH / Volume /
               Additional Special / Aging).</li>
@@ -717,7 +717,7 @@
           <th class="mid">Current<br>Unit Price</th>
           <th class="mid" title="Current Unit Price × Qty — how much the customer would spend at their normal contract price for this line.">Current<br>Order Amount</th>
           <th class="olive narrow editable">Additional<br>Special DC %</th>
-          <th class="amber narrow editable" title="Aging-stock DC — populated by double-clicking an aged-stock row.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC %</th>
+          <th class="amber narrow editable" title="Aging-stock target DC — populated by double-clicking an aged-stock row.  Displayed as a GUIDE for the ladder; the actual price effect is baked into the Additional Special DC% cell.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC<br>Guide&nbsp;%</th>
           <th class="narrow" title="Total Additional Support DC% — chained delta between the price under non-editable columns (Base + 443/promo) and the Proposed Unit Price.  What the customer gets on TOP of their normal contract.">Total<br>Additional<br>Support %</th>
           <th class="mid editable" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
           <th class="mid editable" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
@@ -821,6 +821,21 @@ const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
 const fmtMoney = n => Number(n||0).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
 const fmtQty   = n => Number(n||0).toLocaleString(undefined, {maximumFractionDigits:0});
 const toNum    = v => { const x = parseFloat(String(v).replace(/,/g,'')); return Number.isFinite(x) ? x : 0; };
+/* Uniform "N.NN%" display for every DC-percentage cell (base / MTH /
+   443 / Volume / Current / Additional Special / Aging).  Returns
+   an empty string for 0 / blank / non-numeric input so the cell
+   reads clean instead of showing "0.00%" on every empty row.  toNum
+   accepts the "%" suffix so calling code needn't strip it before
+   reading. */
+const fmtPct   = v => {
+  const n = toNum(v);
+  return n ? n.toFixed(2) + "%" : "";
+};
+/* Editable DC%-column ids — everywhere in the row template that
+   accepts a hand-typed rate.  Used by the newRow event wiring to
+   attach the focus/blur handlers that swap the "%" suffix in and
+   out while the BDE is typing. */
+const DC_PCT_INPUT_COLS = ["base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"];
 
 let customerCache = {};   // {ship_to|sold_to: row}
 let materialCache = {};   // {m_code: row}
@@ -1034,11 +1049,11 @@ function applyAgingDC(row) {
   const spDC   = toNum(row.querySelector('[data-col="sp_dc"]').value);
   const baseFactor = (1 - baseDC/100) * (1 - spDC/100);
   const agingEl = row.querySelector('[data-col="aging_dc"]');
-  if (agingEl) agingEl.value = target.toFixed(2);
+  if (agingEl) agingEl.value = fmtPct(target);
   const addEl = row.querySelector('[data-col="add_dc"]');
   if (addEl && baseFactor > 0) {
     const addDC = 100 * (1 - (1 - target/100) / baseFactor);
-    addEl.value = Math.max(0, addDC).toFixed(2);
+    addEl.value = fmtPct(Math.max(0, addDC));
   }
   /* MTH / Volume start blank on an aged row — the aged path is a
      pure "list → aged" chain that doesn't want stacked customer-
@@ -1320,7 +1335,7 @@ async function applyAdditionalDCToRow(rowEl){
   const currentlyManual = spEl.value && spEl.dataset.autoSpDc !== "1";
   if (currentlyManual) return;
   if (data && data.matched && data.additional_dc != null){
-    spEl.value = (+data.additional_dc).toFixed(2);
+    spEl.value = fmtPct(data.additional_dc);
     spEl.dataset.autoSpDc = "1";
     spEl.title = `Auto-filled from ${data.source || "customer"} promo ${data.promo || ""} (min qty ${data.min_qty ?? "—"})`;
     // Stash the matched promo bucket on the row so updateTotals can
@@ -1359,7 +1374,7 @@ function applyBaseDCToRow(rowEl, brand, line){
   const el = rowEl.querySelector('[data-col="base_dc"]');
   if (!el) return;
   if (pct == null) { el.value = ""; }
-  else             { el.value = (+pct).toFixed(2); }
+  else             { el.value = fmtPct(pct); }
   recalcRow(rowEl);
 }
 
@@ -1471,7 +1486,7 @@ function recalcRow(row){
     : 0;
   const totalAmount = q * proposedPrice;
 
-  row.querySelector('[data-col="current_dc"]').value    = currentDC ? currentDC.toFixed(2) : "";
+  row.querySelector('[data-col="current_dc"]').value    = fmtPct(currentDC);
   row.querySelector('[data-col="current_price"]').value = list ? fmtMoney(currentPrice) : "";
   const currentAmtEl = row.querySelector('[data-col="current_amount"]');
   if (currentAmtEl) currentAmtEl.value = list ? fmtMoney(currentPrice * q) : "";
@@ -1511,7 +1526,7 @@ function reverseSolveAddDC(row, targetStr){
   if (addDC < 0)   addDC = 0;
   if (addDC > 100) addDC = 100;
   const addEl = row.querySelector('[data-col="add_dc"]');
-  if (addEl) addEl.value = addDC.toFixed(2);
+  if (addEl) addEl.value = fmtPct(addDC);
   /* Skip recalcRow's rewrite of proposed_price while the user is
      typing; recalcRow's guard on activeElement handles that.  Every
      other derived cell (add_support, proposed_dc, total_amount)
@@ -1829,6 +1844,21 @@ function newRow(){
   // the customer negotiated a round total rather than a unit price.
   tr.querySelector('[data-col="total_amount"]')?.addEventListener("input", (e) => {
     reverseSolveFromTotalAmt(tr, e.target.value);
+  });
+  // Every editable DC%-column: strip the "%" when the BDE focuses so
+  // arithmetic keys work naturally, and re-append "N.NN%" on blur so
+  // the settled row reads uniformly across Base / MTH / 443 / Volume
+  // / Additional Special / Aging DC Guide.
+  DC_PCT_INPUT_COLS.forEach(c => {
+    const el = tr.querySelector(`[data-col="${c}"]`);
+    if (!el) return;
+    el.addEventListener("focus", () => {
+      const n = toNum(el.value);
+      el.value = n ? String(n) : "";
+    });
+    el.addEventListener("blur", () => {
+      el.value = fmtPct(el.value);
+    });
   });
   // Click any state-stock cell → aging bucket popover for that
   // (m_code, plant).  Cell needs a filled m_code + a nonzero stock
