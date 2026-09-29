@@ -1080,17 +1080,34 @@ async function suggestMaterial(q){
   // one; picking either resolves the same material and applyMaterial
   // overwrites the cell with the canonical size after resolve.
   const strip = s => String(s || "").toLowerCase().replace(/[\s/,.\-'&+()]/g, '');
-  const combo    = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
-  const comboRaw = r => {
-    const s = strip(r.description);
-    return r.pattern ? `${s} · ${r.pattern}` : s;
+  /* Rich value: "215/70R14 · H724 · Ventus S1 · HK" — Chrome
+     filters datalist options by VALUE substring, so putting the
+     pattern AND product name AND brand into the value lets a BDE
+     type "ventus", "h724" or "HK" and see the matching sizes fan
+     out.  A stripped clone ("21570R14 · H724 · Ventus · HK") is
+     added alongside so "21570r14" hits too. */
+  const parts = r => {
+    const bits = [];
+    if (r.description)  bits.push(r.description);
+    if (r.pattern)      bits.push(r.pattern);
+    if (r.product_name) bits.push(r.product_name);
+    if (r.brand)        bits.push(r.brand);
+    return bits.join(" · ");
   };
-  const codeLabel = r => r.pattern ? `${r.description} · ${r.pattern}` : r.description;
+  const partsRaw = r => {
+    const bits = [];
+    if (r.description)  bits.push(strip(r.description));
+    if (r.pattern)      bits.push(r.pattern);
+    if (r.product_name) bits.push(r.product_name);
+    if (r.brand)        bits.push(r.brand);
+    return bits.join(" · ");
+  };
+  const codeLabel = r => parts(r);
   const descItems = [];
   for (const r of rows) {
-    descItems.push({value: combo(r),    label: r.m_code});
-    const raw = comboRaw(r);
-    if (raw && raw !== combo(r)) descItems.push({value: raw, label: r.m_code});
+    descItems.push({value: parts(r), label: r.m_code});
+    const raw = partsRaw(r);
+    if (raw && raw !== parts(r)) descItems.push({value: raw, label: r.m_code});
   }
   fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
   fillDatalist("desc_list",  descItems);

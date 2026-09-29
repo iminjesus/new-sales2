@@ -2527,9 +2527,9 @@ def api_orders_material_suggest():
     calls /api/orders/material to fill the row on selection."""
     q = (request.args.get("q") or "").strip()
     try:
-        limit = max(1, min(int(request.args.get("limit", 15) or 15), 50))
+        limit = max(1, min(int(request.args.get("limit", 150) or 150), 500))
     except ValueError:
-        limit = 15
+        limit = 150
     if not q:
         return jsonify([])
 
@@ -2557,11 +2557,15 @@ def api_orders_material_suggest():
 
         # Punctuation-agnostic multi-token match — see
         # customer_suggest for the rationale.  "185 70r14" and
-        # "18570R14" both find "185/70R14…".  Pattern is added to the
-        # OR set so typing "215 70r14 h724" narrows to the exact tread.
+        # "18570R14" both find "185/70R14…".  Pattern, product_name
+        # AND brand are all in the OR set so typing "ventus", "H724"
+        # or "HK" narrows correctly; typing "dynapro TBR" hits the
+        # Dynapro family across TBR patterns.
         code_expr = _strip_noise_sql("m_code")
         desc_expr = _strip_noise_sql(c_desc) if c_desc else None
         pat_expr  = _strip_noise_sql(c_pat)  if c_pat  else None
+        prod_expr = _strip_noise_sql(c_prod) if c_prod else None
+        brand_expr = _strip_noise_sql("brand") if c_brand else None
         tokens = [t for t in q.split() if t.strip()] or [q]
         wh_and = []
         params = []
@@ -2575,6 +2579,12 @@ def api_orders_material_suggest():
                 params.append(f"%{tok_norm}%")
             if pat_expr:
                 per_tok.append(f"{pat_expr} LIKE %s")
+                params.append(f"%{tok_norm}%")
+            if prod_expr:
+                per_tok.append(f"{prod_expr} LIKE %s")
+                params.append(f"%{tok_norm}%")
+            if brand_expr:
+                per_tok.append(f"{brand_expr} LIKE %s")
                 params.append(f"%{tok_norm}%")
             wh_and.append("(" + " OR ".join(per_tok) + ")")
         if not wh_and:
