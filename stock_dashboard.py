@@ -2348,7 +2348,7 @@ table.dt thead.pipe-mode tr.col-labels th { top:26px; }
    freeze block reserves as little horizontal room as possible.
    Sum ≈ 630px versus the old 830px, freeing 200px for the
    elastic data columns to the right. */
-table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:32px;  width:32px;  }
+table.dt th:nth-child(1),  table.dt td:nth-child(1)  { min-width:44px;  width:44px;  }
 table.dt th:nth-child(2),  table.dt td:nth-child(2)  { min-width:52px;  width:52px;  }
 table.dt th:nth-child(3),  table.dt td:nth-child(3)  { min-width:68px;  width:68px;  }
 table.dt th:nth-child(4),  table.dt td:nth-child(4)  { min-width:36px;  width:36px;  }
@@ -2448,18 +2448,19 @@ table.dt tbody tr.total-row td:nth-child(3).grp-start {
     border-left: none;
 }
 /* Cumulative left offsets — running sum of the widths above.
-   Total = 46+68+36+92+92+52+68+80+40+56 = 630 px */
+   Check column widened to 44 px so the tick is easy to hit; every
+   downstream offset shifts by +12. */
 table.dt th:nth-child(1),  table.dt td:nth-child(1)  { left:0;    }
-table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:32px;  }
-table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:84px;  }
-table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:152px; }
-table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:188px; }
-table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:280px; }
-table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:372px; }
-table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:424px; }
-table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:492px; }
-table.dt th:nth-child(10), table.dt td:nth-child(10) { left:572px; }
-table.dt th:nth-child(11), table.dt td:nth-child(11) { left:612px; }
+table.dt th:nth-child(2),  table.dt td:nth-child(2)  { left:44px;  }
+table.dt th:nth-child(3),  table.dt td:nth-child(3)  { left:96px;  }
+table.dt th:nth-child(4),  table.dt td:nth-child(4)  { left:164px; }
+table.dt th:nth-child(5),  table.dt td:nth-child(5)  { left:200px; }
+table.dt th:nth-child(6),  table.dt td:nth-child(6)  { left:292px; }
+table.dt th:nth-child(7),  table.dt td:nth-child(7)  { left:384px; }
+table.dt th:nth-child(8),  table.dt td:nth-child(8)  { left:436px; }
+table.dt th:nth-child(9),  table.dt td:nth-child(9)  { left:504px; }
+table.dt th:nth-child(10), table.dt td:nth-child(10) { left:584px; }
+table.dt th:nth-child(11), table.dt td:nth-child(11) { left:624px; }
 /* Right edge marker on the last frozen column — thin (1px) per
    user request so it doesn't dominate visually. */
 table.dt th:nth-child(11), table.dt td:nth-child(11) { border-right:1px solid #CBD5E1; }
@@ -2491,12 +2492,25 @@ table.dt tbody tr.merge-cohover.sub-total td { background:#E0E7FF !important; }
    `merge-break` and draws a heavy top border so the merge groups
    read cleanly. */
 table.dt tbody tr.merge-break td { border-top:2px solid #37474F; }
-/* Row-check inputs — a small square shown in the Merge Code cell of
-   every M CODE row + Sub Total row.  Vertical-align so the mono
-   digits sit on the same baseline as the checkbox. */
-.row-check { vertical-align: -2px; width: 13px; height: 13px;
-             cursor: pointer; accent-color: #1D4ED8; margin-right: 4px; }
+/* Row-check inputs — a clearly visible square in the first (Check)
+   column of every M CODE row + Sub Total row.  Sized larger than
+   the browser default so the tick is easy to hit at 44 px column
+   width; a soft blue border-glow makes the box discoverable even
+   before it's ticked, so the BDE doesn't have to hunt for it. */
+.row-check { vertical-align: -1px; width: 17px; height: 17px;
+             cursor: pointer; accent-color: #1D4ED8; margin: 0;
+             border: 1.5px solid #94A3B8; border-radius: 3px;
+             transition: box-shadow .12s, border-color .12s; }
+.row-check:hover { border-color: #1D4ED8;
+                   box-shadow: 0 0 0 2px rgba(29,78,216,0.18); }
+.row-check:checked { border-color: #1D4ED8; }
 .row-check-sub { accent-color: #37474F; }
+.row-check-sub:hover { border-color: #37474F;
+                       box-shadow: 0 0 0 2px rgba(55,71,79,0.18); }
+/* Table header for the Check column — replace the "CHE" truncation
+   with a compact tick glyph so the column reads as a checkbox
+   column at a glance, no header hover needed. */
+table.dt thead th[data-col="_check"] { font-size: 15px; letter-spacing: 0; padding: 4px 0; }
 /* Sub Total row per merge — bold text, dashed top border, solid
    bottom border.  Background colour is set by the sub-status-*
    class below so each merge tints to its own status colour instead
@@ -3583,7 +3597,7 @@ function togglePipeline() {
    state the group belongs to. */
 function buildTableHead() {
     const nonState = [
-        ['_check','Check box'], ['merge_code','Merge'],
+        ['_check','☑'], ['merge_code','Merge'],
         ['m_code','M CODE'], ['brand','Brand'],
         ['line','Marketing Line'], ['product_name','Product Name'],
         ['pattern','Pattern'],
@@ -3606,7 +3620,7 @@ function buildTableHead() {
        no width gets an equal share of the remainder). */
     /* Widths MUST match the CSS nth-child(N) rules above so the
        colgroup and the sticky-left offsets stay in sync. */
-    const IDENTITY_WIDTHS = [32, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];
+    const IDENTITY_WIDTHS = [44, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];
     /* Give each data column an EXPLICIT width so `table-layout: fixed`
        renders headers wide enough to read ("STK / PRT / MOI / 3M /
        4-6M …") without truncating.  If the viewport isn't wide enough
@@ -4495,7 +4509,7 @@ function autofitColumns() {
     };
     const headerCells = tbl.querySelectorAll('thead tr:last-child th');
     const rowCells = tbl.querySelectorAll('tbody tr');
-    const IDENT_WIDTHS = [32, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
+    const IDENT_WIDTHS = [44, 52, 68, 36, 92, 92, 52, 68, 80, 40, 56];  // frozen block
     const IDENT_COUNT  = IDENT_WIDTHS.length;
     /* Blank all col widths first so cells grow to natural content. */
     cols.forEach(c => { c.style.width = ''; });
@@ -4928,6 +4942,24 @@ function downloadXLSX() {
         ['Max demand (basis)',     r => r.max_demand || 0,                            { wch:11, num:'1dp', hidden:true, level:1, group:'basis', right:'medium' }],
         ['Status',                 r => STATUS_PRETTY[r.status] || r.status || '',    { wch:14 }],
         ['Description',            r => r.description || '',                          { wch:30, hidden:true }],
+        /* Selection state, appended AFTER the visible payload and
+           hidden by default.  For each M CODE row: "✓" if the user
+           ticked its checkbox on the drill-down, blank otherwise.
+           Sub Total rows show "all" when every sibling M CODE is
+           checked, "some" for a partial group, and blank for none —
+           lets a downstream reader unhide the column, filter for "✓"
+           or "all", and instantly see the picked subset without
+           losing the merge context. */
+        ['Checked',
+            r => {
+                if (r._isSubTotal) {
+                    const grp = mergeMap.get(r.merge_code) || [];
+                    const on  = grp.filter(x => selected.has(x.m_code)).length;
+                    return on === 0 ? '' : on === grp.length ? 'all' : 'some';
+                }
+                return selected.has(r.m_code) ? '✓' : '';
+            },
+            { wch:8, hidden:true }],
     ];
 
     /* ── Interleave Sub Total rows ──
