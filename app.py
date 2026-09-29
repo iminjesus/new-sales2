@@ -3656,25 +3656,28 @@ def _ensure_submitted_orders_table():
         print(f"[submitted_orders] schema init failed: {e}")
 
 
-def _next_order_no(cur, rebateable_flag: str) -> str:
-    """Generate the next per-day order number in `YYMMDD_NNN(Y|N)` form.
+def _next_order_no(cur, rebateable_flag: str, temp: bool = False) -> str:
+    """Generate the next per-day order number in `YYMMDD_NNN(Y|N)` form
+    (or `TYYMMDD_NNN(Y|N)` when temp=True).
 
     Sequence counts orders where order_no starts with today's YYMMDD
-    prefix regardless of the trailing Y/N.  If today has 3 rows so
-    far and the caller is rebateable=Y, this returns `260926_004Y`.
-    Falls back to `_001<flag>` when the count query errors so the
-    submit never dies over the sequence lookup."""
+    prefix regardless of the trailing Y/N or the T prefix, so a temp
+    and a real order on the same day share the same counter.  Falls
+    back to `_001<flag>` when the count query errors so the submit
+    never dies over the sequence lookup."""
     today = datetime.now().strftime("%y%m%d")
     flag = "Y" if str(rebateable_flag or "").upper().startswith("Y") else "N"
     try:
         cur.execute(
-            "SELECT COUNT(*) FROM submitted_orders WHERE order_no LIKE %s",
-            (today + "_%",),
+            "SELECT COUNT(*) FROM submitted_orders "
+            "WHERE order_no LIKE %s OR order_no LIKE %s",
+            (today + "_%", "T" + today + "_%"),
         )
         n = int((cur.fetchone() or [0])[0]) + 1
     except Exception:
         n = 1
-    return f"{today}_{n:03d}{flag}"
+    prefix = "T" if temp else ""
+    return f"{prefix}{today}_{n:03d}{flag}"
 
 
 def _approval_email_html(oid, order, approver_name, approver_email, base_url):
@@ -3973,6 +3976,24 @@ def api_orders_submit():
             ),
         )
         oid = cur.lastrowid
+        # If this submission came from a saved draft (Save-as-Draft
+        # flow), the front-end sends the draft's row id as
+        # orig_temp_id.  Delete it now that the real order lives on
+        # its own row — the draft has served its purpose.  Guarded
+        # by needs_mgmt_approval='temp' so nothing accidentally
+        # nukes a real order id.
+        try:
+            _temp_id = int(payload.get("orig_temp_id") or 0)
+        except Exception:
+            _temp_id = 0
+        if _temp_id > 0 and submitted_by_email:
+            cur.execute(
+                "DELETE FROM submitted_orders "
+                "WHERE id = %s "
+                "  AND needs_mgmt_approval = 'temp' "
+                "  AND LOWER(submitted_by_email) = %s",
+                (_temp_id, submitted_by_email),
+            )
         conn.commit()
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4016,6 +4037,112 @@ def api_orders_submit():
         print(f"[submit] mail queue failed: {e}")
 
     return jsonify({"ok": True, "id": oid})
+
+
+@app.post("/api/orders/save_temp")
+def api_orders_save_temp():
+    """Persist a draft SPRF to submitted_orders with
+    needs_mgmt_approval='temp' and a T-prefixed order number.
+
+    Body is the same JSON shape as /api/orders/submit but every
+    required-on-submit field (sold_to, lines, rebateable) is
+    OPTIONAL here — a draft can be half-filled.  Pass `id` to
+    UPDATE an existing draft in place (keeps its order_no); omit
+    `id` to create a new draft.  Response: {ok, id, order_no}.
+
+    Only the draft's creator ever sees it — api_orders_list scopes
+    every needs_mgmt_approval='temp' row to submitted_by_email.
+    Once the BDE opens the draft and hits Submit, api_orders_submit
+    deletes this row (via orig_temp_id in the payload)."""
+    import json as _json
+    payload = request.get_json(silent=True) or {}
+    header  = payload.get("header") or {}
+    totals  = payload.get("totals") or {}
+    lines   = payload.get("lines")  or []
+    submitted_by_bde   = (header.get("bde_name") or "").strip()
+    submitted_by_email = (_bde_from_request() or "").strip().lower()
+    def _num(v):
+        try:
+            s = str(v or "0").replace(",", "").replace("$", "").replace("%", "").strip()
+            return float(s or 0)
+        except Exception:
+            return 0.0
+    rebateable = str(header.get("rebateable") or "").upper().strip()
+    if rebateable not in ("Y", "N"): rebateable = "N"
+    mgmt_reason = (header.get("mgmt_reason") or "").strip()
+
+    try:  existing_id = int(payload.get("id") or 0)
+    except Exception: existing_id = 0
+
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        row_values = (
+            submitted_by_bde[:120],
+            submitted_by_email[:255],
+            (header.get("sold_to")      or "")[:40],
+            (header.get("sold_to_name") or "")[:255],
+            (header.get("ship_to")      or "")[:40],
+            (header.get("ship_to_name") or "")[:255],
+            (header.get("state")        or "")[:20],
+            (header.get("po_number")    or "")[:100],
+            (header.get("order_date")   or "")[:20],
+            _num(totals.get("subtotal")),
+            _num(totals.get("total_inc_gst")),
+            _num(totals.get("freight_amount")),
+            _num(totals.get("grand_total")),
+            int(_num(totals.get("total_qty"))),
+            int(_num(totals.get("sovd_qty"))),
+            _num(totals.get("avg_dc_pct")),
+            "temp",
+            mgmt_reason,
+            rebateable,
+            _json.dumps(payload, ensure_ascii=False, default=str),
+        )
+        if existing_id > 0:
+            # Update-in-place — creator only, and only if the row is
+            # still marked temp (safety guard against clobbering a
+            # real order).
+            cur.execute(
+                "UPDATE submitted_orders SET "
+                "  submitted_by_bde=%s, submitted_by_email=%s, sold_to=%s, sold_to_name=%s, "
+                "  ship_to=%s, ship_to_name=%s, state=%s, po_number=%s, order_date=%s, "
+                "  subtotal=%s, total_inc_gst=%s, freight_amount=%s, grand_total=%s, "
+                "  total_qty=%s, sovd_qty=%s, avg_dc_pct=%s, "
+                "  needs_mgmt_approval=%s, mgmt_reason=%s, "
+                "  rebateable=%s, payload_json=%s, "
+                "  submitted_at=NOW() "
+                "WHERE id=%s AND needs_mgmt_approval='temp' "
+                "  AND LOWER(submitted_by_email)=%s",
+                row_values + (existing_id, submitted_by_email),
+            )
+            if cur.rowcount == 0:
+                return jsonify({"error": "draft not found or not yours"}), 404
+            cur.execute("SELECT order_no FROM submitted_orders WHERE id=%s", (existing_id,))
+            order_no = (cur.fetchone() or ["?"])[0]
+            oid = existing_id
+        else:
+            order_no = _next_order_no(cur, rebateable, temp=True)
+            cur.execute(
+                "INSERT INTO submitted_orders "
+                "(submitted_by_bde, submitted_by_email, sold_to, sold_to_name, "
+                " ship_to, ship_to_name, state, po_number, order_date, "
+                " subtotal, total_inc_gst, freight_amount, grand_total, "
+                " total_qty, sovd_qty, avg_dc_pct, status_sap, "
+                " needs_mgmt_approval, mgmt_reason, order_no, rebateable, payload_json) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'N',%s,%s,%s,%s,%s)",
+                row_values[:16] + (row_values[16], row_values[17], order_no, row_values[18], row_values[19]),
+            )
+            oid = cur.lastrowid
+        conn.commit()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+    return jsonify({"ok": True, "id": oid, "order_no": order_no})
 
 
 @app.get("/api/orders/list")
@@ -4063,6 +4190,13 @@ def api_orders_list():
             # state-manager hierarchy carve-out will slot in here
             # once we're handed the mapping.
             wh.append("LOWER(submitted_by_email) = %s")
+            p.append(who or "")
+        else:
+            # Global-scope caller: hide OTHER users' Save-as-Draft
+            # rows.  A temp draft is private to its creator until
+            # they Submit; approvers / read-only CC / Harry never
+            # need to see somebody else's half-filled work.
+            wh.append("(needs_mgmt_approval <> 'temp' OR LOWER(submitted_by_email) = %s)")
             p.append(who or "")
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(

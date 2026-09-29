@@ -287,6 +287,11 @@ function renderRows(){
         const at = (r.approved_at || "").slice(0, 16);
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
                    (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
+      } else if ((r.needs_mgmt_approval || "").toLowerCase() === "temp"){
+        /* Save-as-Draft row — visible only to its creator (the
+           backend scopes it), open it back up by clicking the row
+           and the form re-hydrates in edit mode. */
+        apprCell = `<span style="background:#e0f2fe;color:#075985;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">📝 Draft</span>`;
       } else if (r.needs_mgmt_approval === "Y"){
         /* MD-only pill only flips on when the backend counted at least
            one MD-qualifying line (non-aged, non-Standard-on-line,

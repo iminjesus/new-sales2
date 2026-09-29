@@ -608,7 +608,7 @@
     /* Chrome-in-tab print (used by "Print" button) — hide the URL
        block and app chrome that would otherwise sit above the SPRF. */
     #agedStockPanel, #agedStockReopen, .pagenav, .toolbar,
-    #btnAddRow, #btnClear, #btnPrint, #btnSubmit,
+    #btnAddRow, #btnClear, #btnPrint, #btnSubmit, #btnSaveTemp,
     .status, .row-del, .row-del-cell,
     #approvalPath { display: none !important; }
     .wrap { max-width: none; padding: 0; margin: 0; }
@@ -943,6 +943,16 @@
     <button class="ghost" id="btnAddRow">+ Add row</button>
     <button class="ghost" id="btnClear">Clear form</button>
     <button class="primary" id="btnPrint" onclick="window.print()">Print / PDF</button>
+    <!-- Save draft (temp).  Persists the current form to Submitted
+         Orders with needs_mgmt_approval='temp' and a T-prefixed
+         order number; only the creator can see the saved draft
+         until they come back to it and hit Submit (which creates a
+         real order and deletes the temp). -->
+    <button class="primary" id="btnSaveTemp"
+            style="background:#0f766e;border-color:#0d6a63"
+            title="Save as a draft — visible only to you.  Come back later, open the draft from Submitted Orders, and hit Submit to file it as a real SPRF.">
+      💾 Save as Draft
+    </button>
     <button class="primary submit-btn" id="btnSubmit">Submit</button>
   </div>
   <!-- CS toggle: only visible when Harry (or an ALL-role user) is
@@ -2619,6 +2629,11 @@ $("#btnSubmit").addEventListener("click", async () => {
     if (!ack) return;   // BDE dismissed → don't submit
     window._mdAcknowledged = true;
   }
+  /* If this SPRF was hydrated from a saved draft, pass the draft's
+     row id so the backend can delete it after the real order is
+     inserted.  Set by hydrateSubmittedOrder when it loads a row
+     with needs_mgmt_approval='temp'. */
+  if (btn.dataset.tempOid) payload.orig_temp_id = +btn.dataset.tempOid;
   btn.disabled = true; btn.textContent = "Submitting…";
   try {
     const r = await fetch("/api/orders/submit", {
@@ -2640,6 +2655,46 @@ $("#btnSubmit").addEventListener("click", async () => {
   } catch(e){
     setStatus("Submit failed: " + e, "warn");
     btn.disabled = false; btn.textContent = "Submit";
+  }
+});
+
+/* Save-as-Draft — writes the current form to Submitted Orders as a
+   temp row (needs_mgmt_approval='temp', order_no prefixed with T).
+   Draft rows are visible only to the creator; opening one from the
+   Submitted Orders list re-hydrates the form and Submit turns it
+   into a real order (deleting the temp).  The Save button never
+   fires the MD Notice modal or Rebate-able gate — a draft can be
+   as partial as the BDE likes. */
+$("#btnSaveTemp")?.addEventListener("click", async () => {
+  const btn = $("#btnSaveTemp");
+  const submitBtn = $("#btnSubmit");
+  const payload = serializeOrder();
+  /* If we're currently editing an existing temp, send its id so the
+     backend updates the row in place instead of piling up drafts. */
+  const draftId = submitBtn?.dataset.tempOid ? +submitBtn.dataset.tempOid : null;
+  if (draftId) payload.id = draftId;
+  btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    const r = await fetch("/api/orders/save_temp", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Save failed: ${j.error || r.statusText}`, "warn");
+      btn.disabled = false; btn.textContent = "💾 Save as Draft"; return;
+    }
+    /* Remember this draft's id so subsequent Save clicks update in
+       place and a later Submit can delete it. */
+    if (submitBtn) submitBtn.dataset.tempOid = String(j.id);
+    btn.textContent = `Saved · ${j.order_no || "#" + j.id}`;
+    setStatus(`Draft <b>${j.order_no || "#" + j.id}</b> saved — visible only to you until you Submit.`, "ok");
+    setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save as Draft"; }, 1500);
+  } catch(e){
+    setStatus("Save failed: " + e, "warn");
+    btn.disabled = false; btn.textContent = "💾 Save as Draft";
   }
 });
 
@@ -2710,11 +2765,15 @@ async function hydrateSubmittedOrder(oid, editMode){
 
   // 4. Decide view vs edit mode.  Edit needs both the URL flag and
   // the current user to be the original submitter (or ALL-role).
+  // A saved draft (needs_mgmt_approval='temp') opens in edit mode
+  // for its creator whether or not the URL carries ?edit=1 — the
+  // whole point of a draft is to keep editing it.
   let who = {};
   try {
     who = await (await fetch("/api/orders/whoami", {credentials: "same-origin"})).json();
   } catch {}
-  const canEdit = editMode && (
+  const isTempDraft = (data.needs_mgmt_approval || "").toLowerCase() === "temp";
+  const canEdit = (editMode || isTempDraft) && (
     (who.email && data.submitted_by_email && who.email === data.submitted_by_email.toLowerCase()) ||
     who.role === "ALL"
   );
@@ -2726,13 +2785,30 @@ async function hydrateSubmittedOrder(oid, editMode){
     $("#btnClear").disabled  = false;
     const sBtn = $("#btnSubmit");
     sBtn.hidden = false;
-    sBtn.textContent = "Save changes";
-    sBtn.dataset.mode = "edit";
-    sBtn.dataset.oid  = String(data.id);
+    if (isTempDraft){
+      /* Draft flow: Submit files the SPRF for real AND deletes this
+         temp row (backend does that via orig_temp_id).  Save button
+         stays on so the BDE can keep saving intermediate versions. */
+      sBtn.textContent = "Submit";
+      sBtn.dataset.tempOid = String(data.id);
+      delete sBtn.dataset.mode;
+      delete sBtn.dataset.oid;
+    } else {
+      sBtn.textContent = "Save changes";
+      sBtn.dataset.mode = "edit";
+      sBtn.dataset.oid  = String(data.id);
+      /* Editing an already-submitted order — Save-as-Draft doesn't
+         belong here (there's no draft to save), so hide the button. */
+      const draftBtn = $("#btnSaveTemp");
+      if (draftBtn) draftBtn.hidden = true;
+    }
     // Trigger recalcRow so any user tweak updates totals live.
     $$("#linesBody tr").forEach(tr => recalcRow(tr));
     updateTotals();
-    $("#status").innerHTML = `Editing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b> (will reset to N on save)`;
+    const label = isTempDraft
+      ? `Editing saved draft <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at || ""} · click Submit to file for approval`
+      : `Editing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b> (will reset to N on save)`;
+    $("#status").innerHTML = label;
   } else {
     // Read-only view — lock every input, hide Submit, and let Harry
     // (via wireStatusPanel below) still flip the SAP flag.
@@ -2744,6 +2820,10 @@ async function hydrateSubmittedOrder(oid, editMode){
     $("#btnAddRow").disabled = true;
     $("#btnClear").disabled  = true;
     $("#btnSubmit").hidden   = true;
+    /* Save-as-Draft is only meaningful when the form is editable —
+       a read-only view has nothing new to save. */
+    const draftBtn = $("#btnSaveTemp");
+    if (draftBtn) draftBtn.hidden = true;
     // Offer an Edit chip when the viewer IS the submitter (or ALL) —
     // one click flips into edit mode with the same order id.
     const isSubmitter = (who.email && data.submitted_by_email &&
