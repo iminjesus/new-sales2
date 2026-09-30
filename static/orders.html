@@ -992,6 +992,27 @@
     <button id="btnFlipStatus" class="primary">Mark as Y</button>
     <span id="csMeta" class="cs-meta"></span>
   </div>
+  <!-- Bottom-of-page Approve bar.
+       Appears ONLY when the current viewer is a named approver
+       (Hayden / JJ / Kenny) AND the order is still Pending AND
+       they haven't already flipped their own slot.  Sits at the
+       very tail of the SPRF so the approver reads the entire
+       order top-to-bottom before deciding — no accidental clicks
+       from the top-panel chip row. -->
+  <div id="bottomApproveBar" hidden
+       style="margin-top:18px;padding:16px 20px;background:#f0fdf4;
+              border:2px solid #16a34a;border-radius:6px;
+              text-align:center;">
+    <div id="bottomApproveText"
+         style="color:#166534;font-size:13.5px;font-weight:700;margin-bottom:10px">
+      Review the order above, then click <b>Approve</b> to sign off.
+    </div>
+    <button id="btnBottomApprove" class="primary"
+            style="background:#059669;border-color:#047857;
+                   padding:8px 26px;font-size:14px;font-weight:800">
+      ✓ Approve this SPRF
+    </button>
+  </div>
 </div>
 
 <!-- shared datalists (populated on-input via debounced /suggest calls) -->
@@ -3299,53 +3320,91 @@ function wireApprovalPanel(order, who){
     chip("JJ",      order.approved_b, order.approved_b_at),
   ].join("");
 
-  // Approve button — only for the named approvers, and only when
-  // their own slot is still Pending.  Adds inline so the click target
-  // sits next to their chip.
-  // First-approver-wins: once approved_by_name is set, the order is
-  // fully approved — the Approve button is hidden for everyone,
-  // including the other named approvers.  Only when the record is
-  // still pending AND the viewer is a named approver whose own slot
-  // hasn't flipped do we render the button.
+  /* Approve action lives at the BOTTOM of the page now — the top
+     panel just SHOWS status (chips + banner).  Forcing the approver
+     to scroll to the tail before clicking guarantees they've seen
+     the full order (customer, DC cascade, per-line detail) before
+     signing off.  wireBottomApproveBar handles the render + click. */
+  wireBottomApproveBar(order, who);
+  panel.hidden = false;
+}
+
+/* Render / wire the tail-of-page Approve bar.  Visible only when
+     • order.needs_mgmt_approval === "Y"
+     • the current viewer is one of the named approvers
+     • that approver's OWN slot is still Pending
+     • no approver has flipped the first-wins record yet
+   Everything else hides the bar entirely. */
+function wireBottomApproveBar(order, who){
+  const bar    = document.getElementById("bottomApproveBar");
+  const btn    = document.getElementById("btnBottomApprove");
+  const txt    = document.getElementById("bottomApproveText");
+  if (!bar || !btn || !txt) return;
+  if (order.needs_mgmt_approval !== "Y"){ bar.hidden = true; return; }
   const alreadyApproved = !!order.approved_by_name;
   const myMissing = !alreadyApproved && (
       (who.is_approver_a && order.approved_a !== "Y")
    || (who.is_approver_b && order.approved_b !== "Y")
    || (who.is_approver_c && order.approved_c !== "Y"));
-  if (myMissing){
-    const btn = document.createElement("button");
-    btn.textContent = "Approve";
-    btn.style.cssText = "margin-left:12px;padding:4px 12px;background:#059669;color:#fff;border:1px solid #047857;border-radius:3px;font-weight:700;cursor:pointer";
-    btn.addEventListener("click", async () => {
-      btn.disabled = true; btn.textContent = "Approving…";
-      try {
-        const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
-          method: "POST", credentials: "same-origin",
-          headers: {"Content-Type": "application/json"}, body: "{}",
-        });
-        const j = await r.json();
-        if (!r.ok || !j.ok){
-          setStatus(`Approve failed: ${j.error || r.statusText}`, "warn");
-          btn.disabled = false; btn.textContent = "Approve"; return;
-        }
-        const now = new Date().toISOString().slice(0,16).replace("T"," ");
-        if (j.slot === "approved_a"){
-          order.approved_a = "Y"; order.approved_a_at = now;
-        } else if (j.slot === "approved_b"){
-          order.approved_b = "Y"; order.approved_b_at = now;
-        } else if (j.slot === "approved_c"){
-          order.approved_c = "Y"; order.approved_c_at = now;
-        }
-        setStatus("Approval recorded.", "ok");
-        wireApprovalPanel(order, who);
-      } catch(e){
-        setStatus("Approve failed: "+e, "warn");
-        btn.disabled = false; btn.textContent = "Approve";
-      }
-    });
-    row.appendChild(btn);
+  if (!myMissing){
+    /* Already approved OR viewer isn't a pending approver — show a
+       status ribbon instead of the button so the reader sees where
+       the order stands without needing to scroll back up. */
+    if (alreadyApproved){
+      bar.hidden = false;
+      bar.style.background = "#ecfdf5";
+      bar.style.borderColor = "#16a34a";
+      txt.innerHTML = `✓ Already approved by <b>${(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + order.approved_at : ""}`;
+      btn.hidden = true;
+    } else {
+      bar.hidden = true;
+    }
+    return;
   }
-  panel.hidden = false;
+  /* Ready-to-approve state — full green bar, button visible. */
+  bar.hidden = false;
+  bar.style.background = "#f0fdf4";
+  bar.style.borderColor = "#16a34a";
+  txt.textContent = "Review the order above, then click Approve to sign off.";
+  btn.hidden = false;
+  btn.disabled = false;
+  btn.textContent = "✓ Approve this SPRF";
+  /* Replace prior click handler by cloning the button — re-render
+     paths (post-approve, re-hydrate) don't stack listeners. */
+  const fresh = btn.cloneNode(true);
+  btn.parentNode.replaceChild(fresh, btn);
+  fresh.addEventListener("click", async () => {
+    fresh.disabled = true; fresh.textContent = "Approving…";
+    try {
+      const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"}, body: "{}",
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok){
+        setStatus(`Approve failed: ${j.error || r.statusText}`, "warn");
+        fresh.disabled = false; fresh.textContent = "✓ Approve this SPRF"; return;
+      }
+      const now = new Date().toISOString().slice(0,16).replace("T"," ");
+      if (j.slot === "approved_a"){
+        order.approved_a = "Y"; order.approved_a_at = now;
+      } else if (j.slot === "approved_b"){
+        order.approved_b = "Y"; order.approved_b_at = now;
+      } else if (j.slot === "approved_c"){
+        order.approved_c = "Y"; order.approved_c_at = now;
+      }
+      /* First-approver-wins — stamp the record fields so the top
+         panel + list page both refresh cleanly. */
+      order.approved_by_name  = j.approved_by_name  || j.by_name || order.approved_by_name  || "";
+      order.approved_by_email = j.approved_by_email || j.by      || order.approved_by_email || "";
+      order.approved_at       = now;
+      setStatus("Approval recorded.", "ok");
+      wireApprovalPanel(order, who);
+    } catch(e){
+      setStatus("Approve failed: "+e, "warn");
+      fresh.disabled = false; fresh.textContent = "✓ Approve this SPRF";
+    }
+  });
 }
 
 // Update an existing submitted order — reuses serializeOrder().  Only
