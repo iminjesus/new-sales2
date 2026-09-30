@@ -4595,6 +4595,11 @@ def api_orders_list():
         # only" pill on orders_list — a value of 0 means Hayden /
         # Kenny can approve even if avg_dc_pct is ≥ 64 %.
         md_deep_by_id     = {i: 0 for i in ids}
+        # Per-order Requester + mod_log surfaced from payload_json so
+        # the list page shows the Requester column and the Remark
+        # column (edit history) without a separate fetch.
+        requester_by_id   = {i: "" for i in ids}
+        mod_log_by_id     = {i: [] for i in ids}
         if ids:
             fmt = ",".join(["%s"] * len(ids))
             try:
@@ -4602,6 +4607,10 @@ def api_orders_list():
                 for pr in cur.fetchall() or []:
                     try: pj = _json_local.loads(pr.get("payload_json") or "{}")
                     except Exception: pj = {}
+                    _hdr = pj.get("header") or {}
+                    requester_by_id[pr["id"]] = str(_hdr.get("requester_email") or "").strip()
+                    _ml = pj.get("mod_log") or []
+                    mod_log_by_id[pr["id"]] = _ml if isinstance(_ml, list) else []
                     for ln in (pj.get("lines") or []):
                         tag = str(ln.get("_line") or ln.get("line") or "").upper()
                         brand = str(ln.get("brand") or "").strip().upper()
@@ -4669,17 +4678,18 @@ def api_orders_list():
             # no current_amount (empty payload, e.g.).
             r["add_dc_pct"] = round(100.0 * (1 - tot_amt / cur_amt), 2) if cur_amt > 0 else 0.0
             r["md_deep_line_count"] = int(md_deep_by_id.get(r["id"], 0))
-            # Surface the last price-editor's name so the list can
-            # show "✎ Edited by Brian" next to the Pending pill.
-            # mgmt_reason is set to "<Editor> edited · <BDE reason>"
-            # by api_orders_update whenever Brian / Pamela saves.
+            # Surface the last price-editor's name (kept for
+            # backwards-compat with any client that still reads it;
+            # the list page moved edit history to the Remark col).
             _mr = str(r.get("mgmt_reason") or "")
             _last_edit = ""
             for _nm in PRICE_EDITOR_EMAILS.values():
                 if _mr.startswith(_nm + " edited") or _mr.startswith(_nm + " corrected"):
                     _last_edit = _nm
                     break
-            r["last_edited_by"] = _last_edit
+            r["last_edited_by"]  = _last_edit
+            r["requester_email"] = requester_by_id.get(r["id"], "")
+            r["mod_log"]         = mod_log_by_id.get(r["id"], [])
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()

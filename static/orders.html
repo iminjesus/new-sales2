@@ -734,6 +734,12 @@
               font-weight:700;font-size:14px;letter-spacing:.3px;border-radius:3px;
               margin:8px 0 4px">
     Order Number : <span id="orderNoRibbonVal" style="color:#fbbf24;font-size:15px"></span>
+    <!-- Requester ID next to the Order Number, same bright yellow so
+         the two identity pieces read as one badge.  Hidden until
+         hydrateSubmittedOrder learns the value. -->
+    <span id="orderNoRibbonReq"
+          style="color:#fbbf24;font-size:14px;font-weight:700;
+                 margin-left:16px" hidden></span>
   </div>
 
   <!-- ═══════════════ Customer + Order# meta ═══════════════ -->
@@ -3175,9 +3181,24 @@ async function hydrateSubmittedOrder(oid, editMode){
      the page so a reviewer instantly sees which SPRF this is. */
   const _oribbon = document.getElementById("orderNoRibbon");
   const _oval    = document.getElementById("orderNoRibbonVal");
+  const _oreq    = document.getElementById("orderNoRibbonReq");
   if (_oribbon && _oval){
     const _no = data.order_no || ("#" + data.id);
     _oval.textContent = _no;
+    /* Requester tag beside the Order Number.  Prefer the header
+       payload's requester_email; fall back to submitted_by_email
+       for older rows that predate the Requester field. */
+    const _req = (data.payload && data.payload.header && data.payload.header.requester_email)
+              || data.submitted_by_email || "";
+    if (_oreq){
+      if (_req){
+        _oreq.textContent = ` · Requester : ${_req}`;
+        _oreq.hidden = false;
+      } else {
+        _oreq.textContent = "";
+        _oreq.hidden = true;
+      }
+    }
     _oribbon.hidden = false;
   }
   /* Modification log — the backend appends every editor's email +

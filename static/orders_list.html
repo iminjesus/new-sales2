@@ -145,6 +145,9 @@
           <tr>
             <th style="width:110px">Order #</th>
             <th style="width:130px">Submitted</th>
+            <!-- Requester ID — signed-in mail id of whoever filled
+                 the SPRF (may differ from the mapped BDE). -->
+            <th style="width:170px" title="Signed-in user who filled the SPRF (from Cloudflare Access mail id).  May differ from the mapped BDE.">Requester</th>
             <th>BDE</th>
             <th>Sold-to</th>
             <th>Ship-to</th>
@@ -169,10 +172,15 @@
             <th style="width:130px" title="When the first approver signed off (first-approver-wins)">Approved</th>
             <th style="width:130px" title="When Harry flipped SAP-entered to Y for this order">SAP Created</th>
             <th style="width:90px" class="num" title="Time from Requested to Approved, in days and hours">Elapsed<br>to&nbsp;Approval</th>
+            <!-- Remark — every edit appends one line here so a
+                 reviewer sees the full modification history in
+                 one scroll, without opening the order.  Grows
+                 vertically as new edits happen. -->
+            <th style="width:220px" title="Modification history — every edit appends a line here (editor · timestamp).">Remark</th>
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="21" class="empty">Loading…</td></tr>
+          <tr><td colspan="23" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -240,18 +248,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="21" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="23" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="21" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="21" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -265,7 +273,7 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="21" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="23" class="empty">No orders match.</td></tr>`;
   } else {
     const meEmail = (_me.email || "").toLowerCase();
     const isAll   = (_me.role  || "").toUpperCase() === "ALL";
@@ -292,12 +300,9 @@ function renderRows(){
         const at = (r.approved_at || "").slice(0, 16);
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
                    (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
-        /* Also surface a "✎ Edited by X" chip when a price editor
-           touched the order after it was approved.  Approval + edit
-           can coexist (edit resets approvals, then re-approved). */
-        if (r.last_edited_by){
-          apprCell += `<br><span style="background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;font-size:10.5px;font-weight:700;margin-top:2px;display:inline-block">✎ Edited by ${escapeHtml(r.last_edited_by)}</span>`;
-        }
+        /* Edit history moved to the new Remark column at the far
+           right — the Approver cell stays clean and shows only the
+           approval record. */
       } else if ((r.needs_mgmt_approval || "").toLowerCase() === "temp"){
         /* Save-as-Draft row — visible only to its creator (the
            backend scopes it), open it back up by clicking the row
@@ -315,12 +320,9 @@ function renderRows(){
         const fg   = isMd ? "#991b1b" : "#92400e";
         const lb   = isMd ? "⚑ MD only" : "⏳ Pending";
         apprCell = `<span style="background:${bg};color:${fg};padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">${lb}</span>`;
-        /* Pending + editor touched → also show the ✎ Edited chip so
-           reviewers know a price editor already re-worked the numbers
-           since submission, while the approval is still outstanding. */
-        if (r.last_edited_by){
-          apprCell += `<br><span style="background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;font-size:10.5px;font-weight:700;margin-top:2px;display:inline-block">✎ Edited by ${escapeHtml(r.last_edited_by)}</span>`;
-        }
+        /* Edit history lives in the Remark column at the far right
+           now, so the Pending / MD-only pill reads cleanly on its
+           own. */
       }
       const rebPill = r.rebateable === "Y"
         ? `<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Y</span>`
@@ -331,10 +333,29 @@ function renderRows(){
       // reader spots the gated orders at a glance.
       const totDcStyle = totDC >= 64 ? "color:#991b1b;font-weight:800" : "";
       const curDC = +r.current_dc_pct || 0;
+      /* Remark cell — one line per mod_log entry, oldest at the top
+         so the reader tracks the modification chain downward as new
+         edits happen.  Standard-pricing / never-edited orders read
+         "—".  Truncates each mail id at "@…" so the column stays
+         narrow without losing the audit trail. */
+      const _mods = Array.isArray(r.mod_log) ? r.mod_log : [];
+      const _short = s => {
+        const t = String(s || "");
+        const i = t.indexOf("@");
+        return i > 0 ? t.slice(0, i) : t;
+      };
+      const remarkCell = _mods.length
+        ? _mods.map(m => `<div style="font-size:10.5px;line-height:1.35">
+             <b style="color:#3730a3">${escapeHtml(_short(m.by || m.email))}</b>
+             <span style="color:#64748b"> · ${escapeHtml(m.at || m.when || "")}</span>
+             <span style="color:#94a3b8"> · ${escapeHtml(m.action || "edited")}</span>
+           </div>`).join("")
+        : `<small style="color:#94a3b8">—</small>`;
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
         <td>${r.submitted_at || ""}</td>
+        <td><small style="color:#334155">${escapeHtml(r.requester_email || "—")}</small></td>
         <td>${escapeHtml(r.submitted_by_bde || "—")}</td>
         <td class="name-cell"><b>${escapeHtml(r.sold_to_name || "—")}</b><small>${escapeHtml(r.sold_to || "")}</small></td>
         <td class="name-cell"><b>${escapeHtml(r.ship_to_name || "—")}</b><small>${escapeHtml(r.ship_to || "")}</small></td>
@@ -354,6 +375,7 @@ function renderRows(){
         <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
         <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
         <td class="num">${fmtElapsed(r.submitted_at, r.approved_at)}</td>
+        <td>${remarkCell}</td>
       </tr>`;
     }).join("");
   }
