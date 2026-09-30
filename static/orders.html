@@ -337,11 +337,14 @@
   /* order lines table */
   .lines-wrap{border:1px solid var(--border);border-top:none;background:#fff;overflow-x:auto;}
   table.lines{
-    /* min-width brought back down after the column-bucket trim so
-       a regular 1440-px laptop viewport shows the whole table
-       without horizontal scroll.  .lines-wrap still carries
-       overflow-x:auto for smaller windows. */
-    width:100%;border-collapse:collapse;font-size:12px;min-width:1360px;
+    /* min-width tuned to the compact column buckets so the SPRF
+       row fits inside a 1280-px viewport without horizontal scroll;
+       .lines-wrap still carries overflow-x:auto for smaller windows.
+       Uses table-layout:fixed so declared widths STICK (browser
+       auto-shrink used to override our thead widths when the tbody
+       cells had no matching class). */
+    width:100%;border-collapse:collapse;font-size:12px;min-width:1240px;
+    table-layout:fixed;
   }
   table.lines thead th{
     background:var(--tbl-thead);color:#fff;font-weight:600;
@@ -412,25 +415,28 @@
     background:#fef9c3;color:#713f12;font-weight:700;text-align:right;
   }
   table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
-  /* Trimmed widths pass — the previous 60/90/110/100 bucket was
-     unnecessarily wide for the on-screen values.  Reducing every
-     bucket by ~10-15 px shortens the total row width so a normal
-     laptop viewport can show the whole table without horizontal
-     scroll, while every numeric value still has comfort room. */
-  table.lines thead th.narrow{width:54px}
-  /* Base DC% still wider than the other narrows because "52.00%"
-     is the longest common value plus a header of "Base DC %". */
-  table.lines thead th.base-dc-hdr{width:70px;min-width:70px}
-  table.lines tbody td.base-dc-cell{min-width:70px}
-  table.lines thead th.mid{width:78px}
-  table.lines thead th.mcode{width:92px;min-width:92px}
-  table.lines thead th.wide{width:88px;min-width:88px}
-  /* Ensure the body cells under the M-Code and Size headers inherit
-     min-widths so 7-digit material numbers and full sizes like
-     "205/50R20" don't get clipped when the browser competes for
-     horizontal space with the aged-stock side panel. */
-  table.lines tbody td:nth-child(2){min-width:110px}
-  table.lines tbody td:nth-child(4){min-width:100px}
+  /* Compact widths pass — every shared bucket is trimmed to what
+     the on-screen value actually needs plus a small comfort
+     margin.  Class-based sizing on BOTH thead and tbody cells so
+     the width sticks regardless of table-layout auto-shrink. */
+  table.lines th.narrow,
+  table.lines td.narrow-cell{width:50px;min-width:50px}
+  /* Qty is even narrower — the widest visible value is 3 digits
+     ("218", "132") centre-aligned; 42 px covers header + values. */
+  table.lines th.qty-hdr,
+  table.lines td.qty-cell{width:42px;min-width:42px;max-width:56px}
+  /* Base DC% keeps its own tighter width because "52.00%" is the
+     longest common value plus a "Base DC %" header. */
+  table.lines th.base-dc-hdr,
+  table.lines td.base-dc-cell{width:66px;min-width:66px}
+  table.lines th.mid,
+  table.lines td.mid-cell{width:72px;min-width:72px}
+  /* M-Code needs 7 monospace-ish digits — 66 px is plenty. */
+  table.lines th.mcode,
+  table.lines td.mcode-cell{width:66px;min-width:66px;max-width:80px}
+  /* Size — "205/50R20" is the widest common value. */
+  table.lines th.wide,
+  table.lines td.size-cell{width:74px;min-width:74px}
   /* Resize handle — a 6 px hit-target on the right edge of every
      header cell.  Cursor changes to col-resize on hover; the JS
      resizer down in the script section watches mousedown/mousemove
@@ -936,7 +942,7 @@
           <th class="row-no-th" title="Row number">No</th>
           <th class="row-del-th" title="Delete row">X</th>
           <th class="mcode">M-Code</th>
-          <th class="narrow">Qty</th>
+          <th class="qty-hdr">Qty</th>
           <th class="wide">Size</th>
           <th class="narrow">Brand</th>
           <th class="mid">Product Name</th>
@@ -2464,9 +2470,9 @@ function newRow(){
   delTd.appendChild(delBtn);
   tr.appendChild(delTd);
   const cells = [
-    {c:"m_code",         cls:"", list:"mcode_list"},
-    {c:"qty",            cls:"num center"},
-    {c:"description",    cls:"", list:"desc_list"},
+    {c:"m_code",         cls:"mcode-cell", list:"mcode_list"},
+    {c:"qty",            cls:"num center qty-cell"},
+    {c:"description",    cls:"size-cell", list:"desc_list"},
     {c:"brand",          cls:"center readonly", ro:true},
     /* Product Name and Pattern are ALSO searchable — the same
        material_suggest datalist backs them, so typing "Dyna" in
@@ -3700,12 +3706,17 @@ async function hydrateSubmittedOrder(oid, editMode){
       || who.is_price_editor
       || who.is_approver_a || who.is_approver_b || who.is_approver_c
       || who.is_harry;
-  const canEdit = (editMode || isTempDraft) && (
-    /* Temp drafts stay private to the creator (or ALL) — approvers
-       shouldn't be able to fiddle with a half-filled draft.  Real
-       orders open up to the full updater set above. */
-    isTempDraft ? (isSubmitterMatch || who.role === "ALL") : isAllowedUpdater
-  );
+  /* canEdit gate:
+       • Temp draft            → creator or ALL admin only.  Approvers
+         should NOT tweak somebody else's half-filled draft, so the
+         permission stays tight here.
+       • Real order (any state) → any allowed updater lands in edit
+         mode straight away.  The user's rule: "Approver가 Order를
+         조회할 때는 Update도 가능해야" — an approver reviewing a real
+         SPRF must be able to Update it without needing ?edit=1. */
+  const canEdit = isTempDraft
+      ? (isSubmitterMatch || who.role === "ALL")
+      : (editMode || isAllowedUpdater);
 
   /* Every re-opened order shows BOTH toolbar buttons (Save as Draft
      + Submit).  What changes per state is which one is DIMMED:
@@ -3800,21 +3811,14 @@ async function hydrateSubmittedOrder(oid, editMode){
     sBtn.textContent = "Submit";
     dimIt(sBtn, "View only — you don't have permission to modify this order.");
     dimIt(dBtn, "View only — you don't have permission to modify this order.");
-    /* Update chip — offered to every user in the update permission
-       set (original submitter, ALL admin, price editor, approver,
-       Harry).  Clicking reloads the page in edit mode so the same
-       hydrate flow takes them through the canEdit branch above. */
-    if (isAllowedUpdater){
-      const editBtn = document.createElement("button");
-      editBtn.className   = "primary";
-      editBtn.textContent = "Update";
-      editBtn.style.background = "#f59e0b";
-      editBtn.style.borderColor = "#b45309";
-      editBtn.addEventListener("click", () => {
-        location.href = `/order?id=${data.id}&edit=1`;
-      });
-      $("#btnSubmit").parentElement.appendChild(editBtn);
-    }
+    /* The old separate "Update" chip is gone — the toolbar's
+       Save / Update button already covers the update path for
+       every authorised identity, so a second button was noise.
+       Users with update rights arrive here through
+       hydrateSubmittedOrder without ?edit=1 and just click the
+       Save / Update button to re-enter edit mode via the same
+       flow, or refresh with ?edit=1 to land directly in edit
+       mode. */
     $("#status").innerHTML = `Viewing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b>`;
   }
   // 5. Status toggle for Harry.
@@ -3874,12 +3878,16 @@ function wireApprovalPanel(order, who){
   panel.hidden = false;
 }
 
-/* Render / wire the tail-of-page Approve bar.  Visible only when
-     • order.needs_mgmt_approval === "Y"
-     • the current viewer is one of the named approvers
-     • that approver's OWN slot is still Pending
-     • no approver has flipped the first-wins record yet
-   Everything else hides the bar entirely. */
+/* Render / wire the tail-of-page Approve bar.
+   New visibility rule (per user):
+     • Any viewer on a Pending SPRF that needs approval SEES the bar
+       + Approve button — non-approvers just get a dimmed button
+       with a "you're not an approver" tooltip so the affordance is
+       discoverable but only actionable to the right identity.
+     • Already-approved orders show a compact green status ribbon
+       ("Already approved by <name>") with no button.
+     • Standard-Pricing orders (no needs_mgmt_approval) hide the
+       bar entirely — nothing to approve there.  */
 function wireBottomApproveBar(order, who){
   const bar    = document.getElementById("bottomApproveBar");
   const btn    = document.getElementById("btnBottomApprove");
@@ -3887,37 +3895,47 @@ function wireBottomApproveBar(order, who){
   if (!bar || !btn || !txt) return;
   if (order.needs_mgmt_approval !== "Y"){ bar.hidden = true; return; }
   const alreadyApproved = !!order.approved_by_name;
-  const myMissing = !alreadyApproved && (
-      (who.is_approver_a && order.approved_a !== "Y")
-   || (who.is_approver_b && order.approved_b !== "Y")
-   || (who.is_approver_c && order.approved_c !== "Y"));
-  if (!myMissing){
-    /* Already approved OR viewer isn't a pending approver — show a
-       status ribbon instead of the button so the reader sees where
-       the order stands without needing to scroll back up. */
-    if (alreadyApproved){
-      bar.hidden = false;
-      bar.style.background = "#ecfdf5";
-      bar.style.borderColor = "#16a34a";
-      txt.innerHTML = `✓ Already approved by <b>${(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + order.approved_at : ""}`;
-      btn.hidden = true;
-    } else {
-      bar.hidden = true;
-    }
+  if (alreadyApproved){
+    /* Post-approval status ribbon — no button, just the record. */
+    bar.hidden = false;
+    bar.style.background = "#ecfdf5";
+    bar.style.borderColor = "#16a34a";
+    txt.innerHTML = `✓ Already approved by <b>${(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + order.approved_at : ""}`;
+    btn.hidden = true;
     return;
   }
-  /* Ready-to-approve state — full green bar, button visible. */
+  /* Pending — show the Approve button to everybody, dim it for
+     viewers who aren't the eligible approver. */
+  const myMissing = (who.is_approver_a && order.approved_a !== "Y")
+                 || (who.is_approver_b && order.approved_b !== "Y")
+                 || (who.is_approver_c && order.approved_c !== "Y");
   bar.hidden = false;
   bar.style.background = "#f0fdf4";
   bar.style.borderColor = "#16a34a";
-  txt.textContent = "Review the order above, then click Approve to sign off.";
   btn.hidden = false;
-  btn.disabled = false;
   btn.textContent = "✓ Approve this SPRF";
   /* Replace prior click handler by cloning the button — re-render
      paths (post-approve, re-hydrate) don't stack listeners. */
   const fresh = btn.cloneNode(true);
   btn.parentNode.replaceChild(fresh, btn);
+  if (myMissing){
+    /* Full-strength button for the eligible approver. */
+    txt.textContent = "Review the order above, then click Approve to sign off.";
+    fresh.disabled = false;
+    fresh.style.opacity = "";
+    fresh.style.cursor  = "";
+    fresh.title = "";
+  } else {
+    /* Dimmed for everyone else — the button is visible so the
+       reader sees where approval sits, but clicking does nothing
+       until the eligible approver opens the same view. */
+    txt.textContent = "This SPRF is Pending — the named approvers (Hayden / JJ / Kenny) can sign off.";
+    fresh.disabled = true;
+    fresh.style.opacity = "0.45";
+    fresh.style.cursor  = "not-allowed";
+    fresh.title = "Only Hayden, JJ or Kenny can approve this SPRF.";
+    return;
+  }
   fresh.addEventListener("click", async () => {
     fresh.disabled = true; fresh.textContent = "Approving…";
     try {
