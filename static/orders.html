@@ -2577,6 +2577,15 @@ function newRow(){
   const _qInp = tr.querySelector('[data-col="qty"]');
   _qInp?.addEventListener("paste", e => handleQtyPaste(e, tr));
   _qInp?.addEventListener("input", e => handleQtyInputMaybePaste(e, tr));
+  /* Yellow concession block (MTH / Volume / Additional Special /
+     Aging DC Guide) — same multi-value paste UX as M-Code / Qty.
+     Handler cascades the pasted values down subsequent rows and,
+     for a rectangular Excel selection, spreads across the block
+     from the anchor column rightward.  See handlePctPaste. */
+  ["mth_dc","vol_dc","add_dc","aging_dc"].forEach(col => {
+    tr.querySelector(`[data-col="${col}"]`)?.addEventListener("paste",
+        e => handlePctPaste(e, tr, col));
+  });
   /* On aged-locked rows, edits to MTH or Volume have to re-solve
      the chained add_dc so the row's Proposed Price still lands on
      the aged target (list × (1 − aging/100)).  We re-run the
@@ -2899,6 +2908,88 @@ function _asPositiveNumber(s){
   if (!t || !/^\d+(?:\.\d+)?$/.test(t)) return null;
   const n = parseFloat(t);
   return (isFinite(n) && n > 0) ? n : null;
+}
+
+/* Coerce a token to a percentage between 0 and 100.  Accepts an
+   optional trailing "%", "25", "25%", "25.5", "0.25" all become
+   valid.  A bare "0.25" is treated as 25 % (the Excel convention),
+   values ≥ 1 are treated as already-percent — so "25" is 25 %.
+   Empty / blank / "0" / non-numeric returns null so a blank cell
+   never overwrites a row's existing value. */
+function _asPercent(s){
+  const t = String(s || "").trim().replace(/[%,\s]/g, "");
+  if (!t) return null;
+  if (!/^\d+(?:\.\d+)?$/.test(t)) return null;
+  let n = parseFloat(t);
+  if (!isFinite(n) || n <= 0) return null;
+  if (n < 1) n = n * 100;               // 0.25 → 25 %
+  if (n > 100) return null;              // reject junk
+  return Math.round(n * 100) / 100;     // 2-decimal
+}
+
+/* Yellow concession block, left→right — used as the cursor path
+   when a multi-column paste anchors in one of these cells and
+   spreads across the block.  Same order as the on-screen row. */
+const _PCT_COL_ORDER = ["mth_dc", "vol_dc", "add_dc", "aging_dc"];
+
+/* Generic paste handler for the four yellow DC columns
+   (MTH / Volume / Additional Special / Aging Guide).
+   Shapes handled:
+     • Single column of percentages → each row's paste cell gets
+       one value, cascading downward and auto-adding blank rows
+       when the paste is longer than the current tail.
+     • Rectangular selection anchored at, say, MTH: row-1's first
+       cell fills MTH, second fills Volume, third fills Additional
+       Special, fourth fills Aging Guide.  Subsequent grid rows
+       cascade to the next SPRF row down using the same anchor
+       path.  A paste anchored later in the block (Volume /
+       Additional / Aging) truncates at the far right — nothing
+       to write past Aging.
+   Every affected row runs recalcRow so Proposed DC / Total
+   Amount refresh.  Aging-locked rows are respected — anchor cells
+   that read-only skip the write silently. */
+function handlePctPaste(e, startRow, anchorCol){
+  const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+  const grid = _parsePastedGrid(raw);
+  if (!grid.length) return;
+  const isMultiCol = grid.some(r => r.length > 1);
+  if (grid.length <= 1 && !isMultiCol) return;   // single-value → native paste
+  e.preventDefault();
+  const body = $("#linesBody");
+  const startIdx = Array.from(body.querySelectorAll("tr")).indexOf(startRow);
+  if (startIdx < 0) return;
+  const anchorPos = _PCT_COL_ORDER.indexOf(anchorCol);
+  const trailCols = anchorPos < 0
+      ? [anchorCol]
+      : _PCT_COL_ORDER.slice(anchorPos);
+  grid.forEach((rowCells, ri) => {
+    let tr = body.querySelectorAll("tr")[startIdx + ri];
+    if (!tr) { addRow(); tr = body.lastElementChild; }
+    /* Fill columns to the right of the anchor from this grid row's
+       cells (in order).  Missing / non-numeric cells are skipped
+       so a jagged selection doesn't zero out untouched cells. */
+    const nCols = Math.min(rowCells.length, trailCols.length);
+    for (let ci = 0; ci < nCols; ci++){
+      const target = trailCols[ci];
+      const inp = tr.querySelector(`[data-col="${target}"]`);
+      if (!inp || inp.readOnly) continue;
+      const v = _asPercent(rowCells[ci]);
+      if (v == null) continue;
+      inp.value = fmtPct(v);
+    }
+    /* Aging-locked rows re-solve the chained add_dc via the manual
+       applier so the Proposed Price still lands on the aged
+       target after MTH/Vol edits — mirrors the mth_dc/vol_dc
+       input listener wired in newRow(). */
+    if (tr.classList.contains("aged-locked")) {
+      const target = toNum(tr.querySelector('[data-col="aging_dc"]')?.value);
+      if (target > 0) applyAgingDCManual(tr, target);
+    }
+    recalcRow(tr);
+  });
+  /* Keep focus in the anchor cell so an accidental Enter after
+     the paste doesn't wander into an adjacent field. */
+  startRow.querySelector(`[data-col="${anchorCol}"]`)?.focus();
 }
 
 /* Paste-into-M-Code handler.
