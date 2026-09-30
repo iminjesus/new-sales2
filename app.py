@@ -3983,18 +3983,44 @@ def _submitted_order_email_html(oid, order, base_url):
     _cur_dc      = 100.0 * (1 - _cur_amt / _list_amt) if _list_amt > 0 else 0.0
     _add_support = 100.0 * (1 - _tot_amt / _cur_amt) if _cur_amt  > 0 else 0.0
     _prop_dc     = 100.0 * (1 - _tot_amt / _list_amt) if _list_amt > 0 else 0.0
-    # 6-column line rows — the table stays compact even on wide
-    # orders because each row is a single line of text.
+    # Rich per-line rows mirroring the Submitted-Orders list columns:
+    # State / Qty / List Total / Current DC% / Current Order Amt /
+    # Add Support% / Total Amount / Proposed DC%, plus the identity
+    # cells (M-Code + Size · Pattern · Product) so a reviewer can
+    # sanity-check what the numbers refer to.  Formulas match the
+    # front-end recalcRow: list_total = list_price × qty,
+    # current_amount = current_price × qty, current_dc / add_support
+    # / proposed_dc all read the row's cached string.
+    header_state = (header.get("state") or "").strip()
+    def _pct(v):
+        try:  return f"{float(str(v).replace('%','').replace(',','')):.2f}%"
+        except Exception: return _esc_html(str(v or ""))
     line_rows = []
     for ln in lines:
+        _q = _fnum(ln.get("qty"))
+        if _q <= 0 and not (ln.get("m_code") or "").strip(): continue
+        _list = _fnum(ln.get("list_price"))
+        _curp = _fnum(ln.get("current_price"))
+        _list_ttl = _list * _q
+        _cur_ttl  = _fnum(ln.get("current_amount")) or (_curp * _q)
+        ident = " · ".join([str(x) for x in [
+            ln.get("description") or "",
+            ln.get("pattern") or "",
+            ln.get("product_name") or "",
+        ] if x])
+        td = 'padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:11.5px'
         line_rows.append(
             '<tr>'
-            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;font-family:monospace;font-size:11.5px">{_esc_html(ln.get("m_code",""))}</td>'
-            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px">{_esc_html(ln.get("qty",""))}</td>'
-            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;font-size:11.5px">{_esc_html((ln.get("brand","") or "") + " " + (ln.get("pattern","") or "") + " " + (ln.get("description","") or ln.get("product_name","")))}</td>'
-            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px">{_esc_html(ln.get("list_price",""))}</td>'
-            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px;color:#b45309;font-weight:600">{_esc_html(ln.get("proposed_dc",""))}</td>'
-            f'<td style="padding:3px 6px;border-bottom:1px solid #e5e7eb;text-align:right;font-size:11.5px;font-weight:700">{_esc_html(ln.get("total_amount",""))}</td>'
+            f'<td style="{td};font-family:monospace">{_esc_html(ln.get("m_code",""))}</td>'
+            f'<td style="{td}">{_esc_html(ident)}</td>'
+            f'<td style="{td};text-align:center">{_esc_html(header_state)}</td>'
+            f'<td style="{td};text-align:right">{_esc_html(ln.get("qty",""))}</td>'
+            f'<td style="{td};text-align:right">{_money(_list_ttl)}</td>'
+            f'<td style="{td};text-align:right;color:#0369a1">{_pct(ln.get("current_dc",""))}</td>'
+            f'<td style="{td};text-align:right">{_money(_cur_ttl)}</td>'
+            f'<td style="{td};text-align:right;color:#b45309">{_pct(ln.get("add_support",""))}</td>'
+            f'<td style="{td};text-align:right;font-weight:700">{_money(_fnum(ln.get("total_amount")))}</td>'
+            f'<td style="{td};text-align:right;color:#7f1d1d;font-weight:600">{_pct(ln.get("proposed_dc",""))}</td>'
             '</tr>'
         )
     detail_url = f"{base_url}/order?id={oid}"
@@ -4077,14 +4103,18 @@ def _submitted_order_email_html(oid, order, base_url):
           <thead>
             <tr style="background:#374151;color:#fff;font-size:11px">
               <th style="padding:4px 6px;text-align:left">M-Code</th>
+              <th style="padding:4px 6px;text-align:left">Size · Pattern · Product</th>
+              <th style="padding:4px 6px;text-align:center">State</th>
               <th style="padding:4px 6px;text-align:right">Qty</th>
-              <th style="padding:4px 6px;text-align:left">Brand · Pattern · Description</th>
-              <th style="padding:4px 6px;text-align:right">List</th>
-              <th style="padding:4px 6px;text-align:right">DC</th>
-              <th style="padding:4px 6px;text-align:right">Total</th>
+              <th style="padding:4px 6px;text-align:right">List Total</th>
+              <th style="padding:4px 6px;text-align:right">Current DC%</th>
+              <th style="padding:4px 6px;text-align:right">Current Order Amt</th>
+              <th style="padding:4px 6px;text-align:right">Add Support%</th>
+              <th style="padding:4px 6px;text-align:right">Total Amount</th>
+              <th style="padding:4px 6px;text-align:right">Proposed DC%</th>
             </tr>
           </thead>
-          <tbody>{"".join(line_rows) or '<tr><td colspan="6" style="padding:6px;color:#6b7280">No lines.</td></tr>'}</tbody>
+          <tbody>{"".join(line_rows) or '<tr><td colspan="10" style="padding:6px;color:#6b7280">No lines.</td></tr>'}</tbody>
         </table>
         <div style="margin-top:10px;font-size:11.5px">
           <a href="{detail_url}" style="background:#2563eb;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open order</a>
@@ -4228,8 +4258,12 @@ def api_orders_submit():
         base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
     except Exception:
         base_url = ""
-    subject_prefix = "[SPRF APPROVAL NEEDED" if needs_approval == "Y" else "[SPRF"
-    subject = (f"{subject_prefix} {order_no}] {submitted_by_bde or 'BDE'} → "
+    # Subject is intentionally short: "[SPRF <order_no>] BDE → Customer".
+    # The "APPROVAL NEEDED" tag used to sit here but read as clutter —
+    # the To list already tells the recipient whether they need to act,
+    # and the email body's coloured banner spells out the approval
+    # route in one line.
+    subject = (f"[SPRF {order_no}] {submitted_by_bde or 'BDE'} → "
                f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
     payload_for_mail = dict(payload)
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -4789,8 +4823,9 @@ def api_orders_update(oid):
     except Exception:
         base_url = ""
     submitted_by_bde = (row.get("submitted_by_bde") or "")
-    subject_prefix = "[SPRF UPDATE + APPROVAL NEEDED" if needs_approval == "Y" else "[SPRF UPDATE"
-    subject = (f"{subject_prefix} #{oid}] {submitted_by_bde or 'BDE'} → "
+    # Short subject on the update thread too — the banner inside the
+    # body already spells out "approval required" vs. "standard".
+    subject = (f"[SPRF UPDATE #{oid}] {submitted_by_bde or 'BDE'} → "
                f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
     payload_for_mail = dict(payload)
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
