@@ -478,6 +478,18 @@
   table.lines tbody td.row-del-cell{
     width:22px;padding:0;text-align:center;background:#f9fafb;
   }
+  /* Row-number column — a compact grey badge in the leftmost slot.
+     Text-align center, tabular-nums so the digits stack tidily as
+     the list grows past 9. */
+  table.lines th.row-no-th{
+    width:32px;padding:0;background:#1e293b;color:#e2e8f0;
+    font-size:11px;letter-spacing:.2px;
+  }
+  table.lines tbody td.row-no-cell{
+    width:32px;padding:2px 0;text-align:center;background:#e2e8f0;
+    color:#334155;font-size:11px;font-weight:700;
+    font-variant-numeric:tabular-nums;
+  }
   table.lines tbody td.row-del-cell button.row-del{
     width:18px;height:18px;line-height:16px;padding:0;
     border:none;background:transparent;color:#cbd5e1;
@@ -890,6 +902,7 @@
     <table class="lines" id="linesTable">
       <thead>
         <tr>
+          <th class="row-no-th" title="Row number">No</th>
           <th class="row-del-th" title="Delete row"></th>
           <th class="mcode">M-Code</th>
           <th class="narrow">Qty</th>
@@ -925,9 +938,10 @@
       <tfoot>
         <!-- Subtotal row — matches the Excel workbook's Total line:
              label + total qty + subtotal (ex GST) + qty-weighted avg DC.
-             Leading empty td lines up under the delete-column header. -->
+             Leading empty td lines up under the No + delete-column
+             headers (two frozen identity cells at the very left). -->
         <tr class="total-row">
-          <td></td>
+          <td colspan="2"></td>
           <td class="label">Total</td>
           <td class="num center" id="ttlQty">0</td>
           <td colspan="5"></td>
@@ -961,9 +975,10 @@
                (stock NSW/QLD/VIC/WA + Remark = 5 tail columns). -->
           <td colspan="5"></td>
         </tr>
-        <!-- Total inc GST (subtotal + 10%). -->
+        <!-- Total inc GST (subtotal + 10%).  Colspans bumped +1 on
+             the leading blank to make room for the new No column. -->
         <tr class="total-row summary-row">
-          <td colspan="17" class="summary-blank"></td>
+          <td colspan="18" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
           <td colspan="6" class="summary-blank"></td>
@@ -972,7 +987,7 @@
              Amount sits in the same column (Total Amount) as the inc-
              GST and final-total lines so all three stack vertically. -->
         <tr class="total-row summary-row">
-          <td colspan="11" class="summary-blank"></td>
+          <td colspan="12" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
           <td class="center summary-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
@@ -983,7 +998,7 @@
         </tr>
         <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="17" class="summary-blank"></td>
+          <td colspan="18" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
           <td colspan="6" class="summary-blank"></td>
@@ -2391,9 +2406,17 @@ document.addEventListener("DOMContentLoaded", initColumnResizers);
 /* ────────────────────────── row template ────────────────────────── */
 function newRow(){
   const tr = document.createElement("tr");
-  // Delete-row × button — first cell on every line.  Clicking removes
-  // the row and re-runs totals.  We seed at least one blank row after
-  // a delete so the form never collapses to zero lines.
+  // Row-number cell — first column on every line.  Auto-updated
+  // by renumberRows() whenever the row set changes (add / delete /
+  // hydrate / multi-line paste).  Not editable — the value comes
+  // from the row's position, not from data.
+  const noTd = document.createElement("td");
+  noTd.className = "row-no-cell";
+  tr.appendChild(noTd);
+  // Delete-row × button — second cell on every line.  Clicking
+  // removes the row and re-runs totals.  We seed at least one
+  // blank row after a delete so the form never collapses to zero
+  // lines.
   const delTd = document.createElement("td");
   delTd.className = "row-del-cell";
   const delBtn = document.createElement("button");
@@ -2404,6 +2427,7 @@ function newRow(){
   delBtn.addEventListener("click", () => {
     tr.remove();
     if (!document.querySelector("#linesBody tr")) addRow();
+    renumberRows();
     updateTotals();
   });
   delTd.appendChild(delBtn);
@@ -2813,6 +2837,19 @@ async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
 
 function addRow(){
   $("#linesBody").appendChild(newRow());
+  renumberRows();
+}
+
+/* Renumber every row's leading "No" cell after any row-set change
+   (add / delete / hydrate / paste-cascade).  Cheap enough to run
+   unconditionally — the SPRF form typically carries fewer than 30
+   lines. */
+function renumberRows(){
+  const rows = document.querySelectorAll("#linesBody tr");
+  rows.forEach((tr, i) => {
+    const cell = tr.querySelector("td.row-no-cell");
+    if (cell) cell.textContent = String(i + 1);
+  });
 }
 
 /* Split a pasted clipboard string into individual M-Code tokens.
@@ -2828,32 +2865,85 @@ function _splitPastedMcodes(text){
     .filter(t => t && /^[A-Za-z0-9_-]{3,}$/.test(t) && t.toLowerCase() !== "m-code");
 }
 
-/* Paste-into-M-Code handler: when the clipboard carries several
-   tokens, spread them across successive rows (auto-adding blanks
-   at the tail when there aren't enough), then fire the material
-   resolver on each row so brand/size/pattern/etc. auto-fill. */
+/* Parse a rectangular clipboard paste (Excel copies a range as
+   tab-delimited columns × newline-delimited rows).  Returns
+   [["1018526","10"], ["1030861","3"], …].  Blank rows dropped,
+   blank cells kept as "". */
+function _parsePastedGrid(text){
+  const raw = String(text || "").replace(/\r\n?/g, "\n");
+  const lines = raw.split("\n").filter(l => l && l.trim());
+  return lines.map(l => l.split("\t").map(c => c.trim()));
+}
+
+/* Coerce a token to a positive number; return null when it isn't
+   a valid qty.  Handles thousand-separator commas ("1,000" → 1000). */
+function _asPositiveNumber(s){
+  const t = String(s || "").trim().replace(/,/g, "");
+  if (!t || !/^\d+(?:\.\d+)?$/.test(t)) return null;
+  const n = parseFloat(t);
+  return (isFinite(n) && n > 0) ? n : null;
+}
+
+/* Paste-into-M-Code handler.
+   Two paste shapes supported:
+     • Single column of M-Codes  (Excel M-code column copy):
+         each token lands on its own row's M-Code cell.
+     • Rectangular selection with M-Code + Qty (+ ignored tail):
+         first cell of every row goes to M-Code, second cell (if
+         numeric > 0) fills the same row's Qty, subsequent cells
+         are ignored.  Matches an Excel two-column copy like:
+             1018526\t10
+             1030861\t3
+             1022030\t2
+   Auto-adds blank rows at the tail when the paste is longer than
+   the current empty rows; fires fillMaterialFromCode +
+   recalcRow so brand / size / pattern / list price / promo /
+   Total Amount all update in one shot. */
 function handleMcodePaste(e, startRow){
   const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
-  const tokens = _splitPastedMcodes(raw);
-  if (tokens.length <= 1) return;   // let the browser handle single-value paste
+  const grid = _parsePastedGrid(raw);
+  const isMultiColumn = grid.some(r => r.length > 1);
+  // Single-column path — reuse the letter-tolerant splitter so a
+  // "1018526 1030861" space-separated blob still splits cleanly.
+  const singleCol = isMultiColumn
+      ? grid.map(r => r[0])
+      : _splitPastedMcodes(raw);
+  if (singleCol.length <= 1 && !isMultiColumn) return;   // native single-value paste
   e.preventDefault();
   const body = $("#linesBody");
-  const rows = Array.from(body.querySelectorAll("tr"));
-  const startIdx = rows.indexOf(startRow);
+  const startIdx = Array.from(body.querySelectorAll("tr")).indexOf(startRow);
   if (startIdx < 0) return;
-  tokens.forEach((mc, i) => {
-    // Ensure a row exists at index (startIdx + i) — grow the body
-    // when the paste is longer than the current empty tail.
+  const rowsToWrite = isMultiColumn ? grid.length : singleCol.length;
+  for (let i = 0; i < rowsToWrite; i++) {
     let tr = body.querySelectorAll("tr")[startIdx + i];
     if (!tr) { addRow(); tr = body.lastElementChild; }
-    const inp = tr.querySelector('[data-col="m_code"]');
-    if (!inp) return;
-    inp.value = mc;
-    /* Resolve the row (fires the same fillMaterialFromCode path a
-       manual entry would — fills brand/size/pattern/list price
-       and drops the customer promo into sp_dc). */
-    fillMaterialFromCode(tr, mc);
-  });
+    const mc = isMultiColumn ? String(grid[i][0] || "").trim() : singleCol[i];
+    if (mc && /^[A-Za-z0-9_-]{3,}$/.test(mc) && mc.toLowerCase() !== "m-code") {
+      const mInp = tr.querySelector('[data-col="m_code"]');
+      if (mInp) {
+        mInp.value = mc;
+        fillMaterialFromCode(tr, mc);
+      }
+    }
+    /* Multi-column path also writes the second column into Qty if
+       it looks like a positive number.  Additional columns are
+       ignored — the sheet's other identity fields (Size / Pattern
+       / Product Name) come from the material lookup, not from
+       the paste. */
+    if (isMultiColumn && grid[i].length > 1) {
+      const q = _asPositiveNumber(grid[i][1]);
+      if (q != null) {
+        const qInp = tr.querySelector('[data-col="qty"]');
+        if (qInp) {
+          qInp.value = String(q);
+          recalcRow(tr);
+          if (tr.querySelector('[data-col="m_code"]')?.value) {
+            applyAdditionalDCToRow(tr);
+          }
+        }
+      }
+    }
+  }
   /* Keep focus on the starting row's M-Code so the user's next
      action lands somewhere obvious. */
   startRow.querySelector('[data-col="m_code"]')?.focus();
