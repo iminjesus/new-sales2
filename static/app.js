@@ -196,6 +196,13 @@ const _FETCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const _FETCH_CACHE_MAX    = 500;          // bounded so memory doesn't grow forever
 const _fetchCache    = new Map();         // url → { ts, value }
 const _fetchInFlight = new Map();         // url → Promise
+/* Expose to window so the top-bar 🔄 Refresh button (in index.html)
+   can wipe the client-side response cache alongside the server
+   cache — otherwise a stale in-memory hit would beat the fresh
+   server response on the next fetch, and the Refresh click would
+   feel like it did nothing. */
+window._fetchCache    = _fetchCache;
+window._fetchInFlight = _fetchInFlight;
 
 function _fetchCachePut(url, value) {
   // simple LRU-ish: drop oldest insertion when over cap

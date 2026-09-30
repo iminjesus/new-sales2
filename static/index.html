@@ -39,6 +39,114 @@
 <body>
   <h2 style="margin:10px 0 8px; font-size:18px; color:#111827; font-weight:700; letter-spacing:-0.01em;">Sales Dashboard</h2>
 
+  <!-- Month-progress banner: quick "target vs actual" strip so the
+       BDE sees where the current month stands the moment the page
+       loads, without opening any chart or reading the KPI table.
+       Populated by initMonthProgress() from /api/monthly_sales +
+       /api/monthly_target for BOTH metrics (qty and amount) so a
+       reader can glance across both units in one line.  Metrics
+       whose target is missing (or 0) render as "N/A" so the
+       reader can tell "no target set" apart from "0 % achievement".
+       Always shows the whole-org totals — independent of the chart
+       filters below — so switching Region / Product / Customer
+       doesn't move the monthly baseline. -->
+  <div id="monthProgressBar" style="
+      display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+      padding:8px 14px; margin:0 0 10px;
+      background:linear-gradient(90deg,#f0f9ff 0%,#e0f2fe 100%);
+      border:1px solid #7dd3fc; border-radius:6px;
+      font-size:12.5px; color:#0c4a6e;">
+    <span id="mpTitle" style="font-weight:800;color:#075985;letter-spacing:-.01em">
+      This month:
+    </span>
+    <span style="display:inline-flex;align-items:center;gap:5px">
+      <b style="color:#334155">Qty</b>
+      <span id="mpQtyActual" style="font-variant-numeric:tabular-nums">…</span>
+      <span style="color:#94a3b8">/</span>
+      <span id="mpQtyTarget" style="font-variant-numeric:tabular-nums">…</span>
+      <span id="mpQtyAch"
+            style="margin-left:4px;padding:1px 7px;border-radius:3px;background:#e5e7eb;color:#111;font-weight:700;font-size:12px">
+        …
+      </span>
+    </span>
+    <span style="width:1px;height:16px;background:#7dd3fc"></span>
+    <span style="display:inline-flex;align-items:center;gap:5px">
+      <b style="color:#334155">Amount</b>
+      <span id="mpAmtActual" style="font-variant-numeric:tabular-nums">…</span>
+      <span style="color:#94a3b8">/</span>
+      <span id="mpAmtTarget" style="font-variant-numeric:tabular-nums">…</span>
+      <span id="mpAmtAch"
+            style="margin-left:4px;padding:1px 7px;border-radius:3px;background:#e5e7eb;color:#111;font-weight:700;font-size:12px">
+        …
+      </span>
+    </span>
+  </div>
+  <script>
+  /* Month-progress banner filler.  Runs once at page load; the
+     top-level 🔄 Refresh button reloads the whole page so the
+     banner picks up new data via a normal re-mount.  If any fetch
+     fails we hide the banner rather than showing stale numbers
+     (the KPI table below has the same info in more detail). */
+  (async function initMonthProgress(){
+    const el = document.getElementById("monthProgressBar");
+    if (!el) return;
+    const fmtN = n => (n == null || isNaN(+n))
+                      ? "N/A"
+                      : (+n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const fmtMoney = n => (n == null || isNaN(+n))
+                      ? "N/A"
+                      : "$" + (+n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const paintAch = (span, actual, target) => {
+      if (!target || target <= 0){
+        span.textContent = "N/A";
+        span.style.background = "#e5e7eb";
+        span.style.color      = "#374151";
+        return;
+      }
+      const pct = 100 * actual / target;
+      span.textContent = pct.toFixed(1) + "%";
+      if (pct >= 100)     { span.style.background = "#16a34a"; span.style.color = "#fff"; }
+      else if (pct >= 90) { span.style.background = "#22c55e"; span.style.color = "#fff"; }
+      else if (pct >= 70) { span.style.background = "#facc15"; span.style.color = "#78350f"; }
+      else                { span.style.background = "#f87171"; span.style.color = "#7f1d1d"; }
+    };
+    try {
+      const now  = new Date();
+      const cIdx = now.getMonth();
+      const yr   = now.getFullYear();
+      const monthName = ["January","February","March","April","May","June",
+                         "July","August","September","October","November","December"][cIdx];
+      document.getElementById("mpTitle").textContent =
+        `This month (${monthName} ${yr}):`;
+      /* Parallel fetches — each endpoint carries its own 60 s cache
+         on the server, so a repeat mount is cheap.  No filter
+         params: this banner is always the whole-org roll-up. */
+      const [qA, qT, aA, aT] = await Promise.all([
+        fetch(`/api/monthly_sales?metric=qty&year=${yr}`).then(r => r.json()).catch(() => []),
+        fetch(`/api/monthly_target?metric=qty&year=${yr}`).then(r => r.json()).catch(() => []),
+        fetch(`/api/monthly_sales?metric=amount&year=${yr}`).then(r => r.json()).catch(() => []),
+        fetch(`/api/monthly_target?metric=amount&year=${yr}`).then(r => r.json()).catch(() => []),
+      ]);
+      const pick = (rows, m) => {
+        const row = (rows || []).find(r => (+r.month) === m);
+        return row ? (+row.value || 0) : 0;
+      };
+      const m = cIdx + 1;
+      const qActual = pick(qA, m), qTarget = pick(qT, m);
+      const aActual = pick(aA, m), aTarget = pick(aT, m);
+      document.getElementById("mpQtyActual").textContent = fmtN(qActual);
+      document.getElementById("mpQtyTarget").textContent = qTarget > 0 ? fmtN(qTarget) : "N/A";
+      paintAch(document.getElementById("mpQtyAch"), qActual, qTarget);
+      document.getElementById("mpAmtActual").textContent = fmtMoney(aActual);
+      document.getElementById("mpAmtTarget").textContent = aTarget > 0 ? fmtMoney(aTarget) : "N/A";
+      paintAch(document.getElementById("mpAmtAch"), aActual, aTarget);
+    } catch (e) {
+      console.error("month-progress banner:", e);
+      el.style.display = "none";
+    }
+  })();
+  </script>
+
   <!-- Mobile: toggle button for filter panel -->
   <button id="filterToggleBtn" class="filter-toggle-btn">
     <span>&#9881; Filters</span><span class="filter-toggle-arrow">&#9660;</span>
@@ -370,7 +478,7 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/app.js?v=20260818d" defer></script>
+  <script src="/static/app.js?v=20260930a" defer></script>
 <script>
 // Mobile filter panel toggle
 (function () {
@@ -559,24 +667,37 @@
     if (btnThisMonth) btnThisMonth.onclick = () => triggerDownload("/api/export_excel?" + collectFilters().toString());
     if (btn2526)      btn2526.onclick      = () => triggerDownload("/api/export_excel/sales2526?" + collectFilters().toString());
     if (btnYearly)    btnYearly.onclick    = () => triggerDownload("/api/export_excel/yearly?" + collectFilters().toString());
-    /* Refresh Data — POSTs to /api/admin/clear_cache which empties
-       the 60 s server-side cache on every graph endpoint, then does
-       a plain page reload so every chart re-fetches fresh data.
-       A visible label swap tells the reader something happened, and
-       the button restores itself on the new page load. */
+    /* Refresh Data — three layers of cache stand between the DB and
+       the chart, so this button wipes all three:
+         1. Server: POST /api/admin/clear_cache empties _GRAPH_CACHE
+            so the next request re-runs the underlying SQL.
+         2. Client: window._fetchCache.clear() drops the in-memory
+            5-minute response cache in app.js, otherwise a stale
+            hit would beat the fresh server response.
+         3. Browser HTTP layer: reload the page with a cache-buster
+            in the URL so Chrome doesn't reuse its own cached copy.
+       A visible label swap tells the reader something happened; on
+       reload the label returns to "🔄 Refresh" automatically. */
     const btnRefresh = document.getElementById("btnRefreshData");
     if (btnRefresh) btnRefresh.onclick = async () => {
       const orig = btnRefresh.textContent;
       btnRefresh.disabled = true;
       btnRefresh.textContent = "Refreshing…";
       try {
-        const r = await fetch("/api/admin/clear_cache", { method: "POST" });
+        const r = await fetch("/api/admin/clear_cache", { method: "POST", cache: "no-store" });
         const j = await r.json().catch(() => ({}));
+        try { window._fetchCache?.clear(); } catch(_){}
+        try { window._fetchInFlight?.clear(); } catch(_){}
         btnRefresh.textContent = `✓ Cleared${j.cleared != null ? " (" + j.cleared + ")" : ""}`;
-        /* Full reload — cheaper than re-invoking every chart's
-           fetcher, and it also refreshes the filter chips that
-           depend on customer_rollup / carrying_26 columns. */
-        setTimeout(() => location.reload(), 350);
+        /* Bust the browser's own HTTP cache with a timestamp param,
+           then reload.  The param sits harmlessly on subsequent
+           navigations since every /api/... URL is built fresh by
+           collectFilters(). */
+        setTimeout(() => {
+          const u = new URL(location.href);
+          u.searchParams.set("_r", String(Date.now()));
+          location.href = u.toString();
+        }, 350);
       } catch (e) {
         btnRefresh.textContent = "Refresh failed";
         setTimeout(() => {
