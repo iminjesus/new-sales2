@@ -631,7 +631,10 @@
      Also: hide the fixed aged-stock sidebar, page-nav bar, aged-
      stock reopen chip, the delete-row buttons and toolbar so the
      printout is the SPRF itself, not the surrounding UI. */
-  @page { size: A4 landscape; margin: 10mm; }
+  /* Slightly tighter margin than A4 default so the SPRF's ~28-column
+     details table has as much printable width as possible before the
+     zoom-to-fit rule below kicks in. */
+  @page { size: A4 landscape; margin: 6mm; }
   @media print {
     body { background: #fff !important; }
     /* Print-forces black borders on the grid; !important because the
@@ -666,10 +669,32 @@
     /* Chrome-in-tab print (used by "Print" button) — hide the URL
        block and app chrome that would otherwise sit above the SPRF. */
     #agedStockPanel, #agedStockReopen, .pagenav, .toolbar,
-    #btnAddRow, #btnClear, #btnPrint, #btnSubmit, #btnSaveTemp,
+    #btnAddRow, #btnClear, #btnPrint, #btnExcel, #btnSubmit, #btnSaveTemp,
+    #btnEdit, #btnToolbarApprove, #bottomApproveBar,
     .status, .row-del, .row-del-cell,
     #approvalPath { display: none !important; }
-    .wrap { max-width: none; padding: 0; margin: 0; }
+    /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
+       within the ~1085 px printable area of an A4-landscape page.
+       Zoom (rather than transform:scale) keeps the browser's own
+       pagination math accurate so headers/tables don't split
+       awkwardly, and Chromium/Edge/Safari all honour it. */
+    .wrap {
+      max-width: none;
+      padding: 0;
+      margin: 0;
+      zoom: 0.62;
+    }
+    /* Kill the on-screen minimum so the lines table can shrink into
+       whatever the zoomed page allows without introducing an internal
+       horizontal scroll. */
+    table.lines { min-width: 0 !important; }
+    /* Tighter cell padding on paper — text stays legible, but three
+       characters of vertical whitespace per row vanish. */
+    table.lines thead th,
+    table.lines tbody td,
+    table.lines tfoot td { padding: 2px 3px !important; }
+    table.lines tbody td input,
+    table.lines tbody td textarea { padding: 1px 3px !important; }
     /* Avoid awkward page breaks inside the order details table. */
     table.lines { page-break-inside: avoid; }
     table.lines thead { display: table-header-group; }
@@ -1050,6 +1075,25 @@
     <button class="ghost" id="btnAddRow">+ Add row</button>
     <button class="ghost" id="btnClear">Clear form</button>
     <button class="primary" id="btnPrint" onclick="window.print()">Print / PDF</button>
+    <!-- Excel export — downloads the current SPRF as an .xls file that
+         Excel opens with the same colour blocks (yellow SP, olive Add,
+         amber Aging, sky 443/SOVD, pink Proposed) and border layout as
+         the on-screen form.  Client-side only; no server round-trip. -->
+    <button class="primary" id="btnExcel"
+            style="background:#166534;border-color:#14532d"
+            title="Download this SPRF as an Excel workbook that mirrors the on-screen layout.">
+      📥 Excel
+    </button>
+    <!-- Edit — unlocks the form for another update pass on an
+         already-viewed order.  Hidden on new /order pages, on
+         temp drafts (Save/Update already covers those), and for
+         viewers who don't have update rights.  Everyone else
+         sees it right after Print/PDF. -->
+    <button class="primary" id="btnEdit" hidden
+            style="background:#f59e0b;border-color:#b45309;color:#111"
+            title="Unlock this SPRF for editing.  Save / Update commits the change; the order goes back through approval afterwards.">
+      ✎ Edit
+    </button>
     <!-- Save draft (temp).  Persists the current form to Submitted
          Orders with needs_mgmt_approval='temp' and a T-prefixed
          order number; only the creator can see the saved draft
@@ -1061,6 +1105,16 @@
       💾 Save / Update
     </button>
     <button class="primary submit-btn" id="btnSubmit">Submit</button>
+    <!-- Approve — sits at the far right of the toolbar so it's the
+         last thing the reader sees.  Only actionable to the named
+         approvers (Hayden / JJ / Kenny); dimmed for everybody else,
+         hidden entirely on already-approved / Standard-pricing
+         orders. -->
+    <button class="primary" id="btnToolbarApprove" hidden
+            style="background:#059669;border-color:#047857;
+                   margin-left:auto">
+      ✓ Approve
+    </button>
   </div>
   <!-- CS toggle: only visible when Harry (or an ALL-role user) is
        viewing a submitted order.  Flips submitted_orders.status_sap. -->
@@ -3165,6 +3219,246 @@ $("#btnClear").addEventListener("click", () => {
   updateTotals();
 });
 
+/* ────────────────────────── Excel download ──────────────────────────
+   Builds a self-contained .xls (HTML-flavoured Excel Workbook) that
+   opens in Excel with the same colour blocks and border layout as
+   the on-screen SPRF.  Excel is happy to parse HTML with inline CSS
+   as a workbook — colours, borders and cell alignment carry through
+   without any external library.  The blob is saved with an .xls
+   extension so Excel opens it directly; Sheets and Numbers also
+   read it (Sheets uses HTML import).                                   */
+function exportOrderToExcel(){
+  const S = serializeOrder();
+  const h = S.header || {}, b = S.base_dc || {}, t = S.totals || {};
+  const orderNo = ($("#orderNoRibbonVal")?.textContent || "").trim()
+              || (h.po_number || "draft");
+  const period  = ($("#hdrPeriod")?.textContent || "").trim();
+  const requester = ($("#orderNoRibbonReq")?.textContent || "").replace(/^Requester\s*:\s*/i,"").trim();
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+  const fmt = v => { const n = parseFloat(String(v || "").replace(/,/g,"")); return isFinite(n) ? n : ""; };
+  /* Per-column background matches the on-screen thead colour scheme
+     so the exported workbook reads at a glance the same way. */
+  const HEADS = [
+    {k:"No",       w:"22px",  bg:"#3c3c3c", fg:"#fff"},
+    {k:"M-Code",   w:"72px",  bg:"#3c3c3c", fg:"#fff"},
+    {k:"Qty",      w:"44px",  bg:"#3c3c3c", fg:"#fff"},
+    {k:"Size",     w:"84px",  bg:"#3c3c3c", fg:"#fff"},
+    {k:"Brand",    w:"58px",  bg:"#3c3c3c", fg:"#fff"},
+    {k:"Product Name",   w:"84px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Pattern",  w:"64px",  bg:"#3c3c3c", fg:"#fff"},
+    {k:"Load / Speed",   w:"78px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"List Price",     w:"78px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Base DC %",      w:"72px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"443DC / TBR Special% / PCLT-SOVD%", w:"96px", bg:"#e0f2fe", fg:"#0369a1"},
+    {k:"Current DC %",   w:"68px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Current Unit Price",   w:"80px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Current Order Amount", w:"84px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"MTH Special DC %",     w:"64px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Volume DC %",          w:"56px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Additional Special DC %", w:"78px", bg:"#a08b3c", fg:"#fff"},
+    {k:"Aging DC Guide %",     w:"78px", bg:"#d97706", fg:"#fff"},
+    {k:"Total Additional Support %", w:"78px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"Proposed Unit Price",  w:"84px", bg:"#c8548a", fg:"#fff"},
+    {k:"Total Amount",         w:"84px", bg:"#c8548a", fg:"#fff"},
+    {k:"Proposed DC %",        w:"66px", bg:"#3c3c3c", fg:"#fff"},
+    {k:"NSW stock",  w:"56px", bg:"#2f5f4a", fg:"#fff"},
+    {k:"QLD stock",  w:"56px", bg:"#2f5f4a", fg:"#fff"},
+    {k:"VIC stock",  w:"56px", bg:"#2f5f4a", fg:"#fff"},
+    {k:"WA stock",   w:"56px", bg:"#2f5f4a", fg:"#fff"},
+    {k:"Remark",     w:"140px", bg:"#3c3c3c", fg:"#fff"},
+  ];
+  const border = "border:1px solid #333;";
+  /* Row-level cell tint matches the on-screen input cell colours
+     for the yellow-highlighted DC negotiation columns. */
+  const CELL_TINT = {
+    10: "background:#e0f2fe;color:#0f172a;",                 /* 443/SOVD */
+    14: "background:#fef3c7;color:#78350f;font-weight:700;", /* MTH DC */
+    15: "background:#fef3c7;color:#78350f;font-weight:700;", /* Vol DC */
+    16: "background:#f5f5dc;color:#3d3d1f;font-weight:700;", /* Add DC */
+    17: "background:#fef3c7;color:#7c2d12;font-weight:700;", /* Aging DC */
+    18: "background:#fef9c3;color:#78350f;font-weight:700;", /* Ttl Add DC */
+    19: "background:#fce7f3;color:#9d174d;font-weight:700;", /* Proposed price */
+    20: "background:#fff8e6;color:#111;font-weight:700;",    /* Total amt */
+    21: "background:#fce7f3;color:#9d174d;font-weight:700;", /* Proposed DC */
+  };
+  const theadRow = HEADS.map(h => `
+    <th style="${border}background:${h.bg};color:${h.fg};padding:4px 6px;font-size:10px;font-weight:700;text-align:center;vertical-align:middle;width:${h.w}">${esc(h.k)}</th>`).join("");
+  const bodyRows = (S.lines || []).map((ln, i) => {
+    const cells = [
+      i + 1,                                    /* No */
+      ln.m_code, ln.qty, ln.description, ln.brand,
+      ln.product_name, ln.pattern, ln.load_speed,
+      fmt(ln.list_price),
+      ln.base_dc, ln.sp_dc, ln.current_dc,
+      fmt(ln.current_price), fmt(ln.current_amount),
+      ln.mth_dc, ln.vol_dc, ln.add_dc, ln.aging_dc, ln.add_support,
+      fmt(ln.proposed_price), fmt(ln.total_amount),
+      ln.proposed_dc,
+      ln.stock_nsw, ln.stock_qld, ln.stock_vic, ln.stock_wa,
+      ln.remark,
+    ];
+    const isNum = idx => [1,2,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25].includes(idx);
+    return "<tr>" + cells.map((v, idx) => {
+      const tint = CELL_TINT[idx] || "";
+      const align = idx === 0 ? "text-align:center;"
+                 : isNum(idx) ? "text-align:right;"
+                              : "text-align:left;";
+      return `<td style="${border}padding:2px 4px;font-size:10px;${align}${tint}">${esc(v)}</td>`;
+    }).join("") + "</tr>";
+  }).join("");
+  /* Footer rows mirror the on-screen totals (Total qty / Total inc
+     GST / Freight / Grand total) so the Excel copy carries the same
+     bottom-line figures the reader signs off on. */
+  const foot = `
+    <tr>
+      <td colspan="2" style="${border}background:#f0f0f0;padding:4px;font-weight:700;text-align:right">Total Qty</td>
+      <td style="${border}background:#f0f0f0;padding:4px;text-align:center;font-weight:700">${esc(t.total_qty)}</td>
+      <td colspan="10" style="${border}background:#f0f0f0"></td>
+      <td style="${border}background:#f0f0f0;padding:4px;text-align:right;font-weight:700">${esc(t.subtotal)}</td>
+      <td colspan="13" style="${border}background:#f0f0f0"></td>
+    </tr>
+    <tr>
+      <td colspan="19" style="${border}background:#e5e7eb;padding:4px;text-align:right;font-weight:700">Total inc GST</td>
+      <td colspan="2" style="${border}background:#e5e7eb;padding:4px;text-align:right;font-weight:800">${esc(t.total_inc_gst)}</td>
+      <td colspan="6" style="${border}background:#e5e7eb"></td>
+    </tr>
+    <tr>
+      <td colspan="19" style="${border}background:#e5e7eb;padding:4px;text-align:right;font-weight:700">Freight Charge (10%) if any</td>
+      <td colspan="2" style="${border}background:#e5e7eb;padding:4px;text-align:right;font-weight:700">${esc(t.freight_amount)}</td>
+      <td colspan="6" style="${border}background:#e5e7eb"></td>
+    </tr>
+    <tr>
+      <td colspan="19" style="${border}background:#c8548a;color:#fff;padding:4px;text-align:right;font-weight:800">Total</td>
+      <td colspan="2" style="${border}background:#c8548a;color:#fff;padding:4px;text-align:right;font-weight:800">${esc(t.grand_total)}</td>
+      <td colspan="6" style="${border}background:#c8548a"></td>
+    </tr>`;
+  /* Customer + order meta as a 2-column key/value grid — matches the
+     on-screen "Customer Details / Order Number Details" side-by-side
+     bands so a reader recognises the layout in Excel. */
+  const kv = (k, v) => `
+    <tr>
+      <td style="${border}background:#f8fafc;padding:3px 6px;font-weight:700;width:130px">${esc(k)}</td>
+      <td style="${border}padding:3px 6px">${esc(v)}</td>
+    </tr>`;
+  const customerBlock = `
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:11px;width:100%">
+      <tr>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800;font-size:12px">Customer Details</td>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800;font-size:12px">Order Number Details</td>
+      </tr>
+      <tr>
+        <td style="${border};vertical-align:top;padding:0">
+          <table style="border-collapse:collapse;font-size:11px;width:100%">
+            ${kv("Sold-to Account", h.sold_to)}
+            ${kv("Sold-to Name",    h.sold_to_name)}
+            ${kv("Ship-to Account", h.ship_to)}
+            ${kv("Ship-to Name",    h.ship_to_name)}
+            ${kv("Address",         h.ship_to_address)}
+            ${kv("Phone / Email",   h.phone_email)}
+            ${kv("Mobile",          h.mobile)}
+            ${kv("Customer Group",  h.customer_group)}
+            ${kv("State",           h.ship_to_state)}
+          </table>
+        </td>
+        <td style="${border};vertical-align:top;padding:0">
+          <table style="border-collapse:collapse;font-size:11px;width:100%">
+            ${kv("Order Number",  orderNo)}
+            ${kv("PO Number",     h.po_number)}
+            ${kv("Doc. Date",     h.doc_date)}
+            ${kv("BDE",           h.bde_name)}
+            ${kv("Requester",     requester || h.requester_email)}
+            ${kv("Rebateable",    h.rebateable)}
+            ${kv("Special Instruction", h.special_instruction)}
+            ${kv("Management Reason",   h.mgmt_reason)}
+          </table>
+        </td>
+      </tr>
+    </table>`;
+  /* Base DC cascade — a compact 3-cell block matching the on-screen
+     "Base DC" strip so the reader sees the customer's contract
+     percentages alongside the negotiated numbers. */
+  const dcBlock = `
+    <table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:11px;margin-top:6px">
+      <tr>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (HK-PCLT)</td>
+        <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_hkpclt)}</td>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (TBR)</td>
+        <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_tbr)}</td>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (LF-PCLT)</td>
+        <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_lfpclt)}</td>
+      </tr>
+    </table>`;
+  const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="UTF-8">
+<!--[if gte mso 9]><xml>
+<x:ExcelWorkbook><x:ExcelWorksheets>
+<x:ExcelWorksheet><x:Name>SPRF</x:Name>
+<x:WorksheetOptions>
+  <x:Print><x:ValidPrinterInfo/><x:Orientation>Landscape</x:Orientation><x:FitToPage/><x:HorizontalResolution>600</x:HorizontalResolution><x:VerticalResolution>600</x:VerticalResolution></x:Print>
+  <x:FitWidth>1</x:FitWidth><x:FitHeight>1</x:FitHeight>
+</x:WorksheetOptions>
+</x:ExcelWorksheet>
+</x:ExcelWorksheets></x:ExcelWorkbook>
+</xml><![endif]-->
+<style>
+  body { font-family: Arial, sans-serif; }
+  table { border-collapse: collapse; }
+</style>
+</head>
+<body>
+<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;width:100%">
+  <tr>
+    <td style="${border}background:#c8102e;color:#fff;padding:8px 12px;font-weight:800;font-size:14px;text-align:center">HANKOOK</td>
+    <td style="${border}padding:8px 12px;font-size:11px">
+      <b>Hankook Tyre Australia Pty Ltd</b><br>
+      Suite 3, Level 3/5 Eden Park Dr, Macquarie Park NSW 2113<br>
+      Ph 1300 13 30 30 &nbsp;|&nbsp; ABN 77 082 389 704
+    </td>
+    <td style="${border}background:#c8102e;color:#fff;padding:8px 12px;font-weight:800;font-size:14px;text-align:center">
+      Special Price Request Form<br><small>${esc(period)}</small>
+    </td>
+  </tr>
+</table>
+<table style="border-collapse:collapse;margin:6px 0;width:100%">
+  <tr>
+    <td style="${border}background:#0f172a;color:#fbbf24;padding:6px 12px;font-weight:800;font-size:13px;text-align:center">
+      Order Number : ${esc(orderNo)}${requester ? "  ·  Requester : " + esc(requester) : ""}
+    </td>
+  </tr>
+</table>
+${customerBlock}
+${dcBlock}
+<br>
+<table style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:10px;width:100%;table-layout:fixed">
+  <thead><tr>${theadRow}</tr></thead>
+  <tbody>${bodyRows}</tbody>
+  <tfoot>${foot}</tfoot>
+</table>
+</body></html>`;
+  /* Blob → <a download> is the standard client-side save path.
+     Using .xls (not .xlsx) with application/vnd.ms-excel because
+     Excel opens HTML-flavoured workbooks under that MIME type with
+     the inline styles preserved, which .xlsx (a zip container)
+     wouldn't allow without a full workbook builder. */
+  const blob = new Blob(["﻿" + html], { type: "application/vnd.ms-excel" });
+  const url  = URL.createObjectURL(blob);
+  const safeName = String(orderNo || "draft").replace(/[^\w.-]+/g, "_");
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `SPRF_${safeName}.xls`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 200);
+  setStatus(`Downloaded SPRF_${safeName}.xls`, "ok");
+}
+const _btnExcel = $("#btnExcel");
+if (_btnExcel) _btnExcel.addEventListener("click", exportOrderToExcel);
+
 /* ────────────────────────── header date ────────────────────────── */
 function seedDate(){
   const now = new Date();
@@ -3731,6 +4025,8 @@ async function hydrateSubmittedOrder(oid, editMode){
   const isApproved = !!data.approved_by_name;
   const sBtn  = $("#btnSubmit");
   const dBtn  = $("#btnSaveTemp");
+  const eBtn  = $("#btnEdit");
+  const aBtn  = $("#btnToolbarApprove");
   const dimIt = (btn, tip) => {
     if (!btn) return;
     btn.hidden = false;
@@ -3747,6 +4043,32 @@ async function hydrateSubmittedOrder(oid, editMode){
     btn.style.cursor  = "";
     btn.title = "";
   };
+  /* Edit button — sits between Print/PDF and Save/Update in the
+     toolbar.  Visible only for a hydrated real order the viewer
+     could modify (allowed updater set).  Hidden on temp drafts
+     (Save/Update already unlocks them), on already-approved
+     orders (audit frozen), and for read-only viewers. */
+  if (eBtn){
+    if (!isTempDraft && !isApproved && isAllowedUpdater){
+      eBtn.hidden = false;
+      eBtn.onclick = () => {
+        /* Reload the same order with ?edit=1 so hydrate lands in
+           the canEdit branch and unlocks every input.  If we're
+           already in edit mode this button is redundant — hide it. */
+        const u = new URL(location.href);
+        u.searchParams.set("edit", "1");
+        location.href = u.toString();
+      };
+    } else {
+      eBtn.hidden = true;
+    }
+  }
+  /* Toolbar Approve button — always visible on a Pending SPRF that
+     needs approval; enabled only for the eligible named approver,
+     dimmed for anybody else.  Hidden on already-approved orders
+     and Standard Pricing.  Sits at the far right of the toolbar
+     (margin-left:auto in the CSS). */
+  wireToolbarApproveBtn(aBtn, data, who);
   if (canEdit){
     // Unlock inputs — the form is editable in this state.
     $("#btnAddRow").disabled = false;
@@ -3878,66 +4200,43 @@ function wireApprovalPanel(order, who){
   panel.hidden = false;
 }
 
-/* Render / wire the tail-of-page Approve bar.
-   New visibility rule (per user):
-     • Any viewer on a Pending SPRF that needs approval SEES the bar
-       + Approve button — non-approvers just get a dimmed button
-       with a "you're not an approver" tooltip so the affordance is
-       discoverable but only actionable to the right identity.
-     • Already-approved orders show a compact green status ribbon
-       ("Already approved by <name>") with no button.
-     • Standard-Pricing orders (no needs_mgmt_approval) hide the
-       bar entirely — nothing to approve there.  */
-function wireBottomApproveBar(order, who){
-  const bar    = document.getElementById("bottomApproveBar");
-  const btn    = document.getElementById("btnBottomApprove");
-  const txt    = document.getElementById("bottomApproveText");
-  if (!bar || !btn || !txt) return;
-  if (order.needs_mgmt_approval !== "Y"){ bar.hidden = true; return; }
-  const alreadyApproved = !!order.approved_by_name;
-  if (alreadyApproved){
-    /* Post-approval status ribbon — no button, just the record. */
-    bar.hidden = false;
-    bar.style.background = "#ecfdf5";
-    bar.style.borderColor = "#16a34a";
-    txt.innerHTML = `✓ Already approved by <b>${(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + order.approved_at : ""}`;
-    btn.hidden = true;
-    return;
-  }
-  /* Pending — show the Approve button to everybody, dim it for
-     viewers who aren't the eligible approver. */
+/* Render / wire the toolbar Approve button (sits at the far right,
+   next to Submit).  Visibility mirrors the old bottom-bar rules:
+     • hidden on Standard-Pricing (nothing to approve) and on
+       already-approved orders (the top approval panel + bottom
+       status ribbon show the record instead).
+     • enabled for the eligible named approver (Hayden / JJ /
+       Kenny) whose own slot is still Pending.
+     • dimmed for every other viewer on a Pending SPRF — button
+       visible so the affordance is discoverable, tooltip says
+       who can actually act.  */
+function wireToolbarApproveBtn(btn, order, who){
+  if (!btn) return;
+  const hide = () => { btn.hidden = true; };
+  if (order.needs_mgmt_approval !== "Y")  return hide();
+  if (order.approved_by_name)             return hide();
   const myMissing = (who.is_approver_a && order.approved_a !== "Y")
                  || (who.is_approver_b && order.approved_b !== "Y")
                  || (who.is_approver_c && order.approved_c !== "Y");
-  bar.hidden = false;
-  bar.style.background = "#f0fdf4";
-  bar.style.borderColor = "#16a34a";
   btn.hidden = false;
-  btn.textContent = "✓ Approve this SPRF";
-  /* Replace prior click handler by cloning the button — re-render
-     paths (post-approve, re-hydrate) don't stack listeners. */
+  btn.textContent = "✓ Approve";
   const fresh = btn.cloneNode(true);
   btn.parentNode.replaceChild(fresh, btn);
-  if (myMissing){
-    /* Full-strength button for the eligible approver. */
-    txt.textContent = "Review the order above, then click Approve to sign off.";
-    fresh.disabled = false;
-    fresh.style.opacity = "";
-    fresh.style.cursor  = "";
-    fresh.title = "";
-  } else {
-    /* Dimmed for everyone else — the button is visible so the
-       reader sees where approval sits, but clicking does nothing
-       until the eligible approver opens the same view. */
-    txt.textContent = "This SPRF is Pending — the named approvers (Hayden / JJ / Kenny) can sign off.";
+  if (!myMissing){
     fresh.disabled = true;
     fresh.style.opacity = "0.45";
     fresh.style.cursor  = "not-allowed";
     fresh.title = "Only Hayden, JJ or Kenny can approve this SPRF.";
     return;
   }
+  fresh.disabled = false;
+  fresh.style.opacity = "";
+  fresh.style.cursor  = "";
+  fresh.title = "Sign off on this SPRF (first approver wins).";
   fresh.addEventListener("click", async () => {
-    fresh.disabled = true; fresh.textContent = "Approving…";
+    fresh.disabled = true;
+    const origText = fresh.textContent;
+    fresh.textContent = "Approving…";
     try {
       const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
         method: "POST", credentials: "same-origin",
@@ -3946,28 +4245,49 @@ function wireBottomApproveBar(order, who){
       const j = await r.json();
       if (!r.ok || !j.ok){
         setStatus(`Approve failed: ${j.error || r.statusText}`, "warn");
-        fresh.disabled = false; fresh.textContent = "✓ Approve this SPRF"; return;
+        fresh.disabled = false; fresh.textContent = origText; return;
       }
       const now = new Date().toISOString().slice(0,16).replace("T"," ");
-      if (j.slot === "approved_a"){
-        order.approved_a = "Y"; order.approved_a_at = now;
-      } else if (j.slot === "approved_b"){
-        order.approved_b = "Y"; order.approved_b_at = now;
-      } else if (j.slot === "approved_c"){
-        order.approved_c = "Y"; order.approved_c_at = now;
-      }
-      /* First-approver-wins — stamp the record fields so the top
-         panel + list page both refresh cleanly. */
+      if (j.slot === "approved_a"){ order.approved_a = "Y"; order.approved_a_at = now; }
+      else if (j.slot === "approved_b"){ order.approved_b = "Y"; order.approved_b_at = now; }
+      else if (j.slot === "approved_c"){ order.approved_c = "Y"; order.approved_c_at = now; }
       order.approved_by_name  = j.approved_by_name  || j.by_name || order.approved_by_name  || "";
       order.approved_by_email = j.approved_by_email || j.by      || order.approved_by_email || "";
       order.approved_at       = now;
       setStatus("Approval recorded.", "ok");
       wireApprovalPanel(order, who);
+      /* Refresh the toolbar Approve button — approved_by_name is
+         now set, so wireToolbarApproveBtn hides it and the status
+         ribbon at the bottom takes over the "who approved" note. */
+      wireToolbarApproveBtn(document.getElementById("btnToolbarApprove"), order, who);
     } catch(e){
       setStatus("Approve failed: "+e, "warn");
-      fresh.disabled = false; fresh.textContent = "✓ Approve this SPRF";
+      fresh.disabled = false; fresh.textContent = origText;
     }
   });
+}
+
+/* Bottom Approve bar retired — the toolbar now carries the Approve
+   action (wireToolbarApproveBtn).  This function is kept only as a
+   compact status ribbon that shows "✓ Already approved by <name>"
+   at the tail of the page once the SPRF has been signed off, and
+   hides itself in every other state.  */
+function wireBottomApproveBar(order, who){
+  const bar = document.getElementById("bottomApproveBar");
+  const btn = document.getElementById("btnBottomApprove");
+  const txt = document.getElementById("bottomApproveText");
+  if (!bar || !btn || !txt) return;
+  /* Always hide the button — the action lives in the toolbar now. */
+  btn.hidden = true;
+  if (order.needs_mgmt_approval !== "Y" || !order.approved_by_name){
+    bar.hidden = true;
+    return;
+  }
+  /* Post-approval status ribbon. */
+  bar.hidden = false;
+  bar.style.background  = "#ecfdf5";
+  bar.style.borderColor = "#16a34a";
+  txt.innerHTML = `✓ Already approved by <b>${(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + order.approved_at : ""}`;
 }
 
 // Update an existing submitted order — reuses serializeOrder().  The
