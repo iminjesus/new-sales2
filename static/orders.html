@@ -218,6 +218,63 @@
     margin-right: 8px;
   }
   #mdNoticeOverlay .foot button.cancel:hover{ background: #f1f5f9; color: #0f172a; }
+  /* Approve-with-note modal — pops when a named approver clicks the
+     toolbar Approve button.  Same visual language as #mdNoticeOverlay
+     (dim overlay, centred card, header + body + foot) but tinted
+     green because it's the sign-off moment, and carries a <textarea>
+     for the approver's free-form comment. */
+  #approveOverlay{
+    position: fixed; inset: 0; z-index: 10000;
+    background: rgba(15,23,42,0.55);
+    display: none; align-items: center; justify-content: center;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  }
+  #approveOverlay.show{ display: flex; }
+  #approveOverlay .modal{
+    background: #fff; border-radius: 8px; box-shadow: 0 24px 64px rgba(0,0,0,.35);
+    width: min(560px, 92vw); overflow: hidden;
+    animation: mdNoticeIn 0.14s ease-out;
+  }
+  #approveOverlay .hdr{
+    background: #166534; color: #fff; padding: 10px 16px;
+    font-weight: 800; font-size: 14px; letter-spacing: .3px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  #approveOverlay .hdr::before{ content: "✓"; font-size: 16px; }
+  #approveOverlay .body{
+    padding: 16px 18px; color: #0f172a; font-size: 13px; line-height: 1.55;
+  }
+  #approveOverlay .body label{
+    display: block; font-weight: 700; margin-bottom: 6px; color: #065f46;
+  }
+  #approveOverlay .body textarea{
+    width: 100%; box-sizing: border-box; min-height: 96px;
+    font-family: inherit; font-size: 13px; padding: 8px 10px;
+    border: 1px solid #cbd5e1; border-radius: 4px; resize: vertical;
+    color: #0f172a; background: #fefefe;
+  }
+  #approveOverlay .body textarea:focus{
+    outline: none; border-color: #16a34a;
+    box-shadow: 0 0 0 3px rgba(22,163,74,.15);
+  }
+  #approveOverlay .body .hint{
+    margin-top: 6px; font-size: 11.5px; color: #64748b;
+  }
+  #approveOverlay .foot{
+    padding: 10px 16px; text-align: right; border-top: 1px solid #e5e7eb;
+    background: #f9fafb;
+  }
+  #approveOverlay .foot button{
+    background: #166534; color: #fff; border: none; border-radius: 4px;
+    padding: 7px 18px; font-weight: 700; cursor: pointer; font-size: 12.5px;
+    transition: background .1s;
+  }
+  #approveOverlay .foot button:hover{ background: #14532d; }
+  #approveOverlay .foot button.cancel{
+    background: #fff; color: #64748b; border: 1px solid #cbd5e1;
+    margin-right: 8px;
+  }
+  #approveOverlay .foot button.cancel:hover{ background: #f1f5f9; color: #0f172a; }
   /* When the aged-stock sidebar is visible on wide screens, reserve
      a right-hand gutter so the fixed panel doesn't overlap the form.
      The wrap keeps its centered look inside the remaining space. */
@@ -762,6 +819,29 @@
     <div class="foot">
       <button type="button" class="cancel" id="mdNoticeCancel">Back to edit</button>
       <button type="button" id="mdNoticeOK">Acknowledge &amp; continue</button>
+    </div>
+  </div>
+</div>
+<!-- Approve-with-note modal.  Pops when a named approver clicks the
+     toolbar Approve button.  The textarea's value is POSTed as
+     `note` to /api/orders/detail/{id}/approve and persisted on
+     the order's approval_note column (first-approver-wins). -->
+<div id="approveOverlay" role="dialog" aria-modal="true" aria-labelledby="approveTitle">
+  <div class="modal">
+    <div class="hdr" id="approveTitle">Approve SPRF</div>
+    <div class="body">
+      <label for="approveNoteText">Approver note (optional)</label>
+      <textarea id="approveNoteText"
+                placeholder="Add a brief comment for the record — pricing rationale, condition, follow-up… (optional)"
+                maxlength="500"></textarea>
+      <div class="hint">
+        Your note is saved with the approval and shown on the SPRF and in the Orders list.
+        Up to 500 characters.
+      </div>
+    </div>
+    <div class="foot">
+      <button type="button" class="cancel" id="approveCancel">Cancel</button>
+      <button type="button" id="approveConfirm">✓ Approve</button>
     </div>
   </div>
 </div>
@@ -4271,9 +4351,17 @@ function wireApprovalPanel(order, who){
   // "Approver of record" banner — first-approver-wins, so once
   // approved_by_name is set we highlight it so downstream readers
   // know who signed off (Hayden / JunJong / Kenny — or an editor
-  // if Pamela / Brian corrected the order after submission).
+  // if Pamela / Brian corrected the order after submission).  When
+  // the approver left a comment during sign-off it hangs off the
+  // banner as a second block so the reader sees the record and the
+  // rationale together (also stripped-back version echoed on the
+  // bottom status ribbon by wireBottomApproveBar).
+  const _noteText = String(order.approval_note || "").trim();
+  const noteBlock = _noteText
+    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#fff;border:1px solid #16a34a;border-left-width:4px;border-radius:0 4px 4px 0;color:#065f46;font-weight:600;font-size:12.5px;line-height:1.5;white-space:pre-wrap">📝 <b>Approver note:</b> ${esc(_noteText)}</div>`
+    : "";
   const recordBanner = order.approved_by_name
-    ? `<div style="width:100%;background:#dcfce7;border:1px solid #16a34a;color:#166534;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✓ Approved by ${esc(order.approved_by_name)}${order.approved_at ? " · " + esc(order.approved_at) : ""}</div>`
+    ? `<div style="width:100%;background:#dcfce7;border:1px solid #16a34a;color:#166534;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✓ Approved by ${esc(order.approved_by_name)}${order.approved_at ? " · " + esc(order.approved_at) : ""}</div>` + noteBlock
     : "";
   row.innerHTML = recordBanner + [
     /* Display order (per review): Kenny → Hayden → JJ.  Slot
@@ -4327,38 +4415,95 @@ function wireToolbarApproveBtn(btn, order, who){
   fresh.style.opacity = "";
   fresh.style.cursor  = "";
   fresh.title = "Sign off on this SPRF (first approver wins).";
-  fresh.addEventListener("click", async () => {
-    fresh.disabled = true;
-    const origText = fresh.textContent;
-    fresh.textContent = "Approving…";
-    try {
-      const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
-        method: "POST", credentials: "same-origin",
-        headers: {"Content-Type": "application/json"}, body: "{}",
-      });
-      const j = await r.json();
-      if (!r.ok || !j.ok){
-        setStatus(`Approve failed: ${j.error || r.statusText}`, "warn");
-        fresh.disabled = false; fresh.textContent = origText; return;
-      }
-      const now = new Date().toISOString().slice(0,16).replace("T"," ");
-      if (j.slot === "approved_a"){ order.approved_a = "Y"; order.approved_a_at = now; }
-      else if (j.slot === "approved_b"){ order.approved_b = "Y"; order.approved_b_at = now; }
-      else if (j.slot === "approved_c"){ order.approved_c = "Y"; order.approved_c_at = now; }
-      order.approved_by_name  = j.approved_by_name  || j.by_name || order.approved_by_name  || "";
-      order.approved_by_email = j.approved_by_email || j.by      || order.approved_by_email || "";
-      order.approved_at       = now;
-      setStatus("Approval recorded.", "ok");
-      wireApprovalPanel(order, who);
-      /* Refresh the toolbar Approve button — approved_by_name is
-         now set, so wireToolbarApproveBtn hides it and the status
-         ribbon at the bottom takes over the "who approved" note. */
-      wireToolbarApproveBtn(document.getElementById("btnToolbarApprove"), order, who);
-    } catch(e){
-      setStatus("Approve failed: "+e, "warn");
-      fresh.disabled = false; fresh.textContent = origText;
-    }
+  fresh.addEventListener("click", () => {
+    /* Open the approve-with-note modal; the real POST happens
+       when the approver confirms inside the modal.  Keeping the
+       button enabled here lets the approver reopen the modal
+       after a Cancel without needing a re-render. */
+    openApproveNoteModal(order, who, fresh);
   });
+}
+
+/* Show the Approve-with-note modal, capture the approver's
+   comment, POST the approval to /api/orders/detail/{id}/approve
+   with the note in the body, and update the on-screen state on
+   success.  The `srcBtn` is the toolbar Approve button — we
+   restore its label if the POST fails so the approver can retry. */
+function openApproveNoteModal(order, who, srcBtn){
+  const ov  = document.getElementById("approveOverlay");
+  const ta  = document.getElementById("approveNoteText");
+  const okB = document.getElementById("approveConfirm");
+  const caB = document.getElementById("approveCancel");
+  if (!ov || !ta || !okB || !caB){
+    /* Modal missing — fall back to a plain approve so the workflow
+       is never blocked by an HTML regression. */
+    return _postApprove(order, who, srcBtn, "");
+  }
+  ta.value = "";
+  ov.classList.add("show");
+  setTimeout(() => ta.focus(), 30);
+  const cleanup = () => {
+    ov.classList.remove("show");
+    okB.removeEventListener("click", onOk);
+    caB.removeEventListener("click", onCancel);
+    document.removeEventListener("keydown", onKey);
+  };
+  const onOk = async () => {
+    const note = (ta.value || "").trim().slice(0, 500);
+    cleanup();
+    await _postApprove(order, who, srcBtn, note);
+  };
+  const onCancel = () => { cleanup(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { onCancel(); }
+    /* Ctrl / Cmd + Enter inside the textarea acts as a confirm — a
+       common convention for multi-line note dialogs. */
+    if ((e.key === "Enter") && (e.ctrlKey || e.metaKey)) { onOk(); }
+  };
+  okB.addEventListener("click", onOk);
+  caB.addEventListener("click", onCancel);
+  document.addEventListener("keydown", onKey);
+}
+
+/* Fire the actual approve POST and reconcile the local order
+   state on success.  Extracted so the modal + fallback paths
+   funnel through the same code. */
+async function _postApprove(order, who, srcBtn, note){
+  const origText = srcBtn ? srcBtn.textContent : "";
+  if (srcBtn){ srcBtn.disabled = true; srcBtn.textContent = "Approving…"; }
+  try {
+    const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
+      method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ note: note || "" }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Approve failed: ${j.error || r.statusText}`, "warn");
+      if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
+      return;
+    }
+    const now = new Date().toISOString().slice(0,16).replace("T"," ");
+    if (j.slot === "approved_a"){ order.approved_a = "Y"; order.approved_a_at = now; }
+    else if (j.slot === "approved_b"){ order.approved_b = "Y"; order.approved_b_at = now; }
+    else if (j.slot === "approved_c"){ order.approved_c = "Y"; order.approved_c_at = now; }
+    order.approved_by_name  = j.approved_by_name  || j.by_name || order.approved_by_name  || "";
+    order.approved_by_email = j.approved_by_email || j.by      || order.approved_by_email || "";
+    order.approved_at       = now;
+    /* Persist the note on the local order so wireApprovalPanel /
+       wireBottomApproveBar render it right away without waiting
+       for a re-hydrate. */
+    order.approval_note     = j.approval_note || note || order.approval_note || "";
+    setStatus("Approval recorded.", "ok");
+    wireApprovalPanel(order, who);
+    /* Refresh the toolbar Approve button — approved_by_name is
+       now set, so wireToolbarApproveBtn hides it and the status
+       ribbon at the bottom takes over the "who approved" note. */
+    wireToolbarApproveBtn(document.getElementById("btnToolbarApprove"), order, who);
+  } catch(e){
+    setStatus("Approve failed: "+e, "warn");
+    if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
+  }
 }
 
 /* Bottom Approve bar retired — the toolbar now carries the Approve
@@ -4377,11 +4522,19 @@ function wireBottomApproveBar(order, who){
     bar.hidden = true;
     return;
   }
-  /* Post-approval status ribbon. */
+  /* Post-approval status ribbon.  When the approver left a comment
+     during sign-off, append it as a second line so the reader sees
+     the record and the rationale together. */
   bar.hidden = false;
   bar.style.background  = "#ecfdf5";
   bar.style.borderColor = "#16a34a";
-  txt.innerHTML = `✓ Already approved by <b>${(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + order.approved_at : ""}`;
+  const _esc = s => String(s || "").replace(/[&<>"']/g,
+    ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+  const _hd = `✓ Already approved by <b>${_esc(order.approved_by_name||"—")}</b>${order.approved_at ? " · " + _esc(order.approved_at) : ""}`;
+  const _nt = (order.approval_note || "").trim();
+  txt.innerHTML = _nt
+    ? `${_hd}<div style="margin-top:4px;padding:6px 10px;background:#fff;border-left:3px solid #16a34a;color:#065f46;font-weight:600;font-size:12.5px;line-height:1.4;white-space:pre-wrap">📝 ${_esc(_nt)}</div>`
+    : _hd;
 }
 
 // Update an existing submitted order — reuses serializeOrder().  The

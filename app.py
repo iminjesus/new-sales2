@@ -3880,6 +3880,13 @@ def _ensure_submitted_orders_table():
             ("approved_by_email",   "VARCHAR(120) NULL"),
             ("approved_by_name",    "VARCHAR(60) NULL"),
             ("approved_at",         "DATETIME NULL"),
+            # Free-form comment the approver types when signing off.
+            # First-wins alongside approved_by_name: subsequent approvers
+            # never overwrite an existing note (COALESCE in the UPDATE),
+            # so the record reads as one signed comment from the first
+            # approver to click.  Surfaced on the SPRF's approval panel
+            # and in the orders_list Note column.
+            ("approval_note",       "VARCHAR(500) NULL"),
             # Order-number suffix — human-friendly identifier that
             # encodes submit date + daily sequence + rebateable flag
             # (e.g. 260926_003Y = 3rd rebateable order on 26/09/26).
@@ -3968,6 +3975,7 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
     grand = order.get("grand_total") or ""
     avg_dc = order.get("avg_dc_pct") or ""
     reb   = (order.get("rebateable") or "").upper() or "?"
+    note  = (order.get("approval_note") or "").strip()
     link  = f"{base_url}/orders_list#o={oid}" if base_url else ""
     ts    = datetime.now().strftime("%d/%m/%Y %H:%M")
 
@@ -3991,6 +3999,12 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
           {_chip("Grand",     grand, "#0b3d91")}
           {_chip("Avg DC",    (str(avg_dc) + "%") if avg_dc != "" else "—", "#b45309")}
         </div>
+        {(
+          '<div style="margin-top:8px;padding:8px 10px;background:#ecfdf5;'
+          'border:1px solid #16a34a;border-radius:3px;font-size:12px;color:#065f46">'
+          '<b style="color:#065f46">Approver note:</b> '
+          + _esc_html(note) + '</div>'
+        ) if note else ''}
         <div style="margin-top:8px;font-size:11.5px">
           {'<a href="' + link + '" style="background:#16a34a;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open in Orders list</a>' if link else ''}
           <span style="color:#6b7280;margin-left:12px">Parallel-approver workflow — first approver finalises. Approver of record: <b>{_esc_html(approver_name)}</b> ({_esc_html(approver_email)}).</span>
@@ -4596,6 +4610,7 @@ def api_orders_list():
             f"       status_changed_by, needs_mgmt_approval, "
             f"       approved_a, approved_b, approved_c, "
             f"       approved_by_email, approved_by_name, approved_at, "
+            f"       approval_note, "
             f"       rebateable, mgmt_reason "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
@@ -4757,6 +4772,7 @@ def api_orders_detail(oid):
             "       approved_a, approved_a_at, approved_b, approved_b_at, "
             "       approved_c, approved_c_at, "
             "       approved_by_email, approved_by_name, approved_at, "
+            "       approval_note, "
             "       order_no, rebateable, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
@@ -5093,6 +5109,16 @@ def api_orders_approve(oid):
     elif who == MGMT_APPROVER_EMAILS[2]: approver_col, approver_name = "approved_c", "Kenny"
     if not approver_col:
         return jsonify({"error": "only the named approvers can approve"}), 403
+    # Optional free-form comment the approver types in the modal
+    # before hitting Approve.  Trimmed and capped at the column
+    # width so a run-away paste can't blow the row.  Blank / missing
+    # note stays NULL and doesn't overwrite an earlier note (see
+    # COALESCE in the UPDATE below).
+    try:
+        _body_json = request.get_json(silent=True) or {}
+    except Exception:
+        _body_json = {}
+    approval_note = str(_body_json.get("note") or "").strip()[:500] or None
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     order_snapshot = None
     try:
@@ -5158,9 +5184,10 @@ def api_orders_approve(oid):
             f"  {approver_col}_at = NOW(), "
             f"  approved_by_email = COALESCE(approved_by_email, %s), "
             f"  approved_by_name  = COALESCE(approved_by_name,  %s), "
-            f"  approved_at       = COALESCE(approved_at,       NOW()) "
+            f"  approved_at       = COALESCE(approved_at,       NOW()), "
+            f"  approval_note     = COALESCE(approval_note,     %s) "
             f"WHERE id = %s AND needs_mgmt_approval = 'Y'",
-            (who, approver_name, oid),
+            (who, approver_name, approval_note, oid),
         )
         if cur.rowcount == 0:
             return jsonify({"error": "not found or doesn't need approval"}), 404
@@ -5172,7 +5199,8 @@ def api_orders_approve(oid):
             cur.execute(
                 "SELECT id, order_no, submitted_by_bde, submitted_by_email, "
                 "       sold_to, sold_to_name, grand_total, "
-                "       approved_by_email, approved_by_name, approved_at "
+                "       approved_by_email, approved_by_name, approved_at, "
+                "       approval_note "
                 "FROM submitted_orders WHERE id = %s LIMIT 1",
                 (oid,),
             )
@@ -5219,6 +5247,7 @@ def api_orders_approve(oid):
         "by_name": approver_name,
         "approved_by_email": (order_snapshot or {}).get("approved_by_email") or who,
         "approved_by_name":  (order_snapshot or {}).get("approved_by_name")  or approver_name,
+        "approval_note":     (order_snapshot or {}).get("approval_note")     or approval_note or "",
     })
 
 
@@ -5337,7 +5366,8 @@ def api_orders_list_excel():
             f"       sold_to, sold_to_name, ship_to, ship_to_name, state, "
             f"       total_qty, grand_total, avg_dc_pct, payload_json, "
             f"       rebateable, status_sap, needs_mgmt_approval, "
-            f"       approved_by_name, approved_at, mgmt_reason "
+            f"       approved_by_name, approved_at, approval_note, "
+            f"       mgmt_reason "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -5389,7 +5419,7 @@ def api_orders_list_excel():
                "List Total", "Current DC %", "Current Order Amount",
                "Add Support %", "Total Amount", "Proposed DC %",
                "Rebateable", "SAP Status",
-               "Needs Approval", "Approved By", "Approved At",
+               "Needs Approval", "Approved By", "Approved At", "Approval Note",
                "SAP Created At", "Elapsed to Approval", "Remark"]
     ws.append(headers)
     for c, _ in enumerate(headers, start=1):
@@ -5435,6 +5465,7 @@ def api_orders_list_excel():
             r.get("needs_mgmt_approval") or "",
             r.get("approved_by_name") or "",
             fmt(r.get("approved_at")),
+            (r.get("approval_note") or "")[:500],
             fmt(sap_at),
             _elapsed(r.get("submitted_at"), r.get("approved_at")),
             (r.get("mgmt_reason") or "")[:500],

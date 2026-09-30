@@ -159,6 +159,12 @@
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
             <th style="width:130px">Approver</th>
+            <!-- Approver note — free-form comment the approver
+                 typed in the approve-with-note modal at sign-off
+                 time.  Blank for orders that haven't been
+                 approved yet or where the approver left the note
+                 field empty. -->
+            <th style="width:200px" title="Free-form comment the approver typed at sign-off time.  First-approver-wins — the comment is the one from whichever named approver clicked first.">Note</th>
             <!-- Edit column removed — the row itself is clickable and
                  opens the SPRF in view mode, where an Edit button
                  unlocks the form for authorised viewers.  The old
@@ -183,7 +189,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="21" class="empty">Loading…</td></tr>
+          <tr><td colspan="22" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -281,12 +287,12 @@ function renderRows(){
   const filtered = q ? _rowsCache.filter(r => {
     return [r.submitted_by_bde, r.sold_to, r.sold_to_name, r.ship_to,
             r.ship_to_name, r.state, String(r.id), r.order_no,
-            r.approved_by_name]
+            r.approved_by_name, r.approval_note]
       .some(v => String(v || "").toLowerCase().includes(q));
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="21" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="22" class="empty">No orders match.</td></tr>`;
   } else {
     body.innerHTML = filtered.map(r => {
       // Approver cell — "Standard" pill when the order has no
@@ -360,6 +366,14 @@ function renderRows(){
              <span style="color:#94a3b8"> · ${escapeHtml(m.action || "edited")}</span>
            </div>`).join("")
         : `<small style="color:#94a3b8">—</small>`;
+      /* Approver note — free-form comment captured in the approve
+         modal on the SPRF and saved to submitted_orders.approval_note.
+         Only meaningful once the order is approved (approved_by_name
+         set); otherwise the cell reads as a dash. */
+      const _note = String(r.approval_note || "").trim();
+      const noteCell = _note
+        ? `<div style="font-size:11px;line-height:1.4;color:#065f46;background:#ecfdf5;padding:4px 6px;border-radius:3px;white-space:pre-wrap">${escapeHtml(_note)}</div>`
+        : `<small style="color:#94a3b8">—</small>`;
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
@@ -378,6 +392,7 @@ function renderRows(){
         <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
         <td>${apprCell}</td>
+        <td>${noteCell}</td>
         <td><small style="color:#334155">${escapeHtml(r.submitted_at || "—")}</small></td>
         <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
         <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
