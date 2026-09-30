@@ -3714,21 +3714,25 @@ async function wireStatusPanel(order){
 /* ────────────────────────── boot ────────────────────────── */
 async function seedRequester(){
   /* Requester = whoever is filling this SPRF.  Priority:
-       1. CF-Access mail id (whoami.email) — production path
-       2. whoami.name (some deployments carry a friendly name even
-          without an email — Jayden.Bahng, e.g.)
-       3. Last-typed value cached in localStorage — so an editable
+       1. CF-Access mail id (whoami.email)         — production
+       2. whoami.name (directory-mapped friendly name)
+       3. whoami.local_user — OS user of the Flask process /
+          X-Forwarded-User header / HKAU_REQUESTER_EMAIL env
+          var (self-hosted or dev environments where Cloudflare
+          Access isn't in front)
+       4. Last-typed value cached in localStorage — so an editable
           form in dev / offline mode doesn't nag every reload
-     The input is left EDITABLE so a user can still type in a mail
-     id manually when none of the above yields one. */
+     The input is EDITABLE so the user can still type manually
+     when none of the above yields anything usable. */
   const el = document.getElementById("requester_email");
   if (!el) return;
   let seeded = "";
   try {
     const r = await fetch("/api/orders/whoami", {credentials: "same-origin"});
     const j = await r.json();
-    if (j && j.email) seeded = j.email;
-    else if (j && j.name) seeded = j.name;
+    if      (j && j.email)      seeded = j.email;
+    else if (j && j.name)       seeded = j.name;
+    else if (j && j.local_user) seeded = j.local_user;
   } catch(_e){}
   if (!seeded) {
     try { seeded = localStorage.getItem("sprf_requester") || ""; } catch(_e){}

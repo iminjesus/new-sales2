@@ -5216,14 +5216,53 @@ def api_orders_whoami():
     toggle (Harry-only) and to auto-fill submitted_by.  Also
     surfaces is_approver_a / is_approver_b / is_approver_c and
     is_price_editor so the detail page can render the Approve /
-    Edit buttons only for the right people."""
+    Edit buttons only for the right people.
+
+    Fallback identity chain when the Cloudflare Access header isn't
+    set (self-hosted / dev / behind a different proxy):
+        1. Cf-Access-Authenticated-User-Email       (production)
+        2. X-Forwarded-User / X-Auth-Request-Email  (nginx / oauth2-proxy)
+        3. REMOTE_USER environment variable         (Basic-Auth /
+                                                     Kerberos / WIA)
+        4. HKAU_REQUESTER_EMAIL environment variable (operator can
+                                                      pin an identity
+                                                      on the server)
+        5. OS user of the Flask process             (getpass.getuser)
+    Only the first ever populates `email` for role-gating — the
+    remaining sources land in `local_user` so the SPRF form's
+    Requester input can still auto-fill without granting any of the
+    approver / editor flags to a spoofed identity."""
     who = (_bde_from_request() or "").strip().lower()
     name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
+    # Best-effort local identity for the Requester auto-fill (never
+    # feeds role checks).
+    local_user = ""
+    try:
+        local_user = (
+            request.headers.get("X-Forwarded-User")
+            or request.headers.get("X-Auth-Request-Email")
+            or request.environ.get("REMOTE_USER")
+            or os.environ.get("HKAU_REQUESTER_EMAIL")
+            or ""
+        ).strip()
+    except Exception:
+        local_user = ""
+    if not local_user:
+        try:
+            import getpass as _gp
+            local_user = _gp.getuser() or ""
+        except Exception:
+            local_user = ""
     return jsonify({
         "email":     who,
         "name":      name or "",
         "state":     state or "",
         "role":      role or "",
+        # Auto-fill hint for the Requester field — the front-end
+        # falls back to this when `email` is blank.  Read-only
+        # informational; the backend NEVER promotes local_user into
+        # any role check.
+        "local_user": local_user,
         # Only Harry can flip Y/N — kept as a single field the front
         # end can key off (no ALL-role fallback here).
         "is_cs":         who == HARRY_CS_EMAIL,
