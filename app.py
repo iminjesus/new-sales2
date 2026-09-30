@@ -2419,6 +2419,21 @@ def _strip_noise_py(s):
         s = s.replace(ch, "")
     return s
 
+def _digits_only_py(s):
+    """Reduce a string to its digit characters — used for size
+    matching where the BDE skips both punctuation AND the R / Z / C
+    letters in a size code ("2255017" → matches "225/50R17",
+    "225/50ZR17", "225/50R17C")."""
+    import re as _re_local
+    return _re_local.sub(r"[^0-9]", "", s or "")
+
+def _digits_only_sql(col):
+    """MySQL expression that reduces a text column to just its
+    digits.  REGEXP_REPLACE is available in MySQL 8+ — the sole
+    place this feeds is the material-suggest LIKE clause, and the
+    deployment is on 8.x, so no fallback needed."""
+    return f"REGEXP_REPLACE(LOWER({col}), '[^0-9]', '')"
+
 
 @app.get("/api/orders/customer_suggest")
 def api_orders_customer_suggest():
@@ -2566,6 +2581,13 @@ def api_orders_material_suggest():
         pat_expr  = _strip_noise_sql(c_pat)  if c_pat  else None
         prod_expr = _strip_noise_sql(c_prod) if c_prod else None
         brand_expr = _strip_noise_sql("brand") if c_brand else None
+        # Digits-only variants — a size token like "2255017" reads as
+        # 225/50R17 minus the R.  We add a second LIKE clause per
+        # token that compares digits-only both sides, so 2255017 hits
+        # 225/50R17, 225/50ZR17 AND 225/50R17C in one shot.
+        code_digits_expr = _digits_only_sql("m_code")
+        desc_digits_expr = _digits_only_sql(c_desc) if c_desc else None
+        pat_digits_expr  = _digits_only_sql(c_pat)  if c_pat  else None
         tokens = [t for t in q.split() if t.strip()] or [q]
         wh_and = []
         params = []
@@ -2586,6 +2608,20 @@ def api_orders_material_suggest():
             if brand_expr:
                 per_tok.append(f"{brand_expr} LIKE %s")
                 params.append(f"%{tok_norm}%")
+            # Digits-only fallback — only meaningful when the token
+            # carries digits AND is at least 3 chars (dodges noise
+            # like "R" or single-letter typos).  Matches size and
+            # m_code, NOT pattern/product/brand (those are letters).
+            tok_digits = _digits_only_py(tok)
+            if tok_digits and len(tok_digits) >= 3:
+                per_tok.append(f"{code_digits_expr} LIKE %s")
+                params.append(f"%{tok_digits}%")
+                if desc_digits_expr:
+                    per_tok.append(f"{desc_digits_expr} LIKE %s")
+                    params.append(f"%{tok_digits}%")
+                if pat_digits_expr:
+                    per_tok.append(f"{pat_digits_expr} LIKE %s")
+                    params.append(f"%{tok_digits}%")
             wh_and.append("(" + " OR ".join(per_tok) + ")")
         if not wh_and:
             return jsonify([])
@@ -2788,13 +2824,20 @@ def api_orders_material():
         # product_name) AND take a wide net across every other text-
         # like column in the row we already fetched.  Formats we've
         # seen: "205/55R16 91V", "265/70R16 112T", "205R16C 110/108T",
-        # "11R22.5 148/145L", "205/55R16, 91V", "205/55R16-91V".
+        # "11R22.5 148/145L", "205/55R16, 91V", "205/55R16-91V", plus
+        # datasets where the load/speed sits in its OWN column as a
+        # bare "91V" / "112T" token.
         if not row.get("load_speed"):
             import re as _re_ls
             # Fetch every text column for this m_code so a load-speed
             # stashed in, say, a `description_full` or `spec` we didn't
-            # explicitly probe still gets found.
-            wide_src = " ".join(str(v) for v in row.values() if v is not None)
+            # explicitly probe still gets found.  Also keep the values
+            # per-column so a bare "91V" that lives alone in one cell
+            # can be spotted without noise from adjacent plant codes
+            # like "42R2" / "42R4".
+            per_col_vals = [str(v) for v in row.values()
+                            if v is not None and str(v).strip()]
+            wide_src = " ".join(per_col_vals)
             try:
                 if c_m_code:
                     cur.execute(
@@ -2802,36 +2845,48 @@ def api_orders_material():
                         (row.get("m_code"),),
                     )
                     full = cur.fetchone() or {}
-                    wide_src += " " + " ".join(str(v) for v in full.values() if v is not None)
+                    for v in full.values():
+                        if v is None: continue
+                        sv = str(v).strip()
+                        if sv: per_col_vals.append(sv)
+                    wide_src = " ".join(per_col_vals)
             except Exception:
                 pass
-            # Loosen separator: any non-alphanumeric (space, comma,
-            # dash, tab, punctuation) between the R-size and the
-            # load/speed token.  Also accept load/speed WITHOUT a
-            # trailing space (some datasets glue them together).
+
+            # Valid single-letter tyre speed codes.  Excludes I / O
+            # (never used) and X (reserved for XL markings).
+            _SPEED_LETTERS = "BCDEFGHJKLMNPQRSTUVWY"
+
+            # Pass 1 — canonical "…R<diameter>[C] <LI><Speed>" pattern,
+            # where LI is a plausible load index (60-199, dual "108/106"
+            # form OK) and the speed letter is a real tyre code.  The
+            # negative lookahead after \b keeps plant codes like "42R2"
+            # from sneaking in.
             m = _re_ls.search(
                 r"R\s*\d{1,2}(?:\.\d)?C?[^A-Za-z0-9/]*"
-                r"(\d{2,3}(?:/\d{2,3})?[A-Z]{1,2})\b",
+                r"(([6-9]\d|1\d{2})(?:/\d{2,3})?"
+                r"(?:ZR|[" + _SPEED_LETTERS + r"]))"
+                r"\b(?![A-Za-z0-9])",
                 wide_src,
             )
             if m:
                 row["load_speed"] = m.group(1)
             else:
-                # Bare-token fallback for datasets whose description
-                # is just the size ("175/65R14") and load/speed lives
-                # in its own column ("82T").  Any of carrying_26's
-                # text columns can carry it; we accept the first
-                # token that reads as a plausible load-index + speed
-                # pattern.  Speed letter restricted to real tyre
-                # speed codes to keep random 3-digit words out
-                # (product codes, price rows, etc.).
-                m2 = _re_ls.search(
-                    r"\b(\d{2,3}(?:/\d{2,3})?)"
-                    r"(Z?[A-HJK-Y])\b(?!\s*[A-Za-z])",
-                    wide_src,
-                )
-                if m2:
-                    row["load_speed"] = m2.group(1) + m2.group(2)
+                # Pass 2 — bare token, scanned column-by-column so a
+                # "91V" that lives alone in its cell wins over a random
+                # digit-letter combo elsewhere in the row.  Same
+                # tightened rules: LI 60-199, real speed letter, no
+                # trailing alnum.
+                for v in per_col_vals:
+                    m2 = _re_ls.search(
+                        r"\b(([6-9]\d|1\d{2})(?:/\d{2,3})?"
+                        r"(?:ZR|[" + _SPEED_LETTERS + r"]))"
+                        r"\b(?![A-Za-z0-9])",
+                        v,
+                    )
+                    if m2:
+                        row["load_speed"] = m2.group(1)
+                        break
         return jsonify(row)
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -3528,10 +3583,13 @@ def api_orders_additional_dc():
         )
         base_params = [sold_to, gc, brand, qty]
 
+        has_promo_col = "promo" in ac_cols
+        promo_select  = ", ac.promo" if has_promo_col else ", NULL AS promo"
+
         def _tier(sql_extra, extra_params, tier_name):
             sql = (
                 "SELECT ac.additional_dc, ac.min_qty, ac.customer_grp,"
-                " ac.sold_to,"
+                " ac.sold_to" + promo_select + ","
                 " CASE WHEN TRIM(ac.sold_to) = %s THEN 'sold_to'"
                 "      ELSE 'customer_grp' END AS source"
                 " FROM dc_additional_customer ac"
@@ -3590,6 +3648,46 @@ def api_orders_additional_dc():
 
         if debug:
             out["_debug"]["row"] = row
+
+        # "product_has_planned_promo" — is ANY non-SOVD row in
+        # dc_additional_customer planned for this material's
+        # product_group / pattern / material?  When yes, the SOVD
+        # (Trueblu) ladder MUST NOT fall back onto this line — the
+        # material already carries its own scheduled promo (Kinergy,
+        # Dynapro etc.) and SOVD is reserved for lines with no other
+        # promotion.  The check is customer-agnostic on purpose:
+        # "planned" here means "a promo exists for the product",
+        # not "this customer qualifies for it".
+        product_has_planned_promo = False
+        if has_promo_col:
+            try:
+                where_bits = []
+                params_p   = []
+                if has_material and material:
+                    where_bits.append("(UPPER(TRIM(material)) = UPPER(%s))")
+                    params_p.append(material)
+                if has_pattern and pattern:
+                    where_bits.append("(UPPER(TRIM(pattern)) = UPPER(%s))")
+                    params_p.append(pattern)
+                if has_product_group and product_group:
+                    where_bits.append("(UPPER(TRIM(product_group)) = UPPER(%s))")
+                    params_p.append(product_group)
+                if where_bits:
+                    cur.execute(
+                        "SELECT 1 FROM dc_additional_customer "
+                        "WHERE (" + " OR ".join(where_bits) + ") "
+                        "  AND UPPER(TRIM(brand)) = UPPER(%s) "
+                        "  AND (promo IS NULL OR UPPER(promo) NOT LIKE %s) "
+                        "  AND additional_dc IS NOT NULL "
+                        "  AND additional_dc <> 0 "
+                        "LIMIT 1",
+                        tuple(params_p + [brand, "%SOVD%"]),
+                    )
+                    product_has_planned_promo = cur.fetchone() is not None
+            except Exception:
+                pass
+        out["product_has_planned_promo"] = product_has_planned_promo
+
         if not row:
             return jsonify(out)
         try:
@@ -3605,6 +3703,7 @@ def api_orders_additional_dc():
         out["min_qty"]       = row.get("min_qty")
         out["source"]        = row.get("source")
         out["tier"]          = row.get("tier")
+        out["promo"]         = (row.get("promo") or "")
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()

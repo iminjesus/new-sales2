@@ -404,6 +404,11 @@
   }
   table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
   table.lines thead th.narrow{width:60px}
+  /* Base DC% carries a two-decimal percentage ("52.00%") that
+     clipped inside the 60-px .narrow bucket — 82 px gives comfort
+     for both the header ("Base DC %") and the value. */
+  table.lines thead th.base-dc-hdr{width:82px;min-width:82px}
+  table.lines tbody td.base-dc-cell{min-width:82px}
   table.lines thead th.mid{width:90px}
   table.lines thead th.mcode{width:110px;min-width:110px}
   table.lines thead th.wide{width:100px;min-width:100px}
@@ -856,7 +861,7 @@
           <th class="narrow">Pattern</th>
           <th class="mid">Load / Speed</th>
           <th class="mid">List Price</th>
-          <th class="narrow">Base DC %</th>
+          <th class="narrow base-dc-hdr">Base DC %</th>
           <th class="sky narrow editable" title="443DC / TBR Special / PCLT-SOVD — the customer's automatic contract promo.  Chained with Base DC to give Current DC %.">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
           <th class="narrow" title="Current DC % — chained combined DC from Base DC and 443/TBR/PCLT-SOVD.  Reflects the customer's CONTRACT price before any negotiated concession.">Current DC %</th>
           <th class="mid">Current<br>Unit Price</th>
@@ -1092,27 +1097,22 @@ async function suggestMaterial(q){
     if(Array.isArray(rows)) _matCache[key] = rows;
     else rows = [];
   }
-  // Show "size · pattern" in the size dropdown so different tread
-  // patterns on the same size are distinguishable at a glance.  Chrome
-  // only filters options by their VALUE substring (label is ignored),
-  // so for each row we publish BOTH the canonical "215/70R14 · H724"
-  // AND a noise-stripped "21570R14 · H724" form — typing "21570"
-  // matches the stripped one; typing "215/70" matches the canonical
-  // one; picking either resolves the same material and applyMaterial
-  // overwrites the cell with the canonical size after resolve.
+  // Show "size · pattern · product · brand · #M-Code" in the size
+  // dropdown so (a) different tread patterns on the same size are
+  // distinguishable and (b) every option resolves to exactly ONE
+  // m_code even when two materials share the same size AND pattern
+  // AND product AND brand (merge siblings with different S codes).
+  // Chrome filters options by VALUE substring, so the trailing
+  // "#M-Code" doesn't hurt discoverability — typing "ventus", "H724",
+  // "1016533" or "HK" still narrows the list.
   const strip = s => String(s || "").toLowerCase().replace(/[\s/,.\-'&+()]/g, '');
-  /* Rich value: "215/70R14 · H724 · Ventus S1 · HK" — Chrome
-     filters datalist options by VALUE substring, so putting the
-     pattern AND product name AND brand into the value lets a BDE
-     type "ventus", "h724" or "HK" and see the matching sizes fan
-     out.  A stripped clone ("21570R14 · H724 · Ventus · HK") is
-     added alongside so "21570r14" hits too. */
   const parts = r => {
     const bits = [];
     if (r.description)  bits.push(r.description);
     if (r.pattern)      bits.push(r.pattern);
     if (r.product_name) bits.push(r.product_name);
     if (r.brand)        bits.push(r.brand);
+    if (r.m_code)       bits.push("#" + r.m_code);
     return bits.join(" · ");
   };
   const partsRaw = r => {
@@ -1121,6 +1121,7 @@ async function suggestMaterial(q){
     if (r.pattern)      bits.push(r.pattern);
     if (r.product_name) bits.push(r.product_name);
     if (r.brand)        bits.push(r.brand);
+    if (r.m_code)       bits.push("#" + r.m_code);
     return bits.join(" · ");
   };
   const codeLabel = r => parts(r);
@@ -1132,6 +1133,14 @@ async function suggestMaterial(q){
   }
   fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
   fillDatalist("desc_list",  descItems);
+}
+/* Extract "#1016533" from a datalist value the user picked in the
+   description field.  Returns just the digit run so
+   fillMaterialFromDesc can hit /api/orders/material?m_code=… and
+   guarantee the exact material is resolved. */
+function extractPickedMCode(value){
+  const m = /#\s*([A-Za-z0-9_-]{3,})\s*$/.exec(String(value || ""));
+  return m ? m[1] : "";
 }
 const debouncedSuggestMat = debounce(suggestMaterial, 180);
 
@@ -1537,6 +1546,12 @@ async function applyAdditionalDCToRow(rowEl){
   const spEl  = rowEl.querySelector('[data-col="sp_dc"]');
   const agEl  = rowEl.querySelector('[data-col="aging_dc"]');
   if (!brand || !spEl) return;
+  /* Mark the row "pending customer-promo lookup" so applySOVDRatesToRows
+     stays off this line until we know whether a specific promo (Kinergy,
+     Dynapro, 443…) applies.  Without this gate the async fetch below
+     races the SOVD pass — SOVD ends up written first, then the promo
+     answer arrives too late to overwrite cleanly. */
+  rowEl.dataset.pendingPromo = "1";
   /* Aged rows STILL get the 443/promo lookup — the monthly promo
      (e.g. JAX Dynapro on-road 443) is a customer-contract discount
      that applies whether or not the row is under the aged ladder.
@@ -1568,6 +1583,14 @@ async function applyAdditionalDCToRow(rowEl){
   // OR previously auto-filled by us (data-auto-sp-dc), rewrite it.
   const currentlyManual = spEl.value && spEl.dataset.autoSpDc !== "1";
   if (currentlyManual) return;
+  /* Record whether this material has ANY non-SOVD promo planned so
+     applySOVDRatesToRows never falls back onto a line that already
+     belongs to a specific promo family (Kinergy, Dynapro, 443…). */
+  if (data && data.product_has_planned_promo) {
+    rowEl.dataset.hasProductPromo = "1";
+  } else {
+    delete rowEl.dataset.hasProductPromo;
+  }
   if (data && data.matched && data.additional_dc != null){
     spEl.value = fmtPct(data.additional_dc);
     spEl.dataset.autoSpDc = "1";
@@ -1598,6 +1621,9 @@ async function applyAdditionalDCToRow(rowEl){
       setRemark(rowEl, "");
     }
   }
+  /* Customer-promo answer settled — release the pending flag so
+     the next applySOVDRatesToRows pass can decide about this row. */
+  delete rowEl.dataset.pendingPromo;
   /* Aged row after a fresh promo lookup — re-solve the chained
      Additional Special DC% so the aged target price is still hit
      even though sp_dc just changed.  applyAgingDC internally calls
@@ -1683,12 +1709,28 @@ async function fillMaterialFromCode(row, mcode){
 }
 async function fillMaterialFromDesc(row, desc){
   desc = String(desc||"").trim(); if(!desc) return;
-  const data = await apiGet(`/api/orders/material?description=${encodeURIComponent(desc)}`);
+  /* Prefer the "#M-Code" tail baked into every datalist option so
+     merge siblings that share size/pattern/product/brand still
+     resolve to the exact m_code the user clicked.  Falls back to
+     the old description-only lookup when the user typed a free-form
+     size that isn't a picked datalist value. */
+  const pickedMc = extractPickedMCode(desc);
+  const url = pickedMc
+    ? `/api/orders/material?m_code=${encodeURIComponent(pickedMc)}`
+    : `/api/orders/material?description=${encodeURIComponent(desc)}`;
+  const data = await apiGet(url);
   if(!data || data.error){ setStatus(`Description <b>${desc}</b> not found`, "warn"); return; }
   applyMaterial(row, data);
 }
 function applyMaterial(rowEl, data){
   const set = (name, v) => { const el = rowEl.querySelector(`[data-col="${name}"]`); if(el) el.value = v ?? ""; };
+  /* Hold SOVD off this row until applyAdditionalDCToRow (fired
+     further down) confirms whether a specific promo applies.  If we
+     skip this gate the initial recalcRow → updateTotals below fires
+     applySOVDRatesToRows before the promo answer is even requested,
+     so SOVD lands first and gets stranded when the real Kinergy /
+     Dynapro promo comes back moments later. */
+  if (window._orderSoldTo) rowEl.dataset.pendingPromo = "1";
   set("m_code",       data.m_code);
   set("description",  data.description);
   set("brand",        data.brand);
@@ -1935,6 +1977,9 @@ function isSOVDEligible(r){
      it consults /api/orders/customer_has_sovd).  Non-SOVD customers
      and the pre-sold-to state skip the whole ladder. */
   if (!window._customerHasSOVD) return false;
+  /* Sold-to gate — no SOVD (or anything else) before the customer
+     is picked and its SOVD flag confirmed by fillBaseDC. */
+  if (!window._orderSoldTo) return false;
   const q       = toNum(r.querySelector('[data-col="qty"]')?.value);
   if (q <= 0) return false;
   const brand   = (r.querySelector('[data-col="brand"]')?.value || "").toUpperCase().trim();
@@ -1943,6 +1988,16 @@ function isSOVDEligible(r){
   const promo   = (r.dataset.promo || "").toUpperCase();
   const spEl    = r.querySelector('[data-col="sp_dc"]');
   const sovdAuto = spEl?.dataset.sovdAuto === "1";
+  /* Customer-promo lookup still running — hold SOVD off until we
+     know whether a specific promo (Kinergy / Dynapro / 443…)
+     applies.  Prevents the race where SOVD lands first and gets
+     stranded because the real promo answer arrives too late. */
+  if (r.dataset.pendingPromo === "1") return false;
+  /* Material already has a scheduled non-SOVD promo family — SOVD
+     is a fallback only, so it never overrides a Kinergy / Dynapro /
+     etc. line whose planned promo simply didn't fire for THIS
+     customer's tier. */
+  if (r.dataset.hasProductPromo === "1") return false;
   /* Must be HK PCLT, not aged, and either have no customer promo
      yet OR already be tagged SOVD (either from a customer-side
      SOVD promo hit or a prior SOVD auto-run of ours). */
@@ -2248,7 +2303,7 @@ function newRow(){
     {c:"pattern",        cls:"center readonly", ro:true},
     {c:"load_speed",     cls:"center readonly", ro:true},
     {c:"list_price",     cls:"num readonly", ro:true},
-    {c:"base_dc",        cls:"num"},
+    {c:"base_dc",        cls:"num base-dc-cell"},
     {c:"sp_dc",          cls:"num sky-cell"},
     {c:"current_dc",     cls:"num readonly", ro:true},
     {c:"current_price",  cls:"num red-num readonly", ro:true},
@@ -2297,6 +2352,17 @@ function newRow(){
     inp.setAttribute("data-col", cell.c);
     if(cell.ro) inp.readOnly = true;
     if(cell.list) inp.setAttribute("list", cell.list);
+    /* Placeholder hint so BDEs know the Size / Description input
+       accepts more than just size digits — product, pattern and
+       brand all narrow the datalist in one shared search. */
+    if (cell.c === "description") {
+      inp.setAttribute("placeholder", "size · pattern · product · brand");
+      inp.setAttribute("title", "Type a size (2255017 or 225/50R17), a pattern (RA33), a product family (Dynapro) or a brand (HK / LF) — the suggest lists every carrying_26 match.");
+    }
+    if (cell.c === "m_code") {
+      inp.setAttribute("placeholder", "M-Code");
+      inp.setAttribute("title", "Type an M-Code or paste — the same suggest offers matches from size / pattern / product / brand fields.");
+    }
     td.appendChild(inp);
     tr.appendChild(td);
   }
