@@ -1597,6 +1597,11 @@ async function applyAdditionalDCToRow(rowEl){
   if (data && data.matched && data.additional_dc != null){
     spEl.value = fmtPct(data.additional_dc);
     spEl.dataset.autoSpDc = "1";
+    /* Remember the contract-side percentage so the sp_dc "Enter"
+       handler can restore it after solving add_dc against the BDE's
+       intended target sp — the 443/promo rate itself must never
+       silently shift. */
+    spEl.dataset.originalSpDc = String(data.additional_dc);
     spEl.title = `Auto-filled from ${data.source || "customer"} promo ${data.promo || ""} (min qty ${data.min_qty ?? "—"})`;
     // Stash the matched promo bucket on the row so updateTotals can
     // count SOVD-eligible qty (SOVD TTL box at the top of the form).
@@ -1614,6 +1619,7 @@ async function applyAdditionalDCToRow(rowEl){
       spEl.value = "";
       spEl.title = "";
       delete spEl.dataset.autoSpDc;
+      delete spEl.dataset.originalSpDc;
     }
     delete rowEl.dataset.promo;
     /* Clear the remark unless the row is aged (aging tag lives on
@@ -2027,6 +2033,10 @@ function applySOVDRatesToRows(){
           spEl.value = fmtPct(rate);
           spEl.dataset.sovdAuto  = "1";
           spEl.dataset.autoSpDc  = "1";
+          /* Trueblu rate is the contract value — record it so
+             the sp_dc Enter-key handler can restore it after
+             solving add_dc against the BDE's target. */
+          spEl.dataset.originalSpDc = String(rate);
           spEl.title = `Trueblu ladder — ${rate}% (Trueblu TTL = ${sovdQty})`;
           r.dataset.promo = "SOVD";
           /* Remark badge — "Trueblu (18%)".  Renamed from SOVD per
@@ -2042,6 +2052,7 @@ function applySOVDRatesToRows(){
         spEl.title = "";
         delete spEl.dataset.sovdAuto;
         delete spEl.dataset.autoSpDc;
+        delete spEl.dataset.originalSpDc;
         if (r.dataset.promo === "SOVD") delete r.dataset.promo;
         /* Only clear the remark if it's OUR Trueblu tag — an aged /
            443 / Special tag on the row survives an SOVD un-tag. */
@@ -2420,21 +2431,70 @@ function newRow(){
   tr.querySelector('[data-col="qty"]')?.addEventListener("change", () => {
     if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
   });
-  // Any manual keystroke on sp_dc cancels the auto-fill flag so a
-  // subsequent qty/material change doesn't clobber the BDE's override.
-  tr.querySelector('[data-col="sp_dc"]')?.addEventListener("input", (e) => {
-    /* A manual keystroke cancels both the customer-promo auto-fill
-       tag AND the SOVD-auto tag, so applySOVDRatesToRows leaves this
-       row's sp_dc alone from now on. */
-    if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
-    if (e.target.dataset.sovdAuto === "1") delete e.target.dataset.sovdAuto;
-    /* Retag the Remark: the DC now came from the BDE's own hand,
-       not a promo lookup or the Trueblu ladder.  Empty value on
-       the sp_dc cell clears the Remark entirely (nothing to note). */
-    const v = toNum(e.target.value);
-    setRemark(tr, v > 0 ? `Manual (${v.toFixed(2)}%)` : "");
-    if (tr.dataset.promo === "SOVD") delete tr.dataset.promo;
+  /* sp_dc handler pair.
+       • input  — track user's typing.  When an auto-fill original is
+                  on file (dataset.originalSpDc), we HOLD the auto
+                  tags: the user's typing represents an INTENDED
+                  target, and the commit step (Enter / blur) decides
+                  whether to back-solve add_dc or treat as manual.
+       • Enter  — back-solve add_dc so Proposed DC ends up where the
+                  typed sp_dc would have taken it, then restore the
+                  contract-side sp_dc to its original value.  Leaves
+                  add_dc editable afterwards.
+       • blur   — if the user tabs / clicks away with a value that
+                  differs from the auto-fill original, run the same
+                  back-solve so the row settles even without Enter.
+     Rows with NO originalSpDc (fresh manual entry) keep the old
+     behaviour: any keystroke cancels the auto tags and remarks it
+     as Manual. */
+  const spInp = tr.querySelector('[data-col="sp_dc"]');
+  const _solveAddFromTargetSp = () => {
+    const el = spInp;
+    if (!el) return false;
+    const origStr = el.dataset.originalSpDc;
+    if (!origStr) return false;
+    const orig  = parseFloat(origStr);
+    const typed = toNum(el.value);
+    if (!(orig >= 0) || !(typed >= 0)) return false;
+    if (Math.abs(typed - orig) < 0.005) return false;
+    const base = toNum(tr.querySelector('[data-col="base_dc"]')?.value);
+    const mth  = toNum(tr.querySelector('[data-col="mth_dc"]')?.value);
+    const vol  = toNum(tr.querySelector('[data-col="vol_dc"]')?.value);
+    const addCurr = toNum(tr.querySelector('[data-col="add_dc"]')?.value);
+    /* (1-orig)(1-add_new) = (1-typed)(1-addCurr)
+       ⇒ add_new = 1 − (1-typed)(1-addCurr)/(1-orig)                  */
+    if (!(orig < 100)) return false;
+    const factor = (1 - typed/100) * (1 - addCurr/100) / (1 - orig/100);
+    let addNew = 100 * (1 - factor);
+    if (!isFinite(addNew)) return false;
+    if (addNew < 0)   addNew = 0;
+    if (addNew > 100) addNew = 100;
+    el.value = fmtPct(orig);
+    const addEl = tr.querySelector('[data-col="add_dc"]');
+    if (addEl) addEl.value = fmtPct(addNew);
+    recalcRow(tr);
+    setRemark(tr, `Target sp ${typed.toFixed(2)}% → add ${addNew.toFixed(2)}%`);
+    return true;
+  };
+  spInp?.addEventListener("input", (e) => {
+    /* Preserve the auto tags while typing when an originalSpDc is
+       on file — the commit step below decides how to interpret the
+       final value. */
+    if (!e.target.dataset.originalSpDc) {
+      if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
+      if (e.target.dataset.sovdAuto === "1") delete e.target.dataset.sovdAuto;
+      const v = toNum(e.target.value);
+      setRemark(tr, v > 0 ? `Manual (${v.toFixed(2)}%)` : "");
+      if (tr.dataset.promo === "SOVD") delete tr.dataset.promo;
+    }
   });
+  spInp?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      _solveAddFromTargetSp();
+    }
+  });
+  spInp?.addEventListener("blur", () => { _solveAddFromTargetSp(); });
   // Aging DC change — special path when the row is aged-locked:
   // clearing the Aging DC% cell unlocks the row so the BDE can
   // adjust MTH / Volume / Additional Special manually.  The chained
