@@ -51,12 +51,6 @@
   table.list tbody tr:hover td{background:#eff6ff}
   table.list td.num{text-align:right;font-variant-numeric:tabular-nums}
   table.list td.center{text-align:center}
-  table.list td .edit-link{
-    display:inline-block;padding:3px 10px;background:#f59e0b;color:#fff;
-    text-decoration:none;border-radius:3px;font-size:11px;font-weight:700;
-  }
-  table.list td .edit-link:hover{background:#d97706}
-  table.list td .edit-dash{color:#cbd5e1;font-size:14px}
   .id-col{font-family:monospace;color:#374151}
   .name-cell b{color:#111}
   .name-cell small{color:var(--muted);display:block;font-size:11px;margin-top:2px}
@@ -165,7 +159,13 @@
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
             <th style="width:130px">Approver</th>
-            <th style="width:70px" class="center">Edit</th>
+            <!-- Edit column removed — the row itself is clickable and
+                 opens the SPRF in view mode, where an Edit button
+                 unlocks the form for authorised viewers.  The old
+                 column read mostly as "—" for viewers without edit
+                 rights, so it was empty noise; the Remark column at
+                 the far right already carries the who/when
+                 modification history. -->
             <!-- Timeline columns — read left-to-right as the SPRF's
                  life: BDE submits → an approver signs off → Harry
                  flips SAP-entered.  Elapsed is computed on-the-fly
@@ -183,7 +183,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="22" class="empty">Loading…</td></tr>
+          <tr><td colspan="21" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -286,19 +286,9 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="22" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="21" class="empty">No orders match.</td></tr>`;
   } else {
-    const meEmail = (_me.email || "").toLowerCase();
-    const isAll   = (_me.role  || "").toUpperCase() === "ALL";
-    const isEditor = !!_me.is_price_editor;
     body.innerHTML = filtered.map(r => {
-      // Edit cell — the original submitter, an ALL-role admin, or a
-      // designated price editor (Brian / Pamela) get the link.
-      const submitter = (r.submitted_by_email || "").toLowerCase();
-      const canEdit   = (meEmail && submitter && meEmail === submitter) || isAll || isEditor;
-      const editCell  = canEdit
-        ? `<a class="edit-link" href="/order?id=${r.id}&edit=1" onclick="event.stopPropagation()">Edit</a>`
-        : `<span class="edit-dash">—</span>`;
       // Approver cell — "Standard" pill when the order has no
       // additional DC (base + mth + volume only, no promo / manual /
       // aging).  Otherwise show the first-approver-wins name or a
@@ -388,7 +378,6 @@ function renderRows(){
         <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
         <td>${apprCell}</td>
-        <td class="center">${editCell}</td>
         <td><small style="color:#334155">${escapeHtml(r.submitted_at || "—")}</small></td>
         <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
         <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
