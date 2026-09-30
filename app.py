@@ -4629,6 +4629,17 @@ def api_orders_list():
             # no current_amount (empty payload, e.g.).
             r["add_dc_pct"] = round(100.0 * (1 - tot_amt / cur_amt), 2) if cur_amt > 0 else 0.0
             r["md_deep_line_count"] = int(md_deep_by_id.get(r["id"], 0))
+            # Surface the last price-editor's name so the list can
+            # show "✎ Edited by Brian" next to the Pending pill.
+            # mgmt_reason is set to "<Editor> edited · <BDE reason>"
+            # by api_orders_update whenever Brian / Pamela saves.
+            _mr = str(r.get("mgmt_reason") or "")
+            _last_edit = ""
+            for _nm in PRICE_EDITOR_EMAILS.values():
+                if _mr.startswith(_nm + " edited") or _mr.startswith(_nm + " corrected"):
+                    _last_edit = _nm
+                    break
+            r["last_edited_by"] = _last_edit
         return jsonify({"rows": rows, "count": len(rows)})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4783,12 +4794,12 @@ def api_orders_update(oid):
             rebateable = ""
 
         # Edited content invalidates any prior approvals — reset every
-        # slot so the approvers see the new version cleanly.  If a
-        # price editor is doing the edit, we then IMMEDIATELY re-stamp
-        # their approval on top so the order is auto-approved on their
-        # behalf and the front-end doesn't need a second click.  Also
-        # auto-prepend a short remark to mgmt_reason so approvers /
-        # reviewers see who touched the numbers ("Pamela corrected").
+        # slot so the approvers see the new version cleanly.  Price-
+        # editor edits (Brian / Pamela) do NOT count as approval any
+        # more — they only touch the numbers, the order still needs an
+        # approver's click before it can move.  Auto-prepend a short
+        # remark to mgmt_reason so approvers / reviewers see who
+        # touched the numbers ("Brian edited").
         # needs_approval is AUTO-DERIVED from the edited line data —
         # any row whose MTH+Vol+Add+Aging > 0 trips the flag.  SP
         # (443 promo) is auto contract and doesn't count.
@@ -4805,11 +4816,16 @@ def api_orders_update(oid):
         mgmt_reason    = (header.get("mgmt_reason") or "").strip()
         editor_name = PRICE_EDITOR_EMAILS.get(who, "")
         if is_editor:
-            remark_tag = f"{editor_name} corrected"
+            remark_tag = f"{editor_name} edited"
             # Prepend, but only if the exact tag isn't already sitting
             # at the front (avoid duplicating on repeated saves).
             if not mgmt_reason.startswith(remark_tag):
                 mgmt_reason = (remark_tag + (" · " + mgmt_reason if mgmt_reason else "")).strip()
+            # Also drop the legacy "<name> corrected" prefix so old
+            # rows read "Brian edited" once they're saved again.
+            _legacy = f"{editor_name} corrected"
+            if _legacy in mgmt_reason:
+                mgmt_reason = mgmt_reason.replace(_legacy + " · ", "").replace(_legacy, "")
         cur2 = conn.cursor()
         try:
             cur2.execute(
@@ -4850,19 +4866,11 @@ def api_orders_update(oid):
                     oid,
                 ),
             )
-            # Editor-becomes-approver: stamp Brian/Pamela's approval
-            # on the row so the order comes out already approved from
-            # their edit.  The approved_by_* fields become the record
-            # of who signed off.
-            if is_editor and needs_approval == "Y":
-                cur2.execute(
-                    "UPDATE submitted_orders SET "
-                    "  approved_by_email = %s, "
-                    "  approved_by_name  = %s, "
-                    "  approved_at       = NOW() "
-                    "WHERE id = %s",
-                    (who, editor_name, oid),
-                )
+            # NB: previously we auto-stamped Brian/Pamela's edit as
+            # an implicit approval — that was wrong (an edit is not
+            # an approval).  The order stays Pending after an editor
+            # touches it; only Hayden / JJ / Kenny actually approving
+            # in api_orders_approve flips it to Approved.
             conn.commit()
         finally:
             cur2.close()

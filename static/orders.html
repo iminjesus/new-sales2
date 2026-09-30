@@ -726,6 +726,15 @@
     <div class="internal">Internal Use Only</div>
     <div class="title">Special Price Request Form<small id="hdrPeriod">June 2026</small></div>
   </div>
+  <!-- Order Number ribbon — populated by hydrateSubmittedOrder for
+       existing orders (submitted, drafts, edit mode).  Stays hidden
+       on a blank /order page since there is no number to show yet. -->
+  <div id="orderNoRibbon" hidden
+       style="text-align:center;padding:8px 12px;background:#0f172a;color:#fff;
+              font-weight:700;font-size:14px;letter-spacing:.3px;border-radius:3px;
+              margin:8px 0 4px">
+    Order Number : <span id="orderNoRibbonVal" style="color:#fbbf24;font-size:15px"></span>
+  </div>
 
   <!-- ═══════════════ Customer + Order# meta ═══════════════ -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;">
@@ -2959,6 +2968,21 @@ $("#btnSubmit").addEventListener("click", async () => {
   if (!payload.lines.length){
     setStatus("Add at least one order line before submitting.", "warn"); return;
   }
+  /* Every line that carries an M-Code MUST carry a Qty > 0.  A row
+     with a material but no quantity has no meaningful pricing and
+     should not enter the workflow.  We flag every offending row's
+     M-Code so the reader knows which lines need attention. */
+  const _emptyQty = payload.lines.filter(ln => {
+    const mc  = String(ln.m_code || "").trim();
+    const qty = parseFloat(String(ln.qty || "0").replace(/,/g,''));
+    return mc && !(qty > 0);
+  });
+  if (_emptyQty.length){
+    const _codes = _emptyQty.map(ln => ln.m_code).join(", ");
+    showNotice(`Every M-Code must have a Qty greater than zero.\n\nMissing quantity on: ${_codes}\n\nEnter a Qty for these lines or remove them before submitting.`);
+    setStatus(`Missing Qty on ${_emptyQty.length} line(s): ${_codes}`, "warn");
+    return;
+  }
   // Rebate-able Y/N is REQUIRED — refuse to send an Order Request
   // without it so downstream (order-number suffix + rebate flow) is
   // unambiguous.  On failure we: pulse the red border, scroll the
@@ -3030,6 +3054,21 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
   const btn = $("#btnSaveTemp");
   const submitBtn = $("#btnSubmit");
   const payload = serializeOrder();
+  /* Same Qty-required guard as Submit — a draft with an M-Code but
+     no Qty has no meaningful pricing either, and letting it save
+     would just push the mistake to whoever hydrates the draft
+     later.  Refuse the save and tell the BDE which line to fix. */
+  const _emptyQty = payload.lines.filter(ln => {
+    const mc  = String(ln.m_code || "").trim();
+    const qty = parseFloat(String(ln.qty || "0").replace(/,/g,''));
+    return mc && !(qty > 0);
+  });
+  if (_emptyQty.length){
+    const _codes = _emptyQty.map(ln => ln.m_code).join(", ");
+    showNotice(`Every M-Code needs a Qty greater than zero.\n\nMissing quantity on: ${_codes}\n\nAdd a Qty (or remove the row) before saving.`);
+    setStatus(`Missing Qty on ${_emptyQty.length} draft line(s): ${_codes}`, "warn");
+    return;
+  }
   /* If we're currently editing an existing temp, send its id so the
      backend updates the row in place instead of piling up drafts. */
   const draftId = submitBtn?.dataset.tempOid ? +submitBtn.dataset.tempOid : null;
@@ -3088,6 +3127,16 @@ async function hydrateSubmittedOrder(oid, editMode){
   // picker cells, hidden inputs and border colour.
   const rebFlag = String(data.rebateable || (p.header && p.header.rebateable) || "").toUpperCase();
   if (rebFlag === "Y" || rebFlag === "N") setRebate(rebFlag);
+  /* Order Number ribbon — show the saved order_no (or the numeric
+     row id when a legacy row has no order_no) at the top centre of
+     the page so a reviewer instantly sees which SPRF this is. */
+  const _oribbon = document.getElementById("orderNoRibbon");
+  const _oval    = document.getElementById("orderNoRibbonVal");
+  if (_oribbon && _oval){
+    const _no = data.order_no || ("#" + data.id);
+    _oval.textContent = _no;
+    _oribbon.hidden = false;
+  }
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
     const el = $("#"+k); if (el) el.value = v || "";
@@ -3309,6 +3358,19 @@ async function saveEditedOrder(oid){
   }
   if (!payload.lines.length){
     setStatus("At least one order line required.", "warn"); return;
+  }
+  /* Same Qty>0 guard as Submit — an editor's save must not push a
+     material-without-qty row into the workflow either. */
+  const _emptyQty = payload.lines.filter(ln => {
+    const mc  = String(ln.m_code || "").trim();
+    const qty = parseFloat(String(ln.qty || "0").replace(/,/g,''));
+    return mc && !(qty > 0);
+  });
+  if (_emptyQty.length){
+    const _codes = _emptyQty.map(ln => ln.m_code).join(", ");
+    showNotice(`Every M-Code needs a Qty greater than zero.\n\nMissing quantity on: ${_codes}\n\nEnter a Qty (or remove the row) before saving.`);
+    setStatus(`Missing Qty on ${_emptyQty.length} line(s): ${_codes}`, "warn");
+    return;
   }
   const btn = $("#btnSubmit");
   btn.disabled = true; btn.textContent = "Saving…";

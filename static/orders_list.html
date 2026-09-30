@@ -292,6 +292,12 @@ function renderRows(){
         const at = (r.approved_at || "").slice(0, 16);
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
                    (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
+        /* Also surface a "✎ Edited by X" chip when a price editor
+           touched the order after it was approved.  Approval + edit
+           can coexist (edit resets approvals, then re-approved). */
+        if (r.last_edited_by){
+          apprCell += `<br><span style="background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;font-size:10.5px;font-weight:700;margin-top:2px;display:inline-block">✎ Edited by ${escapeHtml(r.last_edited_by)}</span>`;
+        }
       } else if ((r.needs_mgmt_approval || "").toLowerCase() === "temp"){
         /* Save-as-Draft row — visible only to its creator (the
            backend scopes it), open it back up by clicking the row
@@ -309,6 +315,12 @@ function renderRows(){
         const fg   = isMd ? "#991b1b" : "#92400e";
         const lb   = isMd ? "⚑ MD only" : "⏳ Pending";
         apprCell = `<span style="background:${bg};color:${fg};padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">${lb}</span>`;
+        /* Pending + editor touched → also show the ✎ Edited chip so
+           reviewers know a price editor already re-worked the numbers
+           since submission, while the approval is still outstanding. */
+        if (r.last_edited_by){
+          apprCell += `<br><span style="background:#e0e7ff;color:#3730a3;padding:1px 5px;border-radius:3px;font-size:10.5px;font-weight:700;margin-top:2px;display:inline-block">✎ Edited by ${escapeHtml(r.last_edited_by)}</span>`;
+        }
       }
       const rebPill = r.rebateable === "Y"
         ? `<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Y</span>`
