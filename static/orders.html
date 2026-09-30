@@ -2527,9 +2527,15 @@ function newRow(){
      Qty cell.  Same split rules as the M-Code paste — newlines,
      tabs, commas or multiple-whitespace split into tokens; each
      token lands on its own row; new blank rows are added when the
-     paste runs past the current row count. */
-  tr.querySelector('[data-col="qty"]')?.addEventListener("paste",
-      e => handleQtyPaste(e, tr));
+     paste runs past the current row count.
+     Belt-and-braces: the paste event is the primary path, but a
+     second listener watches the `input` event and picks up any
+     multi-line content that slipped past (some browsers /
+     clipboard sources trigger the input event with the pasted
+     text pre-collapsed on the cell). */
+  const _qInp = tr.querySelector('[data-col="qty"]');
+  _qInp?.addEventListener("paste", e => handleQtyPaste(e, tr));
+  _qInp?.addEventListener("input", e => handleQtyInputMaybePaste(e, tr));
   /* On aged-locked rows, edits to MTH or Volume have to re-solve
      the chained add_dc so the row's Proposed Price still lands on
      the aged target (list × (1 − aging/100)).  We re-run the
@@ -2868,18 +2874,14 @@ function _splitPastedQtys(text){
     .filter(t => t && /^\d+(?:\.\d+)?$/.test(t) && parseFloat(t) > 0);
 }
 
-/* Paste-into-Qty handler: distribute each pasted number to its own
-   row, auto-add blank rows when the paste is longer than the tail.
-   Fires recalcRow after each write so Total Amount / Current Order
-   Amount / Trueblu TTL all refresh at once. */
-function handleQtyPaste(e, startRow){
-  const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
-  const tokens = _splitPastedQtys(raw);
-  if (tokens.length <= 1) return;   // single-value paste stays native
-  e.preventDefault();
+/* Distribute a list of qty tokens starting at `startRow`, adding
+   blank rows at the tail when the paste is longer than the current
+   body.  Extracted so both the `paste` and `input` event paths can
+   funnel through the same logic. */
+function _distributeQtyTokens(tokens, startRow){
+  if (!tokens || tokens.length === 0 || !startRow) return;
   const body = $("#linesBody");
-  const rows = Array.from(body.querySelectorAll("tr"));
-  const startIdx = rows.indexOf(startRow);
+  const startIdx = Array.from(body.querySelectorAll("tr")).indexOf(startRow);
   if (startIdx < 0) return;
   tokens.forEach((q, i) => {
     let tr = body.querySelectorAll("tr")[startIdx + i];
@@ -2895,6 +2897,30 @@ function handleQtyPaste(e, startRow){
     }
   });
   startRow.querySelector('[data-col="qty"]')?.focus();
+}
+
+/* Paste-into-Qty handler — the primary path.  Reads the clipboard
+   directly and preventDefaults the native paste when multi-token. */
+function handleQtyPaste(e, startRow){
+  const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+  const tokens = _splitPastedQtys(raw);
+  if (tokens.length <= 1) return;   // single-value paste stays native
+  e.preventDefault();
+  _distributeQtyTokens(tokens, startRow);
+}
+
+/* Belt-and-braces backup — some browsers / clipboard sources leak
+   a multi-line paste past the `paste` event without letting our
+   handler intercept.  Watch the input event: if the resulting
+   value carries a newline, tab or multiple whitespace-separated
+   numbers, treat it as a paste and re-run the distribution. */
+function handleQtyInputMaybePaste(e, tr){
+  const raw = e.target.value || "";
+  // Fast reject — most keystrokes are a single digit / decimal.
+  if (!/[\r\n\t]/.test(raw) && !/\d[\s,;]+\d/.test(raw)) return;
+  const tokens = _splitPastedQtys(raw);
+  if (tokens.length <= 1) return;
+  _distributeQtyTokens(tokens, tr);
 }
 
 /* ────────────────────────── customer field wire-up ────────────────────────── */
