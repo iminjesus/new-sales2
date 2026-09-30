@@ -788,17 +788,30 @@ def cached_endpoint(ttl_sec: int = 30):
     """Wrap a Flask route so its JSON response is cached in _GRAPH_CACHE
     keyed by sorted query args.  Caches the decoded JSON body and
     re-jsonifies on cache hits, so each request gets a fresh Response
-    object (Flask mutates response state during dispatch)."""
+    object (Flask mutates response state during dispatch).
+
+    Bypasses: request carries ?nocache=1 or the header
+    X-Cache-Bypass: 1 → the wrapped handler runs against the DB, the
+    fresh result replaces the cached entry (so subsequent callers see
+    it), and this call returns the fresh Response.  Used by the
+    dashboard's "🔄 Refresh" button so a BDE can pick up newly-loaded
+    sales_thismonth data without waiting for the 60 s TTL to elapse.
+    """
     from functools import wraps
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
             key = _make_v2_key(fn.__name__, request)
-            cached = _cache_get(_GRAPH_CACHE, key)
-            if cached is not None:
-                print(f"[cache HIT]  {fn.__name__}")
-                return jsonify(cached)
-            print(f"[cache MISS] {fn.__name__}")
+            _bypass = (
+                (request.args.get("nocache") or "").lower() in ("1", "true", "yes")
+                or (request.headers.get("X-Cache-Bypass") or "").strip() == "1"
+            )
+            if not _bypass:
+                cached = _cache_get(_GRAPH_CACHE, key)
+                if cached is not None:
+                    print(f"[cache HIT]  {fn.__name__}")
+                    return jsonify(cached)
+            print(f"[cache {'BYPASS' if _bypass else 'MISS '}] {fn.__name__}")
             result = fn(*args, **kwargs)
             try:
                 body = result.get_json(silent=True) if hasattr(result, "get_json") else None
@@ -12537,6 +12550,22 @@ def admin_refresh_customer_rollup():
     master.  Returns simple {"ok": True} on success."""
     _refresh_customer_rollup()
     return jsonify({"ok": True})
+
+
+@app.route("/api/admin/clear_cache", methods=["GET", "POST"])
+def admin_clear_cache():
+    """Drop every entry in the graph-endpoint cache so the next request
+    re-runs the underlying SQL against the live tables.  Called by
+    the dashboard's "🔄 Refresh" button when new sales_thismonth
+    data has just been loaded and the BDE doesn't want to wait for
+    the 60 s TTL on each cached_endpoint to expire.
+
+    Returns the number of entries evicted so the UI can confirm.
+    Idempotent — clearing an empty cache is a no-op."""
+    n = len(_GRAPH_CACHE)
+    _GRAPH_CACHE.clear()
+    print(f"[cache] cleared {n} entries")
+    return jsonify({"ok": True, "cleared": n})
 
 
 def _sales_2526_from(alias: str = "s", year=None) -> str:

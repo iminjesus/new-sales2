@@ -97,6 +97,16 @@
          Pale-green styling marks them as data exports, visually
          distinct from the filter / view-switch chips. -->
     <div style="display:flex; gap:6px; align-items:center; margin-left:auto;">
+      <!-- Refresh cache — bypasses the 60 s server-side cache on
+           every graph endpoint (POST /api/admin/clear_cache), then
+           re-fetches the current view.  Use this right after a new
+           sales_thismonth batch loads so the day-30 bars show up
+           without a full-minute wait for the cache to expire. -->
+      <button id="btnRefreshData" class="btn"
+              style="background:#eff6ff; border-color:#93c5fd; color:#1d4ed8;"
+              title="Clear the server-side cache and reload the dashboard right now (no 60 s wait after a sales_thismonth load).">
+        🔄 Refresh
+      </button>
       <button id="btnExcelThisMonth" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; This Month</button>
       <button id="btnExcel2526" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; 25_26 Sales</button>
       <button id="btnExcelYearly" class="btn" style="background:#f0fdf4; border-color:#86efac; color:#166534;">&#8595; Yearly</button>
@@ -549,6 +559,32 @@
     if (btnThisMonth) btnThisMonth.onclick = () => triggerDownload("/api/export_excel?" + collectFilters().toString());
     if (btn2526)      btn2526.onclick      = () => triggerDownload("/api/export_excel/sales2526?" + collectFilters().toString());
     if (btnYearly)    btnYearly.onclick    = () => triggerDownload("/api/export_excel/yearly?" + collectFilters().toString());
+    /* Refresh Data — POSTs to /api/admin/clear_cache which empties
+       the 60 s server-side cache on every graph endpoint, then does
+       a plain page reload so every chart re-fetches fresh data.
+       A visible label swap tells the reader something happened, and
+       the button restores itself on the new page load. */
+    const btnRefresh = document.getElementById("btnRefreshData");
+    if (btnRefresh) btnRefresh.onclick = async () => {
+      const orig = btnRefresh.textContent;
+      btnRefresh.disabled = true;
+      btnRefresh.textContent = "Refreshing…";
+      try {
+        const r = await fetch("/api/admin/clear_cache", { method: "POST" });
+        const j = await r.json().catch(() => ({}));
+        btnRefresh.textContent = `✓ Cleared${j.cleared != null ? " (" + j.cleared + ")" : ""}`;
+        /* Full reload — cheaper than re-invoking every chart's
+           fetcher, and it also refreshes the filter chips that
+           depend on customer_rollup / carrying_26 columns. */
+        setTimeout(() => location.reload(), 350);
+      } catch (e) {
+        btnRefresh.textContent = "Refresh failed";
+        setTimeout(() => {
+          btnRefresh.disabled = false;
+          btnRefresh.textContent = orig;
+        }, 1500);
+      }
+    };
   });
 
 })();
