@@ -24,7 +24,10 @@
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#222;background:var(--bg);}
-  .wrap{max-width:1500px;margin:16px auto;padding:0 12px 40px;}
+  /* Use the full viewport width — the SPRF's tail columns (per-state
+     stock + Remark) don't need a centred narrow container.  A modest
+     side gutter keeps the identity block off the browser chrome. */
+  .wrap{max-width:none;margin:16px 20px;padding:0 4px 40px;}
   /* Right-side aged-stock panel — sits outside the form's max-width
      column, only visible when the viewport is wide enough (>= 1780 px)
      so it doesn't overlap the form on narrower screens. */
@@ -2299,8 +2302,13 @@ function newRow(){
     {c:"qty",            cls:"num center"},
     {c:"description",    cls:"", list:"desc_list"},
     {c:"brand",          cls:"center readonly", ro:true},
-    {c:"product_name",   cls:"readonly", ro:true},
-    {c:"pattern",        cls:"center readonly", ro:true},
+    /* Product Name and Pattern are ALSO searchable — the same
+       material_suggest datalist backs them, so typing "Dyna" in
+       Product Name or "K435" in Pattern fires the same fetch and
+       lists all matching materials.  On pick, the row resolves via
+       the trailing "#M-Code" tail the same way as Description. */
+    {c:"product_name",   cls:"", list:"desc_list"},
+    {c:"pattern",        cls:"center", list:"desc_list"},
     {c:"load_speed",     cls:"center readonly", ro:true},
     {c:"list_price",     cls:"num readonly", ro:true},
     {c:"base_dc",        cls:"num base-dc-cell"},
@@ -2363,16 +2371,34 @@ function newRow(){
       inp.setAttribute("placeholder", "M-Code");
       inp.setAttribute("title", "Type an M-Code or paste — the same suggest offers matches from size / pattern / product / brand fields.");
     }
+    if (cell.c === "product_name") {
+      inp.setAttribute("placeholder", "product family");
+      inp.setAttribute("title", "Type a product family (Dyna → Dynapro, Kinergy, Ventus, Laufenn…) — the dropdown lists every matching size / pattern.");
+    }
+    if (cell.c === "pattern") {
+      inp.setAttribute("placeholder", "pattern");
+      inp.setAttribute("title", "Type a pattern (RA33, LK41, K435…) — the dropdown lists every size carrying that pattern.");
+    }
     td.appendChild(inp);
     tr.appendChild(td);
   }
   // Wire events
   const mcodeInp = tr.querySelector('[data-col="m_code"]');
   const descInp  = tr.querySelector('[data-col="description"]');
+  const prodInp  = tr.querySelector('[data-col="product_name"]');
+  const patInp   = tr.querySelector('[data-col="pattern"]');
   mcodeInp.addEventListener("input",  e => debouncedSuggestMat(e.target.value));
   mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
   descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
+  /* Product Name + Pattern inputs share the desc_list datalist and
+     resolve the row through the same "#M-Code"-tail extractor as the
+     Description field.  Typing "Dyna" in Product Name or "K435" in
+     Pattern fires the same suggest fetch. */
+  prodInp?.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
+  prodInp?.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
+  patInp?.addEventListener("input",    e => debouncedSuggestMat(e.target.value));
+  patInp?.addEventListener("change",   e => fillMaterialFromDesc(tr, e.target.value));
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => recalcRow(tr));
   });

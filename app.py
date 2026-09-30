@@ -2428,11 +2428,17 @@ def _digits_only_py(s):
     return _re_local.sub(r"[^0-9]", "", s or "")
 
 def _digits_only_sql(col):
-    """MySQL expression that reduces a text column to just its
-    digits.  REGEXP_REPLACE is available in MySQL 8+ — the sole
-    place this feeds is the material-suggest LIKE clause, and the
-    deployment is on 8.x, so no fallback needed."""
-    return f"REGEXP_REPLACE(LOWER({col}), '[^0-9]', '')"
+    """MySQL expression that reduces a text column to just its digits
+    — used for size searching where the BDE skips both punctuation
+    AND the R / Z / C letters ("2255018" ⇒ "225/50R18").  Built as
+    nested REPLACE calls (a-z plus every char in _NOISE_CHARS) so
+    it runs on both MySQL 8+ AND MySQL 5.7 (no REGEXP_REPLACE)."""
+    expr = f"LOWER({col})"
+    for ch in _NOISE_CHARS:
+        expr = f"REPLACE({expr}, {_sql_lit(ch)}, '')"
+    for ch in "abcdefghijklmnopqrstuvwxyz":
+        expr = f"REPLACE({expr}, '{ch}', '')"
+    return expr
 
 
 @app.get("/api/orders/customer_suggest")
@@ -2651,6 +2657,49 @@ def api_orders_material_suggest():
         except: pass
 
 
+@app.get("/api/orders/material_debug")
+def api_orders_material_debug():
+    """Diagnostic endpoint — hit /api/orders/material_debug?m_code=<mc>
+    to see EXACTLY which carrying_26 columns exist AND the raw values
+    stored in the row for the requested m_code.  Used to figure out
+    why Load/Speed comes back blank on the SPRF form.  Safe read-only
+    query, but returns nothing when the caller doesn't supply an
+    m_code so nobody can enumerate the whole table by accident."""
+    m_code = (request.args.get("m_code") or "").strip()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cols = _list_columns(cur, "carrying_26")
+        out = {"columns": sorted(cols)}
+        if m_code:
+            try:
+                cur.execute(
+                    f"SELECT * FROM carrying_26 WHERE m_code = %s LIMIT 1",
+                    (m_code,),
+                )
+                out["row"] = cur.fetchone() or {}
+            except Exception as e:
+                out["row_error"] = str(e)
+            # Show which alias picks fired for this deployment.
+            pick = lambda *cands: next((c for c in cands if c in cols), None)
+            out["picks"] = {
+                "load":  pick("load_speed", "load", "load_index",
+                              "loadindex", "load_idx", "li",
+                              "li_si", "loadspeed", "load_speed_idx"),
+                "speed": pick("speed", "speed_rating", "speedrating",
+                              "speed_index", "si", "speed_idx",
+                              "speedcode", "ss", "speed_symbol",
+                              "speedsymbol"),
+            }
+        return jsonify(out)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 @app.get("/api/orders/material")
 def api_orders_material():
     """Look up a carrying_26 row by ?m_code=... or ?description=... .
@@ -2687,9 +2736,14 @@ def api_orders_material():
         c_load         = pick("load_speed", "load", "load_index",
                                "loadindex", "load_idx", "li",
                                "li_si", "loadspeed", "load_speed_idx")
+        # `ss` is the canonical MC-sheet column for speed symbol (see
+        # stock_dashboard.py's FIELD_ALIASES) — accept it here too so
+        # carrying_26 rows load their split load / speed pair even
+        # when neither "speed" nor "speed_rating" exists.
         c_speed        = pick("speed", "speed_rating",
                                "speedrating", "speed_index", "si",
-                               "speed_idx", "speedcode")
+                               "speed_idx", "speedcode", "ss",
+                               "speed_symbol", "speedsymbol")
         c_list_price   = pick("list_price", "price")
         c_s_code       = pick("s_code")
         c_operation    = pick("operation")
@@ -2709,6 +2763,10 @@ def api_orders_material():
             parts.append(f"CONCAT_WS('', {c_load}, {c_speed}) AS load_speed")
         elif c_load:
             parts.append(f"{c_load} AS load_speed")
+        elif c_speed:
+            # Speed column alone (rare, but happens) — surface it so
+            # the row at least shows the speed rating.
+            parts.append(f"{c_speed} AS load_speed")
         # list_price follows the OPE representative m_code of the
         # matched row's s_code (secondary spec variants can carry
         # override prices — the OPE row is the canonical one).
