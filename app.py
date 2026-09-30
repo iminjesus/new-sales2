@@ -4485,7 +4485,11 @@ def api_orders_save_temp():
         if existing_id > 0:
             # Update-in-place — creator only, and only if the row is
             # still marked temp (safety guard against clobbering a
-            # real order).
+            # real order).  Ownership match is COALESCE-guarded so a
+            # draft stored with an empty submitted_by_email (local
+            # dev, no CF-Access header) is still writable by the
+            # same-session anonymous user — otherwise the creator
+            # can't reopen their own draft to save/update it.
             cur.execute(
                 "UPDATE submitted_orders SET "
                 "  submitted_by_bde=%s, submitted_by_email=%s, sold_to=%s, sold_to_name=%s, "
@@ -4496,8 +4500,9 @@ def api_orders_save_temp():
                 "  rebateable=%s, payload_json=%s, "
                 "  submitted_at=NOW() "
                 "WHERE id=%s AND needs_mgmt_approval='temp' "
-                "  AND LOWER(submitted_by_email)=%s",
-                row_values + (existing_id, submitted_by_email),
+                "  AND (LOWER(COALESCE(submitted_by_email, '')) = %s "
+                "       OR COALESCE(submitted_by_email, '') = '')",
+                row_values + (existing_id, submitted_by_email or ""),
             )
             if cur.rowcount == 0:
                 return jsonify({"error": "draft not found or not yours"}), 404
@@ -4867,7 +4872,14 @@ def api_orders_update(oid):
         is_editor    = who in PRICE_EDITOR_EMAILS
         is_approver  = who in {e.lower() for e in MGMT_APPROVER_EMAILS}
         is_harry     = who == HARRY_CS_EMAIL.lower()
-        if (who != original and role != "ALL"
+        # An "orphan-owned" row (empty submitted_by_email — dev /
+        # self-hosted create, or a legacy row that predates the
+        # column) is treated as owned by whoever's session is
+        # touching it, otherwise the creator can't reopen their
+        # own draft/order on the same environment.
+        is_orphan_row = not original
+        if (who != original and not is_orphan_row
+                and role != "ALL"
                 and not is_editor and not is_approver and not is_harry):
             return jsonify({"error":
                 "only the original submitter, an approver, a price editor "

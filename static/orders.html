@@ -3566,8 +3566,29 @@ async function hydrateSubmittedOrder(oid, editMode){
      Every path re-routes through the approval flow — backend clears
      the slots on save, and the top / bottom approval bars refresh
      to Pending until Kenny / Hayden / JJ click Approve again. */
-  const isSubmitterMatch = !!(who.email && data.submitted_by_email
-      && who.email === data.submitted_by_email.toLowerCase());
+  /* Submitter-match — the standard rule: whoami email equals the
+     row's submitted_by_email.  Also accept a match against
+     whoami.local_user (getpass fallback / X-Requester-Email header)
+     against the payload's requester_email so a BDE working on a
+     self-hosted / dev deployment can still update their own draft
+     without a CF-Access header.  Finally: when the row itself was
+     stored with NO submitted_by_email (local-dev creates land here
+     because _bde_from_request returns ""), any signed-in identity
+     opening it is treated as the creator — otherwise the creator
+     couldn't reopen their own draft, which is what the reporter
+     hit ("내가 만든 임시 Order에 내가 다시 들어갔는데, save/update를 할 수
+     없네"). */
+  const _dataEmail = (data.submitted_by_email || "").toLowerCase();
+  const _payloadReq = ((data.payload && data.payload.header
+                        && data.payload.header.requester_email)
+                       || "").toLowerCase();
+  const _localUser  = (who.local_user || "").toLowerCase();
+  const _emailsMatch = !!(who.email && _dataEmail
+                          && who.email === _dataEmail);
+  const _reqMatch    = !!(_payloadReq && _localUser
+                          && _payloadReq === _localUser);
+  const _emptyRowOwner = !_dataEmail && !_payloadReq;   // no identity was ever stored
+  const isSubmitterMatch = _emailsMatch || _reqMatch || _emptyRowOwner;
   const isAllowedUpdater = isSubmitterMatch
       || who.role === "ALL"
       || who.is_price_editor
