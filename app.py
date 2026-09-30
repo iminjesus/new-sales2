@@ -4264,9 +4264,38 @@ def api_orders_submit():
 
     conn = get_connection(); cur = conn.cursor()
     try:
-        # Generate the per-day order number BEFORE the INSERT so we
-        # can persist it on the same row.  Format: YYMMDD_NNN(Y|N).
-        order_no = _next_order_no(cur, rebateable)
+        # Order number.
+        # • When the Submit comes from a Save-as-Draft flow, the
+        #   front-end sends orig_temp_id.  Look up that T row's
+        #   order_no and strip the leading 'T' — the resulting name
+        #   is exactly what the temp draft carried, minus the T
+        #   marker.  Preserves the identity of the order across the
+        #   draft → real transition (user rule: "Submit removes T
+        #   from the T-prefixed name and saves under that name").
+        # • Otherwise generate a fresh per-day sequence.
+        try:
+            _orig_tid = int(payload.get("orig_temp_id") or 0)
+        except Exception:
+            _orig_tid = 0
+        order_no = ""
+        if _orig_tid > 0:
+            try:
+                cur.execute(
+                    "SELECT order_no FROM submitted_orders "
+                    "WHERE id = %s AND needs_mgmt_approval = 'temp' LIMIT 1",
+                    (_orig_tid,),
+                )
+                _row_no = cur.fetchone()
+                if _row_no and _row_no[0]:
+                    _tno = str(_row_no[0])
+                    if _tno.startswith("T") or _tno.startswith("t"):
+                        order_no = _tno[1:]
+                    else:
+                        order_no = _tno
+            except Exception:
+                order_no = ""
+        if not order_no:
+            order_no = _next_order_no(cur, rebateable)
         cur.execute(
             "INSERT INTO submitted_orders "
             "(submitted_by_bde, submitted_by_email, sold_to, sold_to_name, "

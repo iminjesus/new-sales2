@@ -3119,13 +3119,27 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
     setStatus(`Missing Qty on ${_emptyQty.length} draft line(s): ${_codes}`, "warn");
     return;
   }
-  /* If we're currently editing an existing temp, send its id so the
-     backend updates the row in place instead of piling up drafts. */
+  /* Save-as-Draft routes to different endpoints depending on what
+     row we're editing:
+       • Editing a T-prefixed temp draft   → /api/orders/save_temp
+         (writes in place with the same T order_no).
+       • Editing a real submitted order    → /api/orders/detail/<oid>/update
+         (keeps the order_no, resets approval slots — per user rule
+         "Save as Draft keeps the existing Order name").
+       • Brand-new /order page (no id)     → /api/orders/save_temp
+         (creates a fresh T row).
+     submitBtn's dataset knows the state: tempOid = editing a T row;
+     dataset.mode === "edit" = editing a real submitted order. */
+  const isEditingReal = submitBtn?.dataset.mode === "edit"
+                      && submitBtn?.dataset.oid;
   const draftId = submitBtn?.dataset.tempOid ? +submitBtn.dataset.tempOid : null;
   if (draftId) payload.id = draftId;
   btn.disabled = true; btn.textContent = "Saving…";
   try {
-    const r = await fetch("/api/orders/save_temp", {
+    const url = isEditingReal
+      ? `/api/orders/detail/${submitBtn.dataset.oid}/update`
+      : "/api/orders/save_temp";
+    const r = await fetch(url, {
       method: "POST",
       credentials: "same-origin",
       headers: {"Content-Type": "application/json"},
@@ -3136,12 +3150,21 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
       setStatus(`Save failed: ${j.error || r.statusText}`, "warn");
       btn.disabled = false; btn.textContent = "💾 Save as Draft"; return;
     }
-    /* Remember this draft's id so subsequent Save clicks update in
-       place and a later Submit can delete it. */
-    if (submitBtn) submitBtn.dataset.tempOid = String(j.id);
-    btn.textContent = `Saved · ${j.order_no || "#" + j.id}`;
-    setStatus(`Draft <b>${j.order_no || "#" + j.id}</b> saved — visible only to you until you Submit.`, "ok");
-    setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save as Draft"; }, 1500);
+    if (isEditingReal){
+      /* Update path — approvals were reset server-side.  Announce
+         the reset so the reader knows re-approval is coming and
+         land back on the list to see the Pending state. */
+      btn.textContent = `Saved · ${j.order_no || "#" + submitBtn.dataset.oid}`;
+      setStatus(`Order <b>${j.order_no || "#" + submitBtn.dataset.oid}</b> updated — approval reset to Pending, notifications re-fired.`, "ok");
+      setTimeout(() => { location.href = "/orders_list"; }, 1400);
+    } else {
+      /* Draft path — remember the id so subsequent Save clicks
+         update in place, and a later Submit can delete it. */
+      if (submitBtn) submitBtn.dataset.tempOid = String(j.id);
+      btn.textContent = `Saved · ${j.order_no || "#" + j.id}`;
+      setStatus(`Draft <b>${j.order_no || "#" + j.id}</b> saved — visible only to you until you Submit.`, "ok");
+      setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save as Draft"; }, 1500);
+    }
   } catch(e){
     setStatus("Save failed: " + e, "warn");
     btn.disabled = false; btn.textContent = "💾 Save as Draft";
@@ -3295,41 +3318,89 @@ async function hydrateSubmittedOrder(oid, editMode){
     isTempDraft ? (isSubmitterMatch || who.role === "ALL") : isAllowedUpdater
   );
 
+  /* Every re-opened order shows BOTH toolbar buttons (Save as Draft
+     + Submit).  What changes per state is which one is DIMMED:
+       • Temp (T-prefixed)  → both active.  Save as Draft keeps the
+         T order_no; Submit strips the T and files it.
+       • Real, still Pending → Save as Draft acts as Update (keeps
+         the order_no; resets approvals).  Submit is dimmed
+         because the order is already submitted once.
+       • Real, already Approved → both dimmed (no modification
+         allowed; the audit trail is frozen).
+       • Read-only viewer with no update rights → both dimmed. */
+  const isApproved = !!data.approved_by_name;
+  const sBtn  = $("#btnSubmit");
+  const dBtn  = $("#btnSaveTemp");
+  const dimIt = (btn, tip) => {
+    if (!btn) return;
+    btn.hidden = false;
+    btn.disabled = true;
+    btn.title = tip || "";
+    btn.style.opacity = "0.45";
+    btn.style.cursor  = "not-allowed";
+  };
+  const undim = (btn) => {
+    if (!btn) return;
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.style.opacity = "";
+    btn.style.cursor  = "";
+    btn.title = "";
+  };
   if (canEdit){
-    // Unlock inputs; swap Submit → Update; add a Cancel that
-    // routes back to the read-only view.
+    // Unlock inputs — the form is editable in this state.
     $("#btnAddRow").disabled = false;
     $("#btnClear").disabled  = false;
-    const sBtn = $("#btnSubmit");
-    sBtn.hidden = false;
+    $$("input, textarea").forEach(el => {
+      if (el.closest(".cs-panel")) return;
+      el.readOnly = false;
+      el.tabIndex = 0;
+    });
     if (isTempDraft){
-      /* Draft flow: Submit files the SPRF for real AND deletes this
-         temp row (backend does that via orig_temp_id).  Save button
-         stays on so the BDE can keep saving intermediate versions. */
+      /* Temp draft:
+           • Save as Draft → writes back to the SAME T row
+             (api_orders_save_temp keeps the same T order_no).
+           • Submit         → strips T from order_no, promotes the
+             row to a real submitted order, delete-then-insert is
+             handled by api_orders_submit via orig_temp_id.
+         Both buttons are active. */
       sBtn.textContent = "Submit";
       sBtn.dataset.tempOid = String(data.id);
       delete sBtn.dataset.mode;
       delete sBtn.dataset.oid;
+      undim(sBtn);
+      undim(dBtn);
+    } else if (isApproved){
+      /* Real order that's already approved.  The audit trail is
+         frozen — modifying it would break the approval chain.
+         Both buttons stay VISIBLE (per user rule) but dimmed so
+         it's obvious no change is allowed. */
+      sBtn.textContent = "Submit";
+      dimIt(sBtn, "This order is already approved — modifications are locked.");
+      dimIt(dBtn, "This order is already approved — modifications are locked.");
     } else {
-      /* Real submitted order → single "Update" button.  Save-as-
-         Draft doesn't belong here (nothing to draft any more), so
-         the draft button hides.  Update always resets the approval
-         slots server-side so the change goes back through approval. */
-      sBtn.textContent = "Update";
+      /* Real order still Pending.  Save as Draft acts as an Update
+         (api_orders_update — keeps the order_no, resets approval
+         slots).  Submit is dimmed because the order is already
+         out for approval. */
+      sBtn.textContent = "Submit";
       sBtn.dataset.mode = "edit";
       sBtn.dataset.oid  = String(data.id);
-      const draftBtn = $("#btnSaveTemp");
-      if (draftBtn) draftBtn.hidden = true;
+      dimIt(sBtn, "This order is already submitted — use Save as Draft to update.");
+      undim(dBtn);
     }
     // recalcRow + updateTotals already ran above (unconditional
     // hydrate pass) so every tfoot cell is already painted.
     const label = isTempDraft
-      ? `Editing saved draft <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at || ""} · Submit files it for approval and deletes this draft`
-      : `Updating submitted order <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} — Update resets approval to Pending and SAP flag to N`;
+      ? `Editing saved draft <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at || ""} · Save keeps the draft; Submit strips the T prefix and files it for approval`
+      : (isApproved
+          ? `Already approved <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at} · locked — no further changes`
+          : `Updating submitted order <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} — Save as Draft resets approval to Pending`);
     $("#status").innerHTML = label;
   } else {
-    // Read-only view — lock every input, hide Submit, and let Harry
-    // (via wireStatusPanel below) still flip the SAP flag.
+    // Read-only view (no update rights) — lock inputs, dim both
+    // toolbar buttons.  Harry's SAP toggle still hooks via
+    // wireStatusPanel below.
     $$("input, textarea").forEach(el => {
       if (el.closest(".cs-panel")) return;
       el.readOnly = true;
@@ -3337,11 +3408,9 @@ async function hydrateSubmittedOrder(oid, editMode){
     });
     $("#btnAddRow").disabled = true;
     $("#btnClear").disabled  = true;
-    $("#btnSubmit").hidden   = true;
-    /* Save-as-Draft is only meaningful when the form is editable —
-       a read-only view has nothing new to save. */
-    const draftBtn = $("#btnSaveTemp");
-    if (draftBtn) draftBtn.hidden = true;
+    sBtn.textContent = "Submit";
+    dimIt(sBtn, "View only — you don't have permission to modify this order.");
+    dimIt(dBtn, "View only — you don't have permission to modify this order.");
     /* Update chip — offered to every user in the update permission
        set (original submitter, ALL admin, price editor, approver,
        Harry).  Clicking reloads the page in edit mode so the same
