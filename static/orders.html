@@ -2002,14 +2002,14 @@ function isSOVDEligible(r){
      applies.  Prevents the race where SOVD lands first and gets
      stranded because the real promo answer arrives too late. */
   if (r.dataset.pendingPromo === "1") return false;
-  /* Material already has a scheduled non-SOVD promo family — SOVD
-     is a fallback only, so it never overrides a Kinergy / Dynapro /
-     etc. line whose planned promo simply didn't fire for THIS
-     customer's tier. */
-  if (r.dataset.hasProductPromo === "1") return false;
-  /* Must be HK PCLT, not aged, and either have no customer promo
-     yet OR already be tagged SOVD (either from a customer-side
-     SOVD promo hit or a prior SOVD auto-run of ours). */
+  /* SOVD (Trueblu) is a true fallback: every HK-PCLT row whose
+     CURRENT CUSTOMER didn't get a specific promo hit falls into
+     the ladder — regardless of whether other customers have a
+     scheduled promo for that same product family.  The old
+     hasProductPromo gate was too aggressive and excluded Dynapro /
+     Kinergy rows that legitimately had no customer promo, so their
+     qty didn't roll into the Trueblu TTL.  The pendingPromo gate
+     above already covers the timing race that motivated it. */
   return brand === "HK" && rowLine === "PCLT" && ag === 0
       && (promo === "" || promo === "SOVD" || sovdAuto);
 }
