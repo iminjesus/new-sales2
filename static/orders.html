@@ -478,17 +478,20 @@
   table.lines tbody td.row-del-cell{
     width:22px;padding:0;text-align:center;background:#f9fafb;
   }
-  /* Row-number column — a compact grey badge in the leftmost slot.
-     Text-align center, tabular-nums so the digits stack tidily as
-     the list grows past 9. */
+  /* Row-number column — narrow slate chip in the leftmost slot.
+     Same 22-px width as the adjacent × delete column so the two
+     read as one compact identity stripe, and body cells inherit
+     row-cell height instead of adding vertical padding (fixes the
+     "bulky" look of the earlier 32-px + 2-px-padding version). */
   table.lines th.row-no-th{
-    width:32px;padding:0;background:#1e293b;color:#e2e8f0;
-    font-size:11px;letter-spacing:.2px;
+    width:22px;min-width:22px;padding:0;background:#1e293b;
+    color:#e2e8f0;font-size:10px;letter-spacing:.2px;
+    text-align:center;line-height:1;
   }
   table.lines tbody td.row-no-cell{
-    width:32px;padding:2px 0;text-align:center;background:#e2e8f0;
-    color:#334155;font-size:11px;font-weight:700;
-    font-variant-numeric:tabular-nums;
+    width:22px;min-width:22px;padding:0;text-align:center;
+    background:#eef2f6;color:#475569;font-size:10.5px;font-weight:700;
+    font-variant-numeric:tabular-nums;line-height:1;
   }
   table.lines tbody td.row-del-cell button.row-del{
     width:18px;height:18px;line-height:16px;padding:0;
