@@ -2241,9 +2241,13 @@ async function drawMonthlyStacked(){
               // a real dataset's color, so the swatch reads as "this
               // shading = this year/role" independent of any region.
               const ROLE_ORDER = [
+                /* Legend order per user request: 2025 Actual first,
+                   then 2026 Target ahead of 2026 Actual so the trio
+                   reads "prior year → this year's plan → this year's
+                   result" from top to bottom. */
                 { key: "(2025)",        text: "2025 Actual",  fill: "rgba(107,114,128,0.55)", stroke: "#64748b", dash: [] },
-                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#1e40af", dash: [] },
                 { key: "(2026 Target)", text: "2026 Target",  fill: "rgba(107,114,128,0.35)", stroke: "#f97316", dash: [4, 3] },
+                { key: "(2026 Actual)", text: "2026 Actual",  fill: "#6b7280",                stroke: "#1e40af", dash: [] },
               ];
               const rolesPresent = new Set();
               chart.data.datasets.forEach((ds) => {
@@ -2677,17 +2681,22 @@ async function drawMonthlyStacked(){
 
   stackedMonthlyInst = new Chart(document.getElementById("stackedMonthlyChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25, ...ds26, ...dsT26] },
+    /* Dataset order matches legend order: 2025 Actual → 2026 Target
+       → 2026 Actual.  Swapped per user request so Target reads
+       before Actual for the current year — reader compares "what we
+       aimed at" against "what we hit" from left to right, and the
+       darker Actual bar naturally overlaps the paler Target block. */
+    data:{ labels, datasets:[...ds25, ...dsT26, ...ds26] },
     options: withStackKeyLegend(
-      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Target+Actual)")
     )
   });
 
   stackedMonthlyCumInst = new Chart(document.getElementById("stackedMonthlyCumChart"), {
     type:"bar",
-    data:{ labels, datasets:[...ds25Cum, ...ds26Cum, ...dsT26Cum] },
+    data:{ labels, datasets:[...ds25Cum, ...dsT26Cum, ...ds26Cum] },
     options: withStackKeyLegend(
-      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Actual+Target)")
+      getCommonOptions(true, undefined, "Monthly (2025 Actual / 2026 Target+Actual)")
     )
   });
 

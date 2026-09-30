@@ -875,8 +875,17 @@ def cached_endpoint(ttl_sec: int = 30):
     it), and this call returns the fresh Response.  Used by the
     dashboard's "🔄 Refresh" button so a BDE can pick up newly-loaded
     sales_thismonth data without waiting for the 60 s TTL to elapse.
+
+    Every response — cache hit or miss — is tagged with a
+    "Cache-Control: no-store" header so the BROWSER never keeps its
+    own copy.  The server's _GRAPH_CACHE (in-process dict, keyed by
+    query args) still absorbs repeat calls inside the 60 s TTL; the
+    difference is that a Refresh + reload always talks to Flask
+    instead of quietly reading a stale copy off Chrome's disk cache
+    — that was the last hiding place for the day-30-missing bug.
     """
     from functools import wraps
+    _NO_STORE = "no-store, no-cache, must-revalidate, max-age=0"
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -889,7 +898,11 @@ def cached_endpoint(ttl_sec: int = 30):
                 cached = _cache_get(_GRAPH_CACHE, key)
                 if cached is not None:
                     print(f"[cache HIT]  {fn.__name__}")
-                    return jsonify(cached)
+                    _resp = jsonify(cached)
+                    _resp.headers["Cache-Control"] = _NO_STORE
+                    _resp.headers["Pragma"]        = "no-cache"
+                    _resp.headers["Expires"]       = "0"
+                    return _resp
             print(f"[cache {'BYPASS' if _bypass else 'MISS '}] {fn.__name__}")
             result = fn(*args, **kwargs)
             try:
@@ -898,6 +911,14 @@ def cached_endpoint(ttl_sec: int = 30):
                 body = None
             if body is not None:
                 _cache_set(_GRAPH_CACHE, key, body, ttl_sec=ttl_sec)
+            # Even for a cache MISS the fresh Response goes back
+            # tagged no-store so subsequent navigations hit Flask.
+            try:
+                result.headers["Cache-Control"] = _NO_STORE
+                result.headers["Pragma"]        = "no-cache"
+                result.headers["Expires"]       = "0"
+            except Exception:
+                pass
             return result
         return wrapper
     return decorator
