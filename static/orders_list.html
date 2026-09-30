@@ -290,6 +290,12 @@ function renderRows(){
             r.approved_by_name, r.approval_note]
       .some(v => String(v || "").toLowerCase().includes(q));
   }) : _rowsCache;
+  /* Row highlight — set when the approver came here via
+     /orders_list?highlight=<oid> after signing off on the SPRF.
+     The row gets a soft green tint until the reader clicks
+     anywhere in it; the first click clears the tint (and still
+     opens the SPRF since the row's onclick fires normally). */
+  const _hlOid = String(new URLSearchParams(location.search).get("highlight") || "").trim();
   const body = $("#listBody");
   if (!filtered.length){
     body.innerHTML = `<tr><td colspan="22" class="empty">No orders match.</td></tr>`;
@@ -374,8 +380,15 @@ function renderRows(){
       const noteCell = _note
         ? `<div style="font-size:11px;line-height:1.4;color:#065f46;background:#ecfdf5;padding:4px 6px;border-radius:3px;white-space:pre-wrap">${escapeHtml(_note)}</div>`
         : `<small style="color:#94a3b8">—</small>`;
+      const _isHl = _hlOid && String(r.id) === _hlOid;
+      const _rowStyle = _isHl
+        ? 'background:#dcfce7 !important;box-shadow:inset 0 0 0 2px #16a34a;transition:background .3s'
+        : '';
+      const _rowClick = _isHl
+        ? `onclick="event.currentTarget.style.background='';event.currentTarget.style.boxShadow='';location.href='/order?id=${r.id}'"`
+        : `onclick="location.href='/order?id=${r.id}'"`;
       return `
-      <tr onclick="location.href='/order?id=${r.id}'">
+      <tr ${_rowClick}${_rowStyle ? ` style="${_rowStyle}"` : ''}>
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
         <td><small style="color:#334155">${escapeHtml(_shortRequester(r.requester_email) || "—")}</small></td>
         <td>${escapeHtml(r.submitted_by_bde || "—")}</td>

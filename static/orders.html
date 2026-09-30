@@ -3936,6 +3936,27 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
     setStatus(`Missing Qty on ${_emptyQty.length} draft line(s): ${_codes}`, "warn");
     return;
   }
+  /* Rebate-able Y/N is required on Save-as-Draft too — the backend
+     no longer defaults a blank flag to 'N' (which used to silently
+     mis-tag drafts as non-rebateable).  Same visual UX as the
+     Submit-time guard: pulse the box red, scroll to it, then show
+     the notice.  A BDE who really means "not yet decided" can Save
+     an empty form; only the moment they add lines and try to save
+     do we insist. */
+  if (!payload.header.rebateable){
+    const wrap = $("#rebateWrap");
+    if (wrap){
+      wrap.style.transition = "background 0.15s, border-color 0.15s";
+      wrap.style.background = "#fee2e2";
+      wrap.style.borderColor = "#dc2626";
+      wrap.scrollIntoView({behavior:"smooth", block:"center"});
+      setTimeout(() => { wrap.style.background = ""; }, 900);
+      const yesInp = $("#rebate_yes"); if (yesInp) yesInp.focus();
+    }
+    showNotice("Please mark Rebate-able (Y or N) before saving this draft.\n\nType 'Y' in the YES cell or 'N' in the NO cell — the draft is stored with that flag from the very first save.");
+    setStatus("Rebate-able (Y or N) is required to save this draft.", "warn");
+    return;
+  }
   /* Save-as-Draft routes to different endpoints depending on what
      row we're editing:
        • Editing a T-prefixed temp draft   → /api/orders/save_temp
@@ -4467,7 +4488,11 @@ function openApproveNoteModal(order, who, srcBtn){
 
 /* Fire the actual approve POST and reconcile the local order
    state on success.  Extracted so the modal + fallback paths
-   funnel through the same code. */
+   funnel through the same code.  When the POST returns 200 we
+   render a small confirmation dialog that offers "Stay here"
+   (keep the SPRF open, banner + note visible) or "Go to list"
+   (redirect to /orders_list?highlight=<oid> so the row lights
+   up until it's clicked). */
 async function _postApprove(order, who, srcBtn, note){
   const origText = srcBtn ? srcBtn.textContent : "";
   if (srcBtn){ srcBtn.disabled = true; srcBtn.textContent = "Approving…"; }
@@ -4500,10 +4525,63 @@ async function _postApprove(order, who, srcBtn, note){
        now set, so wireToolbarApproveBtn hides it and the status
        ribbon at the bottom takes over the "who approved" note. */
     wireToolbarApproveBtn(document.getElementById("btnToolbarApprove"), order, who);
+    /* Post-approve navigation choice.  The banner + toolbar refresh
+       already show the "Approved" state on this page, so choosing
+       "Stay" leaves the reader on the SPRF with the note visible;
+       "Go to list" redirects and asks the list page to highlight
+       this row for one click. */
+    showPostApproveChoice(order.id);
   } catch(e){
     setStatus("Approve failed: "+e, "warn");
     if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
   }
+}
+
+/* Post-approve stay-or-go dialog.  Built inline (no dedicated
+   overlay in the HTML) so it stays close to the approval flow
+   and doesn't add markup other pages ignore.  Auto-dismisses on
+   Escape (= stay), Enter (= go to list), or the backdrop click. */
+function showPostApproveChoice(oid){
+  const bg = document.createElement("div");
+  bg.style.cssText =
+    "position:fixed;inset:0;z-index:10000;background:rgba(15,23,42,0.55);" +
+    "display:flex;align-items:center;justify-content:center;" +
+    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;";
+  bg.innerHTML = `
+    <div style="background:#fff;border-radius:8px;box-shadow:0 24px 64px rgba(0,0,0,.35);width:min(460px,92vw);overflow:hidden;animation:mdNoticeIn .14s ease-out">
+      <div style="background:#166534;color:#fff;padding:10px 16px;font-weight:800;font-size:14px;letter-spacing:.3px">✓ Approval recorded</div>
+      <div style="padding:16px 18px;color:#0f172a;font-size:13px;line-height:1.55">
+        Your sign-off has been saved on this SPRF, and the confirmation
+        email is on its way to the thread.
+        <div style="margin-top:10px;color:#334155">Would you like to return to the Orders list, or stay on this SPRF?</div>
+      </div>
+      <div style="padding:10px 16px;text-align:right;border-top:1px solid #e5e7eb;background:#f9fafb">
+        <button type="button" id="_paStay"
+                style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;border-radius:4px;padding:7px 16px;font-weight:700;cursor:pointer;font-size:12.5px;margin-right:8px">
+          Stay here
+        </button>
+        <button type="button" id="_paGo"
+                style="background:#166534;color:#fff;border:none;border-radius:4px;padding:7px 18px;font-weight:700;cursor:pointer;font-size:12.5px">
+          Go to list →
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(bg);
+  const cleanup = () => {
+    bg.remove();
+    document.removeEventListener("keydown", onKey);
+  };
+  const stay = () => { cleanup(); setStatus("Approved — you're still on this SPRF.", "ok"); };
+  const go   = () => { cleanup(); location.href = `/orders_list?highlight=${encodeURIComponent(oid)}`; };
+  const onKey = (e) => {
+    if (e.key === "Escape") stay();
+    else if (e.key === "Enter") go();
+  };
+  bg.querySelector("#_paStay").addEventListener("click", stay);
+  bg.querySelector("#_paGo").addEventListener("click", go);
+  bg.addEventListener("click", (e) => { if (e.target === bg) stay(); });
+  document.addEventListener("keydown", onKey);
+  setTimeout(() => bg.querySelector("#_paGo")?.focus(), 30);
 }
 
 /* Bottom Approve bar retired — the toolbar now carries the Approve

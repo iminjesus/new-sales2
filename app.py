@@ -3815,6 +3815,32 @@ PRICE_EDITOR_EMAILS = {
     "brian.park@hankooktyre.com.au":  "Brian",
     "pamela.lau@hankooktyre.com.au":  "Pamela",
 }
+# Desktop / dashboard admin identities — treated as global scope on
+# api_orders_list.  Anyone here sees every SPRF (submitted or draft)
+# alongside the named approvers, price editors and Harry.  Local dev
+# runs land here so the person operating the dashboard from the
+# desktop always sees the full picture, even without CF Access.
+DEV_ADMIN_EMAILS = {
+    "jayden.bhang@gmail.com",
+}
+# State-manager scope mapping — key is the manager's mail id (lower-
+# case), value is the state code (or list of state codes) whose
+# ship-to orders they can see IN ADDITION to their own rows.  Empty
+# by default: every non-global caller sees only their own SPRFs
+# until they're added here.  When a subordinate joins Justine's
+# team, add Justine's entry with their shared state code and both
+# start seeing each other's orders through the same rule.
+STATE_MANAGERS = {
+    # "justine.smith@hankooktyre.com.au": "NSW",
+    # "some.qld.manager@hankooktyre.com.au": ["QLD"],
+}
+def _state_scope_for(email: str):
+    """Return the list of ship-to state codes this caller can see
+    beyond their own rows, based on STATE_MANAGERS.  Empty list
+    means own-rows-only scoping.  Accepts a lower-case email."""
+    v = STATE_MANAGERS.get((email or "").strip().lower())
+    if not v: return []
+    return [v] if isinstance(v, str) else [s for s in v if s]
 
 def _ensure_submitted_orders_table():
     try:
@@ -4449,8 +4475,19 @@ def api_orders_save_temp():
             return float(s or 0)
         except Exception:
             return 0.0
+    # Rebate-able Y/N is required on Save-as-Draft too.  The old
+    # code silently defaulted a blank flag to 'N', which quietly
+    # mis-tagged every draft the BDE hadn't consciously marked as
+    # non-rebateable.  Now we return a 400 with a friendly message
+    # so the front-end can surface the same "please mark Y or N"
+    # notice it already uses on Submit.
     rebateable = str(header.get("rebateable") or "").upper().strip()
-    if rebateable not in ("Y", "N"): rebateable = "N"
+    if rebateable not in ("Y", "N"):
+        return jsonify({
+            "error": "rebateable (Y or N) is required — please mark "
+                     "Rebate-able before saving this draft",
+            "field": "rebateable",
+        }), 400
     mgmt_reason = (header.get("mgmt_reason") or "").strip()
 
     try:  existing_id = int(payload.get("id") or 0)
@@ -4563,22 +4600,30 @@ def api_orders_list():
         limit = min(int(request.args.get("limit") or 200), 1000)
     except Exception:
         limit = 200
-    # Role-based scope (per review):
+    # Role-based scope:
     #   • MGMT_APPROVER_EMAILS (Kenny, Hayden, JJ)      → all rows
     #   • SPRF_READONLY_CC     (Brian, Minku, Pamela)   → all rows
     #   • HARRY_CS_EMAIL                                → all rows
-    #   • State-manager hierarchy (not yet supplied)    → own + subs
+    #   • DEV_ADMIN_EMAILS     (desktop-dashboard admin)→ all rows
+    #   • STATE_MANAGERS       (manager → state group)  → own + state
     #   • everyone else                                 → own rows only
-    # The hierarchy stub is easy to plug in later — the code branches
-    # on _list_scope_email() returning either the full-scope sentinel
-    # or the list of BDE emails the caller can see; the SQL then
-    # narrows by submitted_by_email.
+    # A solo BDE with no state-manager entry (Justine today, before
+    # a subordinate is added) sees only her own rows.  Once she is
+    # added to STATE_MANAGERS as "…: 'NSW'" she'll pick up every
+    # NSW ship-to SPRF alongside her own — same as anyone else the
+    # mapping lists.
     who = (_bde_from_request() or "").strip().lower()
     global_scope = (
         who in {e.lower() for e in MGMT_APPROVER_EMAILS}
         or who in {e.lower() for e in SPRF_READONLY_CC}
         or who == HARRY_CS_EMAIL.lower()
+        or who in {e.lower() for e in DEV_ADMIN_EMAILS}
     )
+    # State scope for the caller (empty list unless they're in
+    # STATE_MANAGERS).  Combined with own-rows below via SQL OR so
+    # a state manager still sees their own row when the ship-to
+    # state doesn't match their group.
+    my_states = _state_scope_for(who)
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         wh, p = [], []
@@ -4589,11 +4634,20 @@ def api_orders_list():
         if date_to:
             wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
         if not global_scope:
-            # Non-global caller — surface only their own rows.  The
-            # state-manager hierarchy carve-out will slot in here
-            # once we're handed the mapping.
-            wh.append("LOWER(submitted_by_email) = %s")
-            p.append(who or "")
+            # Non-global caller — own rows always, plus every ship-to
+            # SPRF in the states this caller manages (empty list =
+            # own-only, which is the default for anyone not in
+            # STATE_MANAGERS).
+            if my_states:
+                placeholders = ",".join(["%s"] * len(my_states))
+                wh.append(
+                    f"(LOWER(submitted_by_email) = %s OR state IN ({placeholders}))"
+                )
+                p.append(who or "")
+                p.extend(my_states)
+            else:
+                wh.append("LOWER(submitted_by_email) = %s")
+                p.append(who or "")
         else:
             # Global-scope caller: hide OTHER users' Save-as-Draft
             # rows.  A temp draft is private to its creator until
