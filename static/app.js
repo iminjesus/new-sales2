@@ -1069,6 +1069,23 @@ async function drawDailyTotals(){
     }
     if (cutoffIdx < 0) cutoffIdx = Math.min(salesRows.length, N) - 1;
   }
+  /* daily_breakdown and daily_sales are two independent endpoints
+     with their own 60s server-side caches — one can hold a stale
+     result the moment new rows land in sales_thismonth.  If
+     daily_sales sees a later day than daily_breakdown did, extend
+     cutoffIdx up to that day so the chart doesn't clip the most
+     recent bars just because the breakdown response was stale.
+     Uses value !== 0 as "day has data" so future empty days stay
+     off the chart. */
+  {
+    let salesLast = cutoffIdx;
+    for (let i = 0; i < Math.min(salesRows.length, N); i++){
+      const d = parseInt(salesRows[i]?.day, 10);
+      const v = +salesRows[i]?.value || 0;
+      if (d >= 1 && d <= N && v !== 0) salesLast = Math.max(salesLast, d - 1);
+    }
+    if (salesLast > cutoffIdx) cutoffIdx = salesLast;
+  }
 
   const sales = new Array(N).fill(null);
   for (let i = 0; i <= cutoffIdx; i++) sales[i] = (+salesRows[i]?.value || 0);
@@ -1458,6 +1475,40 @@ async function drawDailyStacked(){
 
   // Build stacks
    let { labels, groups, byGroup, datasets, lastActualIdx } = buildDailyStacks(rows);
+
+  /* daily_breakdown and daily_sales are independent endpoints with
+     independent 60s server-side caches, and their JOIN shapes
+     differ (breakdown adds customer_rollup for grouping).  If the
+     totals endpoint knows about a later day than the breakdown
+     response did, extend lastActualIdx up to that day so the
+     stacked chart's axis doesn't clip the most recent bars.  For
+     any day the breakdown missed, buildDailyStacks left the
+     per-group slot at 0, so the extended day renders as an empty
+     bar (still visible on the axis) rather than dropping off. */
+  try {
+    const totals = await fetchDailySales();
+    const N = labels.length;
+    let salesLast = lastActualIdx;
+    for (let i = 0; i < Math.min(totals.length, N); i++){
+      const d = parseInt(totals[i]?.day, 10);
+      const v = +totals[i]?.value || 0;
+      if (d >= 1 && d <= N && v !== 0) salesLast = Math.max(salesLast, d - 1);
+    }
+    if (salesLast > lastActualIdx){
+      /* Pad each per-group array with 0s up to salesLast so slice()
+         below produces a fully-formed array of the new length. */
+      groups.forEach(g => {
+        const arr = byGroup[g] || (byGroup[g] = []);
+        while (arr.length <= salesLast) arr.push(0);
+      });
+      datasets = datasets.map(ds => {
+        const d2 = ds.data.slice();
+        while (d2.length <= salesLast) d2.push(0);
+        return { ...ds, data: d2 };
+      });
+      lastActualIdx = salesLast;
+    }
+  } catch (e) { /* keep the original lastActualIdx on fetch failure */ }
 
   // Truncate to last actual day — don't show future empty bars on x-axis
   const cutLen = lastActualIdx + 1;
