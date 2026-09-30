@@ -2500,6 +2500,15 @@ function newRow(){
   const patInp   = tr.querySelector('[data-col="pattern"]');
   mcodeInp.addEventListener("input",  e => debouncedSuggestMat(e.target.value));
   mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
+  /* Multi-line paste — a BDE routinely copies a column of M-Codes
+     out of Excel and pastes into the first M-Code cell.  Instead
+     of jamming them all into one cell, split the clipboard on
+     newlines / tabs / commas / whitespace, drop the first token
+     into THIS row, and cascade the rest into subsequent rows —
+     auto-adding blank rows at the tail when there aren't enough.
+     Each row then resolves its material through the same
+     fillMaterialFromCode path. */
+  mcodeInp.addEventListener("paste", e => handleMcodePaste(e, tr));
   descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
   /* Product Name + Pattern inputs share the desc_list datalist and
@@ -2790,6 +2799,50 @@ async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
 
 function addRow(){
   $("#linesBody").appendChild(newRow());
+}
+
+/* Split a pasted clipboard string into individual M-Code tokens.
+   Accepts newlines, tabs, commas and multiple whitespace runs as
+   separators — matches an Excel column copy AND a "1018526 1030861"
+   space-separated string.  Trims blanks and drops any token that
+   isn't at least a 3-char alphanumeric (skips accidentally-copied
+   labels like "M-Code"). */
+function _splitPastedMcodes(text){
+  return String(text || "")
+    .split(/[\r\n\t,]+|\s{2,}| /)
+    .map(t => t.trim())
+    .filter(t => t && /^[A-Za-z0-9_-]{3,}$/.test(t) && t.toLowerCase() !== "m-code");
+}
+
+/* Paste-into-M-Code handler: when the clipboard carries several
+   tokens, spread them across successive rows (auto-adding blanks
+   at the tail when there aren't enough), then fire the material
+   resolver on each row so brand/size/pattern/etc. auto-fill. */
+function handleMcodePaste(e, startRow){
+  const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+  const tokens = _splitPastedMcodes(raw);
+  if (tokens.length <= 1) return;   // let the browser handle single-value paste
+  e.preventDefault();
+  const body = $("#linesBody");
+  const rows = Array.from(body.querySelectorAll("tr"));
+  const startIdx = rows.indexOf(startRow);
+  if (startIdx < 0) return;
+  tokens.forEach((mc, i) => {
+    // Ensure a row exists at index (startIdx + i) — grow the body
+    // when the paste is longer than the current empty tail.
+    let tr = body.querySelectorAll("tr")[startIdx + i];
+    if (!tr) { addRow(); tr = body.lastElementChild; }
+    const inp = tr.querySelector('[data-col="m_code"]');
+    if (!inp) return;
+    inp.value = mc;
+    /* Resolve the row (fires the same fillMaterialFromCode path a
+       manual entry would — fills brand/size/pattern/list price
+       and drops the customer promo into sp_dc). */
+    fillMaterialFromCode(tr, mc);
+  });
+  /* Keep focus on the starting row's M-Code so the user's next
+     action lands somewhere obvious. */
+  startRow.querySelector('[data-col="m_code"]')?.focus();
 }
 
 /* ────────────────────────── customer field wire-up ────────────────────────── */
