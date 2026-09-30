@@ -429,6 +429,15 @@
     font-variant-numeric:tabular-nums;
   }
   table.lines tbody td.stock-cell.zero input{background:#fdecec;color:#a03030}
+  /* Remark column at the far right — a compact "why did this line get
+     that DC?" badge (443, Special=x%, Trueblu, Aging Tx, Manual).
+     Light neutral ground so the tag reads clearly against the row's
+     other coloured cells. */
+  table.lines thead th:last-child{background:#f1f5f9;color:#334155}
+  table.lines tbody td.remark-cell input{
+    background:#f8fafc;color:#334155;font-weight:600;text-align:center;
+    font-size:11px;letter-spacing:.02em;
+  }
   table.lines tbody td{
     border:1px solid var(--border);padding:0;height:32px;background:#fff;
   }
@@ -864,6 +873,7 @@
           <th class="stock narrow" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
           <th class="stock narrow" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
           <th class="stock narrow" title="Stock in WA plant (42R4)">WA<br>stock</th>
+          <th class="narrow" title="Auto-applied promo tag — 443 / Special / Trueblu / Aging / Manual — so the reader sees at a glance where each line's Additional Special DC% came from.">Remark</th>
         </tr>
       </thead>
       <tbody id="linesBody">
@@ -904,14 +914,16 @@
           <td></td>
           <td class="total-cell"><div class="totalv" id="grandTotal">0.00</div></td>
           <td class="num center" id="avgDC"></td>
-          <td colspan="4"></td>
+          <!-- +1 trailing cell to line up under the new Remark column
+               (stock NSW/QLD/VIC/WA + Remark = 5 tail columns). -->
+          <td colspan="5"></td>
         </tr>
         <!-- Total inc GST (subtotal + 10%). -->
         <tr class="total-row summary-row">
           <td colspan="17" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
-          <td colspan="5" class="summary-blank"></td>
+          <td colspan="6" class="summary-blank"></td>
         </tr>
         <!-- Freight prompt + 10 % freight (fires only when "Y" typed).
              Amount sits in the same column (Total Amount) as the inc-
@@ -924,14 +936,14 @@
           </td>
           <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10%) if any</td>
           <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
-          <td colspan="5" class="summary-blank"></td>
+          <td colspan="6" class="summary-blank"></td>
         </tr>
         <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
           <td colspan="17" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
-          <td colspan="5" class="summary-blank"></td>
+          <td colspan="6" class="summary-blank"></td>
         </tr>
       </tfoot>
     </table>
@@ -1241,6 +1253,8 @@ function applyAgingDC(row) {
     const addDC = 100 * (1 - (1 - target/100) / baseFactor);
     addEl.value = fmtPct(Math.max(0, addDC));
   }
+  /* Remark: "Aging (T2)" — tier already resolved above. */
+  setRemark(row, `Aging (${AGING_TIER_LABEL[tier] || tier})`);
   recalcRow(row);
   lockAgedRow(row);
 }
@@ -1269,6 +1283,10 @@ function applyAgingDCManual(row, target){
     const addDC = 100 * (1 - (1 - target/100) / factor);
     addEl.value = fmtPct(Math.max(0, addDC));
   }
+  /* Remark: "Aging (Tx)" or "Aging (manual)" for hand-typed guides
+     without a ladder tier match. */
+  const tier = row.dataset.agingTier || "";
+  setRemark(row, tier ? `Aging (${tier})` : "Aging (manual)");
   recalcRow(row);
   lockAgedRow(row);
 }
@@ -1557,6 +1575,11 @@ async function applyAdditionalDCToRow(rowEl){
     // Stash the matched promo bucket on the row so updateTotals can
     // count SOVD-eligible qty (SOVD TTL box at the top of the form).
     rowEl.dataset.promo = (data.promo || "").toUpperCase();
+    // Remark badge — "Trueblu" for the HK-PCLT SOVD ladder,
+    // "443 (12%)" for the flat 443 promo, "Special (30%)" for a
+    // per-material special.  Blank promo name gets a plain
+    // percentage tag so the reader still sees the DC source.
+    setRemarkFromPromo(rowEl, data.promo, data.additional_dc);
   } else {
     // No match — clear the auto-value so a previously-eligible row
     // that no longer qualifies (qty dropped below threshold, e.g.)
@@ -1567,6 +1590,13 @@ async function applyAdditionalDCToRow(rowEl){
       delete spEl.dataset.autoSpDc;
     }
     delete rowEl.dataset.promo;
+    /* Clear the remark unless the row is aged (aging tag lives on
+       independently) or the BDE has typed sp_dc manually. */
+    if (!rowEl.dataset.agingTier
+        && spEl.dataset.autoSpDc !== "1"
+        && !toNum(spEl.value)) {
+      setRemark(rowEl, "");
+    }
   }
   /* Aged row after a fresh promo lookup — re-solve the chained
      Additional Special DC% so the aged target price is still hit
@@ -1586,6 +1616,39 @@ async function applyAdditionalDCToRow(rowEl){
     return;
   }
   recalcRow(rowEl);
+}
+
+/* ────────────────────────── Remark helpers ──────────────────────────
+   The Remark cell is a compact per-line tag showing which auto-lookup
+   populated the row's Additional Special DC%.  All the places that
+   touch sp_dc / aging / manual entry funnel through setRemark() so
+   the cell stays in sync.
+*/
+function setRemark(rowEl, text){
+  const el = rowEl?.querySelector('[data-col="remark"]');
+  if (el) el.value = text || "";
+}
+function setRemarkFromPromo(rowEl, promoRaw, dcPct){
+  const promo = String(promoRaw || "").trim().toUpperCase();
+  const pct   = (dcPct != null && dcPct !== "")
+    ? Number(dcPct).toFixed(2) + "%"
+    : "";
+  if (!promo && !pct) { setRemark(rowEl, ""); return; }
+  /* SOVD → "Trueblu" per user rule.  Everything else lands as
+     "<PROMO> (x%)" for readability. */
+  if (promo === "SOVD") {
+    setRemark(rowEl, pct ? `Trueblu (${pct})` : "Trueblu");
+    return;
+  }
+  if (promo === "443") {
+    setRemark(rowEl, pct ? `443 (${pct})` : "443");
+    return;
+  }
+  /* Anything else — treat the promo name as-is; if the promo name is
+     empty but a % was set, tag it "Special" so the reader knows a
+     manual/per-material special applied. */
+  const label = promo || "Special";
+  setRemark(rowEl, pct ? `${label} (${pct})` : label);
 }
 
 // Given the row's brand + line, look up which of the three customer
@@ -1849,6 +1912,10 @@ function unlockAgedRow(row){
   });
   /* Aging DC Guide stays user-writable in both states — the aged
      ladder is one entry point and manual typing is another. */
+  /* Clear the aged remark if it was the aging tag; leave a Trueblu /
+     443 / Special tag alone (they can co-exist post-unlock). */
+  const remEl = row.querySelector('[data-col="remark"]');
+  if (remEl && /^aging/i.test(remEl.value || "")) setRemark(row, "");
 }
 /* ── SOVD auto-pricing ─────────────────────────────────────────────
    Per-review rule for SOVD (HK-PCLT ladder promo):
@@ -1902,8 +1969,11 @@ function applySOVDRatesToRows(){
           spEl.value = fmtPct(rate);
           spEl.dataset.sovdAuto  = "1";
           spEl.dataset.autoSpDc  = "1";
-          spEl.title = `SOVD ladder — ${rate}% (SOVD TTL = ${sovdQty})`;
+          spEl.title = `Trueblu ladder — ${rate}% (Trueblu TTL = ${sovdQty})`;
           r.dataset.promo = "SOVD";
+          /* Remark badge — "Trueblu (18%)".  Renamed from SOVD per
+             the user's naming convention. */
+          setRemark(r, `Trueblu (${rate}.00%)`);
           recalcRow(r);
         }
       } else if (spEl.dataset.sovdAuto === "1") {
@@ -1915,6 +1985,10 @@ function applySOVDRatesToRows(){
         delete spEl.dataset.sovdAuto;
         delete spEl.dataset.autoSpDc;
         if (r.dataset.promo === "SOVD") delete r.dataset.promo;
+        /* Only clear the remark if it's OUR Trueblu tag — an aged /
+           443 / Special tag on the row survives an SOVD un-tag. */
+        const remEl = r.querySelector('[data-col="remark"]');
+        if (remEl && /trueblu/i.test(remEl.value || "")) setRemark(r, "");
         recalcRow(r);
       }
     });
@@ -2208,6 +2282,13 @@ function newRow(){
     {c:"stock_qld",      cls:"stock-cell readonly", ro:true},
     {c:"stock_vic",      cls:"stock-cell readonly", ro:true},
     {c:"stock_wa",       cls:"stock-cell readonly", ro:true},
+    /* Free-text badge showing which promo tagged this row's sp_dc:
+       "443 (12%)", "Special (30%)", "Trueblu (18%)", "Aging (T2)",
+       "Manual" or blank.  Read-only; set by applyAdditionalDCToRow,
+       applySOVDRatesToRows, applyAgingDC and the sp_dc/aging_dc
+       input handlers so the source of the concession is visible on
+       every line without hovering the sp_dc tooltip. */
+    {c:"remark",         cls:"remark-cell readonly", ro:true},
   ];
   for(const cell of cells){
     const td = document.createElement("td");
@@ -2255,6 +2336,12 @@ function newRow(){
        row's sp_dc alone from now on. */
     if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
     if (e.target.dataset.sovdAuto === "1") delete e.target.dataset.sovdAuto;
+    /* Retag the Remark: the DC now came from the BDE's own hand,
+       not a promo lookup or the Trueblu ladder.  Empty value on
+       the sp_dc cell clears the Remark entirely (nothing to note). */
+    const v = toNum(e.target.value);
+    setRemark(tr, v > 0 ? `Manual (${v.toFixed(2)}%)` : "");
+    if (tr.dataset.promo === "SOVD") delete tr.dataset.promo;
   });
   // Aging DC change — special path when the row is aged-locked:
   // clearing the Aging DC% cell unlocks the row so the BDE can
@@ -2518,6 +2605,7 @@ const LINE_FIELDS = [
   "add_dc", "aging_dc", "add_support",
   "proposed_price", "total_amount", "proposed_dc",
   "stock_nsw", "stock_qld", "stock_vic", "stock_wa",
+  "remark",
 ];
 
 function serializeOrder(){
