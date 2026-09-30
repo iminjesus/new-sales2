@@ -2615,11 +2615,12 @@ def api_orders_material_suggest():
                 per_tok.append(f"{brand_expr} LIKE %s")
                 params.append(f"%{tok_norm}%")
             # Digits-only fallback — only meaningful when the token
-            # carries digits AND is at least 3 chars (dodges noise
-            # like "R" or single-letter typos).  Matches size and
-            # m_code, NOT pattern/product/brand (those are letters).
+            # carries digits AND is at least 2 chars (a bare "14",
+            # "17" from an inch typing still narrows the size list).
+            # Matches size and m_code, NOT pattern/product/brand
+            # (those are letters).
             tok_digits = _digits_only_py(tok)
-            if tok_digits and len(tok_digits) >= 3:
+            if tok_digits and len(tok_digits) >= 2:
                 per_tok.append(f"{code_digits_expr} LIKE %s")
                 params.append(f"%{tok_digits}%")
                 if desc_digits_expr:

@@ -1056,6 +1056,21 @@ function fillDatalist(listId, items){
     if(it.label) opt.label = it.label;
     dl.appendChild(opt);
   }
+  /* Chrome caches the dropdown filter against the datalist as it
+     was when the input first got focus, so freshly-fetched options
+     after the user has typed a longer query (e.g. "Dyna" → "Dynapro")
+     don't always surface until the input is blurred and refocused.
+     Rebinding the `list` attribute forces Chrome to re-read the
+     datalist DOM the next keystroke, without re-triggering the
+     input's own event listeners (which would loop back into
+     debouncedSuggestMat and fetch again). */
+  const ae = document.activeElement;
+  if (ae && ae.tagName === 'INPUT' && ae.getAttribute
+      && ae.getAttribute('list') === listId) {
+    ae.removeAttribute('list');
+    // one microtask so the DOM change lands before we rebind
+    Promise.resolve().then(() => ae.setAttribute('list', listId));
+  }
 }
 
 // Customer suggest: hits /api/orders/customer_suggest, then populates
@@ -1108,7 +1123,8 @@ async function suggestMaterial(q){
   // Chrome filters options by VALUE substring, so the trailing
   // "#M-Code" doesn't hurt discoverability — typing "ventus", "H724",
   // "1016533" or "HK" still narrows the list.
-  const strip = s => String(s || "").toLowerCase().replace(/[\s/,.\-'&+()]/g, '');
+  const strip     = s => String(s || "").toLowerCase().replace(/[\s/,.\-'&+()]/g, '');
+  const digitsOnly = s => String(s || "").replace(/[^0-9]/g, '');
   const parts = r => {
     const bits = [];
     if (r.description)  bits.push(r.description);
@@ -1127,12 +1143,30 @@ async function suggestMaterial(q){
     if (r.m_code)       bits.push("#" + r.m_code);
     return bits.join(" · ");
   };
+  /* Digits-only variant so Chrome's datalist filter (VALUE-substring
+     only, case-insensitive) can match a fully-concatenated size like
+     "2456014" against "245/60R14".  The user types the digits and
+     inch together; without this variant Chrome only sees the raw
+     "24560r14" form and the R letter breaks the substring. */
+  const partsDigits = r => {
+    const bits = [];
+    const sizeDigits = digitsOnly(r.description);
+    if (sizeDigits) bits.push(sizeDigits);
+    if (r.pattern)      bits.push(r.pattern);
+    if (r.product_name) bits.push(r.product_name);
+    if (r.brand)        bits.push(r.brand);
+    if (r.m_code)       bits.push("#" + r.m_code);
+    return bits.join(" · ");
+  };
   const codeLabel = r => parts(r);
   const descItems = [];
   for (const r of rows) {
-    descItems.push({value: parts(r), label: r.m_code});
+    const canon = parts(r);
+    descItems.push({value: canon, label: r.m_code});
     const raw = partsRaw(r);
-    if (raw && raw !== parts(r)) descItems.push({value: raw, label: r.m_code});
+    if (raw && raw !== canon) descItems.push({value: raw, label: r.m_code});
+    const dig = partsDigits(r);
+    if (dig && dig !== canon && dig !== raw) descItems.push({value: dig, label: r.m_code});
   }
   fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
   fillDatalist("desc_list",  descItems);
@@ -1145,7 +1179,11 @@ function extractPickedMCode(value){
   const m = /#\s*([A-Za-z0-9_-]{3,})\s*$/.exec(String(value || ""));
   return m ? m[1] : "";
 }
-const debouncedSuggestMat = debounce(suggestMaterial, 180);
+/* Shorter debounce (was 180 ms) so typing "Dyna" → "Dynapro" fires
+   the second fetch quickly enough that Chrome's dropdown catches
+   the fresh options.  Also nudge the input after fillDatalist to
+   force Chrome to re-filter its visible list. */
+const debouncedSuggestMat = debounce(suggestMaterial, 90);
 
 /* ────────────────────────── customer resolve ────────────────────────── */
 // Once the user picks (or blurs) a field, resolve the row from ONE key
@@ -2027,6 +2065,12 @@ function applySOVDRatesToRows(){
     rows.forEach(r => {
       const spEl = r.querySelector('[data-col="sp_dc"]');
       if (!spEl) return;
+      /* Never overwrite the cell the BDE is actively typing into —
+         every keystroke triggers recalcRow → updateTotals → us,
+         and clobbering the input would make the field feel frozen
+         (bug reported: "can't type in 443DC").  The sp_dc keydown /
+         blur handler is what commits the target-DC back-solve. */
+      if (document.activeElement === spEl) return;
       if (isSOVDEligible(r)) {
         const cur = toNum(spEl.value);
         if (Math.abs(cur - rate) > 0.01) {
