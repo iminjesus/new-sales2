@@ -280,57 +280,81 @@ def _scan_stock_header(ws, header_row=None):
             i += 5
             continue
 
-        # State-stock blocks: pattern is "<STATE>.STOCK | PORT | WATER
-        # | [CY] | FAC | TOTAL" — CY is optional so the scanner walks
-        # the next few cells and picks up whichever labels appear.
-        # Older workbooks omit CY (5-col block); the new template
-        # inserts CY between WATER and FAC (6-col block).
+        # State-stock blocks — the workbook layout varies:
+        #   old  : <STATE>.STOCK | PORT | WATER | FAC        | TOTAL
+        #   new  : <STATE>.STOCK | POR  | WATER | CY | TOTAL | Factory
+        # In the new layout Factory sits AFTER TOTAL and TOTAL itself
+        # only sums STOCK~CY (Factory excluded).  The scanner walks
+        # forward from the STOCK cell picking up PORT/WATER/CY/FAC/
+        # TOTAL by label wherever they appear, and stops when it hits
+        # the next state's STOCK header (or a safe max window).  The
+        # header's "POR" and "Factory" variants are accepted alongside
+        # the canonical PORT / FAC spellings.
         if h in ("N.STOCK", "Q.STOCK", "V.STOCK", "W.STOCK"):
             st = {"N.STOCK": "NSW", "Q.STOCK": "QLD",
                   "V.STOCK": "VIC", "W.STOCK": "WA"}[h]
             cmap.setdefault("STATE_STOCK", {})[st] = col
-            # Walk forward until we hit the block's TOTAL cell; along
-            # the way, grab PORT/WATER/CY/FAC wherever they sit.
-            block_end = i + 4   # sane fallback for 5-col blocks
-            for k in range(1, 8):
+            block_end = i
+            NEXT_STOCK = ("N.STOCK", "Q.STOCK", "V.STOCK", "W.STOCK", "STOCK")
+            for k in range(1, 12):
                 if i + k >= len(header):
                     break
                 h2 = norm(header[i+k]).upper()
-                if h2 == "PORT":
+                if h2 in NEXT_STOCK:
+                    # Ran into the next state / national block — stop
+                    break
+                if h2 in ("PORT", "POR"):
                     cmap.setdefault("STATE_PORT",  {})[st] = i + k + 1
+                    block_end = i + k
                 elif h2 == "WATER":
                     cmap.setdefault("STATE_WATER", {})[st] = i + k + 1
+                    block_end = i + k
                 elif h2 == "CY":
                     cmap.setdefault("STATE_CY",    {})[st] = i + k + 1
-                elif h2 == "FAC":
-                    cmap.setdefault("STATE_FAC",   {})[st] = i + k + 1
-                elif h2 == "TOTAL":
                     block_end = i + k
-                    break
+                elif h2 in ("FAC", "FACTORY"):
+                    cmap.setdefault("STATE_FAC",   {})[st] = i + k + 1
+                    block_end = i + k
+                elif h2 == "TOTAL":
+                    # Workbook TOTAL is STOCK~CY only (Factory sits
+                    # outside).  We still note its position as the
+                    # far-right anchor of the block so the scanner
+                    # keeps walking for a trailing Factory column.
+                    block_end = i + k
+                # else: silently skip prefix cells (After_S / Σ 1M A /
+                # etc.) that live between one block's Factory and the
+                # next block's STOCK — they don't advance block_end,
+                # so the next STOCK sighting cleanly closes this block.
             i = block_end + 1
             continue
 
-        # National total block: STOCK | PORT | WATER | [CY] | FAC |
-        # TOTAL — same CY-optional layout as the per-state blocks.
+        # National total block — same walk-forward logic, same POR /
+        # Factory tolerance.  When Factory sits after TOTAL, TOTAL_ALL
+        # here still points at the workbook's TOTAL cell (which is
+        # STOCK~CY only); we deliberately DON'T rely on that for the
+        # true Stock+Pipeline number and instead recompute it from
+        # the per-state parts further down the load path.
         if h == "STOCK" and "TOTAL_STOCK" not in cmap:
             cmap["TOTAL_STOCK"] = col
-            block_end = i + 4
-            for k in range(1, 8):
+            block_end = i
+            for k in range(1, 12):
                 if i + k >= len(header):
                     break
                 h2 = norm(header[i+k]).upper()
-                if h2 == "PORT":
-                    cmap["TOTAL_PORT"]  = i + k + 1
+                # No obvious sentinel closes the national block, so we
+                # rely on the fixed window + the fact that the first
+                # real trailing label past Factory (usually blank or
+                # a % / average label) won't match anything below.
+                if h2 in ("PORT", "POR"):
+                    cmap["TOTAL_PORT"]  = i + k + 1; block_end = i + k
                 elif h2 == "WATER":
-                    cmap["TOTAL_WATER"] = i + k + 1
+                    cmap["TOTAL_WATER"] = i + k + 1; block_end = i + k
                 elif h2 == "CY":
-                    cmap["TOTAL_CY"]    = i + k + 1
-                elif h2 == "FAC":
-                    cmap["TOTAL_FAC"]   = i + k + 1
+                    cmap["TOTAL_CY"]    = i + k + 1; block_end = i + k
+                elif h2 in ("FAC", "FACTORY"):
+                    cmap["TOTAL_FAC"]   = i + k + 1; block_end = i + k
                 elif h2 == "TOTAL":
-                    cmap["TOTAL_ALL"]   = i + k + 1
-                    block_end = i + k
-                    break
+                    cmap["TOTAL_ALL"]   = i + k + 1; block_end = i + k
             i = block_end + 1
             continue
 
@@ -1225,13 +1249,13 @@ def _load_stock_data_uncached(path, mtime):
         state_pipe = {s: sum(state_pipe_parts[s].values()) for s in STATES}
         state_3m   = {s: _num(_cell(state_3m_map[s])) for s in STATES}
         total_stock = _num(_cell(total_stock_col))
-        total_all   = _num(_cell(total_all_col))
-        # Fallback: if the workbook doesn't populate a national
-        # TOTAL column (Stock + Port + Water + Factory), compute it
-        # ourselves from the per-state pipeline parts so
-        # Merge_MOI(PPL) never comes out identically zero.
-        if total_all == 0 and total_stock > 0:
-            total_all = total_stock + sum(state_pipe.values())
+        # ALWAYS derive total_all (Stock + full Pipeline incl. Factory)
+        # from the per-state parts we just summed.  The workbook's own
+        # TOTAL column can't be trusted here: on the new layout it is
+        # STOCK + PORT + WATER + CY only (Factory sits in a separate
+        # column after TOTAL), so reading it directly would understate
+        # the Stock+Pipeline basis that feeds Merge_MOI(PPL).
+        total_all = total_stock + sum(state_pipe.values())
         total_3m    = _num(_cell(total_3m_col))
 
         # 12-month sales history per state.  Prefer the scanned per-
