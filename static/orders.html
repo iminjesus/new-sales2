@@ -243,6 +243,8 @@
   }
   .hdr .logo{font-weight:800;color:#e60012;font-size:20px;letter-spacing:.5px}
   .hdr .logo small{display:block;color:#333;font-weight:500;font-size:11px;letter-spacing:.5px}
+  .hdr .logo .logo-txt{display:block}
+  .hdr .logo .logo-txt small{display:block}
   .hdr .co{font-size:12px;color:#333;line-height:1.4}
   .hdr .co b{display:block;color:#111;margin-bottom:2px}
   .hdr .internal{
@@ -335,11 +337,11 @@
   /* order lines table */
   .lines-wrap{border:1px solid var(--border);border-top:none;background:#fff;overflow-x:auto;}
   table.lines{
-    /* min-width raised from 1400 → 1520 px so the widened Remark
-       column and the tighter No / X columns still fit without the
-       browser squeezing everything narrower on medium viewports.
-       .lines-wrap wraps this and horizontal-scrolls when needed. */
-    width:100%;border-collapse:collapse;font-size:12px;min-width:1520px;
+    /* min-width brought back down after the column-bucket trim so
+       a regular 1440-px laptop viewport shows the whole table
+       without horizontal scroll.  .lines-wrap still carries
+       overflow-x:auto for smaller windows. */
+    width:100%;border-collapse:collapse;font-size:12px;min-width:1360px;
   }
   table.lines thead th{
     background:var(--tbl-thead);color:#fff;font-weight:600;
@@ -410,15 +412,19 @@
     background:#fef9c3;color:#713f12;font-weight:700;text-align:right;
   }
   table.lines thead th.stock{background:#2f5f4a;color:#fff;font-size:11px;line-height:1.15}
-  table.lines thead th.narrow{width:60px}
-  /* Base DC% carries a two-decimal percentage ("52.00%") that
-     clipped inside the 60-px .narrow bucket — 82 px gives comfort
-     for both the header ("Base DC %") and the value. */
-  table.lines thead th.base-dc-hdr{width:82px;min-width:82px}
-  table.lines tbody td.base-dc-cell{min-width:82px}
-  table.lines thead th.mid{width:90px}
-  table.lines thead th.mcode{width:110px;min-width:110px}
-  table.lines thead th.wide{width:100px;min-width:100px}
+  /* Trimmed widths pass — the previous 60/90/110/100 bucket was
+     unnecessarily wide for the on-screen values.  Reducing every
+     bucket by ~10-15 px shortens the total row width so a normal
+     laptop viewport can show the whole table without horizontal
+     scroll, while every numeric value still has comfort room. */
+  table.lines thead th.narrow{width:54px}
+  /* Base DC% still wider than the other narrows because "52.00%"
+     is the longest common value plus a header of "Base DC %". */
+  table.lines thead th.base-dc-hdr{width:70px;min-width:70px}
+  table.lines tbody td.base-dc-cell{min-width:70px}
+  table.lines thead th.mid{width:78px}
+  table.lines thead th.mcode{width:92px;min-width:92px}
+  table.lines thead th.wide{width:88px;min-width:88px}
   /* Ensure the body cells under the M-Code and Size headers inherit
      min-widths so 7-digit material numbers and full sizes like
      "205/50R20" don't get clipped when the browser competes for
@@ -746,7 +752,15 @@
 
   <!-- ═══════════════ Header ═══════════════ -->
   <div class="hdr">
-    <div class="logo">HANKOOK<small>driving emotion</small></div>
+    <!-- Image logo consistent with the other Hankook pages
+         (claim_qr_card, claim_qr_bulk).  Falls back to the
+         text-based lockup when the image asset isn't served. -->
+    <div class="logo">
+      <img src="/static/img/hankook_logo.png" alt="HANKOOK"
+           style="max-height:36px;max-width:150px;object-fit:contain;display:block"
+           onerror="this.style.display='none'; this.nextElementSibling.style.display='block'">
+      <span class="logo-txt" style="display:none">HANKOOK<small>driving emotion</small></span>
+    </div>
     <div class="co">
       <b>Hankook Tyre Australia Pty Ltd</b>
       Suite 3, Level 3/5 Eden Park Dr, Macquarie Park NSW 2113<br>
@@ -3541,8 +3555,9 @@ async function hydrateSubmittedOrder(oid, editMode){
     /* Requester tag beside the Order Number.  Prefer the header
        payload's requester_email; fall back to submitted_by_email
        for older rows that predate the Requester field. */
-    const _req = (data.payload && data.payload.header && data.payload.header.requester_email)
-              || data.submitted_by_email || "";
+    const _reqRaw = (data.payload && data.payload.header && data.payload.header.requester_email)
+                 || data.submitted_by_email || "";
+    const _req = _shortRequester(_reqRaw);
     if (_oreq){
       if (_req){
         _oreq.textContent = ` · Requester : ${_req}`;
@@ -4033,6 +4048,16 @@ async function wireStatusPanel(order){
 }
 
 /* ────────────────────────── boot ────────────────────────── */
+/* Strip the hankooktyre.com.au suffix from any identity string so
+   the Requester field reads "jayden.bhang" instead of the noisy
+   full "jayden.bhang@hankooktyre.com.au".  Non-Hankook mail ids
+   are left intact — an external contractor's email still shows
+   in full so the reader can trace it. */
+function _shortRequester(s){
+  const t = String(s || "").trim();
+  const m = /^([^@\s]+)@hankooktyre\.com\.au$/i.exec(t);
+  return m ? m[1] : t;
+}
 async function seedRequester(){
   /* Requester = whoever is filling this SPRF.  Priority:
        1. CF-Access mail id (whoami.email)         — production
@@ -4043,6 +4068,10 @@ async function seedRequester(){
           Access isn't in front)
        4. Last-typed value cached in localStorage — so an editable
           form in dev / offline mode doesn't nag every reload
+     The final value goes through _shortRequester so a
+     "jayden.bhang@hankooktyre.com.au" identity displays as just
+     "jayden.bhang" — matches the user's rule "@hankooktyre.com.au
+     앞에 있는 부분만 가지고 Requester에 등록해 줄 것".
      The input is EDITABLE so the user can still type manually
      when none of the above yields anything usable. */
   const el = document.getElementById("requester_email");
@@ -4058,6 +4087,7 @@ async function seedRequester(){
   if (!seeded) {
     try { seeded = localStorage.getItem("sprf_requester") || ""; } catch(_e){}
   }
+  seeded = _shortRequester(seeded);
   if (seeded && !el.value) el.value = seeded;
   /* Remember what the user finally lands on so the NEXT new SPRF
      starts pre-filled.  Fires on both change and blur to cover

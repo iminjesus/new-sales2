@@ -206,6 +206,16 @@ const fmtQty   = v => (Number(v)||0).toLocaleString("en-AU");
    hours under hours across the whole table (a 2-hour gap renders as
    "     2h" — space in the days column, "2h" flush right in the
    hours column).  Tabular-nums keeps the digit widths uniform. */
+/* Strip a hankooktyre.com.au suffix so the Requester column reads
+   just the mail-id local-part ("jayden.bhang" instead of
+   "jayden.bhang@hankooktyre.com.au").  Foreign / external emails
+   pass through unchanged so their identity is still traceable. */
+function _shortRequester(s){
+  const t = String(s || "").trim();
+  const m = /^([^@\s]+)@hankooktyre\.com\.au$/i.exec(t);
+  return m ? m[1] : t;
+}
+
 function fmtElapsed(startStr, endStr){
   if (!startStr) return "—";
   const a = Date.parse(startStr.replace(" ", "T"));
@@ -363,7 +373,7 @@ function renderRows(){
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
-        <td><small style="color:#334155">${escapeHtml(r.requester_email || "—")}</small></td>
+        <td><small style="color:#334155">${escapeHtml(_shortRequester(r.requester_email) || "—")}</small></td>
         <td>${escapeHtml(r.submitted_by_bde || "—")}</td>
         <td class="name-cell"><b>${escapeHtml(r.sold_to_name || "—")}</b><small>${escapeHtml(r.sold_to || "")}</small></td>
         <td class="name-cell"><b>${escapeHtml(r.ship_to_name || "—")}</b><small>${escapeHtml(r.ship_to || "")}</small></td>
