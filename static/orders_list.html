@@ -144,9 +144,12 @@
         <thead>
           <tr>
             <th style="width:110px">Order #</th>
-            <th style="width:130px">Submitted</th>
             <!-- Requester ID — signed-in mail id of whoever filled
-                 the SPRF (may differ from the mapped BDE). -->
+                 the SPRF (may differ from the mapped BDE).  The
+                 "Submitted" timestamp column that used to sit here
+                 is gone; the same value now reads from the timeline
+                 block on the right (Requested → Approved → SAP
+                 Created → Elapsed) so nothing is repeated. -->
             <th style="width:170px" title="Signed-in user who filled the SPRF (from Cloudflare Access mail id).  May differ from the mapped BDE.">Requester</th>
             <th>BDE</th>
             <th>Sold-to</th>
@@ -168,7 +171,7 @@
                  flips SAP-entered.  Elapsed is computed on-the-fly
                  from Requested and Approved so nothing extra needs
                  to be stored on the row. -->
-            <th style="width:130px" title="When the BDE submitted this Order Request">Requested</th>
+            <th style="width:130px" title="When the BDE submitted this Order Request">Submitted</th>
             <th style="width:130px" title="When the first approver signed off (first-approver-wins)">Approved</th>
             <th style="width:130px" title="When Harry flipped SAP-entered to Y for this order">SAP Created</th>
             <th style="width:90px" class="num" title="Time from Requested to Approved, in days and hours">Elapsed<br>to&nbsp;Approval</th>
@@ -180,7 +183,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="23" class="empty">Loading…</td></tr>
+          <tr><td colspan="22" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -248,18 +251,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="23" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="22" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -273,7 +276,7 @@ function renderRows(){
   }) : _rowsCache;
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="23" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="22" class="empty">No orders match.</td></tr>`;
   } else {
     const meEmail = (_me.email || "").toLowerCase();
     const isAll   = (_me.role  || "").toUpperCase() === "ALL";
@@ -333,19 +336,25 @@ function renderRows(){
       // reader spots the gated orders at a glance.
       const totDcStyle = totDC >= 64 ? "color:#991b1b;font-weight:800" : "";
       const curDC = +r.current_dc_pct || 0;
-      /* Remark cell — one line per mod_log entry, oldest at the top
-         so the reader tracks the modification chain downward as new
-         edits happen.  Standard-pricing / never-edited orders read
-         "—".  Truncates each mail id at "@…" so the column stays
-         narrow without losing the audit trail. */
+      /* Remark cell — one line per SUBSEQUENT edit.  The creation
+         entry (action = "created" / "draft-created" / "draft-saved")
+         is filtered out: the initial submission timestamp already
+         lives in the Submitted column, so repeating it here as
+         "created" is noise.  Only real modifications (Brian /
+         Pamela / re-submitting BDE) accumulate downward. */
       const _mods = Array.isArray(r.mod_log) ? r.mod_log : [];
+      const _isEdit = a => {
+        const t = String(a || "").toLowerCase();
+        return t && t !== "created" && !t.startsWith("draft");
+      };
       const _short = s => {
         const t = String(s || "");
         const i = t.indexOf("@");
         return i > 0 ? t.slice(0, i) : t;
       };
-      const remarkCell = _mods.length
-        ? _mods.map(m => `<div style="font-size:10.5px;line-height:1.35">
+      const _edits = _mods.filter(m => _isEdit(m.action));
+      const remarkCell = _edits.length
+        ? _edits.map(m => `<div style="font-size:10.5px;line-height:1.35">
              <b style="color:#3730a3">${escapeHtml(_short(m.by || m.email))}</b>
              <span style="color:#64748b"> · ${escapeHtml(m.at || m.when || "")}</span>
              <span style="color:#94a3b8"> · ${escapeHtml(m.action || "edited")}</span>
@@ -354,7 +363,6 @@ function renderRows(){
       return `
       <tr onclick="location.href='/order?id=${r.id}'">
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
-        <td>${r.submitted_at || ""}</td>
         <td><small style="color:#334155">${escapeHtml(r.requester_email || "—")}</small></td>
         <td>${escapeHtml(r.submitted_by_bde || "—")}</td>
         <td class="name-cell"><b>${escapeHtml(r.sold_to_name || "—")}</b><small>${escapeHtml(r.sold_to || "")}</small></td>

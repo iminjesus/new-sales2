@@ -840,8 +840,9 @@
              SPRF may be someone else in the office / CS. -->
         <div class="lbl">Requester</div>
         <div class="val" style="grid-column: span 3">
-          <input id="requester_email" placeholder="—" readonly
-                 title="Signed-in user filling this SPRF (from Cloudflare Access).  Persists on the record."/>
+          <input id="requester_email"
+                 placeholder="your.email@hankooktyre.com.au"
+                 title="Signed-in user filling this SPRF.  Auto-filled from Cloudflare Access; if the header isn't set on this machine, type your mail id manually — it persists on the record."/>
         </div>
 
         <div class="lbl">HKAU BDE Name</div>
@@ -3567,15 +3568,36 @@ async function wireStatusPanel(order){
 
 /* ────────────────────────── boot ────────────────────────── */
 async function seedRequester(){
-  /* Requester = signed-in Cloudflare Access mail id.  Auto-fill so
-     the person filling the SPRF is stamped even if the mapped BDE
-     (derived from Ship-to) is a different name. */
+  /* Requester = whoever is filling this SPRF.  Priority:
+       1. CF-Access mail id (whoami.email) — production path
+       2. whoami.name (some deployments carry a friendly name even
+          without an email — Jayden.Bahng, e.g.)
+       3. Last-typed value cached in localStorage — so an editable
+          form in dev / offline mode doesn't nag every reload
+     The input is left EDITABLE so a user can still type in a mail
+     id manually when none of the above yields one. */
+  const el = document.getElementById("requester_email");
+  if (!el) return;
+  let seeded = "";
   try {
     const r = await fetch("/api/orders/whoami", {credentials: "same-origin"});
     const j = await r.json();
-    const el = document.getElementById("requester_email");
-    if (el && !el.value && j && j.email) el.value = j.email;
+    if (j && j.email) seeded = j.email;
+    else if (j && j.name) seeded = j.name;
   } catch(_e){}
+  if (!seeded) {
+    try { seeded = localStorage.getItem("sprf_requester") || ""; } catch(_e){}
+  }
+  if (seeded && !el.value) el.value = seeded;
+  /* Remember what the user finally lands on so the NEXT new SPRF
+     starts pre-filled.  Fires on both change and blur to cover
+     mouse-out and Enter alike. */
+  el.addEventListener("change", () => {
+    try { localStorage.setItem("sprf_requester", el.value || ""); } catch(_e){}
+  });
+  el.addEventListener("blur", () => {
+    try { localStorage.setItem("sprf_requester", el.value || ""); } catch(_e){}
+  });
 }
 (function boot(){
   seedDate();
