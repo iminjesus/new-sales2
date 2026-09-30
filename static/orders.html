@@ -2660,6 +2660,16 @@ function newRow(){
     tr.querySelector(`[data-col="${col}"]`)?.addEventListener("paste",
         e => handlePctPaste(e, tr, col));
   });
+  /* Pink negotiation block (Proposed Unit Price + Total Amount) —
+     multi-row / multi-column paste.  Single-column pastes cascade
+     down subsequent rows; a rectangular 2-column selection anchored
+     at Proposed Unit Price treats Total Amount as the truth and
+     back-solves the unit price + Additional Special DC% from it.
+     See handlePricePaste. */
+  ["proposed_price","total_amount"].forEach(col => {
+    tr.querySelector(`[data-col="${col}"]`)?.addEventListener("paste",
+        e => handlePricePaste(e, tr, col));
+  });
   /* On aged-locked rows, edits to MTH or Volume have to re-solve
      the chained add_dc so the row's Proposed Price still lands on
      the aged target (list × (1 − aging/100)).  We re-run the
@@ -3063,6 +3073,90 @@ function handlePctPaste(e, startRow, anchorCol){
   });
   /* Keep focus in the anchor cell so an accidental Enter after
      the paste doesn't wander into an adjacent field. */
+  startRow.querySelector(`[data-col="${anchorCol}"]`)?.focus();
+}
+
+/* Coerce a token to a positive price ($, commas tolerated).  Same
+   contract as _asPositiveNumber but pre-strips currency ornaments
+   so an Excel "Total Amount" cell copied with "$1,234.56" resolves
+   to 1234.56.  Non-numeric / blank / non-positive returns null so a
+   junk cell never overwrites a row's existing price. */
+function _asPrice(s){
+  const t = String(s || "").trim().replace(/[$,\s]/g, "");
+  if (!t || !/^-?\d+(?:\.\d+)?$/.test(t)) return null;
+  const n = parseFloat(t);
+  return (isFinite(n) && n > 0) ? n : null;
+}
+
+/* Pink negotiation block, left→right — anchor path for a rectangular
+   paste that starts at Proposed Unit Price and includes Total Amount
+   in the same clipboard selection. */
+const _PRICE_COL_ORDER = ["proposed_price", "total_amount"];
+
+/* Multi-row / multi-column paste for the pink negotiation block
+   (Proposed Unit Price + Total Amount).  Shapes handled:
+     • Single column anchored in Proposed Unit Price → each row's
+       proposed_price is set and Additional Special DC% back-solves
+       via reverseSolveAddDC.  Auto-adds blank rows at the tail
+       when the paste runs past the current row count.
+     • Single column anchored in Total Amount → each row's
+       total_amount is set and reverseSolveFromTotalAmt derives
+       the unit price + back-solves Additional Special DC%.
+     • Rectangular 2-column selection anchored in Proposed Unit
+       Price → per user rule TOTAL AMOUNT is the source of truth:
+       we take column 2 as the total and derive proposed_price via
+       reverseSolveFromTotalAmt (column 1 is ignored so the
+       computed unit price stays consistent with the total).
+   Aged-locked rows are respected — the read-only flag on
+   proposed_price / total_amount blocks the write silently. */
+function handlePricePaste(e, startRow, anchorCol){
+  const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+  const grid = _parsePastedGrid(raw);
+  if (!grid.length) return;
+  const isMultiCol = grid.some(r => r.length > 1);
+  /* Single-cell paste → let the native paste + existing input
+     handler on proposed_price / total_amount handle it (they run
+     reverseSolveAddDC / reverseSolveFromTotalAmt anyway). */
+  if (grid.length <= 1 && !isMultiCol) return;
+  e.preventDefault();
+  const body = $("#linesBody");
+  const startIdx = Array.from(body.querySelectorAll("tr")).indexOf(startRow);
+  if (startIdx < 0) return;
+  const anchorPos = _PRICE_COL_ORDER.indexOf(anchorCol);
+  grid.forEach((cells, ri) => {
+    let tr = body.querySelectorAll("tr")[startIdx + ri];
+    if (!tr) { addRow(); tr = body.lastElementChild; }
+    if (tr.classList.contains("aged-locked")) return;
+    /* Multi-column paste anchored at Proposed Unit Price — Total
+       Amount (column 2) is treated as the truth per the user rule.
+       We write the total, then reverseSolveFromTotalAmt derives
+       the unit price and back-solves Additional Special DC% so
+       the whole chain (add_dc, add_support, proposed_dc,
+       total_amount) lands on the pasted number. */
+    if (isMultiCol && anchorPos === 0 && cells.length >= 2) {
+      const total = _asPrice(cells[1]);
+      if (total == null) return;
+      const totEl = tr.querySelector('[data-col="total_amount"]');
+      if (!totEl || totEl.readOnly) return;
+      totEl.value = String(total);
+      reverseSolveFromTotalAmt(tr, String(total));
+      return;
+    }
+    /* Single-column path — first cell only, dispatched by anchor. */
+    const price = _asPrice(cells[0]);
+    if (price == null) return;
+    if (anchorCol === "total_amount") {
+      const totEl = tr.querySelector('[data-col="total_amount"]');
+      if (!totEl || totEl.readOnly) return;
+      totEl.value = String(price);
+      reverseSolveFromTotalAmt(tr, String(price));
+    } else {
+      const propEl = tr.querySelector('[data-col="proposed_price"]');
+      if (!propEl || propEl.readOnly) return;
+      propEl.value = String(price);
+      reverseSolveAddDC(tr, String(price));
+    }
+  });
   startRow.querySelector(`[data-col="${anchorCol}"]`)?.focus();
 }
 
