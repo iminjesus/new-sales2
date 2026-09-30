@@ -4342,6 +4342,13 @@ async function hydrateSubmittedOrder(oid, editMode){
   wireStatusPanel(data);
   // 6. Management-approval status band + Approve button.
   wireApprovalPanel(data, who);
+  /* 7. Belt-and-braces: an already-approved order stays LOCKED
+        regardless of who's viewing and which URL flags they used
+        to reach it.  Both Save/Update and Submit dim, the Edit
+        chip hides, and every input becomes read-only.  Even if
+        one of the branches above accidentally undimmed a button,
+        this last pass restores the frozen state. */
+  if (isApproved) lockFormForApproval();
 }
 
 // Approval-band renderer.  Shows Y/N chips for the two named approvers
@@ -4525,12 +4532,13 @@ async function _postApprove(order, who, srcBtn, note){
        now set, so wireToolbarApproveBtn hides it and the status
        ribbon at the bottom takes over the "who approved" note. */
     wireToolbarApproveBtn(document.getElementById("btnToolbarApprove"), order, who);
-    /* Post-approve navigation choice.  The banner + toolbar refresh
-       already show the "Approved" state on this page, so choosing
-       "Stay" leaves the reader on the SPRF with the note visible;
-       "Go to list" redirects and asks the list page to highlight
-       this row for one click. */
-    showPostApproveChoice(order.id);
+    /* Freeze Save / Update and Edit the moment the sign-off lands.
+       Once an order is approved the audit trail is locked, so we
+       mirror the hydrateSubmittedOrder isApproved branch here:
+       both Save/Update and Submit go dimmed with the same tooltip,
+       Edit hides, and the row inputs go read-only so a stray
+       keystroke doesn't touch a locked SPRF. */
+    lockFormForApproval();
   } catch(e){
     setStatus("Approve failed: "+e, "warn");
     if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
@@ -4541,6 +4549,41 @@ async function _postApprove(order, who, srcBtn, note){
    overlay in the HTML) so it stays close to the approval flow
    and doesn't add markup other pages ignore.  Auto-dismisses on
    Escape (= stay), Enter (= go to list), or the backdrop click. */
+/* Freeze the SPRF form after an approval is committed.  Called
+   from _postApprove and also from hydrateSubmittedOrder as a
+   belt-and-braces guard so an already-approved order that lands
+   in the page (any viewer, any URL flag) always shows Save /
+   Update dimmed alongside Submit, the Edit chip hidden, and every
+   input read-only.  Idempotent — safe to call twice. */
+function lockFormForApproval(){
+  const sBtn = document.getElementById("btnSubmit");
+  const dBtn = document.getElementById("btnSaveTemp");
+  const eBtn = document.getElementById("btnEdit");
+  const _dim = (btn, tip) => {
+    if (!btn) return;
+    btn.hidden   = false;
+    btn.disabled = true;
+    btn.title    = tip || "";
+    btn.style.opacity = "0.45";
+    btn.style.cursor  = "not-allowed";
+  };
+  _dim(sBtn, "This order is already approved — modifications are locked.");
+  _dim(dBtn, "This order is already approved — modifications are locked.");
+  if (eBtn) eBtn.hidden = true;
+  /* Re-lock every input on the form so a stray keystroke can't
+     silently modify a locked SPRF.  Skips the CS panel (Harry's
+     SAP toggle) since that flag is a separate audit trail. */
+  $$("input, textarea").forEach(el => {
+    if (el.closest(".cs-panel")) return;
+    el.readOnly = true;
+    el.tabIndex = -1;
+  });
+  const _add = document.getElementById("btnAddRow");
+  const _clr = document.getElementById("btnClear");
+  if (_add) _add.disabled = true;
+  if (_clr) _clr.disabled = true;
+}
+
 function showPostApproveChoice(oid){
   const bg = document.createElement("div");
   bg.style.cssText =
