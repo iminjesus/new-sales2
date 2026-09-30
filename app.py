@@ -4310,13 +4310,18 @@ def api_orders_submit():
             _temp_id = int(payload.get("orig_temp_id") or 0)
         except Exception:
             _temp_id = 0
-        if _temp_id > 0 and submitted_by_email:
+        if _temp_id > 0:
+            # Delete the T-prefixed draft the submit came from.  The
+            # needs_mgmt_approval='temp' + email match keeps this
+            # scoped to the draft's own creator; an empty email
+            # (local dev, unauthenticated) still matches an empty-
+            # email draft row, so the delete fires there too.
             cur.execute(
                 "DELETE FROM submitted_orders "
                 "WHERE id = %s "
                 "  AND needs_mgmt_approval = 'temp' "
-                "  AND LOWER(submitted_by_email) = %s",
-                (_temp_id, submitted_by_email),
+                "  AND LOWER(COALESCE(submitted_by_email, '')) = %s",
+                (_temp_id, submitted_by_email or ""),
             )
         conn.commit()
     except Exception as e:
@@ -4818,18 +4823,26 @@ def api_orders_update(oid):
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
-        # Ownership check — an ALL-role admin can edit on behalf of a
-        # BDE who's stuck (e.g., left the company); everyone else must
-        # be the original submitter OR a designated price editor
-        # (Brian / Pamela).  Price-editor edits also count as an
-        # implicit approval on the row (rule: editor becomes
-        # approver), so we track that intent here for the UPDATE
-        # branch below.
-        original = (row.get("submitted_by_email") or "").strip().lower()
-        role     = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
-        is_editor = who in PRICE_EDITOR_EMAILS
-        if who != original and role != "ALL" and not is_editor:
-            return jsonify({"error": "only the original submitter or a designated price editor can edit this order"}), 403
+        # Ownership check — a previously-submitted (real) order can be
+        # updated by:
+        #   • the ORIGINAL SUBMITTER (their own request, self-service)
+        #   • an ALL-role admin (rare, for stuck-BDE recovery)
+        #   • a PRICE EDITOR   (Brian / Pamela)  — price corrections
+        #   • an APPROVER      (Hayden / JJ / Kenny)                — MD / senior override
+        #   • Harry (CS)                                            — SAP-side prep
+        # Every path resets the approval slots below, so an updated
+        # order ALWAYS goes back through re-approval regardless of
+        # who touched it.
+        original     = (row.get("submitted_by_email") or "").strip().lower()
+        role         = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
+        is_editor    = who in PRICE_EDITOR_EMAILS
+        is_approver  = who in {e.lower() for e in MGMT_APPROVER_EMAILS}
+        is_harry     = who == HARRY_CS_EMAIL.lower()
+        if (who != original and role != "ALL"
+                and not is_editor and not is_approver and not is_harry):
+            return jsonify({"error":
+                "only the original submitter, an approver, a price editor "
+                "(Brian / Pamela), or Harry can update this order"}), 403
 
         def _num(v):
             try:
@@ -4868,17 +4881,27 @@ def api_orders_update(oid):
         needs_approval = "Y" if has_additional else "N"
         mgmt_reason    = (header.get("mgmt_reason") or "").strip()
         editor_name = PRICE_EDITOR_EMAILS.get(who, "")
-        if is_editor:
-            remark_tag = f"{editor_name} edited"
-            # Prepend, but only if the exact tag isn't already sitting
-            # at the front (avoid duplicating on repeated saves).
+        # Prepend a friendly "<who> updated" tag on mgmt_reason so
+        # readers see the last person to touch the row inline with
+        # the BDE's own justification.  Covers every allowed update
+        # path (editor / approver / Harry) — not just Brian/Pamela.
+        if is_editor or is_approver or is_harry:
+            if is_editor:
+                _who_label = editor_name
+            elif is_harry:
+                _who_label = "Harry"
+            else:
+                _who_label = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+                              MGMT_APPROVER_EMAILS[1].lower(): "JJ",
+                              MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(who, who)
+            remark_tag = f"{_who_label} updated"
             if not mgmt_reason.startswith(remark_tag):
                 mgmt_reason = (remark_tag + (" · " + mgmt_reason if mgmt_reason else "")).strip()
-            # Also drop the legacy "<name> corrected" prefix so old
-            # rows read "Brian edited" once they're saved again.
-            _legacy = f"{editor_name} corrected"
-            if _legacy in mgmt_reason:
-                mgmt_reason = mgmt_reason.replace(_legacy + " · ", "").replace(_legacy, "")
+            # Sweep out legacy "<name> corrected" / "<name> edited"
+            # prefixes so old rows read cleanly once re-saved.
+            for _old in (f"{_who_label} corrected", f"{_who_label} edited"):
+                if _old in mgmt_reason:
+                    mgmt_reason = mgmt_reason.replace(_old + " · ", "").replace(_old, "")
         # Modification log — carry the row's previous mod_log forward
         # AND append this edit.  Falls back to a fresh list when the
         # payload doesn't carry one (older row + first ever edit).
@@ -4887,11 +4910,23 @@ def api_orders_update(oid):
         except Exception:
             _existing_mods = []
         _now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        _label = editor_name if is_editor else (who or "unknown")
+        # Prefer a friendly display name when we can resolve one:
+        # PRICE_EDITOR nickname (Brian / Pamela) → CS (Harry) →
+        # Approver (Hayden / JJ / Kenny) → the raw mail id.
+        if is_editor:
+            _label = editor_name
+        elif is_harry:
+            _label = "Harry"
+        elif is_approver:
+            _label = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+                      MGMT_APPROVER_EMAILS[1].lower(): "JJ",
+                      MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(who, who)
+        else:
+            _label = who or "unknown"
         _existing_mods.append({
             "by":     _label,
             "at":     _now,
-            "action": "edited",
+            "action": "updated",
         })
         payload["mod_log"] = _existing_mods
         cur2 = conn.cursor()

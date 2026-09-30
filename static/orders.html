@@ -3272,13 +3272,31 @@ async function hydrateSubmittedOrder(oid, editMode){
     who = await (await fetch("/api/orders/whoami", {credentials: "same-origin"})).json();
   } catch {}
   const isTempDraft = (data.needs_mgmt_approval || "").toLowerCase() === "temp";
+  /* Update-permission set for a real (non-temp) SPRF:
+       • the original submitter                     (self-service BDE)
+       • an ALL-role admin                          (rare, stuck-BDE)
+       • a price editor (Brian / Pamela)            (price corrections)
+       • an approver   (Hayden / JJ / Kenny)        (MD / senior override)
+       • Harry (CS)                                 (SAP-side prep)
+     Every path re-routes through the approval flow — backend clears
+     the slots on save, and the top / bottom approval bars refresh
+     to Pending until Kenny / Hayden / JJ click Approve again. */
+  const isSubmitterMatch = !!(who.email && data.submitted_by_email
+      && who.email === data.submitted_by_email.toLowerCase());
+  const isAllowedUpdater = isSubmitterMatch
+      || who.role === "ALL"
+      || who.is_price_editor
+      || who.is_approver_a || who.is_approver_b || who.is_approver_c
+      || who.is_harry;
   const canEdit = (editMode || isTempDraft) && (
-    (who.email && data.submitted_by_email && who.email === data.submitted_by_email.toLowerCase()) ||
-    who.role === "ALL"
+    /* Temp drafts stay private to the creator (or ALL) — approvers
+       shouldn't be able to fiddle with a half-filled draft.  Real
+       orders open up to the full updater set above. */
+    isTempDraft ? (isSubmitterMatch || who.role === "ALL") : isAllowedUpdater
   );
 
   if (canEdit){
-    // Unlock inputs; swap Submit → Save changes; add a Cancel that
+    // Unlock inputs; swap Submit → Update; add a Cancel that
     // routes back to the read-only view.
     $("#btnAddRow").disabled = false;
     $("#btnClear").disabled  = false;
@@ -3293,19 +3311,21 @@ async function hydrateSubmittedOrder(oid, editMode){
       delete sBtn.dataset.mode;
       delete sBtn.dataset.oid;
     } else {
-      sBtn.textContent = "Save changes";
+      /* Real submitted order → single "Update" button.  Save-as-
+         Draft doesn't belong here (nothing to draft any more), so
+         the draft button hides.  Update always resets the approval
+         slots server-side so the change goes back through approval. */
+      sBtn.textContent = "Update";
       sBtn.dataset.mode = "edit";
       sBtn.dataset.oid  = String(data.id);
-      /* Editing an already-submitted order — Save-as-Draft doesn't
-         belong here (there's no draft to save), so hide the button. */
       const draftBtn = $("#btnSaveTemp");
       if (draftBtn) draftBtn.hidden = true;
     }
     // recalcRow + updateTotals already ran above (unconditional
     // hydrate pass) so every tfoot cell is already painted.
     const label = isTempDraft
-      ? `Editing saved draft <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at || ""} · click Submit to file for approval`
-      : `Editing submitted order <b>#${data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} · Status <b>${data.status_sap}</b> (will reset to N on save)`;
+      ? `Editing saved draft <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at || ""} · Submit files it for approval and deletes this draft`
+      : `Updating submitted order <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} — Update resets approval to Pending and SAP flag to N`;
     $("#status").innerHTML = label;
   } else {
     // Read-only view — lock every input, hide Submit, and let Harry
@@ -3322,14 +3342,14 @@ async function hydrateSubmittedOrder(oid, editMode){
        a read-only view has nothing new to save. */
     const draftBtn = $("#btnSaveTemp");
     if (draftBtn) draftBtn.hidden = true;
-    // Offer an Edit chip when the viewer IS the submitter (or ALL) —
-    // one click flips into edit mode with the same order id.
-    const isSubmitter = (who.email && data.submitted_by_email &&
-                         who.email === data.submitted_by_email.toLowerCase());
-    if (isSubmitter || who.role === "ALL"){
+    /* Update chip — offered to every user in the update permission
+       set (original submitter, ALL admin, price editor, approver,
+       Harry).  Clicking reloads the page in edit mode so the same
+       hydrate flow takes them through the canEdit branch above. */
+    if (isAllowedUpdater){
       const editBtn = document.createElement("button");
       editBtn.className   = "primary";
-      editBtn.textContent = "Edit";
+      editBtn.textContent = "Update";
       editBtn.style.background = "#f59e0b";
       editBtn.style.borderColor = "#b45309";
       editBtn.addEventListener("click", () => {
@@ -3474,9 +3494,12 @@ function wireBottomApproveBar(order, who){
   });
 }
 
-// Update an existing submitted order — reuses serializeOrder().  Only
-// the original submitter (or ALL-role) can actually persist; a 403
-// bubbles up as a friendly status message.
+// Update an existing submitted order — reuses serializeOrder().  The
+// backend accepts saves from the original submitter, an ALL admin, a
+// price editor (Brian / Pamela), an approver (Hayden / JJ / Kenny),
+// or Harry; any other identity gets a 403 that bubbles up as a
+// friendly status message.  Every update resets the approval slots
+// server-side so the modified order goes back through approval.
 async function saveEditedOrder(oid){
   const payload = serializeOrder();
   if (!payload.header.sold_to){
@@ -3499,7 +3522,7 @@ async function saveEditedOrder(oid){
     return;
   }
   const btn = $("#btnSubmit");
-  btn.disabled = true; btn.textContent = "Saving…";
+  btn.disabled = true; btn.textContent = "Updating…";
   try {
     const r = await fetch(`/api/orders/detail/${oid}/update`, {
       method: "POST", credentials: "same-origin",
@@ -3508,15 +3531,15 @@ async function saveEditedOrder(oid){
     });
     const j = await r.json();
     if (!r.ok || !j.ok){
-      setStatus(`Save failed: ${j.error || r.statusText}`, "warn");
-      btn.disabled = false; btn.textContent = "Save changes"; return;
+      setStatus(`Update failed: ${j.error || r.statusText}`, "warn");
+      btn.disabled = false; btn.textContent = "Update"; return;
     }
-    btn.textContent = "Saved";
-    setStatus(`Order <b>#${oid}</b> updated — Harry has been re-notified and SAP flag reset to N.`, "ok");
+    btn.textContent = "Updated";
+    setStatus(`Order <b>#${oid}</b> updated — approval reset to Pending, Harry re-notified, SAP flag back to N.`, "ok");
     setTimeout(() => { location.href = "/orders_list"; }, 1400);
   } catch(e){
-    setStatus("Save failed: " + e, "warn");
-    btn.disabled = false; btn.textContent = "Save changes";
+    setStatus("Update failed: " + e, "warn");
+    btn.disabled = false; btn.textContent = "Update";
   }
 }
 
