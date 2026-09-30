@@ -828,8 +828,27 @@
 
         <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:flex-start">Sales Person Details / Price Discount Request Justification :</div>
 
+        <!-- Requester = whoever is actually filling this form in
+             (their signed-in mail id).  Shown BEFORE BDE because the
+             mapped BDE follows Ship-to but the person requesting the
+             SPRF may be someone else in the office / CS. -->
+        <div class="lbl">Requester</div>
+        <div class="val" style="grid-column: span 3">
+          <input id="requester_email" placeholder="—" readonly
+                 title="Signed-in user filling this SPRF (from Cloudflare Access).  Persists on the record."/>
+        </div>
+
         <div class="lbl">HKAU BDE Name</div>
         <div class="val" style="grid-column: span 3"><input id="bde_name" placeholder=""/></div>
+
+        <!-- Modification log — reveals only after at least one edit.
+             Each modification appends "<email> · <YYYY-MM-DD HH:MM>"
+             so the whole audit trail persists on the order. -->
+        <div class="lbl" id="modLogLbl" hidden>Modified by</div>
+        <div class="val" id="modLogWrap" style="grid-column: span 3" hidden>
+          <div id="modLogList"
+               style="font-size:11.5px;color:#334155;line-height:1.55;padding:2px 4px"></div>
+        </div>
 
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
@@ -2808,6 +2827,9 @@ const HEADER_FIELDS = [
   "sold_to_name", "ship_to_name", "ship_to_address",
   "phone_email", "mobile",
   "po_number", "doc_date", "bde_name",
+  /* Requester = the signed-in user actually filling the SPRF.
+     Auto-populated from /api/orders/whoami on page load. */
+  "requester_email",
   "special_instruction", "mgmt_reason", "ship_to_state",
   // Rebateable Y/N — captured via the yes/no cells and normalised into
   // a single top-level "rebateable" field on the payload below.
@@ -3158,6 +3180,29 @@ async function hydrateSubmittedOrder(oid, editMode){
     _oval.textContent = _no;
     _oribbon.hidden = false;
   }
+  /* Modification log — the backend appends every editor's email +
+     timestamp to `mod_log` (a JSON array on submitted_orders /
+     payload).  Render the entries so a viewer sees the full audit
+     trail without needing to open the DB. */
+  const _modList = (data.mod_log || (p && p.mod_log) || []);
+  const _modLbl  = document.getElementById("modLogLbl");
+  const _modWrap = document.getElementById("modLogWrap");
+  const _modEl   = document.getElementById("modLogList");
+  if (_modLbl && _modWrap && _modEl){
+    const _esc = s => String(s || "").replace(/[&<>"']/g,
+      ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+    if (Array.isArray(_modList) && _modList.length){
+      _modEl.innerHTML = _modList.map(m =>
+        `<div>• <b>${_esc(m.by || m.email || "—")}</b>` +
+        `<span style="color:#64748b"> · ${_esc(m.at || m.when || "")}</span></div>`
+      ).join("");
+      _modLbl.hidden = false;
+      _modWrap.hidden = false;
+    } else {
+      _modLbl.hidden = true;
+      _modWrap.hidden = true;
+    }
+  }
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
     const el = $("#"+k); if (el) el.value = v || "";
@@ -3500,8 +3545,20 @@ async function wireStatusPanel(order){
 }
 
 /* ────────────────────────── boot ────────────────────────── */
+async function seedRequester(){
+  /* Requester = signed-in Cloudflare Access mail id.  Auto-fill so
+     the person filling the SPRF is stamped even if the mapped BDE
+     (derived from Ship-to) is a different name. */
+  try {
+    const r = await fetch("/api/orders/whoami", {credentials: "same-origin"});
+    const j = await r.json();
+    const el = document.getElementById("requester_email");
+    if (el && !el.value && j && j.email) el.value = j.email;
+  } catch(_e){}
+}
 (function boot(){
   seedDate();
+  seedRequester();
   const q   = new URLSearchParams(location.search);
   const oid = q.get("id");
   const editMode = q.get("edit") === "1";

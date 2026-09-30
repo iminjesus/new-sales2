@@ -4137,12 +4137,13 @@ def _submitted_order_email_html(oid, order, base_url):
              the Submitted-Orders table (Order # is in the banner
              above; Sold-to lives there too so it isn't repeated). -->
         <div style="line-height:1.8">
-          {_chip("Order #",  order_no)}
-          {_chip("Requested",order.get("submitted_at") or "")}
-          {_chip("BDE",      header.get("bde_name") or "")}
-          {_chip("Ship-to",  header.get("ship_to_name") or "")}
-          {_chip("State",    header.get("state") or "")}
-          {_chip("PO",       header.get("po_number") or "—")}
+          {_chip("Order #",   order_no)}
+          {_chip("Requested", order.get("submitted_at") or "")}
+          {_chip("Requester", header.get("requester_email") or "")}
+          {_chip("BDE",       header.get("bde_name") or "")}
+          {_chip("Ship-to",   header.get("ship_to_name") or "")}
+          {_chip("State",     header.get("state") or "")}
+          {_chip("PO",        header.get("po_number") or "—")}
         </div>
         <!-- Row 2 — the money block: everything a reviewer needs to
              judge scale + how deep the discount is.  Cascade reads
@@ -4213,6 +4214,23 @@ def api_orders_submit():
     # customer master), fall back to the Cloudflare-injected email.
     submitted_by_bde   = (header.get("bde_name") or "").strip()
     submitted_by_email = (_bde_from_request() or "").strip().lower()
+    # Requester = whoever is actually filling in the SPRF (their
+    # Cloudflare mail id).  The BDE follows Ship-to and may differ.
+    # Stamp both on the header so a viewer can see who requested
+    # AND who the mapped BDE is without cross-referencing anything.
+    requester_email = (header.get("requester_email") or submitted_by_email or "").strip().lower()
+    header["requester_email"] = requester_email
+    payload["header"] = header
+    # Seed the modification log at creation time with the Requester's
+    # mail id + "created" timestamp so the audit trail starts from
+    # submission, not just from the first edit.  Every later save
+    # (api_orders_update) appends another entry.
+    _now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload["mod_log"] = [{
+        "by":     requester_email or submitted_by_bde or "unknown",
+        "at":     _now,
+        "action": "created",
+    }]
 
     def _num(v):
         try:
@@ -4371,6 +4389,12 @@ def api_orders_save_temp():
     lines   = payload.get("lines")  or []
     submitted_by_bde   = (header.get("bde_name") or "").strip()
     submitted_by_email = (_bde_from_request() or "").strip().lower()
+    # Requester stamp — even on drafts, remember who was actually
+    # filling this SPRF so the audit trail persists from the very
+    # first save.
+    requester_email = (header.get("requester_email") or submitted_by_email or "").strip().lower()
+    header["requester_email"] = requester_email
+    payload["header"] = header
     def _num(v):
         try:
             s = str(v or "0").replace(",", "").replace("$", "").replace("%", "").strip()
@@ -4383,6 +4407,22 @@ def api_orders_save_temp():
 
     try:  existing_id = int(payload.get("id") or 0)
     except Exception: existing_id = 0
+
+    # Modification log — reuse the incoming list (updates in place)
+    # or seed a fresh one when this is the very first save of a
+    # brand-new draft.  Always append the current save so a draft
+    # that gets edited a dozen times has a complete audit trail.
+    try:
+        _mods = list((payload.get("mod_log") or []))
+    except Exception:
+        _mods = []
+    _now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _mods.append({
+        "by":     requester_email or submitted_by_bde or "unknown",
+        "at":     _now,
+        "action": "draft-saved" if existing_id else "draft-created",
+    })
+    payload["mod_log"] = _mods
 
     conn = get_connection(); cur = conn.cursor()
     try:
@@ -4693,6 +4733,9 @@ def api_orders_detail(oid):
             row["payload"] = _json.loads(row.pop("payload_json") or "{}")
         except Exception:
             row["payload"] = {}
+        # Surface the modification log at the top level so the
+        # front-end doesn't have to reach into payload.mod_log.
+        row["mod_log"] = (row["payload"].get("mod_log") or []) if isinstance(row.get("payload"), dict) else []
         return jsonify(row)
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -4826,6 +4869,21 @@ def api_orders_update(oid):
             _legacy = f"{editor_name} corrected"
             if _legacy in mgmt_reason:
                 mgmt_reason = mgmt_reason.replace(_legacy + " · ", "").replace(_legacy, "")
+        # Modification log — carry the row's previous mod_log forward
+        # AND append this edit.  Falls back to a fresh list when the
+        # payload doesn't carry one (older row + first ever edit).
+        try:
+            _existing_mods = list((payload.get("mod_log") or []))
+        except Exception:
+            _existing_mods = []
+        _now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _label = editor_name if is_editor else (who or "unknown")
+        _existing_mods.append({
+            "by":     _label,
+            "at":     _now,
+            "action": "edited",
+        })
+        payload["mod_log"] = _existing_mods
         cur2 = conn.cursor()
         try:
             cur2.execute(
