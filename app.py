@@ -5235,11 +5235,16 @@ def api_orders_whoami():
     who = (_bde_from_request() or "").strip().lower()
     name, state, role = _EMAIL_TO_DIR.get(who, (None, None, None))
     # Best-effort local identity for the Requester auto-fill (never
-    # feeds role checks).
+    # feeds role checks).  Frontend also gets to volunteer an
+    # explicit identity via the X-Requester-Email header (read
+    # from localStorage in seedRequester), which lets a
+    # non-CF-fronted deployment persist a signed-in user across
+    # reloads without any additional server plumbing.
     local_user = ""
     try:
         local_user = (
-            request.headers.get("X-Forwarded-User")
+            request.headers.get("X-Requester-Email")
+            or request.headers.get("X-Forwarded-User")
             or request.headers.get("X-Auth-Request-Email")
             or request.environ.get("REMOTE_USER")
             or os.environ.get("HKAU_REQUESTER_EMAIL")

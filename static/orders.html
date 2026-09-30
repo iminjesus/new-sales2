@@ -1005,8 +1005,8 @@
          real order and deletes the temp). -->
     <button class="primary" id="btnSaveTemp"
             style="background:#0f766e;border-color:#0d6a63"
-            title="Save as a draft — visible only to you.  Come back later, open the draft from Submitted Orders, and hit Submit to file it as a real SPRF.">
-      💾 Save as Draft
+            title="Save this SPRF.  On a new / temp draft it stores as a T-prefixed draft only you can see.  On an already-submitted order it acts as an Update — keeps the order number, resets approval to Pending.">
+      💾 Save / Update
     </button>
     <button class="primary submit-btn" id="btnSubmit">Submit</button>
   </div>
@@ -2522,6 +2522,14 @@ function newRow(){
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => recalcRow(tr));
   });
+  /* Qty column also accepts a multi-line paste: a BDE copies a
+     column of quantities out of Excel and pastes into the first
+     Qty cell.  Same split rules as the M-Code paste — newlines,
+     tabs, commas or multiple-whitespace split into tokens; each
+     token lands on its own row; new blank rows are added when the
+     paste runs past the current row count. */
+  tr.querySelector('[data-col="qty"]')?.addEventListener("paste",
+      e => handleQtyPaste(e, tr));
   /* On aged-locked rows, edits to MTH or Volume have to re-solve
      the chained add_dc so the row's Proposed Price still lands on
      the aged target (list × (1 − aging/100)).  We re-run the
@@ -2843,6 +2851,50 @@ function handleMcodePaste(e, startRow){
   /* Keep focus on the starting row's M-Code so the user's next
      action lands somewhere obvious. */
   startRow.querySelector('[data-col="m_code"]')?.focus();
+}
+
+/* Numeric splitter for Qty pastes — accepts newlines, tabs,
+   semicolons, multi-whitespace and single-space as separators.
+   Thousand-separator commas ("1,000") are stripped BEFORE the
+   split so they aren't confused for value separators.  Keeps
+   positive numbers only (0 or blank would strip a row's qty,
+   which is never what a column-of-numbers paste means). */
+function _splitPastedQtys(text){
+  const normalized = String(text || "")
+    .replace(/(\d),(?=\d)/g, "$1");   // 1,000,000 → 1000000
+  return normalized
+    .split(/[\r\n\t,;]+|\s{2,}| /)
+    .map(t => t.trim())
+    .filter(t => t && /^\d+(?:\.\d+)?$/.test(t) && parseFloat(t) > 0);
+}
+
+/* Paste-into-Qty handler: distribute each pasted number to its own
+   row, auto-add blank rows when the paste is longer than the tail.
+   Fires recalcRow after each write so Total Amount / Current Order
+   Amount / Trueblu TTL all refresh at once. */
+function handleQtyPaste(e, startRow){
+  const raw = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+  const tokens = _splitPastedQtys(raw);
+  if (tokens.length <= 1) return;   // single-value paste stays native
+  e.preventDefault();
+  const body = $("#linesBody");
+  const rows = Array.from(body.querySelectorAll("tr"));
+  const startIdx = rows.indexOf(startRow);
+  if (startIdx < 0) return;
+  tokens.forEach((q, i) => {
+    let tr = body.querySelectorAll("tr")[startIdx + i];
+    if (!tr) { addRow(); tr = body.lastElementChild; }
+    const inp = tr.querySelector('[data-col="qty"]');
+    if (!inp) return;
+    inp.value = q;
+    recalcRow(tr);
+    /* Qty crossing a min-qty threshold in the customer promo table
+       has to re-run the promo lookup on rows with a material set. */
+    if (tr.querySelector('[data-col="m_code"]')?.value) {
+      applyAdditionalDCToRow(tr);
+    }
+  });
+  startRow.querySelector('[data-col="qty"]')?.focus();
 }
 
 /* ────────────────────────── customer field wire-up ────────────────────────── */
@@ -3201,7 +3253,7 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
     const j = await r.json();
     if (!r.ok || !j.ok){
       setStatus(`Save failed: ${j.error || r.statusText}`, "warn");
-      btn.disabled = false; btn.textContent = "💾 Save as Draft"; return;
+      btn.disabled = false; btn.textContent = "💾 Save / Update"; return;
     }
     if (isEditingReal){
       /* Update path — approvals were reset server-side.  Announce
@@ -3216,11 +3268,11 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
       if (submitBtn) submitBtn.dataset.tempOid = String(j.id);
       btn.textContent = `Saved · ${j.order_no || "#" + j.id}`;
       setStatus(`Draft <b>${j.order_no || "#" + j.id}</b> saved — visible only to you until you Submit.`, "ok");
-      setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save as Draft"; }, 1500);
+      setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save / Update"; }, 1500);
     }
   } catch(e){
     setStatus("Save failed: " + e, "warn");
-    btn.disabled = false; btn.textContent = "💾 Save as Draft";
+    btn.disabled = false; btn.textContent = "💾 Save / Update";
   }
 });
 
@@ -3335,8 +3387,32 @@ async function hydrateSubmittedOrder(oid, editMode){
   const t = p.totals || {};
   $("#sovd_ttl").value          = t.sovd_qty       || "0";
   if (t.freight_flag) $("#freightFlag").value = t.freight_flag;
+  /* Re-establish the customer's SOVD eligibility BEFORE the recalc
+     pass so applySOVDRatesToRows (called from updateTotals) can
+     correctly count Trueblu TTL for hydrated rows.  Without this
+     seeding, window._customerHasSOVD stays false and the Trueblu
+     TTL input reads "0" even when the payload was saved with a
+     real Trueblu count and every HK-PCLT row already shows the
+     18 % ladder rate.  fillBaseDC (a) writes _orderSoldTo,
+     (b) sets _customerHasSOVD from /api/orders/customer_has_sovd,
+     and (c) then triggers its own applySOVDRatesToRows pass. */
+  const _hyd_sold = (p.header && p.header.sold_to) || data.sold_to || "";
+  if (_hyd_sold) {
+    await fillBaseDC(_hyd_sold);
+  }
   $$("#linesBody tr").forEach(tr => recalcRow(tr));
   updateTotals();
+  /* Belt-and-braces — if the recompute above landed on a real
+     Trueblu TTL (fillBaseDC → applySOVDRatesToRows already ran),
+     leave it alone.  If it ended up at 0 while the persisted
+     snapshot said otherwise (e.g. customer_has_sovd endpoint is
+     unreachable in offline dev), fall back to the saved value so
+     the reader still sees what the SPRF was submitted with. */
+  const _liveTtl = toNum($("#sovd_ttl").value);
+  const _savedTtl = toNum(t.sovd_qty);
+  if (_liveTtl <= 0 && _savedTtl > 0) {
+    $("#sovd_ttl").value = String(_savedTtl);
+  }
 
   // 4. Decide view vs edit mode.  Edit needs both the URL flag and
   // the current user to be the original submitter (or ALL-role).
