@@ -280,35 +280,58 @@ def _scan_stock_header(ws, header_row=None):
             i += 5
             continue
 
-        # State-stock blocks: pattern is "After Sto | Σ 3M Ave |
-        # <STATE>.STOCK | PORT | WATER | FAC | TOTAL" (7 cols per
-        # state, then a 5-col national block after WA).
+        # State-stock blocks: pattern is "<STATE>.STOCK | PORT | WATER
+        # | [CY] | FAC | TOTAL" — CY is optional so the scanner walks
+        # the next few cells and picks up whichever labels appear.
+        # Older workbooks omit CY (5-col block); the new template
+        # inserts CY between WATER and FAC (6-col block).
         if h in ("N.STOCK", "Q.STOCK", "V.STOCK", "W.STOCK"):
             st = {"N.STOCK": "NSW", "Q.STOCK": "QLD",
                   "V.STOCK": "VIC", "W.STOCK": "WA"}[h]
             cmap.setdefault("STATE_STOCK", {})[st] = col
-            # PORT/WATER/FAC follow in the next three cells
-            if norm(header[i+1]).upper() == "PORT":
-                cmap.setdefault("STATE_PORT",  {})[st] = i + 2
-            if norm(header[i+2]).upper() == "WATER":
-                cmap.setdefault("STATE_WATER", {})[st] = i + 3
-            if norm(header[i+3]).upper() == "FAC":
-                cmap.setdefault("STATE_FAC",   {})[st] = i + 4
-            i += 5   # jump past After Sto / Σ 3M Ave / STOCK / PORT / WATER / FAC / TOTAL
+            # Walk forward until we hit the block's TOTAL cell; along
+            # the way, grab PORT/WATER/CY/FAC wherever they sit.
+            block_end = i + 4   # sane fallback for 5-col blocks
+            for k in range(1, 8):
+                if i + k >= len(header):
+                    break
+                h2 = norm(header[i+k]).upper()
+                if h2 == "PORT":
+                    cmap.setdefault("STATE_PORT",  {})[st] = i + k + 1
+                elif h2 == "WATER":
+                    cmap.setdefault("STATE_WATER", {})[st] = i + k + 1
+                elif h2 == "CY":
+                    cmap.setdefault("STATE_CY",    {})[st] = i + k + 1
+                elif h2 == "FAC":
+                    cmap.setdefault("STATE_FAC",   {})[st] = i + k + 1
+                elif h2 == "TOTAL":
+                    block_end = i + k
+                    break
+            i = block_end + 1
             continue
 
-        # National total block: STOCK / PORT / WATER / FAC / TOTAL
+        # National total block: STOCK | PORT | WATER | [CY] | FAC |
+        # TOTAL — same CY-optional layout as the per-state blocks.
         if h == "STOCK" and "TOTAL_STOCK" not in cmap:
             cmap["TOTAL_STOCK"] = col
-            if norm(header[i+1]).upper() == "PORT":
-                cmap["TOTAL_PORT"]  = i + 2
-            if norm(header[i+2]).upper() == "WATER":
-                cmap["TOTAL_WATER"] = i + 3
-            if norm(header[i+3]).upper() == "FAC":
-                cmap["TOTAL_FAC"]   = i + 4
-            if norm(header[i+4]).upper() == "TOTAL":
-                cmap["TOTAL_ALL"]   = i + 5
-            i += 5
+            block_end = i + 4
+            for k in range(1, 8):
+                if i + k >= len(header):
+                    break
+                h2 = norm(header[i+k]).upper()
+                if h2 == "PORT":
+                    cmap["TOTAL_PORT"]  = i + k + 1
+                elif h2 == "WATER":
+                    cmap["TOTAL_WATER"] = i + k + 1
+                elif h2 == "CY":
+                    cmap["TOTAL_CY"]    = i + k + 1
+                elif h2 == "FAC":
+                    cmap["TOTAL_FAC"]   = i + k + 1
+                elif h2 == "TOTAL":
+                    cmap["TOTAL_ALL"]   = i + k + 1
+                    block_end = i + k
+                    break
+            i = block_end + 1
             continue
 
         i += 1
@@ -1072,6 +1095,11 @@ def _load_stock_data_uncached(path, mtime):
     state_stock_cols = cmap.get("STATE_STOCK") or COL_STATE_STOCK
     state_port_cols  = cmap.get("STATE_PORT")  or {s: COL_STATE_PIPELINE[s][0] for s in STATES}
     state_water_cols = cmap.get("STATE_WATER") or {s: COL_STATE_PIPELINE[s][1] for s in STATES}
+    # CY is a separate warehousing bucket the newer workbook adds
+    # between WATER and FAC.  Older workbooks omit the column
+    # entirely; when the header scan didn't find it, keep the map
+    # empty so every row's CY reads as 0 (no misattribution).
+    state_cy_cols    = cmap.get("STATE_CY")    or {}
     state_fac_cols   = cmap.get("STATE_FAC")   or {s: COL_STATE_PIPELINE[s][2] for s in STATES}
 
     state_3m_cols    = (cmap.get("PERIOD_3M")  or {}).get if isinstance(cmap.get("PERIOD_3M"), dict) else None
@@ -1187,6 +1215,10 @@ def _load_stock_data_uncached(path, mtime):
             s: {
                 "port":  _num(_cell(state_port_cols[s])),
                 "water": _num(_cell(state_water_cols[s])),
+                # CY reads as 0 on older workbooks that don't carry
+                # the column — state_cy_cols is empty there and the
+                # .get() short-circuits to None → _cell(None) → 0.
+                "cy":    _num(_cell(state_cy_cols.get(s))),
                 "fac":   _num(_cell(state_fac_cols[s])),
             } for s in STATES
         }
@@ -1299,7 +1331,7 @@ def _load_stock_data_uncached(path, mtime):
                 "row_pattern":     row_pattern,
                 "row_ope":         row_ope,
                 "state_stock":     {s: 0.0 for s in STATES},
-                "state_pipe_parts":{s: {"port":0.0,"water":0.0,"fac":0.0} for s in STATES},
+                "state_pipe_parts":{s: {"port":0.0,"water":0.0,"cy":0.0,"fac":0.0} for s in STATES},
                 "state_pipe":      {s: 0.0 for s in STATES},
                 "state_3m":        {s: 0.0 for s in STATES},
                 "total_stock":     0.0,
@@ -1331,7 +1363,7 @@ def _load_stock_data_uncached(path, mtime):
             agg["state_stock"][s] += state_stock[s]
             agg["state_pipe"][s]  += state_pipe[s]
             agg["state_3m"][s]    += state_3m[s]
-            for leg in ("port","water","fac"):
+            for leg in ("port","water","cy","fac"):
                 agg["state_pipe_parts"][s][leg] += state_pipe_parts[s][leg]
         agg["total_stock"] += total_stock
         agg["total_all"]   += total_all
@@ -1445,7 +1477,7 @@ def _load_stock_data_uncached(path, mtime):
             "row_pattern":     src.get("row_pattern", ""),
             "row_ope":         src.get("row_ope", ""),
             "state_stock":     {s: 0.0 for s in STATES},
-            "state_pipe_parts":{s: {"port":0.0,"water":0.0,"fac":0.0} for s in STATES},
+            "state_pipe_parts":{s: {"port":0.0,"water":0.0,"cy":0.0,"fac":0.0} for s in STATES},
             "state_pipe":      {s: 0.0 for s in STATES},
             "state_3m":        {s: 0.0 for s in STATES},
             "total_stock":     0.0, "total_all":     0.0,
@@ -2917,7 +2949,7 @@ window.addEventListener("pageshow", () => {
         <div class="tab" data-tab="no_move">🟣 No move <span class="n" id="n-nom">0</span></div>
         <div class="tab" data-tab="total">🔵 Total <span class="n" id="n-tot">0</span></div>
         <button class="icon-btn" style="margin-left:auto" onclick="togglePipeline()"
-                id="btn-pipeline" title="Show / hide per-state Stock · Port · Water · Factory (plus National Total)">
+                id="btn-pipeline" title="Show / hide per-state Stock · Port · Water · CY · Factory (plus National Total)">
           ▶ Pipeline detail
         </button>
       </div>
@@ -2961,13 +2993,13 @@ window.addEventListener("pageshow", () => {
       <div>
         <div class="stat">Stock on hand</div>
         <div class="figv" id="m-stock">—</div>
-        <div class="stat">Pipeline incoming (Port + Water + Factory)</div>
+        <div class="stat">Pipeline incoming (Port + Water + CY + Factory)</div>
         <div class="figv" id="m-pipe">—</div>
         <div class="stat">3-month avg demand / month</div>
         <div class="figv" id="m-3m">—</div>
         <div class="stat">MOI — stock on hand only</div>
         <div class="figv" id="m-moi">—</div>
-        <div class="stat" title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg)">Merge_MOI(PPL) — (Stock+Pipeline) ÷ max of four period averages</div>
+        <div class="stat" title="(Stock + Port + Water + CY + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg)">Merge_MOI(PPL) — (Stock+Pipeline) ÷ max of four period averages</div>
         <div class="figv" id="m-moiplus">—</div>
       </div>
       <div>
@@ -2976,7 +3008,7 @@ window.addEventListener("pageshow", () => {
         <div class="stat" style="margin-top:14px">State breakdown</div>
         <table class="pipe-tbl">
           <thead><tr><th>State</th><th>Stock</th><th>Port</th><th>Water</th>
-              <th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +PPL</th></tr></thead>
+              <th>CY</th><th>Factory</th><th>Pipeline</th><th>3M Avg</th><th>MOI</th><th>MOI +PPL</th></tr></thead>
           <tbody id="m-pipe-tbl"></tbody>
         </table>
 
@@ -3310,7 +3342,7 @@ function currentSetDedupedByMerge() {
                 is_suv: r.is_suv, sku_status: r.sku_status,
                 state_stock:      {NSW:0,QLD:0,VIC:0,WA:0},
                 state_pipeline:   {NSW:0,QLD:0,VIC:0,WA:0},
-                state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+                state_pipe_parts: {NSW:{port:0,water:0,cy:0,fac:0},QLD:{port:0,water:0,cy:0,fac:0},VIC:{port:0,water:0,cy:0,fac:0},WA:{port:0,water:0,cy:0,fac:0}},
                 state_3m:         {NSW:0,QLD:0,VIC:0,WA:0},
                 history:          {NSW:new Array(12).fill(0), QLD:new Array(12).fill(0),
                                    VIC:new Array(12).fill(0), WA:new Array(12).fill(0),
@@ -3330,9 +3362,10 @@ function currentSetDedupedByMerge() {
             agg.state_stock[s]    += r.state_stock[s]    || 0;
             agg.state_pipeline[s] += r.state_pipeline[s] || 0;
             agg.state_3m[s]       += r.state_3m[s]       || 0;
-            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,cy:0,fac:0};
             agg.state_pipe_parts[s].port  += pp.port  || 0;
             agg.state_pipe_parts[s].water += pp.water || 0;
+            agg.state_pipe_parts[s].cy    += pp.cy     || 0;
             agg.state_pipe_parts[s].fac   += pp.fac   || 0;
             for (let i = 0; i < 12; i++) agg.history[s][i] += r.history[s]?.[i] || 0;
         });
@@ -3417,12 +3450,29 @@ function renderStateCards() {
     const host = document.getElementById('state-cards');
     const acc = {};
     STATES.forEach(s => acc[s] = {stock:0, pipeline:0, demand_3m:0,
+        /* max_demand is the STATE-level max of the four period averages,
+           computed after we've summed the four raw period totals; used
+           as the denominator for MOI(PPL) on the card so the number
+           matches the right-hand table's MOI(PPL) basis
+           (max of 3M / 4-6M / 7-9M / 10-12M averages). */
+        p3m:0, p6:0, p79:0, p1012:0,
         shortage:0, balanced:0, surplus:0, serious_surplus:0, no_move:0});
+    /* Group rows' 12-month history by state so a fresh per-state
+       max-of-period-averages can be derived — same recipe as the SKU
+       drill-down, but summed across every row in view.  This is the
+       "판매 전체 Max" the user asked for (not per-material max), so
+       MOI(PPL) here reads the same as the on-screen basis. */
+    const stateHist = {NSW:new Array(12).fill(0), QLD:new Array(12).fill(0),
+                       VIC:new Array(12).fill(0), WA:new Array(12).fill(0)};
     rows.forEach(r => {
         STATES.forEach(s => {
             acc[s].stock     += r.state_stock[s]    || 0;
             acc[s].pipeline  += r.state_pipeline[s] || 0;
             acc[s].demand_3m += r.state_3m[s]       || 0;
+            const h = r.history?.[s];
+            if (h && h.length >= 12) {
+                for (let i = 0; i < 12; i++) stateHist[s][i] += h[i] || 0;
+            }
             /* Status chip counts now use the SKU's MERGE-CODE status
                (from Merge_MOI(PPL)) rather than a re-computed
                per-state MOI.  A SKU is credited to a state only if it
@@ -3434,17 +3484,40 @@ function renderStateCards() {
             }
         });
     });
+    /* Per-state max-demand basis: MAX(3M / 4-6M / 7-9M / 10-12M avg)
+       computed against the aggregated stateHist.  Same formula as the
+       row-level max_demand in Python. */
+    STATES.forEach(s => {
+        const h = stateHist[s];
+        if (h.length >= 12) {
+            acc[s].p3m   = (h[9]  + h[10] + h[11]) / 3.0;
+            acc[s].p6    = (h[6]  + h[7]  + h[8])  / 3.0;
+            acc[s].p79   = (h[3]  + h[4]  + h[5])  / 3.0;
+            acc[s].p1012 = (h[0]  + h[1]  + h[2])  / 3.0;
+        }
+    });
     let html = '';
     STATES.forEach(s => {
         const st = acc[s];
         const moi = st.demand_3m > 0 ? (st.stock / st.demand_3m) : null;
+        /* MOI(PPL): (Stock + Pipeline) ÷ MAX(period averages) — the
+           pipeline sum here INCLUDES the Factory (r.state_pipeline
+           carries port + water + cy + fac from the backend), matching
+           the "In Pipeline (ex SOH / inc Fac)" label above. */
+        const maxDem = Math.max(st.p3m || 0, st.p6 || 0,
+                                 st.p79 || 0, st.p1012 || 0);
+        const moiPpl = maxDem > 0 ? ((st.stock + st.pipeline) / maxDem) : null;
         const activeCls = filterState.state.has(s) ? ' state-card-active' : '';
         html += '<div class="state-card' + activeCls + '" data-state="' + s + '" '
              +      'title="Click to toggle the ' + s + ' filter">'
-             + '<h3>' + s + ' <span class="m">MOI ' + (moi != null ? FMT_1.format(moi) : '—') + '</span></h3>'
+             + '<h3>' + s + ' <span class="m">MOI ' + (moi != null ? FMT_1.format(moi) : '—')
+             +          ' · <span title="(Stock + Pipeline) ÷ MAX(3M/4-6M/7-9M/10-12M state-level averages)">'
+             +          'MOI(PPL) ' + (moiPpl != null ? FMT_1.format(moiPpl) : '—') + '</span>'
+             +      '</span></h3>'
              + '<div class="state-row"><span class="lbl">Stock on hand</span>'
              + '<span class="v">' + fmtI(st.stock) + '</span></div>'
-             + '<div class="state-row"><span class="lbl">In pipeline</span>'
+             + '<div class="state-row" title="Port + Water + CY + Factory pipeline (SOH excluded, Factory included)">'
+             +   '<span class="lbl">In Pipeline (ex SOH / inc Fac)</span>'
              + '<span class="v">' + fmtI(st.pipeline) + '</span></div>'
              + '<div class="state-row"><span class="lbl">3M avg demand / mo</span>'
              + '<span class="v">' + fmtI(st.demand_3m) + '</span></div>'
@@ -3648,7 +3721,7 @@ function buildTableHead() {
        identity columns visible, so a scroll bar is fine. */
     const DATA_COL_WIDTH = showPipeline ? 60 : 72;
     const nDataCols = showPipeline
-        ? (STATES.length * 4 + 4 + 2 + 4)  // 4 states × 4 sub + total × 4 + MOI×2 + period×4 = 26
+        ? (STATES.length * 5 + 5 + 2 + 4)  // 4 states × 5 sub + total × 5 + MOI×2 + period×4 = 31
         : (STATES.length + 1 + 2 + 4);      // state stock + STOCK + MOI×2 + period×4 = 11
     const colgroup = document.getElementById('sku-colgroup');
     colgroup.innerHTML = IDENTITY_WIDTHS.map(w => '<col style="width:' + w + 'px">').join('')
@@ -3661,7 +3734,7 @@ function buildTableHead() {
     let h = '';
     if (showPipeline) {
         /* Two-row header: state band + sub-column labels.  Each state
-           has 4 sub-columns (Stock/Port/Water/Factory) and a final
+           has 5 sub-columns (Stock/Port/Water/CY/Factory) and a final
            TOTAL group sits at the far right so the reader can compare
            per-state pipeline vs. the national roll-up in one glance.
            The state-band row is marked `state-band`; the sub-label
@@ -3669,10 +3742,10 @@ function buildTableHead() {
            26px so the banner stays anchored during vertical scroll. */
         h = '<tr class="state-band"><th colspan="' + nonState.length + '" style="background:#F1F5F9"></th>';
         STATES.forEach(s => {
-            h += '<th colspan="4" class="grp-start" style="text-align:center;background:' + stateColour[s]
+            h += '<th colspan="5" class="grp-start" style="text-align:center;background:' + stateColour[s]
               + ';color:#fff;font-weight:700">' + s + '</th>';
         });
-        h += '<th colspan="4" class="grp-start" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
+        h += '<th colspan="5" class="grp-start" style="text-align:center;background:#0E3F5F;color:#fff;font-weight:700">TOTAL</th>';
         h += '<th colspan="6" class="grp-start" style="background:#F1F5F9"></th></tr><tr class="col-labels">';
     } else {
         h = '<tr>';
@@ -3683,19 +3756,21 @@ function buildTableHead() {
     if (showPipeline) {
         STATES.forEach(s => {
             const dc = s.toLowerCase();
-            /* Short 3-char sub-column labels — with 27 data columns
-               the viewport can't fit "Stock/Port/Water/Factory" in
-               every state group without truncating.  STK/PRT/WTR/FAC
-               reads clearly at 52 px each. */
+            /* Short 2-3-char sub-column labels — with 31 data columns
+               the viewport can't fit "Stock/Port/Water/CY/Factory" in
+               every state group without truncating.  STK/PRT/WTR/CY/
+               FAC reads clearly at 52 px each. */
             h += '<th class="r grp-start" data-col="' + dc + '" title="' + s + ' Stock">STK<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_port" title="' + s + ' Port">PRT<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_water" title="' + s + ' Water">WTR<span class="sort"></span></th>'
+              +  '<th class="r" data-col="' + dc + '_cy" title="' + s + ' CY (Container Yard)">CY<span class="sort"></span></th>'
               +  '<th class="r" data-col="' + dc + '_fac" title="' + s + ' Factory">FAC<span class="sort"></span></th>';
         });
         /* National Total group divider */
         h += '<th class="r grp-start" data-col="total_stock" title="Total Stock">STK<span class="sort"></span></th>'
           +  '<th class="r" data-col="total_port" title="Total Port">PRT<span class="sort"></span></th>'
           +  '<th class="r" data-col="total_water" title="Total Water">WTR<span class="sort"></span></th>'
+          +  '<th class="r" data-col="total_cy" title="Total CY (Container Yard)">CY<span class="sort"></span></th>'
           +  '<th class="r" data-col="total_fac" title="Total Factory">FAC<span class="sort"></span></th>';
     } else {
         STATES.forEach((s, i) => {
@@ -3711,7 +3786,7 @@ function buildTableHead() {
        and use terse labels so they fit at 56 px. */
     h += '<th class="r grp-start" data-col="moh" title="Stock ÷ 3M Avg">MOI<span class="sort"></span></th>'
       +  '<th class="r grp-start" data-col="merge_moi_ppl" '
-      +      'title="(Stock + Port + Water + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg).">'
+      +      'title="(Stock + Port + Water + CY + Factory) ÷ MAX(3M Avg, 4-6M Avg, 7-9M Avg, 10-12M Avg).">'
       +      'MOI(PPL)<span class="sort"></span></th>';
     /* Period-average demand break-down — short "3M / 4-6M / 7-9M /
        10-12M" labels (no "Avg" suffix) so the four columns fit in
@@ -3789,15 +3864,15 @@ function totalPipe(r, leg) {
     return STATES.reduce((s, k) => s + (r.state_pipe_parts[k]?.[leg] || 0), 0);
 }
 function sortKey(r, col) {
-    /* Pipeline sub-columns: nsw_port / qld_water / wa_fac … */
-    const m = /^(nsw|qld|vic|wa)_(port|water|fac)$/.exec(col);
+    /* Pipeline sub-columns: nsw_port / qld_water / wa_cy / wa_fac … */
+    const m = /^(nsw|qld|vic|wa)_(port|water|cy|fac)$/.exec(col);
     if (m) {
         const state = m[1].toUpperCase(), leg = m[2];
         const pp = r.state_pipe_parts?.[state];
         return pp ? (pp[leg] || 0) : 0;
     }
     /* National-Total pipeline sub-columns */
-    const t = /^total_(port|water|fac)$/.exec(col);
+    const t = /^total_(port|water|cy|fac)$/.exec(col);
     if (t) return totalPipe(r, t[1]);
     switch (col) {
         case 'nsw': return r.state_stock.NSW || 0;
@@ -3866,8 +3941,8 @@ function renderTable() {
        ttlMax is a sum of merge maxes, not per-row maxes. */
     let ttlStock=0, ttlAll=0, ttl3M=0, ttl6=0, ttl79=0, ttl1012=0, ttlMax=0;
     const ttlStateStock = {NSW:0,QLD:0,VIC:0,WA:0}, ttlState3M = {NSW:0,QLD:0,VIC:0,WA:0};
-    const ttlPipe = {NSW:{port:0,water:0,fac:0}, QLD:{port:0,water:0,fac:0},
-                     VIC:{port:0,water:0,fac:0}, WA:{port:0,water:0,fac:0}};
+    const ttlPipe = {NSW:{port:0,water:0,cy:0,fac:0}, QLD:{port:0,water:0,cy:0,fac:0},
+                     VIC:{port:0,water:0,cy:0,fac:0}, WA:{port:0,water:0,cy:0,fac:0}};
     const mergeMax = new Map();
     const seenSharedTotals = new Set();
     src.forEach(r => {
@@ -3886,9 +3961,10 @@ function renderTable() {
         STATES.forEach(s => {
             ttlStateStock[s] += r.state_stock[s]  || 0;
             ttlState3M[s]    += r.state_3m[s]     || 0;
-            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,cy:0,fac:0};
             ttlPipe[s].port  += pp.port  || 0;
             ttlPipe[s].water += pp.water || 0;
+            ttlPipe[s].cy    += pp.cy    || 0;
             ttlPipe[s].fac   += pp.fac   || 0;
         });
     });
@@ -3925,7 +4001,7 @@ function renderTable() {
         const sum = {
             merge_code: rows[0].merge_code,
             state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
-            state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+            state_pipe_parts: {NSW:{port:0,water:0,cy:0,fac:0},QLD:{port:0,water:0,cy:0,fac:0},VIC:{port:0,water:0,cy:0,fac:0},WA:{port:0,water:0,cy:0,fac:0}},
             state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
             total_stock:0, total_all:0, total_3m:0,
             p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
@@ -3939,9 +4015,10 @@ function renderTable() {
             STATES.forEach(s => {
                 sum.state_stock[s] += r.state_stock[s] || 0;
                 sum.state_3m[s]    += r.state_3m[s]    || 0;
-                const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+                const pp = r.state_pipe_parts?.[s] || {port:0,water:0,cy:0,fac:0};
                 sum.state_pipe_parts[s].port  += pp.port  || 0;
                 sum.state_pipe_parts[s].water += pp.water || 0;
+                sum.state_pipe_parts[s].cy    += pp.cy     || 0;
                 sum.state_pipe_parts[s].fac   += pp.fac   || 0;
             });
             sum.total_stock += r.total_stock || 0;
@@ -4003,10 +4080,11 @@ function renderTable() {
             ).join('');
         }
         return STATES.map(s => {
-            const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
+            const pp = r.state_pipe_parts?.[s] || { port:0, water:0, cy:0, fac:0 };
             return '<td class="r grp-start">' + fmtI(r.state_stock[s]) + '</td>'
                  + '<td class="r">'          + fmtI(pp.port)          + '</td>'
                  + '<td class="r">'          + fmtI(pp.water)         + '</td>'
+                 + '<td class="r">'          + fmtI(pp.cy)            + '</td>'
                  + '<td class="r">'          + fmtI(pp.fac)           + '</td>';
         }).join('');
     };
@@ -4029,14 +4107,17 @@ function renderTable() {
             totalRow += '<td class="r grp-start">' + fmtI(ttlStateStock[s]) + '</td>'
                      +  '<td class="r">' + fmtI(ttlPipe[s].port)  + '</td>'
                      +  '<td class="r">' + fmtI(ttlPipe[s].water) + '</td>'
+                     +  '<td class="r">' + fmtI(ttlPipe[s].cy)    + '</td>'
                      +  '<td class="r">' + fmtI(ttlPipe[s].fac)   + '</td>';
         });
         const tp = STATES.reduce((s,k)=>s+ttlPipe[k].port,0);
         const tw = STATES.reduce((s,k)=>s+ttlPipe[k].water,0);
-        const tf = STATES.reduce((s,k)=>s+ttlPipe[k].fac,0);
+        const tc = STATES.reduce((s,k)=>s+ttlPipe[k].cy,   0);
+        const tf = STATES.reduce((s,k)=>s+ttlPipe[k].fac,  0);
         totalRow += '<td class="r grp-start">' + fmtI(ttlStock) + '</td>'
                  +  '<td class="r">' + fmtI(tp) + '</td>'
                  +  '<td class="r">' + fmtI(tw) + '</td>'
+                 +  '<td class="r">' + fmtI(tc) + '</td>'
                  +  '<td class="r">' + fmtI(tf) + '</td>';
     } else {
         STATES.forEach((s, i) => {
@@ -4093,16 +4174,17 @@ function renderTable() {
         if (showPipeline) {
             /* Pipeline mode: every state's FIRST sub-cell (STK) gets
                `grp-start` so a vertical divider draws BETWEEN state
-               groups — NSW | QLD | VIC | WA — and the other three
-               sub-cells (PRT / WTR / FAC) stay borderless inside the
-               group.  Fixes the earlier bug where only NSW STK had
-               the divider so the four state groups looked like one
-               continuous stripe of numbers. */
+               groups — NSW | QLD | VIC | WA — and the other four
+               sub-cells (PRT / WTR / CY / FAC) stay borderless inside
+               the group.  Fixes the earlier bug where only NSW STK
+               had the divider so the four state groups looked like
+               one continuous stripe of numbers. */
             return STATES.map((s, i) => {
-                const pp = r.state_pipe_parts?.[s] || { port:0, water:0, fac:0 };
+                const pp = r.state_pipe_parts?.[s] || { port:0, water:0, cy:0, fac:0 };
                 return '<td class="r grp-start">' + fmtI(r.state_stock[s]) + '</td>'
                      + '<td class="r">' + fmtI(pp.port)  + '</td>'
                      + '<td class="r">' + fmtI(pp.water) + '</td>'
+                     + '<td class="r">' + fmtI(pp.cy)    + '</td>'
                      + '<td class="r">' + fmtI(pp.fac)   + '</td>';
             }).join('');
         }
@@ -4113,10 +4195,12 @@ function renderTable() {
     };
     const totalGrpFor = (r) => {
         if (showPipeline) {
-            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'), tf = totalPipe(r,'fac');
+            const tp = totalPipe(r,'port'), tw = totalPipe(r,'water'),
+                  tc = totalPipe(r,'cy'),   tf = totalPipe(r,'fac');
             return '<td class="r grp-start">' + fmtI(r.total_stock) + '</td>'
                  + '<td class="r">' + fmtI(tp) + '</td>'
                  + '<td class="r">' + fmtI(tw) + '</td>'
+                 + '<td class="r">' + fmtI(tc) + '</td>'
                  + '<td class="r">' + fmtI(tf) + '</td>';
         }
         return '<td class="r grp-start">' + fmtI(r.total_stock) + demSuffix(r.total_3m) + '</td>';
@@ -4151,7 +4235,7 @@ function renderTable() {
         const sum = {
             merge_code: groupRows[0].merge_code,
             state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
-            state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+            state_pipe_parts: {NSW:{port:0,water:0,cy:0,fac:0},QLD:{port:0,water:0,cy:0,fac:0},VIC:{port:0,water:0,cy:0,fac:0},WA:{port:0,water:0,cy:0,fac:0}},
             state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
             total_stock:0, total_all:0, total_3m:0,
             p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
@@ -4167,9 +4251,10 @@ function renderTable() {
             STATES.forEach(s => {
                 sum.state_stock[s] += r.state_stock[s] || 0;
                 sum.state_3m[s]    += r.state_3m[s]    || 0;
-                const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+                const pp = r.state_pipe_parts?.[s] || {port:0,water:0,cy:0,fac:0};
                 sum.state_pipe_parts[s].port  += pp.port  || 0;
                 sum.state_pipe_parts[s].water += pp.water || 0;
+                sum.state_pipe_parts[s].cy    += pp.cy     || 0;
                 sum.state_pipe_parts[s].fac   += pp.fac   || 0;
             });
             sum.total_stock += r.total_stock || 0;
@@ -4753,7 +4838,7 @@ function exportSource() {
             const sum = {
                 merge_code: rows[0].merge_code,
                 state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
-                state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+                state_pipe_parts: {NSW:{port:0,water:0,cy:0,fac:0},QLD:{port:0,water:0,cy:0,fac:0},VIC:{port:0,water:0,cy:0,fac:0},WA:{port:0,water:0,cy:0,fac:0}},
                 state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
                 total_stock:0, total_all:0, total_3m:0,
                 p_3m:0, avg_6m_old:0, avg_7_9m:0, avg_10_12m:0,
@@ -4767,9 +4852,10 @@ function exportSource() {
                 ['NSW','QLD','VIC','WA'].forEach(s => {
                     sum.state_stock[s] += r.state_stock[s] || 0;
                     sum.state_3m[s]    += r.state_3m[s]    || 0;
-                    const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+                    const pp = r.state_pipe_parts?.[s] || {port:0,water:0,cy:0,fac:0};
                     sum.state_pipe_parts[s].port  += pp.port  || 0;
                     sum.state_pipe_parts[s].water += pp.water || 0;
+                    sum.state_pipe_parts[s].cy    += pp.cy     || 0;
                     sum.state_pipe_parts[s].fac   += pp.fac   || 0;
                 });
                 sum.total_stock += r.total_stock || 0;
@@ -4835,15 +4921,19 @@ function downloadCSV() {
         ['Total 3M Avg',    r => (r.total_3m ?? 0).toFixed(2)],
         ['NSW Port',        r => r.state_pipe_parts?.NSW?.port  || 0],
         ['NSW Water',       r => r.state_pipe_parts?.NSW?.water || 0],
+        ['NSW CY',          r => r.state_pipe_parts?.NSW?.cy    || 0],
         ['NSW Factory',     r => r.state_pipe_parts?.NSW?.fac   || 0],
         ['QLD Port',        r => r.state_pipe_parts?.QLD?.port  || 0],
         ['QLD Water',       r => r.state_pipe_parts?.QLD?.water || 0],
+        ['QLD CY',          r => r.state_pipe_parts?.QLD?.cy    || 0],
         ['QLD Factory',     r => r.state_pipe_parts?.QLD?.fac   || 0],
         ['VIC Port',        r => r.state_pipe_parts?.VIC?.port  || 0],
         ['VIC Water',       r => r.state_pipe_parts?.VIC?.water || 0],
+        ['VIC CY',          r => r.state_pipe_parts?.VIC?.cy    || 0],
         ['VIC Factory',     r => r.state_pipe_parts?.VIC?.fac   || 0],
         ['WA Port',         r => r.state_pipe_parts?.WA?.port   || 0],
         ['WA Water',        r => r.state_pipe_parts?.WA?.water  || 0],
+        ['WA CY',           r => r.state_pipe_parts?.WA?.cy     || 0],
         ['WA Factory',      r => r.state_pipe_parts?.WA?.fac    || 0],
         ['MOI',                r => r.moh          != null ? r.moh.toFixed(2)          : ''],
         ['MOI(PPL)',           r => r.moh_plus_max != null ? r.moh_plus_max.toFixed(2) : ''],
@@ -4904,10 +4994,10 @@ function _mergeSubTotal(mergeCode, rows) {
         state_stock: { NSW: 0, QLD: 0, VIC: 0, WA: 0 },
         state_3m:    { NSW: 0, QLD: 0, VIC: 0, WA: 0 },
         state_pipe_parts: {
-            NSW: { port: 0, water: 0, fac: 0 },
-            QLD: { port: 0, water: 0, fac: 0 },
-            VIC: { port: 0, water: 0, fac: 0 },
-            WA:  { port: 0, water: 0, fac: 0 },
+            NSW: { port: 0, water: 0, cy: 0, fac: 0 },
+            QLD: { port: 0, water: 0, cy: 0, fac: 0 },
+            VIC: { port: 0, water: 0, cy: 0, fac: 0 },
+            WA:  { port: 0, water: 0, cy: 0, fac: 0 },
         },
         total_stock: 0, total_all: 0, total_3m: 0,
         p_3m: 0, avg_6m_old: 0, avg_7_9m: 0, avg_10_12m: 0,
@@ -4922,9 +5012,10 @@ function _mergeSubTotal(mergeCode, rows) {
         ['NSW', 'QLD', 'VIC', 'WA'].forEach(s => {
             t.state_stock[s] += r.state_stock[s] || 0;
             t.state_3m[s]    += r.state_3m[s]    || 0;
-            const pp = r.state_pipe_parts?.[s] || { port: 0, water: 0, fac: 0 };
+            const pp = r.state_pipe_parts?.[s] || { port: 0, water: 0, cy: 0, fac: 0 };
             t.state_pipe_parts[s].port  += pp.port  || 0;
             t.state_pipe_parts[s].water += pp.water || 0;
+            t.state_pipe_parts[s].cy    += pp.cy     || 0;
             t.state_pipe_parts[s].fac   += pp.fac   || 0;
         });
         t.total_stock += r.total_stock || 0;
@@ -5034,15 +5125,19 @@ function downloadXLSX() {
            handle in the column header the user can click to expand. */
         ['NSW Port',               r => r.state_pipe_parts?.NSW?.port  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW' }],
         ['NSW Water',              r => r.state_pipe_parts?.NSW?.water || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW' }],
+        ['NSW CY',                 r => r.state_pipe_parts?.NSW?.cy    || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW' }],
         ['NSW Factory',            r => r.state_pipe_parts?.NSW?.fac   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_NSW', right:'thin' }],
         ['QLD Port',               r => r.state_pipe_parts?.QLD?.port  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD' }],
         ['QLD Water',              r => r.state_pipe_parts?.QLD?.water || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD' }],
+        ['QLD CY',                 r => r.state_pipe_parts?.QLD?.cy    || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD' }],
         ['QLD Factory',            r => r.state_pipe_parts?.QLD?.fac   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_QLD', right:'thin' }],
         ['VIC Port',               r => r.state_pipe_parts?.VIC?.port  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC' }],
         ['VIC Water',              r => r.state_pipe_parts?.VIC?.water || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC' }],
+        ['VIC CY',                 r => r.state_pipe_parts?.VIC?.cy    || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC' }],
         ['VIC Factory',            r => r.state_pipe_parts?.VIC?.fac   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_VIC', right:'thin' }],
         ['WA Port',                r => r.state_pipe_parts?.WA?.port   || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA' }],
         ['WA Water',               r => r.state_pipe_parts?.WA?.water  || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA' }],
+        ['WA CY',                  r => r.state_pipe_parts?.WA?.cy     || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA' }],
         ['WA Factory',             r => r.state_pipe_parts?.WA?.fac    || 0,          { wch:8, num:'int', hidden:true, level:1, group:'pipe_WA',  right:'medium' }],
         ['MOI',                    r => r.moh          == null ? null : r.moh,        { wch:7,  num:'moi', headerFill:'FFE0E7FF' }],
         ['MOI(PPL)',               r => r.moh_plus_max == null ? null : r.moh_plus_max,{ wch:9, num:'moi', headerFill:'FFE0E7FF', right:'medium' }],
@@ -5418,7 +5513,7 @@ function aggregateMerge(mcRows) {
         group: rep.group,
         state_stock: {NSW:0,QLD:0,VIC:0,WA:0},
         state_pipeline: {NSW:0,QLD:0,VIC:0,WA:0},
-        state_pipe_parts: {NSW:{port:0,water:0,fac:0},QLD:{port:0,water:0,fac:0},VIC:{port:0,water:0,fac:0},WA:{port:0,water:0,fac:0}},
+        state_pipe_parts: {NSW:{port:0,water:0,cy:0,fac:0},QLD:{port:0,water:0,cy:0,fac:0},VIC:{port:0,water:0,cy:0,fac:0},WA:{port:0,water:0,cy:0,fac:0}},
         state_3m: {NSW:0,QLD:0,VIC:0,WA:0},
         history: {NSW: new Array(12).fill(0), QLD: new Array(12).fill(0),
                   VIC: new Array(12).fill(0), WA:  new Array(12).fill(0),
@@ -5430,9 +5525,10 @@ function aggregateMerge(mcRows) {
             sum.state_stock[s]    += r.state_stock[s]    || 0;
             sum.state_pipeline[s] += r.state_pipeline[s] || 0;
             sum.state_3m[s]       += r.state_3m[s]       || 0;
-            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,fac:0};
+            const pp = r.state_pipe_parts?.[s] || {port:0,water:0,cy:0,fac:0};
             sum.state_pipe_parts[s].port  += pp.port  || 0;
             sum.state_pipe_parts[s].water += pp.water || 0;
+            sum.state_pipe_parts[s].cy    += pp.cy     || 0;
             sum.state_pipe_parts[s].fac   += pp.fac   || 0;
             for (let i = 0; i < 12; i++) sum.history[s][i] += r.history[s]?.[i] || 0;
         });
@@ -5524,7 +5620,8 @@ function openModal(mergeCode) {
 
     const rows = STATES.map(s => {
         const pp = r.state_pipe_parts[s], stock = r.state_stock[s];
-        const p  = pp.port + pp.water + pp.fac, dem = r.state_3m[s];
+        const p  = pp.port + pp.water + (pp.cy || 0) + pp.fac,
+              dem = r.state_3m[s];
         const smoh = dem > 0 ? (stock / dem) : null;
         const spmoh = dem > 0 ? ((stock + p) / dem) : null;
         const cls = smoh == null ? '' : smoh <= 1 ? 'short' : smoh <= 3 ? '' : smoh <= 6 ? 'sur' : 'ser';
@@ -5533,6 +5630,7 @@ function openModal(mergeCode) {
             + '<td>' + fmtI(stock) + '</td>'
             + '<td>' + fmtI(pp.port) + '</td>'
             + '<td>' + fmtI(pp.water) + '</td>'
+            + '<td>' + fmtI(pp.cy || 0) + '</td>'
             + '<td>' + fmtI(pp.fac) + '</td>'
             + '<td>' + fmtI(p) + '</td>'
             + '<td>' + fmtF(dem, 1) + '</td>'
@@ -5543,12 +5641,13 @@ function openModal(mergeCode) {
     const totStock = STATES.reduce((s,k) => s + r.state_stock[k], 0);
     const totPort  = STATES.reduce((s,k) => s + r.state_pipe_parts[k].port, 0);
     const totWater = STATES.reduce((s,k) => s + r.state_pipe_parts[k].water, 0);
+    const totCY    = STATES.reduce((s,k) => s + (r.state_pipe_parts[k].cy || 0), 0);
     const totFac   = STATES.reduce((s,k) => s + r.state_pipe_parts[k].fac, 0);
-    const totPipe  = totPort + totWater + totFac;
+    const totPipe  = totPort + totWater + totCY + totFac;
     document.getElementById('m-pipe-tbl').innerHTML = rows
       + '<tr class="tot"><td class="st">Total</td><td>' + fmtI(totStock)
       + '</td><td>' + fmtI(totPort) + '</td><td>' + fmtI(totWater)
-      + '</td><td>' + fmtI(totFac)  + '</td><td>' + fmtI(totPipe)
+      + '</td><td>' + fmtI(totCY)   + '</td><td>' + fmtI(totFac)  + '</td><td>' + fmtI(totPipe)
       + '</td><td>' + fmtF(r.total_3m, 1) + '</td>'
       + '<td>' + (r.moh != null ? fmtF(r.moh, 1) : '—') + '</td>'
       + '<td>' + (r.moh_plus != null ? fmtF(r.moh_plus, 1) : '—') + '</td></tr>';
