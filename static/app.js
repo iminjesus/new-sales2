@@ -2025,6 +2025,12 @@ async function drawMonthlyTotals(){
 
   monthlyInst = new Chart(document.getElementById("monthlyChart"),{
     type:"bar",
+    /* Dataset order: 2025 Actual → 2026 Target → 2026 Actual.
+       Per user request so the trio reads "prior year's result →
+       this year's plan → this year's result" from left to right.
+       Target in the middle also sits between the two Actuals so
+       the comparison bars are visually anchored on either side
+       of the plan. */
     data:{ labels, datasets:[
       // 2025 Actual — darker slate so it reads as a distinct reference
       // rather than blending into 2026 or the Target bar.
@@ -2033,16 +2039,6 @@ async function drawMonthlyTotals(){
         type:"bar",
         data:sales25,
         backgroundColor:"#64748b",
-        categoryPercentage:0.8,
-        barPercentage:0.9,
-        datalabels:{ display:false }
-      },
-      // 2026 Actual — primary saturated blue, the bar the user is here for.
-      {
-        label: (filters.metric==="amount" ? "Sales Amount (2026)" : "SalesQty (2026)"),
-        type:"bar",
-        data:sales26,
-        backgroundColor:"#2563eb",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
@@ -2061,6 +2057,16 @@ async function drawMonthlyTotals(){
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
+      },
+      // 2026 Actual — primary saturated blue, the bar the user is here for.
+      {
+        label: (filters.metric==="amount" ? "Sales Amount (2026)" : "SalesQty (2026)"),
+        type:"bar",
+        data:sales26,
+        backgroundColor:"#2563eb",
+        categoryPercentage:0.8,
+        barPercentage:0.9,
+        datalabels:{ display:false }
       }
     ]},
     options:_withSyncedLegend(getCommonOptions(false))
@@ -2068,21 +2074,15 @@ async function drawMonthlyTotals(){
 
   monthlyCumInst = new Chart(document.getElementById("monthlyCumChart"),{
     type:"bar",
+    /* Cumulative chart mirrors the same Target-ahead-of-Actual
+       order so both monthlyChart and monthlyCumChart tell the
+       same story in the same sequence. */
     data:{ labels, datasets:[
       {
         label: (filters.metric==="amount" ? "Cumulative Amount (2025)" : "Cumulative Qty (2025)"),
         type:"bar",
         data:salesCum25,
         backgroundColor:"#64748b",
-        categoryPercentage:0.8,
-        barPercentage:0.9,
-        datalabels:{ display:false }
-      },
-      {
-        label: (filters.metric==="amount" ? "Cumulative Amount (2026)" : "Cumulative Qty (2026)"),
-        type:"bar",
-        data:salesCum26,
-        backgroundColor:"#2563eb",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
@@ -2095,6 +2095,15 @@ async function drawMonthlyTotals(){
         borderWidth:1.5,
         borderColor:"#b45309",
         borderDash:[4,3],
+        categoryPercentage:0.8,
+        barPercentage:0.9,
+        datalabels:{ display:false }
+      },
+      {
+        label: (filters.metric==="amount" ? "Cumulative Amount (2026)" : "Cumulative Qty (2026)"),
+        type:"bar",
+        data:salesCum26,
+        backgroundColor:"#2563eb",
         categoryPercentage:0.8,
         barPercentage:0.9,
         datalabels:{ display:false }
