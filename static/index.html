@@ -49,34 +49,35 @@
        reader can tell "no target set" apart from "0 % achievement".
        Always shows the whole-org totals — independent of the chart
        filters below — so switching Region / Product / Customer
-       doesn't move the monthly baseline. -->
+       doesn't move the monthly baseline.  Centred and sized up per
+       the user's "좀 크게 좌우 중앙" request. -->
   <div id="monthProgressBar" style="
-      display:flex; align-items:center; gap:16px; flex-wrap:wrap;
-      padding:8px 14px; margin:0 0 10px;
+      display:flex; align-items:center; justify-content:center; gap:22px; flex-wrap:wrap;
+      padding:12px 20px; margin:0 0 12px;
       background:linear-gradient(90deg,#f0f9ff 0%,#e0f2fe 100%);
-      border:1px solid #7dd3fc; border-radius:6px;
-      font-size:12.5px; color:#0c4a6e;">
-    <span id="mpTitle" style="font-weight:800;color:#075985;letter-spacing:-.01em">
+      border:1px solid #7dd3fc; border-radius:8px;
+      font-size:16px; color:#0c4a6e; text-align:center;">
+    <span id="mpTitle" style="font-weight:900;color:#075985;letter-spacing:-.01em;font-size:17px">
       This month:
     </span>
-    <span style="display:inline-flex;align-items:center;gap:5px">
+    <span style="display:inline-flex;align-items:center;gap:7px">
       <b style="color:#334155">Qty</b>
       <span id="mpQtyActual" style="font-variant-numeric:tabular-nums">…</span>
       <span style="color:#94a3b8">/</span>
       <span id="mpQtyTarget" style="font-variant-numeric:tabular-nums">…</span>
       <span id="mpQtyAch"
-            style="margin-left:4px;padding:1px 7px;border-radius:3px;background:#e5e7eb;color:#111;font-weight:700;font-size:12px">
+            style="margin-left:5px;padding:3px 11px;border-radius:4px;background:#e5e7eb;color:#111;font-weight:800;font-size:15px">
         …
       </span>
     </span>
-    <span style="width:1px;height:16px;background:#7dd3fc"></span>
-    <span style="display:inline-flex;align-items:center;gap:5px">
+    <span style="width:1px;height:22px;background:#7dd3fc"></span>
+    <span style="display:inline-flex;align-items:center;gap:7px">
       <b style="color:#334155">Amount</b>
       <span id="mpAmtActual" style="font-variant-numeric:tabular-nums">…</span>
       <span style="color:#94a3b8">/</span>
       <span id="mpAmtTarget" style="font-variant-numeric:tabular-nums">…</span>
       <span id="mpAmtAch"
-            style="margin-left:4px;padding:1px 7px;border-radius:3px;background:#e5e7eb;color:#111;font-weight:700;font-size:12px">
+            style="margin-left:5px;padding:3px 11px;border-radius:4px;background:#e5e7eb;color:#111;font-weight:800;font-size:15px">
         …
       </span>
     </span>
@@ -111,9 +112,29 @@
       else                { span.style.background = "#f87171"; span.style.color = "#7f1d1d"; }
     };
     try {
+      /* Effective month rule — same as the backend's
+         _business_effective_ym and app.js's effectiveMonth():
+         if today is on or before the FIRST business day of the
+         calendar month, the current-month data is still being
+         loaded overnight so we show the PREVIOUS month instead.
+         Otherwise today's calendar month is the effective one.
+         Replicated inline because app.js hasn't loaded yet (defer). */
       const now  = new Date();
-      const cIdx = now.getMonth();
-      const yr   = now.getFullYear();
+      const yrNow  = now.getFullYear();
+      const moNow  = now.getMonth();           // 0-based current calendar month
+      const dNow   = new Date(yrNow, moNow, now.getDate());
+      let firstBD  = new Date(yrNow, moNow, 1);
+      while (firstBD.getDay() === 0 || firstBD.getDay() === 6){
+        firstBD.setDate(firstBD.getDate() + 1);
+      }
+      let effYr  = yrNow;
+      let effIdx = moNow;                      // effective month (0-based)
+      if (dNow <= firstBD){
+        if (moNow === 0){ effIdx = 11; effYr -= 1; }
+        else            { effIdx = moNow - 1; }
+      }
+      const yr = effYr;
+      const cIdx = effIdx;
       const monthName = ["January","February","March","April","May","June",
                          "July","August","September","October","November","December"][cIdx];
       document.getElementById("mpTitle").textContent =
@@ -478,7 +499,7 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/app.js?v=20260930b" defer></script>
+  <script src="/static/app.js?v=20261001a" defer></script>
 <script>
 // Mobile filter panel toggle
 (function () {
