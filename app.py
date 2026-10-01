@@ -18008,6 +18008,336 @@ def admin_usage_user_detail():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
+# ──────────────────────────────────────────────────────────────────────
+#  Admin → System Usage summary
+# ──────────────────────────────────────────────────────────────────────
+
+# Session-gap threshold (minutes).  Any gap >= this between a user's
+# consecutive requests starts a NEW session.  30 min matches the Google
+# Analytics default; bump via env var SESSION_GAP_MIN if the admin wants
+# a tighter / looser definition.
+_SESSION_GAP_MIN = int(os.getenv("SESSION_GAP_MIN", "30"))
+
+# Page-section mapping — one entry per top-level route per the user's
+# "each page separately" request.  First prefix that matches wins.
+# path-starts-with → display label.  Order matters (longest first).
+_SECTION_RULES = [
+    ("/stock_balance",  "Stock Balance"),
+    ("/orders_list",    "SPRF List"),
+    ("/admin/usage",    "Admin · Usage"),
+    ("/map",            "Map View"),
+    ("/stock",          "Stock"),
+    ("/rebate",         "Rebate"),
+    ("/price",          "Price"),
+    ("/meeting",        "Meeting"),
+    ("/claims",         "Claims"),
+    ("/orders",         "SPRF"),
+    ("/order",          "SPRF Form"),
+    ("/highlights",     "Highlights"),
+    ("/admin",          "Admin"),
+]
+
+def _path_to_section(p):
+    """Map an incoming request path to a human section label.  Only
+    PAGE-level routes are classified; API endpoints (which the user
+    doesn't 'click' directly) return None so they drop out of the
+    section tally while still contributing to the raw click count."""
+    if not p:
+        return None
+    if p.startswith("/api/"):
+        return None
+    if p == "/":
+        return "Graph View"
+    for prefix, label in _SECTION_RULES:
+        if p == prefix or p.startswith(prefix + "/") or p.startswith(prefix + "?"):
+            return label
+    return "Other"
+
+
+def _is_download_path(p):
+    """Treat these as a Download hit on the usage dashboard."""
+    if not p:
+        return False
+    pl = p.lower()
+    if "/export_excel" in pl: return True
+    if pl.endswith(".xlsx") or pl.endswith(".csv") or pl.endswith(".pdf"): return True
+    if "/download" in pl: return True
+    if "/list_excel" in pl: return True
+    return False
+
+
+def _parse_date_window(args):
+    """Parse ?from=YYYY-MM-DD&to=YYYY-MM-DD; fall back to ?days=N.
+    Returns (from_date, to_date) inclusive, both python date objects."""
+    from datetime import date, timedelta
+    today = date.today()
+    def _p(s):
+        try:
+            return date.fromisoformat((s or "").strip())
+        except Exception:
+            return None
+    fd = _p(args.get("from"))
+    td = _p(args.get("to"))
+    if fd and td:
+        if fd > td: fd, td = td, fd
+        return fd, td
+    try:
+        n = max(1, min(int(args.get("days") or 30), 365))
+    except Exception:
+        n = 30
+    return today - timedelta(days=n - 1), today
+
+
+def _working_days_between(d_from, d_to):
+    """Mon-Fri count across [d_from, d_to] inclusive — the denominator
+    for the dashboard's working-day average."""
+    from datetime import timedelta
+    n = 0
+    d = d_from
+    while d <= d_to:
+        if d.weekday() < 5:
+            n += 1
+        d += timedelta(days=1)
+    return n
+
+
+def _months_spanned(d_from, d_to):
+    """Approximate month count in the window, rounded up to the nearest
+    tenth of a month so a 15-day window reads as 0.5 (not 0 or 1)."""
+    days = (d_to - d_from).days + 1
+    return round(days / 30.0, 1) if days > 0 else 0.0
+
+
+@app.get("/api/admin/usage/summary")
+def admin_usage_summary():
+    """Rich per-user usage roll-up used by the System Usage page.
+
+    Window: ?from=YYYY-MM-DD&to=YYYY-MM-DD (both inclusive), or
+            ?days=N (default 30, max 365) when the dates aren't given.
+
+    Returns:
+      period  : {from, to, days, working_days, months}
+      totals  : {requests, uniq_users, page_views, sessions,
+                 total_hours, downloads}
+      by_section : [{section, hits, uniq_users}] — pages only
+      by_user : [{email, name, sessions, page_clicks, hours,
+                  downloads, days_active, avg_daily_clicks (per
+                  working day), avg_monthly_clicks, sections: {label:n}}]
+      daily   : [{d, requests, uniq_users, sessions, hours}]
+
+    Sessions are derived in Python by walking each user's chronological
+    request stream and starting a new session whenever the gap exceeds
+    _SESSION_GAP_MIN.  Session duration = last_hit - first_hit WITHIN
+    a session (not across gaps), summed per user.
+    """
+    if not _is_admin_request():
+        return jsonify({"error": "admin only"}), 403
+
+    d_from, d_to = _parse_date_window(request.args)
+    from datetime import datetime, timedelta
+    dt_from = datetime.combine(d_from, datetime.min.time())
+    dt_to   = datetime.combine(d_to,   datetime.max.time())
+    gap     = timedelta(minutes=_SESSION_GAP_MIN)
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+
+        # Pull every row in the window ordered by (user, time) so one
+        # linear pass computes sessions, duration and per-user stats.
+        cur.execute(
+            "SELECT user_email, path, created_at "
+            "FROM request_log "
+            "WHERE created_at BETWEEN %s AND %s "
+            "ORDER BY user_email, created_at",
+            (dt_from, dt_to),
+        )
+        rows = cur.fetchall() or []
+        cur.close(); conn.close()
+
+        # ---- per-user accumulators ----
+        users = {}       # email → stats dict
+        totals = {"requests": 0, "page_views": 0, "sessions": 0,
+                  "total_seconds": 0, "downloads": 0}
+        section_hits = {}        # label → {"hits": n, "users": set}
+        daily_bucket = {}        # YYYY-MM-DD → {"requests", "users":set,
+                                 #                "sessions":n,
+                                 #                "seconds":s}
+        uniq_users = set()
+
+        def _u(email):
+            if email not in users:
+                users[email] = {
+                    "email":        email,
+                    "page_clicks":  0,
+                    "requests":     0,
+                    "sessions":     0,
+                    "total_seconds":0,
+                    "downloads":    0,
+                    "sections":     {},
+                    "days":         set(),
+                    "last_seen":    None,
+                    "_curr_session_start": None,
+                    "_curr_session_last":  None,
+                }
+            return users[email]
+
+        for r in rows:
+            email = (r.get("user_email") or "").strip().lower()
+            if not email:
+                email = "(no auth)"
+            path  = r.get("path") or ""
+            ts    = r.get("created_at")
+            if ts is None:
+                continue
+            uniq_users.add(email)
+            totals["requests"] += 1
+
+            u = _u(email)
+            u["requests"] += 1
+            u["last_seen"] = ts
+            u["days"].add(ts.date())
+
+            # Session continuation vs. new session
+            if u["_curr_session_last"] is None or (ts - u["_curr_session_last"]) > gap:
+                u["sessions"] += 1
+                totals["sessions"] += 1
+                u["_curr_session_start"] = ts
+            else:
+                u["total_seconds"]     += (ts - u["_curr_session_last"]).total_seconds()
+                totals["total_seconds"] += (ts - u["_curr_session_last"]).total_seconds()
+            u["_curr_session_last"] = ts
+
+            # Daily rollup (based on request calendar day)
+            dk = ts.strftime("%Y-%m-%d")
+            db = daily_bucket.setdefault(dk, {"requests": 0, "users": set(),
+                                              "sessions": 0, "seconds": 0.0})
+            db["requests"] += 1
+            db["users"].add(email)
+
+            # Section classification — pages only
+            sec = _path_to_section(path)
+            if sec is not None:
+                totals["page_views"] += 1
+                u["page_clicks"]    += 1
+                u["sections"][sec]  = u["sections"].get(sec, 0) + 1
+                sh = section_hits.setdefault(sec, {"hits": 0, "users": set()})
+                sh["hits"] += 1
+                sh["users"].add(email)
+
+            # Downloads
+            if _is_download_path(path):
+                u["downloads"]    += 1
+                totals["downloads"] += 1
+
+        # Finalise daily sessions / seconds by scanning per-user state
+        # over day boundaries.  Approximation: distribute each user's
+        # per-day time evenly from their requests on that day.
+        for u in users.values():
+            # Sessions-per-day via a quick re-walk only for the daily
+            # breakdown; the per-user top-level already has u["sessions"].
+            # Keep it light: just distribute sessions proportionally.
+            pass
+        # Instead of a second walk, bucket each row again just for daily
+        # session approximation.
+        # (Lightweight: one more linear pass.)
+        _last_by_user = {}
+        for r in rows:
+            email = (r.get("user_email") or "").strip().lower() or "(no auth)"
+            ts = r.get("created_at")
+            if ts is None: continue
+            dk = ts.strftime("%Y-%m-%d")
+            db = daily_bucket.setdefault(dk, {"requests": 0, "users": set(),
+                                              "sessions": 0, "seconds": 0.0})
+            prev = _last_by_user.get(email)
+            if prev is None or (ts - prev) > gap:
+                db["sessions"] += 1
+            else:
+                db["seconds"] += (ts - prev).total_seconds()
+            _last_by_user[email] = ts
+
+        # Shape per-section
+        by_section = sorted(
+            [{"section": s, "hits": v["hits"], "uniq_users": len(v["users"])}
+             for s, v in section_hits.items()],
+            key=lambda x: x["hits"], reverse=True,
+        )
+
+        # Shape per-user
+        wd = _working_days_between(d_from, d_to)
+        mo = _months_spanned(d_from, d_to)
+        by_user = []
+        for email, u in users.items():
+            name = ""
+            try:
+                m = _EMAIL_TO_DIR.get(email)
+                name = m[0] if m else ""
+            except Exception:
+                pass
+            hours = round(u["total_seconds"] / 3600.0, 2)
+            by_user.append({
+                "email":                email,
+                "name":                 name,
+                "sessions":             u["sessions"],
+                "page_clicks":          u["page_clicks"],
+                "requests":             u["requests"],
+                "hours":                hours,
+                "downloads":            u["downloads"],
+                "days_active":          len(u["days"]),
+                "avg_daily_clicks":     round(u["page_clicks"] / wd, 1) if wd > 0 else 0,
+                "avg_monthly_clicks":   round(u["page_clicks"] / mo, 1) if mo > 0 else 0,
+                "sections":             u["sections"],
+                "last_seen": (u["last_seen"].strftime("%Y-%m-%d %H:%M")
+                              if u["last_seen"] else ""),
+            })
+        by_user.sort(key=lambda x: x["page_clicks"], reverse=True)
+
+        # Shape daily
+        daily = sorted(
+            [{"d":        dk,
+              "requests": db["requests"],
+              "uniq_users": len(db["users"]),
+              "sessions": db["sessions"],
+              "hours":    round(db["seconds"] / 3600.0, 2)}
+             for dk, db in daily_bucket.items()],
+            key=lambda x: x["d"],
+        )
+
+        return jsonify({
+            "period": {
+                "from":          d_from.isoformat(),
+                "to":            d_to.isoformat(),
+                "days":          (d_to - d_from).days + 1,
+                "working_days":  wd,
+                "months":        mo,
+                "session_gap_min": _SESSION_GAP_MIN,
+            },
+            "totals": {
+                "requests":   totals["requests"],
+                "page_views": totals["page_views"],
+                "uniq_users": len(uniq_users),
+                "sessions":   totals["sessions"],
+                "total_hours": round(totals["total_seconds"] / 3600.0, 2),
+                "downloads":  totals["downloads"],
+            },
+            "by_section": by_section,
+            "by_user":    by_user,
+            "daily":      daily,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/admin/is_admin")
+def admin_is_admin():
+    """Tiny probe so the frontend can decide whether to render the
+    Admin dropdown in the top nav.  Returns {ok: True, is_admin: bool}
+    — safe for every signed-in caller, never 403."""
+    return jsonify({"ok": True, "is_admin": _is_admin_request()})
+
+
 @app.post("/api/meeting/voice_extract")
 def meeting_voice_extract():
     """Convert a free-form voice transcript into structured meeting_log fields.

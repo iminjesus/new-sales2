@@ -253,7 +253,59 @@
       <button class="btn" onclick="window.location.href='/claims'">Claims</button>
       <button class="btn" onclick="window.location.href='/orders_list'">📄 SPRF</button>
       <button class="btn" onclick="window.location.href='/highlights'">📊 Highlights</button>
+      <!-- Admin dropdown — hidden by default; the admin-probe below
+           un-hides it only for ALL-role callers so a BDE's nav isn't
+           cluttered with menus they can't open.  Container keeps
+           position relative for the absolute-positioned menu. -->
+      <div id="adminMenuWrap" style="position:relative;display:none">
+        <button id="adminMenuBtn" class="btn" type="button"
+                style="background:#1e3a5f;color:#fff;border-color:#0f172a">
+          🔧 Admin <span style="opacity:.65;font-size:10px">▾</span>
+        </button>
+        <div id="adminMenu" hidden
+             style="position:absolute;right:0;top:100%;margin-top:4px;background:#fff;
+                    border:1px solid #cbd5e1;border-radius:6px;
+                    box-shadow:0 8px 24px rgba(0,0,0,.15);
+                    min-width:170px;z-index:100;overflow:hidden">
+          <a href="/admin/usage"
+             style="display:block;padding:8px 12px;font-size:12.5px;color:#0f172a;
+                    text-decoration:none;border-bottom:1px solid #f1f5f9"
+             onmouseover="this.style.background='#eff6ff'"
+             onmouseout="this.style.background=''">
+            📈 System Usage
+          </a>
+        </div>
+      </div>
     </div>
+    <script>
+    /* Admin dropdown — probe /api/admin/is_admin and only reveal the
+       button when the server confirms ALL-role.  Dropdown toggles on
+       the button click and closes on outside click / Escape. */
+    (async function initAdminMenu(){
+      try {
+        const r = await fetch("/api/admin/is_admin", {credentials: "same-origin"});
+        const j = await r.json().catch(() => ({is_admin: false}));
+        if (!j || !j.is_admin) return;
+      } catch(_){
+        return;
+      }
+      const wrap = document.getElementById("adminMenuWrap");
+      const btn  = document.getElementById("adminMenuBtn");
+      const menu = document.getElementById("adminMenu");
+      if (!wrap || !btn || !menu) return;
+      wrap.style.display = "inline-flex";
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        menu.hidden = !menu.hidden;
+      });
+      document.addEventListener("click", (e) => {
+        if (!wrap.contains(e.target)) menu.hidden = true;
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") menu.hidden = true;
+      });
+    })();
+    </script>
   </div>
 
   <!-- ── PRODUCT section ── -->
