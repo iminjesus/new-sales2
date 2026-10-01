@@ -180,16 +180,11 @@ def _thismonth_query_stack(f, top_sold_to=None, month=None):
     if (f.get("product_group") != "ALL" or f.get("pattern") != "ALL"
             or f.get("material") != "ALL" or f.get("code") != "ALL"):
         _ensure_carrying_join("s", joins)
-    if f.get("product_group", "ALL") != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f.get("brand", "ALL") != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f.get("pattern", "ALL") != "ALL":
-        wh.append("mat.pattern = %s"); params.append(f["pattern"])
-    if f.get("material", "ALL") != "ALL":
-        wh.append("mat.size = %s"); params.append(f["material"])
-    if f.get("code", "ALL") != "ALL":
-        wh.append(_code_group_clause("mat")); params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f.get("product_group"))
+    _add_multi(wh, params, "mat.brand", f.get("brand"))
+    _add_multi(wh, params, "mat.pattern", f.get("pattern"))
+    _add_multi(wh, params, "mat.size", f.get("material"))
+    _add_code_multi(wh, params, "mat", f["code"])
     if top_sold_to:
         ph = ",".join(["%s"] * len(top_sold_to))
         wh.append(f"s.sold_to IN ({ph})")
@@ -273,6 +268,72 @@ REGION_STATES = {
 def _code_group_clause(alias):
     return f"{alias}.m_code = %s"
 
+
+# ─── Multi-value filter helpers ───────────────────────────────────
+# Every filter from the frontend arrives as a single string.  A
+# comma inside it means "multi-select" — the caller wants rows
+# matching ANY of the listed values.  _multi_values splits the
+# input into a clean list; _multi_clause turns that list into a
+# ready-to-interpolate WHERE fragment ("col = %s" for one, "col IN
+# (%s, %s)" for several) plus the matching params list.  Every
+# equality-style filter on the dashboard now routes through this
+# so switching a dropdown to multi-select is a frontend-only
+# change — the backend already accepts "Dynapro,Kinergy" or
+# "NSW,VIC,QLD" and expands them into IN clauses automatically.
+
+def _multi_values(s):
+    """Split a comma-separated filter value into a list of trimmed,
+    non-empty, non-ALL strings.  Returns [] when the input is
+    blank, 'ALL' (any case), or an empty list after cleaning."""
+    if s is None:
+        return []
+    s = str(s).strip()
+    if not s or s.upper() == "ALL":
+        return []
+    parts = [p.strip() for p in s.split(",")]
+    return [p for p in parts if p and p.upper() != "ALL"]
+
+
+def _multi_clause(col, values):
+    """Turn a (col, [v1, v2, ...]) pair into (fragment, params).
+      • []           → ("", [])
+      • ["foo"]      → ("col = %s", ["foo"])
+      • ["foo","bar"]→ ("col IN (%s,%s)", ["foo","bar"])
+    Safe to %-format into a SQL string because `col` is caller-
+    supplied; param values go through the driver's bind path."""
+    if not values:
+        return "", []
+    if len(values) == 1:
+        return f"{col} = %s", [values[0]]
+    ph = ",".join(["%s"] * len(values))
+    return f"{col} IN ({ph})", list(values)
+
+
+def _add_multi(wh, params, col, raw_value):
+    """Append a WHERE fragment + params for a possibly comma-separated
+    filter value.  No-op when the value is blank, 'ALL', or expands to
+    an empty list.  `wh` and `params` are mutated in place."""
+    vals = _multi_values(raw_value)
+    if not vals:
+        return
+    frag, extras = _multi_clause(col, vals)
+    wh.append(frag)
+    params.extend(extras)
+
+
+def _add_code_multi(wh, params, alias, raw_value):
+    """M-Code filter helper: equivalent to _add_multi on <alias>.m_code
+    but factored through _code_group_clause so a future s_code-group
+    expansion stays localised in one place.  No-op when the value is
+    blank or 'ALL'."""
+    vals = _multi_values(raw_value)
+    if not vals:
+        return
+    frag, extras = _multi_clause(f"{alias}.m_code", vals)
+    wh.append(frag)
+    params.extend(extras)
+
+
 # ─── Global sold-to exclusion ─────────────────────────────────────
 # Sold-to codes whose data is dropped from every chart / breakdown
 # / export routed through build_customer_filters.  Covers both
@@ -309,70 +370,118 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
         p.append(_ex)
 
     # ?? region: EXISTS on customer (ship_to only) ??no JOIN inflation ??
-    if f["region"] != "ALL":
-        states = REGION_STATES.get(f["region"].upper(), [f["region"]])
-        ph = ",".join(["%s"] * len(states))
-        wh.append(
-            f"EXISTS (SELECT 1 FROM customer _cr"
-            f" WHERE _cr.ship_to = {alias_fact}.ship_to"
-            f" AND _cr.bde_state IN ({ph}))"
-        )
-        p.extend(states)
+    # Multi-value: "NSW,QLD" expands via REGION_STATES to every real
+    # state code behind each pick, then EXISTS on customer (ship_to
+    # only) with an IN clause so one trip through the index covers
+    # every region selected.
+    _r_vals = _multi_values(f["region"])
+    if _r_vals:
+        states = []
+        for r in _r_vals:
+            states.extend(REGION_STATES.get(r.upper(), [r]))
+        _frag, _p = _multi_clause("_cr.bde_state", states)
+        if _frag:
+            wh.append(
+                f"EXISTS (SELECT 1 FROM customer _cr"
+                f" WHERE _cr.ship_to = {alias_fact}.ship_to"
+                f" AND {_frag})"
+            )
+            p.extend(_p)
 
     # ?? salesman: EXISTS on target_26 (bde is authoritative; customer.salesman_name
     #    may be missing or inconsistent for some regions like WA) ??
-    if f["salesman"] != "ALL":
+    # Multi-value: upper-trimmed IN clause.  target_26.bde is
+    # authoritative; customer.salesman_name is incomplete for WA/NT.
+    _sm_vals = _multi_values(f["salesman"])
+    if _sm_vals:
+        ph = ",".join(["UPPER(TRIM(%s))"] * len(_sm_vals))
         wh.append(
             f"EXISTS (SELECT 1 FROM target_26 _t"
             f" WHERE _t.ship_to = {alias_fact}.ship_to"
-            f" AND UPPER(TRIM(_t.bde)) = UPPER(TRIM(%s)))"
+            f" AND UPPER(TRIM(_t.bde)) IN ({ph}))"
         )
-        p.append(f["salesman"])
+        p.extend(_sm_vals)
 
     # ?? sold_to_group: EXISTS on customer (ship_to only) ??
-    if f["sold_to_group"] != "ALL":
+    # Multi-value: EXISTS on customer with IN clause.
+    _sg_vals = _multi_values(f["sold_to_group"])
+    if _sg_vals:
+        _frag, _p = _multi_clause("_cr.sold_to_group", _sg_vals)
         wh.append(
             f"EXISTS (SELECT 1 FROM customer _cr"
             f" WHERE _cr.ship_to = {alias_fact}.ship_to"
-            f" AND _cr.sold_to_group = %s)"
+            f" AND {_frag})"
         )
-        p.append(f["sold_to_group"])
+        p.extend(_p)
 
     # Channel filter: EXISTS on customer (ship_to only), same shape as
     # sold_to_group above so a Channel pick narrows the fact table to
     # ship_tos whose customer-master row carries that channels value.
-    if f.get("channel", "ALL") != "ALL":
+    # Multi-value Channel: EXISTS on customer with IN clause.
+    _ch_vals = _multi_values(f.get("channel"))
+    if _ch_vals:
+        _frag, _p = _multi_clause("TRIM(_ch.channels)", _ch_vals)
         wh.append(
             f"EXISTS (SELECT 1 FROM customer _ch"
             f" WHERE _ch.ship_to = {alias_fact}.ship_to"
-            f" AND TRIM(_ch.channels) = %s)"
+            f" AND {_frag})"
         )
-        p.append(f["channel"])
+        p.extend(_p)
 
     # ?? sold_to: id ??direct filter on fact table; name ??subquery ??
-    if f["sold_to"] != "ALL":
-        sv = f["sold_to"]
-        if not use_sold_to_name and (sv.isdigit() or sv.upper().startswith("A")):
-            wh.append(f"{alias_fact}.sold_to = %s"); p.append(sv)
-        else:
-            wh.append(
+    # Multi-value Sold-to: ids and names mix freely in one pick.
+    # Each token is treated as an id when it starts with a digit or
+    # 'A'; the rest resolve through the customer-master name index.
+    # The two buckets are ORed inside one bracketed clause so a user
+    # typing "100159, Shop Smith, A0001" matches all three.
+    _st_vals = _multi_values(f["sold_to"])
+    if _st_vals:
+        id_vals, name_vals = [], []
+        for sv in _st_vals:
+            if not use_sold_to_name and (sv.isdigit() or sv.upper().startswith("A")):
+                id_vals.append(sv)
+            else:
+                name_vals.append(sv)
+        _ors, _params = [], []
+        if id_vals:
+            _frag, _p = _multi_clause(f"{alias_fact}.sold_to", id_vals)
+            _ors.append(_frag); _params.extend(_p)
+        if name_vals:
+            ph = ",".join(["%s"] * len(name_vals))
+            _ors.append(
                 f"{alias_fact}.sold_to IN ("
-                f"SELECT DISTINCT sold_to FROM customer WHERE sold_to_name = %s)"
+                f"SELECT DISTINCT sold_to FROM customer WHERE sold_to_name IN ({ph}))"
             )
-            p.append(sv)
+            _params.extend(name_vals)
+        if _ors:
+            wh.append("(" + " OR ".join(_ors) + ")")
+            p.extend(_params)
 
     # ?? ship_to: code ??direct; name ??subquery (names now come as codes from frontend) ??
-    if f["ship_to"] != "ALL":
-        st = f["ship_to"].strip()
-        if st.isdigit() or st.upper().startswith("A"):
-            wh.append(f"{alias_fact}.ship_to = %s"); p.append(st)
-        else:
-            wh.append(
+    # Multi-value Ship-to: same code vs name split as sold_to.
+    _sh_vals = _multi_values(f["ship_to"])
+    if _sh_vals:
+        id_vals, name_vals = [], []
+        for st in _sh_vals:
+            if st.isdigit() or st.upper().startswith("A"):
+                id_vals.append(st)
+            else:
+                name_vals.append(st)
+        _ors, _params = [], []
+        if id_vals:
+            _frag, _p = _multi_clause(f"{alias_fact}.ship_to", id_vals)
+            _ors.append(_frag); _params.extend(_p)
+        if name_vals:
+            ph = ",".join(["UPPER(TRIM(%s))"] * len(name_vals))
+            _ors.append(
                 f"{alias_fact}.ship_to IN ("
                 f"SELECT DISTINCT ship_to FROM customer"
-                f" WHERE UPPER(TRIM(ship_to_name)) = UPPER(TRIM(%s)))"
+                f" WHERE UPPER(TRIM(ship_to_name)) IN ({ph}))"
             )
-            p.append(st)
+            _params.extend(name_vals)
+        if _ors:
+            wh.append("(" + " OR ".join(_ors) + ")")
+            p.extend(_params)
 
     if needs_cus:
         joins.append(_customer_join(alias_fact))
@@ -390,31 +499,75 @@ def build_target_filters(alias: str, f):
     wh, p = [], []
     needs_cus = False
 
-    if f["region"] != "ALL":
-        states = REGION_STATES.get(f["region"].upper(), [f["region"]])
-        if len(states) == 1:
-            wh.append(f"{alias}.state = %s"); p.append(states[0])
-        else:
-            wh.append(f"{alias}.state IN ({','.join(['%s']*len(states))})"); p.extend(states)
-    if f["salesman"] != "ALL":
-        wh.append(f"UPPER(TRIM({alias}.bde)) = UPPER(TRIM(%s))"); p.append(f["salesman"])
-    if f["sold_to_group"] != "ALL":
+    r_vals = _multi_values(f["region"])
+    if r_vals:
+        states = []
+        for rv in r_vals:
+            states += REGION_STATES.get(rv.upper(), [rv])
+        states = list(dict.fromkeys(states))  # dedup, preserve order
+        frag, extras = _multi_clause(f"{alias}.state", states)
+        wh.append(frag); p.extend(extras)
+
+    sm_vals = _multi_values(f["salesman"])
+    if sm_vals:
+        ph = ",".join(["%s"] * len(sm_vals))
+        wh.append(f"UPPER(TRIM({alias}.bde)) IN ({ph})")
+        p.extend([v.upper().strip() for v in sm_vals])
+
+    sg_vals = _multi_values(f["sold_to_group"])
+    if sg_vals:
         needs_cus = True
-        wh.append("cus.sold_to_group = %s"); p.append(f["sold_to_group"])
-    if f["sold_to"] != "ALL":
-        sv = f["sold_to"]
-        if sv.isdigit() or sv.upper().startswith("A"):
-            wh.append(f"{alias}.sold_to = %s"); p.append(sv)
-        else:
+        frag, extras = _multi_clause("cus.sold_to_group", sg_vals)
+        wh.append(frag); p.extend(extras)
+
+    st_vals = _multi_values(f["sold_to"])
+    if st_vals:
+        id_vals, name_vals = [], []
+        for sv in st_vals:
+            if sv.isdigit() or sv.upper().startswith("A"):
+                id_vals.append(sv)
+            else:
+                name_vals.append(sv)
+        pieces = []
+        if id_vals:
+            frag, extras = _multi_clause(f"{alias}.sold_to", id_vals)
+            pieces.append(("direct", frag, extras))
+        if name_vals:
             needs_cus = True
-            wh.append("cus.sold_to_name = %s"); p.append(sv)
-    if f["ship_to"] != "ALL":
-        st = f["ship_to"].strip()
-        if st.isdigit() or st.upper().startswith("A"):
-            wh.append(f"{alias}.ship_to = %s"); p.append(st)
+            frag, extras = _multi_clause("cus.sold_to_name", name_vals)
+            pieces.append(("name", frag, extras))
+        if len(pieces) == 1:
+            wh.append(pieces[0][1]); p.extend(pieces[0][2])
         else:
+            wh.append("(" + " OR ".join(x[1] for x in pieces) + ")")
+            for _, _, extras in pieces:
+                p.extend(extras)
+
+    sh_vals = _multi_values(f["ship_to"])
+    if sh_vals:
+        id_vals, name_vals = [], []
+        for sv in sh_vals:
+            sv = sv.strip()
+            if sv.isdigit() or sv.upper().startswith("A"):
+                id_vals.append(sv)
+            else:
+                name_vals.append(sv)
+        pieces = []
+        if id_vals:
+            frag, extras = _multi_clause(f"{alias}.ship_to", id_vals)
+            pieces.append(("direct", frag, extras))
+        if name_vals:
             needs_cus = True
-            wh.append("UPPER(TRIM(cus.ship_to_name)) = UPPER(TRIM(%s))"); p.append(st)
+            ph = ",".join(["%s"] * len(name_vals))
+            pieces.append(("name",
+                           f"UPPER(TRIM(cus.ship_to_name)) IN ({ph})",
+                           [v.upper().strip() for v in name_vals]))
+        if len(pieces) == 1:
+            wh.append(pieces[0][1]); p.extend(pieces[0][2])
+        else:
+            wh.append("(" + " OR ".join(x[1] for x in pieces) + ")")
+            for _, _, extras in pieces:
+                p.extend(extras)
 
     if needs_cus:
         joins.append(f"LEFT JOIN customer cus ON cus.ship_to = {alias}.ship_to")
@@ -5827,10 +5980,7 @@ def api_stock():
         params += plants
 
         # product_group dropdown
-        if prod_group and prod_group != "ALL":
-            wh.append("c.product_group = %s")
-            params.append(prod_group)
-
+        _add_multi(wh, params, "c.product_group ", prod_group)
         # pattern search
         if pattern:
             wh.append("c.pattern LIKE %s")
@@ -5843,9 +5993,7 @@ def api_stock():
             params.append(f"%{material}%")
 
         # code search (carrying_26.m_code) — exact match, same table
-        if code and code != "ALL":
-            wh.append(_code_group_clause("c"))
-            params.append(code)
+        _add_code_multi(wh, params, "c", code)
 
         # category chip handling ??carrying_26 c is already joined above
         if category == "PCLT":
@@ -5971,14 +6119,12 @@ def api_stock_history():
                       f"ON {alias_c}.m_code = {alias_s}.material"]
             wh     = []
             params = []
-            if prod_group and prod_group != "ALL":
-                wh.append(f"{alias_c}.product_group = %s"); params.append(prod_group)
+            _add_multi(wh, params, f"{alias_c}.product_group", prod_group)
             if pattern:
                 wh.append(f"{alias_c}.pattern LIKE %s");   params.append(f"%{pattern}%")
             if material:
                 wh.append(f"{alias_c}.size LIKE %s");      params.append(f"%{material}%")
-            if code and code != "ALL":
-                wh.append(_code_group_clause(alias_c));       params.append(code)
+            _add_code_multi(wh, params, alias_c, code)
             # Optional cohort narrowing — used by the low-stock
             # workflow so the history chart follows the same s_code
             # set that's on the warning table.
@@ -6181,14 +6327,12 @@ def api_stock_warnings():
     wh     = ["c.line IN ('PCLT','TBR')",
               "c.size IS NOT NULL", "TRIM(c.size) <> ''"]
     params = []
-    if prod_group and prod_group != "ALL":
-        wh.append("c.product_group = %s"); params.append(prod_group)
+    _add_multi(wh, params, "c.product_group ", prod_group)
     if pattern:
         wh.append("c.pattern LIKE %s");   params.append(f"%{pattern}%")
     if material:
         wh.append("c.size = %s");         params.append(material)
-    if code and code != "ALL":
-        wh.append(_code_group_clause("c"));       params.append(code)
+    _add_code_multi(wh, params, "c", code)
     if   category == "PCLT":   wh.append("c.line = 'PCLT'")
     elif category == "TBR":    wh.append("c.line = 'TBR'")
     elif category == "18PLUS":
@@ -6563,14 +6707,12 @@ def api_stock_top_sizes():
               "c.size IS NOT NULL", "TRIM(c.size) <> ''",
               "c.pattern IS NOT NULL", "TRIM(c.pattern) <> ''"]
     params = []
-    if prod_group and prod_group != "ALL":
-        wh.append("c.product_group = %s"); params.append(prod_group)
+    _add_multi(wh, params, "c.product_group ", prod_group)
     if pattern:
         wh.append("c.pattern LIKE %s");    params.append(f"%{pattern}%")
     if material:
         wh.append("c.size = %s");          params.append(material)
-    if code and code != "ALL":
-        wh.append(_code_group_clause("c")); params.append(code)
+    _add_code_multi(wh, params, "c", code)
     if   category == "PCLT":   wh.append("c.line = 'PCLT'")
     elif category == "TBR":    wh.append("c.line = 'TBR'")
     elif category == "18PLUS":
@@ -6826,14 +6968,12 @@ def api_stock_aging():
 
     car_wh = []
     car_p  = []
-    if prod_group and prod_group != "ALL":
-        car_wh.append("c.product_group = %s"); car_p.append(prod_group)
+    _add_multi(car_wh, car_p, "c.product_group ", prod_group)
     if pattern:
         car_wh.append("c.pattern LIKE %s"); car_p.append(f"%{pattern}%")
     if material:
         car_wh.append("c.size = %s"); car_p.append(material)
-    if code and code != "ALL":
-        car_wh.append(_code_group_clause("c")); car_p.append(code)
+    _add_code_multi(car_wh, car_p, "c", code)
     if category == "PCLT":
         car_wh.append("c.line = 'PCLT'")
     elif category == "TBR":
@@ -6990,10 +7130,9 @@ def api_sales_stats():
         base_wh    = list(cat_wh)
         base_params: list = []
 
-        if prod_group and prod_group != "ALL":
+        if _multi_values(prod_group):
             _ensure_carrying_join("s", base_joins)
-            base_wh.append("mat.product_group = %s")
-            base_params.append(prod_group)
+            _add_multi(base_wh, base_params, "mat.product_group", prod_group)
         if pattern:
             _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.pattern LIKE %s")
@@ -7002,10 +7141,9 @@ def api_sales_stats():
             _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.size LIKE %s")
             base_params.append(f"%{material}%")
-        if code and code != "ALL":
+        if _multi_values(code):
             _ensure_carrying_join("s", base_joins)
-            base_wh.append(_code_group_clause("mat"))
-            base_params.append(code)
+            _add_code_multi(base_wh, base_params, "mat", code)
 
         results = {}
         for label, periods in (("3m", periods_3), ("6m", periods_6), ("12m", periods_12)):
@@ -7100,8 +7238,7 @@ def api_sales_stats_by_state():
             )
             if needs_carrying:
                 joins.append(f"JOIN carrying_26 c ON c.m_code = {tbl_alias}.material")
-            if prod_group and prod_group != "ALL":
-                wh.append("c.product_group = %s"); params.append(prod_group)
+            _add_multi(wh, params, "c.product_group ", prod_group)
             if pattern:
                 wh.append("c.pattern LIKE %s"); params.append(f"%{pattern}%")
             if material:
@@ -7198,9 +7335,9 @@ def api_sales_stats_by_state():
         base_wh    = list(cat_wh_s)
         base_params: list = []
 
-        if prod_group and prod_group != "ALL":
+        if _multi_values(prod_group):
             _ensure_carrying_join("s", base_joins)
-            base_wh.append("mat.product_group = %s"); base_params.append(prod_group)
+            _add_multi(base_wh, base_params, "mat.product_group", prod_group)
         if pattern:
             _ensure_carrying_join("s", base_joins)
             base_wh.append("mat.pattern LIKE %s"); base_params.append(f"%{pattern}%")
@@ -7324,8 +7461,7 @@ def api_cascade_ancestors():
             params = [material]
             if pattern:
                 where.append("pattern = %s"); params.append(pattern)
-            if pg and pg != "ALL":
-                where.append("product_group = %s"); params.append(pg)
+            _add_multi(where, params, "product_group ", pg)
             cur.execute(
                 "SELECT DISTINCT line, product_group, pattern "
                 "FROM carrying_26 "
@@ -7351,8 +7487,7 @@ def api_cascade_ancestors():
         if pattern:
             where  = ["line IN ('PCLT','TBR')", "pattern = %s"]
             params = [pattern]
-            if pg and pg != "ALL":
-                where.append("product_group = %s"); params.append(pg)
+            _add_multi(where, params, "product_group ", pg)
             cur.execute(
                 "SELECT DISTINCT line, product_group "
                 "FROM carrying_26 "
@@ -7454,8 +7589,7 @@ def api_sales_stats_by_product_level():
 
     extra_wh = []
     extra_p  = []
-    if prod_group and prod_group != "ALL":
-        extra_wh.append("c.product_group = %s"); extra_p.append(prod_group)
+    _add_multi(extra_wh, extra_p, "c.product_group ", prod_group)
     if pattern:
         extra_wh.append("c.pattern LIKE %s"); extra_p.append(f"%{pattern}%")
     if material:
@@ -7465,8 +7599,7 @@ def api_sales_stats_by_product_level():
         # "205/55R16") into the picked bucket.  User wants ONLY the
         # picked size to remain, so bind tightly.
         extra_wh.append("c.size = %s"); extra_p.append(material)
-    if code and code != "ALL":
-        extra_wh.append(_code_group_clause("c")); extra_p.append(code)
+    _add_code_multi(extra_wh, extra_p, "c", code)
     if category == "PCLT":
         extra_wh.append("c.line = 'PCLT'")
     elif category == "TBR":
@@ -7822,9 +7955,7 @@ def api_orders():
             if material:
                 wh.append("c.size LIKE %s")
                 params.append(f"%{material}%")
-            if prod_group and prod_group != "ALL":
-                wh.append("c.product_group = %s")
-                params.append(prod_group)
+            _add_multi(wh, params, "c.product_group ", prod_group)
             if pattern:
                 wh.append("c.pattern LIKE %s")
                 params.append(f"%{pattern}%")
@@ -7965,9 +8096,7 @@ def api_incoming():
             params.append(f"%{material}%")
 
         if needs_carrying:
-            if prod_group and prod_group != "ALL":
-                wh.append("c.product_group = %s")
-                params.append(prod_group)
+            _add_multi(wh, params, "c.product_group ", prod_group)
             if pattern:
                 wh.append("c.pattern LIKE %s")
                 params.append(f"%{pattern}%")
@@ -8067,15 +8196,10 @@ def get_top_sold_to_from_baseline(cur, f, top_limit, value):
     if (f.get("product_group") != "ALL" or f.get("pattern") != "ALL" or
         f.get("material") != "ALL"):
         _ensure_carrying_join("sTop", joins)
-    if f.get("product_group") != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f.get("pattern") != "ALL":
-        wh.append("mat.pattern = %s"); params.append(f["pattern"])
-    if f.get("material") != "ALL":
-        wh.append("mat.size = %s"); params.append(f["material"])
-
+    _add_multi(wh, params, "mat.product_group ", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern ", f["pattern"])
+    _add_multi(wh, params, "mat.size ", f["material"])
     # Always restrict to 2026 — the ranking is "this year's top sold_tos
     # within the selected slice", not last year's.
     # Use billing_date (indexed) — the virtual `year` column isn't
@@ -8130,16 +8254,11 @@ def api_top_sold_to_details():
             or f.get("material") != "ALL" or f.get("code") != "ALL"
             or f.get("brand") != "ALL"):
             _ensure_carrying_join("sTop", joins)
-        if f.get("product_group") != "ALL":
-            wh.append("mat.product_group = %s"); params.append(f["product_group"])
-        if f["brand"] != "ALL":
-            wh.append("mat.brand = %s"); params.append(f["brand"])
-        if f.get("pattern") != "ALL":
-            wh.append("mat.pattern = %s"); params.append(f["pattern"])
-        if f.get("material") != "ALL":
-            wh.append("mat.size = %s"); params.append(f["material"])
-        if f["code"] != "ALL":
-            wh.append(_code_group_clause("mat")); params.append(f["code"])
+        _add_multi(wh, params, "mat.product_group ", f["product_group"])
+        _add_multi(wh, params, "mat.brand", f["brand"])
+        _add_multi(wh, params, "mat.pattern ", f["pattern"])
+        _add_multi(wh, params, "mat.size ", f["material"])
+        _add_multi(wh, params, "mat.m_code", f["code"])
         wh.append("sTop.billing_date >= '2026-01-01' "
                   "AND sTop.billing_date <  '2027-01-01'")
         where_sql = "WHERE " + " AND ".join(wh)
@@ -8207,16 +8326,11 @@ def api_top_products_details():
         inner_wh = ["line IN ('PCLT','TBR')",
                     "size IS NOT NULL", "TRIM(size) <> ''"]
         inner_p  = []
-        if f.get("product_group") != "ALL":
-            inner_wh.append("product_group = %s"); inner_p.append(f["product_group"])
-        if f["brand"] != "ALL":
-            inner_wh.append("brand = %s"); inner_p.append(f["brand"])
-        if f.get("pattern") != "ALL":
-            inner_wh.append("pattern = %s"); inner_p.append(f["pattern"])
-        if f.get("material") != "ALL":
-            inner_wh.append("size = %s"); inner_p.append(f["material"])
-        if f["code"] != "ALL":
-            inner_wh.append("m_code = %s"); inner_p.append(f["code"])
+        _add_multi(inner_wh, inner_p, "product_group ", f["product_group"])
+        _add_multi(inner_wh, inner_p, "brand", f["brand"])
+        _add_multi(inner_wh, inner_p, "pattern ", f["pattern"])
+        _add_multi(inner_wh, inner_p, "size ", f["material"])
+        _add_multi(inner_wh, inner_p, "m_code", f["code"])
         dedup = (
             "(SELECT m_code, "
             " MIN(s_code)        AS s_code, "
@@ -8368,15 +8482,20 @@ def v2_dimensions():
         """)
         product_groups = [r["v"] for r in cur.fetchall() if r.get("v") is not None]
 
-        # Patterns (filtered by product_group) ??from material master
-        if pg and pg != "ALL":
-            cur.execute("""
+        # Patterns (filtered by product_group) — from material master.
+        # Multi-select aware: if the caller passed 'PCLT,TBR' we expand
+        # to a WHERE product_group IN (...) so the pattern menu shows the
+        # union across selected groups.
+        pg_vals = _multi_values(pg)
+        if pg_vals:
+            frag, pparams = _multi_clause("product_group", pg_vals)
+            cur.execute(f"""
                 SELECT DISTINCT TRIM(pattern) AS v
                 FROM carrying_26
-                WHERE product_group = %s
+                WHERE {frag}
                   AND pattern IS NOT NULL AND TRIM(pattern) <> ''
                 ORDER BY TRIM(pattern)
-            """, (pg,))
+            """, tuple(pparams))
         else:
             cur.execute("""
                 SELECT DISTINCT TRIM(pattern) AS v
@@ -8388,10 +8507,8 @@ def v2_dimensions():
 
         # Materials (filtered by product_group/pattern)
         w2, p2 = [], []
-        if pg and pg != "ALL":
-            w2.append("product_group = %s"); p2.append(pg)
-        if pat and pat != "ALL":
-            w2.append("pattern = %s"); p2.append(pat)
+        _add_multi(w2, p2, "product_group ", pg)
+        _add_multi(w2, p2, "pattern ", pat)
         w2_sql = ("WHERE " + " AND ".join(w2)) if w2 else ""
         cur.execute(f"""
             SELECT DISTINCT size AS v
@@ -8534,16 +8651,11 @@ def v2_dashboard():
             _ensure_carrying_join("s", joins_d)
         if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
             _ensure_customer_join("s", joins_d)
-        if f["product_group"] != "ALL":
-            wh_d.append("mat.product_group = %s"); params_d.append(f["product_group"])
-        if f["brand"] != "ALL":
-            wh_d.append("mat.brand = %s"); params_d.append(f["brand"])
-        if f["pattern"] != "ALL":
-            wh_d.append("mat.pattern = %s"); params_d.append(f["pattern"])
-        if f["material"] != "ALL":
-            wh_d.append("mat.size = %s"); params_d.append(f["material"])
-        if f["code"] != "ALL":
-            wh_d.append(_code_group_clause("mat")); params_d.append(f["code"])
+        _add_multi(wh_d, params_d, "mat.product_group", f["product_group"])
+        _add_multi(wh_d, params_d, "mat.brand", f["brand"])
+        _add_multi(wh_d, params_d, "mat.pattern", f["pattern"])
+        _add_multi(wh_d, params_d, "mat.size", f["material"])
+        _add_multi(wh_d, params_d, "mat.m_code", f["code"])
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_d.append(f"s.sold_to IN ({placeholders})")
@@ -8602,21 +8714,21 @@ def v2_dashboard():
         wh_t.append("t.month = %s"); params_t.append(month)
         carrying_join_t = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
         needs_carrying_t = False
-        if f["product_group"] != "ALL":
+        if _multi_values(f["product_group"]):
             needs_carrying_t = True
-            wh_t.append("mat.product_group = %s"); params_t.append(f["product_group"])
-        if f["brand"] != "ALL":
+            _add_multi(wh_t, params_t, "mat.product_group", f["product_group"])
+        if _multi_values(f["brand"]):
             needs_carrying_t = True
-            wh_t.append("mat.brand = %s"); params_t.append(f["brand"])
-        if f["pattern"] != "ALL":
+            _add_multi(wh_t, params_t, "mat.brand", f["brand"])
+        if _multi_values(f["pattern"]):
             needs_carrying_t = True
-            wh_t.append("mat.pattern = %s"); params_t.append(f["pattern"])
-        if f["material"] != "ALL":
+            _add_multi(wh_t, params_t, "mat.pattern", f["pattern"])
+        if _multi_values(f["material"]):
             needs_carrying_t = True
-            wh_t.append("mat.size = %s"); params_t.append(f["material"])
-        if f["code"] != "ALL":
+            _add_multi(wh_t, params_t, "mat.size", f["material"])
+        if _multi_values(f["code"]):
             needs_carrying_t = True
-            wh_t.append(_code_group_clause("mat")); params_t.append(f["code"])
+            _add_code_multi(wh_t, params_t, "mat", f["code"])
         if needs_carrying_t and carrying_join_t not in joins_t:
             joins_t.append(carrying_join_t)
         if top_sold_to:
@@ -8649,16 +8761,11 @@ def v2_dashboard():
             _ensure_carrying_join("s", joins_m)
         if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
             _ensure_customer_join("s", joins_m)
-        if f["product_group"] != "ALL":
-            wh_m.append("mat.product_group = %s"); params_m.append(f["product_group"])
-        if f["brand"] != "ALL":
-            wh_m.append("mat.brand = %s"); params_m.append(f["brand"])
-        if f["pattern"] != "ALL":
-            wh_m.append("mat.pattern = %s"); params_m.append(f["pattern"])
-        if f["material"] != "ALL":
-            wh_m.append("mat.size = %s"); params_m.append(f["material"])
-        if f["code"] != "ALL":
-            wh_m.append(_code_group_clause("mat")); params_m.append(f["code"])
+        _add_multi(wh_m, params_m, "mat.product_group", f["product_group"])
+        _add_multi(wh_m, params_m, "mat.brand", f["brand"])
+        _add_multi(wh_m, params_m, "mat.pattern", f["pattern"])
+        _add_multi(wh_m, params_m, "mat.size", f["material"])
+        _add_multi(wh_m, params_m, "mat.m_code", f["code"])
         # 2025/2026 window on billing_date (no s.year column on this
         # sales_2526 schema — everything is derived from billing_date).
         wh_m.append("s.billing_date >= '2025-01-01' AND s.billing_date < '2027-01-01'")
@@ -8734,21 +8841,21 @@ def v2_dashboard():
         # carrying_26 needed for product_group/pattern (not stored in target_26 directly)
         carrying_join_mt = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
         needs_carrying_mt = group_by in ("brand", "product_group", "pattern")
-        if f["product_group"] != "ALL":
+        if _multi_values(f["product_group"]):
             needs_carrying_mt = True
-            wh_mt.append("mat.product_group = %s"); params_mt.append(f["product_group"])
-        if f["brand"] != "ALL":
+            _add_multi(wh_mt, params_mt, "mat.product_group", f["product_group"])
+        if _multi_values(f["brand"]):
             needs_carrying_mt = True
-            wh_mt.append("mat.brand = %s"); params_mt.append(f["brand"])
-        if f["pattern"] != "ALL":
+            _add_multi(wh_mt, params_mt, "mat.brand", f["brand"])
+        if _multi_values(f["pattern"]):
             needs_carrying_mt = True
-            wh_mt.append("mat.pattern = %s"); params_mt.append(f["pattern"])
-        if f["material"] != "ALL":
+            _add_multi(wh_mt, params_mt, "mat.pattern", f["pattern"])
+        if _multi_values(f["material"]):
             needs_carrying_mt = True
-            wh_mt.append("mat.size = %s"); params_mt.append(f["material"])
-        if f["code"] != "ALL":
+            _add_multi(wh_mt, params_mt, "mat.size", f["material"])
+        if _multi_values(f["code"]):
             needs_carrying_mt = True
-            wh_mt.append(_code_group_clause("mat")); params_mt.append(f["code"])
+            _add_code_multi(wh_mt, params_mt, "mat", f["code"])
         if needs_carrying_mt and carrying_join_mt not in joins_mt:
             joins_mt.append(carrying_join_mt)
         if top_sold_to:
@@ -8806,16 +8913,11 @@ def v2_dashboard():
             _ensure_carrying_join("s", joins_y)
         if group_by in ("region", "salesman", "sold_to_group", "sold_to"):
             _ensure_customer_join("s", joins_y)
-        if f["product_group"] != "ALL":
-            wh_y.append("mat.product_group = %s"); params_y.append(f["product_group"])
-        if f["brand"] != "ALL":
-            wh_y.append("mat.brand = %s"); params_y.append(f["brand"])
-        if f["pattern"] != "ALL":
-            wh_y.append("mat.pattern = %s"); params_y.append(f["pattern"])
-        if f["material"] != "ALL":
-            wh_y.append("mat.size = %s"); params_y.append(f["material"])
-        if f["code"] != "ALL":
-            wh_y.append(_code_group_clause("mat")); params_y.append(f["code"])
+        _add_multi(wh_y, params_y, "mat.product_group", f["product_group"])
+        _add_multi(wh_y, params_y, "mat.brand", f["brand"])
+        _add_multi(wh_y, params_y, "mat.pattern", f["pattern"])
+        _add_multi(wh_y, params_y, "mat.size", f["material"])
+        _add_multi(wh_y, params_y, "mat.m_code", f["code"])
         if top_sold_to:
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_y.append(f"s.sold_to IN ({placeholders})")
@@ -8964,21 +9066,11 @@ def daily_sales():
     # product_group / pattern / size all live in carrying_26 (alias: mat)
     if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL" or f["code"] != "ALL":
         _ensure_carrying_join("s", joins)
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s")
-        params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s")
-        params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s")
-        params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s")
-        params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"))
-        params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_code_multi(wh, params, "mat", f["code"])
 
     # Pin sales_thismonth to the business-effective month so the
     # daily chart only shows days for "this month" as the UI
@@ -9169,18 +9261,11 @@ def daily_breakdown():
         )
     else:
         group_col = group_cols[group_by]
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s");       params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s")
-        params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"))
-        params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_code_multi(wh, params, "mat", f["code"])
 
     if promos:
         _ensure_carrying_join("s", joins)
@@ -9286,16 +9371,11 @@ def daily_target():
     if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL" or f["code"] != "ALL"):
         if carrying_join_dt not in joins:
             joins.append(carrying_join_dt)
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s"); params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s"); params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat")); params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_multi(wh, params, "mat.m_code", f["code"])
 
     # restrict to the chosen month only
     wh.append("t.month = %s")
@@ -9486,14 +9566,10 @@ def fetch_table_rows(top_limit: int):
         cat_joins, cat_where = category_filters_sales("s", f.get("category", "ALL"), has_brand=True)
         joins += cat_joins
         wh    += cat_where
-    if f.get("product_group", "ALL") != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f.get("pattern", "ALL") != "ALL":
-        wh.append("mat.pattern = %s"); params.append(f["pattern"])
-    if f.get("material", "ALL") != "ALL":
-        wh.append("mat.size = %s"); params.append(f["material"])
+    _add_multi(wh, params, "mat.product_group", f.get("product_group"))
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f.get("pattern"))
+    _add_multi(wh, params, "mat.size", f.get("material"))
 
     # top filter (sold_to 湲곗?)
     if top_pairs:
@@ -9723,12 +9799,9 @@ def _build_export_common_filters(f, joins, wh, params, alias="s"):
 
     if f.get("product_group", "ALL") != "ALL" or f.get("pattern", "ALL") != "ALL":
         _ensure_carrying_join(alias, joins)
-    if f.get("product_group", "ALL") != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f.get("pattern", "ALL") != "ALL":
-        wh.append("mat.pattern = %s"); params.append(f["pattern"])
+    _add_multi(wh, params, "mat.product_group", f.get("product_group"))
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f.get("pattern"))
     if f.get("material", "ALL") != "ALL":
         wh.append(f"{alias}.material = %s"); params.append(f["material"])
 
@@ -9798,16 +9871,11 @@ def export_excel_sales2526():
         # always need this join now because the export splits rows by
         # mat.line (PCLT / TBR).
         carrying_join_t = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
-        if f["product_group"] != "ALL":
-            t_wh.append("mat.product_group = %s"); t_params.append(f["product_group"])
-        if f["brand"] != "ALL":
-            t_wh.append("mat.brand = %s"); t_params.append(f["brand"])
-        if f["pattern"] != "ALL":
-            t_wh.append("mat.pattern = %s"); t_params.append(f["pattern"])
-        if f["material"] != "ALL":
-            t_wh.append("mat.size = %s"); t_params.append(f["material"])
-        if f["code"] != "ALL":
-            t_wh.append(_code_group_clause("mat")); t_params.append(f["code"])
+        _add_multi(t_wh, t_params, "mat.product_group", f["product_group"])
+        _add_multi(t_wh, t_params, "mat.brand", f["brand"])
+        _add_multi(t_wh, t_params, "mat.pattern", f["pattern"])
+        _add_multi(t_wh, t_params, "mat.size", f["material"])
+        _add_code_multi(t_wh, t_params, "mat", f["code"])
         if carrying_join_t not in t_joins:
             t_joins.append(carrying_join_t)
 
@@ -10029,21 +10097,11 @@ def monthly_sales():
 
     if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL" or f["code"] != "ALL":
         _ensure_carrying_join("s", joins)
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s")
-        params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s")
-        params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s")
-        params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s")
-        params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"))
-        params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_code_multi(wh, params, "mat", f["code"])
 
     # Both 2025 and 2026 read directly from sales_2526 using
     # billing_date (the base column that's guaranteed to be there and
@@ -10275,16 +10333,11 @@ def monthly_breakdown():
             "  FROM customer GROUP BY sold_to"
             ") scus ON scus.sold_to = s.sold_to"
         )
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s");       params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s");          params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"));          params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_multi(wh, params, "mat.m_code", f["code"])
 
     if promos:
         # Promo filter needs carrying_26 (mat) for line/product_group +
@@ -10450,16 +10503,11 @@ def monthly_target():
     if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL" or f["code"] != "ALL"):
         if carrying_join_mt not in joins:
             joins.append(carrying_join_mt)
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s"); params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s"); params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat")); params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_multi(wh, params, "mat.m_code", f["code"])
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -10599,18 +10647,18 @@ def monthly_target_breakdown():
     carrying_join = "LEFT JOIN carrying_26 mat ON mat.m_code = t.material"
     needs_carrying = group_by in ("line", "brand", "product_group", "pattern")
 
-    if f["product_group"] != "ALL":
+    if _multi_values(f["product_group"]):
         needs_carrying = True
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
+        _add_multi(wh, params, "mat.product_group", f["product_group"])
+    if _multi_values(f["brand"]):
         needs_carrying = True
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f["pattern"] != "ALL":
+        _add_multi(wh, params, "mat.brand", f["brand"])
+    if _multi_values(f["pattern"]):
         needs_carrying = True
-        wh.append("mat.pattern = %s");       params.append(f["pattern"])
-    if f["material"] != "ALL":
+        _add_multi(wh, params, "mat.pattern", f["pattern"])
+    if _multi_values(f["material"]):
         needs_carrying = True
-        wh.append("mat.size = %s");          params.append(f["material"])
+        _add_multi(wh, params, "mat.size", f["material"])
     if f["code"] != "ALL":
         needs_carrying = True
         wh.append(_code_group_clause("mat"));        params.append(f["code"])
@@ -10701,21 +10749,11 @@ def yearly_sales():
 
     if f["product_group"] != "ALL" or f["pattern"] != "ALL" or f["material"] != "ALL" or f["code"] != "ALL":
         _ensure_carrying_join("s", joins)
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s")
-        params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s")
-        params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s")
-        params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s")
-        params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"))
-        params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_code_multi(wh, params, "mat", f["code"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
     conn = get_connection()
@@ -10838,18 +10876,11 @@ def yearly_breakdown():
         # hidden because HM reads as a customer-side pivot, not a
         # product one.  Brand level (HK vs LF) inherits the same gate.
         wh.append("mat.line IN ('PCLT','TBR')")
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s"); params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s"); params.append(f["brand"])
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s");       params.append(f["pattern"])
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s")
-        params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"))
-        params.append(f["code"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_code_multi(wh, params, "mat", f["code"])
     base_where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
     conn = get_connection()
@@ -11171,8 +11202,7 @@ def api_codes():
 
     where  = []
     params = []
-    if product_group and product_group != "ALL":
-        where.append("product_group = %s"); params.append(product_group)
+    _add_multi(where, params, "product_group ", product_group)
     if pattern:
         where.append("pattern LIKE %s"); params.append(f"%{pattern}%")
     if material:
@@ -11210,14 +11240,8 @@ def materials():
         where = []
         params = []
 
-        if product_group and product_group != "ALL":
-            where.append("product_group = %s")
-            params.append(product_group)
-
-        if pattern and pattern != "ALL":
-            where.append("pattern = %s")
-            params.append(pattern)
-
+        _add_multi(where, params, "product_group ", product_group)
+        _add_multi(where, params, "pattern ", pattern)
         where_sql = ""
         if where:
             where_sql = "WHERE " + " AND ".join(where)
@@ -11258,9 +11282,7 @@ def carrying_price():
         where  = []
         params = []
 
-        if product_group and product_group != "ALL":
-            where.append("product_group = %s")
-            params.append(product_group)
+        _add_multi(where, params, "product_group ", product_group)
         if pattern:
             where.append("pattern LIKE %s")
             params.append(f"%{pattern}%")
@@ -11329,8 +11351,14 @@ def profit_monthly():
             params_p = []
 
             # ?? region filter (using EXISTS to avoid JOIN inflation) ??
-            if f["region"] != "ALL":
-                states = REGION_STATES.get(f["region"].upper(), [f["region"]])
+            # Region (multi-value) via EXISTS so profit rows match
+            # customers whose state is in ANY selected region.
+            r_vals = _multi_values(f["region"])
+            if r_vals:
+                states = []
+                for rv in r_vals:
+                    states += REGION_STATES.get(rv.upper(), [rv])
+                states = list(dict.fromkeys(states))
                 ph = ",".join(["%s"] * len(states))
                 wh_p.append(
                     f"EXISTS (SELECT 1 FROM customer c2 WHERE c2.sold_to = p.sold_to"
@@ -11339,46 +11367,83 @@ def profit_monthly():
                 params_p.extend(states)
 
             # ?? salesman filter ??
-            if f["salesman"] != "ALL":
+            sm_vals = [v.upper().strip() for v in _multi_values(f["salesman"])]
+            if sm_vals:
+                ph = ",".join(["%s"] * len(sm_vals))
                 wh_p.append(
                     "EXISTS (SELECT 1 FROM customer c2 WHERE c2.sold_to = p.sold_to"
-                    " AND UPPER(TRIM(c2.salesman_name)) = UPPER(TRIM(%s)))"
+                    f" AND UPPER(TRIM(c2.salesman_name)) IN ({ph}))"
                 )
-                params_p.append(f["salesman"])
+                params_p.extend(sm_vals)
 
             # ?? sold_to_group filter ??
-            if f["sold_to_group"] != "ALL":
+            sg_vals = _multi_values(f["sold_to_group"])
+            if sg_vals:
+                ph = ",".join(["%s"] * len(sg_vals))
                 wh_p.append(
                     "EXISTS (SELECT 1 FROM customer c2 WHERE c2.sold_to = p.sold_to"
-                    " AND c2.sold_to_group = %s)"
+                    f" AND c2.sold_to_group IN ({ph}))"
                 )
-                params_p.append(f["sold_to_group"])
+                params_p.extend(sg_vals)
 
             # ?? sold_to filter (directly on p.sold_to) ??
-            if f["sold_to"] != "ALL":
-                sv = f["sold_to"]
-                if sv.isdigit() or sv.upper().startswith("A"):
-                    wh_p.append("p.sold_to = %s"); params_p.append(sv)
+            st_vals = _multi_values(f["sold_to"])
+            if st_vals:
+                id_vals, name_vals = [], []
+                for sv in st_vals:
+                    if sv.isdigit() or sv.upper().startswith("A"):
+                        id_vals.append(sv)
+                    else:
+                        name_vals.append(sv)
+                branches = []
+                if id_vals:
+                    frag, extras = _multi_clause("p.sold_to", id_vals)
+                    branches.append((frag, extras))
+                if name_vals:
+                    ph = ",".join(["%s"] * len(name_vals))
+                    branches.append((
+                        f"p.sold_to IN (SELECT DISTINCT sold_to FROM customer"
+                        f" WHERE sold_to_name IN ({ph}))",
+                        name_vals,
+                    ))
+                if len(branches) == 1:
+                    wh_p.append(branches[0][0]); params_p.extend(branches[0][1])
                 else:
-                    wh_p.append(
-                        "p.sold_to IN (SELECT DISTINCT sold_to FROM customer WHERE sold_to_name = %s)"
-                    )
-                    params_p.append(sv)
+                    wh_p.append("(" + " OR ".join(b[0] for b in branches) + ")")
+                    for _, extras in branches:
+                        params_p.extend(extras)
 
             # ?? ship_to filter: no ship_to in profit ??resolve to its sold_to ??
-            if f["ship_to"] != "ALL":
-                st = f["ship_to"].strip()
-                if st.isdigit() or st.upper().startswith("A"):
-                    wh_p.append(
-                        "p.sold_to IN (SELECT DISTINCT sold_to FROM customer WHERE ship_to = %s)"
-                    )
-                    params_p.append(st)
+            sh_vals = _multi_values(f["ship_to"])
+            if sh_vals:
+                id_vals, name_vals = [], []
+                for sv in sh_vals:
+                    sv = sv.strip()
+                    if sv.isdigit() or sv.upper().startswith("A"):
+                        id_vals.append(sv)
+                    else:
+                        name_vals.append(sv)
+                branches = []
+                if id_vals:
+                    ph = ",".join(["%s"] * len(id_vals))
+                    branches.append((
+                        f"p.sold_to IN (SELECT DISTINCT sold_to FROM customer"
+                        f" WHERE ship_to IN ({ph}))",
+                        id_vals,
+                    ))
+                if name_vals:
+                    ph = ",".join(["%s"] * len(name_vals))
+                    branches.append((
+                        f"p.sold_to IN (SELECT DISTINCT sold_to FROM customer"
+                        f" WHERE UPPER(TRIM(ship_to_name)) IN ({ph}))",
+                        [v.upper().strip() for v in name_vals],
+                    ))
+                if len(branches) == 1:
+                    wh_p.append(branches[0][0]); params_p.extend(branches[0][1])
                 else:
-                    wh_p.append(
-                        "p.sold_to IN (SELECT DISTINCT sold_to FROM customer"
-                        " WHERE UPPER(TRIM(ship_to_name)) = UPPER(TRIM(%s)))"
-                    )
-                    params_p.append(st)
+                    wh_p.append("(" + " OR ".join(b[0] for b in branches) + ")")
+                    for _, extras in branches:
+                        params_p.extend(extras)
 
             # ?? category filter (via carrying_26, same as sales tables) ??
             cat_joins_p, cat_where_p = category_filters_sales("p", f.get("category", "ALL"))
@@ -11396,16 +11461,11 @@ def profit_monthly():
                 or f.get("code", "ALL") != "ALL"
                 or f.get("brand", "ALL") != "ALL"):
                 _ensure_carrying_join("p", joins_p)
-            if f.get("product_group", "ALL") != "ALL":
-                wh_p.append("mat.product_group = %s"); params_p.append(f["product_group"])
-            if f["brand"] != "ALL":
-                wh_p.append("mat.brand = %s"); params_p.append(f["brand"])
-            if f.get("pattern", "ALL") != "ALL":
-                wh_p.append("mat.pattern = %s"); params_p.append(f["pattern"])
-            if f["material"] != "ALL":
-                wh_p.append("mat.size = %s"); params_p.append(f["material"])
-            if f["code"] != "ALL":
-                wh_p.append(_code_group_clause("mat")); params_p.append(f["code"])
+            _add_multi(wh_p, params_p, "mat.product_group", f["product_group"])
+            _add_multi(wh_p, params_p, "mat.brand", f["brand"])
+            _add_multi(wh_p, params_p, "mat.pattern", f["pattern"])
+            _add_multi(wh_p, params_p, "mat.size", f["material"])
+            _add_multi(wh_p, params_p, "mat.m_code", f["code"])
 
             # ?? top sold_to restriction ??
             if top_sold_to:
@@ -11549,23 +11609,13 @@ def sales_map():
     if (f["product_group"] != "ALL" or f["pattern"] != "ALL" or
         f["material"] != "ALL" or f["code"] != "ALL"):
         _ensure_carrying_join("s", joins)
-    if f["product_group"] != "ALL":
-        wh.append("mat.product_group = %s")
-        params.append(f["product_group"])
-    if f["brand"] != "ALL":
-        wh.append("mat.brand = %s")
-        params.append(f["brand"])
+    _add_multi(wh, params, "mat.product_group", f["product_group"])
+    _add_multi(wh, params, "mat.brand", f["brand"])
 
-    if f["pattern"] != "ALL":
-        wh.append("mat.pattern = %s")
-        params.append(f["pattern"])
+    _add_multi(wh, params, "mat.pattern", f["pattern"])
 
-    if f["material"] != "ALL":
-        wh.append("mat.size = %s")
-        params.append(f["material"])
-    if f["code"] != "ALL":
-        wh.append(_code_group_clause("mat"))
-        params.append(f["code"])
+    _add_multi(wh, params, "mat.size", f["material"])
+    _add_code_multi(wh, params, "mat", f["code"])
 
     # only customers with coordinates
     wh.append("c.latitude IS NOT NULL")
