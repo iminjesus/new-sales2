@@ -823,14 +823,27 @@ window._drillChartOptions = function(){
     },
   };
 };
-document.getElementById('regionBtns').addEventListener("click", async (e) => {
-  if(!e.target.classList.contains("btn"))return;
-  filters.region=e.target.dataset.val; setActive(document.getElementById('regionBtns'),"val",filters.region);
-  const all=Object.values(REGION_SALESMEN).flat();
-  const list=filters.region==="ALL"?all:(REGION_SALESMEN[filters.region]||[]);
-  populateSelect(document.getElementById('salesman_name'),[...new Set(list)].sort());
-  // Honour a locked salesman (BDE role) — don't let a region click
-  // reset the dropdown to "ALL" and leak data outside their scope.
+// Multi-select region.  The selected set lives in __REGION_SELECTED;
+// `filters.region` is its comma-joined form (or "ALL" when empty).
+// Clicking a non-ALL chip toggles it; clicking ALL clears the whole
+// selection.  Ctrl/Cmd modifier is not required — every click is a toggle.
+const __REGION_SELECTED = new Set();
+function _repaintRegion(){
+  const sel = __REGION_SELECTED;
+  document.querySelectorAll("#regionBtns .btn").forEach(b => {
+    const v = b.dataset.val;
+    const active = (v === "ALL" && sel.size === 0) || sel.has(v);
+    b.classList.toggle("active", active);
+  });
+}
+function _applyRegionAfterChange(){
+  // Recompute salesman list from the union of selected regions (empty
+  // set == every salesman).
+  const all = Object.values(REGION_SALESMEN).flat();
+  const union = __REGION_SELECTED.size === 0
+    ? all
+    : [...__REGION_SELECTED].flatMap(r => REGION_SALESMEN[r] || []);
+  populateSelect(document.getElementById('salesman_name'),[...new Set(union)].sort());
   const lockedSalesman = window._me && window._me.lock_salesman;
   if (lockedSalesman) {
     const sel = document.getElementById('salesman_name');
@@ -841,10 +854,23 @@ document.getElementById('regionBtns').addEventListener("click", async (e) => {
     if (sel) { sel.value = lockedSalesman; sel.disabled = true; }
   } else {
     filters.salesman = 'ALL';
-    document.getElementById('salesman_name').value = 'ALL';
+    const sel = document.getElementById('salesman_name');
+    if (sel) sel.value = 'ALL';
   }
-  // Region change must also refetch the Sold-to / Ship-to option lists so
-  // that Top-N (and the dropdown contents) reflect the new region slice.
+}
+document.getElementById('regionBtns').addEventListener("click", async (e) => {
+  if(!e.target.classList.contains("btn")) return;
+  const v = e.target.dataset.val;
+  if (v === "ALL") {
+    __REGION_SELECTED.clear();
+  } else {
+    if (__REGION_SELECTED.has(v)) __REGION_SELECTED.delete(v);
+    else __REGION_SELECTED.add(v);
+  }
+  filters.region = __REGION_SELECTED.size === 0 ? "ALL" : [...__REGION_SELECTED].join(",");
+  _repaintRegion();
+  _applyRegionAfterChange();
+  // Region change widens / narrows the sold_to / ship_to universe.
   await refreshSoldToCustom();
   await refreshShipToCustom();
   refreshAllDebounced();
@@ -3643,9 +3669,10 @@ let __SOLD_TO_OPTIONS = [];
 let __SHIP_TO_OPTIONS = [];
 
 async function refreshSoldToCustom(){
-  const stg = document.getElementById("sold_to_group")?.value || "ALL";
-  // Pass top_limit + filter context so the API can restrict the list
-  // to the top-N sold_to set when Top 10/20/30 is active.
+  // Sold-to Group is now a multi-select native <select>; read the
+  // committed state from filters.* instead of reading .value which only
+  // returns the first selected option.
+  const stg = filters.sold_to_group || "ALL";
   const qs = new URLSearchParams({
     sold_to_group: stg,
     top_limit: filters.top_limit || 0,
@@ -3677,11 +3704,13 @@ function _redrawOpenDD(inputId, menuId){
 }
 
 async function refreshShipToCustom(){
-  const stg = document.getElementById("sold_to_group")?.value || "ALL";
-  const soldTo = (document.getElementById("sold_to")?.value || "").trim();
+  // Same note as refreshSoldToCustom — source every filter from
+  // filters.* so the multi-select comma-strings reach the API intact.
+  const stg = filters.sold_to_group || "ALL";
+  const soldTo = filters.sold_to || "ALL";
   const qs = new URLSearchParams({
     sold_to_group: stg,
-    sold_to: soldTo ? soldTo : "ALL",
+    sold_to: soldTo,
     top_limit: filters.top_limit || 0,
     metric: filters.metric || "qty",
     category: filters.category || "ALL",
@@ -3705,7 +3734,32 @@ async function refreshShipToCustom(){
 function ddOpen(menuEl){ if (menuEl) menuEl.style.display = "block"; }
 function ddClose(menuEl){ if (menuEl) menuEl.style.display = "none"; }
 
-function ddRender(menuEl, items, onPick){
+// Per-field selection state for multi-select dropdowns.  Keyed by inputId,
+// value is a Set of chosen option values.  An empty set means "ALL".
+const __MULTI_SELECTED = Object.create(null);
+
+function _multiSel(inputId){
+  if (!__MULTI_SELECTED[inputId]) __MULTI_SELECTED[inputId] = new Set();
+  return __MULTI_SELECTED[inputId];
+}
+
+// Convert the Set to the comma-joined filter value the backend accepts.
+function _multiJoin(set){
+  if (!set || set.size === 0) return "ALL";
+  return Array.from(set).join(",");
+}
+
+// Reflect the current selection back onto the input (what the user sees)
+// and toggle the dd-active class so the clear-X / highlight work.
+function _multiReflect(inputId){
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  const sel = _multiSel(inputId);
+  inp.value = sel.size === 0 ? "" : Array.from(sel).join(", ");
+  ddUpdateActive(inp);
+}
+
+function ddRender(menuEl, items, onPick, opts){
   if (!menuEl) return;
   menuEl.innerHTML = "";
   if (!items || items.length === 0){
@@ -3715,14 +3769,38 @@ function ddRender(menuEl, items, onPick){
     menuEl.appendChild(div);
     return;
   }
+  const multi = !!(opts && opts.multi);
+  const isSel = (opts && opts.isSelected) || (() => false);
   items.forEach(v => {
     const div = document.createElement("div");
     div.className = "dd-item";
-    div.textContent = v;
+    if (multi){
+      // Prefix each item with a tick box so the user can see which are
+      // already chosen without having to glance back at the input.
+      const picked = isSel(v);
+      const box = document.createElement("span");
+      box.className = "dd-check" + (picked ? " dd-check-on" : "");
+      box.textContent = picked ? "☑" : "☐";
+      box.style.cssText = "display:inline-block;width:14px;margin-right:6px;color:" + (picked ? "#2563eb" : "#9ca3af");
+      div.appendChild(box);
+      const label = document.createElement("span");
+      label.textContent = v;
+      div.appendChild(label);
+      if (picked) div.classList.add("dd-item-picked");
+    } else {
+      div.textContent = v;
+    }
     div.addEventListener("mousedown", (e) => {
       e.preventDefault(); // keep focus
       onPick(v);
-      ddClose(menuEl);    // close after pick
+      if (multi){
+        // In multi mode leave the menu open so the user can tick
+        // several options in one burst.  Just re-render it so the box
+        // next to the just-toggled item flips immediately.
+        if (opts && opts.rerender) opts.rerender();
+      } else {
+        ddClose(menuEl);  // single-select: close after pick
+      }
     });
     menuEl.appendChild(div);
   });
@@ -3747,50 +3825,95 @@ function ddUpdateActive(inp) {
   if (dd) dd.classList.toggle('dd-active', inp.value.trim() !== '');
 }
 
-function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
+function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick, multi, onCommit }){
   const inp = document.getElementById(inputId);
   const btn = document.getElementById(btnId);
   const clr = clearId ? document.getElementById(clearId) : null;
   const menu = document.getElementById(menuId);
   if (!inp || !btn || !menu) return;
 
+  // When `multi` is on, the input's own text while the menu is open is
+  // a free-type SEARCH string, not the current selection.  We only
+  // reflect the selection back onto the input when the menu closes.
+  // `_rawFilter` is what the user actually typed (vs. the auto-populated
+  // "val1, val2" selection reflection).
+  let _rawFilter = "";
+
   function openWithCurrent(){
     const opts = getOptions();
-    ddRender(menu, ddFilter(opts, inp.value), onPick);
+    const q = multi ? _rawFilter : inp.value;
+    if (multi){
+      // Show the raw search string while menu is open so filtering is
+      // predictable (otherwise the reflected "val1, val2" would narrow
+      // the list to options that contain "val1, val2").
+      inp.value = _rawFilter;
+    }
+    const sel = multi ? _multiSel(inputId) : null;
+    const render = () => ddRender(
+      menu,
+      ddFilter(opts, q),
+      onPick,
+      multi ? {
+        multi: true,
+        isSelected: (v) => sel.has(v),
+        rerender: render,
+      } : undefined
+    );
+    render();
     ddOpen(menu);
   }
 
-  // button always opens full list (no need to clear)
   btn.addEventListener("click", () => openWithCurrent());
+  inp.addEventListener("focus", () => {
+    if (multi) _rawFilter = "";   // starting a new search
+    openWithCurrent();
+  });
+  inp.addEventListener("input", () => {
+    if (multi) _rawFilter = inp.value;
+    openWithCurrent();
+    ddUpdateActive(inp);
+  });
 
-  // focus also opens list
-  inp.addEventListener("focus", () => openWithCurrent());
-
-  // typing filters list (still allows reselect without clearing via ▼)
-  inp.addEventListener("input", () => openWithCurrent());
-
-  // update active state whenever input value changes
-  inp.addEventListener("input", () => ddUpdateActive(inp));
-
-  // clear (optional)
+  // Clear ✕ — resets the multi-select Set OR fires single-select "ALL".
   if (clr) {
     clr.addEventListener("click", () => {
-      inp.value = "";
-      ddUpdateActive(inp);
-      onPick("ALL");
+      if (multi){
+        _multiSel(inputId).clear();
+        _rawFilter = "";
+        _multiReflect(inputId);
+        if (onCommit) onCommit([]);
+      } else {
+        inp.value = "";
+        ddUpdateActive(inp);
+        onPick("ALL");
+      }
       ddClose(menu);
       inp.focus();
     });
   }
 
+  // In multi mode we need to reflect the current selection back when
+  // the menu closes (user clicked outside, or hit ESC) so the input no
+  // longer shows the stale search text.
+  function commitMultiClose(){
+    if (!multi) return;
+    _rawFilter = "";
+    _multiReflect(inputId);
+    if (onCommit) onCommit(Array.from(_multiSel(inputId)));
+  }
+
   // close when clicking outside
   document.addEventListener("mousedown", (e) => {
     if (!menu.contains(e.target) && e.target !== inp && e.target !== btn && e.target !== clr){
-      ddClose(menu);
+      if (menu.style.display === "block") {
+        ddClose(menu);
+        commitMultiClose();
+      }
     }
   });
 
-  // Keyboard navigation: ↑/↓ move highlight, Enter picks, Esc closes.
+  // Keyboard navigation: ↑/↓ move highlight, Enter picks (or toggles in
+  // multi mode), Esc closes.
   function activeItems(){ return menu.querySelectorAll(".dd-item"); }
   function setActiveIdx(idx){
     const items = activeItems();
@@ -3808,6 +3931,12 @@ function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
     }
     return -1;
   }
+  function textOf(item){
+    // multi-mode items are checkbox + <span>text</span>; single-mode is
+    // just the text content.
+    const span = item.querySelector("span:not(.dd-check)");
+    return span ? span.textContent : item.textContent;
+  }
   inp.addEventListener("keydown", (e) => {
     const open = menu.style.display === "block";
     if (e.key === "ArrowDown") {
@@ -3822,37 +3951,41 @@ function bindDropdown({ inputId, btnId, clearId, menuId, getOptions, onPick }){
       const items = activeItems();
       const i = currentIdx();
       if (open && i >= 0 && items[i]) {
-        onPick(items[i].textContent);
-        ddClose(menu);
+        onPick(textOf(items[i]));
+        if (!multi){ ddClose(menu); }
+        else { openWithCurrent(); }
         e.preventDefault();
       } else if (open && items.length === 1) {
-        // single result + Enter = pick it
-        onPick(items[0].textContent);
-        ddClose(menu);
+        onPick(textOf(items[0]));
+        if (!multi){ ddClose(menu); }
+        else { openWithCurrent(); }
         e.preventDefault();
       }
     } else if (e.key === "Escape") {
       ddClose(menu);
+      commitMultiClose();
     }
   });
 }
 
 // fetch helpers you already have: fetchJSON(url)
 
+// Narrowing helpers now read the committed multi-select state from
+// `filters.*` (not the input's displayed text, which may be a "A, B, C"
+// reflection of several picked values).  Each child list refreshes
+// against the union of the parent selections.
 async function refreshPatternsCustom(){
-  const pg = document.getElementById("product_group")?.value || "ALL";
+  const pg = filters.product_group || "ALL";
   const res = await fetchJSON(`/api/patterns?product_group=${encodeURIComponent(pg)}`);
-  // your backend sometimes returns {rows:[...]} or [...]
   const rows = Array.isArray(res) ? res : (res?.rows || []);
   __PATTERN_OPTIONS = rows.map(x => String(x)).filter(Boolean);
 }
 
 async function refreshMaterialsCustom(){
-  const pg = document.getElementById("product_group")?.value || "ALL";
-  const pat = (document.getElementById("pattern")?.value || "").trim();
+  const pg  = filters.product_group || "ALL";
+  const pat = (filters.pattern && filters.pattern !== "ALL") ? filters.pattern : "";
   const qs = new URLSearchParams({
     product_group: pg,
-    // pattern이 있으면 material을 더 좁히고, 없으면 전체 material
     ...(pat ? { pattern: pat } : {})
   }).toString();
 
@@ -3862,12 +3995,12 @@ async function refreshMaterialsCustom(){
 }
 
 // Codes = carrying_26.m_code narrowed by the same ancestor filters
-// (product_group / pattern / size).  Same shape as materials so the
-// dropdown behaves identically.
+// (product_group / pattern / size).  Reads filters.* so a multi-value
+// selection like "ULTIMATE,DYNAPRO" is forwarded whole.
 async function refreshCodesCustom(){
-  const pg  = document.getElementById("product_group")?.value || "ALL";
-  const pat = (document.getElementById("pattern")?.value || "").trim();
-  const mat = (document.getElementById("material")?.value || "").trim();
+  const pg  = filters.product_group || "ALL";
+  const pat = (filters.pattern  && filters.pattern  !== "ALL") ? filters.pattern  : "";
+  const mat = (filters.material && filters.material !== "ALL") ? filters.material : "";
   const qs  = new URLSearchParams({
     product_group: pg,
     ...(pat ? { pattern:  pat } : {}),
@@ -3954,33 +4087,42 @@ window.addEventListener("load", async () => {
   await refreshMaterialsCustom();
   await refreshCodesCustom();
 
+  // Toggle-helpers so an onPick on a multi dropdown adds/removes the
+  // value from the per-field set and immediately pushes the comma-joined
+  // version into `filters.<key>`.  Child dependents (Pattern narrows by
+  // Product Group, Material narrows by Pattern, Code narrows by all
+  // three) reset downstream when the parent set changes.
+  function _toggleIn(inputId, filterKey, val, afterCommit){
+    const sel = _multiSel(inputId);
+    if (val === "ALL") { sel.clear(); }
+    else if (sel.has(val)) { sel.delete(val); }
+    else { sel.add(val); }
+    filters[filterKey] = _multiJoin(sel);
+    _multiReflect(inputId);
+    if (afterCommit) afterCommit();
+  }
+
   bindDropdown({
     inputId: "product_group",
     btnId: "pgBtn",
     clearId: "pgClear",
     menuId: "pgMenu",
+    multi: true,
     getOptions: () => __PRODUCT_GROUP_OPTIONS,
     onPick: async (val) => {
-      const v = (val === "ALL") ? "" : val;
-      const pgEl = document.getElementById("product_group");
-      if (pgEl) { pgEl.value = v; ddUpdateActive(pgEl); }
-      filters.product_group = v || "ALL";
-      const patEl = document.getElementById('pattern');
-      const matEl = document.getElementById('material');
-      if (patEl) { patEl.value = ""; ddUpdateActive(patEl); }
-      if (matEl) { matEl.value = ""; ddUpdateActive(matEl); }
-      filters.pattern = "ALL";
-      filters.material = "ALL";
-      filters.code = "ALL";
-      const codeEl = document.getElementById('code');
-      if (codeEl) { codeEl.value = ""; ddUpdateActive(codeEl); }
+      _toggleIn("product_group", "product_group", val);
+      // Any change to the Product Group set invalidates the Pattern /
+      // Material / Code narrowing — clear them and refetch the lists.
+      _multiSel("pattern").clear();  filters.pattern  = "ALL"; _multiReflect("pattern");
+      _multiSel("material").clear(); filters.material = "ALL"; _multiReflect("material");
+      _multiSel("code").clear();     filters.code     = "ALL"; _multiReflect("code");
       await refreshPatternsCustom();
       await refreshMaterialsCustom();
       await refreshCodesCustom();
       await refreshSoldToCustom();
       await refreshShipToCustom();
-      refreshAllDebounced();
-    }
+    },
+    onCommit: () => refreshAllDebounced(),
   });
 
   bindDropdown({
@@ -3988,21 +4130,16 @@ window.addEventListener("load", async () => {
     btnId: "soldToBtn",
     clearId: "soldToClear",
     menuId: "soldToMenu",
+    multi: true,
     getOptions: () => __SOLD_TO_OPTIONS,
     onPick: async (val) => {
-      const v = (val === "ALL") ? "" : val;
-      const soldEl = document.getElementById("sold_to");
-      const shipEl = document.getElementById("ship_to");
-      if (soldEl) { soldEl.value = v; ddUpdateActive(soldEl); }
-      filters.sold_to = v || "ALL";
-
-      // sold-to changes -> reset ship-to + reload ship-to list
-      if (shipEl) { shipEl.value = ""; ddUpdateActive(shipEl); }
-      filters.ship_to = "ALL";
+      _toggleIn("sold_to", "sold_to", val);
+      // sold-to changes → reset ship-to selection + reload its list so the
+      // menu reflects the newly selected sold-to universe.
+      _multiSel("ship_to").clear(); filters.ship_to = "ALL"; _multiReflect("ship_to");
       await refreshShipToCustom();
-
-      refreshAllDebounced();
-    }
+    },
+    onCommit: () => refreshAllDebounced(),
   });
 
   bindDropdown({
@@ -4010,14 +4147,10 @@ window.addEventListener("load", async () => {
     btnId: "shipToBtn",
     clearId: "shipToClear",
     menuId: "shipToMenu",
+    multi: true,
     getOptions: () => __SHIP_TO_OPTIONS,
-    onPick: (val) => {
-      const v = (val === "ALL") ? "" : val;
-      const shipEl = document.getElementById("ship_to");
-      if (shipEl) { shipEl.value = v; ddUpdateActive(shipEl); }
-      filters.ship_to = v || "ALL";
-      refreshAllDebounced();
-    }
+    onPick: (val) => { _toggleIn("ship_to", "ship_to", val); },
+    onCommit: () => refreshAllDebounced(),
   });
 
   bindDropdown({
@@ -4025,16 +4158,16 @@ window.addEventListener("load", async () => {
     btnId: "patternBtn",
     clearId: "patternClear",
     menuId: "patternMenu",
+    multi: true,
     getOptions: () => __PATTERN_OPTIONS,
     onPick: async (val) => {
-      const v = (val === "ALL") ? "" : val;
-      const patEl = document.getElementById("pattern");
-      patEl.value = v; ddUpdateActive(patEl);
-      filters.pattern = v || "ALL";
+      _toggleIn("pattern", "pattern", val);
+      _multiSel("material").clear(); filters.material = "ALL"; _multiReflect("material");
+      _multiSel("code").clear();     filters.code     = "ALL"; _multiReflect("code");
       await refreshMaterialsCustom();
       await refreshCodesCustom();
-      refreshAllDebounced();
-    }
+    },
+    onCommit: () => refreshAllDebounced(),
   });
 
   bindDropdown({
@@ -4042,15 +4175,14 @@ window.addEventListener("load", async () => {
     btnId: "materialBtn",
     clearId: "materialClear",
     menuId: "materialMenu",
+    multi: true,
     getOptions: () => __MATERIAL_OPTIONS,
     onPick: async (val) => {
-      const v = (val === "ALL") ? "" : val;
-      const matEl = document.getElementById("material");
-      matEl.value = v; ddUpdateActive(matEl);
-      filters.material = v || "ALL";
+      _toggleIn("material", "material", val);
+      _multiSel("code").clear(); filters.code = "ALL"; _multiReflect("code");
       await refreshCodesCustom();
-      refreshAllDebounced();
-    }
+    },
+    onCommit: () => refreshAllDebounced(),
   });
 
   bindDropdown({
@@ -4058,14 +4190,10 @@ window.addEventListener("load", async () => {
     btnId: "codeBtn",
     clearId: "codeClear",
     menuId: "codeMenu",
+    multi: true,
     getOptions: () => __CODE_OPTIONS,
-    onPick: (val) => {
-      const v = (val === "ALL") ? "" : val;
-      const codeEl = document.getElementById("code");
-      if (codeEl) { codeEl.value = v; ddUpdateActive(codeEl); }
-      filters.code = v || "ALL";
-      refreshAllDebounced();
-    }
+    onPick: (val) => { _toggleIn("code", "code", val); },
+    onCommit: () => refreshAllDebounced(),
   });
 });
 
