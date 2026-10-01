@@ -3267,13 +3267,12 @@ def api_orders_stock_by_material():
         except: pass
 
 
-# Default TBR Base DC when dc_basic_customer carries no TBR row for
-# the customer / group — same 56 % the old single "TBR (HK & LF)"
-# cell was pinned to.  HK-TBR and LF-TBR now resolve independently
-# through dc_basic_customer; this constant only applies when the
-# table has nothing applicable for the TBR line.
-_ORDERS_TBR_FALLBACK_PCT = 56.00
-# Legacy alias — some callsites still read the old name.
+# No hard-coded fallback — per user rule "grep the data from the
+# table and do not have other options", Base DC cells stay BLANK
+# when dc_basic_customer carries no matching row.  The old 56 %
+# default is gone.  Legacy name is kept as None so any residual
+# callsite reads a null (and renders as blank) instead of 56.
+_ORDERS_TBR_FALLBACK_PCT = None
 _ORDERS_TBR_HKLF_PCT = _ORDERS_TBR_FALLBACK_PCT
 
 
@@ -3323,12 +3322,16 @@ def api_orders_base_dc():
         anchor_date = _d_cls.fromisoformat(_date_arg) if _date_arg else None
     except Exception:
         anchor_date = None
+    # Every cell starts as None.  If dc_basic_customer carries a
+    # matching row we fill it below; otherwise the cell stays blank
+    # on the form.  No hard-coded fallback — read strictly from
+    # the master table per the user's instruction.
     out = {
         "HK_PCLT":  None,
-        "HK_TBR":   _ORDERS_TBR_FALLBACK_PCT,
+        "HK_TBR":   None,
         "LF_PCLT":  None,
-        "LF_TBR":   _ORDERS_TBR_FALLBACK_PCT,
-        "TBR_HKLF": _ORDERS_TBR_FALLBACK_PCT,
+        "LF_TBR":   None,
+        "TBR_HKLF": None,
     }
     if debug:
         out["_debug"] = {"sold_to": sold_to, "anchor_date": _date_arg}
@@ -3498,8 +3501,11 @@ def api_orders_base_dc():
         if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
         # Legacy TBR_HKLF — carry max(HK, LF) so old clients that
         # still read this one field get the better of the two.
-        out["TBR_HKLF"] = max(out["HK_TBR"] or 0, out["LF_TBR"] or 0) \
-                          or _ORDERS_TBR_FALLBACK_PCT
+        # Stays None (blank on the form) when the table has nothing.
+        _hk = out["HK_TBR"]; _lf = out["LF_TBR"]
+        if _hk is not None or _lf is not None:
+            out["TBR_HKLF"] = max(_hk if _hk is not None else -1e9,
+                                   _lf if _lf is not None else -1e9)
 
         if debug:
             def _s(v):
