@@ -195,6 +195,11 @@ def _thismonth_query_stack(f, top_sold_to=None, month=None):
         wh.append(f"s.sold_to IN ({ph})")
         params.extend(top_sold_to)
     if month is not None:
+        # Backfill path is strict — the startup migration tags every
+        # legacy NULL row with an explicit month before any query
+        # runs, so matching `month = %s` here is safe and avoids
+        # double-counting a legacy row across two per-month backfill
+        # passes when sales_thismonth happens to hold both months.
         wh.append("s.`month` = %s")
         params.append(int(month))
     return joins, wh, params
@@ -8458,7 +8463,7 @@ def v2_dashboard():
         # daily_breakdown endpoints.  Stops the loader's rolling
         # previous-month rows from leaking into today's view.
         _eff_y_d, _eff_m_d = _business_effective_ym()
-        wh_d.append("s.`month` = %s")
+        wh_d.append("(s.`month` = %s OR s.`month` IS NULL)")
         params_d.append(_eff_m_d)
         # Add per-sold_to name resolver only for breakdown stack (used below).
         SCUS_JOIN = (
@@ -8892,7 +8897,7 @@ def daily_sales():
     # guard stops stale previous-month rows from leaking into the
     # Daily Sales / Cumulative bars.
     _eff_y, _eff_m = _business_effective_ym()
-    wh.append("s.`month` = %s")
+    wh.append("(s.`month` = %s OR s.`month` IS NULL)")
     params.append(_eff_m)
 
     if promos:
@@ -8905,7 +8910,7 @@ def daily_sales():
         DAY_QTY_JOIN = (
             "LEFT JOIN ("
             f"  SELECT ship_to, day, brand, SUM(qty) AS day_qty"
-            f"  FROM sales_thismonth WHERE `month` = {int(_eff_m)}"
+            f"  FROM sales_thismonth WHERE (`month` = {int(_eff_m)} OR `month` IS NULL)"
             f"  GROUP BY ship_to, day, brand"
             ") dq ON dq.ship_to = s.ship_to AND dq.day = s.day AND dq.brand = s.brand"
         )
@@ -9039,7 +9044,7 @@ def daily_breakdown():
     # as daily_sales — stops previous-month rows the loader keeps on
     # file from leaking into the stacked bars.
     _eff_y, _eff_m = _business_effective_ym()
-    wh.append("s.`month` = %s")
+    wh.append("(s.`month` = %s OR s.`month` IS NULL)")
     params.append(_eff_m)
 
     # Pre-aggregated qty per (ship_to, day, brand) for TrueBlue's
@@ -9053,7 +9058,7 @@ def daily_breakdown():
     DAY_QTY_JOIN = (
         "LEFT JOIN ("
         f"  SELECT ship_to, day, brand, SUM(qty) AS day_qty"
-        f"  FROM sales_thismonth WHERE `month` = {int(_eff_m)}"
+        f"  FROM sales_thismonth WHERE (`month` = {int(_eff_m)} OR `month` IS NULL)"
         f"  GROUP BY ship_to, day, brand"
         ") dq ON dq.ship_to = s.ship_to AND dq.day = s.day AND dq.brand = s.brand"
     )
@@ -9410,7 +9415,7 @@ def fetch_table_rows(top_limit: int):
     # Pin sales_thismonth to the business-effective month so the
     # by-day export only shows "this month" as the UI defines it.
     _eff_y_dx, _eff_m_dx = _business_effective_ym()
-    wh.append("s.`month` = %s")
+    wh.append("(s.`month` = %s OR s.`month` IS NULL)")
     params.append(_eff_m_dx)
 
     where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
@@ -12109,7 +12114,8 @@ def visit_summary():
             # this month" against the visit-check metrics.
             _sw_y, _sw_m = _business_effective_ym()
             cur.execute(
-                "SELECT DISTINCT ship_to FROM sales_thismonth WHERE `month` = %s",
+                "SELECT DISTINCT ship_to FROM sales_thismonth "
+                "WHERE (`month` = %s OR `month` IS NULL)",
                 (_sw_m,),
             )
             shops_with_sales = {r["ship_to"] for r in cur.fetchall()}
@@ -12467,7 +12473,7 @@ def visit_debug_gps_locality():
                 "SELECT c.ship_to, c.latitude, c.longitude FROM customer c "
                 "WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL "
                 "AND EXISTS (SELECT 1 FROM sales_thismonth s "
-                "            WHERE s.ship_to = c.ship_to AND s.`month` = %s)",
+                "            WHERE s.ship_to = c.ship_to AND (s.`month` = %s OR s.`month` IS NULL))",
                 (_exm,),
             )
         else:
@@ -12804,6 +12810,72 @@ def _refresh_customer_rollup():
         print(f"[customer_rollup] rebuild skipped: {e}")
 
 _refresh_customer_rollup()
+
+
+def _ensure_sales_thismonth_month_column():
+    """Make sure sales_thismonth has a `month` column and that no row
+    has NULL in it.  Runs once at startup so the per-month filters
+    on every daily / monthly query see a complete column even on
+    installs where the operator ran the ALTER but skipped the
+    backfill UPDATE.
+
+    Backfill rule — matches the loader's _business_effective_ym and
+    the UI's "This month" definition:
+      • If MAX(day) > today's day-of-month → stale PREVIOUS-month
+        snapshot (loader hasn't rolled over yet) → previous month.
+      • Else → current calendar month (today's month).
+    First-business-day roll-back is handled on the UI side; here
+    we just need a reasonable month to attach to legacy NULL rows
+    so they stop being invisible to the new WHERE `month` = %s
+    filters."""
+    from datetime import date as _d
+    try:
+        conn = get_connection(); cur = conn.cursor()
+    except Exception as e:
+        print(f"[sales_thismonth.month] skipped (no DB): {e}")
+        return
+    try:
+        # 1) Make sure the column exists.  Idempotent — ALTER raises
+        # 1060 "Duplicate column" when the column is already there,
+        # which we treat as "nothing to do".
+        try:
+            cur.execute("ALTER TABLE sales_thismonth ADD COLUMN `month` INT NULL FIRST")
+            print("[sales_thismonth.month] added column")
+        except Exception as _e:
+            # mysql.connector raises its own Error with errno=1060;
+            # pymysql and sqlite flavours just raise a generic one.
+            msg = str(_e).lower()
+            if "1060" not in msg and "duplicate" not in msg:
+                print(f"[sales_thismonth.month] ALTER skipped: {_e}")
+        # 2) Backfill any NULL months.  Query MAX(day) once and
+        # decide which calendar month the legacy rows belong to.
+        try:
+            cur.execute("SELECT MAX(`day`) FROM sales_thismonth WHERE `month` IS NULL")
+            row = cur.fetchone() or (0,)
+            max_day = int(row[0] or 0)
+        except Exception:
+            max_day = 0
+        if max_day > 0:
+            today = _d.today()
+            if max_day > today.day:
+                legacy_m = today.month - 1 if today.month > 1 else 12
+            else:
+                legacy_m = today.month
+            cur.execute(
+                "UPDATE sales_thismonth SET `month` = %s WHERE `month` IS NULL",
+                (legacy_m,),
+            )
+            print(f"[sales_thismonth.month] backfilled {cur.rowcount} legacy rows → month={legacy_m}")
+        conn.commit()
+    except Exception as e:
+        print(f"[sales_thismonth.month] setup error: {e}")
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+_ensure_sales_thismonth_month_column()
 
 
 @app.get("/api/admin/refresh_customer_rollup")
