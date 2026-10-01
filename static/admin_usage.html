@@ -286,12 +286,18 @@ function renderPivot(d){
   let html = "<thead><tr>";
   html += `<th rowspan="2" style="min-width:160px">User</th>`;
   if (sections.length){
-    html += `<th class="section-col" colspan="${sections.length}">Section (page clicks)</th>`;
+    /* Section header spans the per-section columns PLUS a per-user
+       "Section Total" subtotal column so the reader can see each
+       user's section footprint at a glance before the KPIs start. */
+    html += `<th class="section-col" colspan="${sections.length + 1}">Section (page clicks)</th>`;
   }
   html += `<th class="kpi-col" colspan="${kpiCols.length}">Per-user KPIs</th>`;
   html += `<th class="total-col" colspan="${totCols.length}">Total</th>`;
   html += "</tr><tr>";
   for (const s of sections) html += `<th class="section-col num">${escapeHtml(s)}</th>`;
+  if (sections.length){
+    html += `<th class="section-col num" style="background:#1d4ed8">Section Total</th>`;
+  }
   for (const c of kpiCols) html += `<th class="kpi-col num">${escapeHtml(c.lbl)}</th>`;
   for (const c of totCols) html += `<th class="total-col num">${escapeHtml(c.lbl)}</th>`;
   html += "</tr></thead>";
@@ -299,6 +305,7 @@ function renderPivot(d){
   /* Users already arrive sorted by page_clicks desc from the backend. */
   const colTotals = {};
   sections.forEach(s => colTotals[s] = 0);
+  let sectionGrandTotal = 0;
   kpiCols.forEach(c => colTotals[c.k] = 0);
   totCols.forEach(c => colTotals[c.k] = 0);
 
@@ -308,10 +315,18 @@ function renderPivot(d){
     const email = u.email || "";
     html += `<tr data-email="${escapeHtml(email)}" data-name="${escapeHtml(name)}" title="Double-click to see this user's activity chart">`;
     html += `<td class="name-cell">${escapeHtml(name)}<br><span class="email-cell">${escapeHtml(email)}</span></td>`;
+    let rowSectionSum = 0;
     for (const s of sections){
       const n = (u.sections || {})[s] || 0;
       colTotals[s] += n;
+      rowSectionSum += n;
       html += `<td class="num${n===0?' zero':''}">${fmtInt(n)}</td>`;
+    }
+    if (sections.length){
+      /* Per-user section subtotal cell — stronger blue tint so it
+         reads as a group header to the eye. */
+      sectionGrandTotal += rowSectionSum;
+      html += `<td class="num" style="background:#dbeafe;font-weight:700;color:#1e3a8a">${fmtInt(rowSectionSum)}</td>`;
     }
     for (const c of kpiCols){
       const v = u[c.k];
@@ -330,6 +345,9 @@ function renderPivot(d){
   html += `<tr class="totals-row" data-email="all" data-name="All users (Total)" title="Double-click to see the aggregate chart">`;
   html += `<td class="name-cell">Total</td>`;
   for (const s of sections) html += `<td class="num">${fmtInt(colTotals[s])}</td>`;
+  if (sections.length){
+    html += `<td class="num" style="background:#1e40af;color:#fff;font-weight:800">${fmtInt(sectionGrandTotal)}</td>`;
+  }
   for (const c of kpiCols){
     const v = colTotals[c.k];
     const txt = (c.k === "hours" || c.k.startsWith("avg_")) ? fmt1(v) : fmtInt(v);
