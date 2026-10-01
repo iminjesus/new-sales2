@@ -12886,6 +12886,114 @@ def admin_refresh_customer_rollup():
     return jsonify({"ok": True})
 
 
+@app.route("/api/admin/thismonth_diag", methods=["GET", "POST"])
+def admin_thismonth_diag():
+    """Hard-ground-truth probe for the sales_thismonth → dashboard
+    pipeline.  POST (or GET with ?fix=1) forces the NULL-month
+    backfill the startup migration does — handy when Flask hasn't
+    been restarted since the ALTER on the DB side.
+
+    Returns:
+      • effective_month  — what _business_effective_ym() thinks
+                           "this month" is RIGHT NOW on this server.
+      • today            — server-local calendar date.
+      • rows_by_month    — per-month row count in sales_thismonth,
+                           including a bucket for NULL month.
+      • day_range        — MIN(day), MAX(day) across the whole
+                           table (ignores month).
+      • day_30_rows      — count of rows with day = 30 split by
+                           month, so you can see immediately
+                           whether Sep-30 rows exist and what
+                           month they're tagged with.
+      • fix_ran          — true when the backfill actually fired
+                           (either via the POST / ?fix=1 path or
+                           because startup had never run it).
+      • fixed_rows       — number of NULL-month rows filled in by
+                           the backfill on this call.
+    """
+    out = {"ok": True, "fix_ran": False, "fixed_rows": 0}
+    try:
+        _eff_y, _eff_m = _business_effective_ym()
+        out["effective_month"] = _eff_m
+        out["effective_year"]  = _eff_y
+        from datetime import date as _d
+        out["today"] = _d.today().isoformat()
+    except Exception as e:
+        out["effective_err"] = str(e)
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        want_fix = (
+            request.method == "POST"
+            or (request.args.get("fix") or "").lower() in ("1", "true", "yes")
+        )
+        if want_fix:
+            try:
+                cur.execute("SELECT MAX(`day`) AS m FROM sales_thismonth WHERE `month` IS NULL")
+                r = cur.fetchone() or {}
+                max_day = int(r.get("m") or 0)
+            except Exception:
+                max_day = 0
+            if max_day > 0:
+                from datetime import date as _d
+                today = _d.today()
+                legacy_m = (today.month - 1 if today.month > 1 else 12) \
+                           if max_day > today.day else today.month
+                cur.execute(
+                    "UPDATE sales_thismonth SET `month` = %s WHERE `month` IS NULL",
+                    (legacy_m,),
+                )
+                out["fix_ran"]    = True
+                out["fixed_rows"] = int(cur.rowcount)
+                out["fixed_to_month"] = legacy_m
+                conn.commit()
+            else:
+                out["fix_ran"] = True
+                out["fixed_rows"] = 0
+                out["fix_note"]  = "no NULL-month rows to fix"
+            # Also wipe the graph cache so the next dashboard load
+            # actually reads the fixed data instead of a 60 s stale copy.
+            _GRAPH_CACHE.clear()
+        # Diagnostics
+        try:
+            cur.execute(
+                "SELECT COALESCE(`month`, -1) AS m, COUNT(*) AS n "
+                "FROM sales_thismonth GROUP BY `month` ORDER BY m"
+            )
+            out["rows_by_month"] = [
+                {"month": None if int(r["m"]) == -1 else int(r["m"]), "n": int(r["n"])}
+                for r in (cur.fetchall() or [])
+            ]
+        except Exception as e:
+            out["rows_by_month_err"] = str(e)
+        try:
+            cur.execute("SELECT MIN(`day`) AS lo, MAX(`day`) AS hi FROM sales_thismonth")
+            r = cur.fetchone() or {}
+            out["day_range"] = {"min": r.get("lo"), "max": r.get("hi")}
+        except Exception as e:
+            out["day_range_err"] = str(e)
+        try:
+            cur.execute(
+                "SELECT COALESCE(`month`, -1) AS m, COUNT(*) AS n, SUM(qty) AS qty "
+                "FROM sales_thismonth WHERE `day` = 30 GROUP BY `month`"
+            )
+            out["day_30_rows"] = [
+                {
+                    "month": None if int(r["m"]) == -1 else int(r["m"]),
+                    "rows":  int(r["n"]),
+                    "qty":   float(r["qty"] or 0),
+                }
+                for r in (cur.fetchall() or [])
+            ]
+        except Exception as e:
+            out["day_30_err"] = str(e)
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+    return jsonify(out)
+
+
 @app.route("/api/admin/clear_cache", methods=["GET", "POST"])
 def admin_clear_cache():
     """Drop every entry in the graph-endpoint cache so the next request
