@@ -1022,13 +1022,13 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
-        <div class="lbl" style="grid-column: span 4;background:#dfe9f3;justify-content:flex-start">
-          Reason / Notes for Approver (optional)
+        <div class="lbl" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800">
+          Reason / Notes for Approver (REQUIRED on Submit — min 10 characters)
         </div>
 
         <div class="val" style="grid-column: span 4;padding:0">
-          <textarea id="mgmt_reason" rows="3"
-                    placeholder="Optional — if extra DC is being applied, briefly explain why (e.g. aged stock, fleet retention, competitor match).  Standard-pricing orders can leave this blank."
+          <textarea id="mgmt_reason" rows="3" minlength="10"
+                    placeholder="Required at Submit — briefly explain the reason (e.g. aged stock, fleet retention, competitor match, standard pricing with notes).  10+ characters so the approver has context."
                     style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
@@ -1799,13 +1799,16 @@ async function fillBaseDC(soldTo){
       const _dateP = _dateQ ? `&date=${encodeURIComponent(_dateQ)}` : "";
       const chk = await apiGet(`/api/orders/pricing_window_check?sold_to=${encodeURIComponent(soldTo)}${_dateP}`);
       if (chk && chk.matched === false) {
-        alert(chk.message || "pricing master for this month does not exist, please contact the admin");
-        const clear = (id) => { const el = document.getElementById(id); if (el) el.value = ""; };
-        clear("basedc_hkpclt"); clear("basedc_hktbr");
-        clear("basedc_lfpclt"); clear("basedc_lftbr"); clear("basedc_tbr");
-        window._baseDCPct = { HK_PCLT: null, LF_PCLT: null,
-                              HK_TBR: null, LF_TBR: null };
-        return;
+        /* No pricing-master row at all for this customer / date.
+           Per user rule "if there doesnt exist then please let user
+           key in the numbers respectively" — DON'T block or clear
+           the Base DC cells.  Just leave them blank and editable so
+           the BDE can type the DC manually, and set a non-blocking
+           status message so the state is still obvious. */
+        setStatus(
+          "Pricing master has no row for this customer / date — key the Base DC values in manually.",
+          "warn"
+        );
       }
     } catch(_e) { /* fall through — server error shouldn't hard-block */ }
   }
@@ -3921,6 +3924,37 @@ $("#btnSubmit").addEventListener("click", async () => {
     showNotice("Please mark Rebate-able (Y or N) before submitting the Order Request.\n\nType 'Y' in the YES cell or 'N' in the NO cell.");
     setStatus("Rebate-able (Y or N) is required before submitting.", "warn");
     return;
+  }
+  /* Reason / Notes for Approver — now REQUIRED on Submit with a 10-
+     char minimum.  Approvers consistently flagged orders that
+     landed with "see below" / "n/a" / blank, so we gate here. */
+  {
+    const reason = (payload.header.mgmt_reason || "").trim();
+    if (reason.length < 10){
+      const ta = $("#mgmt_reason");
+      if (ta){
+        ta.style.transition = "background 0.15s, box-shadow 0.15s";
+        ta.style.background = "#fee2e2";
+        ta.style.boxShadow  = "0 0 0 3px rgba(220,38,38,.25)";
+        ta.scrollIntoView({behavior:"smooth", block:"center"});
+        setTimeout(() => {
+          ta.style.background = "#fff8d5";
+          ta.style.boxShadow  = "";
+        }, 1200);
+        ta.focus();
+      }
+      showNotice(
+        `Please leave a note for the approver before submitting ` +
+        `(at least 10 characters; currently ${reason.length}).\n\n` +
+        `A short reason — "aged stock promo", "fleet retention Q4", ` +
+        `"competitor match" — is enough.`
+      );
+      setStatus(
+        `Approver note is required (min 10 chars; now ${reason.length}).`,
+        "warn"
+      );
+      return;
+    }
   }
   /* MD-approval acknowledgement.  When the current line-up trips the
      MD gate (non-aged Proposed-DC ≥ 64 % lines are > 5 % of the order

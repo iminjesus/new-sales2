@@ -3284,8 +3284,10 @@ def api_orders_base_dc():
 
     Returns
       { "HK_PCLT": 52.00, "HK_TBR": 56.00,
-        "LF_PCLT": 50.00, "LF_TBR": 56.00,
-        "TBR_HKLF": 56.00 }    # legacy — max(HK_TBR, LF_TBR)
+        "LF_PCLT": 50.00, "LF_TBR": 56.00 }
+    Any cell with no matching row in dc_basic_customer stays None
+    on the response (BLANK on the form) — the operator keys in the
+    missing value by hand, per the "stick to the table" rule.
 
     For each output cell (HK-PCLT, LF-PCLT, TBR) we score every
     candidate row and pick the highest.  Score is:
@@ -3325,13 +3327,14 @@ def api_orders_base_dc():
     # Every cell starts as None.  If dc_basic_customer carries a
     # matching row we fill it below; otherwise the cell stays blank
     # on the form.  No hard-coded fallback — read strictly from
-    # the master table per the user's instruction.
+    # the master table per the user's instruction.  Response carries
+    # only the 4 BRAND × LINE cells; the legacy TBR_HKLF composite
+    # key is gone to match the user's "only these four" screenshot.
     out = {
         "HK_PCLT":  None,
         "HK_TBR":   None,
         "LF_PCLT":  None,
         "LF_TBR":   None,
-        "TBR_HKLF": None,
     }
     if debug:
         out["_debug"] = {"sold_to": sold_to, "anchor_date": _date_arg}
@@ -3499,13 +3502,6 @@ def api_orders_base_dc():
         if lf_pclt_pick: out["LF_PCLT"] = lf_pclt_pick[2]
         if hk_tbr_pick:  out["HK_TBR"]  = hk_tbr_pick[2]
         if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
-        # Legacy TBR_HKLF — carry max(HK, LF) so old clients that
-        # still read this one field get the better of the two.
-        # Stays None (blank on the form) when the table has nothing.
-        _hk = out["HK_TBR"]; _lf = out["LF_TBR"]
-        if _hk is not None or _lf is not None:
-            out["TBR_HKLF"] = max(_hk if _hk is not None else -1e9,
-                                   _lf if _lf is not None else -1e9)
 
         if debug:
             def _s(v):
