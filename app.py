@@ -17815,22 +17815,25 @@ def shop_briefing_data(ship_to):
 # dashboard and which views matter.  Restricted to ALL-role users (the
 # small admin set in _BDE_DIRECTORY — Hayden / JJ / Jayden).
 def _is_admin_request():
+    # Temporarily OPEN to every caller while the operator confirms the
+    # pipeline works.  Flip back to the role-gated version below once
+    # we're ready to lock it to ALL-role again.
+    return True
+
+def _is_admin_request_strict():
+    """Role-gated version — kept here for when we re-lock the admin
+    pages.  Returns True only for _EMAIL_TO_DIR callers with role
+    'ALL' plus the DEV_ADMIN_EMAILS set."""
     email = (_bde_from_request() or "").strip().lower()
     if not email:
         return False
     me = _EMAIL_TO_DIR.get(email)
-    # role is the third tuple element; "ALL" = unscoped admin
     if me and me[2] == "ALL":
         return True
-    # Dev-admin fallback — the local desktop operator (jayden.bhang@
-    # gmail.com) isn't in the sales directory but still runs the
-    # dashboard, so treat DEV_ADMIN_EMAILS as admin for /admin/* +
-    # the usage API.  Same list we use to widen SPRF list scope.
     try:
         if email in {e.lower() for e in DEV_ADMIN_EMAILS}:
             return True
     except NameError:
-        # DEV_ADMIN_EMAILS defined later in the file — ignore on import.
         pass
     return False
 

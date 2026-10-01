@@ -253,11 +253,12 @@
       <button class="btn" onclick="window.location.href='/claims'">Claims</button>
       <button class="btn" onclick="window.location.href='/orders_list'">📄 SPRF</button>
       <button class="btn" onclick="window.location.href='/highlights'">📊 Highlights</button>
-      <!-- Admin dropdown — hidden by default; the admin-probe below
-           un-hides it only for ALL-role callers so a BDE's nav isn't
-           cluttered with menus they can't open.  Container keeps
-           position relative for the absolute-positioned menu. -->
-      <div id="adminMenuWrap" style="position:relative;display:none">
+      <!-- Admin dropdown — currently visible to EVERY caller so the
+           operator can confirm the plumbing works before we re-gate
+           it to ALL-role.  Backend endpoints under /admin/* are open
+           while this is wide-open; tighten _is_admin_request + flip
+           the display back to "none" + restore the probe when ready. -->
+      <div id="adminMenuWrap" style="position:relative;display:inline-flex">
         <button id="adminMenuBtn" class="btn" type="button"
                 style="background:#1e3a5f;color:#fff;border-color:#0f172a">
           🔧 Admin <span style="opacity:.65;font-size:10px">▾</span>
@@ -278,22 +279,14 @@
       </div>
     </div>
     <script>
-    /* Admin dropdown — probe /api/admin/is_admin and only reveal the
-       button when the server confirms ALL-role.  Dropdown toggles on
-       the button click and closes on outside click / Escape. */
-    (async function initAdminMenu(){
-      try {
-        const r = await fetch("/api/admin/is_admin", {credentials: "same-origin"});
-        const j = await r.json().catch(() => ({is_admin: false}));
-        if (!j || !j.is_admin) return;
-      } catch(_){
-        return;
-      }
+    /* Admin dropdown wiring — toggles on click, closes on outside
+       click / Escape.  Visibility is unconditional while we're in
+       the "show-everyone" testing phase. */
+    (function initAdminMenu(){
       const wrap = document.getElementById("adminMenuWrap");
       const btn  = document.getElementById("adminMenuBtn");
       const menu = document.getElementById("adminMenu");
       if (!wrap || !btn || !menu) return;
-      wrap.style.display = "inline-flex";
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         menu.hidden = !menu.hidden;
