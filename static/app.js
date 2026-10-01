@@ -3219,24 +3219,28 @@ function renderProfitCombined(rows) {
   });
 }
 
-/* Draws a dashed brown outline around each bar whose month was
+/* Draws a dashed outline around each bar whose month was
    ESTIMATED on the backend (sales_thismonth fallback with the
    5.5 % Gross haircut + prior-month ratios for Op Cost / Sales
    Deduction).  Chart.js's scriptable borderDash doesn't render
-   per-bar on the stacked profit chart, so we draw the dash
-   manually in a late-pass plugin.
+   per-bar on stacked bars, so we draw the dash manually here.
 
-   Datasets that opt in carry _estimatedMonths: boolean[] whose
-   index matches the chart's categorical x-axis.  Datasets with
-   no array are untouched — the Profit % line and COGS stay
-   stroke-free.  When a month flips from estimated to real
-   (sales_2526 ingests it), the flag goes false and no dash is
-   drawn — the bar reads as a plain solid colour, matching every
-   other actual-data month. */
+   Datasets opt in by setting `_estimatedMonths: boolean[]` whose
+   index aligns with the chart's categorical x-axis.  Datasets
+   without the array are untouched — Profit % line + COGS stay
+   stroke-free.  When sales_2526 ingests the month the flag goes
+   false, the plugin skips the bar, and the chart reverts to
+   plain solid colour everywhere.
+
+   Debug: logs once per redraw when it finds at least one
+   estimated bar.  Open the console on /orders.html? No — this
+   fires on /, the main dashboard.  Open the console there to
+   confirm.  Remove the log line once the behaviour is confirmed. */
 const estimatedOutlinePlugin = {
   id: "estimatedOutline",
   afterDatasetsDraw(chart) {
     const { ctx } = chart;
+    let drew = 0;
     chart.data.datasets.forEach((ds, dsi) => {
       const flags = ds._estimatedMonths;
       if (!Array.isArray(flags)) return;
@@ -3244,25 +3248,30 @@ const estimatedOutlinePlugin = {
       if (!meta || !meta.data) return;
       meta.data.forEach((bar, i) => {
         if (!flags[i]) return;
-        /* getProps gives us the rendered coordinates after
-           Chart.js's layout pass — base = the stack-floor pixel,
-           y = the stack-top pixel, x = category centre. */
         const p = bar.getProps(["x", "y", "base", "width"], true);
-        if (!p || p.width <= 0) return;
+        if (!p || !p.width) return;
         const h = Math.abs(p.base - p.y);
-        if (h <= 0) return;
+        if (!h) return;
         const left = p.x - p.width / 2;
         const top  = Math.min(p.y, p.base);
         ctx.save();
-        ctx.setLineDash([4, 3]);
-        ctx.strokeStyle = "#7c2d12";
-        ctx.lineWidth   = 1.5;
-        /* Half-pixel offset keeps the stroke sharp on retina
-           displays; strokeRect centres the line on its path. */
-        ctx.strokeRect(left + 0.5, top + 0.5, p.width - 1, h - 1);
+        /* Longer dash + thicker, darker stroke so the "estimate"
+           cue is unmistakable even on narrow Sep bars.  Dash
+           [8, 4] gives roughly 2 visible segments per inch of bar
+           edge, which reads clearly at the default profit-chart
+           size without devouring the bar colour underneath. */
+        ctx.setLineDash([8, 4]);
+        ctx.strokeStyle = "#1f2937";    // slate-800 — stands out on every bar colour
+        ctx.lineWidth   = 2.5;
+        ctx.strokeRect(left + 1, top + 1, p.width - 2, h - 2);
         ctx.restore();
+        drew++;
       });
     });
+    if (drew > 0 && !chart._estLogged) {
+      console.log(`[estimatedOutline] drew ${drew} dashed outlines`);
+      chart._estLogged = true;
+    }
   },
 };
 
