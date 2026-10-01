@@ -2635,13 +2635,21 @@ def api_orders_customer():
         # Choose the WHERE clause based on which query param was given.
         # Codes: exact.  Names: exact → normalised-LIKE so freely typed
         # "bobstyres" still resolves to "Bob's Tyres".
-        # Closed customers (channel2 = 'Closed') are blocked here too so
-        # typing the exact code of a decommissioned account can't bypass
-        # the autocomplete filter.
-        closed_guard = (
-            " AND (channel2 IS NULL OR UPPER(TRIM(channel2)) <> 'CLOSED')"
-            if "channel2" in cols else ""
-        )
+        # Closed customers are blocked here too so typing the exact
+        # code of a decommissioned account can't bypass the
+        # autocomplete filter.  Deployments store the closure flag in
+        # whichever of channel2 / channels / channel exists on this
+        # schema; we join every present candidate with OR so a 'Closed'
+        # in ANY of them hides the row.
+        closed_cols = [c for c in ("channel2", "channels", "channel") if c in cols]
+        if closed_cols:
+            parts = [
+                f"(UPPER(TRIM({c})) <> 'CLOSED' OR {c} IS NULL)"
+                for c in closed_cols
+            ]
+            closed_guard = " AND " + " AND ".join(parts)
+        else:
+            closed_guard = ""
         row = None
         base_sql = f"SELECT {', '.join(select_cols)} FROM customer"
         if ship_to:
@@ -2817,18 +2825,31 @@ def api_orders_customer_suggest():
         if not wh_and:
             return jsonify([])
 
-        # Hide customers that are flagged channel2='Closed' from the
-        # SPRF account pickers — those accounts can't take new orders.
-        if "channel2" in cols:
-            wh_and.append(
-                "(channel2 IS NULL "
-                "OR UPPER(TRIM(channel2)) <> 'CLOSED')"
-            )
+        # Hide customers flagged Closed from the SPRF account pickers.
+        # Checks every spelling the deployed schema might carry
+        # (channel2 / channels / channel) because the loader has used
+        # different column names across environments.
+        closed_cols = [c for c in ("channel2", "channels", "channel") if c in cols]
+        for c in closed_cols:
+            wh_and.append(f"(UPPER(TRIM({c})) <> 'CLOSED' OR {c} IS NULL)")
 
+        # Priority ordering: DNU names go to the very bottom, ANC
+        # names go next-to-bottom, everything else above them.  Keep
+        # the existing stable order (by code) as a tiebreaker so a
+        # given search returns the same list each time.
+        order_cols = [code_col]
+        if name_col in cols:
+            order_cols = [
+                f"CASE "
+                f"  WHEN UPPER({name_col}) LIKE '%DNU%' THEN 2 "
+                f"  WHEN UPPER({name_col}) LIKE '%ANC%' THEN 1 "
+                f"  ELSE 0 END",
+                code_col,
+            ]
         sql = (
             f"SELECT {select_sql} FROM customer "
             f"WHERE {' AND '.join(wh_and)} "
-            f"ORDER BY {code_col} LIMIT {limit}"
+            f"ORDER BY {', '.join(order_cols)} LIMIT {limit}"
         )
         cur.execute(sql, tuple(params))
         rows = cur.fetchall()
