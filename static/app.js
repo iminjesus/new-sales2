@@ -261,6 +261,16 @@ const setActive = (wrap, attr, val) => {
     b.classList.toggle("active", b.dataset[attr] === val);
   });
 };
+// Multi-select-ready option caches for the former native <select>
+// dropdowns (Salesman / Channel / Sold-to Group).  Declared up here
+// because populateSelect (below) mirrors into them during initControls,
+// which runs synchronously inside the start() IIFE before this file's
+// bottom section is reached.  Keeping them as `var` sidesteps the
+// `let` temporal-dead-zone that bit the original placement.
+var __SALESMAN_OPTIONS      = [];
+var __CHANNEL_OPTIONS       = [];
+var __SOLD_TO_GROUP_OPTIONS = [];
+
 function populateSelect(el,arr,includeAll=true){
   el.innerHTML="";
   if(includeAll){
@@ -3685,13 +3695,11 @@ let __CODE_OPTIONS = [];
 let __SOLD_TO_OPTIONS = [];
 let __SHIP_TO_OPTIONS = [];
 
-// Multi-select-ready option caches for the former native <select>
-// dropdowns (Salesman / Channel / Sold-to Group).  Mirrors are kept in
-// sync by the populateSelect wrapper below so legacy init paths that
-// still call populateSelect(select, arr) also seed these.
-let __SALESMAN_OPTIONS = [];
-let __CHANNEL_OPTIONS = [];
-let __SOLD_TO_GROUP_OPTIONS = [];
+// (The __SALESMAN_OPTIONS / __CHANNEL_OPTIONS / __SOLD_TO_GROUP_OPTIONS
+// caches are declared near the top of this file with `var`, next to
+// populateSelect — the function that writes them.  Moving the
+// declaration up avoids the let-TDZ error that otherwise fires when
+// initControls runs populateSelect before this line is reached.)
 
 async function refreshSoldToCustom(){
   // Sold-to Group is now a multi-select native <select>; read the
