@@ -1,32 +1,39 @@
 """
-geocode.py — Location Master geocoder for the Customer Master workbook
+geocode.py — Customer Master → Template → Geocode → Flat CSV pipeline
 
-Input: a Customer Master Excel file picked at run-time (file dialog).
-       The workbook must have two sheets:
-         • "Customer Master" — one row per customer / ship-to with
-           Address 1 / City / Region / Postal Code / Country, plus
-           every other column that feeds the downstream flat file
-           (channel2, Parent CGR3, Sold-to, Name, BDE State, …).
-         • "Location Master" — one row per DISTINCT delivery address.
-           Columns A-E are the five address fields; F = Latitude,
-           G = Longitude.  New rows are appended by this script.
+Two file pickers run at launch:
 
-Pass:
-  1. Build the key set (Address 1, City, Region, Postal Code, Country)
-     from both sheets.  Every Customer Master key that isn't already
-     a Location Master row is appended at the bottom of Location
-     Master with blank lat / lon.
-  2. Every Location Master row that still has blank F or G is sent
-     to the Google Geocoding API; the response fills F (Latitude)
-     and G (Longitude).  Progress is cached in geocode_add_cache.csv
-     keyed by the composite address so a Ctrl-C restart doesn't
-     re-charge the API for addresses it already resolved.
-  3. The workbook is saved back in place.
-  4. A flat CSV is written to
+  1. "Please locate most recent customer master file" — the raw
+     Customer Master export (unlocked workbook from SAP / BW).
+     Only columns from A through "Channel2" are read.
+
+  2. "Please locate the Geolocation template file for the customer
+     master file" — the Pamela template workbook that holds the
+     Customer Master Excel Table + the Location Master sheet.  Its
+     Customer Master table has three formula columns at the right
+     end that depend on the Channel2-and-earlier data copied in
+     from (1); those formulas are preserved and re-applied across
+     the new row count by this script, so the Table auto-extends
+     in Excel on next open regardless of how many rows (1) grew by.
+
+Then the normal pipeline:
+
+  A. Pass 1 — compare the composite address key (Address 1, City,
+     Region, Postal Code, Country) on both sheets of the TEMPLATE.
+     Every Customer Master key that isn't already a Location
+     Master row is appended at the bottom of Location Master with
+     blank lat / lon.
+  B. Pass 2 — every Location Master row that still has blank F or
+     G is sent to the Google Geocoding API.  Progress is cached
+     in geocode_add_cache.csv keyed by the composite address so a
+     Ctrl-C restart doesn't re-charge the API for solved rows.
+  C. The template workbook is saved back in place (falls back to
+     <name>_updated.xlsx when it's open in Excel).
+  D. A flat CSV is written to
         E:\\01. work\\2025\\Data_Anal_Website\\rawdata\\unlock\\customer_YYMM.csv
-     where YY / MM are today's two-digit year / month.  Columns are
-     the Customer Master fields the dashboard loader expects, with
-     Longitude / Latitude joined in from Location Master.
+     where YY / MM are today's two-digit year / month.  Columns
+     are the Customer Master fields the dashboard loader expects,
+     with Longitude / Latitude joined in from Location Master.
 
 Dependencies: pip install openpyxl requests
 """
@@ -133,25 +140,183 @@ GEOCODE_DELAY_SEC = 0.1
 #  Helpers
 # ──────────────────────────────────────────────────────────────────────
 
-def pick_input_file():
-    """Open a native file dialog so the operator can locate the
-    workbook.  Falls back to a stdin prompt when tkinter isn't
-    available (headless server, SSH-forwarded run)."""
+def pick_file(title):
+    """Open a native file dialog with the given title.  Falls back
+    to a stdin prompt when tkinter isn't available (headless server,
+    SSH-forwarded run)."""
     try:
         import tkinter as tk
         from tkinter import filedialog
     except Exception:
-        p = input("Path to Customer Master workbook: ").strip().strip('"')
+        p = input(f"{title}: ").strip().strip('"')
         return p
     root = tk.Tk()
     root.withdraw()
     root.update()
     p = filedialog.askopenfilename(
-        title="Select Customer Master workbook",
+        title=title,
         filetypes=[("Excel workbook", "*.xlsx *.xlsm"), ("All files", "*.*")],
     )
     root.destroy()
     return p
+
+
+def copy_source_through_channel2(src_path, tpl_path):
+    """Copy columns A..Channel2 (inclusive, every row) from the source
+    Customer Master workbook into the TEMPLATE's Customer Master
+    sheet, in place.  The template is where everything downstream
+    (Location Master geocoding + flat-file export) runs — the source
+    file is read-only input.
+
+    Preserves the template's Excel Table structure:
+      • Captures the formulas on the LAST THREE columns of the
+        template's Customer Master Table from the first data row.
+      • Clears every existing data row (columns A..Channel2) so
+        yesterday's rows don't leak into today's.
+      • Writes source rows into the template.
+      • Replays the captured formulas onto every new row, shifting
+        row references via openpyxl.formula.translate.Translator.
+      • Updates the Excel Table's `ref` so Excel treats the new rows
+        as part of the Table on next open.
+
+    Raises on IO errors; caller catches."""
+    from openpyxl.utils import range_boundaries, get_column_letter
+    from openpyxl.formula.translate import Translator
+
+    print(f"\nStage 1 — copy source → template")
+    print(f"  Source  : {src_path}")
+    print(f"  Template: {tpl_path}")
+
+    # Read source as values only — the template owns the formulas.
+    src_wb = load_workbook(src_path, data_only=True)
+    tpl_wb = load_workbook(tpl_path)
+
+    src_ws = src_wb[CUSTOMER_SHEET] if CUSTOMER_SHEET in src_wb.sheetnames else src_wb.active
+    if CUSTOMER_SHEET not in tpl_wb.sheetnames:
+        raise RuntimeError(
+            f"Template is missing the '{CUSTOMER_SHEET}' sheet. "
+            f"Available sheets: {tpl_wb.sheetnames}"
+        )
+    tpl_ws = tpl_wb[CUSTOMER_SHEET]
+    if src_ws.title != CUSTOMER_SHEET:
+        print(f"  (source: '{CUSTOMER_SHEET}' not found; using active sheet "
+              f"'{src_ws.title}')")
+
+    # Find the Channel2 column in the source so we know where to stop
+    # the copy.  Column-letter match tolerates spelling drift
+    # ("channel2", "Channel 2", "CHANNEL2").
+    src_headers = [c.value for c in src_ws[1]]
+    def _nrm(s): return "" if s is None else " ".join(str(s).split()).strip().lower()
+    ch2_idx_1b = None   # 1-based column number
+    for i, h in enumerate(src_headers, start=1):
+        if _nrm(h).replace(" ", "") == "channel2":
+            ch2_idx_1b = i
+            break
+    if ch2_idx_1b is None:
+        print("  WARNING: 'Channel2' header not found in source; "
+              "copying every source column.")
+        ch2_idx_1b = len(src_headers)
+    print(f"  Source Channel2 is column {get_column_letter(ch2_idx_1b)} "
+          f"({ch2_idx_1b}); copying columns A..{get_column_letter(ch2_idx_1b)}")
+
+    src_data_rows = max(0, src_ws.max_row - 1)
+    print(f"  Source has {src_data_rows} data rows")
+
+    # Find the Table in the template Customer Master sheet so we can
+    # preserve + extend it.  First table wins; a template normally
+    # only carries one on this sheet.
+    tbl = None
+    try:
+        tables = tpl_ws.tables   # openpyxl ≥ 3.0 — dict-like
+        for t in list(tables.values()):
+            tbl = t
+            break
+    except Exception:
+        tbl = None
+
+    if tbl is not None:
+        min_col, min_row, max_col, max_row = range_boundaries(tbl.ref)
+        print(f"  Template table '{tbl.name}' at {tbl.ref} "
+              f"(cols {get_column_letter(min_col)}..{get_column_letter(max_col)}, "
+              f"rows {min_row}..{max_row})")
+        header_row  = min_row
+        first_data  = min_row + 1
+    else:
+        print("  No Excel Table found on template Customer Master sheet; "
+              "treating row 1 as headers.")
+        min_col, max_col = 1, max(tpl_ws.max_column, ch2_idx_1b + 3)
+        header_row = 1
+        first_data = 2
+        max_row    = tpl_ws.max_row
+
+    # Capture formula templates from the first data row of the LAST
+    # THREE columns of the table — the ones the user said carry the
+    # formulas we need to re-apply across the new row count.
+    formula_cols = []
+    for col in range(max(ch2_idx_1b + 1, max_col - 2), max_col + 1):
+        cell = tpl_ws.cell(row=first_data, column=col)
+        v = cell.value
+        if isinstance(v, str) and v.startswith("="):
+            formula_cols.append((col, v))
+    if formula_cols:
+        print("  Formula columns captured: " +
+              ", ".join(f"{get_column_letter(c)}={f}" for c, f in formula_cols))
+    else:
+        print("  No formula columns detected in the last three table columns.")
+
+    # Wipe existing data in columns A..Channel2 across every existing
+    # row — covers the "today's file is smaller than yesterday's" case.
+    for row in range(first_data, max_row + 1):
+        for col in range(min_col, ch2_idx_1b + 1):
+            tpl_ws.cell(row=row, column=col, value=None)
+
+    # Also wipe formula columns BEYOND the new row count so stale
+    # formulas don't hang off the end of the table.
+    new_last = first_data + src_data_rows - 1
+    if new_last < max_row:
+        for row in range(new_last + 1, max_row + 1):
+            for col in range(ch2_idx_1b + 1, max_col + 1):
+                tpl_ws.cell(row=row, column=col, value=None)
+
+    # Paste every source data row into the template, columns A..Channel2.
+    for src_row in range(2, src_ws.max_row + 1):
+        tpl_row = first_data + (src_row - 2)
+        for col in range(1, ch2_idx_1b + 1):
+            tpl_ws.cell(row=tpl_row, column=col,
+                        value=src_ws.cell(row=src_row, column=col).value)
+
+    # Re-apply formulas on every new row by row-shifting the first-row
+    # formula via openpyxl's Translator.
+    for row in range(first_data, new_last + 1):
+        for col, formula_src in formula_cols:
+            origin = f"{get_column_letter(col)}{first_data}"
+            target = f"{get_column_letter(col)}{row}"
+            try:
+                shifted = Translator(formula_src, origin=origin).translate_formula(target)
+            except Exception:
+                shifted = formula_src   # fallback: paste as-is
+            tpl_ws.cell(row=row, column=col, value=shifted)
+
+    # Extend the Excel Table range so Excel sees every new row as part
+    # of the table on next open (and auto-applies the calculated-column
+    # formula to any row we might have missed).
+    if tbl is not None and new_last > 0:
+        new_ref = (f"{get_column_letter(min_col)}{min_row}:"
+                   f"{get_column_letter(max_col)}{new_last}")
+        tbl.ref = new_ref
+        print(f"  Extended table '{tbl.name}' → {new_ref}")
+
+    # Save template back in place (fall back to <name>_updated.xlsx when
+    # the user left the file open in Excel).
+    try:
+        tpl_wb.save(tpl_path)
+        print(f"  Saved template: {tpl_path}")
+        return tpl_path
+    except PermissionError:
+        alt = os.path.splitext(tpl_path)[0] + "_updated.xlsx"
+        tpl_wb.save(alt)
+        print(f"  Source template was locked — saved copy to: {alt}")
+        return alt
 
 
 def _norm_key(parts):
@@ -286,14 +451,37 @@ def append_cache(key, address_str, lat, lon):
 # ──────────────────────────────────────────────────────────────────────
 
 def main():
-    xlsx_path = pick_input_file()
-    if not xlsx_path:
-        print("No file selected — exiting.")
+    # ── Stage 0: pick the two workbooks ───────────────────────────
+    src_path = pick_file("Please locate most recent customer master file")
+    if not src_path:
+        print("No source Customer Master file selected — exiting.")
         return
-    if not os.path.exists(xlsx_path):
-        print(f"File not found: {xlsx_path}")
+    if not os.path.exists(src_path):
+        print(f"Source file not found: {src_path}")
         return
-    print(f"Workbook: {xlsx_path}")
+
+    tpl_path = pick_file("Please locate the Geolocation template file for the customer master file")
+    if not tpl_path:
+        print("No template file selected — exiting.")
+        return
+    if not os.path.exists(tpl_path):
+        print(f"Template file not found: {tpl_path}")
+        return
+
+    # ── Stage 1: copy source (through Channel2) into the template ──
+    # Everything downstream — the Pass-1 missing-address check, the
+    # Pass-2 geocoder, and the flat-file export — runs against the
+    # TEMPLATE workbook, which now carries the fresh Customer Master
+    # data plus its own Location Master history and formula columns.
+    try:
+        xlsx_path = copy_source_through_channel2(src_path, tpl_path)
+    except Exception as e:
+        print(f"\nCould not copy source into template: {e}")
+        import traceback; traceback.print_exc()
+        return
+
+    print(f"\nStage 2+: running geocode + flat-file pipeline on template")
+    print(f"  Working file: {xlsx_path}")
 
     wb = load_workbook(xlsx_path)
     if LOCATION_SHEET not in wb.sheetnames:
