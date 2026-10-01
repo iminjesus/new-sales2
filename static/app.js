@@ -3086,7 +3086,10 @@ function renderProfitCombined(rows) {
       // it doesn't reserve a column slot in the bar grouping — that
       // was pushing the bar pair to the left of the category.
       datasets: [
-        // Bar group 1: Gross
+        // Bar group 1: Gross — no border, the estimated-month
+        // outline is drawn by estimatedOutlinePlugin below so it
+        // can actually appear as a dashed line (Chart.js's
+        // scriptable borderDash on bar elements doesn't render).
         {
           type: "bar",
           label: "Gross",
@@ -3094,15 +3097,8 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "G",
           backgroundColor: "#93c5fd",
-          borderWidth: 1,
-          /* Dashed outline on estimated months — Gross is now a
-             DERIVED value too (raw sales_thismonth amt minus a
-             5.5 % haircut), not just a direct sum.  Keeps the
-             "actual vs estimated" story consistent across every
-             estimated bar in the group. */
-          borderColor: ctx => est[ctx.dataIndex] ? "#7c2d12" : "#93c5fd",
-          borderWidth: ctx => est[ctx.dataIndex] ? 2 : 1,
-          borderDash:  ctx => est[ctx.dataIndex] ? [4, 3] : [],
+          borderWidth: 0,
+          _estimatedMonths: est,
         },
         // Bar group 2: stacked Costs (beside Gross)
         {
@@ -3113,6 +3109,9 @@ function renderProfitCombined(rows) {
           stack: "C",
           backgroundColor: "#f87171"
         },
+        // Op Cost — dotted outline on estimated months comes from
+        // estimatedOutlinePlugin (see below) because Chart.js's
+        // scriptable borderDash doesn't render per-bar.
         {
           type: "bar",
           label: "Op Cost",
@@ -3120,14 +3119,8 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "C",
           backgroundColor: "#fbbf24",
-          /* Dotted outline on months we ESTIMATED from the prior
-             month's ratios (currently just the effective current
-             month fed by sales_thismonth).  Real-data months get
-             no border so solid vs dotted communicates "actual vs
-             estimated" at a glance. */
-          borderColor:  ctx => est[ctx.dataIndex] ? "#7c2d12" : "transparent",
-          borderWidth:  ctx => est[ctx.dataIndex] ? 2 : 0,
-          borderDash:   ctx => est[ctx.dataIndex] ? [4, 3] : [],
+          borderWidth: 0,
+          _estimatedMonths: est,
         },
         {
           type: "bar",
@@ -3136,9 +3129,8 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "C",
           backgroundColor: "#d55fc3ff",
-          borderColor:  ctx => est[ctx.dataIndex] ? "#7c2d12" : "transparent",
-          borderWidth:  ctx => est[ctx.dataIndex] ? 2 : 0,
-          borderDash:   ctx => est[ctx.dataIndex] ? [4, 3] : [],
+          borderWidth: 0,
+          _estimatedMonths: est,
         },
         // Line: Profit % — placed LAST so it doesn't participate
         // in the bar column allocation.
@@ -3222,9 +3214,57 @@ function renderProfitCombined(rows) {
           }
         }
       }
-    }
+    },
+    plugins: [estimatedOutlinePlugin],
   });
 }
+
+/* Draws a dashed brown outline around each bar whose month was
+   ESTIMATED on the backend (sales_thismonth fallback with the
+   5.5 % Gross haircut + prior-month ratios for Op Cost / Sales
+   Deduction).  Chart.js's scriptable borderDash doesn't render
+   per-bar on the stacked profit chart, so we draw the dash
+   manually in a late-pass plugin.
+
+   Datasets that opt in carry _estimatedMonths: boolean[] whose
+   index matches the chart's categorical x-axis.  Datasets with
+   no array are untouched — the Profit % line and COGS stay
+   stroke-free.  When a month flips from estimated to real
+   (sales_2526 ingests it), the flag goes false and no dash is
+   drawn — the bar reads as a plain solid colour, matching every
+   other actual-data month. */
+const estimatedOutlinePlugin = {
+  id: "estimatedOutline",
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    chart.data.datasets.forEach((ds, dsi) => {
+      const flags = ds._estimatedMonths;
+      if (!Array.isArray(flags)) return;
+      const meta = chart.getDatasetMeta(dsi);
+      if (!meta || !meta.data) return;
+      meta.data.forEach((bar, i) => {
+        if (!flags[i]) return;
+        /* getProps gives us the rendered coordinates after
+           Chart.js's layout pass — base = the stack-floor pixel,
+           y = the stack-top pixel, x = category centre. */
+        const p = bar.getProps(["x", "y", "base", "width"], true);
+        if (!p || p.width <= 0) return;
+        const h = Math.abs(p.base - p.y);
+        if (h <= 0) return;
+        const left = p.x - p.width / 2;
+        const top  = Math.min(p.y, p.base);
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = "#7c2d12";
+        ctx.lineWidth   = 1.5;
+        /* Half-pixel offset keeps the stroke sharp on retina
+           displays; strokeRect centres the line on its path. */
+        ctx.strokeRect(left + 0.5, top + 0.5, p.width - 1, h - 1);
+        ctx.restore();
+      });
+    });
+  },
+};
 
 async function loadProfit() {
   const qs = new URLSearchParams({
