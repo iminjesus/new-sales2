@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Admin · System Usage</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 *{box-sizing:border-box}
 html,body{margin:0;background:#f3f4f6;color:#111827;
@@ -19,6 +20,8 @@ html,body{margin:0;background:#f3f4f6;color:#111827;
 .toolbar .spacer{flex:1}
 .toolbar a{color:#cbd5e1;font-size:12px;text-decoration:none}
 .toolbar a:hover{color:#fff}
+.hint{background:#fef9c3;color:#78350f;border:1px solid #fde68a;padding:6px 12px;
+  border-radius:5px;font-size:11.5px;font-weight:600}
 
 .wrap{padding:18px;max-width:1600px;margin:0 auto}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
@@ -39,7 +42,6 @@ html,body{margin:0;background:#f3f4f6;color:#111827;
 .card h2 .sub{font-size:10px;font-weight:500;color:#6b7280;text-transform:none;
   letter-spacing:0;margin-left:auto}
 
-/* Pivot table — users down, sections across */
 .pivot-wrap{overflow-x:auto}
 table.pivot{border-collapse:collapse;font-size:11.5px;min-width:100%}
 table.pivot th,table.pivot td{padding:4px 8px;border:1px solid #e5e7eb;
@@ -49,10 +51,12 @@ table.pivot thead th{background:#1e3a5f;color:#fff;font-weight:700;font-size:10.
 table.pivot thead th.section-col{background:#2563eb}
 table.pivot thead th.kpi-col{background:#065f46}
 table.pivot thead th.total-col{background:#991b1b}
+table.pivot tbody tr{cursor:pointer}
 table.pivot tbody tr:hover td{background:#eff6ff}
 table.pivot tbody tr.totals-row td{background:#1e3a5f;color:#fff;font-weight:800;
   border-top:2px solid #0f172a}
 table.pivot tbody tr.totals-row td.total-cell{background:#991b1b}
+table.pivot tbody tr.totals-row:hover td{filter:brightness(1.1)}
 table.pivot td.name-cell{font-weight:700;color:#111;position:sticky;left:0;
   background:#fff;z-index:1;max-width:220px;overflow:hidden;text-overflow:ellipsis}
 table.pivot tbody tr:hover td.name-cell{background:#eff6ff}
@@ -64,13 +68,30 @@ table.pivot td.num.zero{color:#cbd5e1}
 table.pivot td.total-cell{background:#fef2f2;color:#7f1d1d;font-weight:700}
 table.pivot td.kpi-cell{background:#f0fdf4;color:#064e3b;font-weight:600}
 
-/* Legend of path → section mapping */
-.map-chip{display:inline-block;background:#eff6ff;color:#1e3a5f;padding:2px 7px;
-  margin:2px 3px 0 0;border-radius:3px;font-size:11px;font-family:ui-monospace,Menlo,monospace}
-.map-chip b{color:#2563eb;margin-right:4px}
-
 .status{padding:30px;text-align:center;color:#6b7280}
 .error{padding:30px;text-align:center;color:#dc2626;font-weight:600}
+
+/* ─── Chart modal ─────────────────────────────────────────── */
+.modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.6);
+  z-index:1000;display:none;align-items:center;justify-content:center;padding:24px}
+.modal-bg.show{display:flex}
+.modal-card{background:#fff;border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.4);
+  width:min(1100px,96vw);max-height:92vh;overflow:hidden;
+  display:flex;flex-direction:column}
+.modal-hdr{background:#1e3a5f;color:#fff;padding:12px 18px;display:flex;
+  align-items:center;gap:12px;flex-wrap:wrap}
+.modal-hdr h3{margin:0;font-size:14px;font-weight:700;flex:1}
+.modal-hdr .bucket-switch{display:flex;background:rgba(255,255,255,.1);
+  border-radius:5px;overflow:hidden}
+.modal-hdr .bucket-switch button{background:transparent;color:#cbd5e1;border:none;
+  padding:5px 14px;font-size:12px;font-weight:700;cursor:pointer}
+.modal-hdr .bucket-switch button.on{background:#2563eb;color:#fff}
+.modal-hdr .close-btn{background:#ef4444;color:#fff;border:none;border-radius:5px;
+  padding:5px 14px;font-size:13px;cursor:pointer;font-weight:700}
+.modal-body{padding:14px 18px;overflow-y:auto}
+.chart-wrap{height:280px;margin-bottom:16px;position:relative}
+.chart-wrap canvas{width:100% !important;height:100% !important}
+.chart-caption{font-size:11.5px;color:#64748b;margin:0 0 6px;text-align:center}
 </style>
 </head>
 <body>
@@ -90,6 +111,7 @@ table.pivot td.kpi-cell{background:#f0fdf4;color:#064e3b;font-weight:600}
     </select>
   </label>
   <button id="btnApply">Apply</button>
+  <div class="hint">💡 Double-click any row (incl. Total) to open the daily / weekly / monthly chart</div>
   <div class="spacer"></div>
   <a href="/">← Dashboard</a>
 </div>
@@ -102,7 +124,7 @@ table.pivot td.kpi-cell{background:#f0fdf4;color:#064e3b;font-weight:600}
 
     <div class="card">
       <h2>User × Section matrix
-        <span class="sub">Each row = one user · each column = a page or KPI · last column = per-user total</span>
+        <span class="sub">Row = user · column = page (left-to-right follows the Dashboard nav) + KPIs · last column = per-user total · sorted by Total clicks desc</span>
       </h2>
       <div class="pivot-wrap">
         <table class="pivot" id="pivotTable"></table>
@@ -111,7 +133,7 @@ table.pivot td.kpi-cell{background:#f0fdf4;color:#064e3b;font-weight:600}
 
     <div class="card">
       <h2>Section traffic breakdown
-        <span class="sub">All users combined · ordered by hits</span>
+        <span class="sub">All users combined · ordered by Dashboard nav</span>
       </h2>
       <table class="pivot" id="sectionTable" style="min-width:auto;max-width:620px">
         <thead>
@@ -124,8 +146,29 @@ table.pivot td.kpi-cell{background:#f0fdf4;color:#064e3b;font-weight:600}
   </div>
 </div>
 
+<!-- Chart modal -->
+<div id="chartModal" class="modal-bg">
+  <div class="modal-card">
+    <div class="modal-hdr">
+      <h3 id="chartTitle">User activity</h3>
+      <div class="bucket-switch">
+        <button data-bucket="day"  class="on">Daily</button>
+        <button data-bucket="week">Weekly</button>
+        <button data-bucket="month">Monthly</button>
+      </div>
+      <button class="close-btn" id="chartClose">× Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="chart-caption">Total clicks (line) over time</div>
+      <div class="chart-wrap"><canvas id="totalChart"></canvas></div>
+      <div class="chart-caption">Section-level clicks (stacked bars)</div>
+      <div class="chart-wrap" style="height:340px"><canvas id="sectionChart"></canvas></div>
+    </div>
+  </div>
+</div>
+
 <script>
-const $ = sel => document.querySelector(sel);
+const $ = s => document.querySelector(s);
 
 function fmtInt(n){
   if (n == null || isNaN(+n)) return "0";
@@ -200,13 +243,13 @@ function renderKpis(d){
   const t = d.totals || {};
   const p = d.period || {};
   const kpis = [
-    {label:"Period",          value: `${p.from} → ${p.to}`,  sub:`${p.days} days · ${p.working_days} working · ${p.months} mo`},
-    {label:"Total requests",  value: fmtInt(t.requests)},
-    {label:"Page clicks",     value: fmtInt(t.page_views),   sub:"navigations (excl. background API)"},
-    {label:"Unique users",    value: fmtInt(t.uniq_users)},
-    {label:"Sessions",        value: fmtInt(t.sessions),     sub:`gap ≥ ${p.session_gap_min||30} min = new session`},
-    {label:"System-open hrs", value: fmt1(t.total_hours),    sub:"summed across every session"},
-    {label:"Downloads",       value: fmtInt(t.downloads),    sub:"export_excel / xlsx / csv / pdf"},
+    {label:"Period",         value: `${p.from} → ${p.to}`,  sub:`${p.days} days · ${p.working_days} working · ${p.months} mo`},
+    {label:"Total requests", value: fmtInt(t.requests)},
+    {label:"Page clicks",    value: fmtInt(t.page_views),   sub:"navigations (excl. background API)"},
+    {label:"Unique users",   value: fmtInt(t.uniq_users)},
+    {label:"Sessions",       value: fmtInt(t.sessions),     sub:`gap ≥ ${p.session_gap_min||30} min = new session`},
+    {label:"System-open hrs",value: fmt1(t.total_hours),    sub:"summed across every session"},
+    {label:"Downloads",      value: fmtInt(t.downloads),    sub:"export_excel / xlsx / csv / pdf"},
   ];
   $("#kpis").innerHTML = kpis.map(k => `
     <div class="kpi">
@@ -219,7 +262,6 @@ function renderKpis(d){
 function renderPivot(d){
   const users    = (d.by_user || []).slice();
   const sections = (d.by_section || []).map(s => s.section);
-  const period   = d.period || {};
 
   const tbl = $("#pivotTable");
   if (!users.length){
@@ -227,17 +269,18 @@ function renderPivot(d){
     return;
   }
 
-  // Header rows
+  /* KPI columns — labels clarified per the user's "Avg of WHAT?" ask:
+     every "Avg" is Avg page CLICKS, not sessions / hours. */
   const kpiCols = [
-    {k:"sessions",      lbl:"Sessions"},
-    {k:"hours",         lbl:"Hours"},
-    {k:"downloads",     lbl:"Downloads"},
-    {k:"days_active",   lbl:"Active days"},
-    {k:"avg_daily_clicks",   lbl:"Avg/working day"},
-    {k:"avg_monthly_clicks", lbl:"Avg/month"},
+    {k:"sessions",            lbl:"Sessions"},
+    {k:"hours",               lbl:"Hours open"},
+    {k:"downloads",           lbl:"Downloads"},
+    {k:"days_active",         lbl:"Active days"},
+    {k:"avg_daily_clicks",    lbl:"Avg clicks / working day"},
+    {k:"avg_monthly_clicks",  lbl:"Avg clicks / month"},
   ];
   const totCols = [
-    {k:"page_clicks", lbl:"Total clicks"},
+    {k:"page_clicks", lbl:"Total page clicks"},
   ];
 
   let html = "<thead><tr>";
@@ -253,7 +296,7 @@ function renderPivot(d){
   for (const c of totCols) html += `<th class="total-col num">${escapeHtml(c.lbl)}</th>`;
   html += "</tr></thead>";
 
-  // Rows
+  /* Users already arrive sorted by page_clicks desc from the backend. */
   const colTotals = {};
   sections.forEach(s => colTotals[s] = 0);
   kpiCols.forEach(c => colTotals[c.k] = 0);
@@ -261,9 +304,9 @@ function renderPivot(d){
 
   html += "<tbody>";
   for (const u of users){
-    const name = u.name || u.email;
+    const name  = u.name || u.email;
     const email = u.email || "";
-    html += `<tr>`;
+    html += `<tr data-email="${escapeHtml(email)}" data-name="${escapeHtml(name)}" title="Double-click to see this user's activity chart">`;
     html += `<td class="name-cell">${escapeHtml(name)}<br><span class="email-cell">${escapeHtml(email)}</span></td>`;
     for (const s of sections){
       const n = (u.sections || {})[s] || 0;
@@ -283,8 +326,8 @@ function renderPivot(d){
     }
     html += `</tr>`;
   }
-  // Totals row
-  html += `<tr class="totals-row">`;
+  /* Total row is also clickable — opens the aggregate chart. */
+  html += `<tr class="totals-row" data-email="all" data-name="All users (Total)" title="Double-click to see the aggregate chart">`;
   html += `<td class="name-cell">Total</td>`;
   for (const s of sections) html += `<td class="num">${fmtInt(colTotals[s])}</td>`;
   for (const c of kpiCols){
@@ -296,6 +339,15 @@ function renderPivot(d){
   html += `</tr></tbody>`;
 
   tbl.innerHTML = html;
+
+  /* Wire double-click → chart modal */
+  tbl.querySelectorAll("tbody tr").forEach(tr => {
+    tr.addEventListener("dblclick", () => {
+      const email = tr.dataset.email || "";
+      const name  = tr.dataset.name  || email;
+      openChartModal(email, name);
+    });
+  });
 }
 
 function renderSectionBreakdown(d){
@@ -310,6 +362,121 @@ function renderSectionBreakdown(d){
       <td class="num">${fmtInt(r.hits)}</td>
       <td class="num">${fmtInt(r.uniq_users)}</td>
     </tr>`).join("");
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Chart modal — triggered by double-click on any row
+   ────────────────────────────────────────────────────────────── */
+
+let _modalUser   = null;    // {email, name}
+let _modalBucket = "day";
+let _totalInst   = null;
+let _sectionInst = null;
+
+const _COLORS = [
+  "#2563eb","#f59e0b","#10b981","#ef4444","#8b5cf6",
+  "#ec4899","#14b8a6","#f97316","#6366f1","#06b6d4",
+  "#84cc16","#a855f7","#eab308","#64748b"
+];
+
+function openChartModal(email, name){
+  _modalUser = {email, name};
+  _modalBucket = "day";
+  document.querySelectorAll("#chartModal .bucket-switch button")
+    .forEach(b => b.classList.toggle("on", b.dataset.bucket === "day"));
+  $("#chartTitle").textContent = `📊 User activity — ${name}`;
+  $("#chartModal").classList.add("show");
+  loadChart();
+}
+$("#chartClose").addEventListener("click", () => {
+  $("#chartModal").classList.remove("show");
+});
+$("#chartModal").addEventListener("click", (e) => {
+  if (e.target === $("#chartModal")) $("#chartModal").classList.remove("show");
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("#chartModal").classList.remove("show");
+});
+document.querySelectorAll("#chartModal .bucket-switch button").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll("#chartModal .bucket-switch button")
+      .forEach(x => x.classList.toggle("on", x === b));
+    _modalBucket = b.dataset.bucket;
+    loadChart();
+  });
+});
+
+async function loadChart(){
+  if (!_modalUser) return;
+  const qs = new URLSearchParams({
+    email:  _modalUser.email || "",
+    bucket: _modalBucket,
+    from:   $("#dFrom").value,
+    to:     $("#dTo").value,
+  });
+  let data;
+  try {
+    const r = await fetch(`/api/admin/usage/user_timeseries?${qs}`, {credentials:"same-origin"});
+    data = await r.json();
+  } catch(e){
+    console.error(e); return;
+  }
+  if (data.error) { console.error(data.error); return; }
+  drawTotal(data);
+  drawSections(data);
+}
+
+function drawTotal(d){
+  const ctx = document.getElementById("totalChart");
+  if (_totalInst) _totalInst.destroy();
+  _totalInst = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: d.labels,
+      datasets: [{
+        label: "Total page clicks",
+        data: d.total,
+        borderColor: "#2563eb",
+        backgroundColor: "rgba(37,99,235,.1)",
+        tension: 0.25,
+        fill: true,
+        pointRadius: 3,
+        pointBackgroundColor: "#2563eb",
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: {position:"top"} },
+      scales: {
+        y: { beginAtZero: true, ticks:{precision:0} }
+      }
+    }
+  });
+}
+
+function drawSections(d){
+  const ctx = document.getElementById("sectionChart");
+  if (_sectionInst) _sectionInst.destroy();
+  const datasets = (d.sections || []).map((s, i) => ({
+    label: s,
+    data: d.per_section[s] || [],
+    backgroundColor: _COLORS[i % _COLORS.length],
+    stack: "S",
+  }));
+  _sectionInst = new Chart(ctx, {
+    type: "bar",
+    data: { labels: d.labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: {position:"right"} },
+      scales: {
+        x: { stacked: true },
+        y: { stacked: true, beginAtZero: true, ticks:{precision:0} }
+      }
+    }
+  });
 }
 
 initDates();

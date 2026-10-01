@@ -18047,11 +18047,47 @@ _SECTION_RULES = [
     ("/price",          "Price"),
     ("/meeting",        "Meeting"),
     ("/claims",         "Claims"),
-    ("/orders",         "SPRF"),
+    ("/orders",         "SPRF List"),
     ("/order",          "SPRF Form"),
     ("/highlights",     "Highlights"),
     ("/admin",          "Admin"),
 ]
+
+# Canonical display order for the pivot columns — matches the main
+# dashboard nav from left to right so a reader scans sections in the
+# same order they'd see the buttons on the top bar.
+_SECTION_ORDER = [
+    "Graph View", "Map View",
+    "Stock",      "Stock Balance",
+    "Rebate",     "Price",
+    "Meeting",    "Claims",
+    "SPRF List",  "SPRF Form",
+    "Highlights",
+    "Admin",      "Admin · Usage",
+    "Other",
+]
+
+def _derive_name_from_email(email):
+    """Pretty-fallback name when _EMAIL_TO_DIR doesn't carry the row.
+    Takes the local part before @, splits on dot/underscore, title-
+    cases each piece and keeps the "last first" convention Pamela
+    uses on the SPRF list ("junjong.cho" → "Cho JunJong") where the
+    directory does carry a row — so a derived label reads the same
+    way.  Reverses "first.last" so the surname comes first, which
+    matches the "Begbie Hayden" / "Park Brian" entries in the current
+    directory."""
+    s = (email or "").split("@", 1)[0]
+    if not s:
+        return ""
+    parts = [p for p in s.replace("_", ".").split(".") if p]
+    if not parts:
+        return ""
+    titled = [p[:1].upper() + p[1:] for p in parts]
+    if len(titled) >= 2:
+        # "first.last" → "Last First"; "a.b.c" → "C A B".
+        return titled[-1] + " " + " ".join(titled[:-1])
+    return titled[0]
+
 
 def _path_to_section(p):
     """Map an incoming request path to a human section label.  Only
@@ -18271,12 +18307,22 @@ def admin_usage_summary():
                 db["seconds"] += (ts - prev).total_seconds()
             _last_by_user[email] = ts
 
-        # Shape per-section
-        by_section = sorted(
-            [{"section": s, "hits": v["hits"], "uniq_users": len(v["users"])}
-             for s, v in section_hits.items()],
-            key=lambda x: x["hits"], reverse=True,
-        )
+        # Shape per-section — ordered to match the main dashboard nav
+        # from left to right (Graph View → Map View → Stock → … →
+        # Highlights → Admin) so the reader scans sections in the
+        # same order they see the top-nav buttons.  Sections that
+        # appear in the data but aren't in _SECTION_ORDER tail at
+        # the end alphabetically.
+        _order_index = {name: i for i, name in enumerate(_SECTION_ORDER)}
+        def _skey(s):
+            return (_order_index.get(s, 10_000), s)
+        ordered_sections = sorted(section_hits.keys(), key=_skey)
+        by_section = [
+            {"section": s,
+             "hits": section_hits[s]["hits"],
+             "uniq_users": len(section_hits[s]["users"])}
+            for s in ordered_sections
+        ]
 
         # Shape per-user
         wd = _working_days_between(d_from, d_to)
@@ -18289,6 +18335,12 @@ def admin_usage_summary():
                 name = m[0] if m else ""
             except Exception:
                 pass
+            # Derive a readable name from the mail id when the sales
+            # directory doesn't carry a row (e.g. kenny.kim, nell.yoo,
+            # russell.ng, pamela.lau — mail ids that aren't under the
+            # BDE roster).  "first.last@…" → "Last First".
+            if not name:
+                name = _derive_name_from_email(email)
             hours = round(u["total_seconds"] / 3600.0, 2)
             by_user.append({
                 "email":                email,
@@ -18338,6 +18390,155 @@ def admin_usage_summary():
             "by_section": by_section,
             "by_user":    by_user,
             "daily":      daily,
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/admin/usage/user_timeseries")
+def admin_usage_user_timeseries():
+    """Day / week / month breakdown of ONE user's page clicks over the
+    chosen window — drives the chart modal that pops when the operator
+    double-clicks a row on the User × Section matrix.
+
+      ?email=<lower-case email>     — "(no auth)" means empty email;
+                                       "ALL" (special) aggregates every user
+      ?from=YYYY-MM-DD&to=YYYY-MM-DD or ?days=N
+      ?bucket=day | week | month    — bucket granularity, default day
+
+    Returns:
+      email, name, bucket, period:{from,to}
+      labels          : [ "2026-09-25", … ]
+      total           : [ clicks per bucket ]
+      sections        : [ "SPRF List", "SPRF Form", "Graph View", … ]
+      per_section     : {sectionLabel: [per-bucket clicks], …}
+    """
+    if not _is_admin_request():
+        return jsonify({"error": "admin only"}), 403
+
+    email  = (request.args.get("email") or "").strip().lower()
+    bucket = (request.args.get("bucket") or "day").strip().lower()
+    if bucket not in ("day", "week", "month"):
+        bucket = "day"
+    if email.startswith("(no auth"):
+        email = ""
+    aggregate_all = (email == "all" or email == "__all__" or email == "total")
+
+    d_from, d_to = _parse_date_window(request.args)
+    from datetime import datetime, timedelta, date
+    dt_from = datetime.combine(d_from, datetime.min.time())
+    dt_to   = datetime.combine(d_to,   datetime.max.time())
+
+    try:
+        conn = get_connection(); cur = conn.cursor(dictionary=True)
+        if aggregate_all:
+            cur.execute(
+                "SELECT user_email, path, created_at "
+                "FROM request_log "
+                "WHERE created_at BETWEEN %s AND %s "
+                "ORDER BY created_at",
+                (dt_from, dt_to),
+            )
+        else:
+            cur.execute(
+                "SELECT user_email, path, created_at "
+                "FROM request_log "
+                "WHERE created_at BETWEEN %s AND %s "
+                "  AND user_email = %s "
+                "ORDER BY created_at",
+                (dt_from, dt_to, email),
+            )
+        rows = cur.fetchall() or []
+        cur.close(); conn.close()
+
+        # Bucket key — ISO date for day, ISO week-start Monday for
+        # week, YYYY-MM for month.  Python's isocalendar() lets us
+        # derive the Monday without a dateutil dependency.
+        def _bucket_key(ts):
+            if bucket == "day":
+                return ts.strftime("%Y-%m-%d")
+            if bucket == "week":
+                iso = ts.isocalendar()
+                # iso[0] = year, iso[1] = week — rebuild Monday-of-week
+                monday = date.fromisocalendar(iso[0], iso[1], 1)
+                return monday.strftime("%Y-%m-%d")
+            return ts.strftime("%Y-%m")
+
+        # Fill every bucket in [d_from, d_to] so the chart has a
+        # continuous x-axis even on days / weeks / months with no
+        # activity.
+        def _all_buckets():
+            out = []
+            d = d_from
+            if bucket == "day":
+                while d <= d_to:
+                    out.append(d.strftime("%Y-%m-%d"))
+                    d = d + timedelta(days=1)
+            elif bucket == "week":
+                iso = d.isocalendar()
+                d = date.fromisocalendar(iso[0], iso[1], 1)
+                while d <= d_to:
+                    out.append(d.strftime("%Y-%m-%d"))
+                    d = d + timedelta(days=7)
+            else:
+                d = d.replace(day=1)
+                while d <= d_to:
+                    out.append(d.strftime("%Y-%m"))
+                    if d.month == 12:
+                        d = d.replace(year=d.year + 1, month=1)
+                    else:
+                        d = d.replace(month=d.month + 1)
+            return out
+
+        labels    = _all_buckets()
+        label_set = set(labels)
+        total     = {b: 0 for b in labels}
+        per_sec   = {}       # section -> {bucket -> n}
+
+        for r in rows:
+            ts   = r.get("created_at")
+            path = r.get("path") or ""
+            if ts is None:
+                continue
+            sec = _path_to_section(path)
+            if sec is None:
+                continue                # pages only, no API churn
+            key = _bucket_key(ts)
+            if key not in label_set:
+                continue
+            total[key] += 1
+            d = per_sec.setdefault(sec, {b: 0 for b in labels})
+            d[key] += 1
+
+        # Section ordering: canonical nav order first, then any
+        # extras that appeared in the data.
+        _order_index = {name: i for i, name in enumerate(_SECTION_ORDER)}
+        sections = sorted(per_sec.keys(),
+                          key=lambda s: (_order_index.get(s, 10_000), s))
+
+        name = ""
+        if aggregate_all:
+            name = "All users"
+        else:
+            try:
+                m = _EMAIL_TO_DIR.get(email)
+                name = m[0] if m else ""
+            except Exception:
+                pass
+            if not name:
+                name = _derive_name_from_email(email) or (email or "(no auth)")
+
+        return jsonify({
+            "email": "all" if aggregate_all else (email or "(no auth)"),
+            "name":  name,
+            "bucket": bucket,
+            "period": {"from": d_from.isoformat(), "to": d_to.isoformat()},
+            "labels": labels,
+            "total":  [total[b] for b in labels],
+            "sections": sections,
+            "per_section": {s: [per_sec[s][b] for b in labels] for s in sections},
         })
 
     except Exception as e:
