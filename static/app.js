@@ -1258,17 +1258,12 @@ async function drawDailyTotals(){
 
   } else {
     // ── Abs mode ──────────────────────────────────────────────────────────────
-    // Daily: bars only (no Ach% line)
+    // Daily: bars only (no Ach% line).  Target → Actual order so the
+    // amber "plan" bar sits on the left of each day's pair, matching
+    // the Monthly / Stacked Monthly convention set by the earlier swap.
     dailyInst = new Chart(document.getElementById("dailyChart"), {
       type: "bar",
       data: { labels: fL, datasets: [
-        // Actual sales — primary saturated blue, matches the Monthly
-        // chart's 2026 actual treatment so the same colour cue means
-        // "real number" across the page.
-        { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
-          type: "bar", data: fS, backgroundColor: "#2563eb",
-          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
-        },
         // Target — warm amber so it reads as a distinct projection
         // next to the blue actual instead of another blue variant.
         // Semi-transparent fill + solid amber border for weight.
@@ -1276,12 +1271,20 @@ async function drawDailyTotals(){
           backgroundColor: "rgba(245,158,11,0.65)",
           borderWidth: 1.5, borderColor: "#b45309", borderDash: [4,3],
           categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+        },
+        // Actual sales — primary saturated blue, matches the Monthly
+        // chart's 2026 actual treatment so the same colour cue means
+        // "real number" across the page.
+        { label: filters.metric === "amount" ? "Sales Amount" : "SalesQty",
+          type: "bar", data: fS, backgroundColor: "#2563eb",
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
         }
       ]},
       options: getCommonOptions(false)
     });
 
     // Cumulative: bars on left (y), Ach% line on right (y1) with 60-130 range + 100% ref
+    // Same Target-before-Actual order as the Daily chart above.
     const ref100 = fL.map(() => 100);
     dailyCumInst = new Chart(document.getElementById("dailyCumChart"), {
       type: "bar",
@@ -1298,13 +1301,13 @@ async function drawDailyTotals(){
           borderColor: "#9ca3af", borderWidth: 1.5, borderDash: [5,3],
           pointRadius: 0, fill: false, datalabels: { display: false }
         },
-        { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
-          type: "bar", data: fSC, backgroundColor: "#2563eb",
-          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
-        },
         { label: "Cumulative Target", type: "bar", data: fTC,
           backgroundColor: "rgba(245,158,11,0.55)",
           borderWidth: 1.5, borderColor: "#b45309", borderDash: [4,3],
+          categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
+        },
+        { label: filters.metric === "amount" ? "Cumulative Amount" : "Cumulative Qty",
+          type: "bar", data: fSC, backgroundColor: "#2563eb",
           categoryPercentage: 0.9, barPercentage: 0.9, datalabels: { display: false }
         }
       ]},
