@@ -2777,10 +2777,24 @@ def api_orders_customer_suggest():
     per token (case-insensitive) so word order doesn't matter."""
     q    = (request.args.get("q") or "").strip()
     kind = (request.args.get("kind") or "sold").strip().lower()
+    # Dynamic cap on the result set: a short query (≤ 3 chars) stays
+    # tight so the dropdown doesn't swamp the user with casual
+    # auto-fire matches on 1-2 letters, but once they commit to 4+
+    # characters we assume they mean it and lift the ceiling to a
+    # practical "show every match" (2000 is plenty for one chain name
+    # like 'Tyrepower' and still bounded enough to never explode).
+    # The caller can still pass ?limit=N to override.
+    _default_limit = 2000 if len(q) >= 4 else 15
     try:
-        limit = max(1, min(int(request.args.get("limit", 15) or 15), 50))
+        _raw_limit = request.args.get("limit")
+        if _raw_limit is None:
+            limit = _default_limit
+        else:
+            # Hard cap at 5000 so a hostile caller can't ask for the
+            # whole customer table.
+            limit = max(1, min(int(_raw_limit), 5000))
     except ValueError:
-        limit = 15
+        limit = _default_limit
     if not q:
         return jsonify([])
 
@@ -2793,15 +2807,28 @@ def api_orders_customer_suggest():
         if code_col not in cols:
             return jsonify({"error": f"{code_col} column missing"}), 500
 
-        # Discover which optional label columns exist so the response
-        # can carry them for the frontend to use directly on pick.
-        pick_cols = [c for c in ("sold_to", "sold_to_name", "ship_to", "ship_to_name",
-                                 "salesman_name") if c in cols]
-        if code_col not in pick_cols: pick_cols.append(code_col)
-
-        # DISTINCT collapses the multi-ship_to-per-sold_to duplication
-        # to a single suggestion per (code, name) pair.
-        select_sql = "DISTINCT " + ", ".join(pick_cols)
+        # Collapse by the primary code (sold_to for kind=sold /
+        # ship_to for kind=ship) so one physical customer never
+        # appears twice in the dropdown just because they have
+        # multiple ship_tos.  The old DISTINCT across the full column
+        # tuple was expanding the count — a 'Tyrepower' chain with 4
+        # sold_tos but dozens of ship_tos was pushing the real sold_to
+        # list past the LIMIT and the datalist's own value-dedupe
+        # collapsed them back down to 2 visible options.
+        agg_cols = []
+        if name_col in cols:
+            agg_cols.append(f"MIN({name_col}) AS {name_col}")
+        if "sold_to" in cols and code_col != "sold_to":
+            agg_cols.append("MIN(sold_to) AS sold_to")
+        if "sold_to_name" in cols and name_col != "sold_to_name":
+            agg_cols.append("MIN(sold_to_name) AS sold_to_name")
+        if "ship_to" in cols and code_col != "ship_to":
+            agg_cols.append("MIN(ship_to) AS ship_to")
+        if "ship_to_name" in cols and name_col != "ship_to_name":
+            agg_cols.append("MIN(ship_to_name) AS ship_to_name")
+        if "salesman_name" in cols:
+            agg_cols.append("MIN(salesman_name) AS salesman_name")
+        select_sql = code_col + (", " + ", ".join(agg_cols) if agg_cols else "")
 
         # Build per-token AND — each whitespace-separated token in q
         # must appear in the stripped code OR the stripped name.
@@ -2836,19 +2863,23 @@ def api_orders_customer_suggest():
         # Priority ordering: DNU names go to the very bottom, ANC
         # names go next-to-bottom, everything else above them.  Keep
         # the existing stable order (by code) as a tiebreaker so a
-        # given search returns the same list each time.
+        # given search returns the same list each time.  The MIN()
+        # aggregate on name_col works for ORDER BY because we're
+        # already GROUP BYing on code_col — the min name is unique
+        # per code.
         order_cols = [code_col]
         if name_col in cols:
             order_cols = [
                 f"CASE "
-                f"  WHEN UPPER({name_col}) LIKE '%DNU%' THEN 2 "
-                f"  WHEN UPPER({name_col}) LIKE '%ANC%' THEN 1 "
+                f"  WHEN UPPER(MIN({name_col})) LIKE '%DNU%' THEN 2 "
+                f"  WHEN UPPER(MIN({name_col})) LIKE '%ANC%' THEN 1 "
                 f"  ELSE 0 END",
                 code_col,
             ]
         sql = (
             f"SELECT {select_sql} FROM customer "
             f"WHERE {' AND '.join(wh_and)} "
+            f"GROUP BY {code_col} "
             f"ORDER BY {', '.join(order_cols)} LIMIT {limit}"
         )
         cur.execute(sql, tuple(params))
