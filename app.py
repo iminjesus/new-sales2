@@ -18379,8 +18379,13 @@ def admin_usage_summary():
 
         for r in rows:
             email = (r.get("user_email") or "").strip().lower()
+            # Skip unauthenticated hits entirely — public /claim
+            # pages, Cloudflare health checks, etc.  They were
+            # bucketed as "(no auth)" and dominating the Total row
+            # on the pivot; the user wants them stripped out from
+            # both the per-user table and the totals.
             if not email:
-                email = "(no auth)"
+                continue
             path  = r.get("path") or ""
             ts    = r.get("created_at")
             if ts is None:
@@ -18438,7 +18443,10 @@ def admin_usage_summary():
         # (Lightweight: one more linear pass.)
         _last_by_user = {}
         for r in rows:
-            email = (r.get("user_email") or "").strip().lower() or "(no auth)"
+            email = (r.get("user_email") or "").strip().lower()
+            # Same no-auth skip as the main pass — daily totals
+            # mustn't carry hits that aren't attributed to a user.
+            if not email: continue
             ts = r.get("created_at")
             if ts is None: continue
             dk = ts.strftime("%Y-%m-%d")
