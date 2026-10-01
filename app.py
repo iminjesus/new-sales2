@@ -17820,7 +17820,19 @@ def _is_admin_request():
         return False
     me = _EMAIL_TO_DIR.get(email)
     # role is the third tuple element; "ALL" = unscoped admin
-    return bool(me and me[2] == "ALL")
+    if me and me[2] == "ALL":
+        return True
+    # Dev-admin fallback — the local desktop operator (jayden.bhang@
+    # gmail.com) isn't in the sales directory but still runs the
+    # dashboard, so treat DEV_ADMIN_EMAILS as admin for /admin/* +
+    # the usage API.  Same list we use to widen SPRF list scope.
+    try:
+        if email in {e.lower() for e in DEV_ADMIN_EMAILS}:
+            return True
+    except NameError:
+        # DEV_ADMIN_EMAILS defined later in the file — ignore on import.
+        pass
+    return False
 
 @app.get("/admin/usage")
 def admin_usage_page():
