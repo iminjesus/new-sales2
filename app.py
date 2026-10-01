@@ -273,6 +273,17 @@ REGION_STATES = {
 def _code_group_clause(alias):
     return f"{alias}.m_code = %s"
 
+# ─── Global sold-to exclusion ─────────────────────────────────────
+# Sold-to codes whose data is dropped from every chart / breakdown
+# / export routed through build_customer_filters.  Covers both
+# sales_2526 and sales_thismonth (they both have a `sold_to`
+# column on the fact table alias).  Add codes as strings here —
+# matched exactly against the fact-table value.
+_EXCLUDE_SOLD_TO = (
+    "100159",   # internal / non-reportable account
+)
+
+
 def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     """
     Returns (joins, wheres, params) to apply Region/Salesman/Group/Sold_to on a fact table.
@@ -285,6 +296,17 @@ def build_customer_filters(alias_fact: str, f, *, use_sold_to_name: bool=False):
     joins = []
     wh, p = [], []
     needs_cus = False   # only for name-based sold_to/ship_to lookups
+
+    # Global sold-to exclusion — rows for these customer codes are
+    # stripped out of every chart / breakdown / export that goes
+    # through build_customer_filters.  Both sales_2526 and
+    # sales_thismonth expose `sold_to` directly on the fact table,
+    # so a single AND clause against the alias covers both.  Add
+    # more codes to _EXCLUDE_SOLD_TO below (or wire it off a DB
+    # table) when the list grows.
+    for _ex in _EXCLUDE_SOLD_TO:
+        wh.append(f"{alias_fact}.sold_to <> %s")
+        p.append(_ex)
 
     # ?? region: EXISTS on customer (ship_to only) ??no JOIN inflation ??
     if f["region"] != "ALL":
