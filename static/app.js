@@ -364,7 +364,27 @@ function xAxisDdMm(stacked=false){
     grid: { color: "rgba(0,0,0,0.05)" },
     ticks: {
       maxRotation: 0,
-      autoSkip: true,
+      /* Show EVERY tick label.  Chart.js's default autoSkip drops
+         labels when they'd overlap, which is why the daily charts
+         were hiding "30" (and sometimes "29") on narrow boxes even
+         though the bar itself was there.  Combined with the font-
+         size autoscale further down the x axis renders a label
+         under every bar regardless of panel width. */
+      autoSkip: false,
+      maxTicksLimit: 32,
+      /* Shrink the tick font as the chart narrows so 31 labels
+         always fit.  Chart.js hands us the Scale object which
+         carries the pixel width of the axis — divide by labels
+         count to see how many px each tick has.  Clamp to 7-11
+         px so labels stay legible even on a phone screen but
+         don't get oversized on a wide dashboard. */
+      font: function(ctx){
+        const scale = ctx.chart.scales && ctx.chart.scales.x;
+        const n = (ctx.chart.data && ctx.chart.data.labels || []).length || 1;
+        const avail = scale ? scale.width / n : 20;
+        const size  = Math.max(7, Math.min(11, Math.round(avail * 0.7)));
+        return { size };
+      },
       callback: function(value){
         // 3-char cap so monthly labels stay distinguishable ("Jan"
         // vs "Jun" vs "Jul", "Mar" vs "May") — 2-char slice collapsed
