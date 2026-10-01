@@ -2186,46 +2186,56 @@ function recalcRow(row){
   row.querySelector('[data-col="current_price"]').value = list ? fmtMoney(currentPrice) : "";
   const currentAmtEl = row.querySelector('[data-col="current_amount"]');
   if (currentAmtEl) currentAmtEl.value = list ? fmtMoney(currentPrice * q) : "";
-  /* Only rewrite proposed_price when the user isn't actively editing
-     it (their input handler already wrote the target value; we'd
-     otherwise clobber their keystrokes with the rounded / re-solved
-     value on every recalc). */
-  const propEl = row.querySelector('[data-col="proposed_price"]');
-  if (propEl && document.activeElement !== propEl) {
-    propEl.value = list ? fmtMoney(proposedPrice) : "";
-  }
+  /* ── Four-way linked cells ─────────────────────────────────────
+     Proposed Unit Price · Total Amount · Proposed DC % · Add
+     Special DC % are mathematically redundant — editing any one
+     of them implies new values for the other three.  Whichever
+     cell the BDE is CURRENTLY FOCUSED on drives the display of
+     the other three; add_dc already got back-solved in
+     reverseSolveAddDC / reverseSolveFromTotalAmt /
+     reverseSolveFromProposedDC before recalcRow was called, so
+     the chain-derived values are consistent with the focused
+     cell's intent.  We STILL override the three un-focused cells
+     from the raw typed value instead of the chain output so a
+     2-decimal rounding on add_dc can't drift the shown price /
+     total / dc% away from "typed × qty".  Fresh renders with no
+     focus simply use the chain output. */
+  const propEl   = row.querySelector('[data-col="proposed_price"]');
   const totAmtEl = row.querySelector('[data-col="total_amount"]');
-  if (totAmtEl && document.activeElement !== totAmtEl) {
-    /* When the BDE is actively typing into Proposed Unit Price, the
-       Total Amount they expect is EXACTLY the typed price × qty —
-       not the chain-derived proposedPrice × qty, which drifts by a
-       few cents because add_dc rounds to 2 decimals and the chain
-       no longer lands back on the typed number.  Mirror the same
-       guard for Proposed DC % so a typed target DC also keeps the
-       total consistent with the price it implies. */
-    let shownTotal = totalAmount;
-    const _typedPrice = (propEl && document.activeElement === propEl)
-                        ? toNum(propEl.value) : 0;
-    if (_typedPrice > 0) {
-      shownTotal = _typedPrice * q;
-    } else {
-      const _pdcEl = row.querySelector('[data-col="proposed_dc"]');
-      if (_pdcEl && document.activeElement === _pdcEl) {
-        const _pd = toNum(_pdcEl.value);
-        if (list > 0 && isFinite(_pd) && _pd >= 0 && _pd <= 100) {
-          shownTotal = list * (1 - _pd/100) * q;
-        }
-      }
+  const pdcEl    = row.querySelector('[data-col="proposed_dc"]');
+  let shownPrice = proposedPrice;
+  let shownTotal = totalAmount;
+  let shownPDC   = proposedDC;
+  const _active  = document.activeElement;
+  if (propEl && _active === propEl) {
+    const t = toNum(propEl.value);
+    if (list > 0 && isFinite(t) && t >= 0) {
+      shownPrice = t;
+      shownTotal = t * q;
+      shownPDC   = 100 * (1 - t / list);
     }
-    totAmtEl.value = list ? fmtMoney(shownTotal) : "";
+  } else if (totAmtEl && _active === totAmtEl) {
+    const tt = toNum(totAmtEl.value);
+    if (list > 0 && q > 0 && isFinite(tt) && tt >= 0) {
+      shownPrice = tt / q;
+      shownTotal = tt;
+      shownPDC   = 100 * (1 - shownPrice / list);
+    }
+  } else if (pdcEl && _active === pdcEl) {
+    const pd = toNum(pdcEl.value);
+    if (list > 0 && isFinite(pd)) {
+      shownPrice = list * (1 - pd / 100);
+      shownTotal = shownPrice * q;
+      shownPDC   = pd;
+    }
   }
-  /* Don't overwrite the Proposed DC % cell while the BDE is typing
-     into it — their keystrokes drive reverseSolveFromProposedDC
-     and would get clobbered by this live recalc. */
-  const pdcEl = row.querySelector('[data-col="proposed_dc"]');
-  if (pdcEl && document.activeElement !== pdcEl) {
-    pdcEl.value = proposedDC ? proposedDC.toFixed(2)+"%" : "";
-  }
+  /* Write back to the three un-focused cells.  The focused one is
+     the user's authoritative input; recalcRow leaves it alone so
+     their keystrokes aren't clobbered mid-type. */
+  if (propEl   && _active !== propEl)   propEl.value   = list ? fmtMoney(shownPrice) : "";
+  if (totAmtEl && _active !== totAmtEl) totAmtEl.value = list ? fmtMoney(shownTotal) : "";
+  if (pdcEl    && _active !== pdcEl)    pdcEl.value    = (shownPDC != null && isFinite(shownPDC))
+                                                        ? shownPDC.toFixed(2) + "%" : "";
   const addSupEl = row.querySelector('[data-col="add_support"]');
   if (addSupEl) addSupEl.value = (Math.abs(addSupport) > 0.005) ? addSupport.toFixed(2)+"%" : "";
   updateTotals();
@@ -2233,8 +2243,12 @@ function recalcRow(row){
 
 /* Back-solve add_dc so the chain lands on the price the user just
    typed into proposed_price.  Called from the row's proposed_price
-   input handler.  Values below zero clamp to 0 (never "up-discount"
-   the row); above 100 clamp to 100.
+   input handler.  Values above 100 clamp to 100 (can't give more
+   than a free row).  NEGATIVE values ARE allowed now — a Proposed
+   DC smaller than the Current DC means the row is priced ABOVE
+   the customer's contract price (markup / claw-back), and the BDE
+   needs to see the implied Add Special DC rather than a silent
+   clamp to 0.
 
    Under the two-stack model, Base and 443/SP form the customer
    contract (Current Price), and MTH / Volume / Additional Special
@@ -2254,7 +2268,9 @@ function reverseSolveAddDC(row, targetStr){
   const denom        = currentPrice * (1 - mthDC/100) * (1 - volDC/100);
   if (!(denom > 0) || !isFinite(targetPrice) || targetPrice <= 0) return;
   let addDC = 100 * (1 - targetPrice / denom);
-  if (addDC < 0)   addDC = 0;
+  /* Upper clamp only — negative "markup" values pass through so
+     the BDE sees the actual implied Add Special DC and all four
+     linked cells stay in sync.  See recalcRow's four-way linkage. */
   if (addDC > 100) addDC = 100;
   const addEl = row.querySelector('[data-col="add_dc"]');
   if (addEl) addEl.value = fmtPct(addDC);
