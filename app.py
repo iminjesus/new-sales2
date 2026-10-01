@@ -2635,33 +2635,40 @@ def api_orders_customer():
         # Choose the WHERE clause based on which query param was given.
         # Codes: exact.  Names: exact → normalised-LIKE so freely typed
         # "bobstyres" still resolves to "Bob's Tyres".
+        # Closed customers (channel2 = 'Closed') are blocked here too so
+        # typing the exact code of a decommissioned account can't bypass
+        # the autocomplete filter.
+        closed_guard = (
+            " AND (channel2 IS NULL OR UPPER(TRIM(channel2)) <> 'CLOSED')"
+            if "channel2" in cols else ""
+        )
         row = None
         base_sql = f"SELECT {', '.join(select_cols)} FROM customer"
         if ship_to:
-            cur.execute(f"{base_sql} WHERE ship_to = %s LIMIT 1", (ship_to,))
+            cur.execute(f"{base_sql} WHERE ship_to = %s{closed_guard} LIMIT 1", (ship_to,))
             row = cur.fetchone()
         elif sold_to:
-            cur.execute(f"{base_sql} WHERE sold_to = %s LIMIT 1", (sold_to,))
+            cur.execute(f"{base_sql} WHERE sold_to = %s{closed_guard} LIMIT 1", (sold_to,))
             row = cur.fetchone()
         elif ship_to_name and "ship_to_name" in cols:
-            cur.execute(f"{base_sql} WHERE TRIM(ship_to_name) = %s LIMIT 1", (ship_to_name,))
+            cur.execute(f"{base_sql} WHERE TRIM(ship_to_name) = %s{closed_guard} LIMIT 1", (ship_to_name,))
             row = cur.fetchone()
             if not row:
                 n = _strip_noise_py(ship_to_name)
                 if n:
                     cur.execute(
-                        f"{base_sql} WHERE {_strip_noise_sql('ship_to_name')} LIKE %s LIMIT 1",
+                        f"{base_sql} WHERE {_strip_noise_sql('ship_to_name')} LIKE %s{closed_guard} LIMIT 1",
                         (f"%{n}%",),
                     )
                     row = cur.fetchone()
         elif sold_to_name and "sold_to_name" in cols:
-            cur.execute(f"{base_sql} WHERE TRIM(sold_to_name) = %s LIMIT 1", (sold_to_name,))
+            cur.execute(f"{base_sql} WHERE TRIM(sold_to_name) = %s{closed_guard} LIMIT 1", (sold_to_name,))
             row = cur.fetchone()
             if not row:
                 n = _strip_noise_py(sold_to_name)
                 if n:
                     cur.execute(
-                        f"{base_sql} WHERE {_strip_noise_sql('sold_to_name')} LIKE %s LIMIT 1",
+                        f"{base_sql} WHERE {_strip_noise_sql('sold_to_name')} LIKE %s{closed_guard} LIMIT 1",
                         (f"%{n}%",),
                     )
                     row = cur.fetchone()
@@ -2809,6 +2816,14 @@ def api_orders_customer_suggest():
             wh_and.append("(" + " OR ".join(per_tok) + ")")
         if not wh_and:
             return jsonify([])
+
+        # Hide customers that are flagged channel2='Closed' from the
+        # SPRF account pickers — those accounts can't take new orders.
+        if "channel2" in cols:
+            wh_and.append(
+                "(channel2 IS NULL "
+                "OR UPPER(TRIM(channel2)) <> 'CLOSED')"
+            )
 
         sql = (
             f"SELECT {select_sql} FROM customer "
