@@ -1023,12 +1023,12 @@
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
         <div class="lbl" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800">
-          Reason / Notes for Approver (REQUIRED on Submit — min 10 characters)
+          Reason / Notes for Approver (REQUIRED on Submit — at least 2 words)
         </div>
 
         <div class="val" style="grid-column: span 4;padding:0">
-          <textarea id="mgmt_reason" rows="3" minlength="10"
-                    placeholder="Required at Submit — briefly explain the reason (e.g. aged stock, fleet retention, competitor match, standard pricing with notes).  10+ characters so the approver has context."
+          <textarea id="mgmt_reason" rows="3"
+                    placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
                     style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
@@ -2196,7 +2196,28 @@ function recalcRow(row){
   }
   const totAmtEl = row.querySelector('[data-col="total_amount"]');
   if (totAmtEl && document.activeElement !== totAmtEl) {
-    totAmtEl.value = list ? fmtMoney(totalAmount) : "";
+    /* When the BDE is actively typing into Proposed Unit Price, the
+       Total Amount they expect is EXACTLY the typed price × qty —
+       not the chain-derived proposedPrice × qty, which drifts by a
+       few cents because add_dc rounds to 2 decimals and the chain
+       no longer lands back on the typed number.  Mirror the same
+       guard for Proposed DC % so a typed target DC also keeps the
+       total consistent with the price it implies. */
+    let shownTotal = totalAmount;
+    const _typedPrice = (propEl && document.activeElement === propEl)
+                        ? toNum(propEl.value) : 0;
+    if (_typedPrice > 0) {
+      shownTotal = _typedPrice * q;
+    } else {
+      const _pdcEl = row.querySelector('[data-col="proposed_dc"]');
+      if (_pdcEl && document.activeElement === _pdcEl) {
+        const _pd = toNum(_pdcEl.value);
+        if (list > 0 && isFinite(_pd) && _pd >= 0 && _pd <= 100) {
+          shownTotal = list * (1 - _pd/100) * q;
+        }
+      }
+    }
+    totAmtEl.value = list ? fmtMoney(shownTotal) : "";
   }
   /* Don't overwrite the Proposed DC % cell while the BDE is typing
      into it — their keystrokes drive reverseSolveFromProposedDC
@@ -3968,12 +3989,15 @@ $("#btnSubmit").addEventListener("click", async () => {
     setStatus("Rebate-able (Y or N) is required before submitting.", "warn");
     return;
   }
-  /* Reason / Notes for Approver — now REQUIRED on Submit with a 10-
-     char minimum.  Approvers consistently flagged orders that
-     landed with "see below" / "n/a" / blank, so we gate here. */
+  /* Reason / Notes for Approver — REQUIRED on Submit with a 2-word
+     minimum.  Approvers consistently flagged orders that landed
+     with "see below" / "n/a" / "ok" / blank, so we gate here on
+     word count — a 2-word floor forces at least one noun+modifier
+     ("aged stock", "fleet retention", "competitor match"). */
   {
     const reason = (payload.header.mgmt_reason || "").trim();
-    if (reason.length < 10){
+    const words  = reason ? reason.split(/\s+/).filter(Boolean) : [];
+    if (words.length < 2){
       const ta = $("#mgmt_reason");
       if (ta){
         ta.style.transition = "background 0.15s, box-shadow 0.15s";
@@ -3988,12 +4012,12 @@ $("#btnSubmit").addEventListener("click", async () => {
       }
       showNotice(
         `Please leave a note for the approver before submitting ` +
-        `(at least 10 characters; currently ${reason.length}).\n\n` +
-        `A short reason — "aged stock promo", "fleet retention Q4", ` +
+        `(at least 2 words; currently ${words.length}).\n\n` +
+        `A short reason — "aged stock", "fleet retention", ` +
         `"competitor match" — is enough.`
       );
       setStatus(
-        `Approver note is required (min 10 chars; now ${reason.length}).`,
+        `Approver note is required (min 2 words; now ${words.length}).`,
         "warn"
       );
       return;

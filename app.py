@@ -11411,7 +11411,8 @@ def profit_monthly():
             cur.close()
             conn.close()
 
-        out = [dict(month=m, gross=0, sd=0, cogs=0, op_cost=0) for m in range(1, 13)]
+        out = [dict(month=m, gross=0, sd=0, cogs=0, op_cost=0, estimated=False)
+               for m in range(1, 13)]
         for r in rows:
             m = int(r["month"] or 0)
             if 1 <= m <= 12:
@@ -11426,11 +11427,13 @@ def profit_monthly():
         # table is loaded month-end, so Sep bars stay empty until
         # the batch runs.  When that month's row is zero AND
         # sales_thismonth has data for the same month, approximate
-        # gross + cogs from sales_thismonth (sum of amt / cogs
-        # across the matching month-slice).  Sales_deduction and
-        # operating_cost aren't tracked on sales_thismonth, so they
-        # stay 0 — the chart will show a shorter bar until the real
-        # profit row lands, but it won't look like Sep didn't happen.
+        # from sales_thismonth:
+        #   • gross   = SUM(amt)      — real
+        #   • cogs    = SUM(cogs)     — real
+        #   • op_cost = est. prev-month op_cost / gross × this gross
+        #   • sd      = est. prev-month sd      / gross × this gross
+        # Mark the month as "estimated" so the frontend can draw
+        # the Op Cost / Sales Deduction bars with dotted outlines.
         try:
             conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
             try:
@@ -11452,7 +11455,27 @@ def profit_monthly():
                     g = float(r2.get("gross") or 0)
                     c = float(r2.get("cogs")  or 0)
                     if g > 0 or c > 0:
-                        out[_efm - 1].update(gross=g, cogs=c)
+                        # Walk back from the effective month to find
+                        # the most recent populated prior month and
+                        # borrow its (sd / gross) and (op_cost / gross)
+                        # ratios to estimate Sep's.  Only Op Cost and
+                        # Sales Deduction are estimated — gross + cogs
+                        # are real sums off sales_thismonth.
+                        prev_sd_ratio = 0.0
+                        prev_op_ratio = 0.0
+                        for look in range(_efm - 1, 0, -1):
+                            pr = out[look - 1]
+                            if (pr["gross"] or 0) > 0 \
+                                    and (pr["sd"] or pr["op_cost"]) > 0:
+                                prev_sd_ratio = (pr["sd"] or 0)      / pr["gross"]
+                                prev_op_ratio = (pr["op_cost"] or 0) / pr["gross"]
+                                break
+                        out[_efm - 1].update(
+                            gross=g, cogs=c,
+                            sd=round(g * prev_sd_ratio, 2),
+                            op_cost=round(g * prev_op_ratio, 2),
+                            estimated=True,
+                        )
             finally:
                 try: cur2.close()
                 except: pass

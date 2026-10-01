@@ -3043,13 +3043,18 @@ function renderProfitCombined(rows) {
 
   // Ensure we always have 12 months
   const byMonth = Array.from({ length: 12 }, (_, i) =>
-    rows.find(r => +r.month === i + 1) || { month: i + 1, gross: 0, sd: 0, cogs: 0, op_cost: 0 }
+    rows.find(r => +r.month === i + 1) || { month: i + 1, gross: 0, sd: 0, cogs: 0, op_cost: 0, estimated: false }
   );
 
   const grossFull = byMonth.map(r => +r.gross || 0);
   const sdFull    = byMonth.map(r => +r.sd || 0);
   const cogsFull  = byMonth.map(r => +r.cogs || 0);
   const opFull    = byMonth.map(r => +r.op_cost || 0);
+  /* Per-month "is this an estimate?" flag.  The backend's
+     sales_thismonth fallback sets estimated=true on the current
+     effective month so we can draw its Op Cost + Sales Deduction
+     bars with a dotted outline — real-data months stay solid. */
+  const estFull   = byMonth.map(r => !!r.estimated);
 
   // Truncate the x-axis at the last month with any actual data —
   // otherwise the chart stretches empty out to Dec in mid-year
@@ -3066,6 +3071,7 @@ function renderProfitCombined(rows) {
   const sd    = sdFull.slice(0, cutLen);
   const cogs  = cogsFull.slice(0, cutLen);
   const op    = opFull.slice(0, cutLen);
+  const est   = estFull.slice(0, cutLen);
   const labels = PROFIT_MONTH_LABELS.slice(0, cutLen);
 
   const totalCost = sd.map((v, i) => sd[i] + cogs[i] + op[i]);
@@ -3105,7 +3111,15 @@ function renderProfitCombined(rows) {
           data: op,
           yAxisID: "y",
           stack: "C",
-          backgroundColor: "#fbbf24"
+          backgroundColor: "#fbbf24",
+          /* Dotted outline on months we ESTIMATED from the prior
+             month's ratios (currently just the effective current
+             month fed by sales_thismonth).  Real-data months get
+             no border so solid vs dotted communicates "actual vs
+             estimated" at a glance. */
+          borderColor:  ctx => est[ctx.dataIndex] ? "#7c2d12" : "transparent",
+          borderWidth:  ctx => est[ctx.dataIndex] ? 2 : 0,
+          borderDash:   ctx => est[ctx.dataIndex] ? [4, 3] : [],
         },
         {
           type: "bar",
@@ -3113,7 +3127,10 @@ function renderProfitCombined(rows) {
           data: sd,
           yAxisID: "y",
           stack: "C",
-          backgroundColor: "#d55fc3ff"
+          backgroundColor: "#d55fc3ff",
+          borderColor:  ctx => est[ctx.dataIndex] ? "#7c2d12" : "transparent",
+          borderWidth:  ctx => est[ctx.dataIndex] ? 2 : 0,
+          borderDash:   ctx => est[ctx.dataIndex] ? [4, 3] : [],
         },
         // Line: Profit % — placed LAST so it doesn't participate
         // in the bar column allocation.
