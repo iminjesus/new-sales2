@@ -11428,12 +11428,22 @@ def profit_monthly():
         # the batch runs.  When that month's row is zero AND
         # sales_thismonth has data for the same month, approximate
         # from sales_thismonth:
-        #   • gross   = SUM(amt)      — real
-        #   • cogs    = SUM(cogs)     — real
-        #   • op_cost = est. prev-month op_cost / gross × this gross
-        #   • sd      = est. prev-month sd      / gross × this gross
+        #   • gross   = SUM(amt) × (1 − PROFIT_SALES_THISMONTH_GROSS_HAIRCUT)
+        #                — raw sales_thismonth amt isn't net of a
+        #                ~5.5 % slice that gets deducted elsewhere
+        #                in the Profit roll-up, so we knock that
+        #                slice off up front rather than inflating
+        #                the Gross bar.
+        #   • cogs    = SUM(cogs)       — real, no haircut
+        #   • op_cost = est. (prev op_cost / prev gross) × adjusted gross
+        #   • sd      = est. (prev sd      / prev gross) × adjusted gross
         # Mark the month as "estimated" so the frontend can draw
-        # the Op Cost / Sales Deduction bars with dotted outlines.
+        # the Op Cost / Sales Deduction bars with dotted outlines
+        # (and the Gross bar too — it's a derived number now).
+        # Flat 5.5 % matches the historical loss slice; tweak the
+        # constant up top if the ops team settles on a different
+        # haircut rate.
+        PROFIT_SALES_THISMONTH_GROSS_HAIRCUT = 0.055
         try:
             conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
             try:
@@ -11452,15 +11462,17 @@ def profit_monthly():
                         tuple(st_params),
                     )
                     r2 = cur2.fetchone() or {}
-                    g = float(r2.get("gross") or 0)
-                    c = float(r2.get("cogs")  or 0)
-                    if g > 0 or c > 0:
+                    g_raw = float(r2.get("gross") or 0)
+                    c     = float(r2.get("cogs")  or 0)
+                    if g_raw > 0 or c > 0:
+                        # Haircut on Gross — see constant block above.
+                        g_adj = g_raw * (1.0 - PROFIT_SALES_THISMONTH_GROSS_HAIRCUT)
                         # Walk back from the effective month to find
                         # the most recent populated prior month and
                         # borrow its (sd / gross) and (op_cost / gross)
-                        # ratios to estimate Sep's.  Only Op Cost and
-                        # Sales Deduction are estimated — gross + cogs
-                        # are real sums off sales_thismonth.
+                        # ratios.  Op Cost + Sales Deduction are both
+                        # derived from this month's ADJUSTED gross so
+                        # the Profit % reads clean.
                         prev_sd_ratio = 0.0
                         prev_op_ratio = 0.0
                         for look in range(_efm - 1, 0, -1):
@@ -11471,9 +11483,10 @@ def profit_monthly():
                                 prev_op_ratio = (pr["op_cost"] or 0) / pr["gross"]
                                 break
                         out[_efm - 1].update(
-                            gross=g, cogs=c,
-                            sd=round(g * prev_sd_ratio, 2),
-                            op_cost=round(g * prev_op_ratio, 2),
+                            gross=round(g_adj, 2),
+                            cogs=c,
+                            sd=round(g_adj * prev_sd_ratio, 2),
+                            op_cost=round(g_adj * prev_op_ratio, 2),
                             estimated=True,
                         )
             finally:

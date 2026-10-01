@@ -3094,7 +3094,15 @@ function renderProfitCombined(rows) {
           yAxisID: "y",
           stack: "G",
           backgroundColor: "#93c5fd",
-          borderWidth: 1
+          borderWidth: 1,
+          /* Dashed outline on estimated months — Gross is now a
+             DERIVED value too (raw sales_thismonth amt minus a
+             5.5 % haircut), not just a direct sum.  Keeps the
+             "actual vs estimated" story consistent across every
+             estimated bar in the group. */
+          borderColor: ctx => est[ctx.dataIndex] ? "#7c2d12" : "#93c5fd",
+          borderWidth: ctx => est[ctx.dataIndex] ? 2 : 1,
+          borderDash:  ctx => est[ctx.dataIndex] ? [4, 3] : [],
         },
         // Bar group 2: stacked Costs (beside Gross)
         {
