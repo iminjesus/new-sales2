@@ -111,60 +111,67 @@ class SQLiteConnectionWrapper:
         return getattr(self._conn, name)
 
 
-def _resolve_thismonth_fill_ym(cur):
-    """Determine which (year, month) the current sales_thismonth
-    snapshot represents, for backfilling into monthly rollups when
-    sales_2526 lags.
+def _effective_month_num():
+    """Shortcut: just the month part of _business_effective_ym().
+    Returned as an int 1-12.  Used as the single "which month is
+    now" definition across every sales_thismonth query so the UI
+    and the monthly-fallback agree on what "this month" means
+    (including the first-business-day roll-back)."""
+    return _business_effective_ym()[1]
 
-    sales_thismonth is refreshed by a nightly job; the calendar month
-    it points at follows the last successful load, not the wall
-    clock.  We infer which month it holds from its MAX(day):
 
-      • MAX(day) > today's day-of-month → the table is STALE, still
-        holding the PREVIOUS calendar month's snapshot (the batch
-        that rolls it over to the new month hasn't run yet).  Fill
-        (year, prev_month) from it.  Handles the "month has passed
-        but sales_2526 hasn't received last month's data yet"
-        window the user called out.
-      • MAX(day) ≤ today's day-of-month → the table is FRESH,
-        holding this month's data-so-far.  Fill (year, this_month)
-        from it.
-      • MAX(day) is NULL or 0 → sales_thismonth is empty, no fill.
-
-    Returns (year, month) or (None, None) when nothing to backfill.
-    Reuses the caller's cursor so we don't spin up a second
-    connection just for the MAX() probe.
-    """
-    from datetime import date as _d
-    _t = _d.today()
+def _sales_thismonth_months(cur):
+    """Return the sorted list of distinct `month` values present in
+    sales_thismonth.  Empty list on error or empty table.  The
+    loader (sapcrawling_sales1.py) keeps at most two months on
+    file — the business-effective current month plus (sometimes)
+    the previous month that sales_2526 hasn't swallowed yet — so
+    this list is normally one or two integers long."""
     try:
-        cur.execute("SELECT MAX(`day`) AS m FROM sales_thismonth")
-        row = cur.fetchone() or {}
-        m_day = int(row.get("m") or 0)
+        cur.execute("SELECT DISTINCT `month` AS m FROM sales_thismonth WHERE `month` IS NOT NULL ORDER BY `month`")
+        return [int(r["m"]) for r in (cur.fetchall() or []) if r.get("m") is not None]
     except Exception:
-        m_day = 0
-    if m_day <= 0:
+        return []
+
+
+def _resolve_thismonth_fill_ym(cur):
+    """Return (year, month) sales_thismonth represents for the
+    monthly-rollup backfill path.  With the `month` column in
+    place, the single source of truth is the business-effective
+    month rule (same as the UI's "This month" banner): today's
+    calendar month, except on or before the first business day of
+    the month when it stays on the previous month.  We still
+    return (None, None) when sales_thismonth is empty so the
+    caller can short-circuit."""
+    try:
+        cur.execute("SELECT COUNT(*) AS c FROM sales_thismonth")
+        row = cur.fetchone() or {}
+        if int(row.get("c") or 0) == 0:
+            return (None, None)
+    except Exception:
         return (None, None)
-    if m_day > _t.day:
-        # Stale — still previous calendar month
-        if _t.month > 1:
-            return (_t.year, _t.month - 1)
-        return (_t.year - 1, 12)
-    return (_t.year, _t.month)
+    return _business_effective_ym()
 
 
-def _thismonth_query_stack(f, top_sold_to=None):
+def _thismonth_query_stack(f, top_sold_to=None, month=None):
     """Rebuild the joins / wheres / params stack used by monthly_sales
     and monthly_breakdown against sales_thismonth (alias `s`), with
     the billing_date gates omitted (sales_thismonth has no
-    billing_date column — the table itself represents whichever
-    calendar month it was last loaded for, resolved by
-    _resolve_thismonth_fill_ym).  Reuses the same helper functions
-    the sales_2526 path uses so the customer / category / product /
+    billing_date column).  Reuses the same helper functions the
+    sales_2526 path uses so the customer / category / product /
     top-N filters carry through identically.  Category filter
-    passes has_brand=True because sales_thismonth has its own brand
-    column (the check that lets HK / LF filters still find rows
-    whose material is missing from carrying_26).
+    passes has_brand=True because sales_thismonth has its own
+    brand column (the check that lets HK / LF filters still find
+    rows whose material is missing from carrying_26).
+
+    Pass `month` to pin the query to a single calendar month in
+    sales_thismonth.  Omit (or pass None) to let the caller add
+    their own month filter — kept optional so other callers that
+    already know they want "whatever sales_thismonth holds" can
+    stay as-is.  With the loader now keeping up to two months on
+    file (current + previous when sales_2526 lags), the explicit
+    month filter stops rows for the wrong month from leaking into
+    the summed fallback.
     """
     joins, wh, params = build_customer_filters("s", f, use_sold_to_name=False)
     cat_j, cat_w = category_filters_sales("s", f.get("category", "ALL"), has_brand=True)
@@ -187,6 +194,9 @@ def _thismonth_query_stack(f, top_sold_to=None):
         ph = ",".join(["%s"] * len(top_sold_to))
         wh.append(f"s.sold_to IN ({ph})")
         params.extend(top_sold_to)
+    if month is not None:
+        wh.append("s.`month` = %s")
+        params.append(int(month))
     return joins, wh, params
 
 
@@ -8442,6 +8452,14 @@ def v2_dashboard():
             placeholders = ",".join(["%s"] * len(top_sold_to))
             wh_d.append(f"s.sold_to IN ({placeholders})")
             params_d.extend(top_sold_to)
+        # Pin sales_thismonth to the business-effective month so the
+        # Daily / Stacked Daily sections of /api/v2/dash agree with
+        # the UI's "This month" rule and the daily_sales /
+        # daily_breakdown endpoints.  Stops the loader's rolling
+        # previous-month rows from leaking into today's view.
+        _eff_y_d, _eff_m_d = _business_effective_ym()
+        wh_d.append("s.`month` = %s")
+        params_d.append(_eff_m_d)
         # Add per-sold_to name resolver only for breakdown stack (used below).
         SCUS_JOIN = (
             "LEFT JOIN ("
@@ -8866,29 +8884,41 @@ def daily_sales():
         wh.append(_code_group_clause("mat"))
         params.append(f["code"])
 
+    # Pin sales_thismonth to the business-effective month so the
+    # daily chart only shows days for "this month" as the UI
+    # defines it (same first-business-day roll-back used in the
+    # banner, _business_effective_ym and the monthly backfill).
+    # With the loader now keeping up to two months on file, this
+    # guard stops stale previous-month rows from leaking into the
+    # Daily Sales / Cumulative bars.
+    _eff_y, _eff_m = _business_effective_ym()
+    wh.append("s.`month` = %s")
+    params.append(_eff_m)
+
     if promos:
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
         # Pre-aggregated qty per (ship_to, day, brand) for TrueBlue's
         # ship_to+day SUM rule.  Same JOIN shape daily_breakdown uses.
+        # Filtered to the business-effective month so stale previous-
+        # month rows don't inflate the day_qty bucket.
         DAY_QTY_JOIN = (
             "LEFT JOIN ("
-            "  SELECT ship_to, day, brand, SUM(qty) AS day_qty"
-            "  FROM sales_thismonth"
-            "  GROUP BY ship_to, day, brand"
+            f"  SELECT ship_to, day, brand, SUM(qty) AS day_qty"
+            f"  FROM sales_thismonth WHERE `month` = {int(_eff_m)}"
+            f"  GROUP BY ship_to, day, brand"
             ") dq ON dq.ship_to = s.ship_to AND dq.day = s.day AND dq.brand = s.brand"
         )
         if DAY_QTY_JOIN not in joins:
             joins.append(DAY_QTY_JOIN)
-        # sales_thismonth has no year/month columns of its own — it IS
-        # the current calendar month — so feed those as integer literals
-        # so the promo_plan period match still works.
-        from datetime import date as _d
-        _today = _d.today()
+        # Feed the effective (year, month) as integer literals so the
+        # promo_plan period match stays correct even on the first
+        # business day of a new calendar month (when sales_thismonth
+        # still represents the previous month).
         promo_wh, promo_p = _promo_filter_clauses(
             promos,
-            year_expr=str(_today.year),
-            month_expr=str(_today.month),
+            year_expr=str(_eff_y),
+            month_expr=str(_eff_m),
             day_qty_alias="dq.day_qty",
         )
         wh.extend(promo_wh)
@@ -9005,17 +9035,26 @@ def daily_breakdown():
         # product one.  Brand level (HK vs LF) inherits the same gate.
         wh.append("mat.line IN ('PCLT','TBR')")
 
+    # Pin sales_thismonth to the business-effective month, same rule
+    # as daily_sales — stops previous-month rows the loader keeps on
+    # file from leaking into the stacked bars.
+    _eff_y, _eff_m = _business_effective_ym()
+    wh.append("s.`month` = %s")
+    params.append(_eff_m)
+
     # Pre-aggregated qty per (ship_to, day, brand) for TrueBlue's
     # "X tires at this shop on this day" rule.  Added lazily — only
     # when promo logic is involved (group_by=promotion* or any promo
     # filter selected) so non-promo views skip the extra GROUP BY.
     # The alias `dq.day_qty` is what _promo_qty_match_sql checks
-    # against pc.min_qty for TrueBlue rules.
+    # against pc.min_qty for TrueBlue rules.  Filtered to the
+    # effective month so the day_qty bucket doesn't include stale
+    # previous-month rows.
     DAY_QTY_JOIN = (
         "LEFT JOIN ("
-        "  SELECT ship_to, day, brand, SUM(qty) AS day_qty"
-        "  FROM sales_thismonth"
-        "  GROUP BY ship_to, day, brand"
+        f"  SELECT ship_to, day, brand, SUM(qty) AS day_qty"
+        f"  FROM sales_thismonth WHERE `month` = {int(_eff_m)}"
+        f"  GROUP BY ship_to, day, brand"
         ") dq ON dq.ship_to = s.ship_to AND dq.day = s.day AND dq.brand = s.brand"
     )
     if is_promo_group or promos:
@@ -9023,14 +9062,13 @@ def daily_breakdown():
             joins.append(DAY_QTY_JOIN)
 
     if is_promo_group:
-        # sales_thismonth has no year/month columns — feed today's as
-        # literals (same reasoning as daily_sales).
-        from datetime import date as _d
-        _today = _d.today()
+        # Feed the business-effective (year, month) so the promo_plan
+        # period match works even on the first business day of a new
+        # calendar month (sales_thismonth still points at the prior one).
         group_col = _promotion_group_col_sql(
             detail=(group_by == "promotion_detail"),
-            year_expr=str(_today.year),
-            month_expr=str(_today.month),
+            year_expr=str(_eff_y),
+            month_expr=str(_eff_m),
             day_qty_alias="dq.day_qty",
         )
     else:
@@ -9051,14 +9089,12 @@ def daily_breakdown():
     if promos:
         _ensure_carrying_join("s", joins)
         _ensure_customer_join("s", joins)
-        # sales_thismonth has no year/month columns — feed today's as
-        # literals (same reasoning as daily_sales).
-        from datetime import date as _d
-        _today = _d.today()
+        # Business-effective (year, month) literals for the promo
+        # period match — matches the daily_sales treatment.
         promo_wh, promo_p = _promo_filter_clauses(
             promos,
-            year_expr=str(_today.year),
-            month_expr=str(_today.month),
+            year_expr=str(_eff_y),
+            month_expr=str(_eff_m),
             day_qty_alias="dq.day_qty",
         )
         wh.extend(promo_wh)
@@ -9228,12 +9264,18 @@ def daily_target():
     conn2 = get_connection()
     cur2  = conn2.cursor(dictionary=True)
     try:
+        # Pin to the business-effective month so working-day detection
+        # uses this-month-only totals, matching the UI's "This month"
+        # rule and ignoring stale previous-month rows the loader keeps
+        # on file.
+        _wd_y, _wd_m = _business_effective_ym()
         cur2.execute("""
             SELECT day, SUM(qty) AS total_qty
             FROM sales_thismonth
+            WHERE `month` = %s
             GROUP BY day
             ORDER BY day
-        """)
+        """, (_wd_m,))
         sales_by_day = {int(r["day"]): float(r["total_qty"] or 0) for r in cur2.fetchall()}
     finally:
         cur2.close()
@@ -9365,6 +9407,12 @@ def fetch_table_rows(top_limit: int):
             params.append(p["sold_to"])
         wh.append("(" + " OR ".join(conds) + ")")
 
+    # Pin sales_thismonth to the business-effective month so the
+    # by-day export only shows "this month" as the UI defines it.
+    _eff_y_dx, _eff_m_dx = _business_effective_ym()
+    wh.append("s.`month` = %s")
+    params.append(_eff_m_dx)
+
     where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
 
     sql = f"""
@@ -9417,9 +9465,12 @@ def export_excel():
         # ?? Fetch monthly target ??ship_to level, fall back to sold_to ??
         conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
         try:
-            cur2.execute("SELECT MAX(year*100+month) AS ym FROM sales_thismonth")
-            ym = int((cur2.fetchone() or {}).get("ym") or 0)
-            cur_month = ym % 100 if ym else datetime.now().month
+            # Business-effective month — matches the UI's "this month"
+            # rule (first-business-day roll-back) and gives this export
+            # the same month boundary as every other sales_thismonth
+            # consumer.  The old MAX(year*100+month) query predates the
+            # month column and always fell back to datetime.now().month.
+            _y_cm, cur_month = _business_effective_ym()
             # Fetch both ship_to and sold_to targets in one query
             cur2.execute(
                 f"SELECT sold_to, ship_to, SUM({value_col}) AS tgt "
@@ -9976,38 +10027,45 @@ def monthly_sales():
 
         month_map = {int(r["month_num"]): float(r["monthly_total"] or 0) for r in rows}
 
-        # Fallback: if sales_2526 hasn't yet received the month that
-        # sales_thismonth currently represents (either the current
-        # calendar month before the batch has landed, or the previous
-        # month if the batch has slipped past its window), fill that
-        # month's total from sales_thismonth so the Monthly Sales /
-        # Stacked Monthly charts don't render a phantom-empty bar for
-        # a month whose data actually exists.  Skipped when the caller
-        # is asking for a historical year — the fallback only makes
-        # sense for the year sales_thismonth belongs to.
+        # Fallback: sales_thismonth now carries a `month` column and
+        # the loader keeps up to two months on file (business-
+        # effective current month, plus the previous month until
+        # sales_2526 swallows it).  For every month present in
+        # sales_thismonth whose sales_2526 total is empty, sum the
+        # matching month-slice of sales_thismonth and fill it in.
+        # Skipped when the caller is asking for a historical year
+        # (sales_thismonth is always current-year data).
         try:
-            _fy, _fm = _resolve_thismonth_fill_ym(cur)
+            _fy, _ = _resolve_thismonth_fill_ym(cur)
         except Exception:
-            _fy, _fm = (None, None)
-        if _fy == year and _fm and month_map.get(_fm, 0) <= 0:
+            _fy = None
+        if _fy == year:
             try:
-                st_joins, st_wh, st_params = _thismonth_query_stack(f, top_sold_to)
-                st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
-                st_sql = (
-                    f"SELECT SUM(s.{value}) AS v "
-                    f"FROM sales_thismonth s "
-                    f"{' '.join(st_joins)} "
-                    f"{st_where}"
-                )
-                cur.execute(st_sql, tuple(st_params))
-                _row = cur.fetchone() or {}
-                _v = float(_row.get("v") or 0)
-                if _v > 0:
-                    month_map[_fm] = _v
-            except Exception as _e:
-                # Backfill is best-effort — a failure here shouldn't
-                # topple the primary sales_2526 response.
-                print(f"[monthly_sales] sales_thismonth backfill skipped: {_e}")
+                _st_months = _sales_thismonth_months(cur)
+            except Exception:
+                _st_months = []
+            for _fm in _st_months:
+                if month_map.get(_fm, 0) > 0:
+                    continue
+                try:
+                    st_joins, st_wh, st_params = _thismonth_query_stack(f, top_sold_to, month=_fm)
+                    st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
+                    st_sql = (
+                        f"SELECT SUM(s.{value}) AS v "
+                        f"FROM sales_thismonth s "
+                        f"{' '.join(st_joins)} "
+                        f"{st_where}"
+                    )
+                    cur.execute(st_sql, tuple(st_params))
+                    _row = cur.fetchone() or {}
+                    _v = float(_row.get("v") or 0)
+                    if _v > 0:
+                        month_map[_fm] = _v
+                except Exception as _e:
+                    # Backfill is best-effort — a failure for one
+                    # month shouldn't topple the primary sales_2526
+                    # response or the other backfilled months.
+                    print(f"[monthly_sales] sales_thismonth backfill month={_fm} skipped: {_e}")
 
     finally:
         try: cur.close()
@@ -10208,56 +10266,63 @@ def monthly_breakdown():
             raise
         rows = cur.fetchall()
 
-        # Fallback: if sales_2526 hasn't received the month that
-        # sales_thismonth currently represents, fill that month's
-        # per-group rows from sales_thismonth so the Stacked Monthly
-        # chart's newest bar isn't empty for a month that actually
-        # has data.  Only runs when the caller is asking for the year
-        # sales_thismonth belongs to, and only when no row for the
-        # target month came back from the sales_2526 query.
+        # Fallback: for every month present in sales_thismonth whose
+        # sales_2526 rows are missing, pull per-group totals from
+        # sales_thismonth filtered to that month and append them.
+        # Mirrors the monthly_sales fallback — one query per missing
+        # month, same filter/join stack as the primary sales_2526
+        # path, same group_col grouping.  Skipped on historical
+        # years (sales_thismonth is always current-year data).
         try:
-            _fy, _fm = _resolve_thismonth_fill_ym(cur)
+            _fy, _ = _resolve_thismonth_fill_ym(cur)
         except Exception:
-            _fy, _fm = (None, None)
-        _has_month = any(int(r.get("month") or 0) == _fm for r in (rows or []))
-        if _fy == year and _fm and not _has_month:
+            _fy = None
+        if _fy == year:
             try:
-                st_joins, st_wh, st_params = _thismonth_query_stack(f, top_sold_to)
-                # Add group-specific joins that monthly_breakdown adds.
-                # customer_rollup is needed for region / salesman /
-                # channel / sold_to_group / sold_to / promotion buckets.
-                if group_by in ("region", "salesman", "channel",
-                                "sold_to_group", "sold_to") or is_promo_group:
-                    _ensure_customer_join("s", st_joins)
-                if group_by in ("line", "brand", "product_group", "pattern"):
-                    _ensure_carrying_join("s", st_joins)
-                st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
-                st_group_by_sql = (
-                    "GROUP BY group_label"
-                    if is_promo_group
-                    else f"GROUP BY {group_col}"
-                )
-                st_sql = (
-                    f"SELECT {_fm} AS month, "
-                    f"       {label_col} AS group_label, "
-                    f"       SUM(s.{value}) AS value "
-                    f"FROM sales_thismonth s "
-                    f"{' '.join(st_joins)} "
-                    f"{st_where} "
-                    f"{st_group_by_sql}"
-                )
-                cur.execute(st_sql, tuple(st_params))
-                _st_rows = cur.fetchall() or []
-                # Filter out zero / negative aggregates so the stack
-                # doesn't grow spurious buckets for months that had
-                # no real sales in a given region.
-                for _r in _st_rows:
-                    try: _v = float(_r.get("value") or 0)
-                    except Exception: _v = 0.0
-                    if _v > 0:
-                        rows.append(_r)
-            except Exception as _e:
-                print(f"[monthly_breakdown] sales_thismonth backfill skipped: {_e}")
+                _st_months = _sales_thismonth_months(cur)
+            except Exception:
+                _st_months = []
+            _months_present = {int(r.get("month") or 0) for r in (rows or [])}
+            for _fm in _st_months:
+                if _fm in _months_present:
+                    continue
+                try:
+                    st_joins, st_wh, st_params = _thismonth_query_stack(f, top_sold_to, month=_fm)
+                    # Add group-specific joins that monthly_breakdown adds.
+                    # customer_rollup is needed for region / salesman /
+                    # channel / sold_to_group / sold_to / promotion buckets.
+                    if group_by in ("region", "salesman", "channel",
+                                    "sold_to_group", "sold_to") or is_promo_group:
+                        _ensure_customer_join("s", st_joins)
+                    if group_by in ("line", "brand", "product_group", "pattern"):
+                        _ensure_carrying_join("s", st_joins)
+                    st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
+                    st_group_by_sql = (
+                        "GROUP BY group_label"
+                        if is_promo_group
+                        else f"GROUP BY {group_col}"
+                    )
+                    st_sql = (
+                        f"SELECT {_fm} AS month, "
+                        f"       {label_col} AS group_label, "
+                        f"       SUM(s.{value}) AS value "
+                        f"FROM sales_thismonth s "
+                        f"{' '.join(st_joins)} "
+                        f"{st_where} "
+                        f"{st_group_by_sql}"
+                    )
+                    cur.execute(st_sql, tuple(st_params))
+                    _st_rows = cur.fetchall() or []
+                    # Filter out zero / negative aggregates so the stack
+                    # doesn't grow spurious buckets for months that had
+                    # no real sales in a given region.
+                    for _r in _st_rows:
+                        try: _v = float(_r.get("value") or 0)
+                        except Exception: _v = 0.0
+                        if _v > 0:
+                            rows.append(_r)
+                except Exception as _e:
+                    print(f"[monthly_breakdown] sales_thismonth backfill month={_fm} skipped: {_e}")
 
     finally:
         try:
@@ -12039,7 +12104,14 @@ def visit_summary():
         # toward the visit checking — but they still count toward total Shops.
         shops_with_sales = None
         if with_sales:
-            cur.execute("SELECT DISTINCT ship_to FROM sales_thismonth")
+            # Pin to the business-effective month so shops that only
+            # have stale previous-month rows don't count as "has sales
+            # this month" against the visit-check metrics.
+            _sw_y, _sw_m = _business_effective_ym()
+            cur.execute(
+                "SELECT DISTINCT ship_to FROM sales_thismonth WHERE `month` = %s",
+                (_sw_m,),
+            )
             shops_with_sales = {r["ship_to"] for r in cur.fetchall()}
             out["customers_with_sales"] = len(shops_with_sales)
 
@@ -12387,11 +12459,16 @@ def visit_debug_gps_locality():
 
         # Customers (optionally filtered to those with sales)
         if with_sales:
+            # EXISTS gates on the business-effective month so a shop
+            # that only has stale previous-month rows isn't counted
+            # as "selling this month" for the GPS/visit metrics.
+            _exy, _exm = _business_effective_ym()
             cur.execute(
                 "SELECT c.ship_to, c.latitude, c.longitude FROM customer c "
                 "WHERE c.latitude IS NOT NULL AND c.longitude IS NOT NULL "
                 "AND EXISTS (SELECT 1 FROM sales_thismonth s "
-                "            WHERE s.ship_to = c.ship_to)"
+                "            WHERE s.ship_to = c.ship_to AND s.`month` = %s)",
+                (_exm,),
             )
         else:
             cur.execute(
@@ -17109,14 +17186,15 @@ def _sales_for_month(cur, ship_to, year, month):
     sales_2526 filtered by YEAR/MONTH(billing_date) for every other
     month.  Returns None only when the query itself blows up."""
     try:
-        now = datetime.now()
-        if int(year) == now.year and int(month) == now.month:
+        _eff_y_pm, _eff_m_pm = _business_effective_ym()
+        if int(year) == _eff_y_pm and int(month) == _eff_m_pm:
             cur.execute(
                 "SELECT COALESCE(SUM(qty),0) AS qty, "
                 "       COALESCE(SUM(amt),0) AS amt "
                 "FROM sales_thismonth "
-                "WHERE ship_to = %s AND brand IN ('HK','LF')",
-                (ship_to,))
+                "WHERE ship_to = %s AND brand IN ('HK','LF') "
+                "  AND `month` = %s",
+                (ship_to, _eff_m_pm))
         else:
             cur.execute(
                 "SELECT COALESCE(SUM(qty),0) AS qty, "

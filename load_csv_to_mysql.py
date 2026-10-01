@@ -83,6 +83,23 @@ SALES_HEADER_MAP = {
 SALES_DB_COLS = ["day", "qty", "amt", "sold_to", "ship_to", "material", "brand",
                  "state", "bde", "so_type", "cogs", "dc_rate", "p_rate"]
 
+# Business-effective "this month" rule — mirrors app.py's
+# _business_effective_ym().  On or before the first business day
+# (Mon-Fri) of a calendar month, "this month" is still the previous
+# calendar month because the overnight batch for the new month
+# hasn't landed yet.  Returned as (year, month) with month 1-12.
+def _business_effective_ym(today=None):
+    from datetime import date as _d, timedelta as _td
+    today = today or _d.today()
+    first = today.replace(day=1)
+    while first.weekday() >= 5:   # 5=Sat, 6=Sun
+        first += _td(days=1)
+    if today <= first:
+        if today.month == 1:
+            return (today.year - 1, 12)
+        return (today.year, today.month - 1)
+    return (today.year, today.month)
+
 # New columns to ADD to the table if missing
 SALES_NEW_COLS = {
     "so_type":  "VARCHAR(10)",
@@ -231,9 +248,22 @@ def load_sales(conn):
     if not os.path.exists(SALES_CSV_PATH):
         raise FileNotFoundError(SALES_CSV_PATH)
 
-    # 1. Ensure new columns exist in the table
+    # 1. Ensure new columns exist in the table.  The `month` column is
+    # populated below from the business-effective month of each load.
     cur = conn.cursor()
     try:
+        # month column — INT, first position when added by this
+        # script.  AFTER-position only matters for brand-new tables;
+        # existing tables with the ALTER already run keep whatever
+        # position the operator added it in.
+        try:
+            cur.execute(
+                f"ALTER TABLE `{SALES_TABLE}` ADD COLUMN `month` INT FIRST;"
+            )
+            print("  Added column: month")
+        except mysql.connector.Error as e:
+            if e.errno != 1060:  # 1060 = Duplicate column (already there)
+                raise
         for col_name, col_type in SALES_NEW_COLS.items():
             try:
                 cur.execute(
@@ -248,6 +278,19 @@ def load_sales(conn):
         conn.commit()
     finally:
         cur.close()
+
+    # Business-effective month this load is for.  Everything in the
+    # CSV is tagged with this month on insert, and the DELETE pass
+    # below is driven off it so that:
+    #   • The month we're about to re-load (this_m) is cleared first.
+    #   • Anything two months old (two_ago) is purged as housekeeping.
+    #   • The previous month (prev_m) is left alone — if sales_2526
+    #     hasn't swallowed its rows yet, the dashboard's monthly
+    #     fallback keeps using them via sales_thismonth.
+    eff_y, this_m   = _business_effective_ym()
+    prev_m          = 12 if this_m == 1 else this_m - 1
+    two_ago         = 12 if prev_m == 1 else prev_m - 1
+    print(f"  Effective month: {this_m} (prev: {prev_m}, two-ago to purge: {two_ago})")
 
     # 2. Read CSV and map headers to DB columns
     with open(SALES_CSV_PATH, "r", encoding="utf-8-sig", errors="replace") as f:
@@ -266,34 +309,52 @@ def load_sales(conn):
             print(f"  [WARN] No matching columns found in {SALES_CSV_PATH}")
             return
 
-        # Columns we'll actually insert (intersection of SALES_DB_COLS and what we found)
-        insert_cols = [c for c in SALES_DB_COLS if c in col_idx_map]
+        # Columns we'll actually insert.  `month` is prepended so it
+        # becomes the first value in every tuple and the first column
+        # name in the INSERT list.
+        insert_cols = ["month"] + [c for c in SALES_DB_COLS if c in col_idx_map]
         print(f"  Mapped columns: {insert_cols}")
 
         placeholders = ", ".join(["%s"] * len(insert_cols))
         col_names    = ", ".join([f"`{c}`" for c in insert_cols])
         insert_sql   = f"INSERT INTO `{SALES_TABLE}` ({col_names}) VALUES ({placeholders})"
 
-        # 3. Truncate and insert
+        # 3. Scoped DELETE instead of TRUNCATE — see the comment above
+        # the month resolution block for the rules.  Previous-month
+        # rows survive this pass unless they get overwritten by rows
+        # we're about to load (which is a no-op because this_m rows
+        # never land in prev_m).
         cur = conn.cursor()
         try:
-            cur.execute(f"TRUNCATE TABLE `{SALES_TABLE}`;")
+            cur.execute(
+                f"DELETE FROM `{SALES_TABLE}` WHERE `month` = %s",
+                (two_ago,),
+            )
+            print(f"  Purged month={two_ago}: {cur.rowcount} rows")
+            cur.execute(
+                f"DELETE FROM `{SALES_TABLE}` WHERE `month` = %s",
+                (this_m,),
+            )
+            print(f"  Cleared month={this_m}: {cur.rowcount} rows (reload target)")
 
             batch = []
             for row in reader:
                 if not any(v.strip() for v in row):
                     continue  # skip empty rows
-                values = []
-                for db_col in insert_cols:
+                values = [this_m]   # month column, first in insert_cols
+                broke = False
+                for db_col in insert_cols[1:]:   # skip "month" — already added
                     idx = col_idx_map[db_col]
                     raw = row[idx].strip() if idx < len(row) else ""
                     if db_col == "day":
                         raw = parse_billing_date_day(raw)
                         if not raw:
+                            broke = True
                             break  # 합계/소계 행 → 건너뜀
                     values.append(raw if raw != "" else None)
-                else:
-                    batch.append(tuple(values))
+                if broke:
+                    continue
+                batch.append(tuple(values))
 
                 if len(batch) >= 500:
                     cur.executemany(insert_sql, batch)
@@ -305,7 +366,12 @@ def load_sales(conn):
             conn.commit()
             cur.execute(f"SELECT COUNT(*) FROM `{SALES_TABLE}`;")
             cnt = cur.fetchone()[0]
-            print(f"[sales] Loaded rows: {cnt}")
+            cur.execute(
+                f"SELECT `month`, COUNT(*) FROM `{SALES_TABLE}` GROUP BY `month`"
+            )
+            per_m = {int(r[0]) if r[0] is not None else None: int(r[1])
+                     for r in cur.fetchall()}
+            print(f"[sales] Loaded rows: {cnt}  per-month: {per_m}")
         finally:
             cur.close()
 
