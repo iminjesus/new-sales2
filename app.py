@@ -11693,32 +11693,39 @@ def profit_monthly():
                     op_cost=float(r["op_cost"] or 0),
                 )
 
-        # Fallback for the current effective month — the `profit`
-        # table is loaded month-end, so Sep bars stay empty until
-        # the batch runs.  When that month's row is zero AND
-        # sales_thismonth has data for the same month, approximate
-        # from sales_thismonth:
+        # Fallback for months not yet in the `profit` table — the
+        # roll-up is loaded month-end, so recent months stay blank
+        # until the batch runs.  sales_thismonth now holds up to two
+        # months at a time (business-effective current + the previous
+        # one until profit swallows it), so we iterate over every
+        # month present in sales_thismonth and fill in each one whose
+        # profit row is zero.
+        #
+        # For every filled month:
         #   • gross   = SUM(amt) × (1 − PROFIT_SALES_THISMONTH_GROSS_HAIRCUT)
         #                — raw sales_thismonth amt isn't net of a
-        #                ~5.5 % slice that gets deducted elsewhere
-        #                in the Profit roll-up, so we knock that
-        #                slice off up front rather than inflating
-        #                the Gross bar.
-        #   • cogs    = SUM(cogs)       — real, no haircut
-        #   • op_cost = est. (prev op_cost / prev gross) × adjusted gross
-        #   • sd      = est. (prev sd      / prev gross) × adjusted gross
-        # Mark the month as "estimated" so the frontend can draw
-        # the Op Cost / Sales Deduction bars with dotted outlines
-        # (and the Gross bar too — it's a derived number now).
-        # Flat 5.5 % matches the historical loss slice; tweak the
-        # constant up top if the ops team settles on a different
-        # haircut rate.
+        #                ~5.5 % slice that gets deducted elsewhere in
+        #                the Profit roll-up, so we knock that slice
+        #                off up front rather than inflating Gross.
+        #   • cogs    = SUM(cogs)       — real, no haircut.
+        #   • op_cost = (prev op_cost / prev gross) × adjusted gross
+        #   • sd      = (prev sd      / prev gross) × adjusted gross
+        # The prev-month ratios are read from the *final* `out` array
+        # AFTER the earlier months have themselves been filled — so a
+        # Sep estimate feeds Oct's ratio when the real Sep profit row
+        # is still missing.  Walking in ascending month order makes
+        # that chaining safe.  Each filled month is tagged
+        # estimated=True so the frontend draws dashed outlines.
         PROFIT_SALES_THISMONTH_GROSS_HAIRCUT = 0.055
         try:
             conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
             try:
-                _efy, _efm = _business_effective_ym()
-                if 1 <= _efm <= 12 and out[_efm - 1]["gross"] == 0:
+                st_months = _sales_thismonth_months(cur2)
+                for _efm in sorted(st_months):
+                    if not (1 <= _efm <= 12):
+                        continue
+                    if out[_efm - 1]["gross"] != 0:
+                        continue    # profit table already has this month
                     st_joins, st_wh, st_params = _thismonth_query_stack(
                         f, top_sold_to, month=_efm,
                     )
@@ -11734,31 +11741,31 @@ def profit_monthly():
                     r2 = cur2.fetchone() or {}
                     g_raw = float(r2.get("gross") or 0)
                     c     = float(r2.get("cogs")  or 0)
-                    if g_raw > 0 or c > 0:
-                        # Haircut on Gross — see constant block above.
-                        g_adj = g_raw * (1.0 - PROFIT_SALES_THISMONTH_GROSS_HAIRCUT)
-                        # Walk back from the effective month to find
-                        # the most recent populated prior month and
-                        # borrow its (sd / gross) and (op_cost / gross)
-                        # ratios.  Op Cost + Sales Deduction are both
-                        # derived from this month's ADJUSTED gross so
-                        # the Profit % reads clean.
-                        prev_sd_ratio = 0.0
-                        prev_op_ratio = 0.0
-                        for look in range(_efm - 1, 0, -1):
-                            pr = out[look - 1]
-                            if (pr["gross"] or 0) > 0 \
-                                    and (pr["sd"] or pr["op_cost"]) > 0:
-                                prev_sd_ratio = (pr["sd"] or 0)      / pr["gross"]
-                                prev_op_ratio = (pr["op_cost"] or 0) / pr["gross"]
-                                break
-                        out[_efm - 1].update(
-                            gross=round(g_adj, 2),
-                            cogs=c,
-                            sd=round(g_adj * prev_sd_ratio, 2),
-                            op_cost=round(g_adj * prev_op_ratio, 2),
-                            estimated=True,
-                        )
+                    if g_raw <= 0 and c <= 0:
+                        continue
+                    g_adj = g_raw * (1.0 - PROFIT_SALES_THISMONTH_GROSS_HAIRCUT)
+                    # Walk back from this month to find the most
+                    # recent populated prior month and borrow its
+                    # (sd / gross) and (op_cost / gross) ratios.
+                    # Reads from the live `out` array so an earlier
+                    # fallback month (already filled above) is a
+                    # valid reference.
+                    prev_sd_ratio = 0.0
+                    prev_op_ratio = 0.0
+                    for look in range(_efm - 1, 0, -1):
+                        pr = out[look - 1]
+                        if (pr["gross"] or 0) > 0 \
+                                and (pr["sd"] or pr["op_cost"]) > 0:
+                            prev_sd_ratio = (pr["sd"] or 0)      / pr["gross"]
+                            prev_op_ratio = (pr["op_cost"] or 0) / pr["gross"]
+                            break
+                    out[_efm - 1].update(
+                        gross=round(g_adj, 2),
+                        cogs=c,
+                        sd=round(g_adj * prev_sd_ratio, 2),
+                        op_cost=round(g_adj * prev_op_ratio, 2),
+                        estimated=True,
+                    )
             finally:
                 try: cur2.close()
                 except: pass
