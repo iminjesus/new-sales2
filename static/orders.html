@@ -354,16 +354,18 @@
   .grid .val.wide{grid-column: span 1;}
 
   /* nested-label rows (e.g. Base DC with three sub cells) */
-  .grid .valgroup{display:grid;grid-template-columns:1fr 1fr 1fr;padding:0;}
+  .grid .valgroup{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;padding:0;}
   .grid .valgroup > div{
     padding:5px 8px;border-right:1px dashed var(--border);
     display:flex;align-items:center;justify-content:center;font-size:12px;
   }
   .grid .valgroup > div:last-child{border-right:none}
   .grid .valgroup .sub-hdr{background:#f2c9d9;color:#111;font-weight:700;border-bottom:1px dashed var(--border);}
-  .grid .valgroup .sub-hdr.pk{background:#f2c9d9}
-  .grid .valgroup .sub-hdr.wh{background:#dfe9f3}
-  .grid .valgroup .sub-hdr.gr{background:#e6ddf3}
+  .grid .valgroup .sub-hdr.pk{background:#f2c9d9}        /* HK-PCLT  */
+  .grid .valgroup .sub-hdr.hktbr{background:#f6d6b8}     /* HK-TBR   */
+  .grid .valgroup .sub-hdr.gr{background:#e6ddf3}        /* LF-PCLT  */
+  .grid .valgroup .sub-hdr.lftbr{background:#d7eac0}     /* LF-TBR   */
+  .grid .valgroup .sub-hdr.wh{background:#dfe9f3}        /* legacy   */
   .grid .valgroup .sub-val{background:#fff}
   .grid .valgroup.two{grid-template-columns:1fr 1fr}
 
@@ -919,11 +921,17 @@
         <div class="val" style="padding:0">
           <div class="valgroup">
             <div class="sub-hdr pk">HK-PCLT</div>
-            <div class="sub-hdr wh">TBR (HK&amp;LF)</div>
+            <div class="sub-hdr hktbr">HK-TBR</div>
             <div class="sub-hdr gr">LF-PCLT</div>
+            <div class="sub-hdr lftbr">LF-TBR</div>
             <div class="sub-val"><input id="basedc_hkpclt" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
-            <div class="sub-val"><input id="basedc_tbr"    placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+            <div class="sub-val"><input id="basedc_hktbr"  placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
             <div class="sub-val"><input id="basedc_lfpclt" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+            <div class="sub-val"><input id="basedc_lftbr"  placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+            <!-- Legacy single TBR id kept as a hidden backing field so
+                 saved orders that still carry basedc_tbr re-hydrate
+                 without a schema bump. -->
+            <input type="hidden" id="basedc_tbr"/>
           </div>
         </div>
 
@@ -1780,29 +1788,56 @@ async function fillBaseDC(soldTo){
   // (nothing to look up yet).
   if (soldTo) {
     try {
-      const chk = await apiGet(`/api/orders/pricing_window_check?sold_to=${encodeURIComponent(soldTo)}`);
+      /* Pricing-master window + Base DC lookups follow the Doc. Date,
+         not today's wall-clock date.  Fresh orders → doc_date was
+         just seeded to today, so this is a no-op for them.  Opened
+         saved orders → doc_date carries the ORIGINAL submission
+         date, so Base DC reflects the pricing-master row that was
+         live when the SPRF was first filled, regardless of how
+         many months have passed since. */
+      const _dateQ = $("#doc_date")?.value || "";
+      const _dateP = _dateQ ? `&date=${encodeURIComponent(_dateQ)}` : "";
+      const chk = await apiGet(`/api/orders/pricing_window_check?sold_to=${encodeURIComponent(soldTo)}${_dateP}`);
       if (chk && chk.matched === false) {
         alert(chk.message || "pricing master for this month does not exist, please contact the admin");
         const clear = (id) => { const el = document.getElementById(id); if (el) el.value = ""; };
-        clear("basedc_hkpclt"); clear("basedc_tbr"); clear("basedc_lfpclt");
-        window._baseDCPct = { HK_PCLT: null, LF_PCLT: null, TBR: null };
+        clear("basedc_hkpclt"); clear("basedc_hktbr");
+        clear("basedc_lfpclt"); clear("basedc_lftbr"); clear("basedc_tbr");
+        window._baseDCPct = { HK_PCLT: null, LF_PCLT: null,
+                              HK_TBR: null, LF_TBR: null };
         return;
       }
     } catch(_e) { /* fall through — server error shouldn't hard-block */ }
   }
-  const data = await apiGet(`/api/orders/base_dc?sold_to=${encodeURIComponent(soldTo)}`);
+  /* Pass doc_date so dc_basic_customer's valid_from / valid_to
+     gate uses the DOC DATE's month, not CURDATE() — a saved order
+     opened months later still reads the Base DC that was live
+     when the SPRF was first filled, matching the user's rule
+     "pricing should be under the pricing master under that
+     corresponding month". */
+  const _bdDate = $("#doc_date")?.value || "";
+  const _bdDateP = _bdDate ? `&date=${encodeURIComponent(_bdDate)}` : "";
+  const data = await apiGet(`/api/orders/base_dc?sold_to=${encodeURIComponent(soldTo)}${_bdDateP}`);
   const fmtPct = v => (v == null) ? "" : `${(+v).toFixed(2)}%`;
   const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
   set("basedc_hkpclt", fmtPct(data && data.HK_PCLT));
-  set("basedc_tbr",    fmtPct(data && data.TBR_HKLF));
+  set("basedc_hktbr",  fmtPct(data && data.HK_TBR));
   set("basedc_lfpclt", fmtPct(data && data.LF_PCLT));
+  set("basedc_lftbr",  fmtPct(data && data.LF_TBR));
+  // Legacy single TBR mirror — kept in sync so any downstream code
+  // that still reads basedc_tbr sees the better of HK-TBR / LF-TBR.
+  const _legacyTbr = Math.max(
+      (data && data.HK_TBR != null ? +data.HK_TBR : 0),
+      (data && data.LF_TBR != null ? +data.LF_TBR : 0));
+  set("basedc_tbr", _legacyTbr > 0 ? fmtPct(_legacyTbr) : "");
   // Cache the raw numeric % values keyed by (brand, line) so each
   // material row can pick the correct one without re-parsing the
-  // formatted "+56.00%" cell every recalc.  null → cell blank.
+  // formatted "56.00%" cell every recalc.  null → cell blank.
   window._baseDCPct = {
     HK_PCLT: data && data.HK_PCLT != null ? +data.HK_PCLT : null,
     LF_PCLT: data && data.LF_PCLT != null ? +data.LF_PCLT : null,
-    TBR:     data && data.TBR_HKLF != null ? +data.TBR_HKLF : null,
+    HK_TBR:  data && data.HK_TBR  != null ? +data.HK_TBR  : null,
+    LF_TBR:  data && data.LF_TBR  != null ? +data.LF_TBR  : null,
   };
   // If any material rows are already filled, refresh their Base DC
   // and Additional DC from the new customer's rates.
@@ -1976,10 +2011,16 @@ function applyBaseDCToRow(rowEl, brand, line){
   const B = String(brand || "").toUpperCase();
   const L = String(line  || "").toUpperCase();
   let pct = null;
-  if (!B)                              pct = rates.TBR;
-  else if (L === "TBR")                pct = rates.TBR;
-  else if (L === "PCLT" && B === "HK") pct = rates.HK_PCLT;
+  // Each (brand, line) now resolves to its own Base DC cell —
+  // HK-PCLT / HK-TBR / LF-PCLT / LF-TBR.  A blank brand on a TBR
+  // line falls back to HK-TBR (first non-null), matching the way
+  // dc_basic_customer's blank-brand TBR row was previously treated.
+  if (L === "PCLT" && B === "HK")      pct = rates.HK_PCLT;
   else if (L === "PCLT" && B === "LF") pct = rates.LF_PCLT;
+  else if (L === "TBR"  && B === "HK") pct = rates.HK_TBR;
+  else if (L === "TBR"  && B === "LF") pct = rates.LF_TBR;
+  else if (L === "TBR")                pct = rates.HK_TBR != null ? rates.HK_TBR : rates.LF_TBR;
+  else if (!B)                         pct = rates.HK_TBR != null ? rates.HK_TBR : rates.LF_TBR;
   // Everything else (non-PCLT/TBR line, unknown brand) → leave the
   // cell alone so the BDE can key in a manual DC.
   const el = rowEl.querySelector('[data-col="base_dc"]');
@@ -3557,10 +3598,12 @@ function exportOrderToExcel(){
       <tr>
         <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (HK-PCLT)</td>
         <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_hkpclt)}</td>
-        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (TBR)</td>
-        <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_tbr)}</td>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (HK-TBR)</td>
+        <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_hktbr || b.basedc_tbr)}</td>
         <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (LF-PCLT)</td>
         <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_lfpclt)}</td>
+        <td style="${border}background:#0f172a;color:#fff;padding:4px 8px;font-weight:800">Base DC (LF-TBR)</td>
+        <td style="${border}background:#fef9c3;color:#78350f;padding:4px 8px;font-weight:700;text-align:right;width:80px">${esc(b.basedc_lftbr || b.basedc_tbr)}</td>
       </tr>
     </table>`;
   const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office"
@@ -3635,8 +3678,15 @@ if (_btnExcel) _btnExcel.addEventListener("click", exportOrderToExcel);
 
 /* ────────────────────────── header date ────────────────────────── */
 function seedDate(){
+  /* LOCAL date (not toISOString() which is UTC) — on Australian
+     time (+10/+11) a 10 am read of toISOString returns the previous
+     calendar day, which is why Oct 1 was pre-filling as 30/09.
+     Build the YYYY-MM-DD string from the Date object's local
+     getters so the default always matches the operator's wall
+     clock. */
   const now = new Date();
-  const iso = now.toISOString().slice(0,10);
+  const pad = n => String(n).padStart(2, "0");
+  const iso = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
   $("#doc_date").value = iso;
   const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
   $("#hdrPeriod").textContent = `${months[now.getMonth()]} ${now.getFullYear()}`;
@@ -3664,7 +3714,10 @@ const HEADER_FIELDS = [
 // serialised from the DOM any more.
 // Base DC readonly cells sit outside HEADER_FIELDS because they're
 // derived — captured separately so the printed copy still shows them.
-const BASE_DC_FIELDS = ["basedc_hkpclt", "basedc_tbr", "basedc_lfpclt"];
+const BASE_DC_FIELDS = ["basedc_hkpclt", "basedc_hktbr",
+                        "basedc_lfpclt", "basedc_lftbr",
+                        "basedc_tbr" /* legacy mirror, kept for
+                                        backward compatibility */];
 
 // Order line cells that make sense to persist.  add_dc / aging_dc /
 // sp_dc go along even when auto-filled — the snapshot has to reproduce
@@ -4068,6 +4121,17 @@ async function hydrateSubmittedOrder(oid, editMode){
      timestamp to `mod_log` (a JSON array on submitted_orders /
      payload).  Render the entries so a viewer sees the full audit
      trail without needing to open the DB. */
+  /* Base DC backward-compat — orders saved before the TBR split
+     carry only basedc_tbr.  Mirror it into HK-TBR / LF-TBR so the
+     new 4-column layout shows the same number without needing a
+     payload migration.  Skipped when the new fields already have
+     values (fresh orders submitted after the split).  Done BEFORE
+     the base_dc block below pushes the dict into the DOM. */
+  if (p && p.base_dc){
+    const _b = p.base_dc;
+    if (_b.basedc_tbr && !_b.basedc_hktbr) _b.basedc_hktbr = _b.basedc_tbr;
+    if (_b.basedc_tbr && !_b.basedc_lftbr) _b.basedc_lftbr = _b.basedc_tbr;
+  }
   const _modList = (data.mod_log || (p && p.mod_log) || []);
   const _modLbl  = document.getElementById("modLogLbl");
   const _modWrap = document.getElementById("modLogWrap");
@@ -4314,6 +4378,20 @@ async function hydrateSubmittedOrder(oid, editMode){
           ? `Already approved <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at} · locked — no further changes`
           : `Updating submitted order <b>${data.order_no || "#" + data.id}</b> · ${data.submitted_at} · BDE: ${data.submitted_by_bde || "—"} — Save as Draft resets approval to Pending`);
     $("#status").innerHTML = label;
+    /* Lock the Doc. Date on any already-persisted order (temp draft
+       or real submission) — the saved date is the one that selects
+       the pricing-master month, so changing it after save would
+       invisibly re-shoot the Base DC / 443 lookups against a
+       different window.  Fresh /order pages (data.id absent) keep
+       the date editable so the BDE can backdate before first save. */
+    if (data && data.id){
+      const _dd = $("#doc_date");
+      if (_dd){
+        _dd.readOnly = true;
+        _dd.title    = "Doc. Date is fixed at save/submit — pricing-master lookup follows this month.";
+        _dd.style.background = "#f3f4f6";
+      }
+    }
   } else {
     // Read-only view (no update rights) — lock inputs, dim both
     // toolbar buttons.  Harry's SAP toggle still hooks via

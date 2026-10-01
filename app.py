@@ -3267,12 +3267,14 @@ def api_orders_stock_by_material():
         except: pass
 
 
-# TBR (HK & LF) discount is a fixed 56% for every customer at the
-# moment — the dc_basic_customer feed doesn't split PCLT vs TBR, so
-# the two brand rows there feed the PCLT columns and TBR is stamped
-# from this constant.  Move to a separate table once the feed is
-# split by line.
-_ORDERS_TBR_HKLF_PCT = 56.00
+# Default TBR Base DC when dc_basic_customer carries no TBR row for
+# the customer / group — same 56 % the old single "TBR (HK & LF)"
+# cell was pinned to.  HK-TBR and LF-TBR now resolve independently
+# through dc_basic_customer; this constant only applies when the
+# table has nothing applicable for the TBR line.
+_ORDERS_TBR_FALLBACK_PCT = 56.00
+# Legacy alias — some callsites still read the old name.
+_ORDERS_TBR_HKLF_PCT = _ORDERS_TBR_FALLBACK_PCT
 
 
 @app.get("/api/orders/base_dc")
@@ -3282,7 +3284,9 @@ def api_orders_base_dc():
       ?sold_to=…        the bill_to_partner code on that table
 
     Returns
-      { "HK_PCLT": 52.00, "LF_PCLT": 50.00, "TBR_HKLF": 56.00 }
+      { "HK_PCLT": 52.00, "HK_TBR": 56.00,
+        "LF_PCLT": 50.00, "LF_TBR": 56.00,
+        "TBR_HKLF": 56.00 }    # legacy — max(HK_TBR, LF_TBR)
 
     For each output cell (HK-PCLT, LF-PCLT, TBR) we score every
     candidate row and pick the highest.  Score is:
@@ -3308,9 +3312,26 @@ def api_orders_base_dc():
     isn't loaded, the endpoint returns those same defaults silently."""
     sold_to = (request.args.get("sold_to") or "").strip()
     debug   = request.args.get("debug") in ("1", "true", "yes")
-    out = {"HK_PCLT": None, "LF_PCLT": None, "TBR_HKLF": _ORDERS_TBR_HKLF_PCT}
+    # Optional ?date=YYYY-MM-DD — anchor the valid_from / valid_to
+    # window to the SPRF's doc_date so a saved order opened months
+    # later still reads the Base DC that was live when the SPRF
+    # was first filled.  Fresh orders pass today's date, which is
+    # equivalent to the pre-change CURDATE() behaviour.
+    _date_arg = (request.args.get("date") or "").strip()
+    try:
+        from datetime import date as _d_cls
+        anchor_date = _d_cls.fromisoformat(_date_arg) if _date_arg else None
+    except Exception:
+        anchor_date = None
+    out = {
+        "HK_PCLT":  None,
+        "HK_TBR":   _ORDERS_TBR_FALLBACK_PCT,
+        "LF_PCLT":  None,
+        "LF_TBR":   _ORDERS_TBR_FALLBACK_PCT,
+        "TBR_HKLF": _ORDERS_TBR_FALLBACK_PCT,
+    }
     if debug:
-        out["_debug"] = {"sold_to": sold_to}
+        out["_debug"] = {"sold_to": sold_to, "anchor_date": _date_arg}
     if not sold_to:
         return jsonify(out)
 
@@ -3377,12 +3398,24 @@ def api_orders_base_dc():
                 f"     AND UPPER(TRIM({group_col})) = UPPER(%s))"
             )
             params.append(group_code)
-        cur.execute(
-            f"SELECT {select_cols} FROM dc_basic_customer "
-            f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
-            f"  AND (valid_from IS NULL OR valid_from <= CURDATE()) "
-            f"  AND (valid_to   IS NULL OR valid_to   >= CURDATE())",
-            tuple(params))
+        # Anchor the window to the SPRF's doc_date (?date=…) when the
+        # caller passed one; otherwise fall back to CURDATE() so pre-
+        # change callers behave identically.
+        if anchor_date:
+            params.extend([anchor_date, anchor_date])
+            cur.execute(
+                f"SELECT {select_cols} FROM dc_basic_customer "
+                f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
+                f"  AND (valid_from IS NULL OR valid_from <= %s) "
+                f"  AND (valid_to   IS NULL OR valid_to   >= %s)",
+                tuple(params))
+        else:
+            cur.execute(
+                f"SELECT {select_cols} FROM dc_basic_customer "
+                f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
+                f"  AND (valid_from IS NULL OR valid_from <= CURDATE()) "
+                f"  AND (valid_to   IS NULL OR valid_to   >= CURDATE())",
+                tuple(params))
         raw_rows = cur.fetchall() or []
 
         # Normalise once, then apply the 5-tier priority for each cell.
@@ -3421,14 +3454,19 @@ def api_orders_base_dc():
                 is_group    = (r["bill"] == "" and r["grp"] == s_group and s_group)
                 if not (is_customer or is_group):
                     continue
-                # Brand gate.
-                if tb:  # HK or LF target — accept HK/LF exact OR blank
-                    if r["brand"] == tb:  brand_score = 2
+                # Brand gate.  Every target now carries a brand (HK or
+                # LF) — the old blank-brand TBR target is gone; HK-TBR
+                # and LF-TBR are picked independently.  A row with
+                # brand matching the target scores 2; a row with blank
+                # brand is a fallback (score 1); a row branded
+                # differently is skipped as wrong bucket.
+                if tb:
+                    if r["brand"] == tb:   brand_score = 2
                     elif r["brand"] == "": brand_score = 1
-                    else: continue        # wrong brand
-                else:   # TBR target — only blank-brand rows apply
-                    if r["brand"] == "":  brand_score = 2
-                    else: continue        # branded row doesn't leak into TBR
+                    else: continue
+                else:
+                    if r["brand"] == "":   brand_score = 2
+                    else: continue
                 # Line gate.
                 if tl:
                     if r["line"] == tl:   line_score = 2
@@ -3449,13 +3487,19 @@ def api_orders_base_dc():
                     best = cand
             return best
 
-        hk_pick  = _pick("HK", "PCLT")
-        lf_pick  = _pick("LF", "PCLT")
-        tbr_pick = _pick("",   "TBR")
+        hk_pclt_pick = _pick("HK", "PCLT")
+        lf_pclt_pick = _pick("LF", "PCLT")
+        hk_tbr_pick  = _pick("HK", "TBR")
+        lf_tbr_pick  = _pick("LF", "TBR")
 
-        if hk_pick:  out["HK_PCLT"]  = hk_pick[2]
-        if lf_pick:  out["LF_PCLT"]  = lf_pick[2]
-        if tbr_pick: out["TBR_HKLF"] = tbr_pick[2]
+        if hk_pclt_pick: out["HK_PCLT"] = hk_pclt_pick[2]
+        if lf_pclt_pick: out["LF_PCLT"] = lf_pclt_pick[2]
+        if hk_tbr_pick:  out["HK_TBR"]  = hk_tbr_pick[2]
+        if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
+        # Legacy TBR_HKLF — carry max(HK, LF) so old clients that
+        # still read this one field get the better of the two.
+        out["TBR_HKLF"] = max(out["HK_TBR"] or 0, out["LF_TBR"] or 0) \
+                          or _ORDERS_TBR_FALLBACK_PCT
 
         if debug:
             def _s(v):
@@ -3466,9 +3510,10 @@ def api_orders_base_dc():
                 return {"score": pk[0], "valid_from": _s(pk[1]),
                         "amount": pk[2], "row": {k: _s(v) for k,v in pk[3].items()}}
             out["_debug"]["picks"] = {
-                "HK_PCLT": _dump(hk_pick),
-                "LF_PCLT": _dump(lf_pick),
-                "TBR":     _dump(tbr_pick),
+                "HK_PCLT": _dump(hk_pclt_pick),
+                "LF_PCLT": _dump(lf_pclt_pick),
+                "HK_TBR":  _dump(hk_tbr_pick),
+                "LF_TBR":  _dump(lf_tbr_pick),
             }
             out["_debug"]["rows"] = [
                 {k: _s(v) for k, v in r.items()} for r in raw_rows
@@ -3501,10 +3546,19 @@ def api_orders_pricing_window_check():
     """
     sold_to = (request.args.get("sold_to") or "").strip()
     debug = request.args.get("debug") in ("1", "true", "yes")
+    # Optional ?date=YYYY-MM-DD anchor so a saved order opened months
+    # later gates against the pricing master that was live on its
+    # own doc_date, not today's.
+    _date_arg = (request.args.get("date") or "").strip()
+    try:
+        from datetime import date as _d_cls
+        anchor_date = _d_cls.fromisoformat(_date_arg) if _date_arg else None
+    except Exception:
+        anchor_date = None
     msg = "pricing master for this month does not exist, please contact the admin"
     out = {"matched": False, "message": msg}
     if debug:
-        out["_debug"] = {"sold_to": sold_to}
+        out["_debug"] = {"sold_to": sold_to, "anchor_date": _date_arg}
     if not sold_to:
         return jsonify(out)
 
@@ -3550,14 +3604,27 @@ def api_orders_pricing_window_check():
                 f"     AND UPPER(TRIM({group_col})) = UPPER(%s))"
             )
             params.append(group_code)
-        cur.execute(
-            f"SELECT 1 FROM dc_basic_customer "
-            f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
-            f"  AND (valid_from IS NULL OR valid_from <= CURDATE()) "
-            f"  AND (valid_to   IS NULL OR valid_to   >= CURDATE()) "
-            f"LIMIT 1",
-            tuple(params),
-        )
+        # Anchor the window to the SPRF's doc_date when provided,
+        # else CURDATE() for backwards-compat with pre-change callers.
+        if anchor_date:
+            params.extend([anchor_date, anchor_date])
+            cur.execute(
+                f"SELECT 1 FROM dc_basic_customer "
+                f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
+                f"  AND (valid_from IS NULL OR valid_from <= %s) "
+                f"  AND (valid_to   IS NULL OR valid_to   >= %s) "
+                f"LIMIT 1",
+                tuple(params),
+            )
+        else:
+            cur.execute(
+                f"SELECT 1 FROM dc_basic_customer "
+                f"WHERE (TRIM(bill_to_partner) = %s {where_group}) "
+                f"  AND (valid_from IS NULL OR valid_from <= CURDATE()) "
+                f"  AND (valid_to   IS NULL OR valid_to   >= CURDATE()) "
+                f"LIMIT 1",
+                tuple(params),
+            )
         if cur.fetchone():
             return jsonify({"matched": True})
         return jsonify(out)
