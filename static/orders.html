@@ -1264,7 +1264,11 @@ const fmtPct   = v => {
    accepts a hand-typed rate.  Used by the newRow event wiring to
    attach the focus/blur handlers that swap the "%" suffix in and
    out while the BDE is typing. */
-const DC_PCT_INPUT_COLS = ["base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"];
+/* Columns whose input is a DC %, so the focus / blur handlers
+   strip and re-append the "N.NN%" suffix for easy keying.
+   Proposed DC % joins the list now that it's user-editable; it
+   back-solves add_dc so the forward recalcRow still runs. */
+const DC_PCT_INPUT_COLS = ["base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc","proposed_dc"];
 
 let customerCache = {};   // {ship_to|sold_to: row}
 let materialCache = {};   // {m_code: row}
@@ -2194,7 +2198,13 @@ function recalcRow(row){
   if (totAmtEl && document.activeElement !== totAmtEl) {
     totAmtEl.value = list ? fmtMoney(totalAmount) : "";
   }
-  row.querySelector('[data-col="proposed_dc"]').value   = proposedDC ? proposedDC.toFixed(2)+"%" : "";
+  /* Don't overwrite the Proposed DC % cell while the BDE is typing
+     into it — their keystrokes drive reverseSolveFromProposedDC
+     and would get clobbered by this live recalc. */
+  const pdcEl = row.querySelector('[data-col="proposed_dc"]');
+  if (pdcEl && document.activeElement !== pdcEl) {
+    pdcEl.value = proposedDC ? proposedDC.toFixed(2)+"%" : "";
+  }
   const addSupEl = row.querySelector('[data-col="add_support"]');
   if (addSupEl) addSupEl.value = (Math.abs(addSupport) > 0.005) ? addSupport.toFixed(2)+"%" : "";
   updateTotals();
@@ -2253,6 +2263,26 @@ function reverseSolveFromTotalAmt(row, targetStr){
   reverseSolveAddDC(row, targetUnit.toFixed(2));
 }
 
+/* Back-solve add_dc when the user types a target Proposed DC %.
+     Proposed DC % = 1 − (proposedPrice / listPrice)
+     ⇒ proposedPrice = listPrice × (1 − td/100)
+   so we derive the target unit price and funnel through
+   reverseSolveAddDC, which handles the rest of the chain + the
+   downstream recalcRow refresh of total_amount, add_support, etc.
+   Values below 0 or above 100 are clamped silently; the BDE can
+   simply retype.  No-op when list_price is blank or 0. */
+function reverseSolveFromProposedDC(row, pdStr){
+  const list = toNum(row.querySelector('[data-col="list_price"]').value);
+  let pd = toNum(pdStr);
+  if (!(list > 0) || !isFinite(pd)) return;
+  if (pd < 0)   pd = 0;
+  if (pd > 100) pd = 100;
+  const targetPrice = list * (1 - pd/100);
+  const propEl = row.querySelector('[data-col="proposed_price"]');
+  if (propEl) propEl.value = targetPrice.toFixed(2);
+  reverseSolveAddDC(row, targetPrice.toFixed(2));
+}
+
 /* Lock every editable cell on a row so an aged-stock line reads as
    "this price came from the aged-discount ladder — don't fiddle".
    Aging DC% stays writable so the BDE can clear it, which unlocks
@@ -2269,7 +2299,7 @@ function lockAgedRow(row){
      extra factor.  Aging DC Guide% + sp_dc stay writable too:
      Aging so the BDE can clear it (which un-locks the row), and
      sp_dc so a live promo lookup can still write to the cell. */
-  ["add_dc","proposed_price","total_amount"].forEach(c => {
+  ["add_dc","proposed_price","total_amount","proposed_dc"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = true; el.classList.add("locked-cell"); }
   });
@@ -2281,7 +2311,7 @@ function unlockAgedRow(row){
   row.classList.remove("aged-locked");
   row.classList.remove("aged-row");
   delete row.dataset.agingTier;
-  ["add_dc","proposed_price","total_amount"].forEach(c => {
+  ["add_dc","proposed_price","total_amount","proposed_dc"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = false; el.classList.remove("locked-cell"); }
   });
@@ -2690,7 +2720,12 @@ function newRow(){
        block; both are locked (readOnly) when the row is aged-locked. */
     {c:"proposed_price", cls:"num reddish-cell"},
     {c:"total_amount",   cls:"num reddish-cell"},
-    {c:"proposed_dc",    cls:"pct-cell readonly", ro:true},
+    /* Proposed DC % is now a two-way field — editing it back-solves
+       the Additional Special DC % so the chain lands on a Proposed
+       Unit Price of list × (1 − proposed_dc/100).  Still read-only on
+       aged-locked rows (handled by the same class gate as the two
+       price cells above). */
+    {c:"proposed_dc",    cls:"pct-cell editable"},
     {c:"stock_nsw",      cls:"stock-cell readonly", ro:true},
     {c:"stock_qld",      cls:"stock-cell readonly", ro:true},
     {c:"stock_vic",      cls:"stock-cell readonly", ro:true},
@@ -2927,6 +2962,14 @@ function newRow(){
   // the customer negotiated a round total rather than a unit price.
   tr.querySelector('[data-col="total_amount"]')?.addEventListener("input", (e) => {
     reverseSolveFromTotalAmt(tr, e.target.value);
+  });
+  // Proposed DC % — editable, back-solves add_dc so the chain
+  // lands on list × (1 − target/100).  Guarded by the same aged-
+  // locked check as the two price cells above; recalcRow does the
+  // downstream total_amount / add_support / proposed_dc refresh.
+  tr.querySelector('[data-col="proposed_dc"]')?.addEventListener("input", (e) => {
+    if (tr.classList.contains("aged-locked")) return;
+    reverseSolveFromProposedDC(tr, e.target.value);
   });
   // Every editable DC%-column: strip the "%" when the BDE focuses so
   // arithmetic keys work naturally, and re-append "N.NN%" on blur so

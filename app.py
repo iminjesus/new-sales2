@@ -11422,6 +11422,45 @@ def profit_monthly():
                     op_cost=float(r["op_cost"] or 0),
                 )
 
+        # Fallback for the current effective month — the `profit`
+        # table is loaded month-end, so Sep bars stay empty until
+        # the batch runs.  When that month's row is zero AND
+        # sales_thismonth has data for the same month, approximate
+        # gross + cogs from sales_thismonth (sum of amt / cogs
+        # across the matching month-slice).  Sales_deduction and
+        # operating_cost aren't tracked on sales_thismonth, so they
+        # stay 0 — the chart will show a shorter bar until the real
+        # profit row lands, but it won't look like Sep didn't happen.
+        try:
+            conn2 = get_connection(); cur2 = conn2.cursor(dictionary=True)
+            try:
+                _efy, _efm = _business_effective_ym()
+                if 1 <= _efm <= 12 and out[_efm - 1]["gross"] == 0:
+                    st_joins, st_wh, st_params = _thismonth_query_stack(
+                        f, top_sold_to, month=_efm,
+                    )
+                    st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
+                    cur2.execute(
+                        f"SELECT COALESCE(SUM(s.amt), 0)  AS gross, "
+                        f"       COALESCE(SUM(s.cogs), 0) AS cogs "
+                        f"FROM sales_thismonth s "
+                        f"{' '.join(st_joins)} "
+                        f"{st_where}",
+                        tuple(st_params),
+                    )
+                    r2 = cur2.fetchone() or {}
+                    g = float(r2.get("gross") or 0)
+                    c = float(r2.get("cogs")  or 0)
+                    if g > 0 or c > 0:
+                        out[_efm - 1].update(gross=g, cogs=c)
+            finally:
+                try: cur2.close()
+                except: pass
+                try: conn2.close()
+                except: pass
+        except Exception as _e:
+            print(f"[profit_monthly] sales_thismonth fallback skipped: {_e}")
+
         return jsonify(out)
 
     except Exception as e:
