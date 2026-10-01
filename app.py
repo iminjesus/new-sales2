@@ -18406,7 +18406,10 @@ def admin_usage_summary():
             # bucketed as "(no auth)" and dominating the Total row
             # on the pivot; the user wants them stripped out from
             # both the per-user table and the totals.
-            if not email:
+            # Belt-and-braces: also skip the literal "(no auth)"
+            # string in case anything ever manages to persist it to
+            # user_email (a mail-field bug / stray script).
+            if not email or email.startswith("(no auth"):
                 continue
             path  = r.get("path") or ""
             ts    = r.get("created_at")
@@ -18468,7 +18471,7 @@ def admin_usage_summary():
             email = (r.get("user_email") or "").strip().lower()
             # Same no-auth skip as the main pass — daily totals
             # mustn't carry hits that aren't attributed to a user.
-            if not email: continue
+            if not email or email.startswith("(no auth"): continue
             ts = r.get("created_at")
             if ts is None: continue
             dk = ts.strftime("%Y-%m-%d")
