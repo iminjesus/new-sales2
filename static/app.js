@@ -261,7 +261,20 @@ const setActive = (wrap, attr, val) => {
     b.classList.toggle("active", b.dataset[attr] === val);
   });
 };
-function populateSelect(el,arr,includeAll=true){ el.innerHTML=""; if(includeAll){const o=document.createElement("option");o.value="ALL";o.textContent="ALL";el.appendChild(o);} arr.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;el.appendChild(o);}); }
+function populateSelect(el,arr,includeAll=true){
+  el.innerHTML="";
+  if(includeAll){
+    const o=document.createElement("option");o.value="ALL";o.textContent="ALL";el.appendChild(o);
+  }
+  arr.forEach(v=>{const o=document.createElement("option");o.value=v;o.textContent=v;el.appendChild(o);});
+  // Mirror the arr into the multi-select option cache for the three
+  // dropdowns we converted (Salesman / Channel / Sold-to Group).  The
+  // native <select> is still present (hidden) so legacy readers keep
+  // working, but the visible UI is driven by these caches.
+  if (el && el.id === "salesman_name")  __SALESMAN_OPTIONS      = Array.isArray(arr) ? arr.filter(Boolean).map(String) : [];
+  if (el && el.id === "channel")        __CHANNEL_OPTIONS       = Array.isArray(arr) ? arr.filter(Boolean).map(String) : [];
+  if (el && el.id === "sold_to_group")  __SOLD_TO_GROUP_OPTIONS = Array.isArray(arr) ? arr.filter(Boolean).map(String) : [];
+}
 function makeStacked(id,labels,datasets,title,max){ return new Chart(document.getElementById(id),{type:"bar",data:{labels,datasets},options:getCommonOptions(true, max, title)}); }
 const monthsLabels=()=>["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const daysLabels=()=>[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
@@ -852,10 +865,14 @@ function _applyRegionAfterChange(){
     }
     filters.salesman = lockedSalesman;
     if (sel) { sel.value = lockedSalesman; sel.disabled = true; }
+    const set = _multiSel("salesman_name_input");
+    set.clear(); set.add(lockedSalesman); _multiReflect("salesman_name_input");
   } else {
     filters.salesman = 'ALL';
     const sel = document.getElementById('salesman_name');
     if (sel) sel.value = 'ALL';
+    _multiSel("salesman_name_input").clear();
+    _multiReflect("salesman_name_input");
   }
 }
 document.getElementById('regionBtns').addEventListener("click", async (e) => {
@@ -3668,6 +3685,14 @@ let __CODE_OPTIONS = [];
 let __SOLD_TO_OPTIONS = [];
 let __SHIP_TO_OPTIONS = [];
 
+// Multi-select-ready option caches for the former native <select>
+// dropdowns (Salesman / Channel / Sold-to Group).  Mirrors are kept in
+// sync by the populateSelect wrapper below so legacy init paths that
+// still call populateSelect(select, arr) also seed these.
+let __SALESMAN_OPTIONS = [];
+let __CHANNEL_OPTIONS = [];
+let __SOLD_TO_GROUP_OPTIONS = [];
+
 async function refreshSoldToCustom(){
   // Sold-to Group is now a multi-select native <select>; read the
   // committed state from filters.* instead of reading .value which only
@@ -4044,13 +4069,25 @@ async function applyRoleScope() {
       sel.disabled = true;
       sel.title = `Locked: ${me.name} (${me.role})`;
     }
+    // Reflect the lock into the visible custom-dropdown too (the native
+    // <select> above is kept as a hidden shadow for legacy readers).
+    const set = _multiSel("salesman_name_input");
+    set.clear();
+    set.add(me.lock_salesman);
+    _multiReflect("salesman_name_input");
+    const inp = document.getElementById("salesman_name_input");
+    const btn = document.getElementById("salesmanBtn");
+    const clr = document.getElementById("salesmanClear");
+    if (inp) { inp.disabled = true; inp.title = `Locked: ${me.name} (${me.role})`; }
+    if (btn) btn.disabled = true;
+    if (clr) clr.disabled = true;
   }
   // SM: lock the region chip to their state.  Other regions disabled
-  // so the user can't accidentally widen the view.  Salesman dropdown
-  // left alone — the existing region-bound list gives them the right
-  // BDEs.
+  // so the user can't accidentally widen the view.
   if (me.lock_region) {
     filters.region = me.lock_region;
+    __REGION_SELECTED.clear();
+    __REGION_SELECTED.add(me.lock_region);
     document.querySelectorAll("#regionBtns .btn").forEach(b => {
       const is = b.dataset.val === me.lock_region;
       b.classList.toggle("active", is);
@@ -4193,6 +4230,66 @@ window.addEventListener("load", async () => {
     multi: true,
     getOptions: () => __CODE_OPTIONS,
     onPick: (val) => { _toggleIn("code", "code", val); },
+    onCommit: () => refreshAllDebounced(),
+  });
+
+  // Salesman — the former native <select>, now driven by the same
+  // multi-select machinery.  The hidden <select id="salesman_name"> is
+  // still around for legacy readers (role-lock code checks its .value);
+  // we keep it in sync by writing the first selected value onto it.
+  function _syncHiddenSelect(selectId, inputId){
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const set = _multiSel(inputId);
+    sel.value = set.size === 0 ? "ALL" : [...set][0];
+  }
+
+  bindDropdown({
+    inputId: "salesman_name_input",
+    btnId: "salesmanBtn",
+    clearId: "salesmanClear",
+    menuId: "salesmanMenu",
+    multi: true,
+    getOptions: () => __SALESMAN_OPTIONS,
+    onPick: (val) => {
+      _toggleIn("salesman_name_input", "salesman", val);
+      _syncHiddenSelect("salesman_name", "salesman_name_input");
+    },
+    onCommit: () => refreshAllDebounced(),
+  });
+
+  bindDropdown({
+    inputId: "channel_input",
+    btnId: "channelBtn",
+    clearId: "channelClear",
+    menuId: "channelMenu",
+    multi: true,
+    getOptions: () => __CHANNEL_OPTIONS,
+    onPick: (val) => {
+      _toggleIn("channel_input", "channel", val);
+      _syncHiddenSelect("channel", "channel_input");
+    },
+    onCommit: () => refreshAllDebounced(),
+  });
+
+  bindDropdown({
+    inputId: "sold_to_group_input",
+    btnId: "soldToGroupBtn",
+    clearId: "soldToGroupClear",
+    menuId: "soldToGroupMenu",
+    multi: true,
+    getOptions: () => __SOLD_TO_GROUP_OPTIONS,
+    onPick: async (val) => {
+      _toggleIn("sold_to_group_input", "sold_to_group", val);
+      _syncHiddenSelect("sold_to_group", "sold_to_group_input");
+      // Changing the sold-to-group narrows which sold_to / ship_to
+      // customers are reachable — reset those selections and reload
+      // their lists so the menu reflects the new universe.
+      _multiSel("sold_to").clear(); filters.sold_to = "ALL"; _multiReflect("sold_to");
+      _multiSel("ship_to").clear(); filters.ship_to = "ALL"; _multiReflect("ship_to");
+      await refreshSoldToCustom();
+      await refreshShipToCustom();
+    },
     onCommit: () => refreshAllDebounced(),
   });
 });

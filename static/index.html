@@ -387,9 +387,18 @@
           <button class="btn" data-val="WA">WA</button>
         </div>
         <div class="filter-sep"></div>
-        <div style="display:flex; align-items:center; gap:5px;">
-          <label>Salesman:</label>
-          <select id="salesman_name"><option value="ALL">ALL</option></select>
+        <!-- Salesman (custom multi-select dropdown; hidden native select
+             preserved so legacy code paths that read .value still work
+             as "first-selected / ALL") -->
+        <div class="dd" id="ddSalesman">
+          <label for="salesman_name_input">Salesman:</label>
+          <div class="dd-wrap">
+            <input id="salesman_name_input" type="text" placeholder="ALL" autocomplete="off">
+            <button type="button" class="dd-btn" id="salesmanBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="salesmanClear">✕</button>
+          </div>
+          <div class="dd-menu" id="salesmanMenu"></div>
+          <select id="salesman_name" style="display:none"><option value="ALL">ALL</option></select>
         </div>
       </div>
     </div>
@@ -407,13 +416,27 @@
            search boxes.  Wraps to a 2nd visual line only on narrow
            viewports. -->
       <div class="filter-row">
-        <div style="display:flex; align-items:center; gap:5px;">
-          <label>Channel:</label>
-          <select id="channel"><option value="ALL">ALL</option></select>
+        <!-- Channel (custom multi-select dropdown) -->
+        <div class="dd" id="ddChannel">
+          <label for="channel_input">Channel:</label>
+          <div class="dd-wrap">
+            <input id="channel_input" type="text" placeholder="ALL" autocomplete="off">
+            <button type="button" class="dd-btn" id="channelBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="channelClear">✕</button>
+          </div>
+          <div class="dd-menu" id="channelMenu"></div>
+          <select id="channel" style="display:none"><option value="ALL">ALL</option></select>
         </div>
-        <div style="display:flex; align-items:center; gap:5px;">
-          <label>Sold-to Group:</label>
-          <select id="sold_to_group"><option value="ALL">ALL</option></select>
+        <!-- Sold-to Group (custom multi-select dropdown) -->
+        <div class="dd" id="ddSoldToGroup">
+          <label for="sold_to_group_input">Sold-to Group:</label>
+          <div class="dd-wrap">
+            <input id="sold_to_group_input" type="text" placeholder="ALL" autocomplete="off">
+            <button type="button" class="dd-btn" id="soldToGroupBtn">▼</button>
+            <button type="button" class="dd-btn dd-clear-btn" id="soldToGroupClear">✕</button>
+          </div>
+          <div class="dd-menu" id="soldToGroupMenu"></div>
+          <select id="sold_to_group" style="display:none"><option value="ALL">ALL</option></select>
         </div>
         <div class="filter-sep"></div>
         <div id="topCustomerControls" style="display:flex; gap:5px;">
@@ -544,7 +567,7 @@
     crossorigin=""
   ></script>
 
-  <script src="/static/app.js?v=20261002multi" defer></script>
+  <script src="/static/app.js?v=20261002multi2" defer></script>
 <script>
 // Mobile filter panel toggle
 (function () {
