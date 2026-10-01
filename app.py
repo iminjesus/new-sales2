@@ -8609,7 +8609,7 @@ def v2_dashboard():
     days_in_month = calendar.monthrange(2026, month)[1]
     daily_labels = list(range(1, days_in_month + 1))
     monthly_labels = list(range(1, 13))
-    yearly_labels = list(range(2021, 2026))
+    yearly_labels = list(range(2021, 2027))
 
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     t0 = time()
@@ -10769,7 +10769,7 @@ def yearly_sales():
 
             if not top_sold_to:
                 # no data ??return zeros for all years in range
-                return jsonify([{"year": y, "value": 0} for y in range(2021, 2026)])
+                return jsonify([{"year": y, "value": 0} for y in range(2021, 2027)])
 
         # 2) Yearly totals, optionally restricted to those sold_to
         wh2 = list(wh)
@@ -10793,14 +10793,79 @@ def yearly_sales():
         cur.execute(yearly_sql, tuple(params2))
         rows = cur.fetchall()
 
+        year_map = {int(r["year_num"]): float(r["yearly_total"] or 0) for r in rows}
+
+        # 2026 slice — sales_21_25 stops at 2025, so pull the 2026
+        # grand total from sales_2526 (same alias / same filter stack;
+        # year-of(billing_date) narrows to just 2026 rows).  Any month
+        # not yet present in sales_2526's 2026 slice is backfilled from
+        # sales_thismonth below so the yearly bar reflects the latest
+        # business day's data.
+        try:
+            wh_2026 = list(wh2) + ["YEAR(s.billing_date) = 2026"]
+            params_2026 = list(params2)
+            where_2026_sql = "WHERE " + " AND ".join(wh_2026)
+            sql_2026 = (
+                f"SELECT SUM(s.{value}) AS v "
+                f"FROM sales_2526 s {' '.join(joins)} "
+                f"{where_2026_sql}"
+            )
+            cur.execute(sql_2026, tuple(params_2026))
+            _r = cur.fetchone() or {}
+            total_2026 = float(_r.get("v") or 0)
+        except Exception as _e:
+            print(f"[yearly_sales] 2026 slice failed: {_e}")
+            total_2026 = 0.0
+
+        # sales_thismonth backfill — only for months whose 2026 rows
+        # haven't landed in sales_2526 yet.  Best-effort; a failure for
+        # one month shouldn't zero the whole 2026 bar.
+        try:
+            _fy, _ = _resolve_thismonth_fill_ym(cur)
+        except Exception:
+            _fy = None
+        if _fy == 2026:
+            # Which 2026 months are already in sales_2526?  Only backfill
+            # the ones NOT already covered.
+            try:
+                cur.execute(
+                    "SELECT DISTINCT MONTH(s.billing_date) AS m "
+                    "FROM sales_2526 s "
+                    "WHERE YEAR(s.billing_date) = 2026 AND s.billing_date IS NOT NULL"
+                )
+                _covered = {int(r["m"]) for r in (cur.fetchall() or []) if r.get("m") is not None}
+            except Exception:
+                _covered = set()
+            try:
+                _st_months = _sales_thismonth_months(cur)
+            except Exception:
+                _st_months = []
+            for _fm in _st_months:
+                if _fm in _covered:
+                    continue
+                try:
+                    st_joins, st_wh, st_params = _thismonth_query_stack(f, top_sold_to, month=_fm)
+                    st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
+                    st_sql = (
+                        f"SELECT SUM(s.{value}) AS v "
+                        f"FROM sales_thismonth s {' '.join(st_joins)} "
+                        f"{st_where}"
+                    )
+                    cur.execute(st_sql, tuple(st_params))
+                    _r = cur.fetchone() or {}
+                    total_2026 += float(_r.get("v") or 0)
+                except Exception as _e:
+                    print(f"[yearly_sales] sales_thismonth backfill m={_fm}: {_e}")
+
+        year_map[2026] = total_2026
+
     finally:
         try: cur.close()
         except: pass
         try: conn.close()
         except: pass
 
-    year_map = {int(r["year_num"]): float(r["yearly_total"] or 0) for r in rows}
-    return jsonify([{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2026)])
+    return jsonify([{"year": y, "value": year_map.get(y, 0)} for y in range(2021, 2027)])
 
 
 # -------------------- Yearly breakdown (stacked by group) -------------------
@@ -10932,6 +10997,114 @@ def yearly_breakdown():
             print(f"[yearly_breakdown] group_by={group_by} SQL failed: {_e}\nSQL:\n{sql}")
             raise
         rows = cur.fetchall()
+
+        # 2026 slice from sales_2526 — same group_col grouping, year
+        # pinned to 2026 via billing_date.  Appends one row per group
+        # label present in 2026.
+        try:
+            wh_2026 = list(wh2) + ["YEAR(s.billing_date) = 2026"]
+            params_2026 = list(params2)
+            where_2026_sql = "WHERE " + " AND ".join(wh_2026)
+            if is_promo_group:
+                st_group_by_sql_2026 = "GROUP BY group_label"
+            else:
+                st_group_by_sql_2026 = f"GROUP BY {group_col}"
+            sql_2026 = f"""
+            SELECT 2026 AS year,
+                   {label_col} AS group_label,
+                   SUM(s.{value}) AS value
+              FROM sales_2526 s
+              {' '.join(joins)}
+              {where_2026_sql}
+              {st_group_by_sql_2026}
+            """
+            cur.execute(sql_2026, tuple(params_2026))
+            _rows_2026 = cur.fetchall() or []
+            # Index 2026 rows by group_label so the sales_thismonth
+            # backfill can add to the existing bucket (same group → sum)
+            # instead of appending a parallel duplicate row.
+            idx_2026 = {}
+            for _r in _rows_2026:
+                try: _v = float(_r.get("value") or 0)
+                except Exception: _v = 0.0
+                _r["value"] = _v
+                idx_2026[_r.get("group_label")] = _r
+                if _v > 0:
+                    rows.append(_r)
+        except Exception as _e:
+            print(f"[yearly_breakdown] 2026 slice failed: {_e}")
+            idx_2026 = {}
+
+        # Backfill 2026 from sales_thismonth for months not yet covered
+        # in sales_2526.  Mirrors monthly_breakdown's fallback — same
+        # join / where stack, grouped by the same group_col — and sums
+        # the per-group result into the 2026 bucket.
+        try:
+            _fy, _ = _resolve_thismonth_fill_ym(cur)
+        except Exception:
+            _fy = None
+        if _fy == 2026:
+            try:
+                cur.execute(
+                    "SELECT DISTINCT MONTH(s.billing_date) AS m "
+                    "FROM sales_2526 s "
+                    "WHERE YEAR(s.billing_date) = 2026 AND s.billing_date IS NOT NULL"
+                )
+                _covered = {int(r["m"]) for r in (cur.fetchall() or []) if r.get("m") is not None}
+            except Exception:
+                _covered = set()
+            try:
+                _st_months = _sales_thismonth_months(cur)
+            except Exception:
+                _st_months = []
+            for _fm in _st_months:
+                if _fm in _covered:
+                    continue
+                try:
+                    st_joins, st_wh, st_params = _thismonth_query_stack(f, top_sold_to, month=_fm)
+                    if group_by in ("region", "salesman", "channel",
+                                    "sold_to_group", "sold_to") or is_promo_group:
+                        _ensure_customer_join("s", st_joins)
+                    if group_by in ("line", "brand", "product_group", "pattern"):
+                        _ensure_carrying_join("s", st_joins)
+                    if group_by == "sold_to":
+                        st_joins.append(
+                            "LEFT JOIN ("
+                            "  SELECT sold_to, MIN(NULLIF(TRIM(sold_to_name),'')) AS sold_to_name "
+                            "  FROM customer GROUP BY sold_to"
+                            ") scus ON scus.sold_to = s.sold_to"
+                        )
+                    st_where = ("WHERE " + " AND ".join(st_wh)) if st_wh else ""
+                    st_group_by_sql = (
+                        "GROUP BY group_label"
+                        if is_promo_group
+                        else f"GROUP BY {group_col}"
+                    )
+                    st_sql = (
+                        f"SELECT 2026 AS year, "
+                        f"       {label_col} AS group_label, "
+                        f"       SUM(s.{value}) AS value "
+                        f"FROM sales_thismonth s "
+                        f"{' '.join(st_joins)} "
+                        f"{st_where} "
+                        f"{st_group_by_sql}"
+                    )
+                    cur.execute(st_sql, tuple(st_params))
+                    _st_rows = cur.fetchall() or []
+                    for _r in _st_rows:
+                        try: _v = float(_r.get("value") or 0)
+                        except Exception: _v = 0.0
+                        if _v <= 0:
+                            continue
+                        _lbl = _r.get("group_label")
+                        if _lbl in idx_2026:
+                            idx_2026[_lbl]["value"] = float(idx_2026[_lbl]["value"]) + _v
+                        else:
+                            _r["value"] = _v
+                            idx_2026[_lbl] = _r
+                            rows.append(_r)
+                except Exception as _e:
+                    print(f"[yearly_breakdown] sales_thismonth backfill m={_fm}: {_e}")
 
     finally:
         try:

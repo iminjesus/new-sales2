@@ -278,7 +278,7 @@ function populateSelect(el,arr,includeAll=true){
 function makeStacked(id,labels,datasets,title,max){ return new Chart(document.getElementById(id),{type:"bar",data:{labels,datasets},options:getCommonOptions(true, max, title)}); }
 const monthsLabels=()=>["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const daysLabels=()=>[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31];
-const yearsLabels=()=>[2021,2022,2023,2024,2025];
+const yearsLabels=()=>[2021,2022,2023,2024,2025,2026];
 // 이달 첫 번째 비즈니스 데이(월~금) 당일 또는 그 이전이면 전달을 반환 (1-based)
 function effectiveMonth(){
   const now=new Date();
