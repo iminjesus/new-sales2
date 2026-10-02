@@ -2439,8 +2439,15 @@ function isSOVDEligible(r){
   /* Sold-to gate — no SOVD (or anything else) before the customer
      is picked and its SOVD flag confirmed by fillBaseDC. */
   if (!window._orderSoldTo) return false;
+  /* qty is NOT a gate — the BDE's natural workflow is "pick material,
+     see the applicable DC, then decide quantity".  Blocking SOVD
+     until qty > 0 made the DC cells stay empty on freshly-added
+     lines, which hid the fact that the customer qualifies at all.
+     With no gate here, qty=0 rows show the 12 % preview, qty bumps
+     them into the ladder, and the sovdQty sum below correctly
+     adds 0 for empty rows. */
   const q       = toNum(r.querySelector('[data-col="qty"]')?.value);
-  if (q <= 0) return false;
+  if (q < 0) return false;
   const brand   = (r.querySelector('[data-col="brand"]')?.value || "").toUpperCase().trim();
   const rowLine = (r.dataset.line || "").toUpperCase().trim();
   const ag      = toNum(r.querySelector('[data-col="aging_dc"]')?.value);
