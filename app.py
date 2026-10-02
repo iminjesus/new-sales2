@@ -2597,8 +2597,13 @@ def api_orders_customer():
     ship_to      = (request.args.get("ship_to")      or "").strip()
     sold_to_name = (request.args.get("sold_to_name") or "").strip()
     ship_to_name = (request.args.get("ship_to_name") or "").strip()
-    if not (sold_to or ship_to or sold_to_name or ship_to_name):
-        return jsonify({"error": "one of sold_to / ship_to / sold_to_name / ship_to_name required"}), 400
+    # Optional scope: when the SPRF already has a confirmed Sold-to,
+    # the Ship-to lookup must stay inside that sold_to so hitting
+    # Enter on a Ship-to Name doesn't accidentally rewire the form
+    # to a different Sold-to just because the first row returned by
+    # the DB happened to belong to another account.  Only honoured
+    # on ship_to / ship_to_name queries.
+    scope_sold_to = (request.args.get("scope_sold_to") or "").strip()
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -2650,23 +2655,44 @@ def api_orders_customer():
             closed_guard = " AND " + " AND ".join(parts)
         else:
             closed_guard = ""
+        # When the caller is doing a ship-side lookup AND passed a
+        # scope_sold_to, add an AND clause so the chosen ship_to must
+        # belong to that sold_to.  Matched by exact code when the
+        # scope value is numeric or 'A'-prefixed, otherwise by
+        # sold_to_name verbatim.
+        scope_frag, scope_params = "", []
+        is_ship_lookup = bool(ship_to or ship_to_name)
+        if is_ship_lookup and scope_sold_to and "sold_to" in cols:
+            if scope_sold_to.isdigit() or scope_sold_to.upper().startswith("A"):
+                scope_frag = " AND sold_to = %s"
+                scope_params = [scope_sold_to]
+            elif "sold_to_name" in cols:
+                scope_frag = " AND TRIM(sold_to_name) = %s"
+                scope_params = [scope_sold_to]
+
         row = None
         base_sql = f"SELECT {', '.join(select_cols)} FROM customer"
         if ship_to:
-            cur.execute(f"{base_sql} WHERE ship_to = %s{closed_guard} LIMIT 1", (ship_to,))
+            cur.execute(
+                f"{base_sql} WHERE ship_to = %s{closed_guard}{scope_frag} LIMIT 1",
+                tuple([ship_to] + scope_params),
+            )
             row = cur.fetchone()
         elif sold_to:
             cur.execute(f"{base_sql} WHERE sold_to = %s{closed_guard} LIMIT 1", (sold_to,))
             row = cur.fetchone()
         elif ship_to_name and "ship_to_name" in cols:
-            cur.execute(f"{base_sql} WHERE TRIM(ship_to_name) = %s{closed_guard} LIMIT 1", (ship_to_name,))
+            cur.execute(
+                f"{base_sql} WHERE TRIM(ship_to_name) = %s{closed_guard}{scope_frag} LIMIT 1",
+                tuple([ship_to_name] + scope_params),
+            )
             row = cur.fetchone()
             if not row:
                 n = _strip_noise_py(ship_to_name)
                 if n:
                     cur.execute(
-                        f"{base_sql} WHERE {_strip_noise_sql('ship_to_name')} LIKE %s{closed_guard} LIMIT 1",
-                        (f"%{n}%",),
+                        f"{base_sql} WHERE {_strip_noise_sql('ship_to_name')} LIKE %s{closed_guard}{scope_frag} LIMIT 1",
+                        tuple([f"%{n}%"] + scope_params),
                     )
                     row = cur.fetchone()
         elif sold_to_name and "sold_to_name" in cols:

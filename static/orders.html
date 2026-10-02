@@ -332,6 +332,24 @@
   .meta .col{border-top:1px solid var(--border);}
   .meta .col:last-child{border-left:1px solid var(--border);}
 
+  /* Account/Name inputs get an inline ✕ clear button on the right.
+     Visibility is driven by the input's own value — empty input hides
+     the button, non-empty shows it.  We toggle `.has-value` on the
+     wrapper from JS whenever the input changes (programmatic or user). */
+  .clearable-wrap{position:relative;width:100%;}
+  .clearable-wrap input{width:100%;padding-right:26px !important;}
+  .clearable-wrap .input-clear{
+    position:absolute;top:50%;right:4px;transform:translateY(-50%);
+    width:18px;height:18px;line-height:16px;text-align:center;
+    display:none;align-items:center;justify-content:center;
+    border:1px solid #cbd5e1;border-radius:50%;
+    background:#f8fafc;color:#64748b;cursor:pointer;
+    font-size:11px;font-weight:700;padding:0;
+    transition:background 0.1s;
+  }
+  .clearable-wrap .input-clear:hover{background:#fee2e2;color:#dc2626;border-color:#dc2626;}
+  .clearable-wrap.has-value .input-clear{display:inline-flex;}
+
   /* uniform label/value grid inside each meta col */
   .grid{
     display:grid;grid-template-columns:150px 1fr 150px 1fr;
@@ -921,17 +939,20 @@
     <!-- ─── Customer column ─── -->
     <div class="col">
       <div class="grid">
-        <!-- Row 1: Sold-to Account (left) | Sold-to Name (right) -->
+        <!-- Row 1: Sold-to Account (left) | Sold-to Name (right).
+             Each input lives inside a `.clearable-wrap` so an inline
+             ✕ clear button can appear at the right end when the
+             field has a value. -->
         <div class="lbl">Sold-to Account</div>
-        <div class="val"><input id="sold_to" list="sold_code_list" placeholder="type code or name" autocomplete="off"/></div>
+        <div class="val"><span class="clearable-wrap"><input id="sold_to" list="sold_code_list" placeholder="type code or name" autocomplete="off"/><button type="button" class="input-clear" data-clear-target="sold_to" title="Clear">✕</button></span></div>
         <div class="lbl">Sold-to Name</div>
-        <div class="val"><input id="sold_to_name" list="sold_name_list" placeholder="type name or code" autocomplete="off"/></div>
+        <div class="val"><span class="clearable-wrap"><input id="sold_to_name" list="sold_name_list" placeholder="type name or code" autocomplete="off"/><button type="button" class="input-clear" data-clear-target="sold_to_name" title="Clear">✕</button></span></div>
 
         <!-- Row 2: Ship-to Account (left) | Ship-to Name (right) -->
         <div class="lbl">Ship-to Account</div>
-        <div class="val"><input id="ship_to" list="ship_code_list" placeholder="type code or name" autocomplete="off"/></div>
+        <div class="val"><span class="clearable-wrap"><input id="ship_to" list="ship_code_list" placeholder="type code or name" autocomplete="off"/><button type="button" class="input-clear" data-clear-target="ship_to" title="Clear">✕</button></span></div>
         <div class="lbl">Ship-to Name</div>
-        <div class="val"><input id="ship_to_name" list="ship_name_list" placeholder="type name or code" autocomplete="off"/></div>
+        <div class="val"><span class="clearable-wrap"><input id="ship_to_name" list="ship_name_list" placeholder="type name or code" autocomplete="off"/><button type="button" class="input-clear" data-clear-target="ship_to_name" title="Clear">✕</button></span></div>
 
         <div class="lbl full-row">Customer Group</div>
         <div class="val readonly full-row"><input id="customer_group" readonly placeholder="—"/></div>
@@ -1475,7 +1496,17 @@ async function resolveCustomer(kind, field, value){
     "ship:code": "ship_to",       "ship:name": "ship_to_name",
   })[`${kind}:${field}`];
   if(!param) return;
-  const data = await apiGet(`/api/orders/customer?${param}=${encodeURIComponent(value)}`);
+  // Keep the existing Sold-to locked when the user is resolving a
+  // ship-side value — otherwise hitting Enter on a Ship-to Name
+  // whose first match in the DB belongs to a different sold_to
+  // would silently overwrite the whole customer header.
+  const qs = new URLSearchParams();
+  qs.set(param, value);
+  if (kind === "ship") {
+    const scope = ($("#sold_to")?.value || "").trim();
+    if (scope) qs.set("scope_sold_to", scope);
+  }
+  const data = await apiGet(`/api/orders/customer?${qs.toString()}`);
   if(!data || data.error){ setStatus(`${param} <b>${value}</b> not found`, "warn"); return; }
   applyCustomer(data);
 }
@@ -1505,6 +1536,9 @@ function applyCustomer(row){
   // pull up the shop.
   const state = (row.state || row.bde_state || "").toUpperCase();
   if (state) fillAgedStockPanel(state);
+  // Programmatic .value assignments above don't fire `input`, so
+  // refresh the ✕ clear buttons on the four customer inputs.
+  if (typeof syncAllClearBtns === "function") syncAllClearBtns();
 }
 
 // Aged-stock discount ladder — total proposed DC for aged rows,
@@ -3531,6 +3565,47 @@ $("#ship_to")     .addEventListener("input",  e => debouncedSuggestShip(e.target
 $("#ship_to")     .addEventListener("change", e => resolveCustomer("ship", "code", e.target.value));
 $("#ship_to_name").addEventListener("input",  e => debouncedSuggestShip(e.target.value));
 $("#ship_to_name").addEventListener("change", e => resolveCustomer("ship", "name", e.target.value));
+
+/* ────── Clearable inputs (Sold-to / Ship-to pairs) ──────
+   Each of the four customer inputs is wrapped in a .clearable-wrap
+   with a trailing ✕ button.  The button is hidden until the input
+   has a non-empty value; clicking it clears the input and fires an
+   `input` + `change` so the suggest/resolve wiring sees the empty
+   value as a user-driven clear. */
+const _CLEARABLE_IDS = ["sold_to", "sold_to_name", "ship_to", "ship_to_name"];
+function _syncClearBtn(id){
+  const el = document.getElementById(id);
+  if (!el) return;
+  const wrap = el.closest(".clearable-wrap");
+  if (!wrap) return;
+  wrap.classList.toggle("has-value", String(el.value || "").trim().length > 0);
+}
+function syncAllClearBtns(){ _CLEARABLE_IDS.forEach(_syncClearBtn); }
+_CLEARABLE_IDS.forEach(id => {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener("input",  () => _syncClearBtn(id));
+  el.addEventListener("change", () => _syncClearBtn(id));
+});
+/* Delegated click on every ✕ button — identified by data-clear-target. */
+document.addEventListener("click", (e) => {
+  const btn = e.target && e.target.closest ? e.target.closest(".input-clear") : null;
+  if (!btn) return;
+  const targetId = btn.getAttribute("data-clear-target");
+  const el = targetId && document.getElementById(targetId);
+  if (!el) return;
+  el.value = "";
+  _syncClearBtn(targetId);
+  // Fire the normal input event so suggest clears its dropdown; a
+  // change isn't fired because an empty value isn't something we
+  // want to resolve.
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.focus();
+});
+/* Initial sync on load — rehydrated / autofilled values show their
+   ✕ button right away.  applyCustomer calls syncAllClearBtns() at
+   the end of its body (see the function definition above). */
+syncAllClearBtns();
 
 /* ────────────────────────── toolbar buttons ────────────────────────── */
 $("#btnAddRow").addEventListener("click", addRow);
