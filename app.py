@@ -5421,7 +5421,7 @@ def api_orders_update(oid):
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         cur.execute(
-            "SELECT submitted_by_email, submitted_by_bde, status_sap "
+            "SELECT submitted_by_email, submitted_by_bde, status_sap, order_no "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
         row = cur.fetchone()
@@ -5606,7 +5606,12 @@ def api_orders_update(oid):
     submitted_by_bde = (row.get("submitted_by_bde") or "")
     # Short subject on the update thread too — the banner inside the
     # body already spells out "approval required" vs. "standard".
-    subject = (f"[SPRF UPDATE #{oid}] {submitted_by_bde or 'BDE'} → "
+    # Prefer the human-readable order_no (YYMMDD_NNN(Y|N)) over the
+    # raw DB id so the thread stays grouped with the original submit
+    # and matches what the approvers / Harry see in the orders list.
+    row_order_no = (row.get("order_no") or "").strip()
+    _order_label = row_order_no or f"#{oid}"
+    subject = (f"[SPRF UPDATE {_order_label}] {submitted_by_bde or 'BDE'} → "
                f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
     payload_for_mail = dict(payload)
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
