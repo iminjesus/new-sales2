@@ -230,6 +230,7 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   }
   #approveOverlay.show{ display: flex; }
+  #rejectOverlay.show{ display: flex !important; }
   #approveOverlay .modal{
     background: #fff; border-radius: 8px; box-shadow: 0 24px 64px rgba(0,0,0,.35);
     width: min(560px, 92vw); overflow: hidden;
@@ -878,6 +879,46 @@
     </div>
   </div>
 </div>
+
+<!-- Reject-with-reason modal.  Mirror of the Approve modal but
+     with a REQUIRED comment (at least 2 words, matching the same
+     bar the submitter's mgmt_reason uses).  The textarea's value
+     is POSTed as `note` to /api/orders/detail/{id}/reject and
+     persisted on reject_note. -->
+<div id="rejectOverlay" role="dialog" aria-modal="true" aria-labelledby="rejectTitle"
+     style="position:fixed;inset:0;background:rgba(15,23,42,0.55);display:none;
+            align-items:center;justify-content:center;z-index:1200;padding:20px;">
+  <div class="modal" style="background:#fff;border:1px solid #991b1b;border-radius:8px;
+                            width:min(540px,100%);max-height:88vh;overflow:auto;
+                            box-shadow:0 20px 40px rgba(15,23,42,0.25);display:flex;
+                            flex-direction:column;">
+    <div class="hdr" id="rejectTitle"
+         style="background:#dc2626;color:#fff;padding:12px 16px;font-weight:800;
+                font-size:14px;display:flex;align-items:center;gap:8px">✕ Reject SPRF</div>
+    <div class="body" style="padding:14px 16px">
+      <label for="rejectNoteText" style="display:block;font-weight:700;font-size:12.5px;color:#7f1d1d;margin-bottom:6px">
+        Reject reason <span style="color:#dc2626">*</span> (at least two words)
+      </label>
+      <textarea id="rejectNoteText"
+                placeholder="Explain why this SPRF is being rejected (e.g. 'price too low', 'need volume commitment', 'competitor evidence missing')."
+                maxlength="500"
+                style="width:100%;min-height:110px;padding:8px 10px;border:1px solid #cbd5e1;
+                       border-radius:4px;font:inherit;resize:vertical"></textarea>
+      <div class="hint" style="margin-top:6px;font-size:11.5px;color:#64748b">
+        The reason is required — it's attached to the SPRF and surfaces on the
+        orders list so the BDE sees exactly what to address if they Revive.
+      </div>
+    </div>
+    <div class="foot" style="padding:10px 16px 14px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid #e2e8f0">
+      <button type="button" id="rejectCancel"
+              style="background:#f8fafc;color:#0f172a;border:1px solid #cbd5e1;
+                     padding:6px 14px;border-radius:4px;font-weight:600;cursor:pointer">Cancel</button>
+      <button type="button" id="rejectConfirm"
+              style="background:#dc2626;color:#fff;border:1px solid #991b1b;
+                     padding:6px 14px;border-radius:4px;font-weight:700;cursor:pointer">✕ Reject</button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
 
   <!-- ═══════════════ Page nav (jump to other views) ═══════════════ -->
@@ -1227,6 +1268,25 @@
       💾 Save / Update
     </button>
     <button class="primary submit-btn" id="btnSubmit">Submit</button>
+    <!-- Cancel — removes the SPRF.  Visible only on orders the
+         viewer may cancel (own draft, own pending submit, or admin
+         Pamela / Brian).  Dimmed on an already-approved or already-
+         rejected row.  Hidden entirely on fresh / unsaved forms
+         (no DB row exists yet). -->
+    <button class="primary" id="btnCancel" hidden
+            style="background:#64748b;border-color:#475569"
+            title="Cancel this SPRF.  Drafts cancel silently; submitted orders fire a short notification to Harry + the approvers.">
+      ⨯ Cancel
+    </button>
+    <!-- Revive — only shows on a REJECTED order the viewer owns
+         (the original submitter).  Revives the SPRF back into the
+         approval queue; the approval slots and reject columns all
+         clear in one shot. -->
+    <button class="primary" id="btnRevive" hidden
+            style="background:#2563eb;border-color:#1d4ed8"
+            title="Re-open this rejected SPRF for a fresh approval pass.">
+      ↻ Revive
+    </button>
     <!-- Approve — sits at the far right of the toolbar so it's the
          last thing the reader sees.  Only actionable to the named
          approvers (Hayden / JJ / Kenny); dimmed for everybody else,
@@ -1236,6 +1296,14 @@
             style="background:#059669;border-color:#047857;
                    margin-left:auto">
       ✓ Approve
+    </button>
+    <!-- Reject — paired with Approve on the toolbar.  Same gating
+         rules (named approvers only, pending orders only); dim +
+         tooltip for everybody else so the affordance is still
+         discoverable. -->
+    <button class="primary" id="btnToolbarReject" hidden
+            style="background:#dc2626;border-color:#991b1b">
+      ✕ Reject
     </button>
   </div>
   <!-- CS toggle: only visible when Harry (or an ALL-role user) is
@@ -1259,12 +1327,18 @@
               text-align:center;">
     <div id="bottomApproveText"
          style="color:#166534;font-size:13.5px;font-weight:700;margin-bottom:10px">
-      Review the order above, then click <b>Approve</b> to sign off.
+      Review the order above, then click <b>Approve</b> to sign off — or <b>Reject</b> with a short reason.
     </div>
     <button id="btnBottomApprove" class="primary"
             style="background:#059669;border-color:#047857;
                    padding:8px 26px;font-size:14px;font-weight:800">
       ✓ Approve this SPRF
+    </button>
+    <button id="btnBottomReject" class="primary"
+            style="background:#dc2626;border-color:#991b1b;
+                   padding:8px 26px;font-size:14px;font-weight:800;
+                   margin-left:10px">
+      ✕ Reject this SPRF
     </button>
   </div>
 </div>
@@ -4552,6 +4626,11 @@ async function hydrateSubmittedOrder(oid, editMode){
      and Standard Pricing.  Sits at the far right of the toolbar
      (margin-left:auto in the CSS). */
   wireToolbarApproveBtn(aBtn, data, who);
+  /* Reject / Cancel / Revive buttons share the same hydrate hook —
+     each has its own visibility + enablement rules against the
+     current order state and the viewer's role. */
+  wireRejectBtns(data, who);
+  wireCancelReviveBtns(data, who);
   if (canEdit){
     // Unlock inputs — the form is editable in this state.
     $("#btnAddRow").disabled = false;
@@ -4663,7 +4742,9 @@ function wireApprovalPanel(order, who){
   // approval flow — hide the panel entirely so the reader sees a
   // clean "Standard Pricing" stamp on the Approval route banner
   // instead of a bureaucratic block.
-  if (order.needs_mgmt_approval !== "Y"){
+  const _nma = String(order.needs_mgmt_approval || "").toUpperCase();
+  const _isRejected = _nma === "R" || !!order.rejected_by_name;
+  if (_nma !== "Y" && !_isRejected){
     panel.hidden = true;
     const el = $("#approvalPathText");
     if (el) el.innerHTML =
@@ -4693,7 +4774,17 @@ function wireApprovalPanel(order, who){
   const recordBanner = order.approved_by_name
     ? `<div style="width:100%;background:#dcfce7;border:1px solid #16a34a;color:#166534;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✓ Approved by ${esc(order.approved_by_name)}${order.approved_at ? " · " + esc(order.approved_at) : ""}</div>` + noteBlock
     : "";
-  row.innerHTML = recordBanner + [
+  /* Rejection banner — mirror of recordBanner but red.  Shown
+     when the order carries rejected_by_name; the reject_note
+     always exists (required at reject time) so no COALESCE needed. */
+  const _rejectText = String(order.reject_note || "").trim();
+  const rejectBlock = _rejectText
+    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#fff;border:1px solid #dc2626;border-left-width:4px;border-radius:0 4px 4px 0;color:#7f1d1d;font-weight:600;font-size:12.5px;line-height:1.5;white-space:pre-wrap">📝 <b>Reject reason:</b> ${esc(_rejectText)}</div>`
+    : "";
+  const rejectBanner = order.rejected_by_name
+    ? `<div style="width:100%;background:#fee2e2;border:1px solid #dc2626;color:#991b1b;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✕ Rejected by ${esc(order.rejected_by_name)}${order.rejected_at ? " · " + esc(order.rejected_at) : ""}</div>` + rejectBlock
+    : "";
+  row.innerHTML = rejectBanner + recordBanner + [
     /* Display order (per review): Kenny → Hayden → JJ.  Slot
        columns in the DB are approved_a=Hayden, approved_b=JunJong,
        approved_c=Kenny — that assignment stays; only the render
@@ -4844,6 +4935,245 @@ async function _postApprove(order, who, srcBtn, note){
   } catch(e){
     setStatus("Approve failed: "+e, "warn");
     if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
+  }
+}
+
+/* ──────────────────────── Reject flow ────────────────────────
+   Mirror of the Approve stack above, with two differences:
+     • the reject note is REQUIRED (≥ 2 words), validated inside
+       the modal AND reconfirmed by the backend.
+     • a rejected order flips needs_mgmt_approval to 'R' and
+       surfaces a red banner on the top panel + a Revive button
+       on the toolbar (only for the original requester). */
+function wireRejectBtns(order, who){
+  const tool = document.getElementById("btnToolbarReject");
+  const bot  = document.getElementById("btnBottomReject");
+  const hide = (b) => { if (b) b.hidden = true; };
+  if (order.needs_mgmt_approval !== "Y") { hide(tool); hide(bot); return; }
+  if (order.approved_by_name || order.rejected_by_name) { hide(tool); hide(bot); return; }
+  const canReject = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
+  [tool, bot].forEach(btn => {
+    if (!btn) return;
+    btn.hidden = false;
+    const fresh = btn.cloneNode(true);
+    btn.parentNode.replaceChild(fresh, btn);
+    if (!canReject) {
+      fresh.disabled = true;
+      fresh.style.opacity = "0.45";
+      fresh.style.cursor  = "not-allowed";
+      fresh.title = "Only Hayden, JJ or Kenny can reject this SPRF.";
+      return;
+    }
+    fresh.disabled = false;
+    fresh.style.opacity = "";
+    fresh.style.cursor  = "";
+    fresh.title = "Reject this SPRF with a brief reason (at least two words).";
+    fresh.addEventListener("click", () => openRejectNoteModal(order, who, fresh));
+  });
+}
+
+function openRejectNoteModal(order, who, srcBtn){
+  const ov  = document.getElementById("rejectOverlay");
+  const ta  = document.getElementById("rejectNoteText");
+  const okB = document.getElementById("rejectConfirm");
+  const caB = document.getElementById("rejectCancel");
+  if (!ov || !ta || !okB || !caB) {
+    alert("Reject reason input is unavailable — refresh the page and try again.");
+    return;
+  }
+  ta.value = "";
+  ov.classList.add("show");
+  setTimeout(() => ta.focus(), 30);
+  const cleanup = () => {
+    ov.classList.remove("show");
+    okB.removeEventListener("click", onOk);
+    caB.removeEventListener("click", onCancel);
+    document.removeEventListener("keydown", onKey);
+  };
+  const _wordCount = (s) => String(s||"").trim().split(/\s+/).filter(Boolean).length;
+  const onOk = async () => {
+    const note = (ta.value || "").trim().slice(0, 500);
+    if (_wordCount(note) < 2) {
+      setStatus("Reject reason must be at least two words.", "warn");
+      ta.style.borderColor = "#dc2626";
+      ta.focus();
+      return;
+    }
+    cleanup();
+    await _postReject(order, who, srcBtn, note);
+  };
+  const onCancel = () => { cleanup(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { onCancel(); }
+    if ((e.key === "Enter") && (e.ctrlKey || e.metaKey)) { onOk(); }
+  };
+  okB.addEventListener("click", onOk);
+  caB.addEventListener("click", onCancel);
+  document.addEventListener("keydown", onKey);
+}
+
+async function _postReject(order, who, srcBtn, note){
+  const origText = srcBtn ? srcBtn.textContent : "";
+  if (srcBtn){ srcBtn.disabled = true; srcBtn.textContent = "Rejecting…"; }
+  try {
+    const r = await fetch(`/api/orders/detail/${order.id}/reject`, {
+      method: "POST", credentials: "same-origin",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ note }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Reject failed: ${j.error || r.statusText}`, "warn");
+      if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✕ Reject"; }
+      return;
+    }
+    const now = new Date().toISOString().slice(0,16).replace("T"," ");
+    order.needs_mgmt_approval = "R";
+    order.rejected_by_name  = j.by_name || order.rejected_by_name || "";
+    order.rejected_by_email = j.by      || order.rejected_by_email || "";
+    order.rejected_at       = now;
+    order.reject_note       = j.reject_note || note || order.reject_note || "";
+    setStatus("Rejection recorded.", "ok");
+    wireApprovalPanel(order, who);
+    wireToolbarApproveBtn(document.getElementById("btnToolbarApprove"), order, who);
+    wireRejectBtns(order, who);
+    wireCancelReviveBtns(order, who);
+    lockFormForApproval();
+  } catch(e){
+    setStatus("Reject failed: "+e, "warn");
+    if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✕ Reject"; }
+  }
+}
+
+/* ──────────────────────── Cancel + Revive ────────────────────────
+   Cancel: requester or admin (Pamela / Brian) can remove a pending
+   SPRF or a draft.  Approved / rejected rows disable the button.
+   Revive: owner only, on a Rejected row; resets the reject
+   columns and bumps the order back into the approval queue. */
+function wireCancelReviveBtns(order, who){
+  const cBtn = document.getElementById("btnCancel");
+  const rBtn = document.getElementById("btnRevive");
+  if (!cBtn || !rBtn) return;
+
+  if (!order || !order.id){
+    cBtn.hidden = true;
+    rBtn.hidden = true;
+    return;
+  }
+  const nma = String(order.needs_mgmt_approval || "").toLowerCase();
+  const isApproved = !!order.approved_by_name;
+  const isRejected = !!order.rejected_by_name;
+  const isDraft    = nma === "temp";
+  const myEmail = (who && (who.email || "")).toLowerCase().trim();
+  const ownerEmail = String(order.submitted_by_email || "").toLowerCase().trim();
+  const isOwner = (!!ownerEmail && !!myEmail && myEmail === ownerEmail)
+                   || (!ownerEmail && !myEmail);
+  const isAdmin  = !!(who && who.is_price_editor);
+  const isApprover = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
+  const dim = (btn, title) => {
+    btn.disabled = true;
+    btn.style.opacity = "0.45";
+    btn.style.cursor  = "not-allowed";
+    btn.title = title || "";
+  };
+  const live = (btn, title) => {
+    btn.disabled = false;
+    btn.style.opacity = "";
+    btn.style.cursor  = "";
+    btn.title = title || "";
+  };
+
+  // Cancel: shown when the viewer could cancel, and gated by state.
+  const canSeeCancel = isOwner || isAdmin || isApprover;
+  if (canSeeCancel){
+    cBtn.hidden = false;
+    const fresh = cBtn.cloneNode(true);
+    cBtn.parentNode.replaceChild(fresh, cBtn);
+    if (isApproved){
+      dim(fresh, "This order is already approved — can't be cancelled.");
+    } else if (isRejected){
+      dim(fresh, "This order is already rejected — use Revive to re-open it.");
+    } else {
+      live(fresh, isDraft
+        ? "Discard this draft.  Only you can see it, so no notification goes out."
+        : "Cancel this SPRF — a short notice goes to Harry and the approvers.");
+      fresh.addEventListener("click", () => _confirmAndCancel(order, who));
+    }
+  } else {
+    cBtn.hidden = true;
+  }
+
+  // Revive: only shown on Rejected rows, enabled only for the owner.
+  if (isRejected){
+    rBtn.hidden = false;
+    const fresh = rBtn.cloneNode(true);
+    rBtn.parentNode.replaceChild(fresh, rBtn);
+    if (isApproved) {
+      dim(fresh, "Already approved — nothing to revive.");
+    } else if (!isOwner) {
+      dim(fresh, "Only the original requester can revive this SPRF.");
+    } else {
+      live(fresh, "Re-open this rejected SPRF for a fresh approval pass.");
+      fresh.addEventListener("click", () => _confirmAndRevive(order, who));
+    }
+  } else {
+    rBtn.hidden = true;
+  }
+}
+
+async function _confirmAndCancel(order, who){
+  const nma = String(order.needs_mgmt_approval || "").toLowerCase();
+  const msg = (nma === "temp")
+    ? "Discard this draft?  It won't be recoverable."
+    : "Cancel this SPRF?  Harry and the approvers will get a short notification.";
+  if (!confirm(msg)) return;
+  const btn = document.getElementById("btnCancel");
+  const txt = btn ? btn.textContent : "";
+  if (btn){ btn.disabled = true; btn.textContent = "Cancelling…"; }
+  try {
+    const r = await fetch(`/api/orders/detail/${order.id}/cancel`, {
+      method: "POST", credentials: "same-origin",
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Cancel failed: ${j.error || r.statusText}`, "warn");
+      if (btn){ btn.disabled = false; btn.textContent = txt || "⨯ Cancel"; }
+      return;
+    }
+    setStatus("Cancelled.", "ok");
+    // Short pause to let the status banner render, then jump back
+    // to the list page — the just-cancelled row is gone from the DB
+    // so staying on the detail page would 404 on the next refresh.
+    setTimeout(() => { location.href = "/orders_list"; }, 500);
+  } catch(e){
+    setStatus("Cancel failed: "+e, "warn");
+    if (btn){ btn.disabled = false; btn.textContent = txt || "⨯ Cancel"; }
+  }
+}
+
+async function _confirmAndRevive(order, who){
+  if (!confirm("Revive this rejected SPRF?  It will go back into the approval queue (approval slots reset).")) return;
+  const btn = document.getElementById("btnRevive");
+  const txt = btn ? btn.textContent : "";
+  if (btn){ btn.disabled = true; btn.textContent = "Reviving…"; }
+  try {
+    const r = await fetch(`/api/orders/detail/${order.id}/revive`, {
+      method: "POST", credentials: "same-origin",
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok){
+      setStatus(`Revive failed: ${j.error || r.statusText}`, "warn");
+      if (btn){ btn.disabled = false; btn.textContent = txt || "↻ Revive"; }
+      return;
+    }
+    setStatus("SPRF revived.", "ok");
+    // Reload the page so every panel re-reads the cleared state
+    // (approval chips reset to Pending, red banner gone, the
+    // Submit flow re-enters normal mode).
+    setTimeout(() => { location.reload(); }, 400);
+  } catch(e){
+    setStatus("Revive failed: "+e, "warn");
+    if (btn){ btn.disabled = false; btn.textContent = txt || "↻ Revive"; }
   }
 }
 

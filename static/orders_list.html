@@ -311,6 +311,14 @@ function renderRows(){
       const addDC = +r.add_dc_pct || 0;
       if (!r.has_additional_dc){
         apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard</span>`;
+      } else if (r.rejected_by_name){
+        /* Rejection trumps approved_by_name (approve is cleared on
+           reject anyway) — surface the rejector + timestamp with a
+           red pill so the state is unmistakable at a glance. */
+        const at = (r.rejected_at || "").slice(0, 16);
+        apprCell = `<span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">✕ Rejected</span>`
+                 + `<br><b style="color:#7f1d1d">${escapeHtml(r.rejected_by_name)}</b>`
+                 + (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
       } else if (r.approved_by_name){
         const at = (r.approved_at || "").slice(0, 16);
         apprCell = `<b>${escapeHtml(r.approved_by_name)}</b>` +
@@ -372,13 +380,36 @@ function renderRows(){
              <span style="color:#94a3b8"> · ${escapeHtml(m.action || "edited")}</span>
            </div>`).join("")
         : `<small style="color:#94a3b8">—</small>`;
-      /* Approver note — free-form comment captured in the approve
-         modal on the SPRF and saved to submitted_orders.approval_note.
-         Only meaningful once the order is approved (approved_by_name
-         set); otherwise the cell reads as a dash. */
-      const _note = String(r.approval_note || "").trim();
-      const noteCell = _note
-        ? `<div style="font-size:11px;line-height:1.4;color:#065f46;background:#ecfdf5;padding:4px 6px;border-radius:3px;white-space:pre-wrap">${escapeHtml(_note)}</div>`
+      /* Note cell combines two things so the reader can judge at a
+         glance:
+           1. The submitter's mgmt_reason (why they're asking) —
+              amber tint, always on if present.
+           2. The approver / rejector's note — green on approve,
+              red on reject.  Required for reject (≥ 2 words);
+              optional for approve.  */
+      const _reason   = String(r.mgmt_reason || "").trim();
+      const _approvalNote = String(r.approval_note || "").trim();
+      const _rejectNote   = String(r.reject_note  || "").trim();
+      const _blocks = [];
+      if (_reason) {
+        _blocks.push(
+          `<div style="font-size:11px;line-height:1.35;color:#78350f;background:#fef3c7;padding:4px 6px;border-radius:3px;white-space:pre-wrap">` +
+          `<b style="color:#7c2d12">Reason:</b> ${escapeHtml(_reason)}</div>`
+        );
+      }
+      if (_rejectNote) {
+        _blocks.push(
+          `<div style="font-size:11px;line-height:1.35;color:#7f1d1d;background:#fee2e2;padding:4px 6px;border-radius:3px;white-space:pre-wrap;margin-top:3px">` +
+          `<b>Reject:</b> ${escapeHtml(_rejectNote)}</div>`
+        );
+      } else if (_approvalNote) {
+        _blocks.push(
+          `<div style="font-size:11px;line-height:1.4;color:#065f46;background:#ecfdf5;padding:4px 6px;border-radius:3px;white-space:pre-wrap;margin-top:3px">` +
+          `<b>Approver:</b> ${escapeHtml(_approvalNote)}</div>`
+        );
+      }
+      const noteCell = _blocks.length
+        ? _blocks.join("")
         : `<small style="color:#94a3b8">—</small>`;
       const _isHl = _hlOid && String(r.id) === _hlOid;
       const _rowStyle = _isHl

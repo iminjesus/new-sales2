@@ -4407,6 +4407,17 @@ def _ensure_submitted_orders_table():
             # only while an old row that predates the column is
             # still on file — new rows always carry Y or N.
             ("rebateable",          "CHAR(1) NULL"),
+            # Rejection path — mirror of the approved_by_* columns.
+            # Set when a MGMT_APPROVER clicks Reject (reject_note is
+            # required, 2+ words validated in the endpoint).  When
+            # rejected, needs_mgmt_approval flips to 'R' so the list
+            # view can filter on it without unpacking payload_json.
+            # Revive by the original requester clears all four
+            # columns and flips needs_mgmt_approval back to 'Y'.
+            ("rejected_by_email",   "VARCHAR(120) NULL"),
+            ("rejected_by_name",    "VARCHAR(60) NULL"),
+            ("rejected_at",         "DATETIME NULL"),
+            ("reject_note",         "VARCHAR(500) NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -4524,6 +4535,102 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
       </div>
     </div>
     """.strip()
+
+def _reject_email_html(oid, order, rejector_name, rejector_email, note, base_url):
+    """Rejection notification — compact, red-tinted mirror of
+    _approval_email_html.  Carries the mandatory reject reason front
+    and centre so the BDE sees exactly why the sign-off was refused."""
+    order_no = order.get("order_no") or f"#{oid}"
+    sold_to_name = order.get("sold_to_name") or ""
+    sold_to = order.get("sold_to") or ""
+    bde   = order.get("submitted_by_bde") or ""
+    grand = order.get("grand_total") or ""
+    link  = f"{base_url}/orders_list#o={oid}" if base_url else ""
+    ts    = datetime.now().strftime("%d/%m/%Y %H:%M")
+    def _chip(label, value, colour="#0f172a"):
+        return (f'<span style="display:inline-block;margin:0 10px 4px 0">'
+                f'<span style="color:#6b7280;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;margin-right:4px">{_esc_html(label)}</span>'
+                f'<b style="color:{colour};font-size:12.5px">{_esc_html(value)}</b>'
+                f'</span>')
+    return f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:900px">
+      <div style="background:#dc2626;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
+        ✕ SPRF {_esc_html(order_no)} — rejected by {_esc_html(rejector_name)}
+      </div>
+      <div style="padding:10px 12px;background:#fef2f2;border:1px solid #dc2626;border-top:none">
+        <div style="line-height:1.8">
+          {_chip("Rejected",  ts, "#991b1b")}
+          {_chip("Rejected by", rejector_name, "#991b1b")}
+          {_chip("BDE",       bde)}
+          {_chip("Customer",  f"{sold_to_name} ({sold_to})")}
+          {_chip("Grand",     grand, "#0b3d91")}
+        </div>
+        <div style="margin-top:8px;padding:8px 10px;background:#fee2e2;
+                    border:1px solid #dc2626;border-radius:3px;
+                    font-size:12px;color:#7f1d1d">
+          <b style="color:#7f1d1d">Reject reason:</b> {_esc_html(note or "")}
+        </div>
+        <div style="margin-top:8px;font-size:11.5px">
+          {('<a href="' + link + '" style="background:#dc2626;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open in Orders list</a>') if link else ''}
+          <span style="color:#6b7280;margin-left:12px">The original requester can <b>Revive</b> this SPRF from the detail page to re-submit after addressing the comment.</span>
+        </div>
+      </div>
+    </div>
+    """.strip()
+
+
+def _cancel_email_html(oid, row, actor_email, base_url):
+    """Short cancellation notice sent to the thread when a non-draft
+    order is cancelled.  Draft cancels never route here — they're
+    private to the requester and leave no trace."""
+    order_no = row.get("order_no") or f"#{oid}"
+    sold_to_name = row.get("sold_to_name") or ""
+    sold_to = row.get("sold_to") or ""
+    bde = row.get("submitted_by_bde") or ""
+    ts  = datetime.now().strftime("%d/%m/%Y %H:%M")
+    return f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:720px">
+      <div style="background:#64748b;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
+        ⨯ SPRF {_esc_html(order_no)} — cancelled
+      </div>
+      <div style="padding:10px 12px;background:#f8fafc;border:1px solid #64748b;border-top:none;font-size:12.5px;line-height:1.7">
+        <div><b>Cancelled by:</b> {_esc_html(actor_email or '—')} · {ts}</div>
+        <div><b>BDE:</b> {_esc_html(bde)}</div>
+        <div><b>Customer:</b> {_esc_html(sold_to_name)} ({_esc_html(sold_to)})</div>
+        <div style="margin-top:6px;color:#475569">No approval or SAP action is required — the SPRF has been removed from the queue.</div>
+      </div>
+    </div>
+    """.strip()
+
+
+def _revive_email_html(oid, snap, actor_email, base_url):
+    """Short notice when a rejected order is revived — approvers
+    should know the SPRF is back on the queue."""
+    order_no = snap.get("order_no") or f"#{oid}"
+    sold_to_name = snap.get("sold_to_name") or ""
+    sold_to = snap.get("sold_to") or ""
+    bde = snap.get("submitted_by_bde") or ""
+    reason = snap.get("mgmt_reason") or ""
+    link = f"{base_url}/order?id={oid}" if base_url else ""
+    ts  = datetime.now().strftime("%d/%m/%Y %H:%M")
+    return f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:720px">
+      <div style="background:#2563eb;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
+        ↻ SPRF {_esc_html(order_no)} — revived by requester
+      </div>
+      <div style="padding:10px 12px;background:#eff6ff;border:1px solid #2563eb;border-top:none;font-size:12.5px;line-height:1.7">
+        <div><b>Revived by:</b> {_esc_html(actor_email or '—')} · {ts}</div>
+        <div><b>BDE:</b> {_esc_html(bde)}</div>
+        <div><b>Customer:</b> {_esc_html(sold_to_name)} ({_esc_html(sold_to)})</div>
+        {('<div style="margin-top:6px;color:#334155"><b>Original reason:</b> ' + _esc_html(reason) + '</div>') if reason else ''}
+        <div style="margin-top:8px">
+          {('<a href="' + link + '" style="background:#2563eb;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open SPRF</a>') if link else ''}
+          <span style="color:#6b7280;margin-left:10px">Approval slots have been reset.</span>
+        </div>
+      </div>
+    </div>
+    """.strip()
+
 
 def _submitted_order_email_html(oid, order, base_url):
     """Compact HTML notification — horizontal chip layout instead of a
@@ -5165,6 +5272,7 @@ def api_orders_list():
             f"       approved_a, approved_b, approved_c, "
             f"       approved_by_email, approved_by_name, approved_at, "
             f"       approval_note, "
+            f"       rejected_by_email, rejected_by_name, rejected_at, reject_note, "
             f"       rebateable, mgmt_reason "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
@@ -5263,7 +5371,7 @@ def api_orders_list():
             except Exception:
                 pass
         for r in rows:
-            for k in ("submitted_at", "status_changed_at", "approved_at"):
+            for k in ("submitted_at", "status_changed_at", "approved_at", "rejected_at"):
                 v = r.get(k)
                 if v is not None:
                     try: r[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -5327,6 +5435,7 @@ def api_orders_detail(oid):
             "       approved_c, approved_c_at, "
             "       approved_by_email, approved_by_name, approved_at, "
             "       approval_note, "
+            "       rejected_by_email, rejected_by_name, rejected_at, reject_note, "
             "       order_no, rebateable, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
@@ -5336,7 +5445,7 @@ def api_orders_detail(oid):
             return jsonify({"error": "not found"}), 404
         for k in ("submitted_at", "status_changed_at",
                   "approved_a_at", "approved_b_at", "approved_c_at",
-                  "approved_at"):
+                  "approved_at", "rejected_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -5808,6 +5917,259 @@ def api_orders_approve(oid):
         "approved_by_name":  (order_snapshot or {}).get("approved_by_name")  or approver_name,
         "approval_note":     (order_snapshot or {}).get("approval_note")     or approval_note or "",
     })
+
+
+def _count_words(s: str) -> int:
+    """Simple whitespace-split word counter used to validate the
+    reject note (2 words minimum, mirroring the mgmt_reason rule)."""
+    return len([w for w in str(s or "").strip().split() if w])
+
+
+@app.post("/api/orders/detail/<int:oid>/reject")
+def api_orders_reject(oid):
+    """Reject this order.  Any MGMT_APPROVER (Hayden / JJ / Kenny)
+    may call this.  Body: { "note": "<at least 2 words>" }.  The note
+    is required (2 words minimum, same bar the submitter's
+    mgmt_reason uses).  The row flips to needs_mgmt_approval='R'
+    and the four rejected_* columns record who / when / why.  A
+    confirmation email mirroring the approve flow goes to Harry,
+    the other approvers, the BDE and the read-only reviewers.
+
+    A rejected order can be revived by the original requester via
+    /api/orders/detail/<oid>/revive — until then it stays visible
+    on the list with a red "Rejected" badge and the reject_note on
+    display."""
+    who = (_bde_from_request() or "").strip().lower()
+    rejector_col = None   # not persisted but drives the "which named approver" label
+    rejector_name = None
+    if   who == MGMT_APPROVER_EMAILS[0]: rejector_name = "Hayden"
+    elif who == MGMT_APPROVER_EMAILS[1]: rejector_name = "JJ"
+    elif who == MGMT_APPROVER_EMAILS[2]: rejector_name = "Kenny"
+    if not rejector_name:
+        return jsonify({"error": "only the named approvers can reject"}), 403
+    try:
+        _body = request.get_json(silent=True) or {}
+    except Exception:
+        _body = {}
+    note = str(_body.get("note") or "").strip()[:500]
+    if _count_words(note) < 2:
+        return jsonify({"error": "Reject reason must be at least two words."}), 400
+
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    snap = None
+    try:
+        cur.execute(
+            "UPDATE submitted_orders SET "
+            "  needs_mgmt_approval = 'R', "
+            "  rejected_by_email   = %s, "
+            "  rejected_by_name    = %s, "
+            "  rejected_at         = NOW(), "
+            "  reject_note         = %s "
+            "WHERE id = %s "
+            "  AND needs_mgmt_approval = 'Y' "
+            "  AND approved_by_name IS NULL",
+            (who, rejector_name, note, oid),
+        )
+        if cur.rowcount == 0:
+            return jsonify({"error": "not found, already approved, or doesn't need approval"}), 404
+        conn.commit()
+        cur.execute(
+            "SELECT id, order_no, submitted_by_bde, submitted_by_email, "
+            "       sold_to, sold_to_name, grand_total, "
+            "       rejected_by_email, rejected_by_name, rejected_at, "
+            "       reject_note "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,),
+        )
+        snap = cur.fetchone()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    if snap is not None:
+        try:
+            base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+        except Exception:
+            base_url = ""
+        order_no = snap.get("order_no") or f"#{oid}"
+        bde_email = (snap.get("submitted_by_email") or "").strip().lower()
+        to_list = [HARRY_CS_EMAIL] + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
+        cc      = ([bde_email] if bde_email else []) + list(SPRF_READONLY_CC)
+        subject = (f"[SPRF REJECTED {order_no}] {rejector_name} · "
+                   f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
+        try:
+            _send_mail_async(
+                to_list, cc, subject,
+                _reject_email_html(oid, snap, rejector_name, who, note, base_url),
+            )
+        except Exception as e:
+            print(f"[reject] mail queue failed: {e}")
+
+    return jsonify({
+        "ok": True, "by": who, "by_name": rejector_name,
+        "reject_note": note,
+    })
+
+
+@app.post("/api/orders/detail/<int:oid>/cancel")
+def api_orders_cancel(oid):
+    """Delete a pending SPRF.  Allowed when the caller is:
+      • the original requester (submitted_by_email match), OR
+      • a PRICE_EDITOR (Pamela / Brian), who act as admin on behalf
+        of the requester
+    AND the order is NOT already approved or rejected.  Drafts
+    (needs_mgmt_approval='temp') cancel silently with no notification
+    — the draft was never on anyone else's inbox.  A submitted order
+    being cancelled sends a short notification to Harry, the
+    approvers and read-only reviewers so threads don't dead-end."""
+    who = (_bde_from_request() or "").strip().lower()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT id, order_no, submitted_by_email, submitted_by_bde, "
+            "       sold_to, sold_to_name, needs_mgmt_approval, "
+            "       approved_by_name, rejected_by_name "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        if row.get("approved_by_name"):
+            return jsonify({"error": "an approved SPRF can't be cancelled"}), 403
+        if row.get("rejected_by_name"):
+            return jsonify({"error": "a rejected SPRF can't be cancelled — Revive it to re-submit"}), 403
+        owner  = (row.get("submitted_by_email") or "").strip().lower()
+        is_owner    = (who and who == owner) or (not who and not owner)
+        is_admin    = who in PRICE_EDITOR_EMAILS
+        is_approver = who in {e.lower() for e in MGMT_APPROVER_EMAILS}
+        if not (is_owner or is_admin or is_approver):
+            return jsonify({"error": "only the requester, Pamela or Brian can cancel this SPRF"}), 403
+        state = (row.get("needs_mgmt_approval") or "").lower()
+        is_draft = (state == "temp")
+
+        cur.execute("DELETE FROM submitted_orders WHERE id = %s", (oid,))
+        conn.commit()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    # Draft cancels never notify — the draft was private to the
+    # requester anyway.  Submitted-order cancels notify the usual
+    # thread so an in-flight approver doesn't keep hunting for the
+    # row that just vanished.
+    if not is_draft:
+        try:
+            base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+        except Exception:
+            base_url = ""
+        order_no = row.get("order_no") or f"#{oid}"
+        bde_email = (row.get("submitted_by_email") or "").strip().lower()
+        to_list = [HARRY_CS_EMAIL] + list(MGMT_APPROVER_EMAILS)
+        cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
+        subject = (f"[SPRF CANCELLED {order_no}] by {who or 'requester'} · "
+                   f"{row.get('sold_to_name','')} ({row.get('sold_to','')})")
+        body_html = _cancel_email_html(oid, row, who, base_url)
+        try:
+            _send_mail_async(to_list, cc, subject, body_html)
+        except Exception as e:
+            print(f"[cancel] mail queue failed: {e}")
+
+    return jsonify({"ok": True, "cancelled_id": oid, "was_draft": is_draft})
+
+
+@app.post("/api/orders/detail/<int:oid>/revive")
+def api_orders_revive(oid):
+    """Re-open a rejected SPRF for the original requester.  Clears
+    all rejected_* columns and flips needs_mgmt_approval back to 'Y'
+    so the order re-enters the approval queue.  A notification email
+    goes to Harry + approvers + read-only reviewers so they know a
+    rejected order is back on the table.
+
+    Only the original requester may revive — admins (Pamela / Brian)
+    don't act on this one, since a revive implies the submitter has
+    decided to push back on the rejection themselves."""
+    who = (_bde_from_request() or "").strip().lower()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    snap = None
+    try:
+        cur.execute(
+            "SELECT id, submitted_by_email, needs_mgmt_approval, "
+            "       approved_by_name, rejected_by_name "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        owner = (row.get("submitted_by_email") or "").strip().lower()
+        if (who or owner) and who != owner:
+            return jsonify({"error": "only the original requester can revive a rejected SPRF"}), 403
+        if row.get("approved_by_name"):
+            return jsonify({"error": "an approved SPRF can't be revived"}), 400
+        if (row.get("needs_mgmt_approval") or "").upper() != "R":
+            return jsonify({"error": "this SPRF isn't in a rejected state"}), 400
+
+        cur.execute(
+            "UPDATE submitted_orders SET "
+            "  needs_mgmt_approval = 'Y', "
+            "  rejected_by_email   = NULL, "
+            "  rejected_by_name    = NULL, "
+            "  rejected_at         = NULL, "
+            "  reject_note         = NULL, "
+            "  approved_a = 'N', approved_a_at = NULL, "
+            "  approved_b = 'N', approved_b_at = NULL, "
+            "  approved_c = 'N', approved_c_at = NULL, "
+            "  approved_by_email = NULL, approved_by_name = NULL, "
+            "  approved_at = NULL, approval_note = NULL "
+            "WHERE id = %s",
+            (oid,),
+        )
+        conn.commit()
+        cur.execute(
+            "SELECT id, order_no, submitted_by_bde, submitted_by_email, "
+            "       sold_to, sold_to_name, grand_total, mgmt_reason "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,),
+        )
+        snap = cur.fetchone()
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+    if snap is not None:
+        try:
+            base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+        except Exception:
+            base_url = ""
+        order_no = snap.get("order_no") or f"#{oid}"
+        bde_email = (snap.get("submitted_by_email") or "").strip().lower()
+        to_list = [HARRY_CS_EMAIL] + list(MGMT_APPROVER_EMAILS)
+        cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
+        subject = (f"[SPRF REVIVED {order_no}] by {who or 'requester'} · "
+                   f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
+        body_html = _revive_email_html(oid, snap, who, base_url)
+        try:
+            _send_mail_async(to_list, cc, subject, body_html)
+        except Exception as e:
+            print(f"[revive] mail queue failed: {e}")
+
+    return jsonify({"ok": True, "revived_id": oid})
 
 
 @app.get("/api/orders/whoami")
