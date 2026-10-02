@@ -4660,10 +4660,10 @@ def _submitted_order_email_html(oid, order, base_url):
       </div>
       <div style="padding:10px 12px;background:#fff;border:1px solid #e5e7eb;border-top:none">
         <!-- Row 1 — WHO / WHEN / WHERE.  Matches the left half of
-             the Submitted-Orders table (Order # is in the banner
-             above; Sold-to lives there too so it isn't repeated). -->
+             the Submitted-Orders table.  Order # and Sold-to both
+             live in the banner above so they're intentionally NOT
+             repeated as chips here. -->
         <div style="line-height:1.8">
-          {_chip("Order #",   order_no)}
           {_chip("Requested", order.get("submitted_at") or "")}
           {_chip("Requester", header.get("requester_email") or "")}
           {_chip("BDE",       header.get("bde_name") or "")}

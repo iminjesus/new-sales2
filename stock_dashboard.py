@@ -4726,6 +4726,18 @@ function toggleExpandTable() {
     const btn = document.getElementById('btn-expand-tbl');
     btn.innerHTML = on ? '✕' : '⛶';
     btn.title = on ? 'Return to split view' : 'Expand table full-screen';
+    /* After entering full-screen mode the card is now 100 vw wide
+       instead of ~1fr of the grid, so the column widths saved for
+       the normal layout leave dead space on the right (very
+       visible on a dual-monitor window).  Re-run the autofit so
+       the table stretches across the newly-available width.  On
+       exit we restore the previous widths from the snapshot via
+       autofitColumns' toggle semantics. */
+    requestAnimationFrame(() => {
+        if (typeof _applyAutofitLayoutOnce === 'function') {
+            _applyAutofitLayoutOnce();
+        }
+    });
 }
 /* Column autofit — TOGGLE.  First click: fit columns to container.
    Second click: restore whatever widths the table had before the
@@ -4768,8 +4780,18 @@ function _applyAutofitLayoutOnce() {
         const identSum = IDENT_WIDTHS.reduce((a, b) => a + b, 0);
         const dataNeed = need.slice(IDENT_COUNT).reduce((a, b) => a + b, 0);
         const dataAvail = Math.max(160, avail - identSum);
+        /* Scale data columns to fill the available width.  Previously
+           capped at 1 so a wide (dual-monitor) window left the right
+           half of the page as dead space — the table sat at its
+           natural width, which usually tops out around a single
+           monitor.  Now we let scale grow up to 2.5× so the Fit
+           button actually spreads the table across the full card
+           (including the second monitor when the browser spans
+           both).  A tiny table at 1.5k natural fitted into a 3.6k
+           card would otherwise scale 2.4× — well within what reads
+           as "balanced numeric table" rather than "runaway cells". */
         let scale = dataAvail / (dataNeed || 1);
-        if (scale > 1) scale = 1;
+        if (scale > 2.5) scale = 2.5;
         let total = 0;
         cols.forEach((c, i) => {
             let w;
