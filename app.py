@@ -5099,8 +5099,17 @@ def api_orders_list():
     # NSW ship-to SPRF alongside her own — same as anyone else the
     # mapping lists.
     who = (_bde_from_request() or "").strip().lower()
+    # No Cloudflare Access header means the caller is coming through
+    # the office network / Tailscale / local-dev; mirror the dashboard
+    # (api_whoami) rule and grant full scope.  Otherwise someone
+    # browsing from inside the office — Brian, Pamela, Minku, Harry —
+    # would see an empty list because the empty email never matches
+    # the SPRF_READONLY_CC / MGMT_APPROVER_EMAILS sets, and the
+    # fallback branch scopes to submitted_by_email = '' which is
+    # almost always no rows.
     global_scope = (
-        who in {e.lower() for e in MGMT_APPROVER_EMAILS}
+        not who
+        or who in {e.lower() for e in MGMT_APPROVER_EMAILS}
         or who in {e.lower() for e in SPRF_READONLY_CC}
         or who == HARRY_CS_EMAIL.lower()
         or who in {e.lower() for e in DEV_ADMIN_EMAILS}
@@ -5881,12 +5890,16 @@ def api_orders_list_excel():
 
     # Same role-based scoping as api_orders_list — the Excel export
     # must reflect what the caller can see on-screen, not the whole
-    # table.
+    # table.  Office / local / Tailscale callers (no CF Access header)
+    # fall into global scope so a Brian-at-his-desk-style download
+    # mirrors what the on-screen list shows.
     who = (_bde_from_request() or "").strip().lower()
     global_scope = (
-        who in {e.lower() for e in MGMT_APPROVER_EMAILS}
+        not who
+        or who in {e.lower() for e in MGMT_APPROVER_EMAILS}
         or who in {e.lower() for e in SPRF_READONLY_CC}
         or who == HARRY_CS_EMAIL.lower()
+        or who in {e.lower() for e in DEV_ADMIN_EMAILS}
     )
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
