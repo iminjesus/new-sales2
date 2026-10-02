@@ -101,18 +101,45 @@
       </a>
     </div>
     <div class="filters">
-      <span class="lbl">Status:</span>
-      <select id="fStatus">
+      <span class="lbl">SAP:</span>
+      <select id="fStatus" title="SAP-entered flag.  Pending = SAP hasn't keyed it; SAP entered = Harry flipped the flag.">
         <option value="">All</option>
         <option value="N">Pending (N)</option>
         <option value="Y">SAP entered (Y)</option>
+      </select>
+      <span class="lbl">Appr:</span>
+      <select id="fApproval" title="Approval state — client-side filter over everything already loaded.">
+        <option value="">All</option>
+        <option value="pending">⏳ Pending</option>
+        <option value="approved">✓ Approved</option>
+        <option value="rejected">✕ Rejected</option>
+        <option value="standard">Standard</option>
+        <option value="draft">📝 Draft</option>
+      </select>
+      <span class="lbl">Reb:</span>
+      <select id="fReb" title="Rebateable flag captured on the SPRF header.">
+        <option value="">All</option>
+        <option value="Y">Y</option>
+        <option value="N">N</option>
+      </select>
+      <span class="lbl">Approver:</span>
+      <select id="fApprover" title="Filter to orders signed off (or rejected) by this named approver.  Populated from the rows currently loaded.">
+        <option value="">All</option>
+      </select>
+      <span class="lbl">Requester:</span>
+      <select id="fRequester" title="Signed-in user that filled the SPRF.  Populated from the rows currently loaded.">
+        <option value="">All</option>
+      </select>
+      <span class="lbl">BDE:</span>
+      <select id="fBde" title="BDE mapped to the ship-to on the SPRF.  Populated from the rows currently loaded.">
+        <option value="">All</option>
       </select>
       <span class="lbl">From:</span>
       <input id="fDateFrom" type="date" title="Include orders submitted on/after this date">
       <span class="lbl">To:</span>
       <input id="fDateTo" type="date" title="Include orders submitted on/before this date">
       <span class="lbl">Search:</span>
-      <input id="fSearch" type="text" placeholder="BDE, sold-to, ship-to, code…" style="min-width:220px">
+      <input id="fSearch" type="text" placeholder="BDE, sold-to, ship-to, code…" style="min-width:200px">
       <button id="btnExcel" title="Download the currently-filtered orders as an XLSX file"
               style="margin-left:8px;padding:4px 12px;background:#0f766e;color:#fff;border:1px solid #115e59;border-radius:4px;font-weight:700;cursor:pointer">
         ⬇ Excel
@@ -284,12 +311,82 @@ async function loadOrders(){
 
 function renderRows(){
   const q = ($("#fSearch").value || "").toLowerCase().trim();
-  const filtered = q ? _rowsCache.filter(r => {
+  const fApp = ($("#fApproval")?.value || "").toLowerCase().trim();
+  const fReb = ($("#fReb")?.value || "").toUpperCase().trim();
+  const fApprover  = ($("#fApprover")?.value || "").toLowerCase().trim();
+  const fRequester = ($("#fRequester")?.value || "").toLowerCase().trim();
+  const fBde       = ($("#fBde")?.value || "").toLowerCase().trim();
+
+  /* Repopulate the dynamic dropdowns from the rows currently in cache
+     (preserving the current selection).  Doing it inside renderRows
+     keeps the dropdowns in sync with whatever date-range / SAP filter
+     the backend narrowed to — if the user hasn't picked yet the lists
+     show every candidate; after a pick we keep that value visible even
+     if it's momentarily out of scope. */
+  const _opt = (v, label) => `<option value="${escapeHtml(v)}">${escapeHtml(label || v)}</option>`;
+  function _buildSelect(sel, values, current){
+    if (!sel) return;
+    const sorted = Array.from(new Set(values.filter(Boolean))).sort(
+      (a,b) => String(a).toLowerCase().localeCompare(String(b).toLowerCase())
+    );
+    const keepCurrent = current && !sorted.includes(current);
+    const html = `<option value="">All</option>` +
+                 sorted.map(v => _opt(v)).join("") +
+                 (keepCurrent ? _opt(current, current + " · (not in current scope)") : "");
+    if (sel.innerHTML.trim() !== html.trim()){
+      sel.innerHTML = html;
+      sel.value = current;
+    }
+  }
+  _buildSelect(
+    document.getElementById("fApprover"),
+    _rowsCache.flatMap(r => [r.approved_by_name, r.rejected_by_name]),
+    fApprover ? _rowsCache.map(r => (r.approved_by_name || r.rejected_by_name || "")).find(v => (v || "").toLowerCase() === fApprover) || fApprover : "",
+  );
+  _buildSelect(
+    document.getElementById("fRequester"),
+    _rowsCache.map(r => r.requester_email || r.submitted_by_email || ""),
+    fRequester ? _rowsCache.map(r => (r.requester_email || r.submitted_by_email || "")).find(v => (v || "").toLowerCase() === fRequester) || fRequester : "",
+  );
+  _buildSelect(
+    document.getElementById("fBde"),
+    _rowsCache.map(r => r.submitted_by_bde || ""),
+    fBde ? _rowsCache.map(r => r.submitted_by_bde || "").find(v => (v || "").toLowerCase() === fBde) || fBde : "",
+  );
+
+  const matchesApproval = (r) => {
+    if (!fApp) return true;
+    const nma = String(r.needs_mgmt_approval || "").toLowerCase();
+    if (fApp === "draft")    return nma === "temp";
+    if (fApp === "rejected") return !!r.rejected_by_name || nma === "r";
+    if (fApp === "approved") return !!r.approved_by_name;
+    if (fApp === "pending")  return nma === "y" && !r.approved_by_name && !r.rejected_by_name;
+    if (fApp === "standard") return !r.has_additional_dc && nma !== "temp"
+                                     && !r.approved_by_name && !r.rejected_by_name;
+    return true;
+  };
+  const matchesReb = (r) =>
+    !fReb || String(r.rebateable || "").toUpperCase() === fReb;
+  const matchesApprover = (r) =>
+    !fApprover || String(r.approved_by_name || "").toLowerCase() === fApprover
+               || String(r.rejected_by_name || "").toLowerCase() === fApprover;
+  const matchesRequester = (r) =>
+    !fRequester || String(r.requester_email || r.submitted_by_email || "").toLowerCase() === fRequester;
+  const matchesBde = (r) =>
+    !fBde || String(r.submitted_by_bde || "").toLowerCase() === fBde;
+  const matchesSearch = (r) => {
+    if (!q) return true;
     return [r.submitted_by_bde, r.sold_to, r.sold_to_name, r.ship_to,
             r.ship_to_name, r.state, String(r.id), r.order_no,
-            r.approved_by_name, r.approval_note]
+            r.approved_by_name, r.rejected_by_name,
+            r.approval_note, r.reject_note, r.mgmt_reason,
+            r.requester_email, r.submitted_by_email]
       .some(v => String(v || "").toLowerCase().includes(q));
-  }) : _rowsCache;
+  };
+  const filtered = _rowsCache.filter(r =>
+    matchesApproval(r) && matchesReb(r) && matchesApprover(r)
+    && matchesRequester(r) && matchesBde(r) && matchesSearch(r)
+  );
   /* Row highlight — set when the approver came here via
      /orders_list?highlight=<oid> after signing off on the SPRF.
      The row gets a soft green tint until the reader clicks
@@ -498,6 +595,13 @@ $("#fStatus").addEventListener("change", loadOrders);
 $("#fDateFrom").addEventListener("change", loadOrders);
 $("#fDateTo").addEventListener("change", loadOrders);
 $("#fSearch").addEventListener("input",  renderRows);
+/* The remaining filters (approval state, rebateable, approver,
+   requester, BDE) are purely client-side — rebuild the dropdowns
+   and re-render against the cache without a round-trip to the API. */
+["fApproval", "fReb", "fApprover", "fRequester", "fBde"].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener("change", renderRows);
+});
 $("#btnExcel").addEventListener("click", () => {
   const qs = new URLSearchParams();
   const st = $("#fStatus").value;
