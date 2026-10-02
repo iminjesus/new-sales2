@@ -2777,21 +2777,25 @@ def api_orders_customer_suggest():
     per token (case-insensitive) so word order doesn't matter."""
     q    = (request.args.get("q") or "").strip()
     kind = (request.args.get("kind") or "sold").strip().lower()
-    # Dynamic cap on the result set: a short query (≤ 3 chars) stays
-    # tight so the dropdown doesn't swamp the user with casual
-    # auto-fire matches on 1-2 letters, but once they commit to 4+
-    # characters we assume they mean it and lift the ceiling to a
-    # practical "show every match" (2000 is plenty for one chain name
-    # like 'Tyrepower' and still bounded enough to never explode).
-    # The caller can still pass ?limit=N to override.
-    _default_limit = 2000 if len(q) >= 4 else 15
+    # Dynamic cap on the result set: step the ceiling up as the user
+    # commits more characters.  A 1-2 letter query stays tight so the
+    # dropdown doesn't swamp them with casual auto-fire matches, and
+    # a 9+ character query (chain + state, say) returns every match.
+    # The caller can still pass ?limit=N to override; hard cap 5000.
+    _ql = len(q)
+    if _ql <= 3:
+        _default_limit = 15
+    elif _ql <= 5:
+        _default_limit = 50
+    elif _ql <= 8:
+        _default_limit = 100
+    else:
+        _default_limit = 5000      # practical "no limit"
     try:
         _raw_limit = request.args.get("limit")
         if _raw_limit is None:
             limit = _default_limit
         else:
-            # Hard cap at 5000 so a hostile caller can't ask for the
-            # whole customer table.
             limit = max(1, min(int(_raw_limit), 5000))
     except ValueError:
         limit = _default_limit

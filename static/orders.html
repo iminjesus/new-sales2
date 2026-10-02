@@ -334,8 +334,15 @@
 
   /* uniform label/value grid inside each meta col */
   .grid{
-    display:grid;grid-template-columns:150px 1fr;
+    display:grid;grid-template-columns:150px 1fr 150px 1fr;
   }
+  /* Rows that only have one label+value pair need to span the whole
+     width; mark their lbl/val cells with .full-row so they stretch
+     across both halves of the 4-column grid.  The 4-column layout
+     exists so the Account and Name rows can sit side-by-side at the
+     top of the customer panel (Sold-to Account | Sold-to Name, etc.). */
+  .grid .lbl.full-row{grid-column:1 / span 1;}
+  .grid .val.full-row{grid-column:2 / span 3;}
   .grid > div{
     border-bottom:1px solid var(--border);
     padding:5px 8px;font-size:12.5px;
@@ -677,7 +684,13 @@
   @media (max-width: 900px){
     .meta{grid-template-columns:1fr}
     .meta .col:last-child{border-left:none}
+    /* On narrow screens drop back to a single lbl+val stack so the
+       4-column top-row layout doesn't crush the Account inputs. */
     .grid{grid-template-columns:130px 1fr}
+    .grid .lbl.full-row{grid-column:1 / span 1;}
+    .grid .val.full-row{grid-column:2 / span 1;}
+    /* Collapse 4-column rows to 2 columns too so Account/Name stack. */
+    .grid > div{grid-column:auto;}
     .hdr{grid-template-columns:1fr;text-align:center}
   }
   /* ══════════════════════════════════════════════════════════════
@@ -908,17 +921,23 @@
     <!-- ─── Customer column ─── -->
     <div class="col">
       <div class="grid">
+        <!-- Row 1: Sold-to Account (left) | Sold-to Name (right) -->
         <div class="lbl">Sold-to Account</div>
         <div class="val"><input id="sold_to" list="sold_code_list" placeholder="type code or name" autocomplete="off"/></div>
+        <div class="lbl">Sold-to Name</div>
+        <div class="val"><input id="sold_to_name" list="sold_name_list" placeholder="type name or code" autocomplete="off"/></div>
 
+        <!-- Row 2: Ship-to Account (left) | Ship-to Name (right) -->
         <div class="lbl">Ship-to Account</div>
         <div class="val"><input id="ship_to" list="ship_code_list" placeholder="type code or name" autocomplete="off"/></div>
+        <div class="lbl">Ship-to Name</div>
+        <div class="val"><input id="ship_to_name" list="ship_name_list" placeholder="type name or code" autocomplete="off"/></div>
 
-        <div class="lbl">Customer Group</div>
-        <div class="val readonly"><input id="customer_group" readonly placeholder="—"/></div>
+        <div class="lbl full-row">Customer Group</div>
+        <div class="val readonly full-row"><input id="customer_group" readonly placeholder="—"/></div>
 
-        <div class="lbl">Base DC</div>
-        <div class="val" style="padding:0">
+        <div class="lbl full-row">Base DC</div>
+        <div class="val full-row" style="padding:0">
           <div class="valgroup">
             <div class="sub-hdr pk">HK-PCLT</div>
             <div class="sub-hdr hktbr">HK-TBR</div>
@@ -935,14 +954,8 @@
           </div>
         </div>
 
-        <div class="lbl">Sold-to Name</div>
-        <div class="val"><input id="sold_to_name" list="sold_name_list" placeholder="type name or code" autocomplete="off"/></div>
-
-        <div class="lbl">Ship-to Name</div>
-        <div class="val"><input id="ship_to_name" list="ship_name_list" placeholder="type name or code" autocomplete="off"/></div>
-
-        <div class="lbl">Ship-to Address</div>
-        <div class="val" style="padding:0">
+        <div class="lbl full-row">Ship-to Address</div>
+        <div class="val full-row" style="padding:0">
           <div class="valgroup two" style="grid-template-columns:2fr 1fr 1fr">
             <div class="sub-val"><input id="ship_to_address" placeholder="—" style="border:none;width:100%;background:transparent;padding:2px 4px"/></div>
             <div class="sub-hdr" style="background:#eef1f4;font-weight:700;border-right:1px dashed var(--border)">State</div>
@@ -950,14 +963,14 @@
           </div>
         </div>
 
-        <div class="lbl">Phone No (Email)</div>
-        <div class="val"><input id="phone_email" placeholder="—"/></div>
+        <div class="lbl full-row">Phone No (Email)</div>
+        <div class="val full-row"><input id="phone_email" placeholder="—"/></div>
 
-        <div class="lbl">Mobile Number</div>
-        <div class="val"><input id="mobile" placeholder="—"/></div>
+        <div class="lbl full-row">Mobile Number</div>
+        <div class="val full-row"><input id="mobile" placeholder="—"/></div>
 
-        <div class="lbl">Rebate-able <span style="color:#dc2626;font-weight:800">*</span></div>
-        <div class="val" style="padding:0">
+        <div class="lbl full-row">Rebate-able <span style="color:#dc2626;font-weight:800">*</span></div>
+        <div class="val full-row" style="padding:0">
           <!-- Rebate-able Y/N is REQUIRED — the wrapper gets a bright red
                border while neither pick is made, and the two picker
                cells light up with a big ✓ when clicked (mutually
