@@ -5145,11 +5145,16 @@ def api_orders_list():
                 p.append(who or "")
         else:
             # Global-scope caller: hide OTHER users' Save-as-Draft
-            # rows.  A temp draft is private to its creator until
-            # they Submit; approvers / read-only CC / Harry never
-            # need to see somebody else's half-filled work.
-            wh.append("(needs_mgmt_approval <> 'temp' OR LOWER(submitted_by_email) = %s)")
-            p.append(who or "")
+            # rows for IDENTIFIED callers (approvers / read-only CC /
+            # Harry — they shouldn't see somebody else's half-filled
+            # work).  Office / local callers (no CF Access header, so
+            # who = '') are treated as super-admin and see every row
+            # including other users' drafts — otherwise Brian /
+            # Pamela browsing from inside the office come up one row
+            # short whenever a temp draft is in play.
+            if who:
+                wh.append("(needs_mgmt_approval <> 'temp' OR LOWER(submitted_by_email) = %s)")
+                p.append(who)
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(
             f"SELECT id, order_no, submitted_at, submitted_by_bde, submitted_by_email, "
