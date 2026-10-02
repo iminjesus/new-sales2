@@ -1351,10 +1351,22 @@ async function suggestCustomer(kind, q){
     fillDatalist(kind === "ship" ? "ship_name_list" : "sold_name_list", []);
     return;
   }
-  const key = kind + ":" + q.toLowerCase();
+  // If the user has already resolved a Sold-to, scope the Ship-to
+  // search to that sold_to only — otherwise typing "0" into the
+  // Ship-to box would surface every ship_to in the master against
+  // the chosen customer's siblings.  `sold_to` is populated by
+  // resolveCustomer(); fall back to the raw text in the Sold-to
+  // input (user may have just typed a code without tabbing out yet).
+  let scopeSoldTo = "";
+  if (kind === "ship") {
+    scopeSoldTo = ($("#sold_to")?.value || "").trim();
+  }
+  const key = kind + ":" + q.toLowerCase() + ":" + scopeSoldTo;
   let rows = _custCache[key];
   if(!rows){
-    rows = await apiGet(`/api/orders/customer_suggest?kind=${kind}&q=${encodeURIComponent(q)}`) || [];
+    const qs = new URLSearchParams({ kind, q });
+    if (scopeSoldTo) qs.set("sold_to", scopeSoldTo);
+    rows = await apiGet(`/api/orders/customer_suggest?${qs.toString()}`) || [];
     if(Array.isArray(rows)) _custCache[key] = rows;
     else rows = [];
   }

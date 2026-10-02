@@ -2777,6 +2777,11 @@ def api_orders_customer_suggest():
     per token (case-insensitive) so word order doesn't matter."""
     q    = (request.args.get("q") or "").strip()
     kind = (request.args.get("kind") or "sold").strip().lower()
+    # Optional scope: once the SPRF has a confirmed Sold-to, the
+    # Ship-to search is narrowed to the ship_tos that actually belong
+    # to that sold_to.  Only honoured on kind=ship — passing a sold_to
+    # scope while searching Sold-to itself would make no sense.
+    scope_sold_to = (request.args.get("sold_to") or "").strip()
     # Dynamic cap on the result set: step the ceiling up as the user
     # commits more characters.  A 1-2 letter query stays tight so the
     # dropdown doesn't swamp them with casual auto-fire matches, and
@@ -2863,6 +2868,18 @@ def api_orders_customer_suggest():
         closed_cols = [c for c in ("channel2", "channels", "channel") if c in cols]
         for c in closed_cols:
             wh_and.append(f"(UPPER(TRIM({c})) <> 'CLOSED' OR {c} IS NULL)")
+
+        # Ship-to search scoped to a confirmed Sold-to: only surface
+        # ship_tos that belong to this sold_to.  Match by exact code
+        # OR by sold_to_name (so the frontend can pass whatever the
+        # Sold-to input currently holds — a code or a name).
+        if kind == "ship" and scope_sold_to and "sold_to" in cols:
+            if scope_sold_to.isdigit() or scope_sold_to.upper().startswith("A"):
+                wh_and.append("sold_to = %s")
+                params.append(scope_sold_to)
+            elif "sold_to_name" in cols:
+                wh_and.append("TRIM(sold_to_name) = %s")
+                params.append(scope_sold_to)
 
         # Priority ordering: DNU names go to the very bottom, ANC
         # names go next-to-bottom, everything else above them.  Keep
