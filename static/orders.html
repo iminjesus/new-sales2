@@ -2533,6 +2533,10 @@ function isSOVDEligible(r){
      applies.  Prevents the race where SOVD lands first and gets
      stranded because the real promo answer arrives too late. */
   if (r.dataset.pendingPromo === "1") return false;
+  /* M-Codes starting with "3" are excluded from SOVD (Trueblu) —
+     they neither take the ladder rate nor count toward the TTL. */
+  const mcode = (r.querySelector('[data-col="m_code"]')?.value || "").trim();
+  if (mcode.startsWith("3")) return false;
   /* SOVD (Trueblu) is a true fallback: every HK-PCLT row whose
      CURRENT CUSTOMER didn't get a specific promo hit falls into
      the ladder — regardless of whether other customers have a
