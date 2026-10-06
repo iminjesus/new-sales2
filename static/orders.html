@@ -2057,11 +2057,17 @@ async function applyAdditionalDCToRow(rowEl){
      because the SOVD contract specifically covers PCLTs.  Treat
      that case as "no match" so the row keeps its base DC, Remark
      stays clean, and the TBR total doesn't inflate with a phantom
-     18 %. */
+     18 %.  The check uses an inferred-line fallback (size-derived)
+     because an m-code that misses the carrying_26 lookup can leave
+     dataset.line empty, and dropping SOVD only when line was
+     confirmed non-PCLT would still let the stamp through on those
+     rows.  Rule: unless we have POSITIVE confirmation the row is
+     PCLT, don't apply SOVD. */
   const _isSovd = data && data.matched
                   && String(data.promo || "").toUpperCase() === "SOVD";
-  const _rowLine = (rowEl.dataset.line || "").toUpperCase().trim();
-  if (_isSovd && _rowLine && _rowLine !== "PCLT"){
+  const _rowLine = (rowEl.dataset.line || "").toUpperCase().trim()
+                   || _inferLineFromRow(rowEl);
+  if (_isSovd && _rowLine !== "PCLT"){
     data = Object.assign({}, data, {matched: false, additional_dc: null});
   }
   if (data && data.matched && data.additional_dc != null){
@@ -2518,6 +2524,33 @@ function unlockAgedRow(row){
    443/SP) picks it up as if it were any other customer promo.
    Rows we auto-set carry data-sovd-auto="1" so a manual keystroke
    is still respected (see the sp_dc input handler further down). */
+/* Best-effort line inference when dataset.line is missing (an
+   m-code that didn't resolve against carrying_26, or a hand-typed
+   row).  Reads the Size cell: a size whose rim ends in '.5' / 20+
+   is almost always TBR (295/80R22.5, 11R22.5, 385/65R22.5).  Also
+   detects a TBR m-code pattern — 3xxx is the TBR series in
+   carrying_26 — as a secondary signal.  Returns 'PCLT' only when
+   neither hint fires AND it's clearly a passenger-car size (rim
+   ≤ 20 in the standard /RNN pattern).  Returns '' when nothing
+   is confident. */
+function _inferLineFromRow(r){
+  const size = (r.querySelector('[data-col="size"]')?.value || "").toUpperCase().trim();
+  const mcode = (r.querySelector('[data-col="m_code"]')?.value || "").trim();
+  if (/^3\d/.test(mcode)) return "TBR";
+  // Rim-size match — the number right after the "R" or at the
+  // start of the second half for metric sizes (11R22.5, 295/80R22.5).
+  const m = size.match(/R\s*([0-9]+(?:\.[0-9]+)?)/);
+  if (m) {
+    const rim = parseFloat(m[1]);
+    if (!isNaN(rim)) {
+      if (rim >= 17.5 && size.indexOf(".5") >= 0) return "TBR";
+      if (rim >= 22) return "TBR";   // 11R22.5, 11R24.5, etc.
+      if (rim <= 20) return "PCLT";
+    }
+  }
+  return "";
+}
+
 function isSOVDEligible(r){
   /* SOVD (Trueblu) ladder is a per-CUSTOMER promo — we only run it
      against customers whose dc_additional_customer entries include
@@ -2565,6 +2598,35 @@ function applySOVDRatesToRows(){
   _sovdBusy = true;
   try {
     const rows = $$("#linesBody tr");
+    /* Pre-pass: strip any stale Trueblu / SOVD stamp from a row
+       whose line isn't PCLT.  Covers the two leak paths:
+         1. hydrated draft that was saved before the TBR guard
+            landed in applyAdditionalDCToRow;
+         2. a row whose dataset.line resolved AFTER the backend
+            match set sp_dc = SOVD rate.
+       We only touch rows whose auto-stamp WE wrote (sovdAuto /
+       autoSpDc / promo==="SOVD" / Remark starts with "Trueblu");
+       a hand-typed 18 % stays. */
+    rows.forEach(r => {
+      const line = ((r.dataset.line || "").toUpperCase().trim()
+                     || _inferLineFromRow(r)).trim();
+      if (line === "PCLT") return;
+      const spEl = r.querySelector('[data-col="sp_dc"]');
+      const isAuto = spEl && (spEl.dataset.sovdAuto === "1"
+                               || (spEl.dataset.autoSpDc === "1"
+                                   && (r.dataset.promo || "").toUpperCase() === "SOVD"));
+      const remEl = r.querySelector('[data-col="remark"]');
+      const remarkIsTrueblu = remEl && /trueblu/i.test(remEl.value || "");
+      if (isAuto){
+        spEl.value = "";
+        spEl.title = "";
+        delete spEl.dataset.sovdAuto;
+        delete spEl.dataset.autoSpDc;
+        delete spEl.dataset.originalSpDc;
+      }
+      if ((r.dataset.promo || "").toUpperCase() === "SOVD") delete r.dataset.promo;
+      if (remarkIsTrueblu) setRemark(r, "");
+    });
     let sovdQty = 0;
     rows.forEach(r => {
       if (isSOVDEligible(r)) sovdQty += toNum(r.querySelector('[data-col="qty"]').value);
