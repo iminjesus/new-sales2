@@ -1350,6 +1350,19 @@
 <datalist id="ship_name_list"></datalist>
 <datalist id="mcode_list"></datalist>
 <datalist id="desc_list"></datalist>
+<!-- Custom material-suggest popover (replaces the native Chrome
+     datalist dropdown for the M-Code / Description / Product Name /
+     Pattern inputs on each order line).  Styled, scrollable, keyboard-
+     navigable; shows ONE row per matched m_code regardless of how
+     many search variants that m_code has.  The empty datalists above
+     stay in the DOM so any legacy wiring that still queries them by
+     id doesn't error out. -->
+<div id="matPopover"
+     style="position:absolute;z-index:10000;display:none;background:#fff;
+            border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 8px 20px rgba(15,23,42,0.18);
+            min-width:360px;max-width:640px;max-height:320px;overflow-y:auto;
+            font:12.5px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#0f172a;">
+</div>
 
 <script>
 /* ────────────────────────── constants & helpers ────────────────────────── */
@@ -1536,25 +1549,174 @@ async function suggestMaterial(q){
   const descItems = [];
   for (const r of rows) {
     const canon = parts(r);
-    const raw   = partsRaw(r);
-    const dig   = partsDigits(r);
-    /* ONE option per m_code — the canonical label is what the user
-       sees in the dropdown.  The raw (noise-stripped) and digits-
-       only variants are tacked onto the end of the SAME value
-       separated by zero-width spaces so Chrome's substring filter
-       still finds the row when a BDE types "2255017" or "11R225".
-       U+200B renders as no visible glyph in the dropdown, so the
-       visible text is just the clean canonical form while the
-       trailing padding keeps every search variant working. */
-    const extras = [raw, dig]
-      .filter(x => x && x !== canon)
-      .join("​");
-    const value = extras ? `${canon}​${extras}` : canon;
-    descItems.push({value, label: r.m_code});
+    /* ONE option per m_code — clean canonical form only.  The
+       custom popover (_matPopoverState / _renderMatPopover) is now
+       what the user sees for these cells, so Chrome's native
+       datalist UI is intentionally bypassed.  The datalist stays
+       populated as a safety net for any browser that still falls
+       through to the native rendering. */
+    descItems.push({value: canon, label: r.m_code});
   }
   fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
   fillDatalist("desc_list",  descItems);
+  /* Also drive the custom popover for whichever input is currently
+     focused among the four material-suggest cells.  The popover
+     dedupes by m_code so one SKU is one row, and keeps itself open
+     until Enter / click / Escape per the UX spec (no auto-close on
+     blur, no auto-close on fresh keystrokes). */
+  const focused = document.activeElement;
+  if (focused && focused.matches && focused.matches('[data-mat-suggest="1"]')){
+    const tr = focused.closest('tr');
+    _matPopoverState.rows = rows;
+    _showMatPopoverFor(focused, tr, (focused.value || "").trim());
+  }
 }
+/* ──────────────────────── Material-suggest popover ────────────────────────
+   Custom dropdown that replaces Chrome's native datalist UI for the four
+   material-suggest inputs on each order line (M-Code, Description,
+   Product Name, Pattern).  Drives one row per m_code regardless of how
+   many search variants that m_code has.  Stays open while the user
+   keeps typing — closes only on Enter (which picks the current
+   highlight) OR explicit option click OR Escape.
+*/
+const _matPopoverState = { rows: [], idx: -1, input: null, tr: null };
+
+function _matParts(r){
+  const bits = [];
+  if (r.description)  bits.push(r.description);
+  if (r.pattern)      bits.push(r.pattern);
+  if (r.product_name) bits.push(r.product_name);
+  if (r.brand)        bits.push(r.brand);
+  if (r.m_code)       bits.push("#" + r.m_code);
+  return bits.join(" · ");
+}
+
+function _renderMatPopover(){
+  const el = document.getElementById("matPopover");
+  if (!el) return;
+  const rows = _matPopoverState.rows || [];
+  if (!rows.length){
+    el.style.display = "none";
+    return;
+  }
+  const items = rows.slice(0, 60);
+  el.innerHTML = items.map((r, i) => {
+    const sel = (i === _matPopoverState.idx);
+    const bg  = sel ? "#dbeafe" : "#fff";
+    const col = sel ? "#1e3a8a" : "#0f172a";
+    return `<div class="mat-pop-row" data-idx="${i}"
+                 style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f1f5f9;
+                        background:${bg};color:${col};">
+              ${_matParts(r).replace(/</g,"&lt;")}
+            </div>`;
+  }).join("");
+  /* Position below the current input. */
+  const inp = _matPopoverState.input;
+  if (inp){
+    const rect = inp.getBoundingClientRect();
+    el.style.left = (rect.left + window.scrollX) + "px";
+    el.style.top  = (rect.bottom + window.scrollY + 2) + "px";
+    el.style.minWidth = Math.max(360, rect.width + 120) + "px";
+  }
+  el.style.display = "block";
+}
+
+function _showMatPopoverFor(inp, tr, query){
+  _matPopoverState.input = inp;
+  _matPopoverState.tr    = tr;
+  if (!_matPopoverState.rows.length){
+    _hideMatPopover();
+    return;
+  }
+  if (_matPopoverState.idx < 0 || _matPopoverState.idx >= _matPopoverState.rows.length){
+    _matPopoverState.idx = 0;
+  }
+  _renderMatPopover();
+}
+
+function _hideMatPopover(){
+  const el = document.getElementById("matPopover");
+  if (el) el.style.display = "none";
+  _matPopoverState.input = null;
+  _matPopoverState.tr = null;
+  _matPopoverState.idx = -1;
+  _matPopoverState.rows = [];
+}
+
+function _pickMatPopover(idx){
+  const rows = _matPopoverState.rows || [];
+  if (idx < 0 || idx >= rows.length) return;
+  const r = rows[idx];
+  const tr = _matPopoverState.tr;
+  if (!r || !tr) { _hideMatPopover(); return; }
+  const mc = r.m_code;
+  const mcInp = tr.querySelector('[data-col="m_code"]');
+  if (mcInp) {
+    mcInp.value = mc;
+    /* fire change so fillMaterialFromCode runs the full resolve
+       pipeline (base DC, additional DC, aging, promos). */
+    mcInp.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  _hideMatPopover();
+}
+
+function _matPopoverKeydown(e){
+  const rows = _matPopoverState.rows || [];
+  if (!rows.length) return;
+  if (e.key === "ArrowDown"){
+    e.preventDefault();
+    _matPopoverState.idx = Math.min(_matPopoverState.idx + 1, rows.length - 1);
+    if (_matPopoverState.idx < 0) _matPopoverState.idx = 0;
+    _renderMatPopover();
+    _scrollMatPopoverToIdx();
+  } else if (e.key === "ArrowUp"){
+    e.preventDefault();
+    _matPopoverState.idx = Math.max(_matPopoverState.idx - 1, 0);
+    _renderMatPopover();
+    _scrollMatPopoverToIdx();
+  } else if (e.key === "Enter"){
+    /* Enter picks the highlighted row — closes the popover and
+       resolves the material.  Prevent form-level enter-to-submit. */
+    e.preventDefault();
+    _pickMatPopover(_matPopoverState.idx >= 0 ? _matPopoverState.idx : 0);
+  } else if (e.key === "Escape"){
+    e.preventDefault();
+    _hideMatPopover();
+  }
+}
+
+function _scrollMatPopoverToIdx(){
+  const el = document.getElementById("matPopover");
+  if (!el) return;
+  const row = el.querySelector(`.mat-pop-row[data-idx="${_matPopoverState.idx}"]`);
+  if (row && row.scrollIntoView) row.scrollIntoView({block: "nearest"});
+}
+
+/* Delegated click + outside-click handlers.  Set up once on
+   DOMContentLoaded so adding / removing lines doesn't rewire. */
+(function _wireMatPopoverGlobals(){
+  const _wire = () => {
+    const el = document.getElementById("matPopover");
+    if (!el) return;
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const row = e.target && e.target.closest ? e.target.closest(".mat-pop-row") : null;
+      if (row) _pickMatPopover(+row.getAttribute("data-idx"));
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (!el) return;
+      if (el.contains(e.target)) return;
+      const inp = _matPopoverState.input;
+      if (inp && (e.target === inp || inp.contains(e.target))) return;
+      _hideMatPopover();
+    });
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", _wire);
+  } else {
+    _wire();
+  }
+})();
 /* Extract "#1016533" from a datalist value the user picked in the
    description field.  Returns just the digit run so
    fillMaterialFromDesc can hit /api/orders/material?m_code=… and
@@ -3017,7 +3179,25 @@ function newRow(){
     const inp = document.createElement("input");
     inp.setAttribute("data-col", cell.c);
     if(cell.ro) inp.readOnly = true;
-    if(cell.list) inp.setAttribute("list", cell.list);
+    /* The m_code / description / product_name / pattern inputs used
+       to carry list="desc_list" so Chrome's native datalist widget
+       would render the suggest.  Chrome's filter was substring-only
+       on the option value, which forced us to inject 3 variants per
+       m_code (canonical, noise-stripped, digits-only) just so a
+       typed "2255017" could substring-match "225/50R17".  That blew
+       the dropdown out to 3 visible rows per SKU and the ZWSP
+       collapse trick didn't fully hide the extras — Chrome still
+       renders them as visible characters.  We now drive those cells
+       with our own popover (see _showMatPopoverFor) and leave the
+       `list` attribute off so Chrome doesn't double-render.  The
+       datalists themselves stay in the DOM (empty) to keep any
+       legacy wiring happy. */
+    if(cell.list && cell.c !== "m_code" && cell.c !== "description"
+                 && cell.c !== "product_name" && cell.c !== "pattern"){
+      inp.setAttribute("list", cell.list);
+    } else if (cell.list){
+      inp.setAttribute("data-mat-suggest", "1");
+    }
     /* Placeholder hint so BDEs know the Size / Description input
        accepts more than just size digits — product, pattern and
        brand all narrow the datalist in one shared search. */
@@ -3047,6 +3227,10 @@ function newRow(){
   const patInp   = tr.querySelector('[data-col="pattern"]');
   mcodeInp.addEventListener("input",  e => debouncedSuggestMat(e.target.value));
   mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
+  mcodeInp.addEventListener("focus",  e => {
+    if (_matPopoverState.rows.length){ _showMatPopoverFor(mcodeInp, tr, mcodeInp.value); }
+  });
+  mcodeInp.addEventListener("keydown", _matPopoverKeydown);
   /* Multi-line paste — a BDE routinely copies a column of M-Codes
      out of Excel and pastes into the first M-Code cell.  Instead
      of jamming them all into one cell, split the clipboard on
@@ -3058,14 +3242,26 @@ function newRow(){
   mcodeInp.addEventListener("paste", e => handleMcodePaste(e, tr));
   descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
+  descInp.addEventListener("focus",   e => {
+    if (_matPopoverState.rows.length){ _showMatPopoverFor(descInp, tr, descInp.value); }
+  });
+  descInp.addEventListener("keydown", _matPopoverKeydown);
   /* Product Name + Pattern inputs share the desc_list datalist and
      resolve the row through the same "#M-Code"-tail extractor as the
      Description field.  Typing "Dyna" in Product Name or "K435" in
      Pattern fires the same suggest fetch. */
   prodInp?.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   prodInp?.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
+  prodInp?.addEventListener("focus",   e => {
+    if (_matPopoverState.rows.length){ _showMatPopoverFor(prodInp, tr, prodInp.value); }
+  });
+  prodInp?.addEventListener("keydown", _matPopoverKeydown);
   patInp?.addEventListener("input",    e => debouncedSuggestMat(e.target.value));
   patInp?.addEventListener("change",   e => fillMaterialFromDesc(tr, e.target.value));
+  patInp?.addEventListener("focus",    e => {
+    if (_matPopoverState.rows.length){ _showMatPopoverFor(patInp, tr, patInp.value); }
+  });
+  patInp?.addEventListener("keydown",  _matPopoverKeydown);
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {
     tr.querySelector(`[data-col="${c}"]`)?.addEventListener("input", () => recalcRow(tr));
   });
@@ -3742,6 +3938,42 @@ $("#ship_to")     .addEventListener("input",  e => debouncedSuggestShip(e.target
 $("#ship_to")     .addEventListener("change", e => resolveCustomer("ship", "code", e.target.value));
 $("#ship_to_name").addEventListener("input",  e => debouncedSuggestShip(e.target.value));
 $("#ship_to_name").addEventListener("change", e => resolveCustomer("ship", "name", e.target.value));
+
+/* Enter-on-single-result: if the user has typed a query that
+   narrowed the suggest to EXACTLY one candidate, pressing Enter
+   auto-picks that candidate rather than falling through to a
+   change-driven lookup against the half-typed string.  Covers the
+   four customer header inputs (sold_to / sold_to_name / ship_to /
+   ship_to_name).  Reads directly from _custCache so no extra
+   fetch is needed — the suggest call already populated it. */
+function _customerSingleResultEnter(e, kind, field){
+  if (e.key !== "Enter") return;
+  const inp = e.target;
+  const q = (inp.value || "").trim();
+  if (!q) return;
+  /* Match the cache key the suggest built. */
+  let scopeSoldTo = "";
+  if (kind === "ship") {
+    scopeSoldTo = ($("#sold_to")?.value || "").trim();
+  }
+  const key = kind + ":" + q.toLowerCase() + ":" + scopeSoldTo;
+  const rows = _custCache[key];
+  if (!Array.isArray(rows) || rows.length !== 1) return;
+  const r = rows[0];
+  /* Fill the input with the matching code / name so the resolve
+     call hits an exact-match hit, then fire the resolve pipeline
+     directly (field tells us whether we're on the code side or the
+     name side of the kind). */
+  e.preventDefault();
+  const pickedValue = (field === "code") ? r.code : r.name;
+  inp.value = pickedValue;
+  if (typeof syncAllClearBtns === "function") syncAllClearBtns();
+  resolveCustomer(kind, field, pickedValue);
+}
+$("#sold_to")     .addEventListener("keydown", e => _customerSingleResultEnter(e, "sold", "code"));
+$("#sold_to_name").addEventListener("keydown", e => _customerSingleResultEnter(e, "sold", "name"));
+$("#ship_to")     .addEventListener("keydown", e => _customerSingleResultEnter(e, "ship", "code"));
+$("#ship_to_name").addEventListener("keydown", e => _customerSingleResultEnter(e, "ship", "name"));
 
 /* ────── Clearable inputs (Sold-to / Ship-to pairs) ──────
    Each of the four customer inputs is wrapped in a .clearable-wrap
