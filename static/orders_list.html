@@ -113,6 +113,7 @@
         <option value="pending">⏳ Pending</option>
         <option value="approved">✓ Approved</option>
         <option value="rejected">✕ Rejected</option>
+        <option value="deleted">🗑 Deleted</option>
         <option value="standard">Standard</option>
         <option value="draft">📝 Draft</option>
       </select>
@@ -357,11 +358,13 @@ function renderRows(){
   const matchesApproval = (r) => {
     if (!fApp) return true;
     const nma = String(r.needs_mgmt_approval || "").toLowerCase();
+    if (fApp === "deleted")  return !!r.deleted_at;
     if (fApp === "draft")    return nma === "temp";
-    if (fApp === "rejected") return !!r.rejected_by_name || nma === "r";
-    if (fApp === "approved") return !!r.approved_by_name;
-    if (fApp === "pending")  return nma === "y" && !r.approved_by_name && !r.rejected_by_name;
-    if (fApp === "standard") return !r.has_additional_dc && nma !== "temp"
+    if (fApp === "rejected") return !r.deleted_at && (!!r.rejected_by_name || nma === "r");
+    if (fApp === "approved") return !r.deleted_at && !!r.approved_by_name;
+    if (fApp === "pending")  return !r.deleted_at && nma === "y"
+                                     && !r.approved_by_name && !r.rejected_by_name;
+    if (fApp === "standard") return !r.deleted_at && !r.has_additional_dc && nma !== "temp"
                                      && !r.approved_by_name && !r.rejected_by_name;
     return true;
   };
@@ -406,7 +409,17 @@ function renderRows(){
       let apprCell = "—";
       const totDC = +r.avg_dc_pct || 0;
       const addDC = +r.add_dc_pct || 0;
-      if (!r.has_additional_dc){
+      if (r.deleted_at){
+        /* Soft-deleted row — surface the 'deleted' flag + who did it
+           in the Approver cell.  The whole row gets the sketch-line
+           grey treatment via the style attribute further down so the
+           reader can tell at a glance that this record is retained
+           for reference, not an active SPRF. */
+        const at = (r.deleted_at || "").slice(0, 16);
+        apprCell = `<span style="background:#e5e7eb;color:#334155;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">🗑 Deleted</span>`
+                 + (r.deleted_by_name ? `<br><b style="color:#475569">${escapeHtml(r.deleted_by_name)}</b>` : "")
+                 + (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
+      } else if (!r.has_additional_dc){
         apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard</span>`;
       } else if (r.rejected_by_name){
         /* Rejection trumps approved_by_name (approve is cleared on
@@ -509,9 +522,18 @@ function renderRows(){
         ? _blocks.join("")
         : `<small style="color:#94a3b8">—</small>`;
       const _isHl = _hlOid && String(r.id) === _hlOid;
-      const _rowStyle = _isHl
-        ? 'background:#dcfce7 !important;box-shadow:inset 0 0 0 2px #16a34a;transition:background .3s'
-        : '';
+      const _isDeleted = !!r.deleted_at;
+      /* Deleted rows read as "retained for reference" — grey wash
+         + line-through so they're visually distinct from active
+         SPRFs without actually hiding the row.  Highlighted takes
+         precedence (fresh approvals land first). */
+      let _rowStyle = "";
+      if (_isHl) {
+        _rowStyle = 'background:#dcfce7 !important;box-shadow:inset 0 0 0 2px #16a34a;transition:background .3s';
+      } else if (_isDeleted) {
+        _rowStyle = 'background:repeating-linear-gradient(135deg,#f1f5f9,#f1f5f9 6px,#e2e8f0 6px,#e2e8f0 12px);'
+                  + 'color:#64748b;text-decoration:line-through;text-decoration-color:#94a3b8;';
+      }
       const _rowClick = _isHl
         ? `onclick="event.currentTarget.style.background='';event.currentTarget.style.boxShadow='';location.href='/order?id=${r.id}'"`
         : `onclick="location.href='/order?id=${r.id}'"`;

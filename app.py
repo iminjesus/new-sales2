@@ -3033,6 +3033,33 @@ def _stock_report_rows_for_suggest():
             mc = str(mc_raw).strip()
         if not mc or mc in seen:
             continue
+        # Zero-stock gate — a material whose total on-hand AND every
+        # pipeline bucket (PRT / WAT / FAC) sits at zero across every
+        # plant is a dead SKU for ordering purposes.  Suppress it
+        # from the suggest so a BDE never picks something the system
+        # physically cannot ship.  state_stock keeps per-plant stock
+        # as {state: qty}; state_pipe_parts (if present) keeps the
+        # PRT/WAT/FAC breakdown per plant; state_pipeline is the
+        # per-plant combined pipeline total — summing it is enough
+        # as a safety net when the parts dict is missing.
+        def _sum_dict(d):
+            if not isinstance(d, dict):
+                return 0.0
+            tot = 0.0
+            for v in d.values():
+                if isinstance(v, dict):
+                    for vv in v.values():
+                        try: tot += float(vv or 0)
+                        except Exception: pass
+                else:
+                    try: tot += float(v or 0)
+                    except Exception: pass
+            return tot
+        _stk  = _sum_dict(r.get("state_stock"))
+        _pipe = _sum_dict(r.get("state_pipeline"))
+        _parts = _sum_dict(r.get("state_pipe_parts"))
+        if (_stk <= 0) and (_pipe <= 0) and (_parts <= 0):
+            continue
         seen[mc] = {
             "m_code":       mc,
             # Stock report keeps raw "11R22.5" / "225/50R17" in size.
@@ -3954,6 +3981,68 @@ def api_orders_base_dc():
         if hk_tbr_pick:  out["HK_TBR"]  = hk_tbr_pick[2]
         if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
 
+        # ATD + 443DC Base DC override — business rule (Oct-6 spec):
+        # when the customer qualifies for the 443DC promo AND their
+        # sold_to_group is ATD, the HK-PCLT Base DC flips to a fixed
+        # ladder regardless of what dc_basic_customer carries:
+        #   • HM (customer.channels='MFC') or ATM group → 52 %
+        #   • everyone else (non-HM ATD)                → 50 %
+        # The rule only touches HK-PCLT; TBR and LF cells stay as
+        # the table said.  Guarded on the customer actually having
+        # a 443-tagged row in dc_additional_customer so the
+        # override doesn't fire on an ATD who isn't on 443 yet.
+        try:
+            cust_cols = _list_columns(cur, "customer")
+            cust_group = ""
+            cust_channel = ""
+            if "sold_to_group" in cust_cols:
+                _sel_bits = ["sold_to_group"]
+                if "channels" in cust_cols: _sel_bits.append("channels")
+                cur.execute(
+                    f"SELECT {', '.join(_sel_bits)} FROM customer "
+                    f"WHERE sold_to = %s LIMIT 1",
+                    (sold_to,),
+                )
+                _c = cur.fetchone() or {}
+                cust_group   = (_c.get("sold_to_group") or "").strip().upper()
+                cust_channel = (_c.get("channels")      or "").strip().upper()
+            if cust_group in ("ATD", "ATM"):
+                # Does this customer carry an active 443 rule in
+                # dc_additional_customer?  Match by sold_to OR by
+                # customer_grp, same as the main additional_dc gate.
+                has_443 = False
+                try:
+                    cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
+                    if cur.fetchone():
+                        ac_cols = _list_columns(cur, "dc_additional_customer")
+                        if "promo" in ac_cols:
+                            gate = "TRIM(sold_to) = %s"
+                            params = [sold_to]
+                            if cust_group and "customer_grp" in ac_cols:
+                                gate = "(TRIM(sold_to) = %s OR UPPER(TRIM(customer_grp)) = %s)"
+                                params.append(cust_group)
+                            cur.execute(
+                                f"SELECT 1 FROM dc_additional_customer "
+                                f"WHERE {gate} AND UPPER(promo) LIKE %s LIMIT 1",
+                                tuple(params + ["443%"]),
+                            )
+                            has_443 = cur.fetchone() is not None
+                except Exception:
+                    has_443 = False
+                if has_443:
+                    is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
+                    out["HK_PCLT"] = 52.0 if is_hm else 50.0
+                    if debug:
+                        out["_debug"]["atd_443_override"] = {
+                            "sold_to_group": cust_group,
+                            "channels":      cust_channel,
+                            "is_hm":         is_hm,
+                            "override_HK_PCLT": out["HK_PCLT"],
+                        }
+        except Exception as _e:
+            if debug:
+                out["_debug"]["atd_443_override_err"] = str(_e)
+
         if debug:
             def _s(v):
                 try: return v.isoformat()
@@ -4580,6 +4669,15 @@ def _ensure_submitted_orders_table():
             ("rejected_by_name",    "VARCHAR(60) NULL"),
             ("rejected_at",         "DATETIME NULL"),
             ("reject_note",         "VARCHAR(500) NULL"),
+            # Soft-delete trail — Delete button on a submitted order
+            # now keeps the row on file (sketch-lined / grey on the
+            # list) with these columns stamped, so a deleted order
+            # stays visible for reference instead of disappearing
+            # from the list.  Drafts still delete hard — no need to
+            # keep a half-filled form around.
+            ("deleted_by_email",    "VARCHAR(120) NULL"),
+            ("deleted_by_name",     "VARCHAR(60) NULL"),
+            ("deleted_at",          "DATETIME NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -5435,6 +5533,7 @@ def api_orders_list():
             f"       approved_by_email, approved_by_name, approved_at, "
             f"       approval_note, "
             f"       rejected_by_email, rejected_by_name, rejected_at, reject_note, "
+            f"       deleted_by_email, deleted_by_name, deleted_at, "
             f"       rebateable, mgmt_reason "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
@@ -5533,7 +5632,7 @@ def api_orders_list():
             except Exception:
                 pass
         for r in rows:
-            for k in ("submitted_at", "status_changed_at", "approved_at", "rejected_at"):
+            for k in ("submitted_at", "status_changed_at", "approved_at", "rejected_at", "deleted_at"):
                 v = r.get(k)
                 if v is not None:
                     try: r[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -5598,6 +5697,7 @@ def api_orders_detail(oid):
             "       approved_by_email, approved_by_name, approved_at, "
             "       approval_note, "
             "       rejected_by_email, rejected_by_name, rejected_at, reject_note, "
+            "       deleted_by_email, deleted_by_name, deleted_at, "
             "       order_no, rebateable, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
@@ -5607,7 +5707,7 @@ def api_orders_detail(oid):
             return jsonify({"error": "not found"}), 404
         for k in ("submitted_at", "status_changed_at",
                   "approved_a_at", "approved_b_at", "approved_c_at",
-                  "approved_at", "rejected_at"):
+                  "approved_at", "rejected_at", "deleted_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -6179,43 +6279,69 @@ def api_orders_reject(oid):
 
 
 @app.post("/api/orders/detail/<int:oid>/cancel")
+@app.post("/api/orders/detail/<int:oid>/delete")
 def api_orders_cancel(oid):
-    """Delete a pending SPRF.  Allowed when the caller is:
-      • the original requester (submitted_by_email match), OR
-      • a PRICE_EDITOR (Pamela / Brian), who act as admin on behalf
-        of the requester
-    AND the order is NOT already approved or rejected.  Drafts
-    (needs_mgmt_approval='temp') cancel silently with no notification
-    — the draft was never on anyone else's inbox.  A submitted order
-    being cancelled sends a short notification to Harry, the
-    approvers and read-only reviewers so threads don't dead-end."""
+    """Delete an SPRF.  Rules (per the Oct-6 spec):
+      • Allowed to: the original requester, OR a PRICE_EDITOR
+        (Pamela / Brian).  Approvers are NO LONGER on this path —
+        delete is a submitter-side action.
+      • Drafts (needs_mgmt_approval='temp') hard-delete silently
+        (the draft was private to the submitter, no inbox needs
+        notifying).
+      • Submitted orders SOFT-delete: the row stays on file with
+        deleted_by_* columns stamped so the Submitted Orders page
+        still shows it (grey / sketch-lined) for reference.  A
+        cancellation email goes to Harry + approvers + reviewers.
+      • Already-approved or already-rejected rows are blocked —
+        approve/reject is a terminal state."""
     who = (_bde_from_request() or "").strip().lower()
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         cur.execute(
             "SELECT id, order_no, submitted_by_email, submitted_by_bde, "
             "       sold_to, sold_to_name, needs_mgmt_approval, "
-            "       approved_by_name, rejected_by_name "
+            "       approved_by_name, rejected_by_name, deleted_at "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,),
         )
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
+        if row.get("deleted_at"):
+            return jsonify({"error": "already deleted"}), 400
         if row.get("approved_by_name"):
-            return jsonify({"error": "an approved SPRF can't be cancelled"}), 403
+            return jsonify({"error": "an approved SPRF can't be deleted"}), 403
         if row.get("rejected_by_name"):
-            return jsonify({"error": "a rejected SPRF can't be cancelled — Revive it to re-submit"}), 403
+            return jsonify({"error": "a rejected SPRF can't be deleted — Revive it to re-submit"}), 403
         owner  = (row.get("submitted_by_email") or "").strip().lower()
-        is_owner    = (who and who == owner) or (not who and not owner)
-        is_admin    = who in PRICE_EDITOR_EMAILS
-        is_approver = who in {e.lower() for e in MGMT_APPROVER_EMAILS}
-        if not (is_owner or is_admin or is_approver):
-            return jsonify({"error": "only the requester, Pamela or Brian can cancel this SPRF"}), 403
+        is_owner = (who and who == owner) or (not who and not owner)
+        is_admin = who in PRICE_EDITOR_EMAILS
+        if not (is_owner or is_admin):
+            return jsonify({"error": "only the requester, Pamela or Brian can delete this SPRF"}), 403
         state = (row.get("needs_mgmt_approval") or "").lower()
         is_draft = (state == "temp")
 
-        cur.execute("DELETE FROM submitted_orders WHERE id = %s", (oid,))
+        if is_draft:
+            # Draft: hard delete.  Nothing persists.
+            cur.execute("DELETE FROM submitted_orders WHERE id = %s", (oid,))
+            del_name = ""
+        else:
+            # Submitted: soft-delete.  Record who / when so the list
+            # view can render the row with a 'deleted' flag + grey
+            # sketch-line without the backend having to join on
+            # anything else.
+            del_name = (PRICE_EDITOR_EMAILS.get(who)
+                        or (_EMAIL_TO_DIR.get(who, (None, None, None))[0] or "")
+                        or (who.split("@")[0] if who else "")
+                        or "requester").strip()[:60]
+            cur.execute(
+                "UPDATE submitted_orders SET "
+                "  deleted_by_email = %s, "
+                "  deleted_by_name  = %s, "
+                "  deleted_at       = NOW() "
+                "WHERE id = %s AND deleted_at IS NULL",
+                (who, del_name, oid),
+            )
         conn.commit()
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -6226,10 +6352,10 @@ def api_orders_cancel(oid):
         try: conn.close()
         except: pass
 
-    # Draft cancels never notify — the draft was private to the
-    # requester anyway.  Submitted-order cancels notify the usual
+    # Draft deletes never notify — the draft was private to the
+    # requester anyway.  Submitted-order deletes notify the usual
     # thread so an in-flight approver doesn't keep hunting for the
-    # row that just vanished.
+    # row that just went grey.
     if not is_draft:
         try:
             base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
@@ -6239,15 +6365,16 @@ def api_orders_cancel(oid):
         bde_email = (row.get("submitted_by_email") or "").strip().lower()
         to_list = [HARRY_CS_EMAIL] + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
-        subject = (f"[SPRF CANCELLED {order_no}] by {who or 'requester'} · "
+        subject = (f"[SPRF DELETED {order_no}] by {who or 'requester'} · "
                    f"{row.get('sold_to_name','')} ({row.get('sold_to','')})")
         body_html = _cancel_email_html(oid, row, who, base_url)
         try:
             _send_mail_async(to_list, cc, subject, body_html)
         except Exception as e:
-            print(f"[cancel] mail queue failed: {e}")
+            print(f"[delete] mail queue failed: {e}")
 
-    return jsonify({"ok": True, "cancelled_id": oid, "was_draft": is_draft})
+    return jsonify({"ok": True, "deleted_id": oid, "was_draft": is_draft,
+                    "soft_delete": not is_draft})
 
 
 @app.post("/api/orders/detail/<int:oid>/revive")

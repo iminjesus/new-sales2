@@ -761,9 +761,76 @@
        block and app chrome that would otherwise sit above the SPRF. */
     #agedStockPanel, #agedStockReopen, .pagenav, .toolbar,
     #btnAddRow, #btnClear, #btnPrint, #btnExcel, #btnSubmit, #btnSaveTemp,
-    #btnEdit, #btnToolbarApprove, #bottomApproveBar,
+    #btnEdit, #btnToolbarApprove, #btnToolbarReject,
+    #btnCancel, #btnRevive, #btnExitHome, #btnCustomerPdf,
+    #bottomApproveBar,
     .status, .row-del, .row-del-cell,
     #approvalPath { display: none !important; }
+
+    /* ─── Customer PDF variant ──────────────────────────────────
+       Triggered by #btnCustomerPdf tagging <body> with the
+       .print-customer class right before window.print().  Drops
+       every internal-only field so the PDF the BDE forwards to the
+       customer carries just the quoted lines + totals. */
+    body.print-customer #rebateWrap,
+    body.print-customer #approvalPanel,
+    body.print-customer #csPanel,
+    body.print-customer #modLogWrap, body.print-customer #modLogLbl,
+    /* Customer Details rows the spec drops: Base DC + Rebate-able */
+    body.print-customer .grid .lbl.hide-cust,
+    body.print-customer .grid .val.hide-cust,
+    /* Order Number Details rows the spec drops: Requester, Modified
+       by, Reason / Notes for Approver */
+    body.print-customer .lbl-requester,
+    body.print-customer .val-requester,
+    body.print-customer .lbl-modlog,
+    body.print-customer .val-modlog,
+    body.print-customer .lbl-reason,
+    body.print-customer .val-reason,
+    body.print-customer textarea#mgmt_reason,
+    /* SOVD TTL strip — internal counter, not for the customer. */
+    body.print-customer .sovd {
+      display: none !important;
+    }
+    /* Columns to hide on the lines table — tagged with data-col on
+       every header + body + foot cell.  CSS attribute selectors do
+       the hiding so we don't touch markup per column. */
+    body.print-customer table.lines th[data-col="list_price"],
+    body.print-customer table.lines td[data-col="list_price"],
+    body.print-customer table.lines th[data-col="base_dc"],
+    body.print-customer table.lines td[data-col="base_dc"],
+    body.print-customer table.lines th[data-col="sp_dc"],
+    body.print-customer table.lines td[data-col="sp_dc"],
+    body.print-customer table.lines th[data-col="current_dc"],
+    body.print-customer table.lines td[data-col="current_dc"],
+    body.print-customer table.lines th[data-col="current_price"],
+    body.print-customer table.lines td[data-col="current_price"],
+    body.print-customer table.lines th[data-col="mth_dc"],
+    body.print-customer table.lines td[data-col="mth_dc"],
+    body.print-customer table.lines th[data-col="vol_dc"],
+    body.print-customer table.lines td[data-col="vol_dc"],
+    body.print-customer table.lines th[data-col="add_dc"],
+    body.print-customer table.lines td[data-col="add_dc"],
+    body.print-customer table.lines th[data-col="aging_dc"],
+    body.print-customer table.lines td[data-col="aging_dc"],
+    body.print-customer table.lines th[data-col="add_support"],
+    body.print-customer table.lines td[data-col="add_support"],
+    body.print-customer table.lines th[data-col="proposed_price"],
+    body.print-customer table.lines td[data-col="proposed_price"],
+    body.print-customer table.lines th[data-col="proposed_dc"],
+    body.print-customer table.lines td[data-col="proposed_dc"],
+    body.print-customer table.lines th[data-col="nsw_stock"],
+    body.print-customer table.lines td[data-col="nsw_stock"],
+    body.print-customer table.lines th[data-col="qld_stock"],
+    body.print-customer table.lines td[data-col="qld_stock"],
+    body.print-customer table.lines th[data-col="vic_stock"],
+    body.print-customer table.lines td[data-col="vic_stock"],
+    body.print-customer table.lines th[data-col="wa_stock"],
+    body.print-customer table.lines td[data-col="wa_stock"],
+    body.print-customer table.lines th[data-col="remark"],
+    body.print-customer table.lines td[data-col="remark"] {
+      display: none !important;
+    }
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
        within the ~1085 px printable area of an A4-landscape page.
        Zoom (rather than transform:scale) keeps the browser's own
@@ -998,8 +1065,8 @@
         <div class="lbl full-row">Customer Group</div>
         <div class="val readonly full-row"><input id="customer_group" readonly placeholder="—"/></div>
 
-        <div class="lbl full-row">Base DC</div>
-        <div class="val full-row" style="padding:0">
+        <div class="lbl full-row hide-cust">Base DC</div>
+        <div class="val full-row hide-cust" style="padding:0">
           <div class="valgroup">
             <div class="sub-hdr pk">HK-PCLT</div>
             <div class="sub-hdr hktbr">HK-TBR</div>
@@ -1031,8 +1098,8 @@
         <div class="lbl full-row">Mobile Number</div>
         <div class="val full-row"><input id="mobile" placeholder="—"/></div>
 
-        <div class="lbl full-row">Rebate-able <span style="color:#dc2626;font-weight:800">*</span></div>
-        <div class="val full-row" style="padding:0">
+        <div class="lbl full-row hide-cust">Rebate-able <span style="color:#dc2626;font-weight:800">*</span></div>
+        <div class="val full-row hide-cust" style="padding:0">
           <!-- Rebate-able Y/N is REQUIRED — the wrapper gets a bright red
                border while neither pick is made, and the two picker
                cells light up with a big ✓ when clicked (mutually
@@ -1075,8 +1142,8 @@
              (their signed-in mail id).  Shown BEFORE BDE because the
              mapped BDE follows Ship-to but the person requesting the
              SPRF may be someone else in the office / CS. -->
-        <div class="lbl">Requester</div>
-        <div class="val" style="grid-column: span 3">
+        <div class="lbl lbl-requester">Requester</div>
+        <div class="val val-requester" style="grid-column: span 3">
           <input id="requester_email"
                  placeholder="your.email@hankooktyre.com.au"
                  title="Signed-in user filling this SPRF.  Auto-filled from Cloudflare Access; if the header isn't set on this machine, type your mail id manually — it persists on the record."/>
@@ -1088,8 +1155,8 @@
         <!-- Modification log — reveals only after at least one edit.
              Each modification appends "<email> · <YYYY-MM-DD HH:MM>"
              so the whole audit trail persists on the order. -->
-        <div class="lbl" id="modLogLbl" hidden>Modified by</div>
-        <div class="val" id="modLogWrap" style="grid-column: span 3" hidden>
+        <div class="lbl lbl-modlog" id="modLogLbl" hidden>Modified by</div>
+        <div class="val val-modlog" id="modLogWrap" style="grid-column: span 3" hidden>
           <div id="modLogList"
                style="font-size:11.5px;color:#334155;line-height:1.55;padding:2px 4px"></div>
         </div>
@@ -1097,11 +1164,11 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
-        <div class="lbl" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800">
+        <div class="lbl lbl-reason" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800">
           Reason / Notes for Approver (REQUIRED on Submit — at least 2 words)
         </div>
 
-        <div class="val" style="grid-column: span 4;padding:0">
+        <div class="val val-reason" style="grid-column: span 4;padding:0">
           <textarea id="mgmt_reason" rows="3"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
                     style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:60px"></textarea>
@@ -1129,32 +1196,32 @@
         <tr>
           <th class="row-no-th" title="Row number">No</th>
           <th class="row-del-th" title="Delete row">X</th>
-          <th class="mcode">M-Code</th>
-          <th class="qty-hdr">Qty</th>
-          <th class="wide">Size</th>
-          <th class="narrow">Brand</th>
-          <th class="mid">Product Name</th>
-          <th class="narrow">Pattern</th>
-          <th class="mid">Load / Speed</th>
-          <th class="mid">List Price</th>
-          <th class="narrow base-dc-hdr">Base DC %</th>
-          <th class="sky narrow editable" title="443DC / TBR Special / PCLT-SOVD — the customer's automatic contract promo.  Chained with Base DC to give Current DC %.">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
-          <th class="narrow" title="Current DC % — chained combined DC from Base DC and 443/TBR/PCLT-SOVD.  Reflects the customer's CONTRACT price before any negotiated concession.">Current DC %</th>
-          <th class="mid">Current<br>Unit Price</th>
-          <th class="mid" title="Current Unit Price × Qty — how much the customer would spend at their normal contract price for this line.">Current<br>Order Amount</th>
-          <th class="narrow editable">MTH Special<br>DC %</th>
-          <th class="narrow editable">Volume<br>DC %</th>
-          <th class="olive narrow editable">Additional<br>Special DC %</th>
-          <th class="amber narrow editable" title="Aging-stock target DC — populated by double-clicking an aged-stock row.  Displayed as a GUIDE for the ladder; the actual price effect is baked into the Additional Special DC% cell.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC<br>Guide&nbsp;%</th>
-          <th class="narrow editable" title="Total Additional Support DC % — chained combined DC of MTH + Volume + Additional Special DC.  The negotiated concession stacked ON TOP of the customer's contract (Current DC %).">Total<br>Additional<br>Support %</th>
-          <th class="mid pink-hdr" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
-          <th class="mid pink-hdr" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
-          <th class="narrow">Proposed DC %</th>
-          <th class="stock narrow" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
-          <th class="stock narrow" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
-          <th class="stock narrow" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
-          <th class="stock narrow" title="Stock in WA plant (42R4)">WA<br>stock</th>
-          <th class="remark-hdr" title="Auto-applied promo tag — 443 / Special / Trueblu / Aging / Manual — so the reader sees at a glance where each line's Additional Special DC% came from.">Remark</th>
+          <th class="mcode" data-col="m_code">M-Code</th>
+          <th class="qty-hdr" data-col="qty">Qty</th>
+          <th class="wide" data-col="description">Size</th>
+          <th class="narrow" data-col="brand">Brand</th>
+          <th class="mid" data-col="product_name">Product Name</th>
+          <th class="narrow" data-col="pattern">Pattern</th>
+          <th class="mid" data-col="load_speed">Load / Speed</th>
+          <th class="mid" data-col="list_price">List Price</th>
+          <th class="narrow base-dc-hdr" data-col="base_dc">Base DC %</th>
+          <th class="sky narrow editable" data-col="sp_dc" title="443DC / TBR Special / PCLT-SOVD — the customer's automatic contract promo.  Chained with Base DC to give Current DC %.">443DC or<br>TBR Special%<br>or PCLT-SOVD%</th>
+          <th class="narrow" data-col="current_dc" title="Current DC % — chained combined DC from Base DC and 443/TBR/PCLT-SOVD.  Reflects the customer's CONTRACT price before any negotiated concession.">Current DC %</th>
+          <th class="mid" data-col="current_price">Current<br>Unit Price</th>
+          <th class="mid" data-col="current_amount" title="Current Unit Price × Qty — how much the customer would spend at their normal contract price for this line.">Current<br>Order Amount</th>
+          <th class="narrow editable" data-col="mth_dc">MTH Special<br>DC %</th>
+          <th class="narrow editable" data-col="vol_dc">Volume<br>DC %</th>
+          <th class="olive narrow editable" data-col="add_dc">Additional<br>Special DC %</th>
+          <th class="amber narrow editable" data-col="aging_dc" title="Aging-stock target DC — populated by double-clicking an aged-stock row.  Displayed as a GUIDE for the ladder; the actual price effect is baked into the Additional Special DC% cell.  Clearing this cell un-locks the row so the BDE can renegotiate manually.">Aging<br>DC<br>Guide&nbsp;%</th>
+          <th class="narrow editable" data-col="add_support" title="Total Additional Support DC % — chained combined DC of MTH + Volume + Additional Special DC.  The negotiated concession stacked ON TOP of the customer's contract (Current DC %).">Total<br>Additional<br>Support %</th>
+          <th class="mid pink-hdr" data-col="proposed_price" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
+          <th class="mid pink-hdr" data-col="total_amount" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
+          <th class="narrow" data-col="proposed_dc">Proposed DC %</th>
+          <th class="stock narrow" data-col="nsw_stock" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
+          <th class="stock narrow" data-col="qld_stock" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
+          <th class="stock narrow" data-col="vic_stock" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
+          <th class="stock narrow" data-col="wa_stock" title="Stock in WA plant (42R4)">WA<br>stock</th>
+          <th class="remark-hdr" data-col="remark" title="Auto-applied promo tag — 443 / Special / Trueblu / Aging / Manual — so the reader sees at a glance where each line's Additional Special DC% came from.">Remark</th>
         </tr>
       </thead>
       <tbody id="linesBody">
@@ -1238,6 +1305,17 @@
     <button class="ghost" id="btnAddRow">+ Add row</button>
     <button class="ghost" id="btnClear">Clear form</button>
     <button class="primary" id="btnPrint" onclick="window.print()">Print / PDF</button>
+    <!-- Customer Order PDF — same window.print() path as the main
+         Print button, but first tags <body> with .print-customer so
+         the @media print stylesheet drops every internal-only cell
+         (base/current/MTH/vol/add DCs, proposed unit, stock splits,
+         remark, approval banner, reasons…) leaving a clean quote
+         the BDE can send straight to the customer. -->
+    <button class="primary" id="btnCustomerPdf" type="button"
+            style="background:#1d4ed8;border-color:#1e3a8a"
+            title="Download a customer-facing PDF — all internal DC / stock / approval detail stripped.">
+      👤 Customer PDF
+    </button>
     <!-- Excel export — downloads the current SPRF as an .xls file that
          Excel opens with the same colour blocks (yellow SP, olive Add,
          amber Aging, sky 443/SOVD, pink Proposed) and border layout as
@@ -1268,15 +1346,24 @@
       💾 Save / Update
     </button>
     <button class="primary submit-btn" id="btnSubmit">Submit</button>
-    <!-- Cancel — removes the SPRF.  Visible only on orders the
-         viewer may cancel (own draft, own pending submit, or admin
-         Pamela / Brian).  Dimmed on an already-approved or already-
-         rejected row.  Hidden entirely on fresh / unsaved forms
-         (no DB row exists yet). -->
+    <!-- Exit to Home — always available on an existing order view.
+         Walks straight back to /orders_list without saving any
+         pending edits.  Hidden on brand-new unsaved SPRFs so the
+         BDE doesn't lose a half-filled form by accident. -->
+    <button class="primary" id="btnExitHome" hidden type="button"
+            style="background:#334155;border-color:#1e293b"
+            title="Discard any unsaved changes on this form and return to the Submitted Orders list.">
+      ← Exit to Home
+    </button>
+    <!-- Delete — formerly Cancel.  Soft-deletes a submitted order
+         (row stays on the list with a grey sketch-line + 'deleted'
+         flag in the approver column) or hard-deletes a draft.
+         Visible to the requester and the admin price editors
+         (Pamela / Brian) only — approvers no longer see this. -->
     <button class="primary" id="btnCancel" hidden
-            style="background:#64748b;border-color:#475569"
-            title="Cancel this SPRF.  Drafts cancel silently; submitted orders fire a short notification to Harry + the approvers.">
-      ⨯ Cancel
+            style="background:#dc2626;border-color:#991b1b"
+            title="Delete this SPRF.  Drafts disappear; submitted orders stay on the list as a greyed-out record for reference and a short notification goes to Harry + the approvers.">
+      🗑 Delete
     </button>
     <!-- Revive — only shows on a REJECTED order the viewer owns
          (the original submitter).  Revives the SPRF back into the
@@ -4055,12 +4142,37 @@ syncAllClearBtns();
 
 /* ────────────────────────── toolbar buttons ────────────────────────── */
 $("#btnAddRow").addEventListener("click", addRow);
+/* Customer PDF — tags <body> with .print-customer so the @media
+   print stylesheet drops every internal-only field (base/current/
+   MTH/vol/add/aging DCs, proposed unit, stock splits, remark,
+   requester, modlog, reason), then fires window.print().  The
+   `afterprint` event hook removes the class so the on-screen view
+   isn't permanently altered. */
+document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
+  const removeClass = () => {
+    document.body.classList.remove("print-customer");
+    window.removeEventListener("afterprint", removeClass);
+  };
+  document.body.classList.add("print-customer");
+  window.addEventListener("afterprint", removeClass);
+  window.print();
+});
 $("#btnClear").addEventListener("click", () => {
   if(!confirm("Clear the whole form?")) return;
   $$("input, textarea").forEach(el => { if(!el.closest("thead")) el.value = ""; });
   $("#linesBody").innerHTML = "";
   for(let i=0;i<5;i++) addRow();
   updateTotals();
+  /* After a clear, re-seed the Date field with today's date so the
+     BDE doesn't have to type it again on every fresh form.  Uses
+     local-time formatting (not .toISOString()) so the YYYY-MM-DD
+     value lands on the user's calendar day, not UTC. */
+  const _d = new Date();
+  const _ymd = _d.getFullYear() + "-"
+             + String(_d.getMonth() + 1).padStart(2, "0") + "-"
+             + String(_d.getDate()).padStart(2, "0");
+  const _dateEl = document.getElementById("doc_date");
+  if (_dateEl) _dateEl.value = _ymd;
 });
 
 /* ────────────────────────── Excel download ──────────────────────────
@@ -5448,24 +5560,48 @@ function wireCancelReviveBtns(order, who){
     btn.title = title || "";
   };
 
-  // Cancel: shown when the viewer could cancel, and gated by state.
-  const canSeeCancel = isOwner || isAdmin || isApprover;
-  if (canSeeCancel){
+  const isDeleted = !!order.deleted_at;
+  // Delete: shown only to the requester + admin price editors
+  // (Pamela / Brian).  Approvers no longer see this button —
+  // approve/reject is their only interaction path with a submitted
+  // order.  State gates: already approved / rejected / deleted
+  // dim the button.
+  const canSeeDelete = isOwner || isAdmin;
+  if (canSeeDelete){
     cBtn.hidden = false;
     const fresh = cBtn.cloneNode(true);
     cBtn.parentNode.replaceChild(fresh, cBtn);
-    if (isApproved){
-      dim(fresh, "This order is already approved — can't be cancelled.");
+    if (isDeleted){
+      dim(fresh, "This order is already deleted.");
+    } else if (isApproved){
+      dim(fresh, "This order is already approved — can't be deleted.");
     } else if (isRejected){
-      dim(fresh, "This order is already rejected — use Revive to re-open it.");
+      dim(fresh, "This order is already rejected — use Revive if you need it back on the queue.");
     } else {
       live(fresh, isDraft
         ? "Discard this draft.  Only you can see it, so no notification goes out."
-        : "Cancel this SPRF — a short notice goes to Harry and the approvers.");
+        : "Delete this SPRF.  The record stays on the Submitted Orders list (greyed-out) and a short notice goes to Harry and the approvers.");
       fresh.addEventListener("click", () => _confirmAndCancel(order, who));
     }
   } else {
     cBtn.hidden = true;
+  }
+
+  // Exit to Home — always available on an existing order; just
+  // walks back to /orders_list without saving.  Hidden on new
+  // unsaved forms (order.id is 0 / undefined), handled by the
+  // guard at the top of this function.
+  const xBtn = document.getElementById("btnExitHome");
+  if (xBtn){
+    xBtn.hidden = false;
+    const fresh = xBtn.cloneNode(true);
+    xBtn.parentNode.replaceChild(fresh, xBtn);
+    fresh.addEventListener("click", () => {
+      /* No confirm here — the SPRF form has its own autosave for
+         drafts and this button is deliberately a quick back-out.
+         Approver / requester all go to the same place. */
+      location.href = "/orders_list";
+    });
   }
 
   // Revive: only shown on Rejected rows, enabled only for the owner.
@@ -5490,29 +5626,29 @@ async function _confirmAndCancel(order, who){
   const nma = String(order.needs_mgmt_approval || "").toLowerCase();
   const msg = (nma === "temp")
     ? "Discard this draft?  It won't be recoverable."
-    : "Cancel this SPRF?  Harry and the approvers will get a short notification.";
+    : "Delete this SPRF?  It stays on the Submitted Orders list as a greyed-out record for reference, and Harry + the approvers get a short notification.";
   if (!confirm(msg)) return;
   const btn = document.getElementById("btnCancel");
   const txt = btn ? btn.textContent : "";
-  if (btn){ btn.disabled = true; btn.textContent = "Cancelling…"; }
+  if (btn){ btn.disabled = true; btn.textContent = "Deleting…"; }
   try {
-    const r = await fetch(`/api/orders/detail/${order.id}/cancel`, {
+    const r = await fetch(`/api/orders/detail/${order.id}/delete`, {
       method: "POST", credentials: "same-origin",
     });
     const j = await r.json();
     if (!r.ok || !j.ok){
-      setStatus(`Cancel failed: ${j.error || r.statusText}`, "warn");
-      if (btn){ btn.disabled = false; btn.textContent = txt || "⨯ Cancel"; }
+      setStatus(`Delete failed: ${j.error || r.statusText}`, "warn");
+      if (btn){ btn.disabled = false; btn.textContent = txt || "🗑 Delete"; }
       return;
     }
-    setStatus("Cancelled.", "ok");
+    setStatus("Deleted.", "ok");
     // Short pause to let the status banner render, then jump back
-    // to the list page — the just-cancelled row is gone from the DB
-    // so staying on the detail page would 404 on the next refresh.
+    // to the list page — the row either disappeared (draft hard
+    // delete) or is now grey (submitted soft delete).
     setTimeout(() => { location.href = "/orders_list"; }, 500);
   } catch(e){
-    setStatus("Cancel failed: "+e, "warn");
-    if (btn){ btn.disabled = false; btn.textContent = txt || "⨯ Cancel"; }
+    setStatus("Delete failed: "+e, "warn");
+    if (btn){ btn.disabled = false; btn.textContent = txt || "🗑 Delete"; }
   }
 }
 
