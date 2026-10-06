@@ -2957,6 +2957,48 @@ def api_orders_customer_suggest():
         except: pass
 
 
+_stock_mcode_cache = {"path": None, "mtime": 0, "set": None}
+
+def _stock_report_mcodes():
+    """Return a set of M-CODEs present in the most recent stock report
+    the Stock Balance page reads from, or None when the stock dashboard
+    isn't wired into this deployment (or the file is unreadable).  A
+    None return tells callers to skip the gate — the SPRF should still
+    offer every carrying_26 material rather than blocking everything.
+
+    Cached against the live stock file's mtime so repeated SPRF typing
+    doesn't pay the openpyxl parse again on every keystroke."""
+    try:
+        from stock_dashboard import _latest_stock_xlsm, load_stock_data
+    except Exception:
+        return None
+    try:
+        path = _latest_stock_xlsm()
+        if not path:
+            return None
+        mtime = os.path.getmtime(path)
+        if (_stock_mcode_cache["path"] == path
+                and _stock_mcode_cache["mtime"] == mtime
+                and _stock_mcode_cache["set"] is not None):
+            return _stock_mcode_cache["set"]
+        rows, _meta = load_stock_data()
+        s = set()
+        for r in (rows or []):
+            mc = r.get("m_code") if isinstance(r, dict) else None
+            if mc is None:
+                continue
+            try:
+                s.add(str(int(mc)))
+            except Exception:
+                s.add(str(mc).strip())
+        _stock_mcode_cache["path"]  = path
+        _stock_mcode_cache["mtime"] = mtime
+        _stock_mcode_cache["set"]   = s or None
+        return _stock_mcode_cache["set"]
+    except Exception:
+        return None
+
+
 @app.get("/api/orders/material_suggest")
 def api_orders_material_suggest():
     """Autocomplete backend for the M-Code / Description inputs on the
@@ -3057,6 +3099,16 @@ def api_orders_material_suggest():
         )
         cur.execute(sql, tuple(params))
         rows = cur.fetchall()
+        # Gate: only surface m_codes present in the latest stock report
+        # (same file the Stock Balance dashboard reads).  Keeps the
+        # dropdown aligned with what's physically on-hand / in-pipeline
+        # so a BDE never picks a code the warehouse has already dropped.
+        # None return = stock dashboard isn't wired in or the file is
+        # unreadable → fall back to the unfiltered carrying_26 list
+        # rather than returning zero rows.
+        stock_mcodes = _stock_report_mcodes()
+        if stock_mcodes:
+            rows = [r for r in rows if (r.get("m_code") or "").strip() in stock_mcodes]
         out = [{
             "m_code":       (r.get("m_code") or "").strip(),
             "description":  (r.get("description") or "").strip(),
