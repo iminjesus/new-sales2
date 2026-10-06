@@ -1536,11 +1536,21 @@ async function suggestMaterial(q){
   const descItems = [];
   for (const r of rows) {
     const canon = parts(r);
-    descItems.push({value: canon, label: r.m_code});
-    const raw = partsRaw(r);
-    if (raw && raw !== canon) descItems.push({value: raw, label: r.m_code});
-    const dig = partsDigits(r);
-    if (dig && dig !== canon && dig !== raw) descItems.push({value: dig, label: r.m_code});
+    const raw   = partsRaw(r);
+    const dig   = partsDigits(r);
+    /* ONE option per m_code — the canonical label is what the user
+       sees in the dropdown.  The raw (noise-stripped) and digits-
+       only variants are tacked onto the end of the SAME value
+       separated by zero-width spaces so Chrome's substring filter
+       still finds the row when a BDE types "2255017" or "11R225".
+       U+200B renders as no visible glyph in the dropdown, so the
+       visible text is just the clean canonical form while the
+       trailing padding keeps every search variant working. */
+    const extras = [raw, dig]
+      .filter(x => x && x !== canon)
+      .join("​");
+    const value = extras ? `${canon}​${extras}` : canon;
+    descItems.push({value, label: r.m_code});
   }
   fillDatalist("mcode_list", rows.map(r => ({value: r.m_code, label: codeLabel(r)})));
   fillDatalist("desc_list",  descItems);
@@ -1548,9 +1558,18 @@ async function suggestMaterial(q){
 /* Extract "#1016533" from a datalist value the user picked in the
    description field.  Returns just the digit run so
    fillMaterialFromDesc can hit /api/orders/material?m_code=… and
-   guarantee the exact material is resolved. */
+   guarantee the exact material is resolved.
+
+   Historically the value ended with "...#1016533" so the regex was
+   anchored at $.  With the one-row-per-m_code refactor the picked
+   value is "canonical​raw​digits" — each variant ends
+   with the same #m_code, so there can be two or three #m_code
+   markers in a row.  Match the FIRST one (not anchored at $) and
+   stop at the next non-code character; that keeps the extraction
+   working whether the value is the clean canonical form or the
+   padded multi-variant one. */
 function extractPickedMCode(value){
-  const m = /#\s*([A-Za-z0-9_-]{3,})\s*$/.exec(String(value || ""));
+  const m = /#\s*([A-Za-z0-9_-]{3,})/.exec(String(value || ""));
   return m ? m[1] : "";
 }
 /* Shorter debounce (was 180 ms) so typing "Dyna" → "Dynapro" fires

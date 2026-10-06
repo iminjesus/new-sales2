@@ -2999,12 +2999,63 @@ def _stock_report_mcodes():
         return None
 
 
+def _stock_report_rows_for_suggest():
+    """Pull the latest Stock Balance workbook rows reshaped for the
+    SPRF material suggest.  Returns None when the stock dashboard
+    isn't wired in / the file is unreadable — the caller then falls
+    back to carrying_26.  The shape mirrors what the SPRF frontend
+    reads out of a suggest row (m_code, description, brand,
+    product_name, pattern), deduped by m_code so one physical SKU is
+    one option in the dropdown."""
+    try:
+        from stock_dashboard import _latest_stock_xlsm, load_stock_data
+    except Exception:
+        return None
+    try:
+        path = _latest_stock_xlsm()
+        if not path:
+            return None
+        rows, _meta = load_stock_data()
+        if not rows:
+            return None
+    except Exception:
+        return None
+    seen = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        mc_raw = r.get("m_code")
+        if mc_raw is None:
+            continue
+        try:
+            mc = str(int(mc_raw))
+        except Exception:
+            mc = str(mc_raw).strip()
+        if not mc or mc in seen:
+            continue
+        seen[mc] = {
+            "m_code":       mc,
+            # Stock report keeps raw "11R22.5" / "225/50R17" in size.
+            # Prefer size over description so the suggest reads the
+            # same canonical shape the stock dashboard already renders
+            # — carrying_26 sometimes shows free-form prose that reads
+            # oddly in a one-line dropdown row.
+            "description":  (r.get("size")         or r.get("description") or "").strip(),
+            "brand":        (r.get("brand")        or "").strip(),
+            "product_name": (r.get("product_name") or r.get("line") or "").strip(),
+            "pattern":      (r.get("pattern")      or "").strip(),
+        }
+    return list(seen.values())
+
+
 @app.get("/api/orders/material_suggest")
 def api_orders_material_suggest():
     """Autocomplete backend for the M-Code / Description inputs on the
-    Orders form.  Same shape as /api/orders/customer_suggest — the
-    frontend populates a datalist with "code — description" labels and
-    calls /api/orders/material to fill the row on selection."""
+    Orders form.  Primary source is the latest Stock Balance report
+    (dedupes by m_code — one SKU = one row in the dropdown).  Falls
+    back to carrying_26 when the stock workbook isn't available, so
+    this endpoint never silently returns nothing on deployments that
+    don't ship the stock dashboard."""
     q = (request.args.get("q") or "").strip()
     try:
         limit = max(1, min(int(request.args.get("limit", 150) or 150), 500))
@@ -3013,6 +3064,49 @@ def api_orders_material_suggest():
     if not q:
         return jsonify([])
 
+    # --- Primary path: filter the stock-report rows by the typed
+    # query in-process.  Mirrors the same noise-stripping / digits-
+    # only / per-token AND semantics the SQL path uses so the user
+    # experience is identical whichever backend ends up serving.
+    stock_rows = _stock_report_rows_for_suggest()
+    if stock_rows:
+        import re as _re_local
+        def _normalise(s):   # strip noise + lowercase for substring compare
+            return _re_local.sub(r"[\s/,.\-'&+()]+", "", str(s or "")).lower()
+        def _digits(s):
+            return _re_local.sub(r"[^0-9]+", "", str(s or ""))
+        tokens = [t for t in q.split() if t.strip()] or [q]
+        tok_pairs = []
+        for tok in tokens:
+            nt = _normalise(tok)
+            dt = _digits(tok)
+            if not nt: continue
+            tok_pairs.append((nt, dt if len(dt) >= 2 else ""))
+        if not tok_pairs:
+            return jsonify([])
+        def _row_matches(r):
+            desc  = _normalise(r.get("description"))
+            pat   = _normalise(r.get("pattern"))
+            prod  = _normalise(r.get("product_name"))
+            brand = _normalise(r.get("brand"))
+            code  = _normalise(r.get("m_code"))
+            desc_d  = _digits(r.get("description"))
+            code_d  = _digits(r.get("m_code"))
+            pat_d   = _digits(r.get("pattern"))
+            for nt, dt in tok_pairs:
+                hit = (nt in desc or nt in pat or nt in prod
+                       or nt in brand or nt in code)
+                if not hit and dt:
+                    hit = (dt in desc_d or dt in code_d or dt in pat_d)
+                if not hit:
+                    return False
+            return True
+        out = [r for r in stock_rows if _row_matches(r)]
+        out.sort(key=lambda r: r.get("m_code") or "")
+        return jsonify(out[:limit])
+
+    # --- Fallback path: original carrying_26 query when the stock
+    # dashboard isn't available on this deployment.
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
