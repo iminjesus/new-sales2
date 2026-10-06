@@ -1488,11 +1488,20 @@ const debouncedSuggestShip = debounce(q => suggestCustomer("ship", q), 180);
 
 // Material suggest — same pattern for /api/orders/material_suggest.
 const _matCache = {};
+/* Monotonic request id so an out-of-order fetch completion (user
+   typed quickly, two fetches raced) can't overwrite the popover
+   with stale rows.  Only the latest fetch applies. */
+let _matFetchSeq = 0;
 async function suggestMaterial(q){
+  const mySeq = ++_matFetchSeq;
   q = String(q||"").trim();
   if(q.length < 1){
     fillDatalist("mcode_list", []);
     fillDatalist("desc_list", []);
+    /* Blank input also clears the popover so an old search's
+       candidates don't bleed through when the user re-focuses. */
+    _matPopoverState.rows = [];
+    _hideMatPopover();
     return;
   }
   const key = q.toLowerCase();
@@ -1501,6 +1510,18 @@ async function suggestMaterial(q){
     rows = await apiGet(`/api/orders/material_suggest?q=${encodeURIComponent(q)}`) || [];
     if(Array.isArray(rows)) _matCache[key] = rows;
     else rows = [];
+  }
+  /* Out-of-order guard — if a newer fetch has started while this
+     one was in flight, discard this result. */
+  if (mySeq !== _matFetchSeq) return;
+  /* And double-check that the input still carries the query we
+     fetched for; if the user kept typing after we started, let the
+     next debounced fetch update the UI instead of flashing stale
+     candidates. */
+  const _activeInp = document.activeElement;
+  if (_activeInp && _activeInp.matches && _activeInp.matches('[data-mat-suggest="1"]')) {
+    const curVal = (_activeInp.value || "").trim().toLowerCase();
+    if (curVal && curVal !== key && !curVal.startsWith(key)) return;
   }
   // Show "size · pattern · product · brand · #M-Code" in the size
   // dropdown so (a) different tread patterns on the same size are
@@ -3228,7 +3249,14 @@ function newRow(){
   mcodeInp.addEventListener("input",  e => debouncedSuggestMat(e.target.value));
   mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
   mcodeInp.addEventListener("focus",  e => {
-    if (_matPopoverState.rows.length){ _showMatPopoverFor(mcodeInp, tr, mcodeInp.value); }
+    /* Fresh focus — clear whatever stale rows the popover was
+       holding from the previous cell and re-fetch against this
+       cell's current value.  Prevents the "old row's candidates
+       surface when I click a new cell" bug. */
+    _matPopoverState.rows = [];
+    _hideMatPopover();
+    const v = (mcodeInp.value || "").trim();
+    if (v) suggestMaterial(v);
   });
   mcodeInp.addEventListener("keydown", _matPopoverKeydown);
   /* Multi-line paste — a BDE routinely copies a column of M-Codes
@@ -3243,7 +3271,10 @@ function newRow(){
   descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
   descInp.addEventListener("focus",   e => {
-    if (_matPopoverState.rows.length){ _showMatPopoverFor(descInp, tr, descInp.value); }
+    _matPopoverState.rows = [];
+    _hideMatPopover();
+    const v = (descInp.value || "").trim();
+    if (v) suggestMaterial(v);
   });
   descInp.addEventListener("keydown", _matPopoverKeydown);
   /* Product Name + Pattern inputs share the desc_list datalist and
@@ -3253,13 +3284,19 @@ function newRow(){
   prodInp?.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
   prodInp?.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
   prodInp?.addEventListener("focus",   e => {
-    if (_matPopoverState.rows.length){ _showMatPopoverFor(prodInp, tr, prodInp.value); }
+    _matPopoverState.rows = [];
+    _hideMatPopover();
+    const v = (prodInp.value || "").trim();
+    if (v) suggestMaterial(v);
   });
   prodInp?.addEventListener("keydown", _matPopoverKeydown);
   patInp?.addEventListener("input",    e => debouncedSuggestMat(e.target.value));
   patInp?.addEventListener("change",   e => fillMaterialFromDesc(tr, e.target.value));
   patInp?.addEventListener("focus",    e => {
-    if (_matPopoverState.rows.length){ _showMatPopoverFor(patInp, tr, patInp.value); }
+    _matPopoverState.rows = [];
+    _hideMatPopover();
+    const v = (patInp.value || "").trim();
+    if (v) suggestMaterial(v);
   });
   patInp?.addEventListener("keydown",  _matPopoverKeydown);
   ["qty","list_price","base_dc","mth_dc","sp_dc","vol_dc","add_dc","aging_dc"].forEach(c => {

@@ -3079,9 +3079,21 @@ def api_orders_material_suggest():
         tok_pairs = []
         for tok in tokens:
             nt = _normalise(tok)
-            dt = _digits(tok)
             if not nt: continue
-            tok_pairs.append((nt, dt if len(dt) >= 2 else ""))
+            # digits-only fallback is ONLY meaningful when the user
+            # typed a bare number string like "2255017" (meaning
+            # 225/50R17 sans slash/R).  A mixed token like "dh16"
+            # or "k435" is a letter-led pattern search — pulling
+            # out the "16" / "435" and substring-matching every tire
+            # size that contains those digits produces a flood of
+            # false positives (every 16" rim size matches "dh16").
+            # Only populate dt when the raw token is pure digits.
+            tok_stripped = tok.strip()
+            if tok_stripped.isdigit() and len(tok_stripped) >= 2:
+                dt = tok_stripped
+            else:
+                dt = ""
+            tok_pairs.append((nt, dt))
         if not tok_pairs:
             return jsonify([])
         def _row_matches(r):
@@ -3167,13 +3179,17 @@ def api_orders_material_suggest():
             if brand_expr:
                 per_tok.append(f"{brand_expr} LIKE %s")
                 params.append(f"%{tok_norm}%")
-            # Digits-only fallback — only meaningful when the token
-            # carries digits AND is at least 2 chars (a bare "14",
-            # "17" from an inch typing still narrows the size list).
-            # Matches size and m_code, NOT pattern/product/brand
-            # (those are letters).
-            tok_digits = _digits_only_py(tok)
-            if tok_digits and len(tok_digits) >= 2:
+            # Digits-only fallback — only meaningful when the raw
+            # token is PURELY digits (e.g. "2255017" meaning 225/50R17
+            # sans slash/R).  A letter-led token like "dh16" or "k435"
+            # is a pattern search; stripping it to just the digits
+            # ("16" / "435") would match every tire size that happens
+            # to contain those digits, which drowns the real pattern
+            # match in false positives.  Guard on tok.isdigit() so the
+            # fallback stays scoped to size-digit typing.
+            tok_stripped = tok.strip()
+            tok_digits = tok_stripped if (tok_stripped.isdigit() and len(tok_stripped) >= 2) else ""
+            if tok_digits:
                 per_tok.append(f"{code_digits_expr} LIKE %s")
                 params.append(f"%{tok_digits}%")
                 if desc_digits_expr:
