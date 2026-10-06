@@ -2049,6 +2049,21 @@ async function applyAdditionalDCToRow(rowEl){
   } else {
     delete rowEl.dataset.hasProductPromo;
   }
+  /* SOVD (Trueblu) is strictly the HK-PCLT ladder.  The backend's
+     brand-only tier can accidentally match a TBR line against a
+     Customer × HK SOVD rule whose row has no line/material/pattern
+     constraint — the DB rule is correct (customer qualifies for
+     SOVD on HK), but it is NEVER meant to feed a TBR m-code (3xxx)
+     because the SOVD contract specifically covers PCLTs.  Treat
+     that case as "no match" so the row keeps its base DC, Remark
+     stays clean, and the TBR total doesn't inflate with a phantom
+     18 %. */
+  const _isSovd = data && data.matched
+                  && String(data.promo || "").toUpperCase() === "SOVD";
+  const _rowLine = (rowEl.dataset.line || "").toUpperCase().trim();
+  if (_isSovd && _rowLine && _rowLine !== "PCLT"){
+    data = Object.assign({}, data, {matched: false, additional_dc: null});
+  }
   if (data && data.matched && data.additional_dc != null){
     spEl.value = fmtPct(data.additional_dc);
     spEl.dataset.autoSpDc = "1";
