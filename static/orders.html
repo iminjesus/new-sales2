@@ -915,18 +915,20 @@
     body.print-customer table.lines td[data-col="remark"] {
       display: none !important;
     }
-    /* Blank out the placeholder hint text (e.g. "M-Code",
-       "size · pattern", "product family") on empty line rows so a
-       Customer PDF of a half-filled form doesn't carry stray grey
-       labels.  `color:transparent` alone leaves the glyphs rendered
-       in some print paths; `opacity:0` is the belt + braces. */
-    body.print-customer table.lines tbody input::placeholder,
-    body.print-customer table.lines tbody textarea::placeholder {
+    /* Blank out EVERY placeholder on the Customer PDF: the lines
+       table's "M-Code / size · pattern / product family" labels AND
+       the Customer-detail inputs' "type code or name" / "type name
+       or code" hints (visible in Sold-to + Ship-to + Account/Name
+       boxes when the form is sent empty).  `color:transparent`
+       alone leaves the glyphs rendered in some print paths;
+       `opacity:0` is the belt + braces. */
+    body.print-customer input::placeholder,
+    body.print-customer textarea::placeholder {
       color: transparent !important;
       opacity: 0 !important;
     }
-    body.print-customer table.lines tbody input::-webkit-input-placeholder,
-    body.print-customer table.lines tbody textarea::-webkit-input-placeholder {
+    body.print-customer input::-webkit-input-placeholder,
+    body.print-customer textarea::-webkit-input-placeholder {
       color: transparent !important;
       opacity: 0 !important;
     }
@@ -4336,6 +4338,85 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     }
   });
 })();
+
+/* ─── Customer PDF: rebuild tfoot into aligned Subtotal + Freight +
+   Total rows ─────────────────────────────────────────────────────
+   The on-screen tfoot carries five grand-total cells (grandListAmt,
+   grandCurrentAmt, grandAddSupport, avgDC, grandTotal) plus the
+   "Input Y for Freight Charge?" prompt — all internal-only.  Hiding
+   individual TDs via display:none makes the surviving cells shift
+   left of where the subtotal's grandTotal sits, so the "Freight
+   Charge" + "Total" rows end up visually offset from the subtotal's
+   amount column.  Rewriting the whole tfoot right before print with
+   a clean 3-row skeleton (and restoring on afterprint) guarantees
+   all three amounts stack vertically under the Total Amount column.
+   Must run AFTER the X-column shift above so that handler's
+   mutations on the original cells are discarded by our innerHTML
+   overwrite, and we use pre-shifted colspan values ourselves
+   (leading colspan accounts for X being display:none'd). */
+(function _wireCustomerPdfTfootRewrite(){
+  let _origTfootHtml = null;
+  const _tfoot = () => document.querySelector("table.lines tfoot");
+
+  window.addEventListener("beforeprint", () => {
+    if (!document.body.classList.contains("print-customer")) return;
+    const tfoot = _tfoot();
+    if (!tfoot) return;
+    _origTfootHtml = tfoot.innerHTML;
+
+    const txt = (id, dflt) => {
+      const el = document.getElementById(id);
+      const s  = (el && (el.textContent || el.value)) || "";
+      return (s.trim() === "") ? dflt : s;
+    };
+    const ttlQty     = txt("ttlQty",     "0");
+    const grandTotal = txt("grandTotal", "0.00");
+    const freightAmt = txt("freightChg", "");
+    const finalTotal = txt("finalTotal", "0.00");
+
+    /* The X column is display:none'd on print, so the table has 27
+       logical columns.  Visible slots after hiding every column
+       outside the Customer-PDF whitelist:
+         col 1  = No,  col 2  = M-Code, col 3  = Qty,
+         cols 4-8 = Size..Load/Speed,   col 21 = Total Amount.
+       Hidden slots (cols 9-20, 22-27) have zero width because every
+       header + body cell at those columns carries display:none.  A
+       colspan=20 cell on cols 1-20 therefore renders only the width
+       of visible cols 1-8; text-align:right then anchors the label
+       to the right edge of col 8 (= left of the Total Amount col),
+       so the Freight / Total amount at col 21 lands directly under
+       the subtotal's grandTotal cell. */
+    tfoot.innerHTML = `
+      <tr class="total-row cust-subtotal-row">
+        <td colspan="1"></td>
+        <td class="label">Total</td>
+        <td class="num center">${ttlQty}</td>
+        <td colspan="5"></td>
+        <td colspan="12"></td>
+        <td class="total-cell"><div class="totalv">${grandTotal}</div></td>
+        <td colspan="6"></td>
+      </tr>
+      <tr class="total-row summary-row cust-freight-row">
+        <td colspan="20" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
+        <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
+        <td colspan="6"></td>
+      </tr>
+      <tr class="total-row summary-row grand-row cust-grand-row">
+        <td colspan="20" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
+        <td class="total-cell summary-amt"><div class="totalv">${finalTotal}</div></td>
+        <td colspan="6"></td>
+      </tr>
+    `;
+  });
+
+  window.addEventListener("afterprint", () => {
+    if (_origTfootHtml === null) return;
+    const tfoot = _tfoot();
+    if (tfoot) tfoot.innerHTML = _origTfootHtml;
+    _origTfootHtml = null;
+  });
+})();
+
 $("#btnClear").addEventListener("click", () => {
   if(!confirm("Clear the whole form?")) return;
   $$("input, textarea").forEach(el => { if(!el.closest("thead")) el.value = ""; });
