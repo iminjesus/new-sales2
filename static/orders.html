@@ -758,14 +758,32 @@
     * { -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important; }
     /* Chrome-in-tab print (used by "Print" button) — hide the URL
-       block and app chrome that would otherwise sit above the SPRF. */
+       block and app chrome that would otherwise sit above the SPRF.
+       Also hides BOTH the X delete column (`.row-del-th` header AND
+       `.row-del-cell` body) so the lines table doesn't carry a dead
+       column on paper + the data alignment stays correct (hiding
+       the body cell but leaving the header shifted every subsequent
+       column one slot left of its label). */
     #agedStockPanel, #agedStockReopen, .pagenav, .toolbar,
     #btnAddRow, #btnClear, #btnPrint, #btnExcel, #btnSubmit, #btnSaveTemp,
     #btnEdit, #btnToolbarApprove, #btnToolbarReject,
     #btnCancel, #btnRevive, #btnExitHome, #btnCustomerPdf,
     #bottomApproveBar,
-    .status, .row-del, .row-del-cell,
+    .status,
+    .row-del, .row-del-cell, .row-del-th,
     #approvalPath { display: none !important; }
+
+    /* Keep the two-pane Customer / Order# layout side-by-side on
+       paper.  Chromium calculates print viewport width in a way
+       that occasionally trips the max-width:900px media query
+       below, which would collapse .meta to a single column (= the
+       stacked layout the user saw).  Pin the two columns here with
+       !important so neither the mobile media query nor the
+       zoom-to-fit math can override it. */
+    .meta { grid-template-columns: 1fr 1fr !important; }
+    .grid { grid-template-columns: 150px 1fr 150px 1fr !important; }
+    .grid .lbl.full-row { grid-column: 1 / span 1 !important; }
+    .grid .val.full-row { grid-column: 2 / span 3 !important; }
 
     /* ─── Customer PDF variant ──────────────────────────────────
        Triggered by #btnCustomerPdf tagging <body> with the
