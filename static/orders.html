@@ -1077,6 +1077,16 @@
       page-break-inside: auto !important;
       break-inside: auto !important;
     }
+    /* The _wirePrintTableReflow handler reparents the tfoot rows
+       onto tbody right before Chromium lays pages out so Chromium
+       stops pinning the whole totals block to its own page.  The
+       tfoot ends up EMPTY for the duration of the print.  Hide the
+       empty tfoot so its invisible row-group doesn't bump the end
+       of the lines table past page 1's bottom margin — otherwise
+       Chromium interprets that single-pixel overflow as "there is
+       content on page 2" and renders an empty page 2 carrying only
+       the repeated thead (the user's "extra blank page" complaint). */
+    table.lines tfoot:empty { display: none !important; }
     table.lines tbody tr,
     table.lines tfoot tr {
       page-break-inside: avoid;
@@ -4515,6 +4525,15 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     while (tfoot.firstChild) {
       tbody.appendChild(tfoot.firstChild);
     }
+    // Belt-and-braces: force the empty tfoot out of flow entirely.
+    // Even an empty <tfoot> with display:table-row-group leaves a
+    // single-pixel row-group that bumps the end of the lines table
+    // past page 1's bottom margin, which Chromium then interprets
+    // as "content exists on page 2" and renders a blank page 2
+    // carrying only the repeated thead.  Flip tfoot to display:none
+    // for the duration of the print — the CSS :empty rule does the
+    // same but inline style is immune to specificity surprises.
+    tfoot.style.display = "none";
   });
 
   window.addEventListener("afterprint", () => {
@@ -4524,6 +4543,7 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     if (_state.tbodyHtml !== null) {
       tbody.innerHTML = _state.tbodyHtml;
       tfoot.innerHTML = _state.tfootHtml;
+      tfoot.style.display = "";
       _state.tbodyHtml = null;
       _state.tfootHtml = null;
     }
