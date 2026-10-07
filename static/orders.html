@@ -551,17 +551,20 @@
      table scrolls horizontally when it runs off-viewport.  The
      min-width on the table itself is also bumped so the Remark
      column always survives the browser's auto-shrink pass. */
-  /* Remark column: deliberately NO fixed width so with
-     table-layout:fixed it absorbs whatever space remains after the
-     sized columns.  The lines table was floating narrower than the
-     Customer / Order# header band above it because every column had
-     an explicit width — now the Remark column stretches to the
-     right margin and the whole SPRF reads at one consistent width. */
+  /* Remark column: use the width:99% trick so with table-layout:
+     fixed the column expands to fill whatever is left over after
+     the sized columns.  Just removing the explicit width isn't
+     enough — Chrome keeps every other column at its declared width
+     and leaves the table narrower than its parent.  Setting
+     width:99% on both header and body forces the remainder onto
+     this column, so the lines table always reaches the same right
+     edge as the Customer / Order# header band above it.
+     min-width:140px stays as the floor on narrow windows. */
   table.lines thead th.remark-hdr{
     background:#f1f5f9;color:#334155;
-    min-width:140px;
+    width:99%;min-width:140px;
   }
-  table.lines tbody td.remark-cell{min-width:140px}
+  table.lines tbody td.remark-cell{width:99%;min-width:140px}
   table.lines tbody td.remark-cell input{
     background:#f8fafc;color:#334155;font-weight:600;text-align:center;
     font-size:11px;letter-spacing:.02em;
