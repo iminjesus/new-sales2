@@ -3390,6 +3390,12 @@ function newRow(){
   for(const cell of cells){
     const td = document.createElement("td");
     td.className = cell.cls || "";
+    /* Mirror the input's data-col onto the TD so the Customer PDF
+       column-hide CSS (`table.lines td[data-col="..."]`) actually
+       matches body cells.  Without this the hide rule only landed
+       on the TH headers and every body TD stayed visible as an
+       empty coloured strip to the right of Total Amount. */
+    td.setAttribute("data-col", cell.c);
     const inp = document.createElement("input");
     inp.setAttribute("data-col", cell.c);
     if(cell.ro) inp.readOnly = true;
