@@ -1000,6 +1000,15 @@
     }
     body.print-customer table.lines th[data-col="total_amount"],
     body.print-customer table.lines td[data-cell-col="total_amount"] {
+      /* Width:99% is the "absorb all leftover" trick for a table
+         column: with Remark hidden on the Customer PDF nothing else
+         is claiming the right-hand flex slot, so the Total Amount
+         column collapses to a thin stripe and leaves a dead zone
+         to the right.  Push 99% here and this column stretches out
+         to the right page margin, matching the header + Total band
+         widths above and below.  min-width floors the money cell so
+         "0.00" always has room to render. */
+      width: 99% !important;
       min-width: 90px !important;
     }
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
@@ -4443,17 +4452,14 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
         <td colspan="5"></td>
         <td colspan="12"></td>
         <td class="total-cell"><div class="totalv">${grandTotal}</div></td>
-        <td colspan="6"></td>
       </tr>
       <tr class="total-row summary-row cust-freight-row">
         <td colspan="21" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
         <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
-        <td colspan="6"></td>
       </tr>
       <tr class="total-row summary-row grand-row cust-grand-row">
         <td colspan="21" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
         <td class="total-cell summary-amt"><div class="totalv">${finalTotal}</div></td>
-        <td colspan="6"></td>
       </tr>
     `;
   });
