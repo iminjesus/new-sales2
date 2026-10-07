@@ -962,6 +962,46 @@
     body.print-customer textarea::-webkit-resizer {
       display: none !important;
     }
+    /* Spread the lines table across the full page width on the
+       Customer PDF.  The on-screen rules pin every column to a
+       narrow fixed px width (M-Code 66, Qty 42, Size 74, narrow 58,
+       mid 72, …) and park the leftover on the Remark column's
+       width:99%.  With Remark + 18 other columns hidden, those
+       declared widths sum to ~530px which under table-layout:fixed
+       leaves the visible 9 columns bunched on the left and a
+       600px dead zone to the right of Total Amount.  Flip to
+       `table-layout: auto` so Chrome auto-sizes each visible
+       column to fill the parent width proportionally, and clear
+       the hard width caps so no column can refuse to grow.  The
+       No-column keeps its tight 24px cap because it only ever
+       carries a single digit; everything else gets a comfortable
+       minimum so the printed row reads cleanly in portrait. */
+    body.print-customer table.lines {
+      table-layout: auto !important;
+      width: 100% !important;
+    }
+    body.print-customer table.lines th,
+    body.print-customer table.lines td {
+      width: auto !important;
+      min-width: 60px !important;
+      max-width: none !important;
+    }
+    body.print-customer table.lines th.row-no-th,
+    body.print-customer table.lines td.row-no-cell {
+      width: 24px !important;
+      min-width: 24px !important;
+      max-width: 24px !important;
+    }
+    body.print-customer table.lines th.qty-hdr,
+    body.print-customer table.lines td.qty-cell {
+      width: 44px !important;
+      min-width: 44px !important;
+      max-width: 60px !important;
+    }
+    body.print-customer table.lines th[data-col="total_amount"],
+    body.print-customer table.lines td[data-cell-col="total_amount"] {
+      min-width: 90px !important;
+    }
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
        within the ~1085 px printable area of an A4-landscape page.
        Zoom (rather than transform:scale) keeps the browser's own
