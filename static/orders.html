@@ -848,21 +848,24 @@
     /* Hide the "Internal Use Only" banner on the Customer PDF and
        let the sibling .customer-only badge take its place.  The
        regular Print path keeps the Internal label. */
+    body.print-customer .hdr .internal,
     body.print-customer .internal,
     /* ✕ clear buttons on Sold-to / Ship-to Name inputs are a form
        affordance — never needed on the printed copy. */
     body.print-customer .input-clear,
     body.print-customer .clearable-wrap .input-clear,
-    /* Freight-prompt row ("Input Y for Freight Charge?") is noise
-       on a customer-facing PDF.  The computed Freight Charge amount
-       row below it stays as part of the totals. */
-    body.print-customer tr.freight-row,
-    /* Oct-8 PM: drop the two summary rows below the Subtotal —
-       "Total inc GST" and "Final Total" leave a wide empty band on
-       the customer copy because every leading td is colspan-blank
-       and only one visible cell carries a value.  Hiding them keeps
-       the subtotal row as the single visible total line. */
-    body.print-customer tr.total-row.summary-row {
+    body.print-customer button.input-clear,
+    /* "Input Y for Freight Charge?" prompt label + its small input —
+       hide ONLY these two cells of the freight-row.  The row itself
+       stays visible so the computed "Freight Charge (10%) if any"
+       label + amount still print as part of the totals. */
+    body.print-customer tr.freight-row .freight-prompt-cell,
+    body.print-customer tr.freight-row .freight-prompt-input,
+    /* Oct-8 PM: drop ONLY the "Total inc GST" row (its leading
+       colspan-blank leaves a wide empty band on the customer copy)
+       — the final "Total" (grand-row) and the Freight Charge line
+       above it STAY visible as the customer-facing totals block. */
+    body.print-customer tr.total-row.summary-row.inc-gst-row {
       display: none !important;
     }
     /* .customer-only is hidden by default (both on screen and on
@@ -900,36 +903,62 @@
     body.print-customer table.lines td[data-col="proposed_price"],
     body.print-customer table.lines th[data-col="proposed_dc"],
     body.print-customer table.lines td[data-col="proposed_dc"],
-    body.print-customer table.lines th[data-col="nsw_stock"],
-    body.print-customer table.lines td[data-col="nsw_stock"],
-    body.print-customer table.lines th[data-col="qld_stock"],
-    body.print-customer table.lines td[data-col="qld_stock"],
-    body.print-customer table.lines th[data-col="vic_stock"],
-    body.print-customer table.lines td[data-col="vic_stock"],
-    body.print-customer table.lines th[data-col="wa_stock"],
-    body.print-customer table.lines td[data-col="wa_stock"],
+    body.print-customer table.lines th[data-col="stock_nsw"],
+    body.print-customer table.lines td[data-col="stock_nsw"],
+    body.print-customer table.lines th[data-col="stock_qld"],
+    body.print-customer table.lines td[data-col="stock_qld"],
+    body.print-customer table.lines th[data-col="stock_vic"],
+    body.print-customer table.lines td[data-col="stock_vic"],
+    body.print-customer table.lines th[data-col="stock_wa"],
+    body.print-customer table.lines td[data-col="stock_wa"],
     body.print-customer table.lines th[data-col="remark"],
     body.print-customer table.lines td[data-col="remark"] {
       display: none !important;
     }
-    /* Blank out the placeholder hint text (e.g. "size · pattern · p",
-       "product family") on empty line rows so a Customer PDF of a
-       half-filled form doesn't carry stray grey labels. */
+    /* Blank out the placeholder hint text (e.g. "M-Code",
+       "size · pattern", "product family") on empty line rows so a
+       Customer PDF of a half-filled form doesn't carry stray grey
+       labels.  `color:transparent` alone leaves the glyphs rendered
+       in some print paths; `opacity:0` is the belt + braces. */
     body.print-customer table.lines tbody input::placeholder,
     body.print-customer table.lines tbody textarea::placeholder {
       color: transparent !important;
+      opacity: 0 !important;
+    }
+    body.print-customer table.lines tbody input::-webkit-input-placeholder,
+    body.print-customer table.lines tbody textarea::-webkit-input-placeholder {
+      color: transparent !important;
+      opacity: 0 !important;
     }
     /* Drop the date-picker calendar glyph that Chromium stamps on
        <input type="date"> cells — it's a form affordance, not part
        of the printed quote. */
     body.print-customer input[type="date"]::-webkit-calendar-picker-indicator {
       display: none !important;
+      -webkit-appearance: none !important;
+      appearance: none !important;
+    }
+    /* Hide the tiny datalist arrow Chromium stamps on <input list="…">
+       (Sold-to / Ship-to Account + Name inputs).  Same selector family
+       as the date-picker glyph. */
+    body.print-customer input[list]::-webkit-calendar-picker-indicator,
+    body.print-customer input[list]::-webkit-list-button {
+      display: none !important;
+      -webkit-appearance: none !important;
+      appearance: none !important;
+      opacity: 0 !important;
     }
     /* Hide the diagonal resize-handle on textareas (Special
        Instruction) — the handle is interactive-only, prints as
-       stray lines in the corner. */
+       stray lines in the corner.  overflow:hidden belts the
+       resize:none in Firefox / older WebKit where the corner grip
+       is drawn via a scrollbar artefact instead of CSS resize. */
     body.print-customer textarea {
       resize: none !important;
+      overflow: hidden !important;
+    }
+    body.print-customer textarea::-webkit-resizer {
+      display: none !important;
     }
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
        within the ~1085 px printable area of an A4-landscape page.
@@ -1321,10 +1350,10 @@
           <th class="mid pink-hdr" data-col="proposed_price" title="Type here to override — the Additional Special DC% cell then back-solves so the chain matches the price you set.">Proposed<br>Unit Price</th>
           <th class="mid pink-hdr" data-col="total_amount" title="Type a total here and the Proposed Unit Price + Additional Special DC% both back-solve to match.">Total Amount</th>
           <th class="narrow" data-col="proposed_dc">Proposed DC %</th>
-          <th class="stock narrow" data-col="nsw_stock" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
-          <th class="stock narrow" data-col="qld_stock" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
-          <th class="stock narrow" data-col="vic_stock" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
-          <th class="stock narrow" data-col="wa_stock" title="Stock in WA plant (42R4)">WA<br>stock</th>
+          <th class="stock narrow" data-col="stock_nsw" title="Stock in NSW plant (42R1)">NSW<br>stock</th>
+          <th class="stock narrow" data-col="stock_qld" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
+          <th class="stock narrow" data-col="stock_vic" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
+          <th class="stock narrow" data-col="stock_wa"  title="Stock in WA plant (42R4)">WA<br>stock</th>
           <th class="remark-hdr" data-col="remark" title="Auto-applied promo tag — 443 / Special / Trueblu / Aging / Manual — so the reader sees at a glance where each line's Additional Special DC% came from.">Remark</th>
         </tr>
       </thead>
@@ -1372,8 +1401,11 @@
           <td colspan="5"></td>
         </tr>
         <!-- Total inc GST (subtotal + 10%).  Colspans bumped +1 on
-             the leading blank to make room for the new No column. -->
-        <tr class="total-row summary-row">
+             the leading blank to make room for the new No column.
+             Tagged `inc-gst-row` so the Customer PDF can hide only
+             this row without touching the Freight Charge and final
+             Total lines beneath it. -->
+        <tr class="total-row summary-row inc-gst-row">
           <td colspan="18" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
@@ -1383,11 +1415,14 @@
              Amount sits in the same column (Total Amount) as the inc-
              GST and final-total lines so all three stack vertically.
              Tagged `freight-row` so the Customer PDF stylesheet can
-             drop the whole "Input Y" prompt line. -->
+             drop the "Input Y" prompt label + input while keeping the
+             computed Freight Charge amount visible.  The two prompt
+             cells carry `freight-prompt-cell` / `freight-prompt-input`
+             so Customer-PDF rules target them individually. -->
         <tr class="total-row summary-row freight-row">
           <td colspan="12" class="summary-blank"></td>
-          <td class="label right-lbl summary-lbl" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
-          <td class="center summary-input">
+          <td class="label right-lbl summary-lbl freight-prompt-cell" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
+          <td class="center summary-input freight-prompt-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
           </td>
           <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10%) if any</td>
