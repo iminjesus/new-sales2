@@ -310,6 +310,11 @@
     padding:6px 14px;font-weight:700;letter-spacing:.5px;
     background:#fff;border-radius:2px;
   }
+  .hdr .customer-only{
+    border:2px solid #0f766e;color:#0f766e;
+    padding:6px 14px;font-weight:700;letter-spacing:.5px;
+    background:#fff;border-radius:2px;
+  }
   .hdr .title{
     background:#f5c518;color:#000;text-align:center;
     padding:8px 12px;font-weight:800;line-height:1.15;
@@ -805,11 +810,22 @@
     .grid .lbl.full-row { grid-column: 1 / span 1 !important; }
     .grid .val.full-row { grid-column: 2 / span 3 !important; }
 
-    /* ─── Customer PDF variant ──────────────────────────────────
+    /* ─── Customer Copy variant ──────────────────────────────────
        Triggered by #btnCustomerPdf tagging <body> with the
-       .print-customer class right before window.print().  Drops
+       .print-customer class right before window.print().  Strips
        every internal-only field so the PDF the BDE forwards to the
-       customer carries just the quoted lines + totals. */
+       customer carries just the quoted lines + totals.  The
+       Oct-8 spec also:
+         • swaps the "Internal Use Only" banner for "Customer Copy"
+         • hides the ✕ clear buttons next to Sold-to / Ship-to Name
+         • removes the "Input Y for Freight Charge?" prompt row
+         • keeps the Remark column visible (user annotation)
+         • keeps Total Amount visible as the only $-column
+         • switches the page orientation to A4 PORTRAIT
+    */
+    @page cust-portrait { size: A4 portrait; margin: 6mm; }
+    body.print-customer { page: cust-portrait; }
+
     body.print-customer #rebateWrap,
     body.print-customer #approvalPanel,
     body.print-customer #csPanel,
@@ -827,12 +843,30 @@
     body.print-customer .val-reason,
     body.print-customer textarea#mgmt_reason,
     /* SOVD TTL strip — internal counter, not for the customer. */
-    body.print-customer .sovd {
+    body.print-customer .sovd,
+    /* Hide the "Internal Use Only" banner on the Customer PDF and
+       let the sibling .customer-only badge take its place.  The
+       regular Print path keeps the Internal label. */
+    body.print-customer .internal,
+    /* ✕ clear buttons on Sold-to / Ship-to Name inputs are a form
+       affordance — never needed on the printed copy. */
+    body.print-customer .input-clear,
+    body.print-customer .clearable-wrap .input-clear,
+    /* Freight-prompt row ("Input Y for Freight Charge?") is noise
+       on a customer-facing PDF.  The computed Freight Charge amount
+       row below it stays as part of the totals. */
+    body.print-customer tr.freight-row {
       display: none !important;
     }
+    /* .customer-only is hidden by default (both on screen and on
+       the regular print path) and only reveals when the body
+       carries .print-customer. */
+    .customer-only { display: none; }
+    body.print-customer .customer-only { display: block !important; }
+
     /* Columns to hide on the lines table — tagged with data-col on
-       every header + body + foot cell.  CSS attribute selectors do
-       the hiding so we don't touch markup per column. */
+       every header + body + foot cell.  Remark + Total Amount stay
+       visible per the Oct-8 user annotation. */
     body.print-customer table.lines th[data-col="list_price"],
     body.print-customer table.lines td[data-col="list_price"],
     body.print-customer table.lines th[data-col="base_dc"],
@@ -843,6 +877,8 @@
     body.print-customer table.lines td[data-col="current_dc"],
     body.print-customer table.lines th[data-col="current_price"],
     body.print-customer table.lines td[data-col="current_price"],
+    body.print-customer table.lines th[data-col="current_amount"],
+    body.print-customer table.lines td[data-col="current_amount"],
     body.print-customer table.lines th[data-col="mth_dc"],
     body.print-customer table.lines td[data-col="mth_dc"],
     body.print-customer table.lines th[data-col="vol_dc"],
@@ -864,10 +900,15 @@
     body.print-customer table.lines th[data-col="vic_stock"],
     body.print-customer table.lines td[data-col="vic_stock"],
     body.print-customer table.lines th[data-col="wa_stock"],
-    body.print-customer table.lines td[data-col="wa_stock"],
-    body.print-customer table.lines th[data-col="remark"],
-    body.print-customer table.lines td[data-col="remark"] {
+    body.print-customer table.lines td[data-col="wa_stock"] {
       display: none !important;
+    }
+    /* Blank out the placeholder hint text (e.g. "size · pattern · p",
+       "product family") on empty line rows so a Customer PDF of a
+       half-filled form doesn't carry stray grey labels. */
+    body.print-customer table.lines tbody input::placeholder,
+    body.print-customer table.lines tbody textarea::placeholder {
+      color: transparent !important;
     }
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
        within the ~1085 px printable area of an A4-landscape page.
@@ -1057,6 +1098,10 @@
       Ph 1300 13 30 30 &nbsp;|&nbsp; ABN 77 082 389 704 &nbsp;|&nbsp; www.hankooktyre.com.au
     </div>
     <div class="internal">Internal Use Only</div>
+    <!-- Companion badge shown only when the Customer PDF button
+         flips <body> into .print-customer; hidden on screen + on
+         the regular print path. -->
+    <div class="customer-only">Customer Copy</div>
     <div class="title">Special Price Request Form<small id="hdrPeriod">June 2026</small></div>
   </div>
   <!-- Order Number ribbon — populated by hydrateSubmittedOrder for
@@ -1315,8 +1360,10 @@
         </tr>
         <!-- Freight prompt + 10 % freight (fires only when "Y" typed).
              Amount sits in the same column (Total Amount) as the inc-
-             GST and final-total lines so all three stack vertically. -->
-        <tr class="total-row summary-row">
+             GST and final-total lines so all three stack vertically.
+             Tagged `freight-row` so the Customer PDF stylesheet can
+             drop the whole "Input Y" prompt line. -->
+        <tr class="total-row summary-row freight-row">
           <td colspan="12" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
           <td class="center summary-input">
