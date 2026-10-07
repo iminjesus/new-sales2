@@ -3981,20 +3981,23 @@ def api_orders_base_dc():
         if hk_tbr_pick:  out["HK_TBR"]  = hk_tbr_pick[2]
         if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
 
-        # ATD + 443DC Base DC override — business rule (Oct-6 spec,
-        # amended Oct-7 to cover LF too):
-        # when the customer qualifies for the 443DC promo AND their
-        # sold_to_group is ATD/ATM, the PCLT Base DC on the matching
-        # brand flips to a fixed ladder regardless of what
-        # dc_basic_customer carries:
-        #   • HM (customer.channels='MFC') or ATM group → 52 %
-        #   • everyone else (non-HM ATD)                → 50 %
-        # 443 rules in dc_additional_customer carry their own brand
-        # (HK or LF), so we gate the HK-PCLT override on an HK-brand
-        # 443 row and LF-PCLT on an LF-brand 443 row — a customer
-        # that only has HK 443 doesn't get LF-PCLT nudged, and vice
-        # versa.  TBR cells on either brand stay as the master table
-        # said.
+        # ATD + 443DC Base DC override — business rule (revised Oct-7
+        # evening):  when the customer qualifies for the 443DC promo
+        # AND their sold_to_group is ATD/ATM, the PCLT Base DC on the
+        # matching brand is CAPPED (not replaced) at a ceiling:
+        #   • HM (customer.channels='MFC') or ATM group → cap at 52 %
+        #   • everyone else (non-HM ATD)                → cap at 50 %
+        # If the master table already carries a Base DC at or BELOW
+        # that cap, keep the master value — the override only lowers
+        # a too-high Base DC, it never nudges it up.  A missing
+        # (None) master value stays None (the operator will key in
+        # the real number — the rule can't manufacture one from
+        # scratch).  443 rules in dc_additional_customer carry their
+        # own brand (HK or LF), so we gate the HK-PCLT override on an
+        # HK-brand 443 row and LF-PCLT on an LF-brand 443 row — a
+        # customer that only has HK 443 doesn't get LF-PCLT nudged,
+        # and vice versa.  TBR cells on either brand stay as the
+        # master table said.
         try:
             cust_cols = _list_columns(cur, "customer")
             cust_group = ""
@@ -4038,11 +4041,25 @@ def api_orders_base_dc():
                 except Exception:
                     pass
                 is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
-                _override_val = 52.0 if is_hm else 50.0
+                _cap = 52.0 if is_hm else 50.0
+                # Cap, don't replace — only lower a Base DC that's
+                # already above the cap, and leave an already-lower
+                # (or NULL) value alone.
+                def _cap_at(key):
+                    cur_val = out.get(key)
+                    if cur_val is None:
+                        return None   # master didn't give us one
+                    try:
+                        n = float(cur_val)
+                    except Exception:
+                        return cur_val
+                    return _cap if n > _cap else n
+                _before_hk = out.get("HK_PCLT")
+                _before_lf = out.get("LF_PCLT")
                 if has_443_by_brand["HK"]:
-                    out["HK_PCLT"] = _override_val
+                    out["HK_PCLT"] = _cap_at("HK_PCLT")
                 if has_443_by_brand["LF"]:
-                    out["LF_PCLT"] = _override_val
+                    out["LF_PCLT"] = _cap_at("LF_PCLT")
                 if debug:
                     out["_debug"]["atd_443_override"] = {
                         "sold_to_group":   cust_group,
@@ -4050,9 +4067,11 @@ def api_orders_base_dc():
                         "is_hm":           is_hm,
                         "has_443_hk":      has_443_by_brand["HK"],
                         "has_443_lf":      has_443_by_brand["LF"],
-                        "override_val":    _override_val,
-                        "override_HK_PCLT": out["HK_PCLT"] if has_443_by_brand["HK"] else None,
-                        "override_LF_PCLT": out["LF_PCLT"] if has_443_by_brand["LF"] else None,
+                        "cap":             _cap,
+                        "HK_PCLT_before":  _before_hk,
+                        "HK_PCLT_after":   out.get("HK_PCLT"),
+                        "LF_PCLT_before":  _before_lf,
+                        "LF_PCLT_after":   out.get("LF_PCLT"),
                     }
         except Exception as _e:
             if debug:
