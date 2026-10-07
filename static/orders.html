@@ -855,7 +855,13 @@
     /* Freight-prompt row ("Input Y for Freight Charge?") is noise
        on a customer-facing PDF.  The computed Freight Charge amount
        row below it stays as part of the totals. */
-    body.print-customer tr.freight-row {
+    body.print-customer tr.freight-row,
+    /* Oct-8 PM: drop the two summary rows below the Subtotal —
+       "Total inc GST" and "Final Total" leave a wide empty band on
+       the customer copy because every leading td is colspan-blank
+       and only one visible cell carries a value.  Hiding them keeps
+       the subtotal row as the single visible total line. */
+    body.print-customer tr.total-row.summary-row {
       display: none !important;
     }
     /* .customer-only is hidden by default (both on screen and on
@@ -900,7 +906,9 @@
     body.print-customer table.lines th[data-col="vic_stock"],
     body.print-customer table.lines td[data-col="vic_stock"],
     body.print-customer table.lines th[data-col="wa_stock"],
-    body.print-customer table.lines td[data-col="wa_stock"] {
+    body.print-customer table.lines td[data-col="wa_stock"],
+    body.print-customer table.lines th[data-col="remark"],
+    body.print-customer table.lines td[data-col="remark"] {
       display: none !important;
     }
     /* Blank out the placeholder hint text (e.g. "size · pattern · p",
@@ -909,6 +917,18 @@
     body.print-customer table.lines tbody input::placeholder,
     body.print-customer table.lines tbody textarea::placeholder {
       color: transparent !important;
+    }
+    /* Drop the date-picker calendar glyph that Chromium stamps on
+       <input type="date"> cells — it's a form affordance, not part
+       of the printed quote. */
+    body.print-customer input[type="date"]::-webkit-calendar-picker-indicator {
+      display: none !important;
+    }
+    /* Hide the diagonal resize-handle on textareas (Special
+       Instruction) — the handle is interactive-only, prints as
+       stray lines in the corner. */
+    body.print-customer textarea {
+      resize: none !important;
     }
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
        within the ~1085 px printable area of an A4-landscape page.
@@ -4234,8 +4254,29 @@ $("#btnAddRow").addEventListener("click", addRow);
    `afterprint` event hook removes the class so the on-screen view
    isn't permanently altered. */
 document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
+  /* Shift the Subtotal row's "Total" label one cell to the left so
+     it visually lines up with the trimmed Customer PDF column set
+     (No column is the only pre-M-Code cell visible once X is
+     hidden).  The leading td carries colspan=2 to cover No + X on
+     the full-column layout; collapsing it to colspan=1 moves
+     everything downstream one slot left.  Restored by _restore()
+     after the print dialog closes so the on-screen SPRF math isn't
+     disturbed. */
+  const _leadBlanks = Array.from(
+    document.querySelectorAll('tr.total-row > td[colspan]:first-child')
+  ).filter(td => td.getAttribute("colspan") === "2");
+  _leadBlanks.forEach(td => {
+    td.dataset.origColspan = "2";
+    td.setAttribute("colspan", "1");
+  });
   const removeClass = () => {
     document.body.classList.remove("print-customer");
+    _leadBlanks.forEach(td => {
+      if (td.dataset.origColspan){
+        td.setAttribute("colspan", td.dataset.origColspan);
+        delete td.dataset.origColspan;
+      }
+    });
     window.removeEventListener("afterprint", removeClass);
   };
   document.body.classList.add("print-customer");
