@@ -4417,21 +4417,27 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     const freightAmt = txt("freightChg", "");
     const finalTotal = txt("finalTotal", "0.00");
 
-    /* The X column is display:none'd on print, so the table has 27
-       logical columns.  Visible slots after hiding every column
-       outside the Customer-PDF whitelist:
-         col 1  = No,  col 2  = M-Code, col 3  = Qty,
-         cols 4-8 = Size..Load/Speed,   col 21 = Total Amount.
-       Hidden slots (cols 9-20, 22-27) have zero width because every
-       header + body cell at those columns carries display:none.  A
-       colspan=20 cell on cols 1-20 therefore renders only the width
-       of visible cols 1-8; text-align:right then anchors the label
-       to the right edge of col 8 (= left of the Total Amount col),
-       so the Freight / Total amount at col 21 lands directly under
-       the subtotal's grandTotal cell. */
+    /* Column map — the lines table carries 28 logical columns.
+       display:none'd headers (X, List Price, Base DC %, 443DC,
+       Current DC %, Current Price, Current Order Amount, MTH, Vol,
+       Add, Aging, Add Support, Proposed Unit Price, Proposed DC,
+       NSW, QLD, VIC, WA, Remark = 19 hidden) collapse to zero width
+       but the X column keeps its slot because the subtotal row's
+       colspan=2 leading blank still spans cols 1-2 — so our
+       rewrite must sum to 28, not 27, or the row leaves a phantom
+       slot at the right.  Target positions:
+         col 1  = No,  col 2  = X (hidden),  col 3  = M-Code,
+         col 4  = Qty, cols 5-9 = Size..Load/Speed,
+         cols 10-21 = hidden,  col 22 = Total Amount,
+         cols 23-28 = hidden.
+       Place the subtotal "Total" label at col 3, the grand/freight
+       amounts at col 22 (right under grandTotal), and let the
+       label cells span cols 1-21 so text-align:right anchors each
+       label to the right edge of visible col 9 (left of Total
+       Amount). */
     tfoot.innerHTML = `
       <tr class="total-row cust-subtotal-row">
-        <td colspan="1"></td>
+        <td colspan="2"></td>
         <td class="label">Total</td>
         <td class="num center">${ttlQty}</td>
         <td colspan="5"></td>
@@ -4440,12 +4446,12 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
         <td colspan="6"></td>
       </tr>
       <tr class="total-row summary-row cust-freight-row">
-        <td colspan="20" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
+        <td colspan="21" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
         <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
         <td colspan="6"></td>
       </tr>
       <tr class="total-row summary-row grand-row cust-grand-row">
-        <td colspan="20" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
+        <td colspan="21" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
         <td class="total-cell summary-amt"><div class="totalv">${finalTotal}</div></td>
         <td colspan="6"></td>
       </tr>
