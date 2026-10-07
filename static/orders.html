@@ -1033,10 +1033,42 @@
     table.lines tfoot td { padding: 2px 3px !important; }
     table.lines tbody td input,
     table.lines tbody td textarea { padding: 1px 3px !important; }
-    /* Avoid awkward page breaks inside the order details table. */
-    table.lines { page-break-inside: avoid; }
+    /* ─── Multi-page printing ──────────────────────────────────
+       Target shape when a SPRF overflows one page:
+         Page 1   : Hankook header + Customer / Order Number grids
+                    + lines table thead + however many body rows
+                    fit, with the subtotal / totals block landing
+                    on whichever page the LAST body row lands on.
+         Page 2+  : the lines-table column-header row ONLY as the
+                    page header, then the remaining body rows,
+                    then the totals block on the final page.
+       Mechanics:
+         (1) Drop `page-break-inside: avoid` on table.lines so the
+             table may break between rows instead of forcing the
+             whole table onto the next page when it won't fit.
+         (2) Keep `thead { display: table-header-group }` so the
+             column-header row repeats on every page that carries
+             any body row (this is Chromium's native "repeated
+             table header" behaviour).
+         (3) Keep tfoot as table-row-group (NOT table-footer-group)
+             so the subtotal + Total inc GST + Freight + final
+             Total block appears ONCE at the end of the last page
+             — table-footer-group would repeat the totals block on
+             every page which isn't what the user wants.
+         (4) Keep each tbody row intact across page boundaries
+             (page-break-inside: avoid on tr) so a tyre line never
+             splits half on page 1 / half on page 2. */
+    table.lines { page-break-inside: auto; }
     table.lines thead { display: table-header-group; }
     table.lines tfoot { display: table-row-group; }
+    table.lines tbody tr { page-break-inside: avoid; }
+    /* Everything in the SPRF ABOVE the lines table (Hankook
+       letterhead, Customer / Order Number grids, SOVD strip) is
+       page-1 only — give the whole top block a hard
+       page-break-after:avoid so Chromium never leaves it stranded
+       on page 1 with the lines table pushed wholesale to page 2
+       (which was the user's "entire form shifted" symptom). */
+    .hdr, .orderBand, .meta, .sovd { page-break-after: avoid; }
   }
 </style>
 </head>
