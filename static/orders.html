@@ -505,7 +505,12 @@
      margin.  Class-based sizing on BOTH thead and tbody cells so
      the width sticks regardless of table-layout auto-shrink. */
   table.lines th.narrow,
-  table.lines td.narrow-cell{width:50px;min-width:50px}
+  table.lines td.narrow-cell{width:58px;min-width:58px}
+  /* Stock columns need a touch more room — "70.00%" / "10,000" style
+     numbers were truncating at the old 50 px.  58 px is enough for
+     5-digit stock + "70.00%" DC values without the input text clipping. */
+  table.lines th.stock,
+  table.lines td.stock-cell{width:58px;min-width:58px}
   /* Qty is even narrower — the widest visible value is 3 digits
      ("218", "132") centre-aligned; 42 px covers header + values. */
   table.lines th.qty-hdr,
@@ -546,9 +551,15 @@
      table scrolls horizontally when it runs off-viewport.  The
      min-width on the table itself is also bumped so the Remark
      column always survives the browser's auto-shrink pass. */
+  /* Remark column: deliberately NO fixed width so with
+     table-layout:fixed it absorbs whatever space remains after the
+     sized columns.  The lines table was floating narrower than the
+     Customer / Order# header band above it because every column had
+     an explicit width — now the Remark column stretches to the
+     right margin and the whole SPRF reads at one consistent width. */
   table.lines thead th.remark-hdr{
     background:#f1f5f9;color:#334155;
-    width:140px;min-width:140px;
+    min-width:140px;
   }
   table.lines tbody td.remark-cell{min-width:140px}
   table.lines tbody td.remark-cell input{
