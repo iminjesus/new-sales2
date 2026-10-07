@@ -878,41 +878,41 @@
        every header + body + foot cell.  Remark + Total Amount stay
        visible per the Oct-8 user annotation. */
     body.print-customer table.lines th[data-col="list_price"],
-    body.print-customer table.lines td[data-col="list_price"],
+    body.print-customer table.lines td[data-cell-col="list_price"],
     body.print-customer table.lines th[data-col="base_dc"],
-    body.print-customer table.lines td[data-col="base_dc"],
+    body.print-customer table.lines td[data-cell-col="base_dc"],
     body.print-customer table.lines th[data-col="sp_dc"],
-    body.print-customer table.lines td[data-col="sp_dc"],
+    body.print-customer table.lines td[data-cell-col="sp_dc"],
     body.print-customer table.lines th[data-col="current_dc"],
-    body.print-customer table.lines td[data-col="current_dc"],
+    body.print-customer table.lines td[data-cell-col="current_dc"],
     body.print-customer table.lines th[data-col="current_price"],
-    body.print-customer table.lines td[data-col="current_price"],
+    body.print-customer table.lines td[data-cell-col="current_price"],
     body.print-customer table.lines th[data-col="current_amount"],
-    body.print-customer table.lines td[data-col="current_amount"],
+    body.print-customer table.lines td[data-cell-col="current_amount"],
     body.print-customer table.lines th[data-col="mth_dc"],
-    body.print-customer table.lines td[data-col="mth_dc"],
+    body.print-customer table.lines td[data-cell-col="mth_dc"],
     body.print-customer table.lines th[data-col="vol_dc"],
-    body.print-customer table.lines td[data-col="vol_dc"],
+    body.print-customer table.lines td[data-cell-col="vol_dc"],
     body.print-customer table.lines th[data-col="add_dc"],
-    body.print-customer table.lines td[data-col="add_dc"],
+    body.print-customer table.lines td[data-cell-col="add_dc"],
     body.print-customer table.lines th[data-col="aging_dc"],
-    body.print-customer table.lines td[data-col="aging_dc"],
+    body.print-customer table.lines td[data-cell-col="aging_dc"],
     body.print-customer table.lines th[data-col="add_support"],
-    body.print-customer table.lines td[data-col="add_support"],
+    body.print-customer table.lines td[data-cell-col="add_support"],
     body.print-customer table.lines th[data-col="proposed_price"],
-    body.print-customer table.lines td[data-col="proposed_price"],
+    body.print-customer table.lines td[data-cell-col="proposed_price"],
     body.print-customer table.lines th[data-col="proposed_dc"],
-    body.print-customer table.lines td[data-col="proposed_dc"],
+    body.print-customer table.lines td[data-cell-col="proposed_dc"],
     body.print-customer table.lines th[data-col="stock_nsw"],
-    body.print-customer table.lines td[data-col="stock_nsw"],
+    body.print-customer table.lines td[data-cell-col="stock_nsw"],
     body.print-customer table.lines th[data-col="stock_qld"],
-    body.print-customer table.lines td[data-col="stock_qld"],
+    body.print-customer table.lines td[data-cell-col="stock_qld"],
     body.print-customer table.lines th[data-col="stock_vic"],
-    body.print-customer table.lines td[data-col="stock_vic"],
+    body.print-customer table.lines td[data-cell-col="stock_vic"],
     body.print-customer table.lines th[data-col="stock_wa"],
-    body.print-customer table.lines td[data-col="stock_wa"],
+    body.print-customer table.lines td[data-cell-col="stock_wa"],
     body.print-customer table.lines th[data-col="remark"],
-    body.print-customer table.lines td[data-col="remark"] {
+    body.print-customer table.lines td[data-cell-col="remark"] {
       display: none !important;
     }
     /* Blank out EVERY placeholder on the Customer PDF: the lines
@@ -3427,12 +3427,15 @@ function newRow(){
   for(const cell of cells){
     const td = document.createElement("td");
     td.className = cell.cls || "";
-    /* Mirror the input's data-col onto the TD so the Customer PDF
-       column-hide CSS (`table.lines td[data-col="..."]`) actually
-       matches body cells.  Without this the hide rule only landed
-       on the TH headers and every body TD stayed visible as an
-       empty coloured strip to the right of Total Amount. */
-    td.setAttribute("data-col", cell.c);
+    /* Tag the TD with its column key so the Customer-PDF column-hide
+       CSS (`table.lines td[data-cell-col="…"]`) actually matches
+       body cells.  Uses a DIFFERENT attribute name from the input's
+       `data-col` on purpose: the ~120 `row.querySelector(
+       '[data-col="…"]')` call sites throughout this file would
+       otherwise return the parent TD before the INPUT, and TD has
+       no `.value` property, so M-Code lookup + every per-cell
+       computation would silently break. */
+    td.setAttribute("data-cell-col", cell.c);
     const inp = document.createElement("input");
     inp.setAttribute("data-col", cell.c);
     if(cell.ro) inp.readOnly = true;
