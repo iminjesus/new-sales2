@@ -1054,14 +1054,34 @@
              so the subtotal + Total inc GST + Freight + final
              Total block appears ONCE at the end of the last page
              — table-footer-group would repeat the totals block on
-             every page which isn't what the user wants.
-         (4) Keep each tbody row intact across page boundaries
-             (page-break-inside: avoid on tr) so a tyre line never
-             splits half on page 1 / half on page 2. */
+             every page which isn't what the user wants.  Also
+             force `break-inside: auto` on the tfoot ELEMENT itself:
+             by default Chromium's print path treats the <tfoot>
+             tag as a "keep-together" group even when it carries
+             display:table-row-group, which was pushing the entire
+             totals block to page 2 any time the body rows plus the
+             totals wouldn't fit as a UNIT on page 1 — even when
+             there was plenty of room on page 1 to split body rows
+             across the page break and keep the totals right after
+             the last body row.  Setting break-inside:auto AND
+             page-break-inside:auto on the tfoot tells Chromium to
+             flow its rows like any other row-group.
+         (4) Keep each tbody / tfoot row intact across page
+             boundaries (break-inside:avoid on tr) so a tyre line
+             or a totals line never splits half on page 1 / half on
+             page 2. */
     table.lines { page-break-inside: auto; }
     table.lines thead { display: table-header-group; }
-    table.lines tfoot { display: table-row-group; }
-    table.lines tbody tr { page-break-inside: avoid; }
+    table.lines tfoot {
+      display: table-row-group;
+      page-break-inside: auto !important;
+      break-inside: auto !important;
+    }
+    table.lines tbody tr,
+    table.lines tfoot tr {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
     /* Everything in the SPRF ABOVE the lines table (Hankook
        letterhead, Customer / Order Number grids, SOVD strip) is
        page-1 only — give the whole top block a hard
@@ -1483,41 +1503,49 @@
                (stock NSW/QLD/VIC/WA + Remark = 5 tail columns). -->
           <td colspan="5"></td>
         </tr>
-        <!-- Total inc GST (subtotal + 10%).  Colspans bumped +1 on
-             the leading blank to make room for the new No column.
-             Tagged `inc-gst-row` so the Customer PDF can hide only
-             this row without touching the Freight Charge and final
-             Total lines beneath it. -->
+        <!-- Total inc GST (subtotal + 10%).  Leading colspan bumped
+             from 18 → 19 (and trailing 6 → 5) so after the X-column
+             pre-print shift reduces leading by 1, the amount cell
+             lands at col 22 = Total Amount, directly under the
+             subtotal's grandTotal cell.  Tagged `inc-gst-row` so
+             the Customer PDF can hide only this row without
+             touching the Freight Charge and final Total lines
+             beneath it. -->
         <tr class="total-row summary-row inc-gst-row">
-          <td colspan="18" class="summary-blank"></td>
+          <td colspan="19" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
-          <td colspan="6" class="summary-blank"></td>
+          <td colspan="5" class="summary-blank"></td>
         </tr>
         <!-- Freight prompt + 10 % freight (fires only when "Y" typed).
              Amount sits in the same column (Total Amount) as the inc-
              GST and final-total lines so all three stack vertically.
+             Leading colspan bumped 12 → 13 and trailing 6 → 5 so the
+             post-X-shift amount lands at col 22 = Total Amount.
              Tagged `freight-row` so the Customer PDF stylesheet can
              drop the "Input Y" prompt label + input while keeping the
              computed Freight Charge amount visible.  The two prompt
              cells carry `freight-prompt-cell` / `freight-prompt-input`
              so Customer-PDF rules target them individually. -->
         <tr class="total-row summary-row freight-row">
-          <td colspan="12" class="summary-blank"></td>
+          <td colspan="13" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl freight-prompt-cell" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
           <td class="center summary-input freight-prompt-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
           </td>
           <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10%) if any</td>
           <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
-          <td colspan="6" class="summary-blank"></td>
+          <td colspan="5" class="summary-blank"></td>
         </tr>
-        <!-- Final Total (Total inc GST + Freight, if any). -->
+        <!-- Final Total (Total inc GST + Freight, if any).  Leading
+             colspan bumped 18 → 19 and trailing 6 → 5 to match the
+             two summary rows above after the X-column pre-print
+             shift. -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="18" class="summary-blank"></td>
+          <td colspan="19" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
-          <td colspan="6" class="summary-blank"></td>
+          <td colspan="5" class="summary-blank"></td>
         </tr>
       </tfoot>
     </table>
