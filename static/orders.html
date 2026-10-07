@@ -4254,35 +4254,46 @@ $("#btnAddRow").addEventListener("click", addRow);
    `afterprint` event hook removes the class so the on-screen view
    isn't permanently altered. */
 document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
-  /* Shift the Subtotal row's "Total" label one cell to the left so
-     it visually lines up with the trimmed Customer PDF column set
-     (No column is the only pre-M-Code cell visible once X is
-     hidden).  The leading td carries colspan=2 to cover No + X on
-     the full-column layout; collapsing it to colspan=1 moves
-     everything downstream one slot left.  Restored by _restore()
-     after the print dialog closes so the on-screen SPRF math isn't
-     disturbed. */
-  const _leadBlanks = Array.from(
-    document.querySelectorAll('tr.total-row > td[colspan]:first-child')
-  ).filter(td => td.getAttribute("colspan") === "2");
-  _leadBlanks.forEach(td => {
-    td.dataset.origColspan = "2";
-    td.setAttribute("colspan", "1");
-  });
   const removeClass = () => {
     document.body.classList.remove("print-customer");
-    _leadBlanks.forEach(td => {
-      if (td.dataset.origColspan){
-        td.setAttribute("colspan", td.dataset.origColspan);
-        delete td.dataset.origColspan;
-      }
-    });
     window.removeEventListener("afterprint", removeClass);
   };
   document.body.classList.add("print-customer");
   window.addEventListener("afterprint", removeClass);
   window.print();
 });
+
+/* ─── Pre-print tfoot colspan compaction ───────────────────────────
+   Both the Internal and Customer PDFs hide the X delete column.
+   Every tfoot row's leading blank TD carries a colspan that
+   assumes X is visible (colspan=2 on the main Subtotal row,
+   colspan=12 on the freight prompt row, colspan=18 on the Total
+   inc GST + Final Total rows).  With X hidden, the labels after
+   those leading blanks sit one visual cell to the right of where
+   they belong.  Shrink every leading colspan by 1 right before
+   print and restore on afterprint, so the shift is non-destructive
+   to the on-screen SPRF math. */
+(function _wirePrintTfootShift(){
+  const _shifted = [];
+  window.addEventListener("beforeprint", () => {
+    document.querySelectorAll('tr.total-row > td[colspan]:first-child').forEach(td => {
+      const n = parseInt(td.getAttribute("colspan"), 10);
+      if (!isFinite(n) || n < 2) return;
+      td.dataset.origColspan = String(n);
+      td.setAttribute("colspan", String(n - 1));
+      _shifted.push(td);
+    });
+  });
+  window.addEventListener("afterprint", () => {
+    while (_shifted.length) {
+      const td = _shifted.pop();
+      if (td.dataset.origColspan) {
+        td.setAttribute("colspan", td.dataset.origColspan);
+        delete td.dataset.origColspan;
+      }
+    }
+  });
+})();
 $("#btnClear").addEventListener("click", () => {
   if(!confirm("Clear the whole form?")) return;
   $$("input, textarea").forEach(el => { if(!el.closest("thead")) el.value = ""; });
