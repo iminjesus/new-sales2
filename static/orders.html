@@ -1503,49 +1503,41 @@
                (stock NSW/QLD/VIC/WA + Remark = 5 tail columns). -->
           <td colspan="5"></td>
         </tr>
-        <!-- Total inc GST (subtotal + 10%).  Leading colspan bumped
-             from 18 → 19 (and trailing 6 → 5) so after the X-column
-             pre-print shift reduces leading by 1, the amount cell
-             lands at col 22 = Total Amount, directly under the
-             subtotal's grandTotal cell.  Tagged `inc-gst-row` so
-             the Customer PDF can hide only this row without
-             touching the Freight Charge and final Total lines
-             beneath it. -->
+        <!-- Total inc GST (subtotal + 10%).  Colspans bumped +1 on
+             the leading blank to make room for the new No column.
+             Tagged `inc-gst-row` so the Customer PDF can hide only
+             this row without touching the Freight Charge and final
+             Total lines beneath it. -->
         <tr class="total-row summary-row inc-gst-row">
-          <td colspan="19" class="summary-blank"></td>
+          <td colspan="18" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total inc GST</td>
           <td class="total-cell summary-amt"><div class="totalv" id="totalIncGst">0.00</div></td>
-          <td colspan="5" class="summary-blank"></td>
+          <td colspan="6" class="summary-blank"></td>
         </tr>
         <!-- Freight prompt + 10 % freight (fires only when "Y" typed).
              Amount sits in the same column (Total Amount) as the inc-
              GST and final-total lines so all three stack vertically.
-             Leading colspan bumped 12 → 13 and trailing 6 → 5 so the
-             post-X-shift amount lands at col 22 = Total Amount.
              Tagged `freight-row` so the Customer PDF stylesheet can
              drop the "Input Y" prompt label + input while keeping the
              computed Freight Charge amount visible.  The two prompt
              cells carry `freight-prompt-cell` / `freight-prompt-input`
              so Customer-PDF rules target them individually. -->
         <tr class="total-row summary-row freight-row">
-          <td colspan="13" class="summary-blank"></td>
+          <td colspan="12" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl freight-prompt-cell" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
           <td class="center summary-input freight-prompt-input">
             <input type="text" id="freightFlag" maxlength="1" placeholder="N">
           </td>
           <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10%) if any</td>
           <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
-          <td colspan="5" class="summary-blank"></td>
+          <td colspan="6" class="summary-blank"></td>
         </tr>
-        <!-- Final Total (Total inc GST + Freight, if any).  Leading
-             colspan bumped 18 → 19 and trailing 6 → 5 to match the
-             two summary rows above after the X-column pre-print
-             shift. -->
+        <!-- Final Total (Total inc GST + Freight, if any). -->
         <tr class="total-row summary-row grand-row">
-          <td colspan="19" class="summary-blank"></td>
+          <td colspan="18" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
           <td class="total-cell summary-amt"><div class="totalv" id="finalTotal">0.00</div></td>
-          <td colspan="5" class="summary-blank"></td>
+          <td colspan="6" class="summary-blank"></td>
         </tr>
       </tfoot>
     </table>
@@ -4419,114 +4411,122 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
   window.print();
 });
 
-/* ─── Pre-print tfoot colspan compaction ───────────────────────────
-   Both the Internal and Customer PDFs hide the X delete column.
-   Every tfoot row's leading blank TD carries a colspan that
-   assumes X is visible (colspan=2 on the main Subtotal row,
-   colspan=12 on the freight prompt row, colspan=18 on the Total
-   inc GST + Final Total rows).  With X hidden, the labels after
-   those leading blanks sit one visual cell to the right of where
-   they belong.  Shrink every leading colspan by 1 right before
-   print and restore on afterprint, so the shift is non-destructive
-   to the on-screen SPRF math. */
-(function _wirePrintTfootShift(){
-  const _shifted = [];
-  window.addEventListener("beforeprint", () => {
-    document.querySelectorAll('tr.total-row > td[colspan]:first-child').forEach(td => {
-      const n = parseInt(td.getAttribute("colspan"), 10);
-      if (!isFinite(n) || n < 2) return;
-      td.dataset.origColspan = String(n);
-      td.setAttribute("colspan", String(n - 1));
-      _shifted.push(td);
-    });
-  });
-  window.addEventListener("afterprint", () => {
-    while (_shifted.length) {
-      const td = _shifted.pop();
-      if (td.dataset.origColspan) {
-        td.setAttribute("colspan", td.dataset.origColspan);
-        delete td.dataset.origColspan;
-      }
-    }
-  });
-})();
+/* ─── Pre-print tfoot handling: X-shift + Customer-PDF rewrite +
+   tfoot→tbody row flow ─────────────────────────────────────────
+   Single unified beforeprint handler that:
 
-/* ─── Customer PDF: rebuild tfoot into aligned Subtotal + Freight +
-   Total rows ─────────────────────────────────────────────────────
-   The on-screen tfoot carries five grand-total cells (grandListAmt,
-   grandCurrentAmt, grandAddSupport, avgDC, grandTotal) plus the
-   "Input Y for Freight Charge?" prompt — all internal-only.  Hiding
-   individual TDs via display:none makes the surviving cells shift
-   left of where the subtotal's grandTotal sits, so the "Freight
-   Charge" + "Total" rows end up visually offset from the subtotal's
-   amount column.  Rewriting the whole tfoot right before print with
-   a clean 3-row skeleton (and restoring on afterprint) guarantees
-   all three amounts stack vertically under the Total Amount column.
-   Must run AFTER the X-column shift above so that handler's
-   mutations on the original cells are discarded by our innerHTML
-   overwrite, and we use pre-shifted colspan values ourselves
-   (leading colspan accounts for X being display:none'd). */
-(function _wireCustomerPdfTfootRewrite(){
-  let _origTfootHtml = null;
+   (a) Both prints hide the X delete column.  Every tfoot row's
+       leading blank TD carries a colspan that assumes X is visible
+       (colspan=2 on the main Subtotal row, colspan=12 on the freight
+       prompt row, colspan=18 on the Total inc GST + final Total
+       rows).  With X hidden, those leading blanks have to shrink by
+       1 or the labels after them sit one visual cell right of where
+       they belong.  Shrink every leading colspan by 1 right before
+       print for the INTERNAL path only (the Customer-PDF path
+       builds its own rows below and encodes the X-shift directly
+       into the colspans it emits).
+
+   (b) Customer PDF: on top of the per-column data-col hides the
+       stylesheet applies, the on-screen tfoot carries five grand-
+       total cells + the "Input Y for Freight Charge?" prompt that
+       are all internal-only.  Rebuild the tfoot with a clean
+       4-row skeleton (Subtotal, Total inc GST, Freight, final
+       Total) in the 9-effective-column structure the Customer PDF
+       table has after display:none strips the 19 hidden headers.
+
+   (c) Move every tfoot row to the end of tbody right before print.
+       Chromium's print path treats the <tfoot> element as a "keep
+       together" group even with display:table-row-group, so when
+       the body rows plus the tfoot don't fit as a UNIT on page 1
+       Chrome pushes the WHOLE tfoot to page 2 — even when there's
+       room on page 1 to flow the summary rows right after the
+       last body row.  Reparenting the tfoot rows onto tbody for
+       the duration of the print removes that boundary; Chromium
+       then flows the summary rows as if they were ordinary body
+       rows and only breaks a page where there genuinely isn't
+       room for the next row.
+
+   (d) On afterprint, restore tbody + tfoot innerHTML to the
+       pristine pre-print state so the on-screen SPRF is intact. */
+(function _wirePrintTableReflow(){
+  const _state = { tbodyHtml: null, tfootHtml: null };
+  const _tbody = () => document.querySelector("table.lines tbody");
   const _tfoot = () => document.querySelector("table.lines tfoot");
 
   window.addEventListener("beforeprint", () => {
-    if (!document.body.classList.contains("print-customer")) return;
+    const tbody = _tbody();
     const tfoot = _tfoot();
-    if (!tfoot) return;
-    _origTfootHtml = tfoot.innerHTML;
+    if (!tbody || !tfoot) return;
 
-    const txt = (id, dflt) => {
-      const el = document.getElementById(id);
-      const s  = (el && (el.textContent || el.value)) || "";
-      return (s.trim() === "") ? dflt : s;
-    };
-    const ttlQty      = txt("ttlQty",      "0");
-    const grandTotal  = txt("grandTotal",  "0.00");
-    const totalIncGst = txt("totalIncGst", "0.00");
-    const freightAmt  = txt("freightChg",  "");
-    const finalTotal  = txt("finalTotal",  "0.00");
+    // Snapshot the pristine state so afterprint can restore it.
+    _state.tbodyHtml = tbody.innerHTML;
+    _state.tfootHtml = tfoot.innerHTML;
 
-    /* Column map — on the Customer PDF the 19 hidden headers
-       (X + 18 internal cols) are display:none'd, so for the
-       purposes of this tfoot the lines table has just NINE
-       effective columns:
-         1 = No,  2 = M-Code, 3 = Qty, 4 = Size, 5 = Brand,
-         6 = Product Name,    7 = Pattern,
-         8 = Load/Speed,      9 = Total Amount.
-       Rewrite each tfoot row so its cells sum to 9 — any row
-       whose colspan sum exceeds 9 pushes its amount cell off
-       the right edge of the 9-column grid, which is exactly
-       why the subtotal "0.00" and the Freight / Total rows
-       went missing in the previous build. */
-    tfoot.innerHTML = `
-      <tr class="total-row cust-subtotal-row">
-        <td></td>
-        <td class="label">Total</td>
-        <td class="num center">${ttlQty}</td>
-        <td colspan="5"></td>
-        <td class="total-cell"><div class="totalv">${grandTotal}</div></td>
-      </tr>
-      <tr class="total-row summary-row cust-inc-gst-row">
-        <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total inc GST</td>
-        <td class="total-cell summary-amt"><div class="totalv">${totalIncGst}</div></td>
-      </tr>
-      <tr class="total-row summary-row cust-freight-row">
-        <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
-        <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
-      </tr>
-      <tr class="total-row summary-row grand-row cust-grand-row">
-        <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
-        <td class="total-cell summary-amt"><div class="totalv">${finalTotal}</div></td>
-      </tr>
-    `;
+    const isCustomerPdf = document.body.classList.contains("print-customer");
+
+    if (isCustomerPdf) {
+      // (b) Customer PDF — rewrite tfoot with the 9-effective-col
+      //     clean 4-row skeleton.
+      const txt = (id, dflt) => {
+        const el = document.getElementById(id);
+        const s  = (el && (el.textContent || el.value)) || "";
+        return (s.trim() === "") ? dflt : s;
+      };
+      const ttlQty      = txt("ttlQty",      "0");
+      const grandTotal  = txt("grandTotal",  "0.00");
+      const totalIncGst = txt("totalIncGst", "0.00");
+      const freightAmt  = txt("freightChg",  "");
+      const finalTotal  = txt("finalTotal",  "0.00");
+      tfoot.innerHTML = `
+        <tr class="total-row cust-subtotal-row">
+          <td></td>
+          <td class="label">Total</td>
+          <td class="num center">${ttlQty}</td>
+          <td colspan="5"></td>
+          <td class="total-cell"><div class="totalv">${grandTotal}</div></td>
+        </tr>
+        <tr class="total-row summary-row cust-inc-gst-row">
+          <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total inc GST</td>
+          <td class="total-cell summary-amt"><div class="totalv">${totalIncGst}</div></td>
+        </tr>
+        <tr class="total-row summary-row cust-freight-row">
+          <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
+          <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
+        </tr>
+        <tr class="total-row summary-row grand-row cust-grand-row">
+          <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
+          <td class="total-cell summary-amt"><div class="totalv">${finalTotal}</div></td>
+        </tr>
+      `;
+    } else {
+      // (a) Internal — shrink the leading colspan on each tfoot row
+      //     to compensate for the hidden X delete column.
+      tfoot.querySelectorAll('tr.total-row > td[colspan]:first-child').forEach(td => {
+        const n = parseInt(td.getAttribute("colspan"), 10);
+        if (!isFinite(n) || n < 2) return;
+        td.setAttribute("colspan", String(n - 1));
+      });
+    }
+
+    // (c) Reparent every (now-finalised) tfoot row onto tbody so
+    //     Chromium can flow them naturally across page breaks
+    //     instead of pinning the whole totals block to its own
+    //     page.  tfoot ends up empty for the duration of the print.
+    while (tfoot.firstChild) {
+      tbody.appendChild(tfoot.firstChild);
+    }
   });
 
   window.addEventListener("afterprint", () => {
-    if (_origTfootHtml === null) return;
+    const tbody = _tbody();
     const tfoot = _tfoot();
-    if (tfoot) tfoot.innerHTML = _origTfootHtml;
-    _origTfootHtml = null;
+    if (!tbody || !tfoot) return;
+    if (_state.tbodyHtml !== null) {
+      tbody.innerHTML = _state.tbodyHtml;
+      tfoot.innerHTML = _state.tfootHtml;
+      _state.tbodyHtml = null;
+      _state.tfootHtml = null;
+    }
   });
 })();
 
