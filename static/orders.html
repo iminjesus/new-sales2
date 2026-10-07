@@ -420,15 +420,20 @@
   }
 
   /* order lines table */
-  .lines-wrap{border:1px solid var(--border);border-top:none;background:#fff;overflow-x:auto;}
+  /* `.lines-wrap` used to carry overflow-x:auto which drew a
+     horizontal scroll bar under the table whenever the Remark
+     column's width:99% hit a sub-pixel rounding mismatch — the
+     scroll bar was always visible even though there was nothing
+     to scroll.  Drop the min-width constraint on the table and
+     hide any residual overflow so the lines table always fits
+     inside its parent, no scrollbar needed on desktop viewports. */
+  .lines-wrap{border:1px solid var(--border);border-top:none;background:#fff;overflow:hidden;}
   table.lines{
-    /* min-width tuned to the compact column buckets so the SPRF
-       row fits inside a 1280-px viewport without horizontal scroll;
-       .lines-wrap still carries overflow-x:auto for smaller windows.
-       Uses table-layout:fixed so declared widths STICK (browser
-       auto-shrink used to override our thead widths when the tbody
-       cells had no matching class). */
-    width:100%;border-collapse:collapse;font-size:12px;min-width:1240px;
+    /* table-layout:fixed keeps declared column widths from being
+       auto-shrunk by Chrome.  No min-width — the Remark column's
+       width:99% rule absorbs the leftover and the whole table
+       scales to the parent naturally. */
+    width:100%;border-collapse:collapse;font-size:12px;
     table-layout:fixed;
   }
   table.lines thead th{
