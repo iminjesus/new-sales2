@@ -4522,8 +4522,11 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     //     Chromium can flow them naturally across page breaks
     //     instead of pinning the whole totals block to its own
     //     page.  tfoot ends up empty for the duration of the print.
+    const movedRows = [];
     while (tfoot.firstChild) {
-      tbody.appendChild(tfoot.firstChild);
+      const row = tfoot.firstChild;
+      tbody.appendChild(row);
+      if (row.nodeType === 1 && row.tagName === "TR") movedRows.push(row);
     }
     // Belt-and-braces: force the empty tfoot out of flow entirely.
     // Even an empty <tfoot> with display:table-row-group leaves a
@@ -4534,6 +4537,19 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     // for the duration of the print — the CSS :empty rule does the
     // same but inline style is immune to specificity surprises.
     tfoot.style.display = "none";
+    // Chain every moved summary row EXCEPT the last with
+    // page-break-after: avoid so Chromium treats the Subtotal /
+    // Total inc GST / Freight / final Total block as a cohesive
+    // unit — either all four land on page 1 (preferred when they
+    // fit) or all four move to page 2 together.  Without this the
+    // JS reparent lets Chromium break anywhere, which produced the
+    // "the final Total row went to page 2 by itself even though
+    // page 1 had plenty of room" symptom the user flagged after
+    // the previous reparent-only fix.
+    for (let i = 0; i < movedRows.length - 1; i++) {
+      movedRows[i].style.pageBreakAfter = "avoid";
+      movedRows[i].style.breakAfter     = "avoid";
+    }
   });
 
   window.addEventListener("afterprint", () => {
