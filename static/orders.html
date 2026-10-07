@@ -4421,44 +4421,42 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
       const s  = (el && (el.textContent || el.value)) || "";
       return (s.trim() === "") ? dflt : s;
     };
-    const ttlQty     = txt("ttlQty",     "0");
-    const grandTotal = txt("grandTotal", "0.00");
-    const freightAmt = txt("freightChg", "");
-    const finalTotal = txt("finalTotal", "0.00");
+    const ttlQty      = txt("ttlQty",      "0");
+    const grandTotal  = txt("grandTotal",  "0.00");
+    const totalIncGst = txt("totalIncGst", "0.00");
+    const freightAmt  = txt("freightChg",  "");
+    const finalTotal  = txt("finalTotal",  "0.00");
 
-    /* Column map — the lines table carries 28 logical columns.
-       display:none'd headers (X, List Price, Base DC %, 443DC,
-       Current DC %, Current Price, Current Order Amount, MTH, Vol,
-       Add, Aging, Add Support, Proposed Unit Price, Proposed DC,
-       NSW, QLD, VIC, WA, Remark = 19 hidden) collapse to zero width
-       but the X column keeps its slot because the subtotal row's
-       colspan=2 leading blank still spans cols 1-2 — so our
-       rewrite must sum to 28, not 27, or the row leaves a phantom
-       slot at the right.  Target positions:
-         col 1  = No,  col 2  = X (hidden),  col 3  = M-Code,
-         col 4  = Qty, cols 5-9 = Size..Load/Speed,
-         cols 10-21 = hidden,  col 22 = Total Amount,
-         cols 23-28 = hidden.
-       Place the subtotal "Total" label at col 3, the grand/freight
-       amounts at col 22 (right under grandTotal), and let the
-       label cells span cols 1-21 so text-align:right anchors each
-       label to the right edge of visible col 9 (left of Total
-       Amount). */
+    /* Column map — on the Customer PDF the 19 hidden headers
+       (X + 18 internal cols) are display:none'd, so for the
+       purposes of this tfoot the lines table has just NINE
+       effective columns:
+         1 = No,  2 = M-Code, 3 = Qty, 4 = Size, 5 = Brand,
+         6 = Product Name,    7 = Pattern,
+         8 = Load/Speed,      9 = Total Amount.
+       Rewrite each tfoot row so its cells sum to 9 — any row
+       whose colspan sum exceeds 9 pushes its amount cell off
+       the right edge of the 9-column grid, which is exactly
+       why the subtotal "0.00" and the Freight / Total rows
+       went missing in the previous build. */
     tfoot.innerHTML = `
       <tr class="total-row cust-subtotal-row">
-        <td colspan="2"></td>
+        <td></td>
         <td class="label">Total</td>
         <td class="num center">${ttlQty}</td>
         <td colspan="5"></td>
-        <td colspan="12"></td>
         <td class="total-cell"><div class="totalv">${grandTotal}</div></td>
       </tr>
+      <tr class="total-row summary-row cust-inc-gst-row">
+        <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total inc GST</td>
+        <td class="total-cell summary-amt"><div class="totalv">${totalIncGst}</div></td>
+      </tr>
       <tr class="total-row summary-row cust-freight-row">
-        <td colspan="21" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
+        <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
         <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
       </tr>
       <tr class="total-row summary-row grand-row cust-grand-row">
-        <td colspan="21" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
+        <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
         <td class="total-cell summary-amt"><div class="totalv">${finalTotal}</div></td>
       </tr>
     `;
