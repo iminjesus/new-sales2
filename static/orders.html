@@ -962,55 +962,55 @@
     body.print-customer textarea::-webkit-resizer {
       display: none !important;
     }
-    /* Spread the lines table across the full page width on the
-       Customer PDF.  The on-screen rules pin every column to a
-       narrow fixed px width (M-Code 66, Qty 42, Size 74, narrow 58,
-       mid 72, …) and park the leftover on the Remark column's
-       width:99%.  With Remark + 18 other columns hidden, those
-       declared widths sum to ~530px which under table-layout:fixed
-       leaves the visible 9 columns bunched on the left and a
-       600px dead zone to the right of Total Amount.  Flip to
-       `table-layout: auto` so Chrome auto-sizes each visible
-       column to fill the parent width proportionally, and clear
-       the hard width caps so no column can refuse to grow.  The
-       No-column keeps its tight 24px cap because it only ever
-       carries a single digit; everything else gets a comfortable
-       minimum so the printed row reads cleanly in portrait. */
+    /* Spread the lines table evenly across the full page width on
+       the Customer PDF.  The on-screen rules pin every column to a
+       narrow fixed px width and park the leftover on the Remark
+       column's width:99% — with Remark + 18 other columns hidden
+       those declared widths sum to ~530px, so the visible nine
+       columns bunched on the left and a 600px dead zone sat to
+       the right of Total Amount.  Give each visible column an
+       explicit percentage width under table-layout:fixed so the
+       nine of them SUM TO 100% of the table width and distribute
+       proportionally — the right page margin is reached without
+       any one column dominating. */
     body.print-customer table.lines {
-      table-layout: auto !important;
+      table-layout: fixed !important;
       width: 100% !important;
-    }
-    body.print-customer table.lines th,
-    body.print-customer table.lines td {
-      width: auto !important;
-      min-width: 60px !important;
-      max-width: none !important;
     }
     body.print-customer table.lines th.row-no-th,
     body.print-customer table.lines td.row-no-cell {
-      width: 24px !important;
-      min-width: 24px !important;
-      max-width: 24px !important;
+      width: 3% !important; min-width: 20px !important; max-width: none !important;
+    }
+    body.print-customer table.lines th.mcode,
+    body.print-customer table.lines td.mcode-cell {
+      width: 11% !important; min-width: 0 !important; max-width: none !important;
     }
     body.print-customer table.lines th.qty-hdr,
     body.print-customer table.lines td.qty-cell {
-      width: 44px !important;
-      min-width: 44px !important;
-      max-width: 60px !important;
+      width: 5% !important; min-width: 0 !important; max-width: none !important;
+    }
+    body.print-customer table.lines th.wide,
+    body.print-customer table.lines td.size-cell {
+      width: 11% !important; min-width: 0 !important; max-width: none !important;
+    }
+    body.print-customer table.lines th.narrow,
+    body.print-customer table.lines td.narrow-cell {
+      width: 11% !important; min-width: 0 !important; max-width: none !important;
+    }
+    body.print-customer table.lines th.mid,
+    body.print-customer table.lines td.mid-cell {
+      width: 13% !important; min-width: 0 !important; max-width: none !important;
     }
     body.print-customer table.lines th[data-col="total_amount"],
     body.print-customer table.lines td[data-cell-col="total_amount"] {
-      /* Width:99% is the "absorb all leftover" trick for a table
-         column: with Remark hidden on the Customer PDF nothing else
-         is claiming the right-hand flex slot, so the Total Amount
-         column collapses to a thin stripe and leaves a dead zone
-         to the right.  Push 99% here and this column stretches out
-         to the right page margin, matching the header + Total band
-         widths above and below.  min-width floors the money cell so
-         "0.00" always has room to render. */
-      width: 99% !important;
-      min-width: 90px !important;
+      width: 22% !important; min-width: 0 !important; max-width: none !important;
     }
+    /* 3 + 11 + 5 + 11 + 11 (Brand) + 13 (Product Name) + 11 (Pattern)
+       + 13 (Load/Speed) + 22 (Total Amount) = 100%.  Chrome's
+       table-layout:fixed treats these as a strict budget so every
+       column lands at the same width in both the header + body +
+       tfoot, and the amount cell in the three summary rows lines
+       up directly under the Total Amount column. */
     /* Zoom the entire SPRF down so the ~1660 px on-screen wrap fits
        within the ~1085 px printable area of an A4-landscape page.
        Zoom (rather than transform:scale) keeps the browser's own
