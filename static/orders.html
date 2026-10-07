@@ -750,6 +750,12 @@
      details table has as much printable width as possible before the
      zoom-to-fit rule below kicks in. */
   @page { size: A4 landscape; margin: 6mm; }
+  /* Named page for the Customer PDF variant — Chrome drops the
+     surrounding ruleset when @page is nested inside @media print,
+     so declare it at the top level alongside the default @page.
+     body.print-customer { page: cust-portrait } selects it. */
+  @page cust-portrait { size: A4 portrait; margin: 6mm; }
+  body.print-customer { page: cust-portrait; }
   @media print {
     body { background: #fff !important; }
     /* Print-forces black borders on the grid; !important because the
@@ -815,17 +821,12 @@
        .print-customer class right before window.print().  Strips
        every internal-only field so the PDF the BDE forwards to the
        customer carries just the quoted lines + totals.  The
-       Oct-8 spec also:
-         • swaps the "Internal Use Only" banner for "Customer Copy"
-         • hides the ✕ clear buttons next to Sold-to / Ship-to Name
-         • removes the "Input Y for Freight Charge?" prompt row
-         • keeps the Remark column visible (user annotation)
-         • keeps Total Amount visible as the only $-column
-         • switches the page orientation to A4 PORTRAIT
+       @page cust-portrait + body.print-customer{page:cust-portrait}
+       declarations live at the top of this <style> block (above
+       @media print) — Chrome drops the surrounding ruleset when
+       @page is nested inside @media, so declaring it there made
+       every rule below silently vanish.
     */
-    @page cust-portrait { size: A4 portrait; margin: 6mm; }
-    body.print-customer { page: cust-portrait; }
-
     body.print-customer #rebateWrap,
     body.print-customer #approvalPanel,
     body.print-customer #csPanel,
