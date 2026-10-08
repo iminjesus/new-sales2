@@ -2246,7 +2246,15 @@ async function resolveCustomer(kind, field, value){
   qs.set(param, value);
   if (kind === "ship") {
     const scope = ($("#sold_to")?.value || "").trim();
-    if (scope) qs.set("scope_sold_to", scope);
+    // Payment-method lock exception: when Cash or Credit Card has
+    // pinned Sold-to to the Hankook house account (728059), the
+    // goods still ship to the REAL customer — any ship_to in the
+    // DB should resolve, not just rows scoped to 728059.  Skip
+    // scope_sold_to in that case so the lookup hits the full
+    // customer table.
+    const payLocked = !!(document.getElementById("payCOD")?.checked
+                      || document.getElementById("payCC")?.checked);
+    if (scope && !payLocked) qs.set("scope_sold_to", scope);
   }
   const data = await apiGet(`/api/orders/customer?${qs.toString()}`);
   if(!data || data.error){ setStatus(`${param} <b>${value}</b> not found`, "warn"); return; }
@@ -2256,9 +2264,18 @@ async function resolveCustomer(kind, field, value){
 function applyCustomer(row){
   if(!row) return;
   const set = (id, v) => { const el = document.getElementById(id.replace("#","")); if(!el) return; el.value = v ?? ""; };
-  set("sold_to",         row.sold_to || "");
+  // Payment-method lock preserves the forced Sold-to (728059) even
+  // when a Ship-to resolve returns a row whose own sold_to differs
+  // — the Cash / Credit Card flow pinned Sold-to to the Hankook
+  // house account on purpose; overwriting it here would silently
+  // undo the lock and leave the goods invoiced to the real customer.
+  const payLocked = !!(document.getElementById("payCOD")?.checked
+                    || document.getElementById("payCC")?.checked);
+  if (!payLocked){
+    set("sold_to",       row.sold_to      || "");
+    set("sold_to_name",  row.sold_to_name || "");
+  }
   set("ship_to",         row.ship_to || "");
-  set("sold_to_name",    row.sold_to_name || "");
   set("ship_to_name",    row.ship_to_name || "");
   set("customer_group",  row.customer_group || row.sold_to_group || "");
   set("ship_to_address", row.address || "");
