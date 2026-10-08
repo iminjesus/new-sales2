@@ -6844,12 +6844,14 @@ async function wireStatusPanel(order){
       }
       // Same year as today but earlier month → card already expired.
       // Same copy as the past-year case because the semantic is
-      // "you typed an expiry that's in the past".
+      // "you typed an expiry that's in the past".  Per the Oct-9
+      // follow-up, wipe BOTH MM and YY — the user has to retype
+      // the whole expiry, not just the month, so a stale year
+      // doesn't linger in the field.
       if (yy === currentYY && mm < currentMM){
         _notice(_INVALID_YY_MSG);
-        ccExpiry.value = "/" + mFull[2];    // clear MM (user needs
-        try { ccExpiry.focus();             //          a FUTURE month
-              ccExpiry.setSelectionRange(0, 0); } catch(_e){}
+        ccExpiry.value = "";
+        try { ccExpiry.focus(); } catch(_e){}
         return;
       }
     };
