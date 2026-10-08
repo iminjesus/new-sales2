@@ -6782,7 +6782,11 @@ async function wireStatusPanel(order){
     ccExpiry.setAttribute("inputmode", "numeric");
     ccExpiry.setAttribute("maxlength", "5");     // MM + / + YY
     ccExpiry.setAttribute("autocomplete", "cc-exp");
-    const _INVALID_MSG = "Invalid expiry date. Please enter a valid future expiry date.";
+    // Two distinct messages so the user knows WHICH half of
+    // MM/YY tripped the validator — month out of range vs. year
+    // in the past.
+    const _INVALID_MM_MSG = "Invalid expiry date. Please enter a valid month.";
+    const _INVALID_YY_MSG = "Invalid expiry date. Please enter a valid future expiry date.";
     const _getMinYY = () => new Date().getFullYear() % 100;  // lazy; survives Jan-1
     const _notice = (msg) => {
       if (typeof showNotice === "function") showNotice(msg);
@@ -6812,7 +6816,7 @@ async function wireStatusPanel(order){
       if (mOnly){
         const mm = parseInt(mOnly[1], 10);
         if (mm < 1 || mm > 12){
-          _notice(_INVALID_MSG);
+          _notice(_INVALID_MM_MSG);
           ccExpiry.value = "";
           try { ccExpiry.focus(); } catch(_e){}
         }
@@ -6824,13 +6828,13 @@ async function wireStatusPanel(order){
       const mm = parseInt(mFull[1], 10);
       const yy = parseInt(mFull[2], 10);
       if (mm < 1 || mm > 12){
-        _notice(_INVALID_MSG);
+        _notice(_INVALID_MM_MSG);
         ccExpiry.value = "/" + mFull[2];   // keep YY, clear MM
         try { ccExpiry.focus(); ccExpiry.setSelectionRange(0, 0); } catch(_e){}
         return;
       }
       if (yy < _getMinYY()){
-        _notice(_INVALID_MSG);
+        _notice(_INVALID_YY_MSG);
         ccExpiry.value = mFull[1] + "/";    // keep MM, clear YY
         try { ccExpiry.focus(); } catch(_e){}
         return;
