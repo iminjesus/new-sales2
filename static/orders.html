@@ -1020,7 +1020,14 @@
       max-width: none;
       padding: 0;
       margin: 0;
-      zoom: 0.62;
+      /* Was 0.62 — browsers whose print dialog uses the default
+         (~15mm) margins instead of our @page 6mm had the Subtotal
+         + Total inc GST + Freight + final Total block pushed to a
+         near-empty page 2 because content barely overflowed page 1.
+         Tightening to 0.55 shaves ~11% off the rendered content
+         height so the totals block fits on page 1 even under the
+         larger default margins without hurting legibility. */
+      zoom: 0.55;
     }
     /* Kill the on-screen minimum so the lines table can shrink into
        whatever the zoomed page allows without introducing an internal
@@ -1033,6 +1040,20 @@
     table.lines tfoot td { padding: 2px 3px !important; }
     table.lines tbody td input,
     table.lines tbody td textarea { padding: 1px 3px !important; }
+    /* Compact textareas on the print path.  The on-screen SPRF pins
+       Reason/Notes to min-height:60px and Special Instruction to
+       min-height:28-ish so BDEs have room to type.  On paper, an
+       empty textarea still eats those pixels and pushes the lines
+       table + totals block down toward (and sometimes past) the
+       page-1 bottom margin.  Collapse the min-heights for print so
+       any content shows at its natural size but an empty box takes
+       no vertical slack. */
+    textarea#mgmt_reason,
+    textarea#special_instruction,
+    textarea#approval_note {
+      min-height: 0 !important;
+      padding: 2px 4px !important;
+    }
     /* ─── Multi-page printing ──────────────────────────────────
        Target shape when a SPRF overflows one page:
          Page 1   : Hankook header + Customer / Order Number grids
