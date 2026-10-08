@@ -1940,9 +1940,20 @@ async function suggestCustomer(kind, q){
   // the chosen customer's siblings.  `sold_to` is populated by
   // resolveCustomer(); fall back to the raw text in the Sold-to
   // input (user may have just typed a code without tabbing out yet).
+  //
+  // Payment-method lock exception: when Cash or Credit Card has
+  // forced Sold-to to the Hankook house account (728059), the
+  // goods still ship to the REAL customer and any ship_to in the
+  // master should be searchable, not just rows scoped to 728059.
+  // Skip the sold_to scope in that case so the suggest dropdown
+  // returns matches from the whole customer table.
   let scopeSoldTo = "";
   if (kind === "ship") {
-    scopeSoldTo = ($("#sold_to")?.value || "").trim();
+    const payLocked = !!(document.getElementById("payCOD")?.checked
+                      || document.getElementById("payCC")?.checked);
+    if (!payLocked) {
+      scopeSoldTo = ($("#sold_to")?.value || "").trim();
+    }
   }
   const key = kind + ":" + q.toLowerCase() + ":" + scopeSoldTo;
   let rows = _custCache[key];
