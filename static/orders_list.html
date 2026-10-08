@@ -186,6 +186,10 @@
             <th style="width:70px" class="num" title="Order-wide chained Proposed DC% = 1 − Σ(total) / Σ(list × qty)">Proposed DC%</th>
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
+            <!-- SAP sales-doc number stamped by the CS after they
+                 enter the order into SAP.  Blank until Harry (or any
+                 CS) fills it from the SPRF detail page. -->
+            <th style="width:100px" class="center" title="SAP sales-doc number stamped after the order was keyed into SAP.">SD No.</th>
             <th style="width:130px">Approver</th>
             <!-- Approver note — free-form comment the approver
                  typed in the approve-with-note modal at sign-off
@@ -554,6 +558,7 @@ function renderRows(){
         <td class="num" style="${totDcStyle}">${totDC ? totDC.toFixed(2) + "%" : "—"}</td>
         <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
+        <td class="center"><small style="color:#0f172a;font-family:monospace">${escapeHtml(r.sd_no || "—")}</small></td>
         <td>${apprCell}</td>
         <td>${noteCell}</td>
         <td><small style="color:#334155">${escapeHtml(r.submitted_at || "—")}</small></td>

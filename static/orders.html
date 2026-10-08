@@ -1436,6 +1436,72 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
+        <!-- Payment Method — COD + Credit Card are mutually exclusive;
+             ticking one unticks the other via the paymentMethod JS
+             wiring below.  Either flag forces Sold-to to the Hankook
+             house account (728059) and locks it, so Ship-to still goes
+             to the real customer but Hankook invoices itself.  On
+             submit the order also CCs accounts@hankooktyre.com.au. -->
+        <div class="lbl">Payment Method</div>
+        <div class="val" style="grid-column: span 3;gap:18px;flex-wrap:wrap">
+          <label style="display:inline-flex;align-items:center;gap:6px;font-weight:600;cursor:pointer">
+            <input type="checkbox" id="payCOD" name="payMethod" value="cod">
+            COD Payment
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-weight:600;cursor:pointer">
+            <input type="checkbox" id="payCC" name="payMethod" value="credit_card">
+            Credit Card Payment
+          </label>
+          <span id="payMethodLock" style="color:#dc2626;font-size:11.5px;font-weight:700" hidden>
+            → Sold-to locked to 728059 (Hankook Tyre Australia)
+          </span>
+        </div>
+
+        <!-- COD remittance block — static Hankook JP Morgan details,
+             shown only when the COD checkbox is ticked. -->
+        <div id="codPanel" hidden style="grid-column:1 / -1;padding:6px 8px 2px">
+          <div style="color:#0369a1;font-weight:700;font-size:11.5px;margin-bottom:3px">
+            * Bank Detail (JP Morgan Bank) : Fax Remittance to (02) 9870 1245
+          </div>
+          <div style="border:2px solid #2563eb;border-radius:4px;overflow:hidden">
+            <div style="background:#86efac;color:#111;padding:6px 10px;text-align:center;font-weight:700;border-bottom:2px solid #2563eb">
+              Account Name: Hankook Tyre Australia
+            </div>
+            <div style="background:#86efac;color:#111;padding:6px 10px;text-align:center;font-weight:700">
+              BSB : 212-200 &nbsp;&nbsp;&nbsp; Account No : 016 043 371
+            </div>
+          </div>
+        </div>
+
+        <!-- Credit Card capture — three inputs (PAN / expiry / CCV).
+             Full PAN is sent to the backend on submit but only ever
+             returned in cleartext to the accounts@hankooktyre.com.au
+             login; every other viewer sees a BIN+last4 mask and the
+             expiry / CCV come back as `••••`.  On a submitted order
+             the inputs flip to readonly and show the masked PAN. -->
+        <div id="ccPanel" hidden style="grid-column:1 / -1;padding:6px 8px 2px">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <label style="display:flex;align-items:center;gap:4px;flex:2;min-width:220px">
+              <span style="font-size:11.5px;font-weight:700;color:#334155;white-space:nowrap">Card No.</span>
+              <input id="ccNumber" placeholder="XXXX XXXX XXXX XXXX" maxlength="23"
+                     style="flex:1;padding:4px 6px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace">
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;flex:1;min-width:110px">
+              <span style="font-size:11.5px;font-weight:700;color:#334155;white-space:nowrap">Expiry</span>
+              <input id="ccExpiry" placeholder="MM/YY" maxlength="7"
+                     style="width:70px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace">
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;flex:1;min-width:90px">
+              <span style="font-size:11.5px;font-weight:700;color:#334155;white-space:nowrap">CCV</span>
+              <input id="ccCCV" placeholder="123" maxlength="4"
+                     style="width:60px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace">
+            </label>
+          </div>
+          <div id="ccMaskNote" hidden style="color:#64748b;font-size:11px;margin-top:3px;font-style:italic">
+            Full card number only visible to the accounts@hankooktyre.com.au login.
+          </div>
+        </div>
+
         <div class="lbl lbl-reason" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800">
           Reason / Notes for Approver (REQUIRED on Submit — at least 2 words)
         </div>
@@ -1568,7 +1634,23 @@
           <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
           <td colspan="6" class="summary-blank"></td>
         </tr>
-        <!-- Final Total (Total inc GST + Freight, if any). -->
+        <!-- Interstate Delivery Fee (10% of subtotal when "Y").  Same
+             two-cell prompt + amount shape as the Freight row above,
+             but computed independently so an order can carry one,
+             both, or neither.  interstate-prompt-cell /
+             interstate-prompt-input tags let the Customer-PDF stylesheet
+             drop just the prompt + input and keep the amount line. -->
+        <tr class="total-row summary-row interstate-row">
+          <td colspan="12" class="summary-blank"></td>
+          <td class="label right-lbl summary-lbl interstate-prompt-cell" colspan="3">Input "Y" for Interstate Delivery? &rarr;</td>
+          <td class="center summary-input interstate-prompt-input">
+            <input type="text" id="interstateFlag" maxlength="1" placeholder="N">
+          </td>
+          <td class="label right-lbl summary-lbl" colspan="5">Interstate Delivery Fee 10% (if any)</td>
+          <td class="total-cell summary-amt"><div class="totalv" id="interstateChg"></div></td>
+          <td colspan="6" class="summary-blank"></td>
+        </tr>
+        <!-- Final Total (Total inc GST + Freight + Interstate, if any). -->
         <tr class="total-row summary-row grand-row">
           <td colspan="18" class="summary-blank"></td>
           <td class="label right-lbl summary-lbl" colspan="3">Total</td>
@@ -1674,11 +1756,21 @@
     </button>
   </div>
   <!-- CS toggle: only visible when Harry (or an ALL-role user) is
-       viewing a submitted order.  Flips submitted_orders.status_sap. -->
+       viewing a submitted order.  Flips submitted_orders.status_sap.
+       SD No. input lives in the same bar — the CS types the SAP
+       sales-doc number here after entering the order into SAP; the
+       value saves on blur (and on Enter) to submitted_orders.sd_no
+       and surfaces on the orders_list Note column. -->
   <div id="csPanel" class="cs-panel" hidden>
     <span class="cs-lbl">SAP order entered?</span>
     <span class="cs-flag" id="csFlag">N</span>
     <button id="btnFlipStatus" class="primary">Mark as Y</button>
+    <span class="cs-lbl" style="margin-left:16px">SD No.</span>
+    <input id="sdNo" placeholder="SAP SD #" maxlength="40"
+           style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace;width:140px">
+    <button id="btnSaveSdNo" class="ghost"
+            style="padding:4px 10px;font-size:12px">Save SD #</button>
+    <span id="sdNoMeta" class="cs-meta"></span>
     <span id="csMeta" class="cs-meta"></span>
   </div>
   <!-- Bottom-of-page Approve bar.
@@ -3315,10 +3407,12 @@ function updateTotals(){
   const avgAddDC = sumCurAmt > 0
     ? 100 * (1 - sumAmt / sumCurAmt)
     : 0;
-  const totalIncGst  = sumAmt * 1.10;
-  const freightFlag  = ($("#freightFlag")?.value || "").trim().toUpperCase();
-  const freight      = freightFlag === "Y" ? sumAmt * 0.10 : 0;
-  const finalTotal   = totalIncGst + freight;
+  const totalIncGst    = sumAmt * 1.10;
+  const freightFlag    = ($("#freightFlag")?.value    || "").trim().toUpperCase();
+  const interstateFlag = ($("#interstateFlag")?.value || "").trim().toUpperCase();
+  const freight        = freightFlag    === "Y" ? sumAmt * 0.10 : 0;
+  const interstate     = interstateFlag === "Y" ? sumAmt * 0.10 : 0;
+  const finalTotal     = totalIncGst + freight + interstate;
 
   $("#sovd_ttl").value                  = fmtQty(sovdQty);
   $("#ttlQty").textContent              = fmtQty(sumQty);
@@ -3329,7 +3423,8 @@ function updateTotals(){
   $("#grandAddSupport").textContent     = sumCurAmt > 0 ? avgAddDC.toFixed(2) + "%" : "";
   $("#avgDC").textContent               = sumAmt ? avgDC.toFixed(2) + "%" : "";
   $("#totalIncGst").textContent         = sumAmt ? fmtMoney(totalIncGst) : "0.00";
-  $("#freightChg").textContent          = freight ? fmtMoney(freight) : "";
+  $("#freightChg").textContent          = freight    ? fmtMoney(freight)    : "";
+  $("#interstateChg").textContent       = interstate ? fmtMoney(interstate) : "";
   $("#finalTotal").textContent          = sumAmt ? fmtMoney(finalTotal) : "0.00";
 
   // Cached for serializeOrder + wireApprovalPanel — front-end
@@ -3379,8 +3474,11 @@ function updateTotals(){
     }
   }
 }
-// Freight flag drives the last two rows — recompute on every keystroke.
+// Freight + Interstate flags drive the final-total chain — recompute
+// on every keystroke so the amount cells update live as the BDE types
+// "Y" or clears the box.
 document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
+document.getElementById("interstateFlag")?.addEventListener("input", updateTotals);
 
 // Rebate-able V-check wiring — YES / NO cells act like radio buttons.
 // Clicking either flips its picker to a big ✓ on a coloured background,
@@ -4524,11 +4622,12 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
         const s  = (el && (el.textContent || el.value)) || "";
         return (s.trim() === "") ? dflt : s;
       };
-      const ttlQty      = txt("ttlQty",      "0");
-      const grandTotal  = txt("grandTotal",  "0.00");
-      const totalIncGst = txt("totalIncGst", "0.00");
-      const freightAmt  = txt("freightChg",  "");
-      const finalTotal  = txt("finalTotal",  "0.00");
+      const ttlQty       = txt("ttlQty",        "0");
+      const grandTotal   = txt("grandTotal",    "0.00");
+      const totalIncGst  = txt("totalIncGst",   "0.00");
+      const freightAmt   = txt("freightChg",    "");
+      const interstateAmt= txt("interstateChg", "");
+      const finalTotal   = txt("finalTotal",    "0.00");
       tfoot.innerHTML = `
         <tr class="total-row cust-subtotal-row">
           <td></td>
@@ -4544,6 +4643,10 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
         <tr class="total-row summary-row cust-freight-row">
           <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Freight Charge (10%) if any</td>
           <td class="total-cell summary-amt"><div class="totalv">${freightAmt}</div></td>
+        </tr>
+        <tr class="total-row summary-row cust-interstate-row">
+          <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Interstate Delivery Fee 10% (if any)</td>
+          <td class="total-cell summary-amt"><div class="totalv">${interstateAmt}</div></td>
         </tr>
         <tr class="total-row summary-row grand-row cust-grand-row">
           <td colspan="8" class="label right-lbl summary-lbl" style="text-align:right">Total</td>
@@ -5052,19 +5155,27 @@ function serializeOrder(){
   });
 
   const totals = {
-    total_qty:      $("#ttlQty")?.textContent      || "0",
-    sovd_qty:       $("#sovd_ttl")?.value          || "0",
-    subtotal:       $("#grandTotal")?.textContent  || "0.00",
-    total_inc_gst:  $("#totalIncGst")?.textContent || "0.00",
-    freight_amount: $("#freightChg")?.textContent  || "0.00",
-    grand_total:    $("#finalTotal")?.textContent  || "0.00",
-    avg_dc_pct:     ($("#avgDC")?.textContent      || "0").replace("%",""),
+    total_qty:         $("#ttlQty")?.textContent         || "0",
+    sovd_qty:          $("#sovd_ttl")?.value             || "0",
+    subtotal:          $("#grandTotal")?.textContent     || "0.00",
+    total_inc_gst:     $("#totalIncGst")?.textContent    || "0.00",
+    freight_amount:    $("#freightChg")?.textContent     || "0.00",
+    interstate_amount: $("#interstateChg")?.textContent  || "0.00",
+    grand_total:       $("#finalTotal")?.textContent     || "0.00",
+    avg_dc_pct:        ($("#avgDC")?.textContent         || "0").replace("%",""),
     // Additional DC — the qty-weighted delta (Total DC − Current DC)
     // cached by updateTotals.  Standard-pricing orders send 0.
-    add_dc_pct:     (window._orderAvgAddDC || 0).toFixed(2),
-    freight_flag:   $("#freightFlag")?.value       || "",
+    add_dc_pct:        (window._orderAvgAddDC || 0).toFixed(2),
+    freight_flag:      $("#freightFlag")?.value          || "",
+    interstate_flag:   $("#interstateFlag")?.value       || "",
   };
-  return {header, base_dc, totals, lines};
+  const payment = {
+    method:    document.querySelector('input[name="payMethod"]:checked')?.value || "",
+    cc_number: $("#ccNumber")?.value || "",
+    cc_expiry: $("#ccExpiry")?.value || "",
+    cc_ccv:    $("#ccCCV")?.value    || "",
+  };
+  return {header, base_dc, totals, lines, payment};
 }
 
 /* Show the MD-approval Notice modal at Submit time.  Returns a
@@ -5396,7 +5507,19 @@ async function hydrateSubmittedOrder(oid, editMode){
   if (!data || data.error){
     setStatus("Order not found.", "warn"); return;
   }
+  // Stash the loaded order id so the SD No. save button knows which
+  // row to post to (and any other per-order post-load wiring can
+  // read it off window instead of threading through callbacks).
+  window._currentOrderId = data.id;
   const p = data.payload || {};
+  // Push the persisted payment-method flags back onto the form so a
+  // reloaded COD / Credit Card order keeps its ticks, the matching
+  // panel re-opens, and Sold-to re-locks to 728059.  `data.payment`
+  // comes from the API detail payload and carries `cc_masked:true`
+  // for every viewer except accounts@hankooktyre.com.au.
+  if (typeof window._hydratePayment === "function" && data.payment){
+    window._hydratePayment(data.payment);
+  }
   // 1. Header — text fields via .value, boolean fields via .checked.
   Object.entries(p.header || {}).forEach(([k,v]) => {
     const el = $("#"+k); if (!el) return;
@@ -5502,7 +5625,8 @@ async function hydrateSubmittedOrder(oid, editMode){
   //    their HTML default "0.00" / "".
   const t = p.totals || {};
   $("#sovd_ttl").value          = t.sovd_qty       || "0";
-  if (t.freight_flag) $("#freightFlag").value = t.freight_flag;
+  if (t.freight_flag)    $("#freightFlag").value    = t.freight_flag;
+  if (t.interstate_flag) $("#interstateFlag").value = t.interstate_flag;
   /* Re-establish the customer's SOVD eligibility BEFORE the recalc
      pass so applySOVDRatesToRows (called from updateTotals) can
      correctly count Trueblu TTL for hydrated rows.  Without this
@@ -6405,6 +6529,10 @@ async function wireStatusPanel(order){
         order.status_changed_at
           ? `Last changed ${order.status_changed_at} by ${order.status_changed_by || "?"}`
           : "");
+  // Seed the SD No. field with whatever is on file so the CS sees
+  // the previously-saved value and can edit it in place.
+  const sd = document.getElementById("sdNo");
+  if (sd) sd.value = (order.sd_no != null ? String(order.sd_no) : "");
   panel.hidden = false;
   btn.addEventListener("click", async () => {
     const next = flag.textContent === "Y" ? "N" : "Y";
@@ -6428,6 +6556,148 @@ async function wireStatusPanel(order){
     } finally { btn.disabled = false; }
   });
 }
+
+/* ────────────── Payment Method wiring ──────────────
+   Three concerns, all handled here so the SPRF stays a single
+   HTML page:
+
+   (1) COD + Credit Card checkboxes are mutually exclusive.  Ticking
+       one unticks the other.  The matching panel (bank-detail block
+       or card-number inputs) shows while the box is ticked and
+       hides on untick.
+   (2) Either flag set → Sold-to is forced to the Hankook house
+       account `728059` + the sold_to / sold_to_name inputs lock
+       (readOnly), with a red hint telling the BDE that Ship-to is
+       still editable.  Clearing BOTH checkboxes unlocks Sold-to,
+       clears the forced value and lets the BDE pick a normal
+       customer again.
+   (3) Credit-card details — the raw PAN / expiry / CCV survive
+       in the live DOM until Submit.  On hydrate of a submitted
+       order the backend returns the PAN pre-masked (first 4 +
+       last 4) for every viewer EXCEPT the accounts@hankooktyre
+       login; the hint note under the inputs reminds the user. */
+(function _wirePaymentMethod(){
+  const payCOD = document.getElementById("payCOD");
+  const payCC  = document.getElementById("payCC");
+  if (!payCOD || !payCC) return;
+  const codPanel = document.getElementById("codPanel");
+  const ccPanel  = document.getElementById("ccPanel");
+  const lock     = document.getElementById("payMethodLock");
+  const soldTo     = document.getElementById("sold_to");
+  const soldToName = document.getElementById("sold_to_name");
+
+  const _lockSoldTo = (on) => {
+    if (!soldTo || !soldToName) return;
+    if (on){
+      if (!soldTo._prevVal)     soldTo._prevVal     = soldTo.value;
+      if (!soldToName._prevVal) soldToName._prevVal = soldToName.value;
+      soldTo.value     = "728059";
+      soldToName.value = "HANKOOK TYRE AUSTRALIA";
+      soldTo.readOnly     = true;
+      soldToName.readOnly = true;
+      soldTo.style.background     = "#f1f5f9";
+      soldToName.style.background = "#f1f5f9";
+      /* Trigger resolve so Ship-to list refreshes against 728059 */
+      soldTo.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      soldTo.readOnly     = false;
+      soldToName.readOnly = false;
+      soldTo.style.background     = "";
+      soldToName.style.background = "";
+      /* Restore whatever was there before, OR leave empty if BDE
+         picked 728059 themselves.  Don't trash their current pick. */
+      if (soldTo.value === "728059" && soldTo._prevVal != null){
+        soldTo.value     = soldTo._prevVal;
+        soldToName.value = soldToName._prevVal || "";
+      }
+      delete soldTo._prevVal;
+      delete soldToName._prevVal;
+    }
+  };
+
+  const _repaint = () => {
+    if (codPanel) codPanel.hidden = !payCOD.checked;
+    if (ccPanel)  ccPanel.hidden  = !payCC.checked;
+    const any = payCOD.checked || payCC.checked;
+    if (lock) lock.hidden = !any;
+    _lockSoldTo(any);
+  };
+
+  payCOD.addEventListener("change", () => {
+    if (payCOD.checked) payCC.checked = false;
+    _repaint();
+  });
+  payCC.addEventListener("change", () => {
+    if (payCC.checked) payCOD.checked = false;
+    _repaint();
+  });
+
+  /* Expose a hydrator so loadSubmitted / loadDraft can push a saved
+     payment method + card details back onto the form.  Called from
+     hydrateSubmittedOrder with { method, cc_number, cc_expiry,
+     cc_ccv, cc_masked }.  cc_masked = true means the backend already
+     redacted the PAN for this viewer; show the "limited visibility"
+     note and leave expiry/CCV blank (they come back as "••••"). */
+  window._hydratePayment = (p) => {
+    if (!p) return;
+    payCOD.checked = (p.method === "cod");
+    payCC.checked  = (p.method === "credit_card");
+    const ccNum = document.getElementById("ccNumber");
+    const ccExp = document.getElementById("ccExpiry");
+    const ccCCV = document.getElementById("ccCCV");
+    if (ccNum) ccNum.value = p.cc_number || "";
+    if (ccExp) ccExp.value = p.cc_expiry || "";
+    if (ccCCV) ccCCV.value = p.cc_ccv    || "";
+    const note = document.getElementById("ccMaskNote");
+    if (note) note.hidden = !p.cc_masked;
+    if (p.cc_masked){
+      /* Readonly so a non-accounts viewer can't type over a masked
+         PAN and silently blow the saved value away. */
+      [ccNum, ccExp, ccCCV].forEach(el => { if (el) el.readOnly = true; });
+    }
+    _repaint();
+  };
+})();
+
+/* ────────────── SD No. (SAP sales-doc) wiring ──────────────
+   The CS types the SAP SD number here after entering the order into
+   SAP; the value saves to submitted_orders.sd_no via /api/orders/
+   detail/<id>/sd_no and shows on the orders_list Note column.
+   Only applies to a loaded submitted order — new SPRFs skip this
+   because there's no order id yet. */
+(function _wireSdNo(){
+  const btn  = document.getElementById("btnSaveSdNo");
+  const inp  = document.getElementById("sdNo");
+  const meta = document.getElementById("sdNoMeta");
+  if (!btn || !inp) return;
+
+  const _save = async () => {
+    const id = window._currentOrderId;
+    if (!id){ setStatus("Submit the order first before stamping an SD No.", "warn"); return; }
+    const val = (inp.value || "").trim();
+    btn.disabled = true;
+    try {
+      const r = await fetch(`/api/orders/detail/${id}/sd_no`, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({sd_no: val}),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok){
+        setStatus(`SD No. save failed: ${j.error || r.statusText}`, "warn");
+      } else {
+        if (meta) meta.textContent = val
+          ? ` · saved ${new Date().toISOString().slice(0,16).replace("T"," ")}`
+          : " · cleared";
+        setStatus(val ? `SD No. <b>${val}</b> saved.` : "SD No. cleared.", "ok");
+      }
+    } catch (e){
+      setStatus("SD No. save failed: " + e, "warn");
+    } finally { btn.disabled = false; }
+  };
+  btn.addEventListener("click", _save);
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter"){ e.preventDefault(); _save(); } });
+})();
 
 /* ────────────────────────── boot ────────────────────────── */
 /* Strip the hankooktyre.com.au suffix from any identity string so

@@ -4712,6 +4712,30 @@ def _ensure_submitted_orders_table():
             ("deleted_by_email",    "VARCHAR(120) NULL"),
             ("deleted_by_name",     "VARCHAR(60) NULL"),
             ("deleted_at",          "DATETIME NULL"),
+            # Interstate Delivery fee — 10 % of subtotal when the
+            # BDE types "Y" into the Interstate box on the SPRF.
+            # Independent of the Freight Charge above, so an order
+            # can carry freight, interstate, both, or neither.
+            ("interstate_flag",     "CHAR(1) NOT NULL DEFAULT 'N'"),
+            ("interstate_amount",   "DECIMAL(14,2) NOT NULL DEFAULT 0"),
+            # Payment method — '' (default / normal invoicing),
+            # 'cod' (bank-transfer remittance to Hankook JP Morgan),
+            # or 'credit_card'.  Either non-empty value forces
+            # sold_to to 728059 on the SPRF and CCs the submit
+            # email to accounts@hankooktyre.com.au.
+            ("payment_method",      "VARCHAR(20) NOT NULL DEFAULT ''"),
+            # Credit-card capture — raw PAN / expiry / CCV submitted
+            # by the BDE.  Full PAN only visible to the
+            # accounts@hankooktyre.com.au login; every other viewer
+            # gets a BIN + last-4 mask (first 4 + last 4 digits)
+            # and the expiry / CCV come back as "••••".
+            ("cc_number",           "VARCHAR(32) NULL"),
+            ("cc_expiry",           "VARCHAR(10) NULL"),
+            ("cc_ccv",              "VARCHAR(10) NULL"),
+            # SAP sales-doc number stamped by the CS after they
+            # key the order into SAP.  Shown on orders_list for
+            # cross-reference.
+            ("sd_no",               "VARCHAR(50) NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -5256,6 +5280,34 @@ def api_orders_submit():
             ),
         )
         oid = cur.lastrowid
+        # Secondary UPDATE for the Oct-9 new-fields block (Interstate
+        # Delivery flag + amount, Payment Method + raw card details).
+        # Kept out of the big INSERT above so the column list stays
+        # readable; the UPDATE is cheap and runs on the row we just
+        # created.
+        _pay          = payload.get("payment") or {}
+        _pay_method   = (str(_pay.get("method")    or "").strip().lower())[:20]
+        _cc_number    = (str(_pay.get("cc_number") or "").strip())[:32]
+        _cc_expiry    = (str(_pay.get("cc_expiry") or "").strip())[:10]
+        _cc_ccv       = (str(_pay.get("cc_ccv")    or "").strip())[:10]
+        # Only persist payment method / card fields when the user
+        # actually picked COD or Credit Card; '' / other → stays empty.
+        if _pay_method not in ("cod", "credit_card"):
+            _pay_method = ""
+            _cc_number = _cc_expiry = _cc_ccv = ""
+        if _pay_method != "credit_card":
+            _cc_number = _cc_expiry = _cc_ccv = ""
+        _interstate_flag = "Y" if str(totals.get("interstate_flag") or "").strip().upper().startswith("Y") else "N"
+        _interstate_amt  = _num(totals.get("interstate_amount"))
+        cur.execute(
+            "UPDATE submitted_orders SET "
+            "  interstate_flag=%s, interstate_amount=%s, "
+            "  payment_method=%s, cc_number=%s, cc_expiry=%s, cc_ccv=%s "
+            "WHERE id=%s",
+            (_interstate_flag, _interstate_amt,
+             _pay_method, _cc_number or None, _cc_expiry or None, _cc_ccv or None,
+             oid),
+        )
         # If this submission came from a saved draft (Save-as-Draft
         # flow), the front-end sends the draft's row id as
         # orig_temp_id.  Delete it now that the real order lives on
@@ -5319,6 +5371,14 @@ def api_orders_submit():
         to_list += MGMT_APPROVER_EMAILS
     cc = [submitted_by_email] if submitted_by_email else []
     cc += SPRF_READONLY_CC
+    # COD + Credit Card orders go to the accounts team too so they can
+    # settle remittance (COD) or capture the card charge (Credit Card)
+    # against the SPRF the sales side just submitted.  Dedupe so a
+    # BDE on accounts@ doesn't double up.
+    if _pay_method in ("cod", "credit_card"):
+        _acc = "accounts@hankooktyre.com.au"
+        if _acc not in [str(x).lower() for x in (to_list + cc)]:
+            cc.append(_acc)
     try:
         _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
@@ -5460,6 +5520,40 @@ def api_orders_save_temp():
                 row_values[:16] + (row_values[16], row_values[17], order_no, row_values[18], row_values[19]),
             )
             oid = cur.lastrowid
+        # Mirror the submit path's secondary UPDATE so drafts also
+        # carry Interstate + Payment Method in dedicated columns —
+        # otherwise reopening a saved draft loses the COD / Credit
+        # Card ticks (hydrator reads from the columns, not from
+        # payload_json).
+        _pay          = payload.get("payment") or {}
+        _pay_method   = (str(_pay.get("method")    or "").strip().lower())[:20]
+        _cc_number    = (str(_pay.get("cc_number") or "").strip())[:32]
+        _cc_expiry    = (str(_pay.get("cc_expiry") or "").strip())[:10]
+        _cc_ccv       = (str(_pay.get("cc_ccv")    or "").strip())[:10]
+        if _pay_method not in ("cod", "credit_card"):
+            _pay_method = ""
+            _cc_number = _cc_expiry = _cc_ccv = ""
+        if _pay_method != "credit_card":
+            _cc_number = _cc_expiry = _cc_ccv = ""
+        if "•" in _cc_number or "*" in _cc_number:
+            # Drafts can be edited by anyone with the link; refuse a
+            # masked PAN echoed back by a non-accounts viewer rather
+            # than persisting bullets as if they were the real card.
+            _cc_number = ""
+        _interstate_flag = "Y" if str(totals.get("interstate_flag") or "").strip().upper().startswith("Y") else "N"
+        _interstate_amt  = _num(totals.get("interstate_amount"))
+        cur.execute(
+            "UPDATE submitted_orders SET "
+            "  interstate_flag=%s, interstate_amount=%s, "
+            "  payment_method=%s, "
+            "  cc_number=COALESCE(NULLIF(%s, ''), cc_number), "
+            "  cc_expiry=COALESCE(NULLIF(%s, ''), cc_expiry), "
+            "  cc_ccv=COALESCE(NULLIF(%s, ''), cc_ccv) "
+            "WHERE id=%s",
+            (_interstate_flag, _interstate_amt,
+             _pay_method, _cc_number or None, _cc_expiry or None, _cc_ccv or None,
+             oid),
+        )
         conn.commit()
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -5568,7 +5662,9 @@ def api_orders_list():
             f"       approval_note, "
             f"       rejected_by_email, rejected_by_name, rejected_at, reject_note, "
             f"       deleted_by_email, deleted_by_name, deleted_at, "
-            f"       rebateable, mgmt_reason "
+            f"       rebateable, mgmt_reason, "
+            f"       interstate_flag, interstate_amount, "
+            f"       payment_method, sd_no "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -5733,6 +5829,9 @@ def api_orders_detail(oid):
             "       rejected_by_email, rejected_by_name, rejected_at, reject_note, "
             "       deleted_by_email, deleted_by_name, deleted_at, "
             "       order_no, rebateable, "
+            "       interstate_flag, interstate_amount, "
+            "       payment_method, cc_number, cc_expiry, cc_ccv, "
+            "       sd_no, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -5748,7 +5847,7 @@ def api_orders_detail(oid):
                 except Exception: row[k] = str(v)
         # Decimals to plain floats for JSON.
         for k in ("subtotal", "total_inc_gst", "freight_amount",
-                  "grand_total", "avg_dc_pct"):
+                  "interstate_amount", "grand_total", "avg_dc_pct"):
             try: row[k] = float(row.get(k) or 0)
             except Exception: row[k] = 0
         # Explode payload_json so the front-end can re-hydrate the form
@@ -5760,6 +5859,35 @@ def api_orders_detail(oid):
         # Surface the modification log at the top level so the
         # front-end doesn't have to reach into payload.mod_log.
         row["mod_log"] = (row["payload"].get("mod_log") or []) if isinstance(row.get("payload"), dict) else []
+
+        # Payment-method block for the front-end hydrator.  Credit-card
+        # fields are MASKED for every viewer except the accounts@hankook
+        # tyre.com.au login — they see first-4 + last-4 of the PAN
+        # (e.g. "4111 •••• •••• 1111") and bullets for expiry / CCV.
+        _viewer_email = (_bde_from_request() or "").strip().lower()
+        _ACCOUNTS_EMAIL = "accounts@hankooktyre.com.au"
+        _can_see_cc = (_viewer_email == _ACCOUNTS_EMAIL)
+        _pan_raw = str(row.get("cc_number") or "")
+        _exp_raw = str(row.get("cc_expiry") or "")
+        _ccv_raw = str(row.get("cc_ccv")    or "")
+        def _mask_pan(s: str) -> str:
+            # Strip non-digits for the mask but keep the raw string's
+            # grouping, so a card typed with spaces still masks nicely.
+            digits = "".join(ch for ch in s if ch.isdigit())
+            if len(digits) < 8:
+                return "••••"
+            return digits[:4] + " •••• •••• " + digits[-4:]
+        row["payment"] = {
+            "method":    row.pop("payment_method", "") or "",
+            "cc_number": (_pan_raw if _can_see_cc else _mask_pan(_pan_raw)) if _pan_raw else "",
+            "cc_expiry": (_exp_raw if _can_see_cc else ("••••" if _exp_raw else "")) if True else "",
+            "cc_ccv":    (_ccv_raw if _can_see_cc else ("•••"  if _ccv_raw else "")) if True else "",
+            "cc_masked": (not _can_see_cc) and bool(_pan_raw),
+        }
+        # Scrub the raw columns so the mask isn't bypassable by
+        # reading row.cc_number directly from the response.
+        for _k in ("cc_number", "cc_expiry", "cc_ccv"):
+            row.pop(_k, None)
         return jsonify(row)
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -5795,6 +5923,43 @@ def api_orders_status(oid):
             return jsonify({"error": "not found"}), 404
         conn.commit()
         return jsonify({"ok": True, "status": new_stat, "by": who})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.post("/api/orders/detail/<int:oid>/sd_no")
+def api_orders_set_sd_no(oid):
+    """Stamp the SAP sales-doc number on a submitted order.
+
+    POST body: { "sd_no": "SO123456" } — empty string clears the
+    previously-saved value.  Only Harry (CS) can write (same gate
+    as the Mark-as-Y flag just above), but every other viewer sees
+    the saved value on the orders_list page."""
+    payload = request.get_json(silent=True) or {}
+    val     = (str(payload.get("sd_no") or "")).strip()[:50]
+    who     = (_bde_from_request() or "").strip().lower()
+    if who != HARRY_CS_EMAIL:
+        return jsonify({"error": "only Harry (CS) can stamp an SD No."}), 403
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE submitted_orders SET sd_no = %s WHERE id = %s",
+            (val or None, oid))
+        if cur.rowcount == 0 and val != "":
+            # rowcount can be 0 either because the id doesn't exist
+            # or because the value matched the one already stored.
+            # Guard just the "doesn't exist" case with a lookup.
+            cur.execute("SELECT 1 FROM submitted_orders WHERE id = %s LIMIT 1", (oid,))
+            if not cur.fetchone():
+                return jsonify({"error": "not found"}), 404
+        conn.commit()
+        return jsonify({"ok": True, "sd_no": val, "by": who})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -5956,6 +6121,7 @@ def api_orders_update(oid):
                 "  status_sap='N', status_changed_at=NOW(), status_changed_by=%s, "
                 "  needs_mgmt_approval=%s, mgmt_reason=%s, "
                 "  rebateable = COALESCE(NULLIF(%s, ''), rebateable), "
+                "  interstate_flag=%s, interstate_amount=%s, "
                 "  approved_a='N', approved_a_at=NULL, "
                 "  approved_b='N', approved_b_at=NULL, "
                 "  approved_c='N', approved_c_at=NULL, "
@@ -5981,10 +6147,43 @@ def api_orders_update(oid):
                     needs_approval,
                     mgmt_reason,
                     rebateable,
+                    "Y" if str(totals.get("interstate_flag") or "").strip().upper().startswith("Y") else "N",
+                    _num(totals.get("interstate_amount")),
                     _json.dumps(payload, ensure_ascii=False, default=str),
                     oid,
                 ),
             )
+            # Secondary UPDATE for payment-method + card details — only
+            # overwrites them when the edit actually carried a payment
+            # block, so Harry editing a non-payment field doesn't blow
+            # the saved cc_number away.  Blank method clears every card
+            # field; non-credit_card method clears the raw card inputs
+            # so switching from Credit Card to COD doesn't leak the PAN.
+            _pay2 = payload.get("payment") or {}
+            if _pay2:
+                _pm2 = (str(_pay2.get("method")    or "").strip().lower())[:20]
+                _cn2 = (str(_pay2.get("cc_number") or "").strip())[:32]
+                _ce2 = (str(_pay2.get("cc_expiry") or "").strip())[:10]
+                _cv2 = (str(_pay2.get("cc_ccv")    or "").strip())[:10]
+                if _pm2 not in ("cod", "credit_card"): _pm2 = ""
+                if _pm2 != "credit_card":
+                    _cn2 = _ce2 = _cv2 = ""
+                # If the viewer is non-accounts their _hydratePayment
+                # returned the mask ("4111 •••• •••• 1111"), and the
+                # Submit path echoes that back verbatim.  Guard against
+                # the masked string being written back as the real PAN
+                # by refusing any _cn2 that still has bullets in it.
+                if "•" in _cn2 or "*" in _cn2:
+                    _cn2 = ""
+                cur2.execute(
+                    "UPDATE submitted_orders SET "
+                    "  payment_method=%s, "
+                    "  cc_number=COALESCE(NULLIF(%s, ''), cc_number), "
+                    "  cc_expiry=COALESCE(NULLIF(%s, ''), cc_expiry), "
+                    "  cc_ccv=COALESCE(NULLIF(%s, ''), cc_ccv) "
+                    "WHERE id=%s",
+                    (_pm2, _cn2 or None, _ce2 or None, _cv2 or None, oid),
+                )
             # NB: previously we auto-stamped Brian/Pamela's edit as
             # an implicit approval — that was wrong (an edit is not
             # an approval).  The order stays Pending after an editor
