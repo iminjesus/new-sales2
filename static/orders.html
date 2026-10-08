@@ -6771,36 +6771,64 @@ async function wireStatusPanel(order){
   }
 
   // Expiry Date — MM/YY per Oct-9 (corrected) spec:
-  //   MM ∈ 01-12 (standard month range)
-  //   YY ≥ current year (2-digit) — can't type an already-expired card
+  //   MM ∈ 01-12 (standard month range) — clamps silently on type
+  //   YY ≥ current year (2-digit) — can't be already-expired.
+  //                                  Per the Oct-9 PM clarification,
+  //                                  an invalid YY shows a modal
+  //                                  prompt instead of silently
+  //                                  snapping forward.
   if (ccExpiry){
     ccExpiry.setAttribute("inputmode", "numeric");
     ccExpiry.setAttribute("maxlength", "5");     // MM + / + YY
     ccExpiry.setAttribute("autocomplete", "cc-exp");
-    const _minYY = new Date().getFullYear() % 100;   // e.g. 26 in 2026
+    const _getMinYY = () => new Date().getFullYear() % 100;  // lazy; survives Jan-1
+    // Live mask: digits only, MM clamp to 01-12, auto-insert "/".
+    // YY is NOT clamped here — a bad YY would snap-change the
+    // field under the user's fingers and feel like an unexplained
+    // bug.  We validate YY on blur / change below and surface the
+    // message there.
     ccExpiry.addEventListener("input", (e) => {
       if (e.target.readOnly) return;
       let digits = (e.target.value || "").replace(/\D/g, "").slice(0, 4);
-      // Clamp MM to 01-12 once the second digit lands.
       if (digits.length >= 2){
         let mm = parseInt(digits.slice(0, 2), 10);
         if (mm < 1)  mm = 1;
         if (mm > 12) mm = 12;
         digits = String(mm).padStart(2, "0") + digits.slice(2);
       }
-      // Clamp YY to >= current year once the fourth digit lands —
-      // typing "25" in late-2026 jumps back up to "26".  A YY
-      // greater than or equal to _minYY is left alone so future
-      // expiries (27, 28, 29, …) work.
-      if (digits.length === 4){
-        let yy = parseInt(digits.slice(2, 4), 10);
-        if (yy < _minYY) yy = _minYY;
-        digits = digits.slice(0, 2) + String(yy).padStart(2, "0");
-      }
-      // Re-insert the "/" separator between MM and YY.
       e.target.value = digits.length <= 2
         ? digits
         : digits.slice(0, 2) + "/" + digits.slice(2);
+    });
+    // YY-floor check — fires on blur (user left the field) and on
+    // the 4th digit (MM/YY is now complete).  Shows the Oct-9
+    // notice "Invalid expiry date. Please enter a valid future
+    // expiry date." and clears the YY so the user can retype it.
+    const _INVALID_MSG = "Invalid expiry date. Please enter a valid future expiry date.";
+    const _validateYY = () => {
+      if (ccExpiry.readOnly) return;
+      const v = (ccExpiry.value || "").trim();
+      const m = /^(\d{2})\/(\d{2})$/.exec(v);
+      if (!m) return;
+      const yy = parseInt(m[2], 10);
+      if (yy < _getMinYY()){
+        if (typeof showNotice === "function"){
+          showNotice(_INVALID_MSG);
+        } else {
+          alert(_INVALID_MSG);
+        }
+        ccExpiry.value = m[1] + "/";
+        try { ccExpiry.focus(); } catch(_e){}
+      }
+    };
+    ccExpiry.addEventListener("blur",   _validateYY);
+    ccExpiry.addEventListener("change", _validateYY);
+    // Also check on `input` once the fourth digit lands — that way
+    // typing "02/25" gets the warning the moment the "5" lands,
+    // even if the user doesn't tab out.
+    ccExpiry.addEventListener("input", (e) => {
+      const v = (e.target.value || "").trim();
+      if (/^\d{2}\/\d{2}$/.test(v)) _validateYY();
     });
   }
 
