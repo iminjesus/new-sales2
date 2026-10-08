@@ -6770,26 +6770,31 @@ async function wireStatusPanel(order){
     });
   }
 
-  // Expiry Date — MM/YY with MM 01-31, YY 01-12 (per user spec).
+  // Expiry Date — MM/YY per Oct-9 (corrected) spec:
+  //   MM ∈ 01-12 (standard month range)
+  //   YY ≥ current year (2-digit) — can't type an already-expired card
   if (ccExpiry){
     ccExpiry.setAttribute("inputmode", "numeric");
     ccExpiry.setAttribute("maxlength", "5");     // MM + / + YY
     ccExpiry.setAttribute("autocomplete", "cc-exp");
+    const _minYY = new Date().getFullYear() % 100;   // e.g. 26 in 2026
     ccExpiry.addEventListener("input", (e) => {
       if (e.target.readOnly) return;
       let digits = (e.target.value || "").replace(/\D/g, "").slice(0, 4);
-      // Clamp MM to 01-31 as the user types the second digit.
+      // Clamp MM to 01-12 once the second digit lands.
       if (digits.length >= 2){
         let mm = parseInt(digits.slice(0, 2), 10);
         if (mm < 1)  mm = 1;
-        if (mm > 31) mm = 31;
+        if (mm > 12) mm = 12;
         digits = String(mm).padStart(2, "0") + digits.slice(2);
       }
-      // Clamp YY to 01-12 as the user types the fourth digit.
+      // Clamp YY to >= current year once the fourth digit lands —
+      // typing "25" in late-2026 jumps back up to "26".  A YY
+      // greater than or equal to _minYY is left alone so future
+      // expiries (27, 28, 29, …) work.
       if (digits.length === 4){
         let yy = parseInt(digits.slice(2, 4), 10);
-        if (yy < 1)  yy = 1;
-        if (yy > 12) yy = 12;
+        if (yy < _minYY) yy = _minYY;
         digits = digits.slice(0, 2) + String(yy).padStart(2, "0");
       }
       // Re-insert the "/" separator between MM and YY.
