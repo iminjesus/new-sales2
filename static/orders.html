@@ -1520,10 +1520,10 @@
           Reason / Notes for Approver (REQUIRED on Submit — at least 2 words)
         </div>
 
-        <div class="val val-reason" style="grid-column: span 4;padding:0;flex-direction:column;align-items:stretch">
-          <textarea id="mgmt_reason" rows="7"
+        <div class="val val-reason" style="grid-column: span 4;padding:0">
+          <textarea id="mgmt_reason" rows="3"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
-                    style="width:100%;flex:1;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:180px"></textarea>
+                    style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:80px"></textarea>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
              carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
@@ -6766,67 +6766,16 @@ async function wireStatusPanel(order){
 })();
 
 /* ────────────── Align Reason/Notes to Payment Method ──────────────
-   The Customer Details sub-grid (left pane) and the Order Submission
-   Details sub-grid (right pane) are independent CSS Grid containers
-   stacked side-by-side in `.meta`.  Each sub-grid auto-sizes its
-   rows from its own content, so pure-CSS alignment of two specific
-   children (Payment Method on the left, Reason / Notes on the right)
-   drifts whenever either column's row count changes.
-
-   Fix it with a one-shot measure:
-     • Locate the Payment Method block (the lines-wrap outer div
-       inside the Customer Details grid that contains #payCOD).
-     • Locate the Reason / Notes label + textarea.
-     • Shift the label down with margin-top so its TOP edge lines
-       up with the Payment Method's TOP edge, then size the
-       textarea so its BOTTOM edge lines up with the Payment
-       Method's BOTTOM edge.
-     • Repeats on resize so the alignment survives a window-width
-       change (the sub-grid rows reflow and the required margin
-       shifts).
-   The margin-top is RESET to 0 before each measure so repeated
-   runs don't compound.  Falls back silently if any element is
-   missing — the SPRF stays functional either way. */
-(function _wireReasonAlign(){
-  const align = () => {
-    const pmBlock        = document.getElementById("paymentMethodBlock");
-    const reasonLabel    = document.querySelector(".lbl-reason");
-    const reasonTextarea = document.getElementById("mgmt_reason");
-    if (!pmBlock || !reasonLabel || !reasonTextarea) return;
-    // Reset previous inline overrides so this run measures natural
-    // geometry — not the geometry left by the last run.
-    reasonLabel.style.marginTop    = "0px";
-    reasonTextarea.style.height    = "";
-    reasonTextarea.style.minHeight = "";
-    // Force layout, then measure.
-    void pmBlock.offsetHeight;
-    const pmRect       = pmBlock.getBoundingClientRect();
-    const labelRectNow = reasonLabel.getBoundingClientRect();
-    const topDiff      = pmRect.top - labelRectNow.top;
-    if (Math.abs(topDiff) > 1){
-      reasonLabel.style.marginTop = topDiff + "px";
-    }
-    // Measure the label AFTER the shift (reflow may change height).
-    void reasonLabel.offsetHeight;
-    const labelHeight  = reasonLabel.getBoundingClientRect().height;
-    const textareaH    = Math.max(60, pmRect.height - labelHeight);
-    reasonTextarea.style.height    = textareaH + "px";
-    reasonTextarea.style.minHeight = textareaH + "px";
-  };
-  // Run after initial layout settles (DOMContentLoaded is too early —
-  // the fonts / sub-grid auto-sizing need one frame to resolve).
-  window.addEventListener("load", () => requestAnimationFrame(align));
-  // Repeat on resize, debounced via rAF.  Also fires on orientation
-  // changes on tablets.
-  let _rafId = 0;
-  window.addEventListener("resize", () => {
-    cancelAnimationFrame(_rafId);
-    _rafId = requestAnimationFrame(align);
-  });
-  // Expose for the hydrator so a loaded order can re-align after
-  // its rows swap in (Modified by shows, mod_log drops in, etc.).
-  window._alignReasonToPayment = align;
-})();
+   JS-measure approach dropped — chasing getBoundingClientRect() on
+   two independent sub-grids feedback-loops into unreasonably tall
+   textareas because the left pane stretches to match the right as
+   soon as the textarea grows.  The textarea now carries a FIXED
+   intrinsic height matching the Payment Method block's content
+   height (~80–90 px rendered); the Reason/Notes block ends roughly
+   level with Payment Method on a standard-content SPRF.  A no-op
+   hook is left on window._alignReasonToPayment so hydrateSubmitted-
+   Order's existing call site stays harmless. */
+window._alignReasonToPayment = function(){};
 
 /* ────────────────────────── boot ────────────────────────── */
 /* Strip the hankooktyre.com.au suffix from any identity string so
