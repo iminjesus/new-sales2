@@ -6765,17 +6765,44 @@ async function wireStatusPanel(order){
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter"){ e.preventDefault(); _save(); } });
 })();
 
-/* ────────────── Align Reason/Notes to Payment Method ──────────────
-   JS-measure approach dropped — chasing getBoundingClientRect() on
-   two independent sub-grids feedback-loops into unreasonably tall
-   textareas because the left pane stretches to match the right as
-   soon as the textarea grows.  The textarea now carries a FIXED
-   intrinsic height matching the Payment Method block's content
-   height (~80–90 px rendered); the Reason/Notes block ends roughly
-   level with Payment Method on a standard-content SPRF.  A no-op
-   hook is left on window._alignReasonToPayment so hydrateSubmitted-
-   Order's existing call site stays harmless. */
-window._alignReasonToPayment = function(){};
+/* ────────────── Align Reason/Notes TOP to Payment Method TOP ─────
+   Shift ONLY the Reason / Notes label down with margin-top so its
+   top border lines up with the Payment Method top on the left pane.
+   The textarea keeps its FIXED small height (set in the HTML via
+   `rows=3; min-height:80px`) — chasing the height dynamically fed
+   back into unreasonably tall textareas because the two sub-grids
+   stretch to each other.  Running align only on the TOP alignment
+   doesn't trigger that loop because the label height stays stable.
+   Re-runs on load, resize and after hydrateSubmittedOrder. */
+(function _wireReasonTopAlign(){
+  const align = () => {
+    const pmBlock     = document.getElementById("paymentMethodBlock");
+    const reasonLabel = document.querySelector(".lbl-reason");
+    if (!pmBlock || !reasonLabel) return;
+    // Reset previous margin so this run measures natural position.
+    reasonLabel.style.marginTop = "0px";
+    void pmBlock.offsetHeight;
+    const pmTop    = pmBlock.getBoundingClientRect().top;
+    const labelTop = reasonLabel.getBoundingClientRect().top;
+    const topDiff  = pmTop - labelTop;
+    // Only push DOWN (positive diff).  Negative diffs would mean
+    // the label naturally sits BELOW Payment Method top; shifting
+    // UP with a negative margin-top would collide with the row
+    // above and look worse than leaving it where the sub-grid
+    // placed it.
+    if (topDiff > 1){
+      reasonLabel.style.marginTop = topDiff + "px";
+    }
+  };
+  window.addEventListener("load", () => requestAnimationFrame(align));
+  let _rafId = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(_rafId);
+    _rafId = requestAnimationFrame(align);
+  });
+  // hydrateSubmittedOrder calls this after rebuilding the right pane.
+  window._alignReasonToPayment = align;
+})();
 
 /* ────────────────────────── boot ────────────────────────── */
 /* Strip the hankooktyre.com.au suffix from any identity string so
