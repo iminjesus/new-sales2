@@ -1021,20 +1021,19 @@
       padding: 0;
       margin: 0;
       /* Internal Copy default — 27 visible columns across landscape
-         + Base DC band + Reason/Notes block eat more vertical space
-         than the Customer PDF (9 columns, portrait, Rebate / Base
-         DC / Reason-block all hidden), so Internal needs a tighter
-         compression ratio to fit one page under users whose Chrome
+         + Base DC band + Reason/Notes block eat vertical space.
+         0.36 is tight enough that a 13-line order + the 4 summary
+         rows all fit one landscape page even on users whose Chrome
          print dialog is set to Default (~15mm) margins instead of
-         Minimum (~6mm).  0.42 fits comfortably with text still
-         legible (12 px source → ~5 px on paper). */
-      zoom: 0.42;
+         Minimum (~6mm).  12 px source still renders at ~4.3 px on
+         paper — compact but legible. */
+      zoom: 0.36;
     }
-    /* Customer PDF has far less content on the page (portrait, 9
-       visible columns, no Base DC / Rebate / Reason block, no SOVD
-       strip), so it can afford a looser zoom that keeps the money
-       column legible without crowding. */
-    body.print-customer .wrap { zoom: 0.48; }
+    /* Customer PDF carries much less content (portrait, 9 visible
+       columns, no Base DC / Rebate / Reason block, no SOVD strip)
+       so it can afford a less aggressive zoom while still fitting
+       10-15 lines on a single portrait page. */
+    body.print-customer .wrap { zoom: 0.42; }
     /* Kill the on-screen minimum so the lines table can shrink into
        whatever the zoomed page allows without introducing an internal
        horizontal scroll. */
