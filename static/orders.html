@@ -5542,6 +5542,13 @@ async function hydrateSubmittedOrder(oid, editMode){
   if (typeof window._hydratePayment === "function" && data.payment){
     window._hydratePayment(data.payment);
   }
+  // Re-align the Reason/Notes box to the Payment Method height AFTER
+  // the hydrator has swapped the Modified-by / mod-log rows in on the
+  // right pane — they change the right sub-grid's row count and
+  // therefore the natural Y of the Reason/Notes label.
+  if (typeof window._alignReasonToPayment === "function"){
+    requestAnimationFrame(() => requestAnimationFrame(window._alignReasonToPayment));
+  }
   // 1. Header — text fields via .value, boolean fields via .checked.
   Object.entries(p.header || {}).forEach(([k,v]) => {
     const el = $("#"+k); if (!el) return;
@@ -6747,6 +6754,76 @@ async function wireStatusPanel(order){
   };
   btn.addEventListener("click", _save);
   inp.addEventListener("keydown", (e) => { if (e.key === "Enter"){ e.preventDefault(); _save(); } });
+})();
+
+/* ────────────── Align Reason/Notes to Payment Method ──────────────
+   The Customer Details sub-grid (left pane) and the Order Submission
+   Details sub-grid (right pane) are independent CSS Grid containers
+   stacked side-by-side in `.meta`.  Each sub-grid auto-sizes its
+   rows from its own content, so pure-CSS alignment of two specific
+   children (Payment Method on the left, Reason / Notes on the right)
+   drifts whenever either column's row count changes.
+
+   Fix it with a one-shot measure:
+     • Locate the Payment Method block (the lines-wrap outer div
+       inside the Customer Details grid that contains #payCOD).
+     • Locate the Reason / Notes label + textarea.
+     • Shift the label down with margin-top so its TOP edge lines
+       up with the Payment Method's TOP edge, then size the
+       textarea so its BOTTOM edge lines up with the Payment
+       Method's BOTTOM edge.
+     • Repeats on resize so the alignment survives a window-width
+       change (the sub-grid rows reflow and the required margin
+       shifts).
+   The margin-top is RESET to 0 before each measure so repeated
+   runs don't compound.  Falls back silently if any element is
+   missing — the SPRF stays functional either way. */
+(function _wireReasonAlign(){
+  const align = () => {
+    const payCOD = document.getElementById("payCOD");
+    if (!payCOD) return;
+    // Payment Method block = the lines-wrap div with grid-column 1/-1
+    // that contains payCOD (not payCOD's immediate parent, which is
+    // the <label> wrapping the checkbox).
+    const pmBlock = payCOD.closest("div[style*='grid-column: 1 / -1']");
+    const reasonLabel    = document.querySelector(".lbl-reason");
+    const reasonTextarea = document.getElementById("mgmt_reason");
+    if (!pmBlock || !reasonLabel || !reasonTextarea) return;
+    // Reset the previous margin so this run measures the natural
+    // position, not the position left by the last run.
+    reasonLabel.style.marginTop = "0px";
+    reasonTextarea.style.height = "";
+    // Force layout now (reading geometry does this implicitly in
+    // Chromium but being explicit keeps the two reads consistent).
+    void pmBlock.offsetHeight;
+    const pmRect    = pmBlock.getBoundingClientRect();
+    const labelRect = reasonLabel.getBoundingClientRect();
+    const topDiff   = pmRect.top - labelRect.top;
+    if (Math.abs(topDiff) > 1){
+      reasonLabel.style.marginTop = topDiff + "px";
+    }
+    // Textarea height = Payment Method height − Reason label height,
+    // measured AFTER the label shift (its height can change if the
+    // margin-top triggered a reflow).
+    void reasonLabel.offsetHeight;
+    const labelHeightAfter = reasonLabel.getBoundingClientRect().height;
+    const textareaH = Math.max(60, pmRect.height - labelHeightAfter);
+    reasonTextarea.style.height    = textareaH + "px";
+    reasonTextarea.style.minHeight = textareaH + "px";
+  };
+  // Run after initial layout settles (DOMContentLoaded is too early —
+  // the fonts / sub-grid auto-sizing need one frame to resolve).
+  window.addEventListener("load", () => requestAnimationFrame(align));
+  // Repeat on resize, debounced via rAF.  Also fires on orientation
+  // changes on tablets.
+  let _rafId = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(_rafId);
+    _rafId = requestAnimationFrame(align);
+  });
+  // Expose for the hydrator so a loaded order can re-align after
+  // its rows swap in (Modified by shows, mod_log drops in, etc.).
+  window._alignReasonToPayment = align;
 })();
 
 /* ────────────────────────── boot ────────────────────────── */
