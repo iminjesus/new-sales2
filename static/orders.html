@@ -2278,10 +2278,10 @@ async function resolveCustomer(kind, field, value){
   }
   const data = await apiGet(`/api/orders/customer?${qs.toString()}`);
   if(!data || data.error){ setStatus(`${param} <b>${value}</b> not found`, "warn"); return; }
-  applyCustomer(data);
+  applyCustomer(data, kind);
 }
 
-function applyCustomer(row){
+function applyCustomer(row, kind){
   if(!row) return;
   const set = (id, v) => { const el = document.getElementById(id.replace("#","")); if(!el) return; el.value = v ?? ""; };
   // Payment-method lock preserves the forced Sold-to (728059) even
@@ -2295,13 +2295,36 @@ function applyCustomer(row){
     set("sold_to",       row.sold_to      || "");
     set("sold_to_name",  row.sold_to_name || "");
   }
-  set("ship_to",         row.ship_to || "");
-  set("ship_to_name",    row.ship_to_name || "");
+  // When the payment lock engages, the _lockSoldTo helper dispatches
+  // a `change` on sold_to which lands us here with kind="sold" and
+  // the Hankook house account's row.  Per the Oct-9 PM clarification,
+  // Ship-to should stay BLANK so the BDE can type the real customer
+  // in — if we filled every ship-side field from 728059's row the
+  // user would see "Ship-to Account: 728059" and have to clear it
+  // manually.  Keep the ship-side fields untouched on a sold-side
+  // lookup under the lock; a later ship-side resolve (kind="ship")
+  // fills them normally.
+  const skipShipFill = payLocked && kind === "sold";
+  if (!skipShipFill){
+    set("ship_to",         row.ship_to || "");
+    set("ship_to_name",    row.ship_to_name || "");
+    set("ship_to_address", row.address || "");
+    set("ship_to_state",   row.state || row.bde_state || "");
+    set("phone_email",     row.phone || row.email || "");
+    set("mobile",          row.mobile || "");
+  } else {
+    // Scrub any ship-side values that a PREVIOUSLY-loaded customer
+    // left on the form before the lock engaged, so the BDE starts
+    // from a clean blank Ship-to row.
+    ["ship_to", "ship_to_name", "ship_to_address",
+     "ship_to_state", "phone_email", "mobile"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = "";
+    });
+  }
+  // customer_group / BDE name / Base DC come from the Sold-to side
+  // (the house account under the lock) and stay filled either way.
   set("customer_group",  row.customer_group || row.sold_to_group || "");
-  set("ship_to_address", row.address || "");
-  set("ship_to_state",   row.state || row.bde_state || "");
-  set("phone_email",     row.phone || row.email || "");
-  set("mobile",          row.mobile || "");
   // BDE / salesman — the Order# column has its own bde_name input.
   set("bde_name",        row.bde_name || row.salesman_name || "");
   setStatus(`Loaded <b>${row.ship_to_name||row.sold_to_name||"—"}</b> · BDE: ${row.bde_name||row.salesman_name||"—"}`, "ok");
