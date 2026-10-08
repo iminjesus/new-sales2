@@ -372,6 +372,15 @@
     padding:5px 8px;font-size:12.5px;
     min-height:28px;display:flex;align-items:center;
   }
+  /* The `.grid > div { display:flex }` rule above has higher
+     specificity than the UA stylesheet's `[hidden]{display:none}`,
+     so a hidden grid child (e.g. #approvalPanel on a brand-new
+     SPRF with no edits yet) still rendered as a visible row with
+     its yellow background showing — the "empty yellow bar below
+     Reason/Notes" the user has been flagging.  Explicitly force
+     display:none on any hidden grid child to restore the UA
+     behaviour. */
+  .grid > div[hidden]{ display: none !important; }
   .grid .lbl{background:#eef1f4;font-weight:700;color:#333;border-right:1px solid var(--border);}
   .grid .val{background:#fff;}
   .grid .val input, .grid .val textarea, .grid .val select{
@@ -1406,7 +1415,7 @@
                └──────────────┴────────────┴──────────────────────────┘
              Lives in the Customer Details grid (left pane) per the
              Oct-9 "move to left" request. -->
-        <div class="val full-row" style="padding: 0; display:block; grid-column: 1 / -1">
+        <div id="paymentMethodBlock" class="val full-row" style="padding: 0; display:block; grid-column: 1 / -1">
           <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:12.5px">
             <tr>
               <td rowspan="2" style="width:150px;vertical-align:middle;padding:10px;background:#f1f5f9;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;font-weight:700;text-align:center">
@@ -6780,34 +6789,27 @@ async function wireStatusPanel(order){
    missing — the SPRF stays functional either way. */
 (function _wireReasonAlign(){
   const align = () => {
-    const payCOD = document.getElementById("payCOD");
-    if (!payCOD) return;
-    // Payment Method block = the lines-wrap div with grid-column 1/-1
-    // that contains payCOD (not payCOD's immediate parent, which is
-    // the <label> wrapping the checkbox).
-    const pmBlock = payCOD.closest("div[style*='grid-column: 1 / -1']");
+    const pmBlock        = document.getElementById("paymentMethodBlock");
     const reasonLabel    = document.querySelector(".lbl-reason");
     const reasonTextarea = document.getElementById("mgmt_reason");
     if (!pmBlock || !reasonLabel || !reasonTextarea) return;
-    // Reset the previous margin so this run measures the natural
-    // position, not the position left by the last run.
-    reasonLabel.style.marginTop = "0px";
-    reasonTextarea.style.height = "";
-    // Force layout now (reading geometry does this implicitly in
-    // Chromium but being explicit keeps the two reads consistent).
+    // Reset previous inline overrides so this run measures natural
+    // geometry — not the geometry left by the last run.
+    reasonLabel.style.marginTop    = "0px";
+    reasonTextarea.style.height    = "";
+    reasonTextarea.style.minHeight = "";
+    // Force layout, then measure.
     void pmBlock.offsetHeight;
-    const pmRect    = pmBlock.getBoundingClientRect();
-    const labelRect = reasonLabel.getBoundingClientRect();
-    const topDiff   = pmRect.top - labelRect.top;
+    const pmRect       = pmBlock.getBoundingClientRect();
+    const labelRectNow = reasonLabel.getBoundingClientRect();
+    const topDiff      = pmRect.top - labelRectNow.top;
     if (Math.abs(topDiff) > 1){
       reasonLabel.style.marginTop = topDiff + "px";
     }
-    // Textarea height = Payment Method height − Reason label height,
-    // measured AFTER the label shift (its height can change if the
-    // margin-top triggered a reflow).
+    // Measure the label AFTER the shift (reflow may change height).
     void reasonLabel.offsetHeight;
-    const labelHeightAfter = reasonLabel.getBoundingClientRect().height;
-    const textareaH = Math.max(60, pmRect.height - labelHeightAfter);
+    const labelHeight  = reasonLabel.getBoundingClientRect().height;
+    const textareaH    = Math.max(60, pmRect.height - labelHeight);
     reasonTextarea.style.height    = textareaH + "px";
     reasonTextarea.style.minHeight = textareaH + "px";
   };
