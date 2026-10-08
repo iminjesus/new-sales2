@@ -6833,10 +6833,23 @@ async function wireStatusPanel(order){
         try { ccExpiry.focus(); ccExpiry.setSelectionRange(0, 0); } catch(_e){}
         return;
       }
-      if (yy < _getMinYY()){
+      const now         = new Date();
+      const currentYY   = now.getFullYear() % 100;
+      const currentMM   = now.getMonth() + 1;   // JS months are 0-indexed
+      if (yy < currentYY){
         _notice(_INVALID_YY_MSG);
         ccExpiry.value = mFull[1] + "/";    // keep MM, clear YY
         try { ccExpiry.focus(); } catch(_e){}
+        return;
+      }
+      // Same year as today but earlier month → card already expired.
+      // Same copy as the past-year case because the semantic is
+      // "you typed an expiry that's in the past".
+      if (yy === currentYY && mm < currentMM){
+        _notice(_INVALID_YY_MSG);
+        ccExpiry.value = "/" + mFull[2];    // clear MM (user needs
+        try { ccExpiry.focus();             //          a FUTURE month
+              ccExpiry.setSelectionRange(0, 0); } catch(_e){}
         return;
       }
     };
