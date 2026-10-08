@@ -1455,10 +1455,10 @@
                 </div>
                 <div style="padding:3px 0;display:flex;align-items:center;gap:8px">
                   <span style="min-width:84px">Expiry Date</span>
-                  <input id="ccExpiry" placeholder="MM/YY" maxlength="7"
+                  <input id="ccExpiry" placeholder="MM/YY" maxlength="5"
                          style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:80px">
                   <span style="margin-left:20px;min-width:36px">CCV</span>
-                  <input id="ccCCV" placeholder="123" maxlength="4"
+                  <input id="ccCCV" placeholder="123" maxlength="3"
                          style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:70px">
                 </div>
               </td>
@@ -6736,6 +6736,79 @@ async function wireStatusPanel(order){
     }
     _repaint();
   };
+})();
+
+/* ────────────── Credit Card input validation ──────────────
+   Enforce the Oct-9 spec on the three Credit Card inputs:
+     • Card No.    — 16 digits only, auto-grouped "XXXX XXXX XXXX XXXX"
+     • Expiry Date — "MM/YY" with MM ∈ 01-31 and YY ∈ 01-12
+                     (per the user spec — these ranges look swapped
+                      from the standard month-01-12 / year-last-2-
+                      digits convention, implemented verbatim)
+     • CCV         — 3 digits only
+   All three live-sanitise on input: non-digits are stripped, the
+   value is truncated to the max length, and the group separators
+   are re-inserted so the user sees a clean mask as they type. */
+(function _wireCreditCardValidation(){
+  const ccNumber = document.getElementById("ccNumber");
+  const ccExpiry = document.getElementById("ccExpiry");
+  const ccCCV    = document.getElementById("ccCCV");
+
+  // Card No. — 16 digits, grouped "XXXX XXXX XXXX XXXX" (19 chars).
+  if (ccNumber){
+    ccNumber.setAttribute("inputmode", "numeric");
+    ccNumber.setAttribute("maxlength", "19");
+    ccNumber.setAttribute("autocomplete", "cc-number");
+    ccNumber.addEventListener("input", (e) => {
+      // Don't rewrite a masked PAN loaded for a non-accounts viewer
+      // (the hydrator flipped the input readOnly in that case — if
+      // the browser ignores readOnly for `input` events, the mask
+      // bullets would get stripped by the digit-only clean below).
+      if (e.target.readOnly) return;
+      const digits = (e.target.value || "").replace(/\D/g, "").slice(0, 16);
+      e.target.value = digits.replace(/(\d{4})(?=\d)/g, "$1 ");
+    });
+  }
+
+  // Expiry Date — MM/YY with MM 01-31, YY 01-12 (per user spec).
+  if (ccExpiry){
+    ccExpiry.setAttribute("inputmode", "numeric");
+    ccExpiry.setAttribute("maxlength", "5");     // MM + / + YY
+    ccExpiry.setAttribute("autocomplete", "cc-exp");
+    ccExpiry.addEventListener("input", (e) => {
+      if (e.target.readOnly) return;
+      let digits = (e.target.value || "").replace(/\D/g, "").slice(0, 4);
+      // Clamp MM to 01-31 as the user types the second digit.
+      if (digits.length >= 2){
+        let mm = parseInt(digits.slice(0, 2), 10);
+        if (mm < 1)  mm = 1;
+        if (mm > 31) mm = 31;
+        digits = String(mm).padStart(2, "0") + digits.slice(2);
+      }
+      // Clamp YY to 01-12 as the user types the fourth digit.
+      if (digits.length === 4){
+        let yy = parseInt(digits.slice(2, 4), 10);
+        if (yy < 1)  yy = 1;
+        if (yy > 12) yy = 12;
+        digits = digits.slice(0, 2) + String(yy).padStart(2, "0");
+      }
+      // Re-insert the "/" separator between MM and YY.
+      e.target.value = digits.length <= 2
+        ? digits
+        : digits.slice(0, 2) + "/" + digits.slice(2);
+    });
+  }
+
+  // CCV — 3 digits only.
+  if (ccCCV){
+    ccCCV.setAttribute("inputmode", "numeric");
+    ccCCV.setAttribute("maxlength", "3");
+    ccCCV.setAttribute("autocomplete", "cc-csc");
+    ccCCV.addEventListener("input", (e) => {
+      if (e.target.readOnly) return;
+      e.target.value = (e.target.value || "").replace(/\D/g, "").slice(0, 3);
+    });
+  }
 })();
 
 /* ────────────── SD No. (SAP sales-doc) wiring ──────────────
