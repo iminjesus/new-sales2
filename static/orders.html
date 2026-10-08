@@ -4498,9 +4498,11 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     hiddenEmptyRows:  null,  // tbody rows we set display:none on
     movedTfootRows:   null,  // tfoot rows we appended to tbody
     tfootDisplayWas:  null,  // original inline display on <tfoot>
+    wrapZoomWas:      null,  // original inline zoom on .wrap so afterprint restores it
   };
   const _tbody = () => document.querySelector("table.lines tbody");
   const _tfoot = () => document.querySelector("table.lines tfoot");
+  const _wrap  = () => document.querySelector(".wrap");
 
   window.addEventListener("beforeprint", () => {
     const tbody = _tbody();
@@ -4600,12 +4602,69 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
       movedRows[i].style.pageBreakAfter = "avoid";
       movedRows[i].style.breakAfter     = "avoid";
     }
+
+    // ─── Dynamic zoom: measure content vs. page and compute scale
+    //
+    // The hard-coded zoom values (Internal 0.36, Customer 0.42) in
+    // the stylesheet are a floor that works for ~15-line orders
+    // under the user's Default (~15mm) print margins.  A 25-line
+    // order still overflows; a 3-line order is pointlessly tiny.
+    // Measure the ACTUAL printed content height + width right now
+    // (with empty rows hidden and tfoot rows reparented onto
+    // tbody) and compute a scale factor that fits one A4 page at
+    // the worst-case default margins.  Set the scale as an inline
+    // `zoom` on .wrap — inline wins over the stylesheet, afterprint
+    // restores the previous inline value (usually empty = use CSS).
+    const wrap = _wrap();
+    if (wrap) {
+      _state.wrapZoomWas = wrap.style.zoom;
+      // Reset to 1 so scrollHeight / scrollWidth reflect the
+      // natural (unscaled) content dimensions.
+      wrap.style.zoom = "1";
+      // Force synchronous reflow by reading a layout-dependent
+      // property, then capture both dimensions.
+      /* eslint-disable-next-line no-unused-expressions */
+      wrap.offsetHeight;
+      const naturalH = wrap.scrollHeight;
+      const naturalW = wrap.scrollWidth;
+
+      // Target one A4 page under the worst-case Default (~15mm)
+      // margins.  Portrait for Customer PDF, landscape for
+      // Internal.  CSS px at 96 dpi:
+      //   A4 landscape content area = 297-30 × 210-30 mm
+      //                             = 267 × 180 mm
+      //                             = 1009 × 680 px
+      //   A4 portrait  content area = 210-30 × 297-30 mm
+      //                             = 180 × 267 mm
+      //                             =  680 × 1009 px
+      const pageHpx = isCustomerPdf ? 1009 : 680;
+      const pageWpx = isCustomerPdf ?  680 : 1009;
+
+      // Scale to fit both axes.  Cap at 1.0 (don't zoom in on
+      // short orders).  Floor at 0.18 so an absurdly long order
+      // doesn't shrink to illegibility — if even that doesn't
+      // fit, let Chromium split normally.  3% safety margin
+      // soaks up sub-pixel rendering jitter.
+      const scaleH = naturalH > 0 ? pageHpx / naturalH : 1;
+      const scaleW = naturalW > 0 ? pageWpx / naturalW : 1;
+      const scale  = Math.max(0.18, Math.min(1.0, scaleH, scaleW) * 0.97);
+      wrap.style.zoom = String(scale);
+    }
   });
 
   window.addEventListener("afterprint", () => {
     const tbody = _tbody();
     const tfoot = _tfoot();
     if (!tbody || !tfoot) return;
+
+    // Restore .wrap zoom first so the SPRF resumes its on-screen
+    // scale.  Inline "" means "fall back to CSS", which for the
+    // on-screen path is no zoom.
+    const wrap = _wrap();
+    if (wrap && _state.wrapZoomWas !== null) {
+      wrap.style.zoom = _state.wrapZoomWas || "";
+      _state.wrapZoomWas = null;
+    }
 
     // Undo the inline display:none on tbody empty rows.  Node
     // identity preserved — the inputs still carry whatever value
