@@ -1020,16 +1020,21 @@
       max-width: none;
       padding: 0;
       margin: 0;
-      /* 0.48 after a 0.62 → 0.55 pass that still spilt page 2 on
-         users whose Chrome print dialog uses Default (~15mm)
-         margins instead of Minimum (~6mm).  Dropping to 0.48
-         compresses rendered content height by another ~13% so the
-         Hankook header + grids + 5 body rows + the 4 summary
-         rows fit comfortably even under the larger margins.
-         Text is still legible — 12 px source renders at ~6 px
-         on paper, same as the Internal print has done for weeks. */
-      zoom: 0.48;
+      /* Internal Copy default — 27 visible columns across landscape
+         + Base DC band + Reason/Notes block eat more vertical space
+         than the Customer PDF (9 columns, portrait, Rebate / Base
+         DC / Reason-block all hidden), so Internal needs a tighter
+         compression ratio to fit one page under users whose Chrome
+         print dialog is set to Default (~15mm) margins instead of
+         Minimum (~6mm).  0.42 fits comfortably with text still
+         legible (12 px source → ~5 px on paper). */
+      zoom: 0.42;
     }
+    /* Customer PDF has far less content on the page (portrait, 9
+       visible columns, no Base DC / Rebate / Reason block, no SOVD
+       strip), so it can afford a looser zoom that keeps the money
+       column legible without crowding. */
+    body.print-customer .wrap { zoom: 0.48; }
     /* Kill the on-screen minimum so the lines table can shrink into
        whatever the zoomed page allows without introducing an internal
        horizontal scroll. */
