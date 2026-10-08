@@ -4480,7 +4480,20 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
    (d) On afterprint, restore tbody + tfoot innerHTML to the
        pristine pre-print state so the on-screen SPRF is intact. */
 (function _wirePrintTableReflow(){
-  const _state = { tbodyHtml: null, tfootHtml: null };
+  // State needed to UNDO the print mutations.  CRITICAL: never
+  // save tbody.innerHTML — the HTML string serialisation does
+  // NOT include user-typed input values (only the original
+  // `value="..."` attribute, which is empty on the seeded SPRF
+  // rows), so restoring from innerHTML wipes every M-Code / Qty
+  // / etc. the BDE just typed in.  Everything we do to tbody
+  // must be reversible via live-DOM operations (toggle display,
+  // move nodes back) instead.
+  const _state = {
+    tfootHtml:        null,  // tfoot IS safe to innerHTML-restore (no user inputs)
+    hiddenEmptyRows:  null,  // tbody rows we set display:none on
+    movedTfootRows:   null,  // tfoot rows we appended to tbody
+    tfootDisplayWas:  null,  // original inline display on <tfoot>
+  };
   const _tbody = () => document.querySelector("table.lines tbody");
   const _tfoot = () => document.querySelector("table.lines tfoot");
 
@@ -4489,8 +4502,9 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     const tfoot = _tfoot();
     if (!tbody || !tfoot) return;
 
-    // Snapshot the pristine state so afterprint can restore it.
-    _state.tbodyHtml = tbody.innerHTML;
+    // Snapshot the tfoot (safe — tfoot has no user inputs) so the
+    // afterprint can restore the Customer-PDF rewrite / the Internal
+    // X-shift mutations in one shot.
     _state.tfootHtml = tfoot.innerHTML;
 
     const isCustomerPdf = document.body.classList.contains("print-customer");
@@ -4543,10 +4557,9 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     // seeds with 5 placeholder rows and the user often keeps
     // extras open past the lines they typed into.  On paper those
     // empty rows just eat vertical space and (worse) push the
-    // 4-row totals block past the page-1 bottom margin, so the
-    // user sees "page 2 is blank rows + totals" even though their
-    // actual data all fit on page 1.  Collect the hidden rows so
-    // afterprint can un-hide them.
+    // 4-row totals block past the page-1 bottom margin.  Toggle
+    // display inline (not via innerHTML) so the input values the
+    // user just typed into the visible rows stay in the live DOM.
     const hiddenEmptyRows = [];
     tbody.querySelectorAll('tr').forEach(tr => {
       const mc = tr.querySelector('[data-col="m_code"]');
@@ -4556,35 +4569,28 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
         hiddenEmptyRows.push(tr);
       }
     });
+    _state.hiddenEmptyRows = hiddenEmptyRows;
 
     // (c) Reparent every (now-finalised) tfoot row onto tbody so
     //     Chromium can flow them naturally across page breaks
     //     instead of pinning the whole totals block to its own
-    //     page.  tfoot ends up empty for the duration of the print.
+    //     page.  Node moves — the TR nodes keep their identity so
+    //     afterprint can walk them back to tfoot verbatim.
     const movedRows = [];
     while (tfoot.firstChild) {
       const row = tfoot.firstChild;
       tbody.appendChild(row);
       if (row.nodeType === 1 && row.tagName === "TR") movedRows.push(row);
     }
+    _state.movedTfootRows = movedRows;
     // Belt-and-braces: force the empty tfoot out of flow entirely.
-    // Even an empty <tfoot> with display:table-row-group leaves a
-    // single-pixel row-group that bumps the end of the lines table
-    // past page 1's bottom margin, which Chromium then interprets
-    // as "content exists on page 2" and renders a blank page 2
-    // carrying only the repeated thead.  Flip tfoot to display:none
-    // for the duration of the print — the CSS :empty rule does the
-    // same but inline style is immune to specificity surprises.
+    _state.tfootDisplayWas = tfoot.style.display;
     tfoot.style.display = "none";
     // Chain every moved summary row EXCEPT the last with
     // page-break-after: avoid so Chromium treats the Subtotal /
     // Total inc GST / Freight / final Total block as a cohesive
-    // unit — either all four land on page 1 (preferred when they
-    // fit) or all four move to page 2 together.  Without this the
-    // JS reparent lets Chromium break anywhere, which produced the
-    // "the final Total row went to page 2 by itself even though
-    // page 1 had plenty of room" symptom the user flagged after
-    // the previous reparent-only fix.
+    // unit — either all four land on page 1 or all four move
+    // to page 2 together.
     for (let i = 0; i < movedRows.length - 1; i++) {
       movedRows[i].style.pageBreakAfter = "avoid";
       movedRows[i].style.breakAfter     = "avoid";
@@ -4595,13 +4601,38 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
     const tbody = _tbody();
     const tfoot = _tfoot();
     if (!tbody || !tfoot) return;
-    if (_state.tbodyHtml !== null) {
-      tbody.innerHTML = _state.tbodyHtml;
+
+    // Undo the inline display:none on tbody empty rows.  Node
+    // identity preserved — the inputs still carry whatever value
+    // the BDE typed before hitting Print.
+    if (_state.hiddenEmptyRows) {
+      _state.hiddenEmptyRows.forEach(tr => { tr.style.display = ""; });
+      _state.hiddenEmptyRows = null;
+    }
+
+    // Detach the summary rows we reparented onto tbody — they're
+    // currently living at the end of tbody.  Removing them from
+    // tbody now (while tbody's other children are untouched)
+    // preserves every typed-in input value in the surviving body
+    // rows, which `tbody.innerHTML = snapshot` would have wiped.
+    // tfoot is about to be regenerated from innerHTML with fresh
+    // nodes, so these detached ones are discarded.
+    if (_state.movedTfootRows) {
+      _state.movedTfootRows.forEach(tr => {
+        if (tr.parentNode) tr.parentNode.removeChild(tr);
+      });
+      _state.movedTfootRows = null;
+    }
+
+    // Restore tfoot — safe to blow away via innerHTML because
+    // tfoot carries no user-typed inputs; it's all computed totals
+    // + static labels.
+    if (_state.tfootHtml !== null) {
       tfoot.innerHTML = _state.tfootHtml;
-      tfoot.style.display = "";
-      _state.tbodyHtml = null;
       _state.tfootHtml = null;
     }
+    tfoot.style.display = _state.tfootDisplayWas || "";
+    _state.tfootDisplayWas = null;
   });
 })();
 
