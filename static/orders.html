@@ -658,8 +658,11 @@
   table.lines tfoot tr.summary-row td.summary-lbl,
   table.lines tfoot tr.summary-row td.summary-amt,
   table.lines tfoot tr.summary-row td.summary-input{border:1px solid #cbd5e1}
-  /* Freight-flag input — small centred cell matching the Excel look. */
-  table.lines tfoot tr.total-row td #freightFlag{
+  /* Freight + Interstate flag inputs — small centred cells matching
+     the Excel workbook's look.  Both get the same yellow pill so
+     the two prompts read as a visual pair. */
+  table.lines tfoot tr.total-row td #freightFlag,
+  table.lines tfoot tr.total-row td #interstateFlag{
     width:36px;padding:3px;text-align:center;font-weight:700;
     background:#fef3c7;border:1px solid #d1d5db;border-radius:2px;
   }
@@ -1436,69 +1439,73 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="2" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
-        <!-- Payment Method — COD + Credit Card are mutually exclusive;
+        <!-- Payment Method — Cash + Credit Card are mutually exclusive;
              ticking one unticks the other via the paymentMethod JS
              wiring below.  Either flag forces Sold-to to the Hankook
-             house account (728059) and locks it, so Ship-to still goes
-             to the real customer but Hankook invoices itself.  On
-             submit the order also CCs accounts@hankooktyre.com.au. -->
-        <div class="lbl">Payment Method</div>
-        <div class="val" style="grid-column: span 3;gap:18px;flex-wrap:wrap">
-          <label style="display:inline-flex;align-items:center;gap:6px;font-weight:600;cursor:pointer">
-            <input type="checkbox" id="payCOD" name="payMethod" value="cod">
-            COD Payment
-          </label>
-          <label style="display:inline-flex;align-items:center;gap:6px;font-weight:600;cursor:pointer">
-            <input type="checkbox" id="payCC" name="payMethod" value="credit_card">
-            Credit Card Payment
-          </label>
-          <span id="payMethodLock" style="color:#dc2626;font-size:11.5px;font-weight:700" hidden>
-            → Sold-to locked to 728059 (Hankook Tyre Australia)
-          </span>
-        </div>
-
-        <!-- COD remittance block — static Hankook JP Morgan details,
-             shown only when the COD checkbox is ticked. -->
-        <div id="codPanel" hidden style="grid-column:1 / -1;padding:6px 8px 2px">
-          <div style="color:#0369a1;font-weight:700;font-size:11.5px;margin-bottom:3px">
-            * Bank Detail (JP Morgan Bank) : Fax Remittance to (02) 9870 1245
-          </div>
-          <div style="border:2px solid #2563eb;border-radius:4px;overflow:hidden">
-            <div style="background:#86efac;color:#111;padding:6px 10px;text-align:center;font-weight:700;border-bottom:2px solid #2563eb">
-              Account Name: Hankook Tyre Australia
-            </div>
-            <div style="background:#86efac;color:#111;padding:6px 10px;text-align:center;font-weight:700">
-              BSB : 212-200 &nbsp;&nbsp;&nbsp; Account No : 016 043 371
-            </div>
-          </div>
-        </div>
-
-        <!-- Credit Card capture — three inputs (PAN / expiry / CCV).
-             Full PAN is sent to the backend on submit but only ever
-             returned in cleartext to the accounts@hankooktyre.com.au
-             login; every other viewer sees a BIN+last4 mask and the
-             expiry / CCV come back as `••••`.  On a submitted order
-             the inputs flip to readonly and show the masked PAN. -->
-        <div id="ccPanel" hidden style="grid-column:1 / -1;padding:6px 8px 2px">
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <label style="display:flex;align-items:center;gap:4px;flex:2;min-width:220px">
-              <span style="font-size:11.5px;font-weight:700;color:#334155;white-space:nowrap">Card No.</span>
-              <input id="ccNumber" placeholder="XXXX XXXX XXXX XXXX" maxlength="23"
-                     style="flex:1;padding:4px 6px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace">
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;flex:1;min-width:110px">
-              <span style="font-size:11.5px;font-weight:700;color:#334155;white-space:nowrap">Expiry</span>
-              <input id="ccExpiry" placeholder="MM/YY" maxlength="7"
-                     style="width:70px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace">
-            </label>
-            <label style="display:flex;align-items:center;gap:4px;flex:1;min-width:90px">
-              <span style="font-size:11.5px;font-weight:700;color:#334155;white-space:nowrap">CCV</span>
-              <input id="ccCCV" placeholder="123" maxlength="4"
-                     style="width:60px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace">
-            </label>
-          </div>
-          <div id="ccMaskNote" hidden style="color:#64748b;font-size:11px;margin-top:3px;font-style:italic">
+             house account (728059) and locks it, so Ship-to still
+             goes to the real customer but Hankook invoices itself.
+             On submit the order also CCs accounts@hankooktyre.com.au.
+             Rendered as a 3-column mini-table so the structure matches
+             the Oct-9 spec screenshot:
+               ┌──────────────┬────────────┬──────────────────────────┐
+               │              │ ☐ Cash     │ Account Name / BSB / A/C │
+               │ Payment      │            │ Fax Remittance …         │
+               │ Method       ├────────────┼──────────────────────────┤
+               │              │ ☐ Credit   │ Card No. [yellow input]  │
+               │              │   Card     │ Expiry Date  CCV         │
+               └──────────────┴────────────┴──────────────────────────┘ -->
+        <div class="val" style="grid-column: 1 / -1; padding: 0; display:block">
+          <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:12.5px">
+            <tr>
+              <td rowspan="2" style="width:140px;vertical-align:middle;padding:10px;background:#f1f5f9;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;font-weight:700;text-align:center">
+                Payment Method
+              </td>
+              <td style="width:140px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;vertical-align:middle">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+                  <input type="checkbox" id="payCOD" name="payMethod" value="cod">
+                  Cash
+                </label>
+              </td>
+              <td style="padding:4px 12px;border-bottom:1px solid #cbd5e1;vertical-align:top">
+                <div style="padding:3px 0">
+                  Account Name: <b>Hankook Tyre Australia</b>
+                  &nbsp;&nbsp;&nbsp; BSB: <b>212-200</b>
+                  &nbsp;&nbsp;&nbsp; Account No. <b>016 043 371</b>
+                </div>
+                <div style="padding:3px 0;color:#334155">
+                  Fax Remittance to (02) 9870 1245
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td style="width:140px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;vertical-align:middle">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:600">
+                  <input type="checkbox" id="payCC" name="payMethod" value="credit_card">
+                  Credit Card
+                </label>
+              </td>
+              <td style="padding:4px 12px;vertical-align:top">
+                <div style="padding:3px 0;display:flex;align-items:center;gap:8px">
+                  <span style="min-width:84px">Card No.</span>
+                  <input id="ccNumber" placeholder="XXXX XXXX XXXX XXXX" maxlength="23"
+                         style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:230px">
+                </div>
+                <div style="padding:3px 0;display:flex;align-items:center;gap:8px">
+                  <span style="min-width:84px">Expiry Date</span>
+                  <input id="ccExpiry" placeholder="MM/YY" maxlength="7"
+                         style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:80px">
+                  <span style="margin-left:20px;min-width:36px">CCV</span>
+                  <input id="ccCCV" placeholder="123" maxlength="4"
+                         style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:70px">
+                </div>
+              </td>
+            </tr>
+          </table>
+          <div id="ccMaskNote" hidden style="color:#64748b;font-size:11px;margin-top:3px;font-style:italic;padding:0 4px">
             Full card number only visible to the accounts@hankooktyre.com.au login.
+          </div>
+          <div id="payMethodLock" hidden style="color:#dc2626;font-size:11.5px;font-weight:700;padding:4px;margin-top:2px">
+            → Sold-to locked to 728059 (Hankook Tyre Australia)
           </div>
         </div>
 
