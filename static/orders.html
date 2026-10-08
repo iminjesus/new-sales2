@@ -1020,14 +1020,15 @@
       max-width: none;
       padding: 0;
       margin: 0;
-      /* Was 0.62 — browsers whose print dialog uses the default
-         (~15mm) margins instead of our @page 6mm had the Subtotal
-         + Total inc GST + Freight + final Total block pushed to a
-         near-empty page 2 because content barely overflowed page 1.
-         Tightening to 0.55 shaves ~11% off the rendered content
-         height so the totals block fits on page 1 even under the
-         larger default margins without hurting legibility. */
-      zoom: 0.55;
+      /* 0.48 after a 0.62 → 0.55 pass that still spilt page 2 on
+         users whose Chrome print dialog uses Default (~15mm)
+         margins instead of Minimum (~6mm).  Dropping to 0.48
+         compresses rendered content height by another ~13% so the
+         Hankook header + grids + 5 body rows + the 4 summary
+         rows fit comfortably even under the larger margins.
+         Text is still legible — 12 px source renders at ~6 px
+         on paper, same as the Internal print has done for weeks. */
+      zoom: 0.48;
     }
     /* Kill the on-screen minimum so the lines table can shrink into
        whatever the zoomed page allows without introducing an internal
