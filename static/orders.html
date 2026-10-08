@@ -4539,6 +4539,24 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
       });
     }
 
+    // Hide every tbody row whose M-Code input is blank — the SPRF
+    // seeds with 5 placeholder rows and the user often keeps
+    // extras open past the lines they typed into.  On paper those
+    // empty rows just eat vertical space and (worse) push the
+    // 4-row totals block past the page-1 bottom margin, so the
+    // user sees "page 2 is blank rows + totals" even though their
+    // actual data all fit on page 1.  Collect the hidden rows so
+    // afterprint can un-hide them.
+    const hiddenEmptyRows = [];
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const mc = tr.querySelector('[data-col="m_code"]');
+      const val = mc && (mc.value || mc.textContent) || "";
+      if (val.trim() === "") {
+        tr.style.display = "none";
+        hiddenEmptyRows.push(tr);
+      }
+    });
+
     // (c) Reparent every (now-finalised) tfoot row onto tbody so
     //     Chromium can flow them naturally across page breaks
     //     instead of pinning the whole totals block to its own
