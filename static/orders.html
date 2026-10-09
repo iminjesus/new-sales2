@@ -7067,6 +7067,36 @@ async function wireStatusPanel(order){
    stretch to each other.  Running align only on the TOP alignment
    doesn't trigger that loop because the label height stays stable.
    Re-runs on load, resize and after hydrateSubmittedOrder. */
+/* ────────────── Row 1: approvalPath height = Sold-to row height ──
+   Both rows SHOULD be 32 px high, but the left Sold-to Account row
+   carries a .clearable-wrap + ✕ button that nudges the row's
+   actual rendered height a touch above the default .grid > div
+   28 px min.  Measuring the LEFT row and copying its height to
+   approvalPath on load / resize keeps the two rows aligned no
+   matter what the ✕ wrapper's computed box turns out to be. */
+(function _wireApprovalRowAlign(){
+  const align = () => {
+    const soldToLbl    = document.querySelector(".meta .col:first-child .grid .lbl");
+    const approvalPath = document.getElementById("approvalPath");
+    if (!soldToLbl || !approvalPath) return;
+    const h = soldToLbl.getBoundingClientRect().height;
+    if (h > 0) approvalPath.style.minHeight = h + "px";
+  };
+  if (document.readyState === "complete"){
+    requestAnimationFrame(align);
+  } else {
+    window.addEventListener("DOMContentLoaded", () => requestAnimationFrame(align));
+    window.addEventListener("load",             () => requestAnimationFrame(align));
+  }
+  // 300ms backup after fonts / text metrics settle.
+  window.addEventListener("load", () => setTimeout(align, 300));
+  let _rafId = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(_rafId);
+    _rafId = requestAnimationFrame(align);
+  });
+})();
+
 (function _wireReasonTopAlign(){
   const align = () => {
     const pmBlock     = document.getElementById("paymentMethodBlock");
