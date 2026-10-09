@@ -6112,13 +6112,26 @@ def api_orders_update(oid):
         payload["mod_log"] = _existing_mods
         cur2 = conn.cursor()
         try:
+            # Preserve `status_sap` when the row already carries an
+            # SD No. — that marks SAP entry as "done", and a routine
+            # edit (SD No. itself, Special Instruction tweak, etc.)
+            # shouldn't silently flip it back to N behind the CS's
+            # back.  Rows with no SD No. still reset to N so Harry
+            # knows a re-check is needed on genuine data changes.
+            # The expression evaluates on the DB side so we don't
+            # need a second SELECT round-trip.
             cur2.execute(
                 "UPDATE submitted_orders SET "
                 "  sold_to=%s, sold_to_name=%s, ship_to=%s, ship_to_name=%s, "
                 "  state=%s, po_number=%s, order_date=%s, "
                 "  subtotal=%s, total_inc_gst=%s, freight_amount=%s, grand_total=%s, "
                 "  total_qty=%s, sovd_qty=%s, avg_dc_pct=%s, "
-                "  status_sap='N', status_changed_at=NOW(), status_changed_by=%s, "
+                "  status_sap        = CASE WHEN sd_no IS NOT NULL AND TRIM(sd_no) <> '' "
+                "                           THEN status_sap ELSE 'N' END, "
+                "  status_changed_at = CASE WHEN sd_no IS NOT NULL AND TRIM(sd_no) <> '' "
+                "                           THEN status_changed_at ELSE NOW() END, "
+                "  status_changed_by = CASE WHEN sd_no IS NOT NULL AND TRIM(sd_no) <> '' "
+                "                           THEN status_changed_by ELSE %s END, "
                 "  needs_mgmt_approval=%s, mgmt_reason=%s, "
                 "  rebateable = COALESCE(NULLIF(%s, ''), rebateable), "
                 "  interstate_flag=%s, interstate_amount=%s, "
