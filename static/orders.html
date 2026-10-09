@@ -2943,6 +2943,34 @@ async function fillMaterialFromDesc(row, desc){
 }
 function applyMaterial(rowEl, data){
   const set = (name, v) => { const el = rowEl.querySelector(`[data-col="${name}"]`); if(el) el.value = v ?? ""; };
+  /* Scrub every per-row calculated / looked-up cell left behind by
+     the PREVIOUS material on this row before we write the new one.
+     Without this, swapping an Aging-tier material (which left
+     add_dc=28, aging_dc=64, Remark="Aging (Ageing1)", etc.) for a
+     Trueblu or 443 material leaves those stale columns in place —
+     only M-Code → Base DC % refresh and the right-hand half of
+     the row keeps showing the previous material's economics.
+     Covers: 443 / Trueblu / SOVD rate (sp_dc), the three
+     concession-ladder cells (mth_dc, vol_dc, add_dc), the
+     aging-tier Guide (aging_dc), the chained totals the row math
+     then back-fills (current_dc, current_price, current_amount,
+     add_support, proposed_price, total_amount, proposed_dc),
+     the Remark auto-tag, and the aged-row + aging / promo
+     dataset flags that drive subsequent recalcs. */
+  const _clear = (name) => {
+    const el = rowEl.querySelector(`[data-col="${name}"]`);
+    if (el) el.value = "";
+  };
+  ["sp_dc", "mth_dc", "vol_dc", "add_dc", "aging_dc",
+   "current_dc", "current_price", "current_amount",
+   "add_support", "proposed_price", "total_amount",
+   "proposed_dc", "remark"].forEach(_clear);
+  delete rowEl.dataset.agingTier;
+  delete rowEl.dataset.promo;
+  delete rowEl.dataset.line;
+  delete rowEl.dataset.productGroup;
+  delete rowEl.dataset.pattern;
+  rowEl.classList.remove("aged-row");
   /* Hold SOVD off this row until applyAdditionalDCToRow (fired
      further down) confirms whether a specific promo applies.  If we
      skip this gate the initial recalcRow → updateTotals below fires
