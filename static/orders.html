@@ -1065,11 +1065,24 @@
        page-1 bottom margin.  Collapse the min-heights for print so
        any content shows at its natural size but an empty box takes
        no vertical slack. */
-    textarea#mgmt_reason,
-    textarea#special_instruction,
-    textarea#approval_note {
+    /* Customer PDF hides the mgmt_reason / special_instruction /
+       approval_note textareas entirely, so there's no point
+       reserving height for them.  Internal copy keeps them visible
+       — the Reason / Notes box in particular needs to sit tall
+       enough to balance the Payment Method block on the left pane. */
+    body.print-customer textarea#mgmt_reason,
+    body.print-customer textarea#special_instruction,
+    body.print-customer textarea#approval_note {
       min-height: 0 !important;
       padding: 2px 4px !important;
+    }
+    /* Internal copy: keep the Reason / Notes box tall so its bottom
+       lines up with the Payment Method block on the left pane. */
+    body:not(.print-customer) textarea#mgmt_reason {
+      min-height: 110px !important;
+    }
+    body:not(.print-customer) textarea#special_instruction {
+      min-height: 70px !important;
     }
     /* ─── Multi-page printing ──────────────────────────────────
        Target shape when a SPRF overflows one page:
@@ -1416,9 +1429,16 @@
              Lives in the Customer Details grid (left pane) per the
              Oct-9 "move to left" request. -->
         <div id="paymentMethodBlock" class="val full-row" style="padding: 0; display:block; grid-column: 1 / -1">
-          <table style="width:100%;border-collapse:collapse;border:1px solid #cbd5e1;font-size:12.5px">
+          <!-- Inner-table has no left/right/top borders so it sits
+               flush inside the Customer Details band (the band
+               already draws those borders).  Only the bottom + the
+               inter-row dividers draw, so the Payment Method label
+               reads as the leftmost cell of a continuous grid
+               instead of a nested table with a double border on
+               the left margin. -->
+          <table style="width:100%;border-collapse:collapse;border:none;border-bottom:1px solid #cbd5e1;font-size:12.5px">
             <tr>
-              <td rowspan="2" style="width:150px;vertical-align:middle;padding:10px;background:#f1f5f9;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;font-weight:700;text-align:center">
+              <td rowspan="2" style="width:150px;vertical-align:middle;padding:10px;background:#eef1f4;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;font-weight:700;text-align:center">
                 Payment Method
               </td>
               <td style="width:120px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;vertical-align:middle">
