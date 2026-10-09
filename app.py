@@ -5914,6 +5914,30 @@ def api_orders_status(oid):
         return jsonify({"error": "only Harry (CS) can change SAP status"}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
+        # Approval gate — mirror the frontend wireStatusPanel lock
+        # so a direct POST can't bypass it either.  Order must be
+        # Standard Pricing (needs_mgmt_approval='N') OR have a signed
+        # approved_by_name AND not be rejected.  Rejected or still-
+        # pending orders are refused.
+        cur.execute(
+            "SELECT needs_mgmt_approval, approved_by_name, rejected_by_name "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,))
+        _gate = cur.fetchone()
+        if not _gate:
+            return jsonify({"error": "not found"}), 404
+        _needs    = str(_gate[0] or "").upper()
+        _approved = _gate[1] or ""
+        _rejected = _gate[2] or ""
+        _is_approved = (_needs == "N") or (bool(_approved) and not _rejected)
+        # Flipping to Y requires approval.  Flipping back to N is a
+        # correction path (unflag a mistaken Y) and stays allowed
+        # even on a non-approved order so the CS can undo themselves.
+        if new_stat == "Y" and not _is_approved:
+            return jsonify({
+                "error": "Order has not been approved yet — SD No. and "
+                         "Mark-as-Y are locked until approval."
+            }), 409
         cur.execute(
             "UPDATE submitted_orders SET status_sap = %s, "
             "  status_changed_at = NOW(), status_changed_by = %s "
@@ -5948,6 +5972,27 @@ def api_orders_set_sd_no(oid):
         return jsonify({"error": "only Harry (CS) can stamp an SD No."}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
+        # Approval gate — same rule as the status endpoint above.
+        # Standard Pricing (needs_mgmt_approval='N') OR approved +
+        # not rejected.  Pending / rejected orders can't be stamped
+        # with an SD No. because SAP entry shouldn't happen until
+        # the pricing has been signed off.
+        cur.execute(
+            "SELECT needs_mgmt_approval, approved_by_name, rejected_by_name "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,))
+        _gate = cur.fetchone()
+        if not _gate:
+            return jsonify({"error": "not found"}), 404
+        _needs    = str(_gate[0] or "").upper()
+        _approved = _gate[1] or ""
+        _rejected = _gate[2] or ""
+        _is_approved = (_needs == "N") or (bool(_approved) and not _rejected)
+        if not _is_approved:
+            return jsonify({
+                "error": "Order has not been approved yet — SD No. and "
+                         "Mark-as-Y are locked until approval."
+            }), 409
         cur.execute(
             "UPDATE submitted_orders SET sd_no = %s WHERE id = %s",
             (val or None, oid))

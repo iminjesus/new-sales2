@@ -6608,10 +6608,44 @@ async function wireStatusPanel(order){
   // the saved value on dataset.saved so the Mark-as-Y gate below
   // (and the Save-SD# handler elsewhere) can tell "typed but not
   // yet persisted" from "already saved to the server".
-  const sd = document.getElementById("sdNo");
+  const sd    = document.getElementById("sdNo");
+  const sdBtn = document.getElementById("btnSaveSdNo");
   if (sd){
     sd.value = (order.sd_no != null ? String(order.sd_no) : "");
     sd.dataset.saved = sd.value;
+  }
+  // Oct-9 PM gate: SD No. input + Mark-as-Y are only usable AFTER
+  // the order has been signed off.  "Signed off" here means either:
+  //   • Standard Pricing (needs_mgmt_approval = 'N') — no approval
+  //     ever required, so CS can go ahead the moment the BDE
+  //     submits; or
+  //   • The order required approval AND an approver has stamped
+  //     approved_by_name (first-approver-wins).
+  // Rejected orders (rejected_by_name set) stay locked too — they
+  // need to be revived + re-approved before SAP entry.
+  const _needsApp = String(order.needs_mgmt_approval || "").toUpperCase();
+  const _isApproved = (_needsApp === "N")
+                   || (!!order.approved_by_name && !order.rejected_by_name);
+  if (!_isApproved){
+    const _lockMsg = order.rejected_by_name
+      ? "Order was rejected — SD No. and SAP flag locked until it's revived + re-approved."
+      : "SD No. and SAP flag unlock once the order has been approved.";
+    if (sd){
+      sd.readOnly = true;
+      sd.disabled = true;
+      sd.title    = _lockMsg;
+      sd.style.background = "#f3f4f6";
+    }
+    if (sdBtn){
+      sdBtn.disabled = true;
+      sdBtn.title    = _lockMsg;
+      sdBtn.style.opacity = "0.5";
+      sdBtn.style.cursor  = "not-allowed";
+    }
+    btn.disabled = true;
+    btn.title    = _lockMsg;
+    btn.style.opacity = "0.5";
+    btn.style.cursor  = "not-allowed";
   }
   panel.hidden = false;
   btn.addEventListener("click", async () => {
