@@ -1079,10 +1079,10 @@
     /* Internal copy: keep the Reason / Notes box tall so its bottom
        lines up with the Payment Method block on the left pane. */
     body:not(.print-customer) textarea#mgmt_reason {
-      min-height: 110px !important;
+      min-height: 180px !important;
     }
     body:not(.print-customer) textarea#special_instruction {
-      min-height: 70px !important;
+      min-height: 90px !important;
     }
     /* ─── Multi-page printing ──────────────────────────────────
        Target shape when a SPRF overflows one page:
@@ -1428,7 +1428,7 @@
                └──────────────┴────────────┴──────────────────────────┘
              Lives in the Customer Details grid (left pane) per the
              Oct-9 "move to left" request. -->
-        <div id="paymentMethodBlock" class="val full-row" style="padding: 0; display:block; grid-column: 1 / -1">
+        <div id="paymentMethodBlock" class="val" style="padding: 0; display:block; grid-column: 1 / -1">
           <!-- Inner-table has no left/right/top borders so it sits
                flush inside the Customer Details band (the band
                already draws those borders).  Only the bottom + the
@@ -1540,9 +1540,9 @@
         </div>
 
         <div class="val val-reason" style="grid-column: span 4;padding:0">
-          <textarea id="mgmt_reason" rows="4"
+          <textarea id="mgmt_reason" rows="6"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
-                    style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:95px"></textarea>
+                    style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:160px"></textarea>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
              carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
