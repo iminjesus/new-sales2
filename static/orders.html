@@ -333,10 +333,32 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
+    /* Explicit row template so both panes can subgrid their rows
+       from this parent — ensures row-by-row alignment per the
+       Oct-9 PM table.  9 rows covers each pane's content when
+       Modified-by sits hidden; splitting Base DC + Payment
+       Method into 2 rows later will bump this to 11. */
+    grid-template-rows: repeat(9, auto);
     background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
   }
-  .meta .col{border-top:1px solid var(--border);}
+  .meta .col{border-top:1px solid var(--border);display:contents;}
   .meta .col:last-child{border-left:1px solid var(--border);}
+  /* Each pane's inner grid uses `subgrid` on rows (inherited from
+     .meta) + its own column template, so row heights sync across
+     the two panes while each pane keeps its own column layout. */
+  .meta .col > .grid{
+    display:grid;
+    grid-template-rows:subgrid;
+    grid-row:1 / -1;
+  }
+  .meta .col:first-child > .grid{
+    grid-template-columns:150px 1fr 150px 1fr;
+    grid-column:1;
+  }
+  .meta .col:last-child > .grid{
+    grid-template-columns:150px 1fr 90px 1fr;
+    grid-column:2;
+  }
 
   /* Account/Name inputs get an inline ✕ clear button on the right.
      Visibility is driven by the input's own value — empty input hides
