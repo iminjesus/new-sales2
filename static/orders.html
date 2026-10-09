@@ -7085,7 +7085,18 @@ async function wireStatusPanel(order){
       reasonLabel.style.marginTop = topDiff + "px";
     }
   };
-  window.addEventListener("load", () => requestAnimationFrame(align));
+  // Fire at every plausible timing so one of them catches the
+  // moment the sub-grid rows have settled.  Repeated runs are
+  // idempotent (margin resets to 0 each time before measuring).
+  if (document.readyState === "complete"){
+    requestAnimationFrame(align);
+  } else {
+    window.addEventListener("DOMContentLoaded", () => requestAnimationFrame(align));
+    window.addEventListener("load", () => requestAnimationFrame(align));
+  }
+  // Backup pass 300 ms after load — covers fonts loading late /
+  // sub-grid rows measuring different after text metrics stabilise.
+  window.addEventListener("load", () => setTimeout(align, 300));
   let _rafId = 0;
   window.addEventListener("resize", () => {
     cancelAnimationFrame(_rafId);
