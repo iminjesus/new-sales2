@@ -6604,12 +6604,37 @@ async function wireStatusPanel(order){
           ? `Last changed ${order.status_changed_at} by ${order.status_changed_by || "?"}`
           : "");
   // Seed the SD No. field with whatever is on file so the CS sees
-  // the previously-saved value and can edit it in place.
+  // the previously-saved value and can edit it in place.  Record
+  // the saved value on dataset.saved so the Mark-as-Y gate below
+  // (and the Save-SD# handler elsewhere) can tell "typed but not
+  // yet persisted" from "already saved to the server".
   const sd = document.getElementById("sdNo");
-  if (sd) sd.value = (order.sd_no != null ? String(order.sd_no) : "");
+  if (sd){
+    sd.value = (order.sd_no != null ? String(order.sd_no) : "");
+    sd.dataset.saved = sd.value;
+  }
   panel.hidden = false;
   btn.addEventListener("click", async () => {
     const next = flag.textContent === "Y" ? "N" : "Y";
+    // Flipping TO Y requires an SD No. that's both typed AND saved.
+    // Flipping back to N is a correction path and skips the gate.
+    if (next === "Y"){
+      const sdInp   = document.getElementById("sdNo");
+      const sdVal   = (sdInp?.value || "").trim();
+      const sdSaved = (sdInp?.dataset.saved || "").trim();
+      if (!sdVal){
+        const msg = "Please input and save the SAP SD No. before marking as Y.";
+        if (typeof showNotice === "function") showNotice(msg); else alert(msg);
+        try { sdInp && sdInp.focus(); } catch(_e){}
+        return;
+      }
+      if (sdVal !== sdSaved){
+        const msg = "SAP SD No. has unsaved changes. Please click Save SD # first.";
+        if (typeof showNotice === "function") showNotice(msg); else alert(msg);
+        try { sdInp && sdInp.focus(); } catch(_e){}
+        return;
+      }
+    }
     btn.disabled = true;
     try {
       const r = await fetch(`/api/orders/detail/${order.id}/status`, {
@@ -6933,6 +6958,11 @@ async function wireStatusPanel(order){
           ? ` · saved ${new Date().toISOString().slice(0,16).replace("T"," ")}`
           : " · cleared";
         setStatus(val ? `SD No. <b>${val}</b> saved.` : "SD No. cleared.", "ok");
+        // Mirror the just-persisted value onto dataset.saved so the
+        // Mark-as-Y gate can compare live-input to last-saved and
+        // detect "typed but not yet saved" the next time the CS
+        // clicks the flag button.
+        inp.dataset.saved = val;
       }
     } catch (e){
       setStatus("SD No. save failed: " + e, "warn");
