@@ -6587,11 +6587,13 @@ async function wireStatusPanel(order){
     const r = await fetch("/api/orders/whoami", {credentials: "same-origin"});
     who = await r.json();
   } catch { who = {}; }
-  if (!who || !who.is_cs) return;
+  who = who || {};
   const panel = $("#csPanel");
   const flag  = $("#csFlag");
   const btn   = $("#btnFlipStatus");
   const meta  = $("#csMeta");
+  const sd    = document.getElementById("sdNo");
+  const sdBtn = document.getElementById("btnSaveSdNo");
   const paint = (st, byLine) => {
     flag.textContent   = st;
     flag.classList.toggle("ok", st === "Y");
@@ -6603,33 +6605,32 @@ async function wireStatusPanel(order){
         order.status_changed_at
           ? `Last changed ${order.status_changed_at} by ${order.status_changed_by || "?"}`
           : "");
-  // Seed the SD No. field with whatever is on file so the CS sees
-  // the previously-saved value and can edit it in place.  Record
-  // the saved value on dataset.saved so the Mark-as-Y gate below
-  // (and the Save-SD# handler elsewhere) can tell "typed but not
-  // yet persisted" from "already saved to the server".
-  const sd    = document.getElementById("sdNo");
-  const sdBtn = document.getElementById("btnSaveSdNo");
+  // Seed the SD No. field for everyone — the Oct-9 user request:
+  // "if SD No. has been inputted and Mark as Y has clicked, they
+  //  should also [be] shown in the order page to all users, not
+  //  only the inputter".  Only Harry (CS) can WRITE; every other
+  //  viewer sees the read-only value and the dim SAP flag.
   if (sd){
     sd.value = (order.sd_no != null ? String(order.sd_no) : "");
     sd.dataset.saved = sd.value;
   }
-  // Oct-9 PM gate: SD No. input + Mark-as-Y are only usable AFTER
-  // the order has been signed off.  "Signed off" here means either:
-  //   • Standard Pricing (needs_mgmt_approval = 'N') — no approval
-  //     ever required, so CS can go ahead the moment the BDE
-  //     submits; or
-  //   • The order required approval AND an approver has stamped
-  //     approved_by_name (first-approver-wins).
-  // Rejected orders (rejected_by_name set) stay locked too — they
-  // need to be revived + re-approved before SAP entry.
+  // Approval gate — unlocks SD No. input + Mark-as-Y when the
+  // order has been signed off (Standard Pricing OR approved AND
+  // not rejected).
   const _needsApp = String(order.needs_mgmt_approval || "").toUpperCase();
   const _isApproved = (_needsApp === "N")
                    || (!!order.approved_by_name && !order.rejected_by_name);
-  if (!_isApproved){
-    const _lockMsg = order.rejected_by_name
-      ? "Order was rejected — SD No. and SAP flag locked until it's revived + re-approved."
-      : "SD No. and SAP flag unlock once the order has been approved.";
+  // Writer-visibility gate — only Harry (CS) ever gets the live
+  // Save SD # button + the Mark-as-Y click handler.  Every other
+  // viewer sees the panel but the controls are permanently
+  // disabled (SD No. input readOnly, both buttons dim).
+  const _canWrite = !!who.is_cs;
+  if (!_canWrite || !_isApproved){
+    const _lockMsg = !_canWrite
+      ? "View only — only the CS team can enter SD No. or flip the SAP flag."
+      : (order.rejected_by_name
+          ? "Order was rejected — SD No. and SAP flag locked until it's revived + re-approved."
+          : "SD No. and SAP flag unlock once the order has been approved.");
     if (sd){
       sd.readOnly = true;
       sd.disabled = true;
@@ -6648,6 +6649,10 @@ async function wireStatusPanel(order){
     btn.style.cursor  = "not-allowed";
   }
   panel.hidden = false;
+  // Non-CS viewers see the panel as read-only — don't wire the
+  // click handler so even a programmatic click on btnFlipStatus
+  // does nothing.
+  if (!_canWrite) return;
   btn.addEventListener("click", async () => {
     const next = flag.textContent === "Y" ? "N" : "Y";
     // Flipping TO Y requires an SD No. that's both typed AND saved.
