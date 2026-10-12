@@ -1123,11 +1123,18 @@
     }
     /* Internal copy: keep the Reason / Notes box tall so its bottom
        lines up with the Payment Method block on the left pane. */
+    /* On the Internal print copy both textareas stretch to fill
+       whatever subgrid row they land in; drop the big min-heights
+       that previously forced row 10/11 (Reason) and 8/9 (Special
+       Instruction) to blow past every other row's ~32 px height.
+       The subgrid-row-auto sizing already lets content grow when
+       there IS content; empty textareas now sit at the same row
+       height as a plain input row. */
     body:not(.print-customer) textarea#mgmt_reason {
-      min-height: 180px !important;
+      min-height: 32px !important;
     }
     body:not(.print-customer) textarea#special_instruction {
-      min-height: 90px !important;
+      min-height: 32px !important;
     }
     /* ─── Multi-page printing ──────────────────────────────────
        Target shape when a SPRF overflows one page:
@@ -1502,15 +1509,15 @@
                   Cash
                 </label>
               </td>
-              <td style="padding:4px 12px;border-bottom:1px solid #cbd5e1;vertical-align:top">
-                <div style="padding:3px 0">
-                  Account Name: <b>Hankook Tyre Australia</b>
-                  &nbsp;&nbsp;&nbsp; BSB: <b>212-200</b>
-                  &nbsp;&nbsp;&nbsp; Account No. <b>016 043 371</b>
-                </div>
-                <div style="padding:3px 0;color:#334155">
-                  Fax Remittance to (02) 9870 1245
-                </div>
+              <!-- Cash row: all bank details on a SINGLE line so this
+                   <tr> sits at the same ~32 px height as a plain
+                   input row.  Fax Remittance is appended inline
+                   after the Account No. with a bullet separator. -->
+              <td style="padding:4px 10px;border-bottom:1px solid #cbd5e1;vertical-align:middle;white-space:nowrap">
+                Account Name: <b>Hankook Tyre Australia</b>
+                &nbsp;&nbsp; BSB: <b>212-200</b>
+                &nbsp;&nbsp; Account No. <b>016 043 371</b>
+                &nbsp;&nbsp;·&nbsp;&nbsp; Fax Remittance to (02) 9870 1245
               </td>
             </tr>
             <tr>
@@ -1521,19 +1528,19 @@
                   Credit Card
                 </label>
               </td>
-              <td style="padding:4px 12px;vertical-align:top">
-                <div style="padding:3px 0;display:flex;align-items:center;gap:8px">
-                  <span style="min-width:84px">Card No.</span>
+              <!-- Credit Card row: Card No. / Expiry / CCV inputs on a
+                   SINGLE line so this <tr> also sits at ~32 px. -->
+              <td style="padding:4px 10px;vertical-align:middle">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
+                  <span>Card No.</span>
                   <input id="ccNumber" placeholder="XXXX XXXX XXXX XXXX" maxlength="23"
-                         style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:230px">
-                </div>
-                <div style="padding:3px 0;display:flex;align-items:center;gap:8px">
-                  <span style="min-width:84px">Expiry Date</span>
+                         style="padding:2px 6px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:200px">
+                  <span style="margin-left:16px">Expiry</span>
                   <input id="ccExpiry" placeholder="MM/YY" maxlength="5"
-                         style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:80px">
-                  <span style="margin-left:20px;min-width:36px">CCV</span>
+                         style="padding:2px 6px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:70px">
+                  <span style="margin-left:16px">CCV</span>
                   <input id="ccCCV" placeholder="123" maxlength="3"
-                         style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:70px">
+                         style="padding:2px 6px;border:1px solid #cbd5e1;border-radius:2px;font-family:monospace;background:#fff8d5;width:60px">
                 </div>
               </td>
             </tr>
@@ -1601,9 +1608,9 @@
         </div>
 
         <div class="val val-reason" style="grid-column: span 4;padding:0;align-self:stretch">
-          <textarea id="mgmt_reason" rows="4"
+          <textarea id="mgmt_reason" rows="2"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
-                    style="width:100%;height:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:95px"></textarea>
+                    style="width:100%;height:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none"></textarea>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
              carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
