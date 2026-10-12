@@ -67,6 +67,12 @@ def wait_for_manual_login(driver):
 
 
 def search_tyres(driver, wait, query):
+    # Force the search page every call.  The old "if Product/Search not
+    # in current_url" guard assumed the user stayed on the Search tab;
+    # if the first search times out and we re-enter here, the browser
+    # may have landed on an error page where the Clear / search-input
+    # elements no longer exist.  Reloading is cheap and keeps the DOM
+    # in a known state.
     if "Product/Search" not in driver.current_url:
         driver.get(SEARCH_URL)
         time.sleep(2)
@@ -80,9 +86,44 @@ def search_tyres(driver, wait, query):
     except Exception:
         pass
 
-    search_input = wait.until(
-        EC.presence_of_element_located((By.ID, "simpleSearchText"))
-    )
+    # Try multiple selectors for the search input — the site may have
+    # renamed the id, or shown a different control depending on which
+    # tab the user landed on after login.  Fall back on <input> whose
+    # placeholder / name hints at search.
+    try:
+        search_input = wait.until(
+            EC.presence_of_element_located((By.ID, "simpleSearchText"))
+        )
+    except Exception as e:
+        # Diagnostic so the user can see WHY the wait timed out
+        # (empty "Message:" by itself was useless).
+        print(f"  [DIAG] simpleSearchText not found on {driver.current_url!r}")
+        print(f"  [DIAG] page title: {driver.title!r}")
+        # Fallback locators — any of these should work if the search
+        # tab is open under a different control id.
+        alt_locators = [
+            (By.CSS_SELECTOR, "input[placeholder*='Search' i]"),
+            (By.CSS_SELECTOR, "input[name*='search' i][type='text']"),
+            (By.CSS_SELECTOR, "input[type='search']"),
+        ]
+        search_input = None
+        for loc in alt_locators:
+            try:
+                search_input = driver.find_element(*loc)
+                print(f"  [DIAG] fell back to {loc}")
+                break
+            except Exception:
+                continue
+        if search_input is None:
+            # Re-raise with a meaningful message so the top-level
+            # try/except in main() prints something useful instead
+            # of an empty Selenium Message.
+            raise RuntimeError(
+                f"Search input not found on {driver.current_url}. "
+                f"Make sure you are on the 'Search Tyres' tab before "
+                f"pressing Enter."
+            )
+
     search_input.clear()
     search_input.send_keys(query)
     time.sleep(1)
@@ -106,10 +147,20 @@ def search_tyres(driver, wait, query):
     driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
     time.sleep(1)
 
-    # Wait for results — detect by "Get Cost" text in any element
-    wait.until(EC.presence_of_element_located(
-        (By.XPATH, "//*[contains(text(),'Get Cost')]")
-    ))
+    # Wait for results — detect by "Get Cost" text in any element.
+    # Longer timeout here (45 s) because the results table can be slow
+    # on the first search of a session when auth / inventory warm up.
+    long_wait = WebDriverWait(driver, 45)
+    try:
+        long_wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//*[contains(text(),'Get Cost')]")
+        ))
+    except Exception:
+        # No "Get Cost" after 45 s likely means the search returned
+        # zero results for this size.  Not an error — just no rows.
+        print(f"  [INFO] no 'Get Cost' seen for {query} within 45s "
+              f"(URL={driver.current_url}) — treating as 0 results")
+        return
     time.sleep(1)
     print("Results loaded.")
 
