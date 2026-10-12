@@ -433,13 +433,19 @@
 
   /* rebate row split (YES/NO) */
   .rebate{display:grid;grid-template-columns:80px 1fr 80px 1fr;padding:0;}
-  .rebate > div{padding:5px 8px;display:flex;align-items:center;justify-content:center;border-right:1px dashed var(--border);font-size:12.5px}
+  /* Trim the picker row to the same height as a plain Phone No /
+     Mobile row — padding 2 px + 14 px font keeps the YES / NO
+     pills readable while bringing the overall row to ~32 px so
+     subgrid matches it to the right pane's Reason / Notes label.
+     The .pick font was 18 px below, overriden to 14 px for the
+     same reason. */
+  .rebate > div{padding:2px 6px;display:flex;align-items:center;justify-content:center;border-right:1px dashed var(--border);font-size:12.5px;min-height:24px}
   .rebate > div:last-child{border-right:none}
   .rebate .yes{background:#eaf6ea;font-weight:700}
   .rebate .no{background:#fdecec;font-weight:700}
   /* V-check style — YES / NO cells become clickable and light up
      with a big ✓ when picked.  Mutually exclusive, no typing. */
-  .rebate .pick{cursor:pointer;user-select:none;font-weight:800;font-size:18px;color:#94a3b8;transition:all .12s}
+  .rebate .pick{cursor:pointer;user-select:none;font-weight:800;font-size:14px;color:#94a3b8;transition:all .12s}
   .rebate .pick:hover{background:#f1f5f9}
   .rebate .pick.on{color:#fff}
   .rebate .pick.on.yes-on{background:#16a34a}
@@ -1563,10 +1569,10 @@
           Reason / Notes for Approver (REQUIRED on Submit — at least 2 words)
         </div>
 
-        <div class="val val-reason" style="grid-column: span 4;padding:0">
+        <div class="val val-reason" style="grid-column: span 4;padding:0;align-self:stretch">
           <textarea id="mgmt_reason" rows="4"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
-                    style="width:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:95px"></textarea>
+                    style="width:100%;height:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;min-height:95px"></textarea>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
              carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
