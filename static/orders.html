@@ -1509,19 +1509,20 @@
                   Cash
                 </label>
               </td>
-              <!-- Cash row: all bank details on a SINGLE line so this
-                   <tr> sits at the same ~32 px height as a plain
-                   input row.  Font tightened to 11 px + labels
-                   abbreviated (Account No. → A/C, Fax Remittance
-                   to → Fax) so the whole string fits inside the
-                   .val.full-row width without horizontal overflow.
-                   font-size override wins over the parent table's
-                   12.5 px via normal CSS specificity. -->
-              <td style="padding:4px 10px;border-bottom:1px solid #cbd5e1;vertical-align:middle;white-space:nowrap;font-size:11px">
-                Account Name: <b>Hankook Tyre Australia</b>
-                &nbsp;·&nbsp; BSB: <b>212-200</b>
-                &nbsp;·&nbsp; A/C: <b>016 043 371</b>
-                &nbsp;·&nbsp; Fax: (02) 9870 1245
+              <!-- Cash row: Account / BSB / A/C on the first line,
+                   Fax Remittance on its own second line so the full
+                   word "Remittance" fits without abbreviation.  Font
+                   stays at 11 px to keep the <tr> tight; each line
+                   is nowrap so neither wraps. -->
+              <td style="padding:3px 10px;border-bottom:1px solid #cbd5e1;vertical-align:middle;font-size:11px;line-height:1.4">
+                <div style="white-space:nowrap">
+                  Account Name: <b>Hankook Tyre Australia</b>
+                  &nbsp;·&nbsp; BSB: <b>212-200</b>
+                  &nbsp;·&nbsp; A/C: <b>016 043 371</b>
+                </div>
+                <div style="white-space:nowrap">
+                  Fax Remittance: (02) 9870 1245
+                </div>
               </td>
             </tr>
             <tr>
