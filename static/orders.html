@@ -852,8 +852,13 @@
     #bottomApproveBar,
     #csPanel,
     .status,
-    .row-del, .row-del-cell, .row-del-th,
-    #approvalPath { display: none !important; }
+    .row-del, .row-del-cell, .row-del-th { display: none !important; }
+    /* Approval route stays visible on the Internal print copy so the
+       right pane keeps 11 rows and lines up with the left pane per
+       the Oct-12 schema (row 1 = Sold-to Account ↔ Approval route).
+       The Customer PDF still hides it below in the print-customer
+       block since the end-customer should not see the internal
+       approval routing. */
 
     /* Keep the two-pane Customer / Order# layout side-by-side on
        paper.  Chromium calculates print viewport width in a way
@@ -880,6 +885,7 @@
     */
     body.print-customer #rebateWrap,
     body.print-customer #approvalPanel,
+    body.print-customer #approvalPath,
     body.print-customer #csPanel,
     body.print-customer #modLogWrap, body.print-customer #modLogLbl,
     /* Customer Details rows the spec drops: Base DC + Rebate-able */
