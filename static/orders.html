@@ -1453,20 +1453,18 @@
                └──────────────┴────────────┴──────────────────────────┘
              Lives in the Customer Details grid (left pane) per the
              Oct-9 "move to left" request. -->
-        <div id="paymentMethodBlock" class="val" style="padding: 0; display:block; grid-column: 1 / -1">
-          <!-- Inner-table has no left/right/top borders so it sits
-               flush inside the Customer Details band (the band
-               already draws those borders).  Only the bottom + the
-               inter-row dividers draw, so the Payment Method label
-               reads as the leftmost cell of a continuous grid
-               instead of a nested table with a double border on
-               the left margin. -->
-          <table style="width:100%;border-collapse:collapse;border:none;border-bottom:1px solid #cbd5e1;font-size:12.5px">
+        <!-- Payment Method label sits in column 1 (150 px, grey) as a
+             standard .lbl.full-row — identical to Sold-to Account /
+             Ship-to Account / Rebate-able above, so it aligns with
+             the left margin on screen AND on both print copies.  The
+             .val.full-row carries only the Cash / Credit-Card table
+             (no leading "Payment Method" cell inside the table,
+             which previously indented everything by one column). -->
+        <div class="lbl full-row" id="paymentMethodLbl">Payment Method</div>
+        <div id="paymentMethodBlock" class="val full-row" style="padding:0">
+          <table style="width:100%;border-collapse:collapse;border:none;font-size:12.5px;height:100%">
             <tr>
-              <td rowspan="2" style="width:150px;vertical-align:middle;padding:10px;background:#eef1f4;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;font-weight:700;text-align:center">
-                Payment Method
-              </td>
-              <td style="width:120px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;vertical-align:middle">
+              <td style="width:140px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1;vertical-align:middle">
                 <label style="display:flex;align-items:center;gap:12px;cursor:pointer;font-weight:600">
                   <input type="checkbox" id="payCOD" name="payMethod" value="cod"
                          style="width:22px;height:22px;cursor:pointer;accent-color:#059669;flex-shrink:0">
@@ -1485,7 +1483,7 @@
               </td>
             </tr>
             <tr>
-              <td style="width:120px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;vertical-align:middle">
+              <td style="width:140px;padding:8px 10px;background:#f8fafc;border-right:1px solid #cbd5e1;vertical-align:middle">
                 <label style="display:flex;align-items:center;gap:12px;cursor:pointer;font-weight:600">
                   <input type="checkbox" id="payCC" name="payMethod" value="credit_card"
                          style="width:22px;height:22px;cursor:pointer;accent-color:#059669;flex-shrink:0">
