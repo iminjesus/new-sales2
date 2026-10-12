@@ -1121,24 +1121,29 @@ function _render(title, datasets) {
         type: 'line', data: { labels: months, datasets }, options: opts
     });
     _attachZoomReset(_chart);
+    _syncZoomResetChart(_chart);
 }
 
 /* Zoom-reset gesture (Oct-12 user ask #2): mouse-down at any point
    then drag toward the upper-left ≥ 60 px → chart.resetZoom().
-   The chartjs-plugin-zoom owns the normal drag-to-zoom gesture (which
-   fires on mouseup), so we only trigger the reset AFTER drag finishes
-   AND the delta vector points up-left — otherwise a normal zoom-in
-   drag that happens to end to the upper-left of its start would be
-   ambiguous.  Using the canvas's pointer events means this plays
-   nicely with the plugin without having to monkey-patch it. */
+   chartjs-plugin-zoom owns the normal drag-to-zoom gesture — its
+   pointerup handler runs ALONGSIDE ours, so an upper-left drag
+   would still try to zoom to its (inverted) box.  Two tricks make
+   this reliable:
+     • capture:true on pointerdown so we record the start position
+       even if the plugin tries to swallow the event; and
+     • setTimeout(…, 0) around chart.resetZoom() so our reset runs
+       AFTER the plugin's synchronous zoom this tick — the user
+       sees the chart snap back to the unzoomed state. */
 function _attachZoomReset(chart) {
     const canvas = chart.canvas;
     if (!canvas || canvas._zoomResetWired) return;
     canvas._zoomResetWired = true;
+    canvas._zoomResetChart = chart;
     let _sx = 0, _sy = 0, _down = false;
     canvas.addEventListener('pointerdown', function(ev) {
         _down = true; _sx = ev.clientX; _sy = ev.clientY;
-    });
+    }, {capture: true});
     canvas.addEventListener('pointerup', function(ev) {
         if (!_down) return;
         _down = false;
@@ -1147,10 +1152,26 @@ function _attachZoomReset(chart) {
         // Upper-left means dx < 0 AND dy < 0; require a reasonable
         // minimum travel so stray clicks don't reset accidentally.
         if (dx < -60 && dy < -60) {
-            try { chart.resetZoom(); } catch (_) {}
+            // Defer so the plugin's own zoom runs first this tick,
+            // then our resetZoom() wipes it on the next.  Use the
+            // CURRENT chart stored on the canvas (chart objects get
+            // replaced on every _render() but the canvas persists).
+            setTimeout(function() {
+                try {
+                    const c = canvas._zoomResetChart;
+                    if (c && c.resetZoom) c.resetZoom();
+                } catch (_) {}
+            }, 0);
         }
-    });
-    canvas.addEventListener('pointercancel', function() { _down = false; });
+    }, {capture: true});
+    canvas.addEventListener('pointercancel', function() { _down = false; }, {capture: true});
+}
+
+/* Keep the pointer-handler's chart reference in sync with the live
+   chart (handler is attached once, chart is replaced on every
+   _render()).  Called from _render() after new Chart() returns. */
+function _syncZoomResetChart(chart) {
+    if (chart && chart.canvas) chart.canvas._zoomResetChart = chart;
 }
 
 function _noData(msg) {
