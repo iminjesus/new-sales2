@@ -333,14 +333,23 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
-    /* 10 explicit rows for subgrid.  Right-pane Special Instruction
-       (textarea rows=4 min-height=75 px) spans rows 7-8 so left-pane
-       Mobile Number stays short (row 7) and Rebate-able stays short
-       (row 8) instead of being dragged tall by the subgrid-max rule.
-       Left-pane Payment Method spans rows 9-10 to mirror that span
-       so right-pane Reason/Notes label (row 9) + textarea (row 10)
-       stack cleanly next to Payment Method. */
-    grid-template-rows: repeat(10, auto);
+    /* 11 explicit rows for subgrid, mirroring the Oct-12 row-by-row
+       pairing table the user supplied:
+         row  LEFT                    RIGHT
+         1    Sold-to Account         Approval route
+         2    Ship-to Account         Purchase Order #
+         3    Customer Group          Date
+         4    Base DC (top half)      Sales Person Details
+         5    Base DC (bot half)      Requester
+         6    Ship-to Address         HKAU BDE Name
+         7    Phone No (Email)        Modified By
+         8    Mobile Number           Special Instruction (top)
+         9    Rebate-able             Special Instruction (bot)
+         10   Payment Method (top)    Reason / Notes
+         11   Payment Method (bot)    Required at Submit (textarea)
+       Base DC, Special Instruction and Payment Method each occupy
+       their two allotted rows via grid-row: span 2. */
+    grid-template-rows: repeat(11, auto);
     background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
   }
   .meta .col{border-top:1px solid var(--border);display:contents;}
@@ -1392,8 +1401,13 @@
         <div class="lbl full-row">Customer Group</div>
         <div class="val readonly full-row"><input id="customer_group" readonly placeholder="—"/></div>
 
-        <div class="lbl full-row hide-cust">Base DC</div>
-        <div class="val full-row hide-cust" style="padding:0">
+        <!-- Spans 2 subgrid rows (4-5) so left-pane Base DC lines up
+             with right-pane Sales Person Details header (row 4) +
+             Requester (row 5).  Inner valgroup already has 2 internal
+             rows (sub-hdr + sub-val) so each table row maps 1-to-1
+             onto a subgrid row. -->
+        <div class="lbl full-row hide-cust" style="grid-row: span 2">Base DC</div>
+        <div class="val full-row hide-cust" style="padding:0;grid-row: span 2">
           <div class="valgroup">
             <div class="sub-hdr pk">HK-PCLT</div>
             <div class="sub-hdr hktbr">HK-TBR</div>
@@ -1559,13 +1573,14 @@
         <div class="lbl">HKAU BDE Name</div>
         <div class="val" style="grid-column: span 3"><input id="bde_name" placeholder=""/></div>
 
-        <!-- Modification log — reveals only after at least one edit.
-             Each modification appends "<email> · <YYYY-MM-DD HH:MM>"
-             so the whole audit trail persists on the order. -->
-        <div class="lbl lbl-modlog" id="modLogLbl" hidden>Modified by</div>
-        <div class="val val-modlog" id="modLogWrap" style="grid-column: span 3" hidden>
+        <!-- Modification log — ALWAYS visible per the Oct-12 schema so
+             the Modified By row aligns with left-pane Phone No (row 7).
+             Empty state renders a dash placeholder; each modification
+             then appends "<email> · <YYYY-MM-DD HH:MM>" below. -->
+        <div class="lbl lbl-modlog" id="modLogLbl">Modified by</div>
+        <div class="val val-modlog" id="modLogWrap" style="grid-column: span 3">
           <div id="modLogList"
-               style="font-size:11.5px;color:#334155;line-height:1.55;padding:2px 4px"></div>
+               style="font-size:11.5px;color:#334155;line-height:1.55;padding:2px 4px">—</div>
         </div>
 
         <!-- Spans 2 subgrid rows (7-8) so left-pane Mobile Number
@@ -5739,17 +5754,19 @@ async function hydrateSubmittedOrder(oid, editMode){
   if (_modLbl && _modWrap && _modEl){
     const _esc = s => String(s || "").replace(/[&<>"']/g,
       ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
+    // Modified By row is ALWAYS visible per the Oct-12 schema; the
+    // row body shows the list of edits when present, otherwise a
+    // single dash placeholder so the row still occupies subgrid r.7.
     if (Array.isArray(_modList) && _modList.length){
       _modEl.innerHTML = _modList.map(m =>
         `<div>• <b>${_esc(m.by || m.email || "—")}</b>` +
         `<span style="color:#64748b"> · ${_esc(m.at || m.when || "")}</span></div>`
       ).join("");
-      _modLbl.hidden = false;
-      _modWrap.hidden = false;
     } else {
-      _modLbl.hidden = true;
-      _modWrap.hidden = true;
+      _modEl.textContent = "—";
     }
+    _modLbl.hidden  = false;
+    _modWrap.hidden = false;
   }
   // Base DC display
   Object.entries(p.base_dc || {}).forEach(([k,v]) => {
