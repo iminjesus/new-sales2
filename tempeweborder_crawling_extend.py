@@ -193,8 +193,30 @@ def select_brand(driver, brand):
         return False
 
 
-def close_modal(driver):
-    """Close the Manufacturer modal by its ✕ button, or Escape."""
+def _modal_is_open(driver):
+    """Heuristic: a Bootstrap-style modal typically carries .modal.in,
+    .modal.show, or an open backdrop <div class=modal-backdrop>.  Return
+    True if any of those are present and visible, which means click_search
+    would hit the WRONG button (whatever Search control the modal
+    hosts, if any) instead of the main-page Search."""
+    for sel in [
+        (By.CSS_SELECTOR, "div.modal.in"),
+        (By.CSS_SELECTOR, "div.modal.show"),
+        (By.CSS_SELECTOR, "div.modal-backdrop"),
+    ]:
+        try:
+            el = driver.find_element(*sel)
+            if el.is_displayed():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def close_modal(driver, wait):
+    """Close the Manufacturer modal by its ✕ button, or Escape, and
+    WAIT until it's actually gone so the next click_search targets the
+    main-page Search button and not something covered by the modal."""
     for sel in [
         (By.XPATH, "//*[self::button or self::a or self::span][contains(@class,'close')]"),
         (By.XPATH, "//*[@aria-label='Close']"),
@@ -205,33 +227,64 @@ def close_modal(driver):
             el = driver.find_element(*sel)
             if el.is_displayed():
                 driver.execute_script("arguments[0].click();", el)
-                time.sleep(0.4)
-                return
+                time.sleep(0.3)
+                break
         except Exception:
             continue
-    # Fallback: send ESC
+    # Fallback: send ESC a couple of times.
+    for _ in range(2):
+        if not _modal_is_open(driver):
+            break
+        try:
+            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+            time.sleep(0.4)
+        except Exception:
+            break
+    # Final guard: block up to 5 s for the modal to actually disappear.
     try:
-        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-        time.sleep(0.4)
+        WebDriverWait(driver, 5).until(lambda d: not _modal_is_open(d))
     except Exception:
-        pass
+        print("  [WARN] modal이 5초 안에 닫히지 않음 — 그래도 진행")
 
 
 def click_search(driver, wait):
-    """Click the main red Search button to run the filtered query."""
-    try:
-        btn = wait.until(EC.element_to_be_clickable((
-            By.XPATH,
-            "//input[@value='Search'] | //button[normalize-space()='Search'] "
-            "| //a[normalize-space()='Search']"
-        )))
-        driver.execute_script("arguments[0].click();", btn)
-    except Exception:
+    """Click the MAIN red Search button on the search panel.  The
+    Manufacturer modal has its own buttons so make sure the modal is
+    closed first, otherwise the click lands on the wrong element and
+    the search never fires (user Oct-12 report: HANKOOK filter was in
+    the input but the result list stayed empty)."""
+    if _modal_is_open(driver):
+        close_modal(driver, wait)
+    # Try a few locators in order of specificity.  Only elements that
+    # live INSIDE the main search panel (not inside .modal) count.
+    for by, expr in [
+        (By.XPATH,
+         "//*[not(ancestor::div[contains(@class,'modal')])]"
+         "/input[@value='Search' and @type='submit']"),
+        (By.XPATH,
+         "//*[not(ancestor::div[contains(@class,'modal')])]"
+         "/input[@value='Search']"),
+        (By.XPATH,
+         "//*[not(ancestor::div[contains(@class,'modal')])]"
+         "/button[normalize-space()='Search']"),
+    ]:
+        try:
+            btn = driver.find_element(by, expr)
+            if btn.is_displayed():
+                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
+                time.sleep(0.2)
+                driver.execute_script("arguments[0].click();", btn)
+                print("  → Search button clicked")
+                break
+        except Exception:
+            continue
+    else:
         # Fallback: press Enter in the search input
         try:
             driver.find_element(By.ID, "simpleSearchText").send_keys(Keys.RETURN)
+            print("  → Search by Enter key (fallback)")
         except Exception:
-            pass
+            print("  [WARN] Search 버튼 못 찾음")
     time.sleep(1.5)
     # Dismiss any lingering suggestion dropdown
     try:
@@ -240,20 +293,29 @@ def click_search(driver, wait):
         pass
 
 
-def wait_results(driver):
-    """Wait up to 60 s for at least one result row to appear.  Returns
-    True when results loaded, False when the brand/category combo had
-    zero matches (common for commercial brands with no on-sale stock). """
-    try:
-        WebDriverWait(driver, 60).until(EC.any_of(
-            EC.presence_of_element_located((By.XPATH, "//*[contains(text(),'Get Cost')]")),
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.product-data-list")),
-        ))
-    except Exception:
-        print(f"  [INFO] no results in 60s (URL={driver.current_url}) — zero rows")
-        return False
-    time.sleep(1)
-    return True
+def wait_results(driver, max_total_s=120):
+    """Wait up to max_total_s seconds for at least one result row.
+    User asked (Oct-12) to extend the wait in 5 s chunks when the
+    first attempt turns up zero — this covers slow brands / warm-up
+    on the first query of a session.  Returns True once rows appear,
+    False after the full timeout.  Prints progress every chunk so the
+    user can see the retry happening instead of a silent hang."""
+    waited = 0
+    chunk  = 5
+    while waited < max_total_s:
+        rows = driver.find_elements(By.CSS_SELECTOR, "div.product-data-list")
+        if rows:
+            # Give the Angular bindings a half-second to settle so
+            # ng-binding spans have their text before we scrape.
+            time.sleep(0.5)
+            print(f"  → {len(rows)} rows loaded after {waited}s")
+            return True
+        waited += chunk
+        print(f"  … still 0 rows — waiting another {chunk}s (total {waited}s)")
+        time.sleep(chunk)
+    print(f"  [INFO] 결과 없음: {max_total_s}s 대기 후에도 0 rows "
+          f"(URL={driver.current_url}) — brand/category 조합 재고 없음으로 간주")
+    return False
 
 
 # ── Click + scrape helpers (reused from tempeweborder_crawling.py) ──────
@@ -427,9 +489,9 @@ def main():
                         open_manufacturer_modal(driver, wait)
                         select_category_tab(driver, category)
                         if not select_brand(driver, brand):
-                            close_modal(driver)
+                            close_modal(driver, wait)
                             continue
-                        close_modal(driver)
+                        close_modal(driver, wait)
                         click_search(driver, wait)
                     except Exception as e:
                         print(f"  [ERROR] filter 설정 실패: {e} — skip")
