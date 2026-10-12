@@ -1511,13 +1511,17 @@
               </td>
               <!-- Cash row: all bank details on a SINGLE line so this
                    <tr> sits at the same ~32 px height as a plain
-                   input row.  Fax Remittance is appended inline
-                   after the Account No. with a bullet separator. -->
-              <td style="padding:4px 10px;border-bottom:1px solid #cbd5e1;vertical-align:middle;white-space:nowrap">
+                   input row.  Font tightened to 11 px + labels
+                   abbreviated (Account No. → A/C, Fax Remittance
+                   to → Fax) so the whole string fits inside the
+                   .val.full-row width without horizontal overflow.
+                   font-size override wins over the parent table's
+                   12.5 px via normal CSS specificity. -->
+              <td style="padding:4px 10px;border-bottom:1px solid #cbd5e1;vertical-align:middle;white-space:nowrap;font-size:11px">
                 Account Name: <b>Hankook Tyre Australia</b>
-                &nbsp;&nbsp; BSB: <b>212-200</b>
-                &nbsp;&nbsp; Account No. <b>016 043 371</b>
-                &nbsp;&nbsp;·&nbsp;&nbsp; Fax Remittance to (02) 9870 1245
+                &nbsp;·&nbsp; BSB: <b>212-200</b>
+                &nbsp;·&nbsp; A/C: <b>016 043 371</b>
+                &nbsp;·&nbsp; Fax: (02) 9870 1245
               </td>
             </tr>
             <tr>
