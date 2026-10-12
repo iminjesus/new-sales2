@@ -333,13 +333,9 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
-    /* 9 explicit rows for subgrid.  Rows 1-7 auto-size from
-       content (approvalPath / PO / Date / Sales Person / Requester
-       / HKAU BDE / Mobile+Special), row 8 is CLAMPED to 32 px
-       so the Rebate-able / Reason-Notes-label pair never floats
-       up past a plain input row's height, and row 9 is auto so
-       Payment Method and the Reason/Notes textarea can expand. */
-    grid-template-rows: repeat(7, auto) 32px auto;
+    /* 9 explicit rows for subgrid — each pane uses this template
+       so their rows share heights. */
+    grid-template-rows: repeat(9, auto);
     background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
   }
   .meta .col{border-top:1px solid var(--border);display:contents;}
@@ -1566,8 +1562,8 @@
         <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="4" style="width:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none;min-height:75px"></textarea></div>
 
-        <div class="lbl lbl-reason" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800;padding:2px 8px;min-height:0;font-size:11.5px">
-          Reason / Notes for Approver (REQUIRED on Submit — at least 2 words)
+        <div class="lbl lbl-reason" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800;padding:2px 8px;min-height:0;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          Reason / Notes for Approver <span style="color:#dc2626">*</span>
         </div>
 
         <div class="val val-reason" style="grid-column: span 4;padding:0;align-self:stretch">
@@ -7126,46 +7122,13 @@ async function wireStatusPanel(order){
   });
 })();
 
-(function _wireReasonTopAlign(){
-  const align = () => {
-    const pmBlock     = document.getElementById("paymentMethodBlock");
-    const reasonLabel = document.querySelector(".lbl-reason");
-    if (!pmBlock || !reasonLabel) return;
-    // Reset previous margin so this run measures natural position.
-    reasonLabel.style.marginTop = "0px";
-    void pmBlock.offsetHeight;
-    const pmTop    = pmBlock.getBoundingClientRect().top;
-    const labelTop = reasonLabel.getBoundingClientRect().top;
-    const topDiff  = pmTop - labelTop;
-    // Only push DOWN (positive diff).  Negative diffs would mean
-    // the label naturally sits BELOW Payment Method top; shifting
-    // UP with a negative margin-top would collide with the row
-    // above and look worse than leaving it where the sub-grid
-    // placed it.
-    if (topDiff > 1){
-      reasonLabel.style.marginTop = topDiff + "px";
-    }
-  };
-  // Fire at every plausible timing so one of them catches the
-  // moment the sub-grid rows have settled.  Repeated runs are
-  // idempotent (margin resets to 0 each time before measuring).
-  if (document.readyState === "complete"){
-    requestAnimationFrame(align);
-  } else {
-    window.addEventListener("DOMContentLoaded", () => requestAnimationFrame(align));
-    window.addEventListener("load", () => requestAnimationFrame(align));
-  }
-  // Backup pass 300 ms after load — covers fonts loading late /
-  // sub-grid rows measuring different after text metrics stabilise.
-  window.addEventListener("load", () => setTimeout(align, 300));
-  let _rafId = 0;
-  window.addEventListener("resize", () => {
-    cancelAnimationFrame(_rafId);
-    _rafId = requestAnimationFrame(align);
-  });
-  // hydrateSubmittedOrder calls this after rebuilding the right pane.
-  window._alignReasonToPayment = align;
-})();
+/* _wireReasonTopAlign is DISABLED — CSS subgrid now owns cross-pane
+   row alignment, so the margin-top push used before subgrid was
+   introduced is actively WIDENING row 8 (it drags the Reason /
+   Notes label down into row 8, inflating its subgrid-driven max
+   height).  Leaving a no-op shim so hydrateSubmittedOrder's call
+   to window._alignReasonToPayment doesn't throw.  */
+window._alignReasonToPayment = function(){};
 
 /* ────────────────────────── boot ────────────────────────── */
 /* Strip the hankooktyre.com.au suffix from any identity string so
