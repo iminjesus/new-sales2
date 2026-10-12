@@ -179,8 +179,26 @@ def build_data(monthly):
 
     months       = sorted(monthly.keys())
     month_labels = [_month_label(m) for m in months]
-    sizes        = list(SIZE_CATEGORY.keys())
-    abbrs        = list(BRANDS.keys())
+    # ── Size universe ──────────────────────────────────────────────
+    # Collect EVERY size that shows up in any raw row across every
+    # month / store so the Size button bar can list the full catalogue
+    # (not just the 32 curated ones in SIZE_CATEGORY).  The Oct-12
+    # user ask #3: "모든 사이즈를 나열해 줄 것" (list all sizes).
+    # Curated sizes stay first in SIZE_CATEGORY insertion order so
+    # the "popular" grid at the top keeps its established layout;
+    # extras discovered in the raw data are appended afterwards,
+    # sorted so the extras aren't a random dump.
+    _curated     = list(SIZE_CATEGORY.keys())
+    _curated_set = set(_curated)
+    _extra_sizes = set()
+    for _mk, _md in monthly.items():
+        for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows"):
+            for _r in _md.get(_bucket, []):
+                _sz = (_r.get("SIZE","") or "").strip()
+                if _sz and _sz not in _curated_set:
+                    _extra_sizes.add(_sz)
+    sizes = _curated + sorted(_extra_sizes)
+    abbrs = list(BRANDS.keys())
 
     store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": []}
     # size_data[size][abbr][store]     = [price_per_month, ...]
@@ -370,22 +388,28 @@ def build_data(monthly):
             if any(p is not None for p in d["tempe"] + d["bj"] + d["jax"] + d["tw"] + d["twi"]):
                 brand_size_data.setdefault(abbr, {})[size] = d
 
+    _sizes_with_data = sorted({
+        size for size in sizes
+        for abbr in abbrs
+        if any(p is not None for p in
+               size_data[size][abbr]["tempe"] +
+               size_data[size][abbr]["bj"] +
+               size_data[size][abbr]["jax"] +
+               size_data[size][abbr]["tw"] +
+               size_data[size][abbr]["twi"])
+    }, key=lambda s: sizes.index(s))
     return {
         "months":          month_labels,
         "store_avg":       store_avg,
         "size_data":       size_data,
         "brand_size_data": brand_size_data,
         "summary_rows":    summary_rows,
-        "sizes_with_data": sorted({
-            size for size in sizes
-            for abbr in abbrs
-            if any(p is not None for p in
-                   size_data[size][abbr]["tempe"] +
-                   size_data[size][abbr]["bj"] +
-                   size_data[size][abbr]["jax"] +
-                   size_data[size][abbr]["tw"] +
-                   size_data[size][abbr]["twi"])
-        }, key=lambda s: sizes.index(s)),
+        "sizes_with_data": _sizes_with_data,
+        # The subset of sizes_with_data that lives in the curated
+        # SIZE_CATEGORY list, so the front-end can render them with
+        # a highlight pill style AND filter down to just these when
+        # the user ticks the "Reserved" checkbox.
+        "popular_sizes":   [s for s in _sizes_with_data if s in _curated_set],
     }
 
 
@@ -398,6 +422,12 @@ _HTML = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tyre Price Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- chartjs-plugin-zoom gives us the box-select drag-to-zoom and
+     ctx.resetZoom() needed for Oct-12 request #2: drag a vertical area
+     on the chart to zoom into that Y-axis range; drag toward the
+     upper-left to reset. -->
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: system-ui, sans-serif; background: #f0f2f5;
@@ -637,10 +667,20 @@ body.tables-expanded .ctable { font-size: 14px; }
 
     <div class="btn-panel">
 
-      <!-- Row 1: Size filter (global) -->
+      <!-- Row 1: Size filter (global)
+           Oct-12 PM: Reserved checkbox at the end of the row.  When
+           ticked, the Size button bar collapses to just the "popular"
+           (curated) sizes from SIZE_CATEGORY; unticked (default) it
+           lists EVERY size seen in the raw data.  Popular sizes always
+           render with a highlight pill style so they stand out from
+           the long tail of extras. -->
       <div class="btn-row">
         <span class="row-label">Size</span>
         <div class="btns" id="size-btns"></div>
+        <label style="font-size:11px;color:#444;margin-left:10px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
+          <input type="checkbox" id="size-reserved-only" style="margin:0;cursor:pointer">
+          Reserved only
+        </label>
       </div>
 
       <hr class="divider">
@@ -674,11 +714,13 @@ body.tables-expanded .ctable { font-size: 14px; }
 </div>
 
 <script>
-const D      = {{ chart_json | safe }};
-const BRANDS = {{ brands_json | safe }};
-const BCOLORS= {{ bcolors_json | safe }};
-const SIZES  = {{ sizes_json | safe }};
-const months = D.months;
+const D       = {{ chart_json | safe }};
+const BRANDS  = {{ brands_json | safe }};
+const BCOLORS = {{ bcolors_json | safe }};
+const SIZES   = {{ sizes_json | safe }};
+const POPULAR = {{ popular_json | safe }};
+const POPULAR_SET = new Set(POPULAR);
+const months  = D.months;
 
 const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800', tw:'#9C27B0', twi:'#E040FB' };
 const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX',   tw:'TempeWOS Sell Out', twi:'TempeWOS Sell In' };
@@ -770,6 +812,25 @@ const baseOpts = {
     plugins:{
         legend:  { display: false },   // replaced by brandEndLabels plugin
         brandEndLabels: { enabled: true },
+        /* chartjs-plugin-zoom: drag a vertical rectangle on the chart
+           to zoom into that Y-axis range (per Oct-12 user ask #2 —
+           prices clustered close together).  Mode 'y' means the drag
+           box selection narrows the Y scale only; the X (month) scale
+           stays the full timeline.  The reset-via-drag-upper-left
+           gesture is wired below in _attachZoomReset() because the
+           plugin itself only exposes resetZoom() programmatically. */
+        zoom: {
+            zoom: {
+                drag: {
+                    enabled: true,
+                    backgroundColor: 'rgba(100,149,237,0.15)',
+                    borderColor: 'rgba(100,149,237,0.7)',
+                    borderWidth: 1,
+                    threshold: 10,
+                },
+                mode: 'y',
+            },
+        },
         tooltip: {
             /* Full descriptions + a callout line whenever the point was
                picked via the COMPETITOR_PATTERNS fallback (Tempe had no
@@ -1057,6 +1118,37 @@ function _render(title, datasets) {
     _chart = new Chart(document.getElementById('main-chart'), {
         type: 'line', data: { labels: months, datasets }, options: opts
     });
+    _attachZoomReset(_chart);
+}
+
+/* Zoom-reset gesture (Oct-12 user ask #2): mouse-down at any point
+   then drag toward the upper-left ≥ 60 px → chart.resetZoom().
+   The chartjs-plugin-zoom owns the normal drag-to-zoom gesture (which
+   fires on mouseup), so we only trigger the reset AFTER drag finishes
+   AND the delta vector points up-left — otherwise a normal zoom-in
+   drag that happens to end to the upper-left of its start would be
+   ambiguous.  Using the canvas's pointer events means this plays
+   nicely with the plugin without having to monkey-patch it. */
+function _attachZoomReset(chart) {
+    const canvas = chart.canvas;
+    if (!canvas || canvas._zoomResetWired) return;
+    canvas._zoomResetWired = true;
+    let _sx = 0, _sy = 0, _down = false;
+    canvas.addEventListener('pointerdown', function(ev) {
+        _down = true; _sx = ev.clientX; _sy = ev.clientY;
+    });
+    canvas.addEventListener('pointerup', function(ev) {
+        if (!_down) return;
+        _down = false;
+        const dx = ev.clientX - _sx;
+        const dy = ev.clientY - _sy;
+        // Upper-left means dx < 0 AND dy < 0; require a reasonable
+        // minimum travel so stray clicks don't reset accidentally.
+        if (dx < -60 && dy < -60) {
+            try { chart.resetZoom(); } catch (_) {}
+        }
+    });
+    canvas.addEventListener('pointercancel', function() { _down = false; });
 }
 
 function _noData(msg) {
@@ -1450,25 +1542,52 @@ function onModeBrand(btn) {
     if (subBtns.firstChild) subBtns.firstChild.click();
 }
 
-/* ── init ─────────────────────────────────────────────── */
-(function init() {
+/* ── Size button bar ─────────────────────────────────── */
+/* Oct-12 PM:
+     • Default: render EVERY size seen in the data; popular (curated)
+       sizes get a highlight ring so they visually pop over the
+       long-tail extras.
+     • Reserved-only (checkbox): drop the extras, show just the
+       curated set.
+   _buildSizeBar() is re-called whenever the checkbox flips so the
+   bar always reflects the current mode without reloading. */
+function _buildSizeBar() {
     const szContainer = document.getElementById('size-btns');
-    // ALL button first
+    const reservedOnly = document.getElementById('size-reserved-only').checked;
+    szContainer.innerHTML = '';
+    // ALL button first (always visible)
     const allBtn = document.createElement('button');
     allBtn.className = 'btn';
     allBtn.textContent = 'ALL';
     allBtn.style.fontWeight = '700';
     allBtn.onclick = function() { _setSize('ALL', allBtn); };
     szContainer.appendChild(allBtn);
-    SIZES.forEach(function(size) {
+    const list = reservedOnly ? POPULAR : SIZES;
+    list.forEach(function(size) {
         const b = document.createElement('button');
         b.className = 'btn';
         b.textContent = size;
+        // Highlight ring for popular / curated sizes so they stand
+        // out when the full catalogue is rendered.
+        if (POPULAR_SET.has(size)) {
+            b.style.boxShadow = '0 0 0 2px #1F4E79 inset';
+            b.style.fontWeight = '700';
+        } else {
+            b.style.opacity = '0.75';
+        }
         b.onclick = function() { _setSize(size, b); };
         szContainer.appendChild(b);
     });
-    // default: ALL
+    // Re-select ALL on every rebuild so the chart doesn't dangle on
+    // a size button that no longer exists in the current list.
     allBtn.click();
+}
+
+/* ── init ─────────────────────────────────────────────── */
+(function init() {
+    document.getElementById('size-reserved-only')
+            .addEventListener('change', _buildSizeBar);
+    _buildSizeBar();
     // auto-select By Brand mode
     document.getElementById('btn-brand').click();
 }());
@@ -1487,6 +1606,20 @@ def price_dashboard():
         return ("<h2 style='padding:40px;font-family:sans-serif;color:#c00'>"
                 "No data files found. Need Tempe_*.csv, BobJane_*.csv, JAX_*.csv.</h2>")
 
+    # Diagnostic: Oct-12 user flagged that Tempeweborder_20261007_1739.csv
+    # (and newer month downloads) didn't show up on the dashboard.  Log
+    # per-month row counts for every store bucket so if a month's file
+    # exists on disk but goes through with zero rows, it's visible in
+    # the server log without needing a debugger.
+    print("[price_compare] load_all_months → month-key : t_rows / bj_rows / jx_rows / tw_rows")
+    for _mk in sorted(monthly.keys()):
+        _md = monthly[_mk]
+        print(f"[price_compare]   {_mk}: "
+              f"t={len(_md.get('t_rows',  []))} "
+              f"bj={len(_md.get('bj_rows', []))} "
+              f"jx={len(_md.get('jx_rows', []))} "
+              f"tw={len(_md.get('tw_rows', []))}")
+
     data = build_data(monthly)
     chart_json = json.dumps({
         "months":          data["months"],
@@ -1498,12 +1631,13 @@ def price_dashboard():
     base_rows = load_compare_base()
     return render_template_string(
         _HTML,
-        month_count  = len(data["months"]),
-        chart_json   = chart_json,
-        brands_json  = json.dumps(BRANDS),
-        bcolors_json = json.dumps(BRAND_COLOURS),
-        sizes_json   = json.dumps(data["sizes_with_data"]),
-        base_rows    = base_rows,
+        month_count    = len(data["months"]),
+        chart_json     = chart_json,
+        brands_json    = json.dumps(BRANDS),
+        bcolors_json   = json.dumps(BRAND_COLOURS),
+        sizes_json     = json.dumps(data["sizes_with_data"]),
+        popular_json   = json.dumps(data["popular_sizes"]),
+        base_rows      = base_rows,
     )
 
 
