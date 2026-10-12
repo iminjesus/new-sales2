@@ -333,12 +333,13 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
-    /* Explicit row template so both panes can subgrid their rows
-       from this parent — ensures row-by-row alignment per the
-       Oct-9 PM table.  9 rows covers each pane's content when
-       Modified-by sits hidden; splitting Base DC + Payment
-       Method into 2 rows later will bump this to 11. */
-    grid-template-rows: repeat(9, auto);
+    /* 9 explicit rows for subgrid.  Rows 1-7 auto-size from
+       content (approvalPath / PO / Date / Sales Person / Requester
+       / HKAU BDE / Mobile+Special), row 8 is CLAMPED to 32 px
+       so the Rebate-able / Reason-Notes-label pair never floats
+       up past a plain input row's height, and row 9 is auto so
+       Payment Method and the Reason/Notes textarea can expand. */
+    grid-template-rows: repeat(7, auto) 32px auto;
     background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
   }
   .meta .col{border-top:1px solid var(--border);display:contents;}
