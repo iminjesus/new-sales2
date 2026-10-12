@@ -70,14 +70,53 @@ def _latest_per_month(pattern):
         by_month[_month_key(f)] = f
     return by_month
 
+def _ci_glob(prefix):
+    """Case-insensitive glob — matches <prefix>_*.csv regardless of
+    how the prefix is cased on disk (Tempeweborder vs TempeWebOrder
+    vs tempeweborder etc.).  Linux's glob is case-sensitive by
+    default so a slightly different casing on a downloaded CSV would
+    silently miss the dashboard; this helper walks _BASE once and
+    filters names in lower-case so any variant is caught. """
+    pl = prefix.lower()
+    hits = []
+    try:
+        for name in os.listdir(_BASE):
+            nl = name.lower()
+            if nl.startswith(pl + "_") and nl.endswith(".csv"):
+                hits.append(os.path.join(_BASE, name))
+    except OSError:
+        return {}
+    by_month = {}
+    for f in sorted(hits):
+        by_month[_month_key(f)] = f
+    return by_month
+
 
 # ── data loading ──────────────────────────────────────────────────────────────
 
 def load_all_months():
-    t_f  = _latest_per_month("Tempe_*.csv")
-    bj_f = _latest_per_month("BobJane_*.csv")
-    jx_f = _latest_per_month("JAX_*.csv")
-    tw_f = _latest_per_month("[Tt]empeweborder_*.csv")
+    # Case-insensitive filename matching so a downloaded CSV with
+    # unexpected casing (TempeWebOrder_… vs Tempeweborder_… etc.)
+    # still gets picked up — the Linux glob is case-sensitive by
+    # default and that was eating Oct's Tempeweborder file.
+    t_f  = _ci_glob("Tempe")
+    bj_f = _ci_glob("BobJane")
+    jx_f = _ci_glob("JAX")
+    tw_f = _ci_glob("Tempeweborder")
+    # Oct-12 diagnostic: Tempeweborder_20261007_1739.csv was on disk
+    # but the dashboard still showed no '26.10 data.  Likely causes:
+    # another Tempeweborder file with the same month-key sorted later
+    # (and won the picker), OR the file wasn't in _BASE at all.  Log
+    # the FULL list of candidate files per prefix so we can tell what
+    # the picker actually saw.
+    print(f"[price_compare] _BASE = {_BASE}")
+    for _prefix, _dict in (("Tempe",         t_f),
+                           ("BobJane",       bj_f),
+                           ("JAX",           jx_f),
+                           ("Tempeweborder", tw_f)):
+        print(f"[price_compare] {_prefix:>14}: {len(_dict)} month(s) → "
+              + ", ".join(f"{mk}={os.path.basename(_dict[mk])}"
+                          for mk in sorted(_dict.keys())))
     all_months = sorted(set(list(t_f) + list(bj_f) + list(jx_f) + list(tw_f)))
     return {
         mk: {
