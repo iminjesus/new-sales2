@@ -59,11 +59,37 @@ def wait_for_manual_login(driver):
     driver.get("https://orders.tempetyreswholesale.com.au/weborder")
     print("\n" + "="*60)
     print("Chrome 브라우저가 열렸습니다.")
-    print("1. 로그인 하세요")
-    print("2. Search Tyres 탭으로 이동하세요")
-    print("3. 준비되면 여기서 Enter를 누르세요")
+    print("1. 로그인만 완료하세요 (Search Tyres 탭 이동은 자동으로 처리합니다)")
+    print("2. 준비되면 여기서 Enter를 누르세요")
     print("="*60)
-    input(">>> Enter를 누르면 크롤링을 시작합니다: ")
+    input(">>> Enter를 누르면 Search 페이지로 자동 이동 + 크롤링을 시작합니다: ")
+
+    # Auto-navigate to the Search Tyres page after login so the user
+    # does NOT need to click the tab manually.  Previously the user
+    # had to open the Search Tyres tab themselves and the first
+    # search_tyres() call would silently time out on simpleSearchText
+    # if they forgot — now we drive the browser there and WAIT for
+    # the search input to actually appear before returning control
+    # to the main crawl loop.
+    print("→ Search Tyres 페이지로 자동 이동 중…")
+    driver.get(SEARCH_URL)
+    # Give the Angular / server-rendered search page up to 60 s to
+    # finish booting.  The first search in a fresh session often
+    # needs more than the normal 25 s because auth cookies, product
+    # inventory and pricing are all warming up at once.
+    try:
+        WebDriverWait(driver, 60).until(
+            EC.presence_of_element_located((By.ID, "simpleSearchText"))
+        )
+        print("→ Search 페이지 로드 완료 — 크롤링을 시작합니다.")
+    except Exception:
+        # Don't abort here — search_tyres() will try its own fallback
+        # locators next and print a clearer diagnostic if the input
+        # really is missing.
+        print(f"→ [WARN] Search 입력창(simpleSearchText)이 60초 안에 나타나지 않음")
+        print(f"→        URL  = {driver.current_url!r}")
+        print(f"→        Title= {driver.title!r}")
+        print(f"→        그래도 크롤링을 시도합니다 (fallback locators 존재).")
 
 
 def search_tyres(driver, wait, query):
