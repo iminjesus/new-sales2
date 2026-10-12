@@ -668,15 +668,17 @@ body.tables-expanded .ctable { font-size: 14px; }
     <div class="btn-panel">
 
       <!-- Row 1: Size filter (global)
-           Oct-12 PM: Reserved checkbox at the end of the row.  When
-           ticked, the Size button bar collapses to just the "popular"
-           (curated) sizes from SIZE_CATEGORY; unticked (default) it
-           lists EVERY size seen in the raw data.  Popular sizes always
-           render with a highlight pill style so they stand out from
-           the long tail of extras. -->
+           Oct-12 PM 2nd pass: the full-grid button bar swallowed the
+           chart below.  Collapse to a native <select> dropdown so
+           only one row of controls shows; options are grouped as
+           "Reserved" (curated SIZE_CATEGORY sizes) then "Others"
+           (every other size seen in the data) so popular sizes are
+           always at the top of the open list.  "Reserved only"
+           checkbox trims the dropdown to just the Reserved group. -->
       <div class="btn-row">
         <span class="row-label">Size</span>
-        <div class="btns" id="size-btns"></div>
+        <select id="size-select"
+                style="padding:4px 24px 4px 10px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;font:inherit;font-size:12.5px;cursor:pointer;min-width:140px"></select>
         <label style="font-size:11px;color:#444;margin-left:10px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
           <input type="checkbox" id="size-reserved-only" style="margin:0;cursor:pointer">
           Reserved only
@@ -1542,52 +1544,74 @@ function onModeBrand(btn) {
     if (subBtns.firstChild) subBtns.firstChild.click();
 }
 
-/* ── Size button bar ─────────────────────────────────── */
-/* Oct-12 PM:
-     • Default: render EVERY size seen in the data; popular (curated)
-       sizes get a highlight ring so they visually pop over the
-       long-tail extras.
-     • Reserved-only (checkbox): drop the extras, show just the
-       curated set.
-   _buildSizeBar() is re-called whenever the checkbox flips so the
-   bar always reflects the current mode without reloading. */
-function _buildSizeBar() {
-    const szContainer = document.getElementById('size-btns');
+/* ── Size dropdown ────────────────────────────────────── */
+/* Oct-12 PM 2nd pass: replaced the full-grid button bar (hid the
+   chart) with a native <select> dropdown.
+     • Default: "ALL" + "Reserved" <optgroup> (curated SIZE_CATEGORY
+       sizes) + "Others" <optgroup> (extras seen in raw data).
+     • "Reserved only" checkbox: hides the Others group.
+   The dropdown's change event drives _setSize() the same way the
+   button clicks used to; the previous _setSize contract (size name
+   + button element to highlight) is preserved by passing the
+   <select> itself as the "active" element — _setSize only reads
+   its textContent for the chart title, which the <select>'s
+   .value gives us too. */
+function _buildSizeDropdown() {
+    const sel = document.getElementById('size-select');
     const reservedOnly = document.getElementById('size-reserved-only').checked;
-    szContainer.innerHTML = '';
-    // ALL button first (always visible)
-    const allBtn = document.createElement('button');
-    allBtn.className = 'btn';
-    allBtn.textContent = 'ALL';
-    allBtn.style.fontWeight = '700';
-    allBtn.onclick = function() { _setSize('ALL', allBtn); };
-    szContainer.appendChild(allBtn);
-    const list = reservedOnly ? POPULAR : SIZES;
-    list.forEach(function(size) {
-        const b = document.createElement('button');
-        b.className = 'btn';
-        b.textContent = size;
-        // Highlight ring for popular / curated sizes so they stand
-        // out when the full catalogue is rendered.
-        if (POPULAR_SET.has(size)) {
-            b.style.boxShadow = '0 0 0 2px #1F4E79 inset';
-            b.style.fontWeight = '700';
-        } else {
-            b.style.opacity = '0.75';
+    sel.innerHTML = '';
+
+    // Always first: the global "ALL" aggregate.
+    const allOpt = document.createElement('option');
+    allOpt.value = 'ALL';
+    allOpt.textContent = 'ALL';
+    sel.appendChild(allOpt);
+
+    // Reserved (curated) group — always shown.
+    if (POPULAR.length) {
+        const g1 = document.createElement('optgroup');
+        g1.label = 'Reserved';
+        POPULAR.forEach(function(size) {
+            const o = document.createElement('option');
+            o.value = size;
+            o.textContent = size;
+            g1.appendChild(o);
+        });
+        sel.appendChild(g1);
+    }
+
+    // Others group — hidden when Reserved-only is ticked.
+    if (!reservedOnly) {
+        const extras = SIZES.filter(function(s) { return !POPULAR_SET.has(s); });
+        if (extras.length) {
+            const g2 = document.createElement('optgroup');
+            g2.label = 'Others';
+            extras.forEach(function(size) {
+                const o = document.createElement('option');
+                o.value = size;
+                o.textContent = size;
+                g2.appendChild(o);
+            });
+            sel.appendChild(g2);
         }
-        b.onclick = function() { _setSize(size, b); };
-        szContainer.appendChild(b);
-    });
-    // Re-select ALL on every rebuild so the chart doesn't dangle on
-    // a size button that no longer exists in the current list.
-    allBtn.click();
+    }
+
+    // Default to ALL whenever the list rebuilds so a dangling
+    // selection (e.g. an Others size that got filtered out) can't
+    // leave the chart stuck on nothing.
+    sel.value = 'ALL';
+    _setSize('ALL', sel);
 }
 
 /* ── init ─────────────────────────────────────────────── */
 (function init() {
+    const sel = document.getElementById('size-select');
+    sel.addEventListener('change', function() {
+        _setSize(sel.value, sel);
+    });
     document.getElementById('size-reserved-only')
-            .addEventListener('change', _buildSizeBar);
-    _buildSizeBar();
+            .addEventListener('change', _buildSizeDropdown);
+    _buildSizeDropdown();
     // auto-select By Brand mode
     document.getElementById('btn-brand').click();
 }());
