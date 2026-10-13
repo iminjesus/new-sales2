@@ -2867,6 +2867,17 @@ async function applyAdditionalDCToRow(rowEl){
   } else {
     delete rowEl.dataset.hasProductPromo;
   }
+  /* Oct-13 user ask: when THIS CUSTOMER carries a Special / 443 /
+     non-SOVD rule for THIS material (regardless of min_qty gate),
+     mark the row so isSOVDEligible returns false and Trueblu can't
+     steal the sp_dc cell on the first material-pick (qty is 0 at
+     that moment so the main lookup above routinely misses even
+     though the rule exists for the customer). */
+  if (data && data.customer_has_specific_promo) {
+    rowEl.dataset.customerHasSpecificPromo = "1";
+  } else {
+    delete rowEl.dataset.customerHasSpecificPromo;
+  }
   /* SOVD (Trueblu) is strictly the HK-PCLT ladder.  The backend's
      brand-only tier can accidentally match a TBR line against a
      Customer × HK SOVD rule whose row has no line/material/pattern
@@ -3434,7 +3445,13 @@ function isSOVDEligible(r){
      hasProductPromo gate was too aggressive and excluded Dynapro /
      Kinergy rows that legitimately had no customer promo, so their
      qty didn't roll into the Trueblu TTL.  The pendingPromo gate
-     above already covers the timing race that motivated it. */
+     above already covers the timing race that motivated it.
+     Oct-13 user ask: honour customerHasSpecificPromo — when the
+     backend confirmed THIS customer carries a Special / 443 rule
+     for this material (even if the main qty-gated lookup missed
+     because qty was 0 at material-pick time), suppress SOVD so
+     Trueblu never steals the sp_dc cell. */
+  if (r.dataset.customerHasSpecificPromo === "1") return false;
   return brand === "HK" && rowLine === "PCLT" && ag === 0
       && (promo === "" || promo === "SOVD" || sovdAuto);
 }

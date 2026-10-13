@@ -4572,6 +4572,54 @@ def api_orders_additional_dc():
                 pass
         out["product_has_planned_promo"] = product_has_planned_promo
 
+        # Oct-13 user ask: when THIS CUSTOMER has a Special / 443 /
+        # non-SOVD rule registered against this material (or its
+        # pattern / product_group) in dc_additional_customer, Trueblu
+        # must NEVER override that rule — even when the current qty
+        # hasn't yet crossed the rule's min_qty gate (first material
+        # pick happens before the BDE types the real qty, so the
+        # qty-gated main lookup above routinely misses on the first
+        # pass and the fallback Trueblu lands on the row).  Run a
+        # NO-QTY-GATE query against the same customer scope so the
+        # frontend can see "yes, this customer has a specific promo
+        # for this material" and suppress SOVD regardless. */
+        customer_has_specific_promo = False
+        if has_promo_col:
+            try:
+                scope_where_bits = []
+                scope_params = [sold_to, gc, brand, "%SOVD%"]
+                if has_material and material:
+                    scope_where_bits.append(
+                        "(ac.material IS NOT NULL AND TRIM(ac.material) <> ''"
+                        " AND TRIM(ac.material) = TRIM(%s))")
+                    scope_params.append(material)
+                if has_pattern and pattern:
+                    scope_where_bits.append(
+                        "(ac.pattern IS NOT NULL AND TRIM(ac.pattern) <> ''"
+                        " AND UPPER(TRIM(ac.pattern)) = UPPER(%s))")
+                    scope_params.append(pattern)
+                if has_product_group and product_group:
+                    scope_where_bits.append(
+                        "(ac.product_group IS NOT NULL AND TRIM(ac.product_group) <> ''"
+                        " AND UPPER(TRIM(ac.product_group)) = UPPER(%s))")
+                    scope_params.append(product_group)
+                if scope_where_bits:
+                    scope_sql = (
+                        "SELECT 1 FROM dc_additional_customer ac "
+                        "WHERE " + customer_gate +
+                        "  AND UPPER(TRIM(ac.brand)) = UPPER(%s) "
+                        "  AND (ac.promo IS NULL OR UPPER(ac.promo) NOT LIKE %s) "
+                        "  AND ac.additional_dc IS NOT NULL "
+                        "  AND ac.additional_dc <> 0 "
+                        "  AND (" + " OR ".join(scope_where_bits) + ") "
+                        "LIMIT 1"
+                    )
+                    cur.execute(scope_sql, tuple(scope_params))
+                    customer_has_specific_promo = cur.fetchone() is not None
+            except Exception:
+                pass
+        out["customer_has_specific_promo"] = customer_has_specific_promo
+
         if not row:
             return jsonify(out)
         try:
