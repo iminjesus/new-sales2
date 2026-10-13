@@ -2999,6 +2999,8 @@ def _stock_report_mcodes():
         return None
 
 
+_STOCK_SUGGEST_CACHE = {"path": None, "mtime": 0, "rows": None}
+
 def _stock_report_rows_for_suggest():
     """Pull the latest Stock Balance workbook rows reshaped for the
     SPRF material suggest.  Returns None when the stock dashboard
@@ -3006,7 +3008,15 @@ def _stock_report_rows_for_suggest():
     back to carrying_26.  The shape mirrors what the SPRF frontend
     reads out of a suggest row (m_code, description, brand,
     product_name, pattern), deduped by m_code so one physical SKU is
-    one option in the dropdown."""
+    one option in the dropdown.
+
+    Oct-13 perf fix: load_stock_data() reads a multi-MB .xlsm from
+    disk on every call — 5–10 s latency.  The autocomplete fires a
+    fresh fetch on each debounced keystroke after the user picks a
+    customer, so a BDE waiting on the dropdown was staring at a
+    blank list for the full workbook-read duration again and again.
+    Cache the reshaped rows keyed on (path, mtime); any save to the
+    xlsm bumps the mtime and transparently refreshes the cache. """
     try:
         from stock_dashboard import _latest_stock_xlsm, load_stock_data
     except Exception:
@@ -3015,6 +3025,14 @@ def _stock_report_rows_for_suggest():
         path = _latest_stock_xlsm()
         if not path:
             return None
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0
+        if (_STOCK_SUGGEST_CACHE["rows"] is not None
+                and _STOCK_SUGGEST_CACHE["path"] == path
+                and _STOCK_SUGGEST_CACHE["mtime"] == mtime):
+            return _STOCK_SUGGEST_CACHE["rows"]
         rows, _meta = load_stock_data()
         if not rows:
             return None
@@ -3060,6 +3078,10 @@ def _stock_report_rows_for_suggest():
         _parts = _sum_dict(r.get("state_pipe_parts"))
         if (_stk <= 0) and (_pipe <= 0) and (_parts <= 0):
             continue
+        _desc  = (r.get("size")         or r.get("description") or "").strip()
+        _brand = (r.get("brand")        or "").strip()
+        _prod  = (r.get("product_name") or r.get("line") or "").strip()
+        _pat   = (r.get("pattern")      or "").strip()
         seen[mc] = {
             "m_code":       mc,
             # Stock report keeps raw "11R22.5" / "225/50R17" in size.
@@ -3067,12 +3089,42 @@ def _stock_report_rows_for_suggest():
             # same canonical shape the stock dashboard already renders
             # — carrying_26 sometimes shows free-form prose that reads
             # oddly in a one-line dropdown row.
-            "description":  (r.get("size")         or r.get("description") or "").strip(),
-            "brand":        (r.get("brand")        or "").strip(),
-            "product_name": (r.get("product_name") or r.get("line") or "").strip(),
-            "pattern":      (r.get("pattern")      or "").strip(),
+            "description":  _desc,
+            "brand":        _brand,
+            "product_name": _prod,
+            "pattern":      _pat,
+            # Oct-13 perf: pre-compute the normalised + digits-only
+            # strings used by the suggest filter so the per-keystroke
+            # pass doesn't have to re-regex each of 10k+ rows.  Keys
+            # start with "_" so JSON serialisation still carries them
+            # for the frontend (harmless surplus) and the filter can
+            # read them directly.
+            "_n_desc":  _re_sub_noise(_desc),
+            "_n_pat":   _re_sub_noise(_pat),
+            "_n_prod":  _re_sub_noise(_prod),
+            "_n_brand": _re_sub_noise(_brand),
+            "_n_code":  _re_sub_noise(mc),
+            "_d_desc":  _re_sub_digits(_desc),
+            "_d_pat":   _re_sub_digits(_pat),
+            "_d_code":  _re_sub_digits(mc),
         }
-    return list(seen.values())
+    result = list(seen.values())
+    # Fill the per-file cache so the next call skips load_stock_data().
+    try:
+        _STOCK_SUGGEST_CACHE["path"]  = path
+        _STOCK_SUGGEST_CACHE["mtime"] = mtime
+        _STOCK_SUGGEST_CACHE["rows"]  = result
+    except Exception:
+        pass
+    return result
+
+
+_RE_NOISE  = re.compile(r"[\s/,.\-'&+()]+")
+_RE_DIGITS = re.compile(r"[^0-9]+")
+def _re_sub_noise(s):
+    return _RE_NOISE.sub("", str(s or "")).lower()
+def _re_sub_digits(s):
+    return _RE_DIGITS.sub("", str(s or ""))
 
 
 @app.get("/api/orders/material_suggest")
@@ -3097,15 +3149,10 @@ def api_orders_material_suggest():
     # experience is identical whichever backend ends up serving.
     stock_rows = _stock_report_rows_for_suggest()
     if stock_rows:
-        import re as _re_local
-        def _normalise(s):   # strip noise + lowercase for substring compare
-            return _re_local.sub(r"[\s/,.\-'&+()]+", "", str(s or "")).lower()
-        def _digits(s):
-            return _re_local.sub(r"[^0-9]+", "", str(s or ""))
         tokens = [t for t in q.split() if t.strip()] or [q]
         tok_pairs = []
         for tok in tokens:
-            nt = _normalise(tok)
+            nt = _re_sub_noise(tok)
             if not nt: continue
             # digits-only fallback is ONLY meaningful when the user
             # typed a bare number string like "2255017" (meaning
@@ -3124,14 +3171,16 @@ def api_orders_material_suggest():
         if not tok_pairs:
             return jsonify([])
         def _row_matches(r):
-            desc  = _normalise(r.get("description"))
-            pat   = _normalise(r.get("pattern"))
-            prod  = _normalise(r.get("product_name"))
-            brand = _normalise(r.get("brand"))
-            code  = _normalise(r.get("m_code"))
-            desc_d  = _digits(r.get("description"))
-            code_d  = _digits(r.get("m_code"))
-            pat_d   = _digits(r.get("pattern"))
+            # Pre-normalised fields come from the cache (built once at
+            # xlsm load time) — avoids 5-regex-subs per row per keystroke.
+            desc  = r["_n_desc"]
+            pat   = r["_n_pat"]
+            prod  = r["_n_prod"]
+            brand = r["_n_brand"]
+            code  = r["_n_code"]
+            desc_d  = r["_d_desc"]
+            code_d  = r["_d_code"]
+            pat_d   = r["_d_pat"]
             for nt, dt in tok_pairs:
                 hit = (nt in desc or nt in pat or nt in prod
                        or nt in brand or nt in code)
@@ -3142,7 +3191,11 @@ def api_orders_material_suggest():
             return True
         out = [r for r in stock_rows if _row_matches(r)]
         out.sort(key=lambda r: r.get("m_code") or "")
-        return jsonify(out[:limit])
+        # Strip the internal "_n_*" / "_d_*" fields before returning so
+        # the JSON payload stays lean on the wire.
+        slim = [{k: v for k, v in r.items() if not k.startswith("_")}
+                for r in out[:limit]]
+        return jsonify(slim)
 
     # --- Fallback path: original carrying_26 query when the stock
     # dashboard isn't available on this deployment.
