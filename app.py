@@ -21202,4 +21202,20 @@ if __name__ == "__main__":
             "sample": {abbr: list(sizes.keys())[:3] for abbr, sizes in list(data["brand_size_data"].items())[:3]},
         })
 
+    # Oct-13 perf: pre-warm the material-suggest cache in a background
+    # thread so the FIRST BDE who selects a customer + types a letter
+    # doesn't eat the 10 s cold-start reading the Stock_report xlsm.
+    # The warm-up populates _STOCK_SUGGEST_CACHE["rows"] before any
+    # user request lands.  Daemon thread so it doesn't block Ctrl-C.
+    def _warmup_material_suggest():
+        try:
+            print("[warmup] loading material suggest cache …")
+            t0 = time()
+            n = len(_stock_report_rows_for_suggest() or [])
+            print(f"[warmup] material suggest cache ready: {n} rows "
+                  f"in {time()-t0:.1f} s")
+        except Exception as e:
+            print(f"[warmup] material suggest cache failed: {e}")
+    threading.Thread(target=_warmup_material_suggest, daemon=True).start()
+
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
