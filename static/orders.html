@@ -333,22 +333,24 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
-    /* 11 explicit rows for subgrid, mirroring the Oct-12 row-by-row
-       pairing table the user supplied:
+    /* 11 explicit rows for subgrid, mirroring the Oct-13 revised
+       pairing table (Approval route now takes two rows so Total DC
+       / Additional DC badges land on a separate line):
          row  LEFT                    RIGHT
-         1    Sold-to Account         Approval route
-         2    Ship-to Account         Purchase Order #
-         3    Customer Group          Date
-         4    Base DC (top half)      Sales Person Details
-         5    Base DC (bot half)      Requester
-         6    Ship-to Address         HKAU BDE Name
-         7    Phone No (Email)        Modified By
-         8    Mobile Number           Special Instruction (top)
-         9    Rebate-able             Special Instruction (bot)
+         1    Sold-to Account         Approval route (top)
+         2    Ship-to Account         Approval route (bot — badges)
+         3    Customer Group          Purchase Order #
+         4    Base DC (top half)      Date
+         5    Base DC (bot half)      Sales Person Details
+         6    Ship-to Address         Requester
+         7    Phone No (Email)        HKAU BDE Name
+         8    Mobile Number           Modified By
+         9    Rebate-able             Special Instruction
          10   Payment Method (top)    Reason / Notes
          11   Payment Method (bot)    Required at Submit (textarea)
-       Base DC, Special Instruction and Payment Method each occupy
-       their two allotted rows via grid-row: span 2. */
+       Approval route, Base DC and Payment Method each span their
+       two allotted rows via grid-row: span 2.  Special Instruction
+       is now a single row. */
     grid-template-rows: repeat(11, auto);
     background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
   }
@@ -1566,23 +1568,24 @@
                • no additional DC on any line  → Standard Pricing
                • avg total DC < 64 %           → Hayden or Kenny
                • avg total DC ≥ 64 %           → JunJong (MD) only -->
-        <!-- Approval route — content is a mix of styled badges that
-             can run quite long ("MANAGING DIRECTOR APPROVAL REQUIRED
-             — N non-aged, non-Standard line(s) with Proposed DC ≥
-             64 %. Only JJ (MD) can approve. Total DC xx.xx%
-             Additional DC xx.xx%").  Oct-13 user ask: shrink the
-             font until the whole string fits one row — DO NOT grow
-             the row height.
-             white-space:nowrap pins the line, overflow:hidden +
-             text-overflow:ellipsis truncates with "…" at the right
-             edge if the content exceeds the cell at a given viewport
-             width (full text is still readable on hover via title).
-             font-size 10.5 px keeps the string legible while fitting
-             the long MD-required banner inside the Sold-to Account
-             row's ~32 px height. -->
+        <!-- Approval route — Oct-13 revised schema:
+             Spans TWO subgrid rows (grid-row: span 2) so the long
+             MD-required banner has vertical room without ellipsis-
+             truncating the main line AND the Total DC / Additional
+             DC pills land on their own second line.
+             Inner layout = flex column:
+               line 1 (#approvalPathLine) — main approval text/reason
+               line 2 (#approvalPathBadges) — "Total DC xx.xx%  Additional DC xx.xx%" pills
+             Each line nowraps individually so no mid-sentence wrap
+             blows the height; horizontal overflow still clips with
+             ellipsis.  Full phrase stays on #approvalPath.title for
+             the hover tooltip. -->
         <div id="approvalPath" title=""
-             style="grid-column: 1 / span 4;background:#f1f5f9;padding:5px 8px;font-size:10.5px;color:#0f172a;min-height:32px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-          <b>Approval route</b>: <span id="approvalPathText">—</span>
+             style="grid-column: 1 / span 4;grid-row: span 2;background:#f1f5f9;padding:5px 8px;font-size:11.5px;color:#0f172a;line-height:1.4;display:flex;flex-direction:column;justify-content:center;gap:3px;overflow:hidden">
+          <div id="approvalPathLine" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            <b>Approval route</b>: <span id="approvalPathText">—</span>
+          </div>
+          <div id="approvalPathBadges" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
         </div>
         <div class="lbl">Purchase Order #</div>
         <div class="val" style="grid-column: span 3"><input id="po_number" placeholder=""/></div>
@@ -1616,12 +1619,15 @@
                style="font-size:11.5px;color:#334155;line-height:1.55;padding:2px 4px">—</div>
         </div>
 
-        <!-- Spans 2 subgrid rows (7-8) so left-pane Mobile Number
-             + Rebate-able can each stay at their natural short
-             height (~32 px each) instead of being dragged tall by
-             the textarea's 75 px min-height on a single row. -->
-        <div class="lbl" style="grid-row: span 2">Special Instruction</div>
-        <div class="val" style="grid-column: span 3;grid-row: span 2"><textarea id="special_instruction" rows="2" style="width:100%;height:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
+        <!-- Oct-13 schema revision: Special Instruction is a SINGLE
+             subgrid row now (right-pane row 9, paired with left-pane
+             Rebate-able).  The textarea no longer stretches across
+             two rows — rows=1 keeps the intrinsic height at a plain
+             input row so Rebate-able on the left pane isn't dragged
+             taller than the Phone No row.  Users can grab the
+             resize handle to grow it when they need more space. -->
+        <div class="lbl">Special Instruction</div>
+        <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="1" style="width:100%;height:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
 
         <div class="lbl lbl-reason" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800;padding:2px 8px;min-height:0;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
           Reason / Notes for Approver <span style="color:#dc2626">*</span>
@@ -3672,38 +3678,41 @@ function updateTotals(){
 
   const el = $("#approvalPathText");
   if (el){
+    // Oct-13 revision: Total DC / Additional DC badges live on a
+    // SEPARATE second line of the Approval route cell now
+    // (#approvalPathBadges), freeing the first line to hold the
+    // long MD-required banner without ellipsis-truncating.
     const dcBadge =
-      `<span style="background:#f1f5f9;border:1px solid #cbd5e1;padding:1px 6px;border-radius:10px;margin-left:6px;font-weight:700">`
+      `<span style="background:#fff;border:1px solid #cbd5e1;padding:1px 8px;border-radius:10px;font-weight:700">`
         + `Total DC ${avgDC.toFixed(2)}%</span>`
-      + `<span style="background:#fef3c7;border:1px solid #f59e0b;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700;color:#92400e">`
+      + `<span style="background:#fef3c7;border:1px solid #f59e0b;padding:1px 8px;border-radius:10px;margin-left:6px;font-weight:700;color:#92400e">`
         + `Additional DC ${avgAddDC.toFixed(2)}%</span>`;
     let fullText = "";
     if (!hasAdditional){
       el.innerHTML =
-        `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required. `
-        + dcBadge;
+        `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required.`;
       fullText = `STANDARD PRICING — no approval required.`;
     } else if (mdRequired){
       const s = mdDeepLineCount === 1 ? "" : "s";
       el.innerHTML =
         `<span style="color:#fff;background:#7f1d1d;padding:1px 6px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
         + `— <b>${mdDeepLineCount}</b> non-aged, non-Standard line${s} with Proposed DC ≥ 64 %. `
-        + `Only <b>JJ (MD)</b> can approve. `
-        + dcBadge;
+        + `Only <b>JJ (MD)</b> can approve.`;
       fullText =
         `MANAGING DIRECTOR APPROVAL REQUIRED — ${mdDeepLineCount} non-aged, `
         + `non-Standard line${s} with Proposed DC ≥ 64 %. Only JJ (MD) can approve.`;
     } else {
-      el.innerHTML =
-        `<b>Kenny or Hayden</b> can approve. `
-        + dcBadge;
+      el.innerHTML = `<b>Kenny or Hayden</b> can approve.`;
       fullText = `Kenny or Hayden can approve.`;
     }
+    const badgesEl = document.getElementById("approvalPathBadges");
+    if (badgesEl) badgesEl.innerHTML = dcBadge;
     // Oct-13: approvalPath text may ellipsis-truncate at narrow
     // viewports — expose the full phrase as the parent cell's
     // tooltip so the reader can still see what got clipped.
     const parent = document.getElementById("approvalPath");
-    if (parent) parent.title = fullText;
+    if (parent) parent.title = fullText
+      + `  (Total DC ${avgDC.toFixed(2)}%, Additional DC ${avgAddDC.toFixed(2)}%)`;
   }
 }
 // Freight + Interstate flags drive the final-total chain — recompute
@@ -7179,20 +7188,17 @@ async function wireStatusPanel(order){
    doesn't trigger that loop because the label height stays stable.
    Re-runs on load, resize and after hydrateSubmittedOrder. */
 /* ────────────── Row 1: approvalPath height = Sold-to row height ──
-   Both rows SHOULD be 32 px high, but the left Sold-to Account row
-   carries a .clearable-wrap + ✕ button that nudges the row's
-   actual rendered height a touch above the default .grid > div
-   28 px min.  Measuring the LEFT row and copying its height to
-   approvalPath on load / resize keeps the two rows aligned no
-   matter what the ✕ wrapper's computed box turns out to be. */
+   DISABLED Oct-13: approvalPath now spans TWO subgrid rows (rows 1
+   + 2) so its height is driven by Sold-to Account PLUS Ship-to
+   Account together.  Copying a single Sold-to row's height onto
+   approvalPath.minHeight here used to make sure a 1-row cell lined
+   up with the Sold-to lbl; today it would under-size the two-row
+   cell and clip the Total DC / Additional DC badge line.
+   The _wireApprovalRowAlign IIFE below is kept as a no-op so any
+   future caller that imports `align` keeps working — the IIFE now
+   returns without touching the DOM. */
 (function _wireApprovalRowAlign(){
-  const align = () => {
-    const soldToLbl    = document.querySelector(".meta .col:first-child .grid .lbl");
-    const approvalPath = document.getElementById("approvalPath");
-    if (!soldToLbl || !approvalPath) return;
-    const h = soldToLbl.getBoundingClientRect().height;
-    if (h > 0) approvalPath.style.minHeight = h + "px";
-  };
+  const align = () => { /* no-op after Oct-13 schema revision */ };
   if (document.readyState === "complete"){
     requestAnimationFrame(align);
   } else {
