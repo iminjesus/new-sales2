@@ -3338,21 +3338,23 @@ function reverseSolveFromProposedDC(row, pdStr){
 function lockAgedRow(row){
   if (!row) return;
   row.classList.add("aged-locked");
-  /* Locked cells on an aged row: the auto-solved add_dc and the
-     downstream price outputs.  MTH Special DC% and Volume DC%
-     stay writable per the review — the BDE can stack an extra
-     concession on top of an aged base without clearing Aging DC
-     Guide first.  When they do, applyAgingDC re-solves add_dc so
-     the chain still lands on the aged target price minus their
-     extra factor.  Aging DC Guide% + sp_dc stay writable too:
-     Aging so the BDE can clear it (which un-locks the row), and
-     sp_dc so a live promo lookup can still write to the cell. */
-  ["add_dc","proposed_price","total_amount","proposed_dc"].forEach(c => {
+  /* Locked cells on an aged row: the downstream price outputs only.
+     Oct-13 user ask: Additional Special DC% stays WRITABLE on aged
+     rows too — the BDE routinely renegotiates the exact % on top of
+     the auto-ladder, and locking the cell forced them to clear
+     Aging DC Guide first (which blew away the aged tier metadata).
+     MTH / Volume / Aging DC Guide / sp_dc also stay writable. */
+  ["proposed_price","total_amount","proposed_dc"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
     if (el) { el.readOnly = true; el.classList.add("locked-cell"); }
   });
   const agingEl = row.querySelector('[data-col="aging_dc"]');
   if (agingEl) agingEl.readOnly = false;
+  /* Also unlock add_dc on rows that may have been locked by a
+     previous commit's lockAgedRow — hydrating a draft saved under
+     the old rule would otherwise carry a frozen cell. */
+  const addEl = row.querySelector('[data-col="add_dc"]');
+  if (addEl) { addEl.readOnly = false; addEl.classList.remove("locked-cell"); }
 }
 function unlockAgedRow(row){
   if (!row) return;
