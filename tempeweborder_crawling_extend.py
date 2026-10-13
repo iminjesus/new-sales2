@@ -1,30 +1,33 @@
 """
 tempeweborder_crawling_extend.py
 ──────────────────────────────────────────────────────────────────────
-Extended Tempe-Weborder crawler — scrapes EVERY on-sale tyre for a
-curated list of brands across BOTH "Passenger / LT" and "Medium Truck"
-categories, instead of the digit-only size queries the original
-tempeweborder_crawling.py script walks.
+Simplified brand-sweep crawler — tempeweborder_crawling.py loops
+24 hard-coded SIZE codes; this one loops BRAND NAMES instead so every
+on-sale size for each brand lands in one CSV without having to open
+the Manufacturer modal.
 
 Workflow after login:
-  1. Open Search page.
+  1. Auto-navigate to Search Tyres page (with retry).
   2. Tick "On Sale Only".
-  3. For each category (Passenger / LT, Medium Truck):
-       for each brand in BRANDS:
-         • Clear previous filter.
-         • Open Manufacturer modal.
-         • Switch to the category tab.
-         • Click the brand logo / name.
-         • Close modal.
-         • Click the main Search button.
-         • Walk every result page, scraping brand / description /
-           cost / price / size (size is extracted from DESCRIPTION
-           because this crawl no longer filters by size).
+  3. For each brand in BRANDS:
+       • Clear the search panel.
+       • Type the brand name into #simpleSearchText (same text input
+         the user types a size code into — e.g. "HANKOOK" works the
+         same way the digit codes did).
+       • Click the red Search button.
+       • Wait for div.product-data-list to populate (polled every
+         5 s up to 120 s so slow warm-up queries aren't skipped).
+       • Click every "Get Cost" link, scrape rows, follow Next.
+  4. Save Tempeweborder_extend_<YYYYMMDD>_<HHMM>.csv.
 
-Output CSV columns match the original crawler so the dashboard's
-build_tw_lookup() picks it up without changes:
+Output columns match the original crawler so the dashboard's
+build_tw_lookup() reads it unchanged:
      SIZE, brand, DESCRIPTION, COST, PRICE
-plus an extra CATEGORY column at the end for debugging.
+SIZE is extracted from the DESCRIPTION field via SIZE_RE because
+this crawl no longer filters by size.
+
+No Manufacturer modal, no Medium Truck tab, no category pass —
+Oct-13 user confirmed those weren't needed.
 
 Run:   python tempeweborder_crawling_extend.py
 """
@@ -38,11 +41,12 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+LOGIN_URL  = "https://orders.tempetyreswholesale.com.au/weborder"
 SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
 
-# ── 14 brands the user highlighted in the Oct-12 Manufacturer screenshot
-#    (red rectangles).  Scrape each one under both Passenger/LT and
-#    Medium Truck tabs. ------------------------------------------------
+# 14 brands to sweep — the red-boxed logos in the Oct-12 Manufacturer
+# screenshot.  Typed verbatim into the search input the same way the
+# original crawler typed size codes.
 BRANDS = [
     "BF GOODRICH",
     "BRIDGESTONE",
@@ -60,15 +64,11 @@ BRANDS = [
     "YOKOHAMA",
 ]
 
-# Tab labels in the Manufacturer modal (visible as pills across the top).
-CATEGORIES = ["Passenger / LT", "Medium Truck"]
-
 OUTPUT_FILE = datetime.now().strftime("Tempeweborder_extend_%Y%m%d_%H%M.csv")
 
-# Size regex extracted from the DESCRIPTION column, since this
-# extended crawl doesn't search by size any more.  Supports the
-# usual "<width>/<aspect>R<rim>" shape plus commercial "<w>R<rim>"
-# vans / "<w>/<asp>R<rim>C" C-rated specs.
+# Size regex extracted from the DESCRIPTION column (we no longer
+# filter by size via the input).  Covers the usual passenger
+# <width>/<aspect>R<rim> plus commercial <w>R<rim> / C-rated.
 SIZE_RE = re.compile(r'\b(\d{3}(?:/\d{2})?R\d{2}C?)\b', re.IGNORECASE)
 
 
@@ -85,50 +85,73 @@ def init_driver():
     return webdriver.Chrome(options=options)
 
 
+def _nav_to_search_page(driver, label=""):
+    """Navigate to the Search Tyres page and wait for #simpleSearchText.
+    Retries up to 3 times — the first attempt right after login often
+    hits a redirect while the session cookie settles. """
+    for attempt in range(1, 4):
+        print(f"→ Search Tyres 페이지로 이동 (시도 {attempt}/3) …")
+        driver.get(SEARCH_URL)
+        try:
+            WebDriverWait(driver, 60).until(
+                EC.presence_of_element_located((By.ID, "simpleSearchText"))
+            )
+            print(f"→ Search 페이지 로드 완료.  URL={driver.current_url}")
+            return True
+        except Exception:
+            print(f"→ [WARN] simpleSearchText 60초 안에 못 봄 "
+                  f"(URL={driver.current_url}, title={driver.title!r})")
+            # If we got bounced to the login page, pause and let the
+            # user re-login if needed.
+            if "login" in driver.current_url.lower() or "signin" in driver.current_url.lower():
+                print(f"→ [WARN] 로그인 페이지로 redirect됨 — 다시 로그인 후 Enter")
+                input(">>> 로그인 완료 후 Enter: ")
+            time.sleep(2)
+    print(f"→ [ERROR] Search 페이지 3회 재시도 실패")
+    return False
+
+
 def wait_for_manual_login(driver):
-    driver.get("https://orders.tempetyreswholesale.com.au/weborder")
+    driver.get(LOGIN_URL)
     print("\n" + "=" * 60)
     print("Chrome 브라우저가 열렸습니다.")
-    print("1. 로그인만 완료하세요 (Search Tyres 탭 이동은 자동으로 처리합니다)")
+    print("1. 로그인만 완료하세요")
     print("2. 준비되면 여기서 Enter를 누르세요")
+    print("   (Search Tyres 페이지 이동은 자동으로 처리합니다)")
     print("=" * 60)
-    input(">>> Enter를 누르면 Search 페이지로 자동 이동 + 크롤링을 시작합니다: ")
-
-    print("→ Search Tyres 페이지로 자동 이동 중…")
-    driver.get(SEARCH_URL)
-    try:
-        WebDriverWait(driver, 60).until(
-            EC.presence_of_element_located((By.ID, "simpleSearchText"))
-        )
-        print("→ Search 페이지 로드 완료.")
-    except Exception:
-        print(f"→ [WARN] simpleSearchText가 60초 안에 나타나지 않음 (URL={driver.current_url!r})")
+    input(">>> Enter: ")
+    _nav_to_search_page(driver)
 
 
 # ── Filter helpers ──────────────────────────────────────────────────────
 
 def check_on_sale_only(driver):
-    """Tick the 'On Sale Only' checkbox once at the top of the run."""
-    try:
-        cb = driver.find_element(
-            By.XPATH,
-            "//input[@type='checkbox' and "
-            "(following-sibling::*[contains(.,'On Sale Only')] or "
-            " preceding-sibling::*[contains(.,'On Sale Only')] or "
-            " ../*[contains(.,'On Sale Only')])]"
-        )
-        if not cb.is_selected():
-            driver.execute_script("arguments[0].click();", cb)
-            print("  → 'On Sale Only' checked")
-            time.sleep(0.4)
-        else:
-            print("  → 'On Sale Only' already checked")
-    except Exception as e:
-        print(f"  [WARN] 'On Sale Only' checkbox 못 찾음: {e}")
+    """Tick the 'On Sale Only' checkbox once at the top of the run.
+    Multiple XPath variants because the checkbox / label markup
+    varies across page states."""
+    for xpath in [
+        "//input[@type='checkbox' and @id and ../label[contains(.,'On Sale')]]",
+        "//label[contains(.,'On Sale')]/preceding-sibling::input[@type='checkbox']",
+        "//label[contains(.,'On Sale')]/following-sibling::input[@type='checkbox']",
+        "//*[contains(text(),'On Sale Only')]/preceding::input[@type='checkbox'][1]",
+        "//*[contains(text(),'On Sale Only')]/following::input[@type='checkbox'][1]",
+    ]:
+        try:
+            cb = driver.find_element(By.XPATH, xpath)
+            if not cb.is_selected():
+                driver.execute_script("arguments[0].click();", cb)
+                print("  → 'On Sale Only' checked")
+                time.sleep(0.4)
+            else:
+                print("  → 'On Sale Only' already checked")
+            return
+        except Exception:
+            continue
+    print("  [WARN] 'On Sale Only' checkbox 못 찾음 — 확인 필요")
 
 
 def click_clear(driver):
-    """Reset the search so a fresh brand filter can be applied."""
+    """Reset previous search so a fresh brand query starts clean."""
     try:
         btn = driver.find_element(
             By.XPATH,
@@ -140,151 +163,52 @@ def click_clear(driver):
         pass
 
 
-def open_manufacturer_modal(driver, wait):
-    """Open the Manufacturer modal (grey 'Manufacturer' pill)."""
-    btn = wait.until(EC.element_to_be_clickable((
-        By.XPATH,
-        "//input[@value='Manufacturer'] | //button[normalize-space()='Manufacturer'] "
-        "| //*[self::a or self::div][normalize-space(text())='Manufacturer']"
-    )))
-    driver.execute_script("arguments[0].click();", btn)
-    time.sleep(1.0)
+def search_brand(driver, wait, brand):
+    """Type the brand name into #simpleSearchText and click Search —
+    mirrors the original crawler's search_tyres() but with a brand
+    word instead of a digit size code."""
+    # Make sure the search panel is clean before each brand.
+    click_clear(driver)
 
-
-def select_category_tab(driver, category):
-    """Switch between 'Passenger / LT' and 'Medium Truck' tabs inside
-    the Manufacturer modal.  Tab labels are matched exactly (case-sensitive)
-    so stray whitespace or re-casing on the site WILL miss — adjust
-    CATEGORIES above if the DOM changes. """
+    # Resolve the search input; fall back to common alternates if the
+    # id was renamed on the site.
+    search_input = None
     try:
-        tab = driver.find_element(
-            By.XPATH,
-            f"//*[self::a or self::button or self::div or self::li]"
-            f"[normalize-space()={category!r}]"
+        search_input = wait.until(
+            EC.presence_of_element_located((By.ID, "simpleSearchText"))
         )
-        driver.execute_script("arguments[0].click();", tab)
-        time.sleep(0.5)
-    except Exception as e:
-        print(f"  [WARN] category tab {category!r} 못 찾음: {e}")
-
-
-def select_brand(driver, brand):
-    """Click a brand logo / name in the Manufacturer modal.  Brand
-    names in the modal use mixed case ("Hankook", "BF Goodrich") so
-    the XPath normalises to upper-case for an exact match against the
-    all-caps BRANDS list. """
-    uppercase = ("translate(normalize-space(.),"
-                 "'abcdefghijklmnopqrstuvwxyz',"
-                 "'ABCDEFGHIJKLMNOPQRSTUVWXYZ')")
-    # Try text match on label-like elements first.
-    try:
-        el = driver.find_element(
-            By.XPATH,
-            f"//*[self::a or self::div or self::span or self::li or self::button]"
-            f"[{uppercase}={brand.upper()!r}]"
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        time.sleep(0.2)
-        driver.execute_script("arguments[0].click();", el)
-        time.sleep(0.4)
-        return True
-    except Exception as e:
-        print(f"  [WARN] brand {brand!r} 못 찾음: {e}")
-        return False
-
-
-def _modal_is_open(driver):
-    """Heuristic: a Bootstrap-style modal typically carries .modal.in,
-    .modal.show, or an open backdrop <div class=modal-backdrop>.  Return
-    True if any of those are present and visible, which means click_search
-    would hit the WRONG button (whatever Search control the modal
-    hosts, if any) instead of the main-page Search."""
-    for sel in [
-        (By.CSS_SELECTOR, "div.modal.in"),
-        (By.CSS_SELECTOR, "div.modal.show"),
-        (By.CSS_SELECTOR, "div.modal-backdrop"),
-    ]:
-        try:
-            el = driver.find_element(*sel)
-            if el.is_displayed():
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def close_modal(driver, wait):
-    """Close the Manufacturer modal by its ✕ button, or Escape, and
-    WAIT until it's actually gone so the next click_search targets the
-    main-page Search button and not something covered by the modal."""
-    for sel in [
-        (By.XPATH, "//*[self::button or self::a or self::span][contains(@class,'close')]"),
-        (By.XPATH, "//*[@aria-label='Close']"),
-        (By.XPATH, "//button[normalize-space()='×']"),
-        (By.XPATH, "//span[normalize-space()='×']"),
-    ]:
-        try:
-            el = driver.find_element(*sel)
-            if el.is_displayed():
-                driver.execute_script("arguments[0].click();", el)
-                time.sleep(0.3)
-                break
-        except Exception:
-            continue
-    # Fallback: send ESC a couple of times.
-    for _ in range(2):
-        if not _modal_is_open(driver):
-            break
-        try:
-            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-            time.sleep(0.4)
-        except Exception:
-            break
-    # Final guard: block up to 5 s for the modal to actually disappear.
-    try:
-        WebDriverWait(driver, 5).until(lambda d: not _modal_is_open(d))
     except Exception:
-        print("  [WARN] modal이 5초 안에 닫히지 않음 — 그래도 진행")
-
-
-def click_search(driver, wait):
-    """Click the MAIN red Search button on the search panel.  The
-    Manufacturer modal has its own buttons so make sure the modal is
-    closed first, otherwise the click lands on the wrong element and
-    the search never fires (user Oct-12 report: HANKOOK filter was in
-    the input but the result list stayed empty)."""
-    if _modal_is_open(driver):
-        close_modal(driver, wait)
-    # Try a few locators in order of specificity.  Only elements that
-    # live INSIDE the main search panel (not inside .modal) count.
-    for by, expr in [
-        (By.XPATH,
-         "//*[not(ancestor::div[contains(@class,'modal')])]"
-         "/input[@value='Search' and @type='submit']"),
-        (By.XPATH,
-         "//*[not(ancestor::div[contains(@class,'modal')])]"
-         "/input[@value='Search']"),
-        (By.XPATH,
-         "//*[not(ancestor::div[contains(@class,'modal')])]"
-         "/button[normalize-space()='Search']"),
-    ]:
-        try:
-            btn = driver.find_element(by, expr)
-            if btn.is_displayed():
-                driver.execute_script("arguments[0].scrollIntoView({block:'center'});", btn)
-                time.sleep(0.2)
-                driver.execute_script("arguments[0].click();", btn)
-                print("  → Search button clicked")
+        print(f"  [DIAG] simpleSearchText 없음 — URL={driver.current_url}")
+        for loc in [
+            (By.CSS_SELECTOR, "input[placeholder*='Search' i]"),
+            (By.CSS_SELECTOR, "input[name*='search' i][type='text']"),
+            (By.CSS_SELECTOR, "input[type='search']"),
+        ]:
+            try:
+                search_input = driver.find_element(*loc)
+                print(f"  [DIAG] fallback locator로 입력창 찾음: {loc}")
                 break
-        except Exception:
-            continue
-    else:
-        # Fallback: press Enter in the search input
-        try:
-            driver.find_element(By.ID, "simpleSearchText").send_keys(Keys.RETURN)
-            print("  → Search by Enter key (fallback)")
-        except Exception:
-            print("  [WARN] Search 버튼 못 찾음")
+            except Exception:
+                continue
+    if search_input is None:
+        raise RuntimeError(f"Search input not found on {driver.current_url}")
+
+    search_input.clear()
+    search_input.send_keys(brand)
+    time.sleep(1)
+
+    # Click the main red Search button.
+    try:
+        btn = wait.until(EC.element_to_be_clickable((
+            By.XPATH,
+            "//input[@value='Search'] | //button[normalize-space()='Search']"
+        )))
+        driver.execute_script("arguments[0].click();", btn)
+        print(f"  → Search clicked for {brand}")
+    except Exception:
+        search_input.send_keys(Keys.RETURN)
+        print(f"  → Enter pressed (fallback) for {brand}")
+
     time.sleep(1.5)
     # Dismiss any lingering suggestion dropdown
     try:
@@ -294,31 +218,27 @@ def click_search(driver, wait):
 
 
 def wait_results(driver, max_total_s=120):
-    """Wait up to max_total_s seconds for at least one result row.
-    User asked (Oct-12) to extend the wait in 5 s chunks when the
-    first attempt turns up zero — this covers slow brands / warm-up
-    on the first query of a session.  Returns True once rows appear,
-    False after the full timeout.  Prints progress every chunk so the
-    user can see the retry happening instead of a silent hang."""
+    """Poll div.product-data-list every 5 s up to max_total_s.
+    Returns True once rows appear, False after the full timeout.
+    Prints progress every chunk so the retry is visible."""
     waited = 0
     chunk  = 5
     while waited < max_total_s:
         rows = driver.find_elements(By.CSS_SELECTOR, "div.product-data-list")
         if rows:
-            # Give the Angular bindings a half-second to settle so
-            # ng-binding spans have their text before we scrape.
+            # Let Angular bindings settle so ng-binding text is populated.
             time.sleep(0.5)
             print(f"  → {len(rows)} rows loaded after {waited}s")
             return True
         waited += chunk
-        print(f"  … still 0 rows — waiting another {chunk}s (total {waited}s)")
+        print(f"  … 0 rows — 다시 {chunk}s 대기 (누적 {waited}s)")
         time.sleep(chunk)
-    print(f"  [INFO] 결과 없음: {max_total_s}s 대기 후에도 0 rows "
-          f"(URL={driver.current_url}) — brand/category 조합 재고 없음으로 간주")
+    print(f"  [INFO] {max_total_s}s 대기 후에도 0 rows — "
+          f"브랜드에 재고 없음으로 간주 (URL={driver.current_url})")
     return False
 
 
-# ── Click + scrape helpers (reused from tempeweborder_crawling.py) ──────
+# ── Click + scrape helpers (reused from the size-sweep crawler) ─────
 
 def click_all_get_costs(driver):
     """Click every visible 'Get Cost' element so the COST column populates."""
@@ -350,8 +270,8 @@ def click_all_get_costs(driver):
 
 
 def scrape_rows(driver):
-    """Click all Get Cost links, then collect {brand, description, cost,
-    price, size} dicts for every row on the current page."""
+    """Click all Get Cost links, then collect dicts for every row on
+    the current page.  SIZE comes from DESCRIPTION via SIZE_RE."""
     click_all_get_costs(driver)
     driver.execute_script("window.scrollTo(0, 0);")
     time.sleep(0.4)
@@ -360,7 +280,8 @@ def scrape_rows(driver):
     results = []
     for row in rows:
         try:
-            # Brand name
+            # Brand name — try class-based selectors first, then fall
+            # back to the first non-dollar / non-size ng-binding span.
             brand = ""
             for sel in [
                 "div[class*='brand'] span",
@@ -414,17 +335,14 @@ def scrape_rows(driver):
 
             full_desc = other_texts[1] if len(other_texts) > 1 else other_texts[0] if other_texts else ""
 
-            # SIZE: extract from the full description.  This replaces the
-            # hard-coded SEARCH_QUERIES tag from the original crawler
-            # because this run doesn't filter by size.
+            # SIZE from full description (not from a search input any more).
             size = ""
             m = SIZE_RE.search(full_desc)
             if m:
                 size = m.group(1).upper()
 
-            # Strip brand + size prefix from the description so the
-            # saved value matches the compact pattern the original
-            # crawler produced (load rating + model name).
+            # Strip brand + size prefix from the saved description so
+            # the pattern-grouping on the dashboard side still works.
             desc = full_desc
             if brand and desc.lower().startswith(brand.lower()):
                 desc = desc[len(brand):].strip()
@@ -479,45 +397,37 @@ def main():
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "CATEGORY"])
+            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE"])
 
-            for category in CATEGORIES:
-                for brand in BRANDS:
-                    print(f"\n=== {category}  |  {brand} ===")
-                    click_clear(driver)
+            for brand in BRANDS:
+                print(f"\n=== {brand} ===")
+                try:
+                    search_brand(driver, wait, brand)
+                except Exception as e:
+                    print(f"  [ERROR] search 설정 실패: {e} — skip")
+                    continue
+
+                if not wait_results(driver):
+                    continue
+
+                page = 1
+                while True:
+                    print(f"  -- Page {page} --")
+                    rows = scrape_rows(driver)
+                    for r in rows:
+                        writer.writerow([
+                            r["size"], r["brand"], r["description"],
+                            r["cost"], r["price"],
+                        ])
+                    f.flush()
+                    if not has_next_page(driver):
+                        break
                     try:
-                        open_manufacturer_modal(driver, wait)
-                        select_category_tab(driver, category)
-                        if not select_brand(driver, brand):
-                            close_modal(driver, wait)
-                            continue
-                        close_modal(driver, wait)
-                        click_search(driver, wait)
+                        go_next_page(driver, wait)
                     except Exception as e:
-                        print(f"  [ERROR] filter 설정 실패: {e} — skip")
-                        continue
-
-                    if not wait_results(driver):
-                        continue
-
-                    page = 1
-                    while True:
-                        print(f"  -- Page {page} --")
-                        rows = scrape_rows(driver)
-                        for r in rows:
-                            writer.writerow([
-                                r["size"], r["brand"], r["description"],
-                                r["cost"], r["price"], category,
-                            ])
-                        f.flush()
-                        if not has_next_page(driver):
-                            break
-                        try:
-                            go_next_page(driver, wait)
-                        except Exception as e:
-                            print(f"  [WARN] next page 실패: {e}")
-                            break
-                        page += 1
+                        print(f"  [WARN] next page 실패: {e}")
+                        break
+                    page += 1
 
         print(f"\n✓ 저장 완료: {OUTPUT_FILE}")
     finally:
