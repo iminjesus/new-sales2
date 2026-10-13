@@ -3338,23 +3338,25 @@ function reverseSolveFromProposedDC(row, pdStr){
 function lockAgedRow(row){
   if (!row) return;
   row.classList.add("aged-locked");
-  /* Locked cells on an aged row: the downstream price outputs only.
-     Oct-13 user ask: Additional Special DC% stays WRITABLE on aged
-     rows too — the BDE routinely renegotiates the exact % on top of
-     the auto-ladder, and locking the cell forced them to clear
-     Aging DC Guide first (which blew away the aged tier metadata).
-     MTH / Volume / Aging DC Guide / sp_dc also stay writable. */
-  ["proposed_price","total_amount","proposed_dc"].forEach(c => {
+  /* Oct-13 user ask (2nd pass): keep EVERY yellow/pink cell writable
+     on aged rows too — Additional Special DC%, Proposed Unit Price,
+     Total Amount.  The BDE routinely overrides the aged-ladder
+     result on top of the auto-fill and locking the cells forced
+     them to clear Aging DC Guide first (which blew away the aged
+     tier metadata).  No cells get the readOnly flag now; the aged-
+     locked class is still added so the row still carries the amber
+     border + remark tag + aging metadata — the "locked" name is
+     retained for symmetry with lockAgedRow / unlockAgedRow and the
+     downstream code that watches the class.
+     Defensive cleanup: proactively strip the readOnly / locked-cell
+     tags from the four cells the OLD rule locked, so a draft
+     hydrated from a save made under that rule un-freezes. */
+  ["add_dc","proposed_price","total_amount","proposed_dc"].forEach(c => {
     const el = row.querySelector(`[data-col="${c}"]`);
-    if (el) { el.readOnly = true; el.classList.add("locked-cell"); }
+    if (el) { el.readOnly = false; el.classList.remove("locked-cell"); }
   });
   const agingEl = row.querySelector('[data-col="aging_dc"]');
   if (agingEl) agingEl.readOnly = false;
-  /* Also unlock add_dc on rows that may have been locked by a
-     previous commit's lockAgedRow — hydrating a draft saved under
-     the old rule would otherwise carry a frozen cell. */
-  const addEl = row.querySelector('[data-col="add_dc"]');
-  if (addEl) { addEl.readOnly = false; addEl.classList.remove("locked-cell"); }
 }
 function unlockAgedRow(row){
   if (!row) return;
