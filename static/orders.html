@@ -6169,7 +6169,17 @@ function wireApprovalPanel(order, who){
   const rejectBanner = order.rejected_by_name
     ? `<div style="width:100%;background:#fee2e2;border:1px solid #dc2626;color:#991b1b;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✕ Rejected by ${esc(order.rejected_by_name)}${order.rejected_at ? " · " + esc(order.rejected_at) : ""}</div>` + rejectBlock
     : "";
-  row.innerHTML = rejectBanner + recordBanner + [
+  /* Requester's "Reason / Notes for Approver" — mirror it into the
+     approval panel so Kenny / Hayden / JJ don't have to scroll back
+     up to the yellow textarea when deciding whether to sign off.
+     Oct-14 user ask: the email notification already carries this
+     text; show the SAME string here on the form itself for easy
+     reference. */
+  const _mgmtText = String(order.mgmt_reason || "").trim();
+  const requesterReasonBlock = _mgmtText
+    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#fff8d5;border:1px solid #f59e0b;border-left-width:4px;border-radius:0 4px 4px 0;color:#7c2d12;font-size:12.5px;line-height:1.5;white-space:pre-wrap">📝 <b>Reason from requester:</b> ${esc(_mgmtText)}</div>`
+    : "";
+  row.innerHTML = rejectBanner + recordBanner + requesterReasonBlock + [
     /* Display order (per review): Kenny → Hayden → JJ.  Slot
        columns in the DB are approved_a=Hayden, approved_b=JunJong,
        approved_c=Kenny — that assignment stays; only the render
