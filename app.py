@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify, send_file, send_from_directory, make_response, redirect
 from werkzeug.middleware.proxy_fix import ProxyFix
+import re
 import sqlite3
 import mysql.connector
 from mysql.connector import pooling
