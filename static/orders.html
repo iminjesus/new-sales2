@@ -4028,54 +4028,31 @@ function newRow(){
      Rows with NO originalSpDc (fresh manual entry) keep the old
      behaviour: any keystroke cancels the auto tags and remarks it
      as Manual. */
+  /* sp_dc (443DC / TBR Special / PCLT-SOVD):
+       Oct-13 user ask — typing a new value here MUST stick.  The old
+       behaviour back-solved add_dc and restored sp_dc to its auto-
+       detected "contract" value on blur / Enter, which the user read
+       as "my edit got reverted".  Treat sp_dc as a plain editable
+       field now:
+         • Any keystroke clears all auto tags (autoSpDc / sovdAuto /
+           originalSpDc) so this row no longer carries the automatic
+           back-solve metadata.
+         • The row's SOVD flag is dropped so the SOVD-reapply pass
+           won't overwrite the manual value on the next updateTotals.
+         • Remark updates to "Manual (NN.NN%)" so the audit trail
+           still shows where the value came from.
+         • recalcRow fires so Current DC % / Current Unit Price /
+           Current Order Amount / Proposed cells all refresh. */
   const spInp = tr.querySelector('[data-col="sp_dc"]');
-  const _solveAddFromTargetSp = () => {
-    const el = spInp;
-    if (!el) return false;
-    const origStr = el.dataset.originalSpDc;
-    if (!origStr) return false;
-    const orig  = parseFloat(origStr);
-    const typed = toNum(el.value);
-    if (!(orig >= 0) || !(typed >= 0)) return false;
-    if (Math.abs(typed - orig) < 0.005) return false;
-    const base = toNum(tr.querySelector('[data-col="base_dc"]')?.value);
-    const mth  = toNum(tr.querySelector('[data-col="mth_dc"]')?.value);
-    const vol  = toNum(tr.querySelector('[data-col="vol_dc"]')?.value);
-    const addCurr = toNum(tr.querySelector('[data-col="add_dc"]')?.value);
-    /* (1-orig)(1-add_new) = (1-typed)(1-addCurr)
-       ⇒ add_new = 1 − (1-typed)(1-addCurr)/(1-orig)                  */
-    if (!(orig < 100)) return false;
-    const factor = (1 - typed/100) * (1 - addCurr/100) / (1 - orig/100);
-    let addNew = 100 * (1 - factor);
-    if (!isFinite(addNew)) return false;
-    if (addNew < 0)   addNew = 0;
-    if (addNew > 100) addNew = 100;
-    el.value = fmtPct(orig);
-    const addEl = tr.querySelector('[data-col="add_dc"]');
-    if (addEl) addEl.value = fmtPct(addNew);
-    recalcRow(tr);
-    setRemark(tr, `Target sp ${typed.toFixed(2)}% → add ${addNew.toFixed(2)}%`);
-    return true;
-  };
   spInp?.addEventListener("input", (e) => {
-    /* Preserve the auto tags while typing when an originalSpDc is
-       on file — the commit step below decides how to interpret the
-       final value. */
-    if (!e.target.dataset.originalSpDc) {
-      if (e.target.dataset.autoSpDc === "1") delete e.target.dataset.autoSpDc;
-      if (e.target.dataset.sovdAuto === "1") delete e.target.dataset.sovdAuto;
-      const v = toNum(e.target.value);
-      setRemark(tr, v > 0 ? `Manual (${v.toFixed(2)}%)` : "");
-      if (tr.dataset.promo === "SOVD") delete tr.dataset.promo;
-    }
+    if (e.target.dataset.autoSpDc   === "1") delete e.target.dataset.autoSpDc;
+    if (e.target.dataset.sovdAuto   === "1") delete e.target.dataset.sovdAuto;
+    if (e.target.dataset.originalSpDc)       delete e.target.dataset.originalSpDc;
+    if (tr.dataset.promo === "SOVD") delete tr.dataset.promo;
+    const v = toNum(e.target.value);
+    setRemark(tr, v > 0 ? `Manual (${v.toFixed(2)}%)` : "");
+    recalcRow(tr);
   });
-  spInp?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      _solveAddFromTargetSp();
-    }
-  });
-  spInp?.addEventListener("blur", () => { _solveAddFromTargetSp(); });
   // Aging DC change — special path when the row is aged-locked:
   // clearing the Aging DC% cell unlocks the row so the BDE can
   // adjust MTH / Volume / Additional Special manually.  The chained
@@ -4127,6 +4104,20 @@ function newRow(){
   // the customer negotiated a round total rather than a unit price.
   tr.querySelector('[data-col="total_amount"]')?.addEventListener("input", (e) => {
     reverseSolveFromTotalAmt(tr, e.target.value);
+  });
+  // Oct-13 user ask #2: Total Amount should settle in NN.NN format.
+  // The input handler above keeps the typed text raw while the user
+  // is typing (so "100" doesn't jump to "100.00" between keystrokes
+  // and lose the caret position), then on blur we re-write through
+  // fmtMoney so the saved value is always two-decimal consistent.
+  // Same convention applied to Proposed Unit Price for symmetry.
+  ["proposed_price", "total_amount"].forEach(c => {
+    const el = tr.querySelector(`[data-col="${c}"]`);
+    if (!el) return;
+    el.addEventListener("blur", () => {
+      const v = toNum(el.value);
+      if (v > 0) el.value = fmtMoney(v);
+    });
   });
   // Proposed DC % — editable, back-solves add_dc so the chain
   // lands on list × (1 − target/100).  Guarded by the same aged-
