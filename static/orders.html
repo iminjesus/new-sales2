@@ -1566,7 +1566,22 @@
                • no additional DC on any line  → Standard Pricing
                • avg total DC < 64 %           → Hayden or Kenny
                • avg total DC ≥ 64 %           → JunJong (MD) only -->
-        <div id="approvalPath" style="grid-column: 1 / span 4;background:#f1f5f9;padding:5px 8px;font-size:12.5px;color:#0f172a;min-height:32px">
+        <!-- Approval route — content is a mix of styled badges that
+             can run quite long ("MANAGING DIRECTOR APPROVAL REQUIRED
+             — N non-aged, non-Standard line(s) with Proposed DC ≥
+             64 %. Only JJ (MD) can approve. Total DC xx.xx%
+             Additional DC xx.xx%").  Oct-13 user ask: shrink the
+             font until the whole string fits one row — DO NOT grow
+             the row height.
+             white-space:nowrap pins the line, overflow:hidden +
+             text-overflow:ellipsis truncates with "…" at the right
+             edge if the content exceeds the cell at a given viewport
+             width (full text is still readable on hover via title).
+             font-size 10.5 px keeps the string legible while fitting
+             the long MD-required banner inside the Sold-to Account
+             row's ~32 px height. -->
+        <div id="approvalPath" title=""
+             style="grid-column: 1 / span 4;background:#f1f5f9;padding:5px 8px;font-size:10.5px;color:#0f172a;min-height:32px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
           <b>Approval route</b>: <span id="approvalPathText">—</span>
         </div>
         <div class="lbl">Purchase Order #</div>
@@ -3658,26 +3673,37 @@ function updateTotals(){
   const el = $("#approvalPathText");
   if (el){
     const dcBadge =
-      `<span style="background:#f1f5f9;border:1px solid #cbd5e1;padding:2px 8px;border-radius:12px;margin-left:8px;font-weight:700">`
+      `<span style="background:#f1f5f9;border:1px solid #cbd5e1;padding:1px 6px;border-radius:10px;margin-left:6px;font-weight:700">`
         + `Total DC ${avgDC.toFixed(2)}%</span>`
-      + `<span style="background:#fef3c7;border:1px solid #f59e0b;padding:2px 8px;border-radius:12px;margin-left:6px;font-weight:700;color:#92400e">`
+      + `<span style="background:#fef3c7;border:1px solid #f59e0b;padding:1px 6px;border-radius:10px;margin-left:4px;font-weight:700;color:#92400e">`
         + `Additional DC ${avgAddDC.toFixed(2)}%</span>`;
+    let fullText = "";
     if (!hasAdditional){
       el.innerHTML =
         `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required. `
         + dcBadge;
+      fullText = `STANDARD PRICING — no approval required.`;
     } else if (mdRequired){
       const s = mdDeepLineCount === 1 ? "" : "s";
       el.innerHTML =
-        `<span style="color:#fff;background:#7f1d1d;padding:2px 8px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
+        `<span style="color:#fff;background:#7f1d1d;padding:1px 6px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
         + `— <b>${mdDeepLineCount}</b> non-aged, non-Standard line${s} with Proposed DC ≥ 64 %. `
         + `Only <b>JJ (MD)</b> can approve. `
         + dcBadge;
+      fullText =
+        `MANAGING DIRECTOR APPROVAL REQUIRED — ${mdDeepLineCount} non-aged, `
+        + `non-Standard line${s} with Proposed DC ≥ 64 %. Only JJ (MD) can approve.`;
     } else {
       el.innerHTML =
         `<b>Kenny or Hayden</b> can approve. `
         + dcBadge;
+      fullText = `Kenny or Hayden can approve.`;
     }
+    // Oct-13: approvalPath text may ellipsis-truncate at narrow
+    // viewports — expose the full phrase as the parent cell's
+    // tooltip so the reader can still see what got clipped.
+    const parent = document.getElementById("approvalPath");
+    if (parent) parent.title = fullText;
   }
 }
 // Freight + Interstate flags drive the final-total chain — recompute
