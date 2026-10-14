@@ -4035,23 +4035,30 @@ def api_orders_base_dc():
         if hk_tbr_pick:  out["HK_TBR"]  = hk_tbr_pick[2]
         if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
 
-        # ATD + 443DC Base DC override — business rule (revised Oct-7
-        # evening):  when the customer qualifies for the 443DC promo
-        # AND their sold_to_group is ATD/ATM, the PCLT Base DC on the
-        # matching brand is CAPPED (not replaced) at a ceiling:
-        #   • HM (customer.channels='MFC') or ATM group → cap at 52 %
-        #   • everyone else (non-HM ATD)                → cap at 50 %
-        # If the master table already carries a Base DC at or BELOW
-        # that cap, keep the master value — the override only lowers
-        # a too-high Base DC, it never nudges it up.  A missing
-        # (None) master value stays None (the operator will key in
-        # the real number — the rule can't manufacture one from
-        # scratch).  443 rules in dc_additional_customer carry their
-        # own brand (HK or LF), so we gate the HK-PCLT override on an
-        # HK-brand 443 row and LF-PCLT on an LF-brand 443 row — a
-        # customer that only has HK 443 doesn't get LF-PCLT nudged,
-        # and vice versa.  TBR cells on either brand stay as the
-        # master table said.
+        # ATD / ATM Base DC override — business rule (Oct-14 revision):
+        # when the customer's sold_to_group is ATD/ATM AND they
+        # qualify for ANY promo (not just 443 — Black Friday, Special,
+        # Kinergy, etc.) in dc_additional_customer_new (preferred) or
+        # the legacy dc_additional_customer (fallback), the PCLT Base
+        # DC on the matching brand is REPLACED by a flat rate:
+        #   • HM (customer.channels='MFC') or ATM group → 52 %
+        #   • everyone else (non-HM ATD)                → 50 %
+        # Difference vs the pre-Oct-14 rule:
+        #   (a) ANY promo, not only 443 — the user Oct-14 message
+        #       referenced "Black Friday" as the promo, confirming
+        #       the rule is promo-agnostic;
+        #   (b) REPLACE, not cap — the rule reads "Base DC% change
+        #       to 50 % from original Base DC%", so a master DC of
+        #       45 % also moves up to 50 % when the override fires;
+        #   (c) read dc_additional_customer_new first (the renamed
+        #       table the Oct-14 feed drops), fall back to the
+        #       legacy table if the new one isn't loaded.
+        # A missing (None) master value stays None (the operator
+        # will key in the real number — the rule can't manufacture
+        # one from scratch).  Promo rules carry their own brand
+        # (HK or LF), so we gate the HK-PCLT override on an HK-brand
+        # row and LF-PCLT on an LF-brand row.  TBR cells on either
+        # brand stay as the master table said.
         try:
             cust_cols = _list_columns(cur, "customer")
             cust_group = ""
@@ -4068,68 +4075,87 @@ def api_orders_base_dc():
                 cust_group   = (_c.get("sold_to_group") or "").strip().upper()
                 cust_channel = (_c.get("channels")      or "").strip().upper()
             if cust_group in ("ATD", "ATM"):
-                # Which brands does this customer carry a 443 rule
-                # for?  Query once and bucket by brand so the HK
-                # and LF overrides fire independently.
-                has_443_by_brand = {"HK": False, "LF": False}
-                try:
-                    cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
-                    if cur.fetchone():
-                        ac_cols = _list_columns(cur, "dc_additional_customer")
-                        if "promo" in ac_cols and "brand" in ac_cols:
+                # Resolve which promo-source table is live on this
+                # deployment: prefer dc_additional_customer_new (the
+                # Oct-14 renamed feed), fall back to the legacy one.
+                _promo_table = None
+                for _tbl in ("dc_additional_customer_new",
+                             "dc_additional_customer"):
+                    try:
+                        cur.execute("SHOW TABLES LIKE %s", (_tbl,))
+                        if cur.fetchone():
+                            _promo_table = _tbl
+                            break
+                    except Exception:
+                        continue
+                # Which brands does this customer carry ANY promo for?
+                # (Not restricted to 443 — Black Friday / Special /
+                # Kinergy etc. all count toward the override gate.)
+                has_promo_by_brand = {"HK": False, "LF": False}
+                if _promo_table:
+                    try:
+                        ac_cols = _list_columns(cur, _promo_table)
+                        if "brand" in ac_cols:
                             gate = "TRIM(sold_to) = %s"
                             params = [sold_to]
                             if cust_group and "customer_grp" in ac_cols:
                                 gate = "(TRIM(sold_to) = %s OR UPPER(TRIM(customer_grp)) = %s)"
                                 params.append(cust_group)
+                            # additional_dc must be a real discount so
+                            # a stray zero-row doesn't trigger the
+                            # override.  No promo-name filter — ANY
+                            # populated promo rule counts.
+                            _dc_filter = ""
+                            if "additional_dc" in ac_cols:
+                                _dc_filter = (" AND additional_dc IS NOT NULL "
+                                              " AND additional_dc <> 0 ")
                             cur.execute(
                                 f"SELECT DISTINCT UPPER(TRIM(brand)) AS brand "
-                                f"FROM dc_additional_customer "
-                                f"WHERE {gate} AND UPPER(promo) LIKE %s",
-                                tuple(params + ["443%"]),
+                                f"FROM {_promo_table} "
+                                f"WHERE {gate} {_dc_filter}",
+                                tuple(params),
                             )
                             for _r in (cur.fetchall() or []):
                                 _b = (_r.get("brand") or "").strip().upper()
-                                if _b in has_443_by_brand:
-                                    has_443_by_brand[_b] = True
-                except Exception:
-                    pass
+                                if _b in has_promo_by_brand:
+                                    has_promo_by_brand[_b] = True
+                    except Exception:
+                        pass
                 is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
-                _cap = 52.0 if is_hm else 50.0
-                # Cap, don't replace — only lower a Base DC that's
-                # already above the cap, and leave an already-lower
-                # (or NULL) value alone.
-                def _cap_at(key):
+                _rate = 52.0 if is_hm else 50.0
+                # Replace, don't cap — the rule reads "change to
+                # <rate> from original" so a master DC below the rate
+                # moves UP to the rate too.  A missing master value
+                # stays None (operator keys it in manually; the rule
+                # can't manufacture a Base DC from nothing).
+                def _replace_at(key):
                     cur_val = out.get(key)
                     if cur_val is None:
-                        return None   # master didn't give us one
-                    try:
-                        n = float(cur_val)
-                    except Exception:
-                        return cur_val
-                    return _cap if n > _cap else n
+                        return None
+                    return _rate
                 _before_hk = out.get("HK_PCLT")
                 _before_lf = out.get("LF_PCLT")
-                if has_443_by_brand["HK"]:
-                    out["HK_PCLT"] = _cap_at("HK_PCLT")
-                if has_443_by_brand["LF"]:
-                    out["LF_PCLT"] = _cap_at("LF_PCLT")
+                if has_promo_by_brand["HK"]:
+                    out["HK_PCLT"] = _replace_at("HK_PCLT")
+                if has_promo_by_brand["LF"]:
+                    out["LF_PCLT"] = _replace_at("LF_PCLT")
                 if debug:
-                    out["_debug"]["atd_443_override"] = {
-                        "sold_to_group":   cust_group,
-                        "channels":        cust_channel,
-                        "is_hm":           is_hm,
-                        "has_443_hk":      has_443_by_brand["HK"],
-                        "has_443_lf":      has_443_by_brand["LF"],
-                        "cap":             _cap,
-                        "HK_PCLT_before":  _before_hk,
-                        "HK_PCLT_after":   out.get("HK_PCLT"),
-                        "LF_PCLT_before":  _before_lf,
-                        "LF_PCLT_after":   out.get("LF_PCLT"),
+                    out["_debug"]["atd_promo_override"] = {
+                        "sold_to_group":    cust_group,
+                        "channels":         cust_channel,
+                        "is_hm":            is_hm,
+                        "promo_table":      _promo_table,
+                        "has_promo_hk":     has_promo_by_brand["HK"],
+                        "has_promo_lf":     has_promo_by_brand["LF"],
+                        "rate":             _rate,
+                        "HK_PCLT_before":   _before_hk,
+                        "HK_PCLT_after":    out.get("HK_PCLT"),
+                        "LF_PCLT_before":   _before_lf,
+                        "LF_PCLT_after":    out.get("LF_PCLT"),
                     }
         except Exception as _e:
             if debug:
-                out["_debug"]["atd_443_override_err"] = str(_e)
+                out["_debug"]["atd_promo_override_err"] = str(_e)
 
         if debug:
             def _s(v):
