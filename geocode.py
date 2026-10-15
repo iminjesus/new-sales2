@@ -345,10 +345,25 @@ def _norm_key(parts):
 def _lookup_header(header_row, aliases):
     """Return the first column INDEX whose header matches any of the
     accepted aliases (case / whitespace insensitive).  None if nothing
-    matches."""
+    matches.
+
+    Oct-15 fix: when two columns share the SAME normalised name (the
+    Customer Master workbook has shown both an early "Channel" and a
+    late "Channel " / "Channel2" that both reduce to "channel"), the
+    old `{_nrm(h): i for i, h in …}` dict comprehension silently
+    kept the LAST occurrence — so the fallback secondary column
+    would win over the primary one even though the alias list named
+    the primary spelling first.  Walk the header row left-to-right
+    and keep the FIRST hit per normalised name so document order
+    acts as the natural tiebreaker, matching the user's expectation
+    that the leftmost "Channel" column feeds the flat CSV. """
     def _nrm(s):
         return "" if s is None else " ".join(str(s).strip().split()).lower()
-    normalised = {_nrm(h): i for i, h in enumerate(header_row)}
+    normalised = {}
+    for i, h in enumerate(header_row):
+        key = _nrm(h)
+        if key and key not in normalised:
+            normalised[key] = i
     for alias in aliases:
         if _nrm(alias) in normalised:
             return normalised[_nrm(alias)]
