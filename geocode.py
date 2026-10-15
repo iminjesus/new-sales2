@@ -98,7 +98,14 @@ FLAT_FILE_COLUMNS = [
 # Map FLAT_FILE_COLUMNS entry → list of header spellings this script
 # should accept.  Case / whitespace are ignored by the lookup.
 CUSTOMER_COLUMN_ALIASES = {
-    "channel2":        ["channel2", "Channel2", "Channel 2"],
+    # Oct-15 user ask: the flat CSV's "channel2" header pulls its
+    # data from the "channel" column on the Customer Master sheet
+    # (the source workbook ships the HM / MFC flag under a plain
+    # "channel" label while the dashboard loader still reads it as
+    # "channel2").  Keep the Channel2 spellings first so a workbook
+    # that genuinely has both columns prefers the dedicated one.
+    "channel2":        ["channel2", "Channel2", "Channel 2",
+                        "channel", "Channel"],
     "Parent CGR3":     ["Parent CGR3", "ParentCGR3", "Parent CGR 3"],
     "Sold-to":         ["Sold-to", "Sold to", "SoldTo"],
     "Sold-to Name":    ["Sold-to Name", "Sold to Name", "SoldToName"],
