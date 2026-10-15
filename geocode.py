@@ -680,6 +680,13 @@ def main():
     # downstream.  Walk the headers manually so a workbook with both
     # columns never accidentally picks up Channel2.
     def _nrm2(s): return "" if s is None else " ".join(str(s).strip().split()).lower()
+    # Resolve _col_letter FIRST so the override banner below can use
+    # it without triggering an UnboundLocalError (Oct-15 bug — the
+    # import was below the banner originally).
+    try:
+        from openpyxl.utils import get_column_letter as _col_letter
+    except Exception:
+        _col_letter = lambda n: str(n)
     _channel_idx = None
     _ch_matches  = []
     for i, h in enumerate(cm_headers):
@@ -715,10 +722,6 @@ def main():
     # the result doesn't match expectation.  Especially useful when
     # the workbook ships duplicate "Channel" / "Channel2" headers
     # and the alias order has to pick between them.
-    try:
-        from openpyxl.utils import get_column_letter as _col_letter
-    except Exception:
-        _col_letter = lambda n: str(n)
     print("[flat] column mapping (output col → source col):")
     for col in FLAT_FILE_COLUMNS:
         if col in ("Longitude", "Latitude"):
