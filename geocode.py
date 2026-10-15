@@ -671,6 +671,29 @@ def main():
         idx = _lookup_header(cm_headers, CUSTOMER_COLUMN_ALIASES.get(col, [col]))
         cm_col_idx[col] = idx
 
+    # Oct-15 diagnostic: print the resolved mapping flat-column →
+    # (source column letter + source header text) so the user can
+    # verify which Customer Master column fed each output cell when
+    # the result doesn't match expectation.  Especially useful when
+    # the workbook ships duplicate "Channel" / "Channel2" headers
+    # and the alias order has to pick between them.
+    try:
+        from openpyxl.utils import get_column_letter as _col_letter
+    except Exception:
+        _col_letter = lambda n: str(n)
+    print("[flat] column mapping (output col → source col):")
+    for col in FLAT_FILE_COLUMNS:
+        if col in ("Longitude", "Latitude"):
+            print(f"  {col:<16} ← [from Location Master]")
+            continue
+        i = cm_col_idx.get(col)
+        if i is None:
+            print(f"  {col:<16} ← MISSING (no header matched)")
+        else:
+            src_hdr = cm_headers[i] if i < len(cm_headers) else "?"
+            print(f"  {col:<16} ← col {_col_letter(i+1)} "
+                  f"(header: {src_hdr!r})")
+
     missing_cm_cols = [c for c, i in cm_col_idx.items() if i is None]
     if missing_cm_cols:
         print(f"[flat] WARNING — Customer Master is missing: {missing_cm_cols}")
