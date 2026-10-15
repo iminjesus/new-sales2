@@ -762,6 +762,23 @@ def main():
             if all(k == "" for k in key):
                 continue
             lat, lon = loc_by_key.get(key, (None, None))
+            # Oct-15 user ask: round lat / lon to 6 decimals before
+            # writing so the downstream `LOAD DATA LOCAL INFILE` into
+            # the customer table doesn't throw "Data truncated for
+            # column 'latitude'" warnings — the column is DECIMAL(10,6),
+            # Google returns 7-decimal values.  6 decimals ≈ 11 cm,
+            # which is more than enough for the dashboard map and
+            # kills the warning noise.  Non-numeric / blank values
+            # pass through untouched.
+            def _round6(v):
+                if v is None or v == "":
+                    return v
+                try:
+                    return round(float(v), 6)
+                except (TypeError, ValueError):
+                    return v
+            lat = _round6(lat)
+            lon = _round6(lon)
             out_row = []
             for col in FLAT_FILE_COLUMNS:
                 if col == "Latitude":
