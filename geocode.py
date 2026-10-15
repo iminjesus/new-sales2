@@ -681,11 +681,33 @@ def main():
     # columns never accidentally picks up Channel2.
     def _nrm2(s): return "" if s is None else " ".join(str(s).strip().split()).lower()
     _channel_idx = None
+    _ch_matches  = []
     for i, h in enumerate(cm_headers):
-        if _nrm2(h) == "channel":   # exact match, NOT "channel2"
-            _channel_idx = i
-            break
+        n = _nrm2(h)
+        if n == "channel":   # exact match, NOT "channel2"
+            _ch_matches.append((i, h))
+            if _channel_idx is None:
+                _channel_idx = i
     cm_col_idx["channel2"] = _channel_idx
+    # Highly visible banner so the operator can confirm which source
+    # column the override picked (if any).  If the banner shows the
+    # expected "Channel" cell but the output still carries the
+    # Channel2 value, the local script hasn't been updated to this
+    # version.  Rerun from a fresh checkout of geocode.py.
+    print("=" * 70)
+    print("[flat] channel2 override — hard-wired to 'Channel' column:")
+    if _channel_idx is None:
+        print("  ✗ NO 'Channel' header found in Customer Master.")
+        print("    Headers scanned (first 60):")
+        for i, h in enumerate(cm_headers[:60]):
+            print(f"      col {_col_letter(i+1)}  {h!r}")
+    else:
+        for (ii, hh) in _ch_matches:
+            marker = "←PICKED" if ii == _channel_idx else "        "
+            print(f"  {marker}  col {_col_letter(ii+1)}  header={hh!r}")
+        if len(_ch_matches) > 1:
+            print(f"  (first-occurrence wins — col {_col_letter(_channel_idx+1)})")
+    print("=" * 70)
 
     # Oct-15 diagnostic: print the resolved mapping flat-column →
     # (source column letter + source header text) so the user can
