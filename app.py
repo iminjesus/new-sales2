@@ -3083,6 +3083,13 @@ def _stock_report_rows_for_suggest():
         _brand = (r.get("brand")        or "").strip()
         _prod  = (r.get("product_name") or r.get("line") or "").strip()
         _pat   = (r.get("pattern")      or "").strip()
+        # Oct-15 user ask: Stock_report.xlsm's SIZE column sometimes
+        # drops the "LT" / "LTR" prefix for Light-Truck SKUs even
+        # though carrying_26 carries it ("LT265/65R17" vs "265/65R17").
+        # Stash the m_code so we can look up carrying_26.size per
+        # material below and prefer it when it carries extra prefix
+        # characters the xlsm stripped.  Does not touch SKUs whose
+        # carrying_26 size equals the xlsm size.
         seen[mc] = {
             "m_code":       mc,
             # Stock report keeps raw "11R22.5" / "225/50R17" in size.
@@ -3110,6 +3117,64 @@ def _stock_report_rows_for_suggest():
             "_d_code":  _re_sub_digits(mc),
         }
     result = list(seen.values())
+    # Oct-15 enrichment: carrying_26.size preserves the "LT" / "LTR"
+    # prefix on Light-Truck SKUs that the Stock_report xlsm strips.
+    # Build an m_code → carrying_26.size map once and prefer that
+    # value whenever it contains an alpha prefix (letters BEFORE the
+    # first digit) that the xlsm size lacks.  Fails silently when
+    # carrying_26 isn't loaded on this deployment.
+    try:
+        _cr_conn = get_connection()
+        _cr_cur  = _cr_conn.cursor(dictionary=True)
+        try:
+            _cr_cur.execute("SHOW TABLES LIKE 'carrying_26'")
+            if _cr_cur.fetchone():
+                _cols = _list_columns(_cr_cur, "carrying_26")
+                if "m_code" in _cols and "size" in _cols:
+                    _mcodes = [r["m_code"] for r in result]
+                    # chunk the IN clause so a huge SKU count doesn't
+                    # blow the MySQL packet size — 1k codes per batch
+                    # is comfortably under the default max_allowed_packet.
+                    _cr_size = {}
+                    for _i in range(0, len(_mcodes), 1000):
+                        _batch = _mcodes[_i:_i+1000]
+                        if not _batch: continue
+                        _ph = ",".join(["%s"] * len(_batch))
+                        _cr_cur.execute(
+                            f"SELECT m_code, size FROM carrying_26 "
+                            f"WHERE m_code IN ({_ph})",
+                            tuple(_batch),
+                        )
+                        for _rr in (_cr_cur.fetchall() or []):
+                            _cmc  = str(_rr.get("m_code") or "").strip()
+                            _csz  = str(_rr.get("size")   or "").strip()
+                            if _cmc and _csz:
+                                _cr_size[_cmc] = _csz
+                    # Walk result list and overlay carrying_26.size when
+                    # it carries an alpha prefix the xlsm size doesn't.
+                    import re as _re_sz
+                    _alpha_prefix = _re_sz.compile(r"^[A-Za-z]+")
+                    for _row in result:
+                        _mc    = _row["m_code"]
+                        _xlsm  = _row.get("description", "")
+                        _crsz  = _cr_size.get(_mc)
+                        if not _crsz:
+                            continue
+                        _cp = _alpha_prefix.match(_crsz)
+                        _xp = _alpha_prefix.match(_xlsm or "")
+                        # Prefer carrying_26 when it starts with
+                        # letters and the xlsm value does NOT.
+                        if _cp and not _xp:
+                            _row["description"] = _crsz
+                            _row["_n_desc"] = _re_sub_noise(_crsz)
+                            _row["_d_desc"] = _re_sub_digits(_crsz)
+        finally:
+            try: _cr_cur.close()
+            except Exception: pass
+            try: _cr_conn.close()
+            except Exception: pass
+    except Exception:
+        pass
     # Fill the per-file cache so the next call skips load_stock_data().
     try:
         _STOCK_SUGGEST_CACHE["path"]  = path
