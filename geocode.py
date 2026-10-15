@@ -671,6 +671,22 @@ def main():
         idx = _lookup_header(cm_headers, CUSTOMER_COLUMN_ALIASES.get(col, [col]))
         cm_col_idx[col] = idx
 
+    # Oct-15 user ask: for the "channel2" output cell, pull the value
+    # DIRECTLY from the source column literally named "Channel" (case /
+    # whitespace insensitive) — no alias priority, no Channel2 fallback.
+    # The user's Customer Master ships both "Channel" (ADS / RE / WH /
+    # Closed classification the dashboard reads as HM/MFC) and
+    # "Channel2" (secondary tag) and only the primary one is wanted
+    # downstream.  Walk the headers manually so a workbook with both
+    # columns never accidentally picks up Channel2.
+    def _nrm2(s): return "" if s is None else " ".join(str(s).strip().split()).lower()
+    _channel_idx = None
+    for i, h in enumerate(cm_headers):
+        if _nrm2(h) == "channel":   # exact match, NOT "channel2"
+            _channel_idx = i
+            break
+    cm_col_idx["channel2"] = _channel_idx
+
     # Oct-15 diagnostic: print the resolved mapping flat-column →
     # (source column letter + source header text) so the user can
     # verify which Customer Master column fed each output cell when
