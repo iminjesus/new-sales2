@@ -739,6 +739,15 @@ def main():
         print("       aliases to CUSTOMER_COLUMN_ALIASES if your workbook uses")
         print("       different names.")
 
+    # ────────────────────────────────────────────────────────────
+    # [FLAT-CSV v3 — Oct-15 hard-wired Channel source]
+    # Version tag so the operator can confirm on the console whether
+    # the local geocode.py they're running carries the Oct-15 fix.
+    # If this banner doesn't appear, the box is on an older copy and
+    # the Ind.Retailer / Channel2 drift will reappear.
+    # ────────────────────────────────────────────────────────────
+    print("[flat] version: v3 (Oct-15 hard-wired Channel source)")
+
     written = 0
     with open(out_path, "w", newline="", encoding="utf-8") as f_out:
         w = csv.writer(f_out)
@@ -756,6 +765,17 @@ def main():
                     out_row.append("" if lat is None else lat)
                 elif col == "Longitude":
                     out_row.append("" if lon is None else lon)
+                elif col == "channel2":
+                    # Hard-wired INSIDE the row loop so no earlier
+                    # cm_col_idx assignment can leak through.  Pulls
+                    # directly from the source column whose header
+                    # literally equals "Channel" (case / whitespace
+                    # insensitive) — never "Channel2".
+                    if _channel_idx is not None and _channel_idx < len(r):
+                        v = r[_channel_idx]
+                        out_row.append("" if v is None else v)
+                    else:
+                        out_row.append("")
                 else:
                     i = cm_col_idx.get(col)
                     v = (r[i] if (i is not None and i < len(r)) else "")
