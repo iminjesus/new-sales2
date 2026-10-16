@@ -43,8 +43,16 @@ def _slog(msg):
     except Exception:
         ts = "?"
     line = f"[{ts}] [sap_logon] {msg}"
+    # cp1252-safe print: a stray Unicode char can't crash the orchestrator
     try:
         print(line, flush=True)
+    except UnicodeEncodeError:
+        try:
+            enc = (sys.stdout.encoding or "ascii")
+            print(line.encode(enc, errors="replace").decode(enc, errors="replace"),
+                  flush=True)
+        except Exception:
+            pass
     except Exception:
         pass
     try:

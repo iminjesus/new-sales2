@@ -104,7 +104,23 @@ def _now_syd():
 def log(msg):
     ts = _now_syd().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] {msg}"
-    print(line, flush=True)
+    # Windows console on the operator's box defaults to cp1252 which
+    # can't encode Unicode arrows / checkmarks.  Wrap print() in a
+    # try/except that falls back to ASCII-replaced output so a stray
+    # non-cp1252 character can NEVER crash the orchestrator (as it
+    # did on Oct-16 — the first run attached to SAP, then the
+    # "→ sapcrawling.main" log line's arrow blew up the process).
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        try:
+            enc = (sys.stdout.encoding or "ascii")
+            print(line.encode(enc, errors="replace").decode(enc, errors="replace"),
+                  flush=True)
+        except Exception:
+            pass
+    except Exception:
+        pass
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
@@ -235,15 +251,17 @@ def send_multi_logon_email(hour_key):
 # ── Pipeline step wrappers ──────────────────────────────────────────
 def _run_step(label, fn):
     """Run one of the pipeline steps and log the outcome.  Returns
-    True on success, False on failure (orchestrator keeps going)."""
-    log(f"→ {label}")
+    True on success, False on failure (orchestrator keeps going).
+    ASCII-only markers (-> / OK / FAIL) so cp1252 consoles don't
+    throw UnicodeEncodeError on the log line."""
+    log(f"-> {label}")
     try:
         fn()
-        log(f"✓ {label}")
+        log(f"OK {label}")
         return True
     except Exception as e:
         tb = traceback.format_exc()
-        log(f"✗ {label}: {e}\n{tb}")
+        log(f"FAIL {label}: {e}\n{tb}")
         status_set("last_error", f"{label}: {e}")
         status_set("last_error_at", _now_syd().strftime("%Y-%m-%d %H:%M:%S"))
         return False
@@ -266,27 +284,27 @@ def run_pipeline():
     # (plus per-plant xlsx) and raises on failure.  We let the first
     # exception bubble so the orchestrator records it.
     stock_ok = _run_step(
-        "sapcrawling.main — ZSDM64300 stock + DOT",
+        "sapcrawling.main - ZSDM64300 stock + DOT",
         lambda: __import__("sapcrawling").main(),
     )
 
     # Sales: sapcrawling_sales1.main writes rawdata/unlock/sales_thismonth.csv.
     sales_ok = _run_step(
-        "sapcrawling_sales1.main — ZSDR24030 daily sales",
+        "sapcrawling_sales1.main - ZSDR24030 daily sales",
         lambda: __import__("sapcrawling_sales1").main(),
     )
 
     # Loader needs AT LEAST one of the two CSVs to be fresh.  Run it
-    # even if only one crawl succeeded — load_csv_to_mysql skips the
+    # even if only one crawl succeeded - load_csv_to_mysql skips the
     # table whose CSV is missing (its own existence check).
     if stock_ok or sales_ok:
         load_ok = _run_step(
-            "load_csv_to_mysql.main — push CSVs into MySQL",
+            "load_csv_to_mysql.main - push CSVs into MySQL",
             lambda: __import__("load_csv_to_mysql").main(),
         )
     else:
         load_ok = False
-        log("Both crawls failed — skipping MySQL load for this slot.")
+        log("Both crawls failed - skipping MySQL load for this slot.")
 
     now_syd_str = _now_syd().strftime("%Y-%m-%d %H:%M:%S")
     if stock_ok and load_ok:
