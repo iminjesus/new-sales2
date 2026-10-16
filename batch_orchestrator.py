@@ -340,6 +340,19 @@ def main():
     log(f"batch_orchestrator PID={os.getpid()} starting.")
     log(f"Business hours: {RUN_HOURS[0]:02d}–{RUN_HOURS[-1]:02d} Sydney, Mon–Fri, "
         f"skipping {len(AU_NATIONAL_HOLIDAYS)} AU federal holidays.")
+
+    # Oct-16 user ask: run the full pipeline IMMEDIATELY on startup
+    # (via start_batch.bat or a manual launch), regardless of hour /
+    # day / holiday — the operator who just clicked start_batch.bat
+    # expects to see the dashboard refresh now, not at the top of the
+    # next business hour.  After the kickoff run completes, fall into
+    # the normal top-of-the-hour schedule.
+    log("Immediate kickoff run (start_batch.bat behaviour)…")
+    try:
+        run_slot(_now_syd())
+    except Exception as e:
+        log(f"[kickoff fatal-but-recovering] {e}\n{traceback.format_exc()}")
+
     while True:
         now = _now_syd()
         nxt = _next_run_at(now)
