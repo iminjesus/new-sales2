@@ -285,9 +285,9 @@ def run_pipeline():
     """Attach to SAP + run stock crawl + sales crawl + MySQL load.
     Raises batch_sap_logon.MultiLogonError if the user is already on
     another desktop so the caller can wait + retry."""
-    from batch_sap_logon import ensure_sap_session, MultiLogonError, NoSapError
+    from batch_sap_logon import ensure_sap_session, MultiLogonError, NoSapError, _reset_to_home
     try:
-        _sess, status = ensure_sap_session()
+        sess, status = ensure_sap_session()
     except MultiLogonError:
         raise
     except NoSapError as e:
@@ -301,6 +301,15 @@ def run_pipeline():
         "sapcrawling.main - ZSDM64300 stock + DOT",
         lambda: __import__("sapcrawling").main(),
     )
+
+    # If the stock crawl crashed partway it may have left SAP on a
+    # mid-transaction screen (popup, selection screen, grid, …).  Reset
+    # to Easy Access before the sales crawler so its own
+    # start_transaction_fresh starts from a known-good state.
+    try:
+        _reset_to_home(sess)
+    except Exception as e:
+        log(f"[warn] _reset_to_home between crawls failed: {e}")
 
     # Sales: sapcrawling_sales1.main writes rawdata/unlock/sales_thismonth.csv.
     sales_ok = _run_step(

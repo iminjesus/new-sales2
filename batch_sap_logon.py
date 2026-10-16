@@ -246,13 +246,49 @@ def _handle_multi_logon(session):
     return True
 
 
+def _reset_to_home(session):
+    """Close any lingering popups and send /n so the attached session
+    lands on Easy Access.  Without this, if the user left SAP sitting
+    on a previous transaction / popup, sapcrawling's F8 would hit
+    "control not found by id" (as happened in the Oct-16 13:34 run)."""
+    # Maximise main window so toolbar coords are predictable.
+    try:
+        session.findById("wnd[0]").maximize()
+    except Exception:
+        pass
+    # Close every popup wnd[1..5] - most SAP sessions never stack more.
+    for i in (5, 4, 3, 2, 1):
+        try:
+            w = session.findById(f"wnd[{i}]")
+            try:
+                w.close()
+            except Exception:
+                try: w.sendVKey(0)   # Enter / dismiss
+                except Exception: pass
+                try: w.sendVKey(12)  # Escape / cancel
+                except Exception: pass
+            time.sleep(0.3)
+        except Exception:
+            pass
+    # /n resets to Easy Access from any transaction.  Follow with Enter
+    # so we leave a clean selection screen for the next crawler.
+    try:
+        okcd = session.findById("wnd[0]/tbar[0]/okcd")
+        okcd.Text = "/n"
+        session.findById("wnd[0]").sendVKey(0)
+        time.sleep(1.0)
+    except Exception as e:
+        _slog(f"  _reset_to_home: /n didn't take ({e}) - continuing anyway")
+
+
 def ensure_sap_session():
     """Public entry.  Attach or log in; return (session, status)."""
     _slog("ensure_sap_session: checking for logged-in session…")
     # 1. Try to attach to an existing logged-in session.
     sess = _try_attach()
     if sess is not None:
-        _slog("already logged in — attached.")
+        _slog("already logged in — attached; resetting to Easy Access.")
+        _reset_to_home(sess)
         return sess, "attached"
 
     # 2. Launch SAP Logon if the scripting bridge isn't live yet.
