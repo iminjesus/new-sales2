@@ -21267,6 +21267,47 @@ def potential_customers_stats():
 # === POTENTIAL CUSTOMER FEATURE END ===
 
 
+# === BATCH STATUS ENDPOINT =================================================
+# Oct-16 user ask: expose the batch_status rows written by
+# batch_orchestrator.py so the Stock Report (NOT the Stock Balance Report)
+# can show "Stock last updated at …" and, separately, "Sales last updated
+# at …" since Orders / Incoming aren't refreshed on the hourly batch.
+# Reads only — no auth, no writes.  Minimal payload.
+# ---------------------------------------------------------------------------
+@app.get("/api/batch_status")
+def api_batch_status():
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        # The orchestrator creates batch_status lazily, so the table
+        # may not exist on a brand-new deployment yet.  Return empty
+        # defaults in that case rather than 500ing.
+        cur.execute("SHOW TABLES LIKE 'batch_status'")
+        if not cur.fetchone():
+            return jsonify({
+                "stock_updated_at":    None,
+                "sales_updated_at":    None,
+                "last_error":          None,
+                "last_error_at":       None,
+            })
+        cur.execute("SELECT k, v FROM batch_status")
+        rows = {r["k"]: r["v"] for r in (cur.fetchall() or [])}
+        return jsonify({
+            "stock_updated_at":    rows.get("stock_updated_at")    or None,
+            "sales_updated_at":    rows.get("sales_updated_at")    or None,
+            "last_error":          rows.get("last_error")          or None,
+            "last_error_at":       rows.get("last_error_at")       or None,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+# === BATCH STATUS ENDPOINT END =============================================
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))   # Cloudtype probes 5000
     from price_compare import price_dashboard, load_all_months, build_data
