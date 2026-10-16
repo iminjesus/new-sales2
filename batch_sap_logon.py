@@ -26,8 +26,32 @@ Design notes:
     orchestrator can send the warning email + sleep 5 min + retry.
 """
 import os
+import sys
 import time
 import subprocess
+
+# ── Logging — mirror into batch_orchestrator.log so a stuck login
+#    is visible in the SAME log file the operator is already watching.
+#    No orchestrator dependency: if the log file isn't writable we
+#    silently fall back to stdout only. --------------------------------
+_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "batch_orchestrator.log")
+def _slog(msg):
+    try:
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        ts = "?"
+    line = f"[{ts}] [sap_logon] {msg}"
+    try:
+        print(line, flush=True)
+    except Exception:
+        pass
+    try:
+        with open(_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 SAP_USER = os.environ.get("SAP_USER", "42S00030B2")
 SAP_PWD  = os.environ.get("SAP_PWD",  "Ksmpyj1234!")
@@ -134,24 +158,32 @@ def _open_connection(sap):
 
 
 def _enter_credentials(session):
-    """Fill client / user / password / language and press Enter."""
+    """Fill client / user / password / language and press Enter.
+    Logs each field so a stuck step is visible in the log."""
     wnd = session.findById("wnd[0]")
+    _slog(f"filling client={SAP_CLIENT!r}")
     try:
         wnd.findById("usr/txtRSYST-MANDT").Text = SAP_CLIENT
-    except Exception:
-        pass
+    except Exception as e:
+        _slog(f"  MANDT not writable: {e}  (continuing)")
+    _slog(f"filling user={SAP_USER!r}")
     try:
         wnd.findById("usr/txtRSYST-BNAME").Text = SAP_USER
-    except Exception:
+    except Exception as e:
+        _slog(f"  BNAME not found: {e}")
         raise RuntimeError("SAP login screen didn't carry BNAME field")
+    _slog("filling password (len=%d)" % len(SAP_PWD))
     try:
         wnd.findById("usr/pwdRSYST-BCODE").Text = SAP_PWD
-    except Exception:
+    except Exception as e:
+        _slog(f"  BCODE not found: {e}")
         raise RuntimeError("SAP login screen didn't carry BCODE field")
+    _slog(f"filling language={SAP_LANG!r}")
     try:
         wnd.findById("usr/txtRSYST-LANGU").Text = SAP_LANG
-    except Exception:
-        pass
+    except Exception as e:
+        _slog(f"  LANGU not writable: {e}  (continuing)")
+    _slog("pressing Enter (sendVKey 0)")
     wnd.sendVKey(0)   # Enter
 
 
@@ -208,42 +240,63 @@ def _handle_multi_logon(session):
 
 def ensure_sap_session():
     """Public entry.  Attach or log in; return (session, status)."""
+    _slog("ensure_sap_session: checking for logged-in session…")
     # 1. Try to attach to an existing logged-in session.
     sess = _try_attach()
     if sess is not None:
+        _slog("already logged in — attached.")
         return sess, "attached"
 
     # 2. Launch SAP Logon if the scripting bridge isn't live yet.
     sap = _get_gui_auto()
     if sap is None:
+        _slog("SAP GUI scripting not reachable — launching saplogon.exe…")
         _launch_logon()
         sap = _get_gui_auto()
         if sap is None:
+            _slog("still not reachable after launch — bailing.")
             raise NoSapError("SAP GUI scripting not reachable after launch")
+    else:
+        _slog("SAP GUI scripting is live.")
 
     # 3. Open the G.ERP (or SAP_CONN) connection and key credentials.
-    session = _open_connection(sap)
+    _slog(f"opening connection {SAP_CONN!r}…")
+    try:
+        session = _open_connection(sap)
+    except Exception as e:
+        _slog(f"OpenConnection({SAP_CONN!r}) failed: {e}")
+        raise
+    _slog("connection opened; entering credentials…")
     _enter_credentials(session)
+    _slog("credentials submitted; waiting 2.5 s for SAP response…")
     time.sleep(2.5)
 
     # 4. Multi-logon check — if the "already logged on" dialog appears,
     #    terminate it and bail with MultiLogonError so the caller can
     #    email the owner + wait + retry.
+    _slog("checking for multi-logon dialog…")
     if _handle_multi_logon(session):
+        _slog("multi-logon dialog handled — raising MultiLogonError.")
         raise MultiLogonError(
             f"User {SAP_USER} is already logged on another desktop."
         )
 
     # 5. Dismiss any licence / disclaimer popup.
+    _slog("dismissing any post-login popup (licence / disclaimer / password)…")
     for _ in range(5):
         try:
             wnd1 = session.findById("wnd[1]")
             if wnd1:
+                try:
+                    popup_title = str(wnd1.Text or "")
+                except Exception:
+                    popup_title = "(unknown)"
+                _slog(f"  popup detected: {popup_title!r} — sending Enter.")
                 wnd1.sendVKey(0)
                 time.sleep(0.5)
             else:
                 break
         except Exception:
             break
-
+    _slog("fresh login complete.")
     return session, "fresh_login"

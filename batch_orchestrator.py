@@ -338,16 +338,16 @@ def _write_pid():
 def main():
     _write_pid()
     log(f"batch_orchestrator PID={os.getpid()} starting.")
-    log(f"Business hours: {RUN_HOURS[0]:02d}–{RUN_HOURS[-1]:02d} Sydney, Mon–Fri, "
+    log(f"Business hours: {RUN_HOURS[0]:02d}-{RUN_HOURS[-1]:02d} Sydney, Mon-Fri, "
         f"skipping {len(AU_NATIONAL_HOLIDAYS)} AU federal holidays.")
 
     # Oct-16 user ask: run the full pipeline IMMEDIATELY on startup
     # (via start_batch.bat or a manual launch), regardless of hour /
-    # day / holiday — the operator who just clicked start_batch.bat
+    # day / holiday - the operator who just clicked start_batch.bat
     # expects to see the dashboard refresh now, not at the top of the
     # next business hour.  After the kickoff run completes, fall into
     # the normal top-of-the-hour schedule.
-    log("Immediate kickoff run (start_batch.bat behaviour)…")
+    log("Immediate kickoff run (start_batch.bat behaviour)...")
     try:
         run_slot(_now_syd())
     except Exception as e:
@@ -372,10 +372,22 @@ def main():
         # Loop around to compute the next slot.
 
 
+def _install_excepthook():
+    """pythonw.exe silently drops stderr, so an uncaught exception
+    would vanish without a trace.  Pipe sys.excepthook into our log
+    file so crashes land next to the regular status lines."""
+    def _hook(exc_type, exc_value, exc_tb):
+        import traceback as _tb
+        tb = "".join(_tb.format_exception(exc_type, exc_value, exc_tb))
+        log(f"[uncaught] {exc_type.__name__}: {exc_value}\n{tb}")
+    sys.excepthook = _hook
+
+
 if __name__ == "__main__":
+    _install_excepthook()
     try:
         main()
     except KeyboardInterrupt:
-        log("Interrupted — exiting.")
+        log("Interrupted - exiting.")
         try: os.remove(PID_FILE)
         except Exception: pass
