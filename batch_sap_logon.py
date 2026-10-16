@@ -246,11 +246,42 @@ def _handle_multi_logon(session):
     return True
 
 
+def _dump_sap_state(session, label):
+    """Log what SAP looks like RIGHT NOW so we can diagnose a stuck
+    attach.  Dumps transaction code, wnd[0] title, and whether any
+    popups are open."""
+    try:
+        tcode = str(session.Info.Transaction or "")
+    except Exception:
+        tcode = "?"
+    try:
+        prog = str(session.Info.Program or "")
+    except Exception:
+        prog = "?"
+    try:
+        title = str(session.findById("wnd[0]").Text or "")
+    except Exception:
+        title = "?"
+    popups = []
+    for i in range(1, 6):
+        try:
+            w = session.findById(f"wnd[{i}]")
+            popups.append(f"wnd[{i}]={str(w.Text or '')!r}")
+        except Exception:
+            break
+    _slog(f"[sap_state@{label}] tcode={tcode!r} prog={prog!r} "
+          f"title={title!r} popups=[{', '.join(popups) or 'none'}]")
+
+
 def _reset_to_home(session):
     """Close any lingering popups and send /n so the attached session
     lands on Easy Access.  Without this, if the user left SAP sitting
     on a previous transaction / popup, sapcrawling's F8 would hit
-    "control not found by id" (as happened in the Oct-16 13:34 run)."""
+    "control not found by id" (as happened in the Oct-16 13:34 run).
+
+    Logs the SAP state before AND after so a stuck session is visible
+    in the log."""
+    _dump_sap_state(session, "before-reset")
     # Maximise main window so toolbar coords are predictable.
     try:
         session.findById("wnd[0]").maximize()
@@ -260,6 +291,7 @@ def _reset_to_home(session):
     for i in (5, 4, 3, 2, 1):
         try:
             w = session.findById(f"wnd[{i}]")
+            _slog(f"  closing popup wnd[{i}]")
             try:
                 w.close()
             except Exception:
@@ -276,9 +308,10 @@ def _reset_to_home(session):
         okcd = session.findById("wnd[0]/tbar[0]/okcd")
         okcd.Text = "/n"
         session.findById("wnd[0]").sendVKey(0)
-        time.sleep(1.0)
+        time.sleep(1.5)   # a hair longer than before for slow mainframes
     except Exception as e:
         _slog(f"  _reset_to_home: /n didn't take ({e}) - continuing anyway")
+    _dump_sap_state(session, "after-reset")
 
 
 def ensure_sap_session():
