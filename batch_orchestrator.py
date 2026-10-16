@@ -50,6 +50,20 @@ import time
 import traceback
 from datetime import datetime, timedelta, date
 
+# ── UTF-8 everywhere ─────────────────────────────────────────────────
+# The Windows console pythonw.exe hands us is cp1252 by default, which
+# blows up on the first Unicode char any imported sub-script tries to
+# print (sapcrawling.py uses '──' box drawing, sapcrawling_sales1.py
+# uses '→', etc.).  Reconfigure sys.stdout / sys.stderr to utf-8 with
+# errors='replace' so a stray Unicode char becomes '?' on the console
+# INSTEAD of raising UnicodeEncodeError and tearing down the batch.
+# Must run before any import that might print at import time.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # ── Config ────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PID_FILE = os.path.join(BASE_DIR, "batch_orchestrator.pid")

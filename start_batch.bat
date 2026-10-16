@@ -7,6 +7,14 @@ REM stop_batch.bat script.
 
 cd /d "%~dp0"
 
+REM Oct-16: force UTF-8 for stdout / stderr so Unicode characters in
+REM any imported sub-script (sapcrawling.py's '──' box drawing,
+REM sapcrawling_sales1.py's '→' arrow, etc.) can no longer trigger
+REM UnicodeEncodeError on this Windows box's cp1252 default.  errors
+REM is set to 'replace' so stray chars become '?' instead of crashing.
+set PYTHONIOENCODING=utf-8:replace
+set PYTHONUTF8=1
+
 REM Pick pythonw.exe (no console) so no stray cmd window stays open.
 REM If pythonw isn't on PATH, fall back to python but still detach.
 where pythonw.exe >nul 2>&1
