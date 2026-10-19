@@ -3032,12 +3032,25 @@ function applyBaseDCToRow(rowEl, brand, line){
   else if (L === "TBR"  && B === "LF") pct = rates.LF_TBR;
   else if (L === "TBR")                pct = rates.HK_TBR != null ? rates.HK_TBR : rates.LF_TBR;
   else if (!B)                         pct = rates.HK_TBR != null ? rates.HK_TBR : rates.LF_TBR;
-  // Everything else (non-PCLT/TBR line, unknown brand) → leave the
-  // cell alone so the BDE can key in a manual DC.
+  // Oct-19 fallback (user-reported ACD rows with empty Base DC):
+  // when the (brand, line) pair didn't resolve to anything above
+  // AND the brand IS known, infer the line from the PCLT/TBR
+  // default against the brand — any brand-known row that has a
+  // PCLT rate for its brand should fall into that bucket by
+  // default (passenger tyres outnumber TBR 10:1 in the catalogue),
+  // which keeps the cell populated even when the material's
+  // dataset.line was never resolved by the stock loader.
+  if (pct == null && B === "HK" && rates.HK_PCLT != null) pct = rates.HK_PCLT;
+  if (pct == null && B === "LF" && rates.LF_PCLT != null) pct = rates.LF_PCLT;
   const el = rowEl.querySelector('[data-col="base_dc"]');
   if (!el) return;
-  if (pct == null) { el.value = ""; }
-  else             { el.value = fmtPct(pct); }
+  // Oct-19 user ask: do NOT clear a cell that already carries a
+  // typed/auto value just because a late recompute happened with
+  // unknown brand/line (that wiped Base DC on first material-pick
+  // when the row had just been created from an M-code paste and
+  // dataset.line wasn't filled yet).  Only write when we actually
+  // resolved a rate; leave the existing value alone otherwise.
+  if (pct != null) { el.value = fmtPct(pct); }
   recalcRow(rowEl);
 }
 

@@ -4319,25 +4319,23 @@ def api_orders_pricing_window_check():
 def api_orders_customer_has_sovd():
     """Return { has_sovd: bool } indicating whether the given sold-to
     (or its customer group) carries a SOVD-tagged row in
+    dc_additional_customer_new (preferred) or the legacy
     dc_additional_customer.  The SPRF frontend uses this to decide
     whether the "Trueblu (HK PCLTs) TTL" ladder should be applied at
     all — a customer with no SOVD promo listed shouldn't have the
-    12/18 % auto-price kick in even when they have HK-PCLT lines."""
+    12/18 % auto-price kick in even when they have HK-PCLT lines.
+
+    Oct-19 fix: the Oct-14 Hankook feed moved to dc_additional_customer_new;
+    an ACD customer with ONLY a new-table SOVD row was returning
+    has_sovd=false here because the lookup was pinned to the legacy
+    table name.  Query both tables (new one first) so SOVD-eligible
+    customers are detected regardless of which feed is live."""
     sold_to = (request.args.get("sold_to") or "").strip()
     if not sold_to:
         return jsonify({"has_sovd": False})
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        try:
-            cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
-            if not cur.fetchone():
-                return jsonify({"has_sovd": False})
-        except Exception:
-            return jsonify({"has_sovd": False})
-        ac_cols = _list_columns(cur, "dc_additional_customer")
-        if "promo" not in ac_cols:
-            return jsonify({"has_sovd": False})
         # Resolve the customer's group so SOVD rows registered against
         # the group (not the individual sold_to) are also detected.
         group_code = ""
@@ -4351,21 +4349,35 @@ def api_orders_customer_has_sovd():
                 group_code = (gr.get("grp") or "").strip()
         except Exception:
             pass
-        # SOVD is a per-row tag.  A single hit — whether by sold_to or
-        # by customer_grp — is enough to say the customer is Trueblu-
-        # eligible.  LIKE '%SOVD%' catches the odd 'SOVD_2026' or
-        # 'SOVD-A' variants the feed sometimes ships.
-        params = [sold_to]
-        gate = "TRIM(ac.sold_to) = %s"
-        if group_code and "customer_grp" in ac_cols:
-            gate = "(TRIM(ac.sold_to) = %s OR TRIM(ac.customer_grp) = %s)"
-            params.append(group_code)
-        cur.execute(
-            f"SELECT 1 FROM dc_additional_customer ac "
-            f"WHERE {gate} AND UPPER(ac.promo) LIKE '%SOVD%' LIMIT 1",
-            tuple(params),
-        )
-        return jsonify({"has_sovd": cur.fetchone() is not None})
+        # Walk both promo tables.  First hit wins.
+        for _tbl in ("dc_additional_customer_new",
+                     "dc_additional_customer"):
+            try:
+                cur.execute("SHOW TABLES LIKE %s", (_tbl,))
+                if not cur.fetchone():
+                    continue
+                ac_cols = _list_columns(cur, _tbl)
+                if "promo" not in ac_cols:
+                    continue
+                # SOVD is a per-row tag.  A single hit — whether by
+                # sold_to or by customer_grp — is enough to say the
+                # customer is Trueblu-eligible.  LIKE '%SOVD%' catches
+                # the odd 'SOVD_2026' or 'SOVD-A' variants.
+                params = [sold_to]
+                gate = "TRIM(ac.sold_to) = %s"
+                if group_code and "customer_grp" in ac_cols:
+                    gate = "(TRIM(ac.sold_to) = %s OR TRIM(ac.customer_grp) = %s)"
+                    params.append(group_code)
+                cur.execute(
+                    f"SELECT 1 FROM {_tbl} ac "
+                    f"WHERE {gate} AND UPPER(ac.promo) LIKE '%SOVD%' LIMIT 1",
+                    tuple(params),
+                )
+                if cur.fetchone() is not None:
+                    return jsonify({"has_sovd": True})
+            except Exception:
+                continue
+        return jsonify({"has_sovd": False})
     except Exception:
         return jsonify({"has_sovd": False})
     finally:
@@ -4445,13 +4457,25 @@ def api_orders_additional_dc():
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
-        try:
-            cur.execute("SHOW TABLES LIKE 'dc_additional_customer'")
-            if not cur.fetchone():
-                # Rule 3: no table → no additional discount.
-                return jsonify(out)
-        except Exception:
+        # Oct-19: resolve the live promo table.  dc_additional_customer_new
+        # is the Oct-14 Hankook feed name; dc_additional_customer is the
+        # legacy one.  First existing table wins — one-shot resolution
+        # here so every SQL below uses {ac_table}.
+        ac_table = None
+        for _tbl in ("dc_additional_customer_new",
+                     "dc_additional_customer"):
+            try:
+                cur.execute("SHOW TABLES LIKE %s", (_tbl,))
+                if cur.fetchone():
+                    ac_table = _tbl
+                    break
+            except Exception:
+                continue
+        if not ac_table:
+            # Rule 3: no table → no additional discount.
             return jsonify(out)
+        if debug:
+            out["_debug"]["ac_table"] = ac_table
 
         # Resolve customer group so tier-fallback (row.customer_grp
         # matches this customer's group) works.
@@ -4469,7 +4493,7 @@ def api_orders_additional_dc():
         if debug:
             out["_debug"]["group_code"] = group_code
 
-        ac_cols = _list_columns(cur, "dc_additional_customer")
+        ac_cols = _list_columns(cur, ac_table)
         needed = {"customer_grp", "sold_to", "brand", "min_qty", "additional_dc"}
         if not needed.issubset(ac_cols):
             if debug:
@@ -4522,7 +4546,7 @@ def api_orders_additional_dc():
                 " ac.sold_to" + promo_select + ","
                 " CASE WHEN TRIM(ac.sold_to) = %s THEN 'sold_to'"
                 "      ELSE 'customer_grp' END AS source"
-                " FROM dc_additional_customer ac"
+                f" FROM {ac_table} ac"
                 " WHERE " + customer_gate + common_gate + sql_extra + order_by
             )
             params = [sold_to] + base_params + extra_params + [sold_to]
@@ -4604,7 +4628,7 @@ def api_orders_additional_dc():
                     params_p.append(product_group)
                 if where_bits:
                     cur.execute(
-                        "SELECT 1 FROM dc_additional_customer "
+                        f"SELECT 1 FROM {ac_table} "
                         "WHERE (" + " OR ".join(where_bits) + ") "
                         "  AND UPPER(TRIM(brand)) = UPPER(%s) "
                         "  AND (promo IS NULL OR UPPER(promo) NOT LIKE %s) "
@@ -4651,7 +4675,7 @@ def api_orders_additional_dc():
                     scope_params.append(product_group)
                 if scope_where_bits:
                     scope_sql = (
-                        "SELECT 1 FROM dc_additional_customer ac "
+                        f"SELECT 1 FROM {ac_table} ac "
                         "WHERE " + customer_gate +
                         "  AND UPPER(TRIM(ac.brand)) = UPPER(%s) "
                         "  AND (ac.promo IS NULL OR UPPER(ac.promo) NOT LIKE %s) "
