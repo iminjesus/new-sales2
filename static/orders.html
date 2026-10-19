@@ -5717,6 +5717,24 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
       setStatus(`Draft <b>${j.order_no || "#" + j.id}</b> saved — visible only to you until you Submit.`, "ok");
       setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save / Update"; }, 1500);
     }
+    /* Oct-19 user ask: reveal the "Exit to Home" button the moment
+       a Save succeeds, instead of waiting for the user to round-trip
+       through /orders_list and reopen the order.  Previously Exit
+       to Home was only unhidden inside hydrateSubmittedOrder (which
+       only fires on load of an existing submitted order), so a
+       fresh draft that was just saved never got the button on
+       screen.  Flipping its hidden flag here means the button
+       shows up right after the status toast toggles to "Saved". */
+    const xBtn = document.getElementById("btnExitHome");
+    if (xBtn) {
+      xBtn.hidden = false;
+      if (!xBtn.dataset.wired) {
+        xBtn.dataset.wired = "1";
+        xBtn.addEventListener("click", () => {
+          location.href = "/orders_list";
+        });
+      }
+    }
   } catch(e){
     setStatus("Save failed: " + e, "warn");
     btn.disabled = false; btn.textContent = "💾 Save / Update";
