@@ -2746,10 +2746,16 @@ async function fillBaseDC(soldTo){
      and re-check via the dedicated endpoint.  isSOVDEligible reads
      this flag before adding a line to the Trueblu TTL count. */
   window._customerHasSOVD = false;
+  window._sovdLadder = [];
   if (soldTo) {
     try {
       const j = await apiGet(`/api/orders/customer_has_sovd?sold_to=${encodeURIComponent(soldTo)}`);
       window._customerHasSOVD = !!(j && j.has_sovd);
+      /* Oct-20 data-driven ladder: the backend returns the applicable
+         (min_qty, rate) pairs — frontend used to hard-code 12/18.
+         ATE and sold_to 739199 only ship a min_qty=1, rate=12 rule,
+         so their ladder tops out at 12 % regardless of Trueblu TTL. */
+      window._sovdLadder = Array.isArray(j && j.ladder) ? j.ladder : [];
     } catch(_e){ /* keep flag false on lookup error */ }
   }
   /* Recompute Trueblu totals in case rows were already on the form
@@ -3532,7 +3538,22 @@ function applySOVDRatesToRows(){
     rows.forEach(r => {
       if (isSOVDEligible(r)) sovdQty += toNum(r.querySelector('[data-col="qty"]').value);
     });
-    const rate = sovdQty >= 4 ? 18 : 12;
+    /* Oct-20 data-driven ladder: pick the HIGHEST rate whose
+       min_qty is <= the current Trueblu TTL.  Ladder arrives from
+       the backend as [{min_qty, rate}, ...] sorted ascending.
+       Fallback to the historical hard-coded 12/18 rule only when
+       the ladder is empty (older deployment / unreachable endpoint). */
+    let rate = 0;
+    const _ladder = Array.isArray(window._sovdLadder) ? window._sovdLadder : [];
+    if (_ladder.length) {
+      for (const tier of _ladder) {
+        if (sovdQty >= (tier.min_qty || 0) && (tier.rate || 0) > rate) {
+          rate = tier.rate;
+        }
+      }
+    } else {
+      rate = sovdQty >= 4 ? 18 : 12;
+    }
     rows.forEach(r => {
       const spEl = r.querySelector('[data-col="sp_dc"]');
       if (!spEl) return;

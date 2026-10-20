@@ -4317,22 +4317,26 @@ def api_orders_pricing_window_check():
 
 @app.get("/api/orders/customer_has_sovd")
 def api_orders_customer_has_sovd():
-    """Return { has_sovd: bool } indicating whether the given sold-to
-    (or its customer group) carries a SOVD-tagged row in
-    dc_additional_customer_new (preferred) or the legacy
-    dc_additional_customer.  The SPRF frontend uses this to decide
-    whether the "Trueblu (HK PCLTs) TTL" ladder should be applied at
-    all — a customer with no SOVD promo listed shouldn't have the
-    12/18 % auto-price kick in even when they have HK-PCLT lines.
+    """Return the SOVD (Trueblu) ladder that applies to the given
+    sold-to.  Response:
+        { "has_sovd": bool,
+          "ladder":   [{"min_qty": int, "rate": float}, ...] }
+    The ladder is sorted by min_qty ascending.  The SPRF frontend
+    picks the HIGHEST rate whose min_qty <= Trueblu-TTL so a
+    customer that only ships a (min_qty=1, rate=12) rule stays at
+    12 % even when the HK-PCLT TTL crosses 4.
 
-    Oct-19 fix: the Oct-14 Hankook feed moved to dc_additional_customer_new;
-    an ACD customer with ONLY a new-table SOVD row was returning
-    has_sovd=false here because the lookup was pinned to the legacy
-    table name.  Query both tables (new one first) so SOVD-eligible
-    customers are detected regardless of which feed is live."""
+    Sold-to-level rules REPLACE customer-group rules so a specific
+    sold_to with only an entry-tier rule (e.g. 739199 shipping just
+    (1, -12)) never promotes to the group's volume tier.
+
+    Oct-20 (second revision): the ladder is returned from the data
+    rather than hard-coded in the frontend, so a desk ops person
+    can edit dc_additional_customer_(new) and have the SPRF honour
+    the change on the next request without a code push."""
     sold_to = (request.args.get("sold_to") or "").strip()
     if not sold_to:
-        return jsonify({"has_sovd": False})
+        return jsonify({"has_sovd": False, "ladder": []})
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
@@ -4349,7 +4353,10 @@ def api_orders_customer_has_sovd():
                 group_code = (gr.get("grp") or "").strip()
         except Exception:
             pass
-        # Walk both promo tables.  First hit wins.
+        # Walk both promo tables.  First one that resolves wins —
+        # don't union across both tables, that could stack mismatched
+        # ladders if someone forgets to drop the legacy data after
+        # importing the new feed.
         for _tbl in ("dc_additional_customer_new",
                      "dc_additional_customer"):
             try:
@@ -4357,29 +4364,50 @@ def api_orders_customer_has_sovd():
                 if not cur.fetchone():
                     continue
                 ac_cols = _list_columns(cur, _tbl)
-                if "promo" not in ac_cols:
+                if "promo" not in ac_cols or "min_qty" not in ac_cols or "additional_dc" not in ac_cols:
                     continue
-                # SOVD is a per-row tag.  A single hit — whether by
-                # sold_to or by customer_grp — is enough to say the
-                # customer is Trueblu-eligible.  LIKE '%SOVD%' catches
-                # the odd 'SOVD_2026' or 'SOVD-A' variants.
-                params = [sold_to]
-                gate = "TRIM(ac.sold_to) = %s"
-                if group_code and "customer_grp" in ac_cols:
-                    gate = "(TRIM(ac.sold_to) = %s OR TRIM(ac.customer_grp) = %s)"
-                    params.append(group_code)
+                # Pass 1 — sold_to-specific SOVD rules.
                 cur.execute(
-                    f"SELECT 1 FROM {_tbl} ac "
-                    f"WHERE {gate} AND UPPER(ac.promo) LIKE '%SOVD%' LIMIT 1",
-                    tuple(params),
+                    f"SELECT min_qty, ABS(additional_dc) AS rate FROM {_tbl} "
+                    f"WHERE TRIM(sold_to) = %s "
+                    f"  AND UPPER(promo) LIKE '%SOVD%' "
+                    f"  AND UPPER(TRIM(brand)) = 'HK' "
+                    f"  AND additional_dc IS NOT NULL "
+                    f"ORDER BY min_qty ASC",
+                    (sold_to,),
                 )
-                if cur.fetchone() is not None:
-                    return jsonify({"has_sovd": True})
-            except Exception:
+                _sold_ladder = [{"min_qty": int(r["min_qty"] or 0),
+                                 "rate":    float(r["rate"] or 0)}
+                                for r in (cur.fetchall() or [])]
+                if _sold_ladder:
+                    return jsonify({"has_sovd": True, "ladder": _sold_ladder,
+                                    "source": "sold_to"})
+                # Pass 2 — customer_grp SOVD rules (only if no sold_to-
+                # specific rules exist, so a per-sold_to override truly
+                # REPLACES the group ladder).
+                if group_code and "customer_grp" in ac_cols:
+                    cur.execute(
+                        f"SELECT min_qty, ABS(additional_dc) AS rate FROM {_tbl} "
+                        f"WHERE UPPER(TRIM(customer_grp)) = UPPER(%s) "
+                        f"  AND (TRIM(sold_to) = '' OR sold_to IS NULL) "
+                        f"  AND UPPER(promo) LIKE '%SOVD%' "
+                        f"  AND UPPER(TRIM(brand)) = 'HK' "
+                        f"  AND additional_dc IS NOT NULL "
+                        f"ORDER BY min_qty ASC",
+                        (group_code,),
+                    )
+                    _grp_ladder = [{"min_qty": int(r["min_qty"] or 0),
+                                    "rate":    float(r["rate"] or 0)}
+                                   for r in (cur.fetchall() or [])]
+                    if _grp_ladder:
+                        return jsonify({"has_sovd": True, "ladder": _grp_ladder,
+                                        "source": "customer_grp"})
+            except Exception as _e:
+                print(f"[sovd?] {_tbl} query failed: {_e}")
                 continue
-        return jsonify({"has_sovd": False})
-    except Exception:
-        return jsonify({"has_sovd": False})
+        return jsonify({"has_sovd": False, "ladder": []})
+    except Exception as e:
+        return jsonify({"has_sovd": False, "ladder": [], "error": str(e)})
     finally:
         try: cur.close()
         except: pass
