@@ -3119,6 +3119,11 @@ function applyMaterial(rowEl, data){
      so SOVD lands first and gets stranded when the real Kinergy /
      Dynapro promo comes back moments later. */
   if (window._orderSoldTo) rowEl.dataset.pendingPromo = "1";
+  /* Re-arm the one-shot "auto Qty=1 on first discount edit" default:
+     every fresh material pick deserves its own chance to auto-default
+     the Qty, even if an earlier material on this same row already
+     triggered it.  Cleared here, set once by ensureQtyDefault below. */
+  delete rowEl.dataset.qtyAutoDefault;
   set("m_code",       data.m_code);
   set("description",  data.description);
   set("brand",        data.brand);
@@ -3191,6 +3196,35 @@ async function fillStockForRow(rowEl, mcode){
     const td = el.parentElement;
     if (td) td.classList.toggle("zero", n === 0);
   }
+}
+
+/* ────────────────────────── Qty auto-default ──────────────────────
+   Oct-20 user ask: once a material is linked on a row, the first edit
+   to ANY other cell on that row (sp_dc, mth_dc, vol_dc, add_dc,
+   aging_dc, proposed_price, total_amount, proposed_dc, …) should
+   auto-fill Qty=1 so the chained pricing has something to multiply.
+   After that one-shot default fires, further edits leave the Qty
+   alone — the BDE can retype it freely, or clear it; the Save /
+   Submit guards further down still refuse to persist an order whose
+   M-Code lines carry no Qty > 0.
+
+   One-shot flag lives on the row dataset so a new material pick on
+   the same row (applyMaterial clears the flag) re-arms the default. */
+function ensureQtyDefault(rowEl){
+  if (!rowEl) return;
+  const mcEl = rowEl.querySelector('[data-col="m_code"]');
+  if (!mcEl || !String(mcEl.value || "").trim()) return;
+  if (rowEl.dataset.qtyAutoDefault === "1") return;
+  const qEl = rowEl.querySelector('[data-col="qty"]');
+  if (!qEl) return;
+  if (toNum(qEl.value) > 0) return;
+  qEl.value = "1";
+  rowEl.dataset.qtyAutoDefault = "1";
+  // Mirror the Qty 'change' handler's side-effects so a crossed
+  // min_qty rule picks up its promo DC immediately (programmatic
+  // .value = "1" does not fire input/change on its own).
+  recalcRow(rowEl);
+  applyAdditionalDCToRow(rowEl);
 }
 
 /* ────────────────────────── row math ──────────────────────────
@@ -4257,7 +4291,50 @@ function newRow(){
                             col.replace("stock_", "").toUpperCase());
     });
   }
+  /* Qty auto-default — delegated input listener on the row.  Fires
+     once per material pick (gated by rowEl.dataset.qtyAutoDefault,
+     cleared in applyMaterial) when the BDE edits ANY cell other than
+     Qty itself.  Lets them jump straight to typing a discount or a
+     Proposed Price without first typing Qty — the row's chained math
+     then has something to multiply.  Edits inside the Qty cell are
+     excluded so a manual Qty entry stays the user's number, not a
+     race against the one-shot default. */
+  tr.addEventListener("input", (e) => {
+    const t = e && e.target;
+    const col = t && t.getAttribute && t.getAttribute("data-col");
+    if (!col || col === "qty") return;
+    ensureQtyDefault(tr);
+  });
   return tr;
+}
+
+/* Flash every M-Code line whose Qty is still empty/0, then scroll
+   the first offender into view and focus its Qty cell.  Called from
+   both the Submit and Save-as-Draft guards so the BDE sees exactly
+   which row the modal is complaining about. */
+function highlightEmptyQtyRows(){
+  const trs = Array.from(document.querySelectorAll("table.lines tbody tr"));
+  let first = null;
+  for (const tr of trs){
+    const mc = (tr.querySelector('[data-col="m_code"]')?.value || "").trim();
+    if (!mc) continue;
+    const qEl = tr.querySelector('[data-col="qty"]');
+    if (!qEl) continue;
+    const n = toNum(qEl.value);
+    if (n > 0) continue;
+    qEl.style.transition  = "background 0.15s, box-shadow 0.15s";
+    qEl.style.background  = "#fee2e2";
+    qEl.style.boxShadow   = "0 0 0 2px rgba(220,38,38,.35)";
+    setTimeout(() => {
+      qEl.style.background = "";
+      qEl.style.boxShadow  = "";
+    }, 1800);
+    if (!first) first = qEl;
+  }
+  if (first){
+    first.scrollIntoView({behavior:"smooth", block:"center"});
+    setTimeout(() => { try { first.focus(); } catch(_){} }, 250);
+  }
 }
 /* ─── Aging popover for state-stock cells ──────────────────────
    Same colour scheme as the /stock aging popup (green ≤12M →
@@ -5566,6 +5643,7 @@ $("#btnSubmit").addEventListener("click", async () => {
   });
   if (_emptyQty.length){
     const _codes = _emptyQty.map(ln => ln.m_code).join(", ");
+    highlightEmptyQtyRows();
     showNotice(`Every M-Code must have a Qty greater than zero.\n\nMissing quantity on: ${_codes}\n\nEnter a Qty for these lines or remove them before submitting.`);
     setStatus(`Missing Qty on ${_emptyQty.length} line(s): ${_codes}`, "warn");
     return;
@@ -5686,6 +5764,7 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
   });
   if (_emptyQty.length){
     const _codes = _emptyQty.map(ln => ln.m_code).join(", ");
+    highlightEmptyQtyRows();
     showNotice(`Every M-Code needs a Qty greater than zero.\n\nMissing quantity on: ${_codes}\n\nAdd a Qty (or remove the row) before saving.`);
     setStatus(`Missing Qty on ${_emptyQty.length} draft line(s): ${_codes}`, "warn");
     return;
