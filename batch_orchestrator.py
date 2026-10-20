@@ -12,8 +12,8 @@ Oct-16 user spec:
            - Email brian.park@hankooktyre.com.au ONCE per hour (first
              attempt of the hour that fails)
            - Sleep 5 min, retry.  Silent retries thereafter.
-      2. sapcrawling.main()        — ZSDM64300 → dot_stock.csv (+ DOT)
-      3. sapcrawling_sales1.main() — ZSDR24030 → sales_thismonth.csv
+      2. sapcrawling_batch.main()        — ZSDM64300 → dot_stock.csv (+ DOT)
+      3. sapcrawling_sales1_batch.main() — ZSDR24030 → sales_thismonth.csv
       4. load_csv_to_mysql.main()  — load both CSVs into MySQL
       5. Stamp the batch_status table with the last-successful times.
 
@@ -53,8 +53,9 @@ from datetime import datetime, timedelta, date
 # ── UTF-8 everywhere ─────────────────────────────────────────────────
 # The Windows console pythonw.exe hands us is cp1252 by default, which
 # blows up on the first Unicode char any imported sub-script tries to
-# print (sapcrawling.py uses '──' box drawing, sapcrawling_sales1.py
-# uses '→', etc.).  Reconfigure sys.stdout / sys.stderr to utf-8 with
+# print (sapcrawling_batch.py uses '──' box drawing,
+# sapcrawling_sales1_batch.py uses '→', etc.).  Reconfigure sys.stdout
+# / sys.stderr to utf-8 with
 # errors='replace' so a stray Unicode char becomes '?' on the console
 # INSTEAD of raising UnicodeEncodeError and tearing down the batch.
 # Must run before any import that might print at import time.
@@ -123,7 +124,7 @@ def log(msg):
     # try/except that falls back to ASCII-replaced output so a stray
     # non-cp1252 character can NEVER crash the orchestrator (as it
     # did on Oct-16 — the first run attached to SAP, then the
-    # "→ sapcrawling.main" log line's arrow blew up the process).
+    # "→ sapcrawling_batch.main" log line's arrow blew up the process).
     try:
         print(line, flush=True)
     except UnicodeEncodeError:
@@ -294,12 +295,14 @@ def run_pipeline():
         raise RuntimeError(f"SAP not reachable: {e}")
     log(f"SAP session {status}.")
 
-    # Stock + DOT: sapcrawling.main writes rawdata/unlock/dot_stock.csv
+    # Stock + DOT: sapcrawling_batch.main writes rawdata/unlock/dot_stock.csv
     # (plus per-plant xlsx) and raises on failure.  We let the first
     # exception bubble so the orchestrator records it.
+    # Oct-20: use sapcrawling_batch.py (batch-only fork of sapcrawling.py)
+    # so the stable manually-runnable sapcrawling.py stays untouched.
     stock_ok = _run_step(
-        "sapcrawling.main - ZSDM64300 stock + DOT",
-        lambda: __import__("sapcrawling").main(),
+        "sapcrawling_batch.main - ZSDM64300 stock + DOT",
+        lambda: __import__("sapcrawling_batch").main(),
     )
 
     # If the stock crawl crashed partway it may have left SAP on a
@@ -311,10 +314,13 @@ def run_pipeline():
     except Exception as e:
         log(f"[warn] _reset_to_home between crawls failed: {e}")
 
-    # Sales: sapcrawling_sales1.main writes rawdata/unlock/sales_thismonth.csv.
+    # Sales: sapcrawling_sales1_batch.main writes rawdata/unlock/sales_thismonth.csv.
+    # Oct-20: use sapcrawling_sales1_batch.py (batch-only fork of
+    # sapcrawling_sales1.py) so the stable manually-runnable
+    # sapcrawling_sales1.py stays untouched.
     sales_ok = _run_step(
-        "sapcrawling_sales1.main - ZSDR24030 daily sales",
-        lambda: __import__("sapcrawling_sales1").main(),
+        "sapcrawling_sales1_batch.main - ZSDR24030 daily sales",
+        lambda: __import__("sapcrawling_sales1_batch").main(),
     )
 
     # Loader needs AT LEAST one of the two CSVs to be fresh.  Run it

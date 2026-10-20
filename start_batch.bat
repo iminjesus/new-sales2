@@ -8,10 +8,17 @@ REM stop_batch.bat script.
 cd /d "%~dp0"
 
 REM Oct-16: force UTF-8 for stdout / stderr so Unicode characters in
-REM any imported sub-script (sapcrawling.py's '──' box drawing,
-REM sapcrawling_sales1.py's '→' arrow, etc.) can no longer trigger
-REM UnicodeEncodeError on this Windows box's cp1252 default.  errors
-REM is set to 'replace' so stray chars become '?' instead of crashing.
+REM any imported sub-script (sapcrawling_batch.py's '──' box drawing,
+REM sapcrawling_sales1_batch.py's '→' arrow, etc.) can no longer
+REM trigger UnicodeEncodeError on this Windows box's cp1252 default.
+REM errors is set to 'replace' so stray chars become '?' instead of
+REM crashing.
+REM
+REM Oct-20: batch_orchestrator now imports sapcrawling_batch /
+REM sapcrawling_sales1_batch (batch-only forks) instead of the
+REM manually-runnable sapcrawling / sapcrawling_sales1.  The .bat
+REM itself still only launches batch_orchestrator.py — the fork
+REM selection happens inside batch_orchestrator.py.
 set PYTHONIOENCODING=utf-8:replace
 set PYTHONUTF8=1
 

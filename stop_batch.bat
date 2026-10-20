@@ -4,6 +4,11 @@ REM Reads batch_orchestrator.pid, taskkills it, deletes the pid file.
 REM If the pid file is missing (manual start etc.), falls back to
 REM killing every pythonw.exe whose command line contains
 REM batch_orchestrator.py.
+REM
+REM Oct-20: batch_orchestrator now imports sapcrawling_batch /
+REM sapcrawling_sales1_batch (batch-only forks).  Nothing to change
+REM here — this .bat only kills batch_orchestrator.py, which is
+REM still the top-level process.
 
 cd /d "%~dp0"
 
