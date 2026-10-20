@@ -51,6 +51,21 @@ COMBINED_CSV = os.path.join(UNLOCK_DIR, "dot_stock.csv")
 DELETE_XLSX_AFTER_COMBINE = False                   # keep per-plant XLSX
 MIN_CSV_SIZE = 200
 
+# SAP user-profile date format varies per operator (System -> User
+# Profile -> Own Data -> Defaults -> Date format).  Order matters: the
+# first accepted format wins.  If SAP rejects one with a status-bar
+# warning ("Enter data in the format XX/YY/ZZZZ", "Ungueltiges Datum",
+# etc.) main() resets the selection screen and tries the next.  Covers
+# the Jayden-vs-batch-operator profile difference (20.10.2026 vs
+# 2026.10.20).
+DATE_FORMATS = [
+    "%d.%m.%Y",   # 20.10.2026  (SAP default 1 - Jayden's profile)
+    "%Y.%m.%d",   # 2026.10.20  (SAP default 4 - this operator's profile)
+    "%m/%d/%Y",   # 10/20/2026  (SAP default 2 - US)
+    "%d/%m/%Y",   # 20/10/2026  (SAP default 6 - UK/AU)
+    "%Y-%m-%d",   # 2026-10-20  (ISO)
+]
+
 # When True, dumps everything we can see on the result screen the first
 # time export fails so it's clear which grid ID / menu path / okcd works
 # on THIS SAP layout.  Log lands in the console; paste it here and we
@@ -147,6 +162,30 @@ def _try_set_radio(session, id_candidates):
                 return True
             except: pass
     return False
+
+
+def sbar_text(session) -> str:
+    """Return the SAP status-bar text (or '' if unavailable)."""
+    try:
+        return (session.findById("wnd[0]/sbar").Text or "").strip()
+    except:
+        return ""
+
+
+def sbar_is_error(session) -> bool:
+    """True when the status bar carries an error/warning (MessageType E/W/A)."""
+    try:
+        return (session.findById("wnd[0]/sbar").MessageType or "").upper() in ("E", "W", "A")
+    except:
+        return False
+
+
+def looks_like_date_format_error(msg: str) -> bool:
+    """SAP messages that indicate 'wrong date format' vary by language:
+    'Enter data in the format XX/YY/ZZZZ', 'Please enter a valid date',
+    'Ungueltiges Datum', etc.  Match on the common keywords."""
+    m = (msg or "").lower()
+    return any(k in m for k in ("format", "date", "invalid", "enter", "gueltig", "valid"))
 
 
 # ================= SAP driving =================
@@ -471,14 +510,21 @@ def combine_to_csv(xlsx_paths, csv_path):
 
 
 # ================= MAIN =================
+def yesterday_date():
+    """Return yesterday as a date object; formatting happens in main()
+    so we can retry across DATE_FORMATS when SAP rejects one."""
+    return datetime.now() - timedelta(days=1)
+
+
+# Back-compat shim — keep in case external callers still import this.
 def yesterday_ddmmyyyy():
-    return (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
+    return yesterday_date().strftime("%d.%m.%Y")
 
 
 def main():
     ensure_dir(UNLOCK_DIR)
-    interface_date = yesterday_ddmmyyyy()
-    print(f"ZSDM64300 crawl · plants={PLANTS} · interface date={interface_date}")
+    interface_dt = yesterday_date()
+    print(f"ZSDM64300 crawl · plants={PLANTS} · interface date (any-fmt)={interface_dt.date().isoformat()}")
 
     sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
     conn = sap.Children(0)
@@ -487,15 +533,60 @@ def main():
         session.findById("wnd[0]").maximize()
     except: pass
 
+    # Remember the format SAP accepted on the first successful plant
+    # so later plants skip straight to it instead of re-walking every
+    # candidate.  Reset to None here so a fresh main() starts clean.
+    preferred_fmt = None
+
     xlsx_files = []
     for plant in PLANTS:
         print(f"\n── {plant} ──")
-        start_transaction_fresh(session)
-        set_selection_screen(session, plant, interface_date)
 
-        export_start_ts = time.time()
-        session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 execute
-        wait(2.0); close_popups(session, 4)
+        # Build the ordered list of formats to try: preferred first (if
+        # we already learned it earlier in this run), then every other
+        # candidate.  Each attempt restarts the TCODE so the selection
+        # screen is clean before we re-enter plant / date / radio.
+        fmt_order = []
+        if preferred_fmt:
+            fmt_order.append(preferred_fmt)
+        for f in DATE_FORMATS:
+            if f not in fmt_order:
+                fmt_order.append(f)
+
+        accepted_fmt    = None
+        export_start_ts = None
+        for i, fmt in enumerate(fmt_order, 1):
+            interface_date = interface_dt.strftime(fmt)
+            print(f"  [Attempt {i}/{len(fmt_order)}] date format = {fmt} -> {interface_date}")
+            start_transaction_fresh(session)
+            set_selection_screen(session, plant, interface_date)
+
+            export_start_ts = time.time()
+            session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8 execute
+            wait(2.0); close_popups(session, 4)
+
+            msg = sbar_text(session)
+            if sbar_is_error(session) and looks_like_date_format_error(msg):
+                print(f"    SAP rejected date format: {msg}")
+                continue  # try the next candidate
+
+            accepted_fmt = fmt
+            if msg:
+                print(f"    format {fmt} accepted (status: {msg})")
+            else:
+                print(f"    format {fmt} accepted")
+            break
+
+        if not accepted_fmt:
+            print(f"  [ERROR] {plant}: none of the candidate date formats were "
+                  f"accepted by SAP.  Check System -> User Profile -> Own Data "
+                  f"-> Defaults -> Date format and add that format to "
+                  f"DATE_FORMATS at the top of this script.")
+            continue
+
+        # Lock in the format for the remaining plants in this run.
+        if preferred_fmt is None:
+            preferred_fmt = accepted_fmt
 
         if not trigger_export(session):
             print(f"  [ERROR] {plant}: could not trigger export"); continue
