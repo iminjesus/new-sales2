@@ -2724,9 +2724,13 @@ async function fillAgedStockPanel(state){
   if (!panel || !close || !chip) return;
   close.addEventListener("click", () => {
     panel.classList.remove("visible");
-    // Only show the reopen chip if there was actually aged stock to
-    // display — otherwise there's nothing to reopen.
-    if (window._agedStockHasData) chip.classList.add("visible");
+    // Oct-20 user ask: the panel is now visible from page load, so
+    // the reopen chip must ALWAYS be available after a close —
+    // even before a customer is picked.  (Was previously gated on
+    // _agedStockHasData, which was only set once fillAgedStockPanel
+    // had real data to show; closing a pre-customer panel used to
+    // leave the user with no way back.)
+    chip.classList.add("visible");
     localStorage.setItem("agedStockClosed", "1");
   });
   chip.addEventListener("click", () => {
@@ -2734,6 +2738,20 @@ async function fillAgedStockPanel(state){
     chip.classList.remove("visible");
     localStorage.removeItem("agedStockClosed");
   });
+  /* Oct-20 user ask: show the Aged-stock panel immediately on form
+     load, before any customer is picked, so the BDE knows it exists.
+     The placeholder content in the markup already says "Load a
+     customer to see aged stock at their state plant." — once the
+     customer is picked, fillAgedStockPanel replaces that line with
+     the real data.  Respect the user's last × choice so a BDE who
+     closed it stays closed. */
+  const wasClosed = localStorage.getItem("agedStockClosed") === "1";
+  if (wasClosed) {
+    panel.classList.remove("visible");
+    chip.classList.add("visible");
+  } else {
+    panel.classList.add("visible");
+  }
 })();
 
 async function fillBaseDC(soldTo){
