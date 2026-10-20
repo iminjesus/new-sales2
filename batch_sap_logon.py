@@ -92,29 +92,67 @@ class MultiLogonError(RuntimeError):
 # polls for the dialog by window title and clicks OK via a Return
 # keypress, then exits.
 def _find_sap_security_popup():
-    """Return the HWND of the 'SAP GUI Security' popup, or None.
-    Matches both the English title and a couple of common variants."""
+    """Return the HWND of SAP's script-security popup, or None.
+
+    Older SAP GUI builds title the popup 'SAP GUI Security', newer /
+    localised ones title it plainly 'SAP Logon' or 'SAP GUI Scripting',
+    so a title-only match misses them.  Match by BODY TEXT instead —
+    the dialog always contains one of these marker phrases in a static
+    control inside the dialog ('A script is opening a connection to
+    system: G.ERP', 'A script is attaching to SAP GUI', etc.)."""
     try:
         import win32gui
     except ImportError:
         return None
+
+    # Markers inside the dialog body across EN / DE / KR.  Lower-cased
+    # match on the concatenated text of every child static control.
+    MARKERS = (
+        "script is opening",      # EN: "A script is opening a connection to system: G.ERP"
+        "script is attaching",    # EN: "A script is attaching to SAP GUI"
+        "connection to system",   # EN fragment (catches variants)
+        "attaching to sap",       # EN fragment
+        "script öffnet",          # DE: "Ein Skript öffnet eine Verbindung..."
+        "skript öffnet",          # DE alt spelling
+        "script wird",            # DE fragment
+        "스크립트",                # KR: "스크립트가 연결을 열고 있습니다..."
+    )
+
     found = []
+
     def _enum(h, _):
         try:
             if not win32gui.IsWindowVisible(h):
                 return True
-            t = (win32gui.GetWindowText(h) or "").lower()
-            # English, German, Korean localisations of the SAP GUI
-            # Scripting security dialog all contain the word "sap" and
-            # one of these cues in the title bar.
-            if "sap" in t and (
-                "security" in t or "sicherheit" in t or "보안" in t
-                or "scripting" in t
-            ):
+            title = (win32gui.GetWindowText(h) or "").lower()
+            # Fast-path: title must at least mention "sap" — otherwise
+            # we'd scan every window on the desktop for the marker.
+            if "sap" not in title:
+                return True
+            texts = []
+
+            def _collect(child, _):
+                try:
+                    texts.append((win32gui.GetWindowText(child) or "").lower())
+                except Exception:
+                    pass
+                return True
+
+            try:
+                win32gui.EnumChildWindows(h, _collect, None)
+            except Exception:
+                pass
+            # Also include the dialog's own title so an old-style
+            # 'SAP GUI Security' popup matches even if its body text
+            # is empty.
+            texts.append(title)
+            full = " ".join(texts)
+            if any(m in full for m in MARKERS) or "sap gui security" in full:
                 found.append(h)
         except Exception:
             pass
         return True
+
     try:
         win32gui.EnumWindows(_enum, None)
     except Exception:
@@ -207,7 +245,7 @@ def _get_gui_auto():
         import win32com.client  # type: ignore
     except Exception as e:
         raise NoSapError(f"pywin32 not installed: {e}")
-    _dismiss_sap_connect_popup_background(timeout_sec=15)
+    _dismiss_sap_connect_popup_background(timeout_sec=60)
     try:
         return win32com.client.GetObject("SAPGUI").GetScriptingEngine
     except Exception:
@@ -275,7 +313,7 @@ def _open_connection(sap):
     ('A script is opening a connection to system: G.ERP') is dismissed.
     We start a background watcher BEFORE the call so a human doesn't
     have to click OK — see _dismiss_sap_connect_popup_background."""
-    _dismiss_sap_connect_popup_background(timeout_sec=20)
+    _dismiss_sap_connect_popup_background(timeout_sec=60)
     conn = sap.OpenConnection(SAP_CONN, True)
     # OpenConnection returns the connection; its first child is the
     # fresh logon-screen session.
