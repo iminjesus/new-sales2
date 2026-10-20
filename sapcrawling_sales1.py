@@ -2,6 +2,7 @@ import os
 import time
 import glob
 import csv
+import subprocess
 import win32com.client
 from datetime import datetime, date, timedelta
 from openpyxl import load_workbook
@@ -86,6 +87,50 @@ def exists(session, wid):
         return True
     except:
         return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Excel killer — stops Office from locking the files we're about to write
+# ──────────────────────────────────────────────────────────────────────
+# Same pattern as sapcrawling_batch.py.  SAP's Local-File export can
+# leave Excel open on the just-saved EXPORT_*.xlsx; on a box where
+# Office isn't activated the Activation Wizard then opens and blocks
+# further scripting AND the open workbook keeps a file lock on the
+# XLSX, which stops xlsx_to_csv (openpyxl load_workbook) from reading
+# it cleanly.  Nuke them all before + after the export + conversion.
+def _kill_excel(reason=""):
+    """Terminate every EXCEL.EXE on the box, plus the Office Activation
+    Wizard siblings that keep Excel in a modal state on un-activated
+    Office installs.  Best-effort — silently returns on failure."""
+    for exe in ("EXCEL.EXE", "excel.exe"):
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", exe, "/T"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW on Windows
+            )
+        except Exception:
+            pass
+    for exe in ("OSPPREARM.EXE", "msoia.exe", "OFFICECLICKTORUN.EXE",
+                "SETUP.EXE"):
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", exe],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                creationflags=0x08000000,
+            )
+        except Exception:
+            pass
+    if reason:
+        try:
+            print(f"  [kill-excel] {reason}")
+        except Exception:
+            pass
+
 
 def close_popups(session, max_steps=6):
     for _ in range(max_steps):
@@ -505,6 +550,12 @@ def main():
         except:
             pass
 
+    # Before SAP writes a single XLSX, kill any Excel window that would
+    # otherwise lock C:\temp\EXPORT_*.xlsx or sales_thismonth.csv.  Also
+    # disposes of any Office Activation Wizard popup left over from a
+    # previous unattended run.
+    _kill_excel("pre-flight: clear Excel locks before SAP sales export")
+
     SapGuiAuto = win32com.client.GetObject("SAPGUI")
     app = SapGuiAuto.GetScriptingEngine
 
@@ -588,10 +639,20 @@ def main():
         raise RuntimeError(f"Could not find SAP export XLSX in {SAP_EXPORT_DIR}")
 
     print("Detected XLSX:", xlsx_path)
+    # Kill Excel before openpyxl's load_workbook tries to open the just-
+    # saved XLSX — SAP's "open file after save" (if ticked on this box)
+    # leaves an Excel instance holding the workbook, which trips openpyxl
+    # with a 'file in use' / zipfile BadZipFile error.
+    _kill_excel("pre-convert: release lock on just-saved sales XLSX")
     xlsx_to_csv(xlsx_path, OUT_CSV)
 
     if not file_ok(OUT_CSV, MIN_CSV_SIZE):
         raise RuntimeError("CSV conversion failed or file too small.")
+
+    # And one final kill after the conversion so no stray Excel window
+    # (Activation Wizard, "file is open elsewhere" dialog, etc.) stays
+    # on screen between hourly runs.
+    _kill_excel("post-convert: close every Excel window on the box")
 
     print("CSV saved:", OUT_CSV)
 
