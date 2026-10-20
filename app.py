@@ -4637,14 +4637,21 @@ def api_orders_additional_dc():
         # Gates (ALL must hold):
         #   • matched row exists AND additional_dc > 0 (above)
         #   • customer.sold_to_group in ('ATD', 'ATM')
-        #   • the row's line is PCLT  (callers pass `?line=PCLT|TBR`
-        #     or we infer blank → treat as "unknown" and skip to be
-        #     safe — TBR Base DCs read from the master table unmodified)
+        #   • the row is NOT a TBR line (PCLT only)
+        #
+        # Line normalisation: the raw `line` on the material feed is
+        # usually something like '1UHP&PCR' or 'PCR', not literally
+        # 'PCLT' — only TBR rows carry an exact 'TBR' token.  Mirror
+        # the frontend's applyBaseDCToRow heuristic: ANYTHING that
+        # doesn't contain 'TBR' is treated as PCLT (passenger
+        # materials outnumber TBR ~10:1, so PCLT is the right default
+        # when the line string is unknown).
         #
         # Rate:
         #   • HM (customer.channels = 'MFC') or group ATM → 52.0
         #   • everyone else (non-HM ATD)                  → 50.0
         line_arg = (request.args.get("line") or "").strip().upper()
+        is_tbr_line = "TBR" in line_arg
         override_base_dc = None
         try:
             cust_cols = _list_columns(cur, "customer")
@@ -4660,7 +4667,7 @@ def api_orders_additional_dc():
                 _c = cur.fetchone() or {}
                 cust_group   = (_c.get("sold_to_group") or "").strip().upper()
                 cust_channel = (_c.get("channels")      or "").strip().upper()
-                if cust_group in ("ATD", "ATM") and line_arg == "PCLT":
+                if cust_group in ("ATD", "ATM") and not is_tbr_line:
                     is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
                     override_base_dc = 52.0 if is_hm else 50.0
         except Exception:
