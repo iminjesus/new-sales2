@@ -2893,13 +2893,41 @@ async function applyAdditionalDCToRow(rowEl){
   // every pattern / material".
   const pat = rowEl.dataset.pattern || "";
   const mat = (rowEl.querySelector('[data-col="m_code"]')?.value || "").trim();
+  const lin = (rowEl.dataset.line || "").trim();
   if (pat) q.set("pattern", pat);
   if (mat) q.set("material", mat);
+  // Oct-20: pass line so the backend can decide the per-material ATD /
+  // ATM Base DC override (only fires on PCLT lines).
+  if (lin) q.set("line", lin);
   let data;
   try {
     const r = await fetch(`/api/orders/additional_dc?${q}`, {credentials: "same-origin"});
     data = await r.json();
   } catch(e){ return; }
+
+  /* Oct-20: per-material ATD / ATM Base DC override.
+     When data.override_base_dc is set, THIS material has earned a
+     promo DC and the row's Base DC % cell flips to 50 % (non-HM) or
+     52 % (HM / ATM).  When it's absent (null) and this row was
+     previously overridden, revert to the raw master value from
+     window._baseDCPct so a qty drop below min_qty takes the Base DC
+     back to the dc_basic_customer rate.  The Customer Details tile
+     at the top of the form is NEVER touched by this logic — it
+     always shows the raw master values. */
+  try {
+    const baseEl = rowEl.querySelector('[data-col="base_dc"]');
+    if (baseEl) {
+      if (data && data.override_base_dc != null) {
+        baseEl.value = fmtPct(data.override_base_dc);
+        baseEl.dataset.baseOverride = "1";
+      } else if (baseEl.dataset.baseOverride === "1") {
+        delete baseEl.dataset.baseOverride;
+        const _brand = (rowEl.querySelector('[data-col="brand"]')?.value || "").trim();
+        const _line  = rowEl.dataset.line || "";
+        applyBaseDCToRow(rowEl, _brand, _line);
+      }
+    }
+  } catch (_e) {}
   // Only stamp when there's no user override.  If the cell was empty
   // OR previously auto-filled by us (data-auto-sp-dc), rewrite it.
   const currentlyManual = spEl.value && spEl.dataset.autoSpDc !== "1";
@@ -3142,6 +3170,11 @@ function applyMaterial(rowEl, data){
      the Qty, even if an earlier material on this same row already
      triggered it.  Cleared here, set once by ensureQtyDefault below. */
   delete rowEl.dataset.qtyAutoDefault;
+  /* Oct-20: clear the per-row Base DC override flag so a fresh
+     material swap starts clean.  applyAdditionalDCToRow will set it
+     back to "1" when the new material actually earns a promo DC. */
+  const _baseElReset = rowEl.querySelector('[data-col="base_dc"]');
+  if (_baseElReset) delete _baseElReset.dataset.baseOverride;
   set("m_code",       data.m_code);
   set("description",  data.description);
   set("brand",        data.brand);

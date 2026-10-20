@@ -4055,127 +4055,18 @@ def api_orders_base_dc():
         if hk_tbr_pick:  out["HK_TBR"]  = hk_tbr_pick[2]
         if lf_tbr_pick:  out["LF_TBR"]  = lf_tbr_pick[2]
 
-        # ATD / ATM Base DC override — business rule (Oct-14 revision):
-        # when the customer's sold_to_group is ATD/ATM AND they
-        # qualify for ANY promo (not just 443 — Black Friday, Special,
-        # Kinergy, etc.) in dc_additional_customer_new (preferred) or
-        # the legacy dc_additional_customer (fallback), the PCLT Base
-        # DC on the matching brand is REPLACED by a flat rate:
-        #   • HM (customer.channels='MFC') or ATM group → 52 %
-        #   • everyone else (non-HM ATD)                → 50 %
-        # Difference vs the pre-Oct-14 rule:
-        #   (a) ANY promo, not only 443 — the user Oct-14 message
-        #       referenced "Black Friday" as the promo, confirming
-        #       the rule is promo-agnostic;
-        #   (b) REPLACE, not cap — the rule reads "Base DC% change
-        #       to 50 % from original Base DC%", so a master DC of
-        #       45 % also moves up to 50 % when the override fires;
-        #   (c) read dc_additional_customer_new first (the renamed
-        #       table the Oct-14 feed drops), fall back to the
-        #       legacy table if the new one isn't loaded.
-        # A missing (None) master value stays None (the operator
-        # will key in the real number — the rule can't manufacture
-        # one from scratch).  Promo rules carry their own brand
-        # (HK or LF), so we gate the HK-PCLT override on an HK-brand
-        # row and LF-PCLT on an LF-brand row.  TBR cells on either
-        # brand stay as the master table said.
-        try:
-            cust_cols = _list_columns(cur, "customer")
-            cust_group = ""
-            cust_channel = ""
-            if "sold_to_group" in cust_cols:
-                _sel_bits = ["sold_to_group"]
-                if "channels" in cust_cols: _sel_bits.append("channels")
-                cur.execute(
-                    f"SELECT {', '.join(_sel_bits)} FROM customer "
-                    f"WHERE sold_to = %s LIMIT 1",
-                    (sold_to,),
-                )
-                _c = cur.fetchone() or {}
-                cust_group   = (_c.get("sold_to_group") or "").strip().upper()
-                cust_channel = (_c.get("channels")      or "").strip().upper()
-            if cust_group in ("ATD", "ATM"):
-                # Resolve which promo-source table is live on this
-                # deployment: prefer dc_additional_customer_new (the
-                # Oct-14 renamed feed), fall back to the legacy one.
-                _promo_table = None
-                for _tbl in ("dc_additional_customer_new",
-                             "dc_additional_customer"):
-                    try:
-                        cur.execute("SHOW TABLES LIKE %s", (_tbl,))
-                        if cur.fetchone():
-                            _promo_table = _tbl
-                            break
-                    except Exception:
-                        continue
-                # Which brands does this customer carry ANY promo for?
-                # (Not restricted to 443 — Black Friday / Special /
-                # Kinergy etc. all count toward the override gate.)
-                has_promo_by_brand = {"HK": False, "LF": False}
-                if _promo_table:
-                    try:
-                        ac_cols = _list_columns(cur, _promo_table)
-                        if "brand" in ac_cols:
-                            gate = "TRIM(sold_to) = %s"
-                            params = [sold_to]
-                            if cust_group and "customer_grp" in ac_cols:
-                                gate = "(TRIM(sold_to) = %s OR UPPER(TRIM(customer_grp)) = %s)"
-                                params.append(cust_group)
-                            # additional_dc must be a real discount so
-                            # a stray zero-row doesn't trigger the
-                            # override.  No promo-name filter — ANY
-                            # populated promo rule counts.
-                            _dc_filter = ""
-                            if "additional_dc" in ac_cols:
-                                _dc_filter = (" AND additional_dc IS NOT NULL "
-                                              " AND additional_dc <> 0 ")
-                            cur.execute(
-                                f"SELECT DISTINCT UPPER(TRIM(brand)) AS brand "
-                                f"FROM {_promo_table} "
-                                f"WHERE {gate} {_dc_filter}",
-                                tuple(params),
-                            )
-                            for _r in (cur.fetchall() or []):
-                                _b = (_r.get("brand") or "").strip().upper()
-                                if _b in has_promo_by_brand:
-                                    has_promo_by_brand[_b] = True
-                    except Exception:
-                        pass
-                is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
-                _rate = 52.0 if is_hm else 50.0
-                # Replace, don't cap — the rule reads "change to
-                # <rate> from original" so a master DC below the rate
-                # moves UP to the rate too.  A missing master value
-                # stays None (operator keys it in manually; the rule
-                # can't manufacture a Base DC from nothing).
-                def _replace_at(key):
-                    cur_val = out.get(key)
-                    if cur_val is None:
-                        return None
-                    return _rate
-                _before_hk = out.get("HK_PCLT")
-                _before_lf = out.get("LF_PCLT")
-                if has_promo_by_brand["HK"]:
-                    out["HK_PCLT"] = _replace_at("HK_PCLT")
-                if has_promo_by_brand["LF"]:
-                    out["LF_PCLT"] = _replace_at("LF_PCLT")
-                if debug:
-                    out["_debug"]["atd_promo_override"] = {
-                        "sold_to_group":    cust_group,
-                        "channels":         cust_channel,
-                        "is_hm":            is_hm,
-                        "promo_table":      _promo_table,
-                        "has_promo_hk":     has_promo_by_brand["HK"],
-                        "has_promo_lf":     has_promo_by_brand["LF"],
-                        "rate":             _rate,
-                        "HK_PCLT_before":   _before_hk,
-                        "HK_PCLT_after":    out.get("HK_PCLT"),
-                        "LF_PCLT_before":   _before_lf,
-                        "LF_PCLT_after":    out.get("LF_PCLT"),
-                    }
-        except Exception as _e:
-            if debug:
-                out["_debug"]["atd_promo_override_err"] = str(_e)
+        # Oct-20 user ask: the ATD / ATM Base DC override no longer
+        # fires at the Customer Details level.  This endpoint returns
+        # the RAW dc_basic_customer values; the Customer Details tile
+        # displays those unmodified so the operator sees the master
+        # table as-is.
+        #
+        # The per-material override (PCLT Base DC → 50 % non-HM,
+        # 52 % HM / ATM when THIS material actually earns a promo
+        # DC) now lives on /api/orders/additional_dc as an
+        # `override_base_dc` field.  Only the row whose material has
+        # a positive promo DC flips its Base DC % cell; every other
+        # row keeps the raw master value.
 
         if debug:
             def _s(v):
@@ -4734,6 +4625,48 @@ def api_orders_additional_dc():
         out["source"]        = row.get("source")
         out["tier"]          = row.get("tier")
         out["promo"]         = (row.get("promo") or "")
+
+        # Oct-20 user ask: per-material ATD / ATM Base DC override.
+        # When THIS material actually earns a promo DC for an ATD or
+        # ATM customer, THIS row's PCLT Base DC % flips to 50 % (non-
+        # HM) or 52 % (HM / ATM).  Returned as `override_base_dc` on
+        # the response so the front-end can write it into this row's
+        # base_dc cell without touching the Customer Details tile
+        # or any other row's base_dc.
+        #
+        # Gates (ALL must hold):
+        #   • matched row exists AND additional_dc > 0 (above)
+        #   • customer.sold_to_group in ('ATD', 'ATM')
+        #   • the row's line is PCLT  (callers pass `?line=PCLT|TBR`
+        #     or we infer blank → treat as "unknown" and skip to be
+        #     safe — TBR Base DCs read from the master table unmodified)
+        #
+        # Rate:
+        #   • HM (customer.channels = 'MFC') or group ATM → 52.0
+        #   • everyone else (non-HM ATD)                  → 50.0
+        line_arg = (request.args.get("line") or "").strip().upper()
+        override_base_dc = None
+        try:
+            cust_cols = _list_columns(cur, "customer")
+            if "sold_to_group" in cust_cols:
+                _sel_bits = ["sold_to_group"]
+                if "channels" in cust_cols:
+                    _sel_bits.append("channels")
+                cur.execute(
+                    f"SELECT {', '.join(_sel_bits)} FROM customer "
+                    f"WHERE sold_to = %s LIMIT 1",
+                    (sold_to,),
+                )
+                _c = cur.fetchone() or {}
+                cust_group   = (_c.get("sold_to_group") or "").strip().upper()
+                cust_channel = (_c.get("channels")      or "").strip().upper()
+                if cust_group in ("ATD", "ATM") and line_arg == "PCLT":
+                    is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
+                    override_base_dc = 52.0 if is_hm else 50.0
+        except Exception:
+            override_base_dc = None
+        out["override_base_dc"] = override_base_dc
+
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
