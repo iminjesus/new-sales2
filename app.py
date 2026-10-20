@@ -2629,10 +2629,21 @@ def api_orders_customer():
             "phone":           "phone",
             "telephone":       "telephone",
             "contact_phone":   "contact_phone",
+            "phone_number":    "phone_number",
             "mobile":          "mobile",
             "mobile_phone":    "mobile_phone",
+            "mobile_number":   "mobile_number",
+            # Oct-20: Customer Master's "E-Mail Address" header gets
+            # loaded into MySQL under one of several sanitized names
+            # depending on the loader.  Accept every variant so the
+            # endpoint picks it up without needing a schema migration.
             "email":           "email",
             "contact_email":   "contact_email",
+            "email_address":   "email_address",
+            "e_mail":          "e_mail",
+            "e_mail_address":  "e_mail_address",
+            "e_mailaddress":   "e_mailaddress",
+            "emailaddress":    "emailaddress",
         }
         select_cols = [c for c in wanted if c in cols]
         if not select_cols:
@@ -2719,9 +2730,18 @@ def api_orders_customer():
         # deployment actually stores the value in.
         addr_parts = [out.get("address"), out.get("address_1"), out.get("ship_to_address"), out.get("city")]
         out["address"] = ", ".join([p for p in addr_parts if p]) or ""
-        out["phone"]   = out.get("phone")     or out.get("telephone")     or out.get("contact_phone") or ""
-        out["mobile"]  = out.get("mobile")    or out.get("mobile_phone")  or ""
-        out["email"]   = out.get("email")     or out.get("contact_email") or ""
+        out["phone"]   = (out.get("phone") or out.get("telephone")
+                          or out.get("contact_phone") or out.get("phone_number")
+                          or "")
+        out["mobile"]  = (out.get("mobile") or out.get("mobile_phone")
+                          or out.get("mobile_number") or "")
+        # Oct-20: pick email from any of the loader-produced column
+        # variants so the frontend can display "phone (email)" when
+        # the customer has one on file.
+        out["email"]   = (out.get("email") or out.get("contact_email")
+                          or out.get("email_address") or out.get("e_mail")
+                          or out.get("e_mail_address") or out.get("e_mailaddress")
+                          or out.get("emailaddress") or "")
         # ship_to_state is the authoritative jurisdiction on the customer
         # row; bde_state is the sales-org region and can differ from it.
         out["state"]   = out.get("ship_to_state") or out.get("state") or out.get("bde_state") or ""

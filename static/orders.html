@@ -2421,7 +2421,18 @@ function applyCustomer(row, kind){
     set("ship_to_name",    row.ship_to_name || "");
     set("ship_to_address", row.address || "");
     set("ship_to_state",   row.state || row.bde_state || "");
-    set("phone_email",     row.phone || row.email || "");
+    // Oct-20 user ask: show "phone (email)" when the customer row
+    // carries both.  Fall back to whichever single one is present;
+    // if neither, stay blank so the "—" placeholder shows through.
+    {
+      const _ph = (row.phone || "").trim();
+      const _em = (row.email || "").trim();
+      let _combined = "";
+      if (_ph && _em)      _combined = `${_ph} (${_em})`;
+      else if (_ph)        _combined = _ph;
+      else if (_em)        _combined = _em;
+      set("phone_email", _combined);
+    }
     set("mobile",          row.mobile || "");
   } else {
     // Scrub any ship-side values that a PREVIOUSLY-loaded customer
