@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import glob
 import csv
@@ -611,6 +612,22 @@ def main():
 
         go_back_to_selection(session)
 
+    # Oct-20 safety guard: if NO plant produced an XLSX this run, DO NOT
+    # overwrite the previous good dot_stock.csv.  combine_to_csv opens
+    # with mode='w' and would truncate the file to a header-only line,
+    # which load_csv_to_mysql then loads as 0 rows and clobbers the
+    # whole `stock` table.  Preserve the previous CSV instead so the
+    # downstream loader keeps using yesterday's good data until the
+    # next successful crawl.
+    if not xlsx_files:
+        raise RuntimeError(
+            "No plants produced an XLSX this run — leaving existing "
+            f"{COMBINED_CSV} untouched so the loader keeps using the "
+            "previous good data.  Investigate the per-plant errors "
+            "above.  To rebuild the CSV from the on-disk per-plant "
+            "XLSXs, run: python sapcrawling.py --combine-only"
+        )
+
     print("\n── Combine to CSV ──")
     combine_to_csv(xlsx_files, COMBINED_CSV)
 
@@ -624,5 +641,52 @@ def main():
             except: pass
 
 
+def _combine_only_mode():
+    """Rebuild COMBINED_CSV from whatever per-plant dot_stock_*.xlsx
+    files are already on disk — skips SAP entirely, no F8, no popups.
+
+    Recovery path for the situation where the per-plant XLSXs landed on
+    disk from an earlier successful crawl but the combined dot_stock.csv
+    got truncated by a LATER failed crawl (before the safety guard
+    above was in place).
+
+    Usage:  python sapcrawling.py --combine-only
+    """
+    ensure_dir(UNLOCK_DIR)
+    print(f"[combine-only] rebuilding {COMBINED_CSV} from on-disk per-plant XLSXs")
+    existing = []
+    for plant in PLANTS:
+        p = os.path.join(UNLOCK_DIR, f"dot_stock_{plant}.xlsx")
+        if os.path.exists(p) and os.path.getsize(p) > 500:
+            existing.append(p)
+            print(f"  picked up {os.path.basename(p)}  "
+                  f"({os.path.getsize(p):,} bytes, "
+                  f"mtime {datetime.fromtimestamp(os.path.getmtime(p)).isoformat()})")
+        else:
+            print(f"  [skip] missing / empty: {p}")
+    if not existing:
+        raise RuntimeError(
+            "No per-plant dot_stock_*.xlsx files found in "
+            f"{UNLOCK_DIR}.  Run a full crawl first "
+            "(python sapcrawling.py) so the plant XLSXs land on "
+            "disk, then re-run with --combine-only."
+        )
+    print("\n── Combine to CSV ──")
+    combine_to_csv(existing, COMBINED_CSV)
+    size = os.path.getsize(COMBINED_CSV)
+    if size < MIN_CSV_SIZE:
+        raise RuntimeError(
+            f"Combined CSV too small ({size} bytes).  Every on-disk "
+            "XLSX produced zero keep-rows — the per-plant files may "
+            "themselves be stale / corrupted.  Delete them and run a "
+            "full crawl."
+        )
+    print(f"\nDone.  {COMBINED_CSV} rebuilt from {len(existing)} plant file(s).")
+    print(f"Run load_csv_to_mysql.py next to push into MySQL.")
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] in ("--combine-only", "-c"):
+        _combine_only_mode()
+    else:
+        main()
