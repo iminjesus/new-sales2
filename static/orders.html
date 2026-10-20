@@ -3563,7 +3563,13 @@ function applySOVDRatesToRows(){
          (bug reported: "can't type in 443DC").  The sp_dc keydown /
          blur handler is what commits the target-DC back-solve. */
       if (document.activeElement === spEl) return;
-      if (isSOVDEligible(r)) {
+      /* Oct-20 user rule: when the customer's ladder has NO tier
+         whose min_qty is <= current TTL (e.g. ACS / AMD only ship
+         a min_qty=4 rule, so TTL<4 picks nothing), rate falls to 0
+         and we must NOT stamp 0 %.  Treat rate=0 the same as "not
+         eligible" — clear any stale SOVD stamp AND leave the sp_dc
+         cell blank. */
+      if (isSOVDEligible(r) && rate > 0) {
         const cur = toNum(spEl.value);
         if (Math.abs(cur - rate) > 0.01) {
           spEl.value = fmtPct(rate);
