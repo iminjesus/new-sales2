@@ -28,6 +28,7 @@ Design notes:
 import os
 import sys
 import time
+import threading
 import subprocess
 
 # ── Logging — mirror into batch_orchestrator.log so a stuck login
@@ -79,6 +80,118 @@ class MultiLogonError(RuntimeError):
     pass
 
 
+# ──────────────────────────────────────────────────────────────────────
+# SAP GUI "Security" popup auto-dismisser
+# ──────────────────────────────────────────────────────────────────────
+# SAP Logon pops up "A script is opening a connection to system: G.ERP"
+# (or "A script is attaching to SAP GUI") when scripting touches a
+# connection.  The clean fix is to untick 'Notify when a script opens
+# a connection' in SAP Logon → Options → Scripting; this watcher is a
+# belt-and-braces fallback for boxes where that setting is still on
+# (or re-enabled by Group Policy).  We spawn a background thread that
+# polls for the dialog by window title and clicks OK via a Return
+# keypress, then exits.
+def _find_sap_security_popup():
+    """Return the HWND of the 'SAP GUI Security' popup, or None.
+    Matches both the English title and a couple of common variants."""
+    try:
+        import win32gui
+    except ImportError:
+        return None
+    found = []
+    def _enum(h, _):
+        try:
+            if not win32gui.IsWindowVisible(h):
+                return True
+            t = (win32gui.GetWindowText(h) or "").lower()
+            # English, German, Korean localisations of the SAP GUI
+            # Scripting security dialog all contain the word "sap" and
+            # one of these cues in the title bar.
+            if "sap" in t and (
+                "security" in t or "sicherheit" in t or "보안" in t
+                or "scripting" in t
+            ):
+                found.append(h)
+        except Exception:
+            pass
+        return True
+    try:
+        win32gui.EnumWindows(_enum, None)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def _dismiss_sap_connect_popup_background(timeout_sec=25):
+    """Start a background watcher that auto-OKs the SAP GUI Security
+    popup within `timeout_sec`.  Returns immediately so the caller can
+    continue with sap.OpenConnection (which BLOCKS waiting for the
+    popup to be dismissed).  Silently no-ops if pywin32 is missing."""
+    try:
+        import win32gui, win32con
+    except ImportError:
+        _slog("pywin32 missing — can't auto-dismiss SAP security popup "
+              "(disable 'Notify when a script opens a connection' in "
+              "SAP Logon Options to skip this prompt entirely)")
+        return None
+
+    def _click_ok_in(dlg_hwnd):
+        """Find the OK button inside the dialog by its text and click
+        it via BM_CLICK.  Covers EN/DE/KR labels."""
+        clicked = {"done": False}
+        OK_LABELS = ("ok", "확인", "yes", "예", "ja")
+
+        def _enum_children(h, _):
+            try:
+                txt = (win32gui.GetWindowText(h) or "").strip().lower().strip("&")
+                cls = win32gui.GetClassName(h) or ""
+                if "button" in cls.lower() and any(txt == l for l in OK_LABELS):
+                    # BM_CLICK = 0x00F5
+                    win32gui.SendMessage(h, 0x00F5, 0, 0)
+                    clicked["done"] = True
+                    return False
+            except Exception:
+                pass
+            return True
+        try:
+            win32gui.EnumChildWindows(dlg_hwnd, _enum_children, None)
+        except Exception:
+            pass
+        return clicked["done"]
+
+    def _runner():
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            hwnd = _find_sap_security_popup()
+            if hwnd:
+                try:
+                    try:
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+                    # Primary: directly click the OK button inside the
+                    # dialog via BM_CLICK on the button HWND whose text
+                    # matches one of our labels.
+                    if _click_ok_in(hwnd):
+                        _slog("auto-dismissed SAP GUI Security popup (OK click)")
+                        return
+                    # Fallback: send a Return keypress.  OK is almost
+                    # always the default button, so Enter activates it.
+                    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+                    time.sleep(0.05)
+                    win32gui.PostMessage(hwnd, win32con.WM_KEYUP,   win32con.VK_RETURN, 0)
+                    _slog("auto-dismissed SAP GUI Security popup (Enter)")
+                    return
+                except Exception as e:
+                    _slog(f"SAP popup dismiss failed: {e}")
+                    return
+            time.sleep(0.25)
+
+    t = threading.Thread(target=_runner, name="sap-popup-dismiss", daemon=True)
+    t.start()
+    return t
+
+
 class NoSapError(RuntimeError):
     """Raised when SAP Logon isn't installed or can't be reached."""
     pass
@@ -86,11 +199,15 @@ class NoSapError(RuntimeError):
 
 def _get_gui_auto():
     """Return the SAPGUI scripting-engine root, or None if SAP Logon
-    isn't running / scripting isn't enabled."""
+    isn't running / scripting isn't enabled.
+
+    GetScriptingEngine can also trigger the 'A script is attaching to
+    SAP GUI' security popup, so arm the dismisser before the call."""
     try:
         import win32com.client  # type: ignore
     except Exception as e:
         raise NoSapError(f"pywin32 not installed: {e}")
+    _dismiss_sap_connect_popup_background(timeout_sec=15)
     try:
         return win32com.client.GetObject("SAPGUI").GetScriptingEngine
     except Exception:
@@ -152,7 +269,13 @@ def _launch_logon():
 
 
 def _open_connection(sap):
-    """Open the SAP_CONN entry from SAP Logon.  Returns the new session."""
+    """Open the SAP_CONN entry from SAP Logon.  Returns the new session.
+
+    sap.OpenConnection BLOCKS until the SAP GUI Security popup
+    ('A script is opening a connection to system: G.ERP') is dismissed.
+    We start a background watcher BEFORE the call so a human doesn't
+    have to click OK — see _dismiss_sap_connect_popup_background."""
+    _dismiss_sap_connect_popup_background(timeout_sec=20)
     conn = sap.OpenConnection(SAP_CONN, True)
     # OpenConnection returns the connection; its first child is the
     # fresh logon-screen session.

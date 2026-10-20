@@ -4,6 +4,7 @@ import time
 import glob
 import csv
 import shutil
+import subprocess
 import win32com.client
 from datetime import datetime, timedelta
 from openpyxl import load_workbook
@@ -123,6 +124,55 @@ def exists(session, wid):
         return True
     except:
         return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Excel killer — stops Office from locking the files we're about to write
+# ──────────────────────────────────────────────────────────────────────
+# SAP's Local-File export can leave Excel open on the just-saved
+# EXPORT_*.xlsx.  On a box where Office isn't activated, the Activation
+# Wizard pops up and blocks Excel from closing on its own — AND the
+# workbook keeps a file lock on EXPORT_*.xlsx and on the per-plant
+# dot_stock_*.xlsx we're about to overwrite with shutil.copy2.  Nuke
+# every Excel process with /F /T (force + child tree) so modal dialogs
+# like the Activation Wizard, "This file is open elsewhere…" and
+# "Excel can't do this because a dialog box is open" all go away with
+# their parent.
+def _kill_excel(reason=""):
+    """Terminate every EXCEL.EXE on the box.  Returns silently on
+    failure — this is a best-effort cleanup, not a hard requirement."""
+    for exe in ("EXCEL.EXE", "excel.exe"):
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", exe, "/T"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW on Windows
+            )
+        except Exception:
+            pass
+    # Also take out the Office Activation Wizard and the "sideloading"
+    # watchdog that can pop up when Office isn't activated.  These keep
+    # Excel in a modal state even after EXCEL.EXE is killed on some
+    # Office 2016 builds.
+    for exe in ("OSPPREARM.EXE", "msoia.exe", "OFFICECLICKTORUN.EXE",
+                "SETUP.EXE"):
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", exe],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                creationflags=0x08000000,
+            )
+        except Exception:
+            pass
+    if reason:
+        try:
+            print(f"  [kill-excel] {reason}")
+        except Exception:
+            pass
 
 def close_popups(session, max_steps=6):
     for _ in range(max_steps):
@@ -527,6 +577,12 @@ def main():
     interface_dt = yesterday_date()
     print(f"ZSDM64300 crawl · plants={PLANTS} · interface date (any-fmt)={interface_dt.date().isoformat()}")
 
+    # Before SAP writes a single XLSX, kill any Excel window that would
+    # otherwise lock C:\temp\EXPORT_*.xlsx or dot_stock_*.xlsx.  This
+    # also disposes of any Office Activation Wizard popup left over
+    # from a previous unattended run.
+    _kill_excel("pre-flight: clear Excel locks before SAP export")
+
     sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
     conn = sap.Children(0)
     session = conn.Children(0)
@@ -606,9 +662,19 @@ def main():
             go_back_to_selection(session); continue
 
         dest = os.path.join(UNLOCK_DIR, f"dot_stock_{plant}.xlsx")
+        # Make sure no Excel is holding the destination; if the previous
+        # plant's XLSX got auto-opened in Excel after SAP wrote it, the
+        # copy below will fail with PermissionError.
+        _kill_excel(f"before copy of {plant} XLSX")
         shutil.copy2(xlsx_path, dest)
         print(f"  {plant} XLSX → {dest}")
         xlsx_files.append(dest)
+
+        # And kill Excel again AFTER the copy so SAP's "open file after
+        # save" setting (if ticked on this box) doesn't leave an Excel
+        # window up on the just-saved EXPORT_*.xlsx — which would then
+        # keep the file locked for the next plant's export.
+        _kill_excel(f"after copy of {plant} XLSX")
 
         go_back_to_selection(session)
 
@@ -627,6 +693,12 @@ def main():
             "above.  To rebuild the CSV from the on-disk per-plant "
             "XLSXs, run: python sapcrawling_batch.py --combine-only"
         )
+
+    # One more Excel cleanup before openpyxl reads each per-plant XLSX
+    # and before combine_to_csv opens dot_stock.csv for writing — if any
+    # Excel instance is still hanging on either file, this release lets
+    # openpyxl / combine_to_csv open them cleanly.
+    _kill_excel("pre-combine: release any locks on per-plant XLSXs + CSV")
 
     print("\n── Combine to CSV ──")
     combine_to_csv(xlsx_files, COMBINED_CSV)
