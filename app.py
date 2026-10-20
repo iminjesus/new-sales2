@@ -4713,6 +4713,22 @@ def api_orders_additional_dc():
 # order form and the list page both read/write via /api/orders/* below.
 # ══════════════════════════════════════════════════════════════════════
 HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
+# Oct-20 user ask: HKCustomerService shares Harry's CS role — gets
+# every submitted-order email, can flip "SAP order entered?" Y/N,
+# and enter the SAP SD #.  Access rights identical to Harry's.
+HKCUSTOMERSERVICE_EMAIL = "HKCustomerService@hankooktyre.com.au"
+# Everyone on the CS team.  Add new CS addresses here and both the
+# notification fan-out and the role-check helper pick them up with
+# no further edit.
+CS_TEAM_EMAILS = [HARRY_CS_EMAIL, HKCUSTOMERSERVICE_EMAIL]
+_CS_TEAM_LOWER = {e.lower() for e in CS_TEAM_EMAILS}
+
+
+def _is_cs_user(email) -> bool:
+    """True when `email` is on the CS team (Harry OR HKCustomerService).
+    Case-insensitive, whitespace-tolerant.  Replaces the old
+    `who == HARRY_CS_EMAIL.lower()` scattered through the code."""
+    return (email or "").strip().lower() in _CS_TEAM_LOWER
 # Parallel approvers — each can approve independently; the FIRST
 # approver to click Approve finalises the order and their name is
 # recorded on approved_by_email / approved_by_name / approved_at.
@@ -5522,11 +5538,11 @@ def api_orders_submit():
     payload_for_mail["order_no"]            = order_no
     payload_for_mail["rebateable"]          = rebateable
     # When approval is needed, put every approver on To alongside
-    # Harry so everyone who has to act sees it in their inbox
-    # directly.  Otherwise it's Harry-only.  BDE + the read-only
+    # the CS team so everyone who has to act sees it in their inbox
+    # directly.  Otherwise it's CS-only.  BDE + the read-only
     # reviewers (Brian, Minku, Pamela) always go on Cc so the flow
     # stays visible without giving them an Approve button.
-    to_list = [HARRY_CS_EMAIL]
+    to_list = list(CS_TEAM_EMAILS)
     if needs_approval == "Y":
         to_list += MGMT_APPROVER_EMAILS
     cc = [submitted_by_email] if submitted_by_email else []
@@ -5744,7 +5760,7 @@ def api_orders_list():
     # Role-based scope:
     #   • MGMT_APPROVER_EMAILS (Kenny, Hayden, JJ)      → all rows
     #   • SPRF_READONLY_CC     (Brian, Minku, Pamela)   → all rows
-    #   • HARRY_CS_EMAIL                                → all rows
+    #   • CS_TEAM_EMAILS (Harry + HKCustomerService)    → all rows
     #   • DEV_ADMIN_EMAILS     (desktop-dashboard admin)→ all rows
     #   • STATE_MANAGERS       (manager → state group)  → own + state
     #   • everyone else                                 → own rows only
@@ -5766,7 +5782,7 @@ def api_orders_list():
         not who
         or who in {e.lower() for e in MGMT_APPROVER_EMAILS}
         or who in {e.lower() for e in SPRF_READONLY_CC}
-        or who == HARRY_CS_EMAIL.lower()
+        or _is_cs_user(who)
         or who in {e.lower() for e in DEV_ADMIN_EMAILS}
     )
     # State scope for the caller (empty list unless they're in
@@ -6068,10 +6084,11 @@ def api_orders_status(oid):
     if new_stat not in ("Y", "N"):
         return jsonify({"error": "status must be Y or N"}), 400
     who = (_bde_from_request() or "").strip().lower()
-    # Only Harry (CS) can flip the SAP-entered flag.  Leadership /
-    # ALL-role users can view the panel but not write.
-    if who != HARRY_CS_EMAIL:
-        return jsonify({"error": "only Harry (CS) can change SAP status"}), 403
+    # Only the CS team (Harry OR HKCustomerService) can flip the
+    # SAP-entered flag.  Leadership / ALL-role users can view the
+    # panel but not write.
+    if not _is_cs_user(who):
+        return jsonify({"error": "only CS (Harry / HKCustomerService) can change SAP status"}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         # Approval gate — mirror the frontend wireStatusPanel lock
@@ -6128,8 +6145,8 @@ def api_orders_set_sd_no(oid):
     payload = request.get_json(silent=True) or {}
     val     = (str(payload.get("sd_no") or "")).strip()[:50]
     who     = (_bde_from_request() or "").strip().lower()
-    if who != HARRY_CS_EMAIL:
-        return jsonify({"error": "only Harry (CS) can stamp an SD No."}), 403
+    if not _is_cs_user(who):
+        return jsonify({"error": "only CS (Harry / HKCustomerService) can stamp an SD No."}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         # Approval gate — same rule as the status endpoint above.
@@ -6216,7 +6233,7 @@ def api_orders_update(oid):
         role         = _EMAIL_TO_DIR.get(who, (None, None, None))[2]
         is_editor    = who in PRICE_EDITOR_EMAILS
         is_approver  = who in {e.lower() for e in MGMT_APPROVER_EMAILS}
-        is_harry     = who == HARRY_CS_EMAIL.lower()
+        is_harry     = _is_cs_user(who)   # back-compat name; now matches any CS member
         # An "orphan-owned" row (empty submitted_by_email — dev /
         # self-hosted create, or a legacy row that predates the
         # column) is treated as owned by whoever's session is
@@ -6439,7 +6456,7 @@ def api_orders_update(oid):
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload_for_mail["needs_mgmt_approval"] = needs_approval
     payload_for_mail["mgmt_reason"]         = mgmt_reason
-    to_list = [HARRY_CS_EMAIL]
+    to_list = list(CS_TEAM_EMAILS)
     if needs_approval == "Y":
         to_list += MGMT_APPROVER_EMAILS
     cc = [who] if who else []
@@ -6608,7 +6625,7 @@ def api_orders_approve(oid):
             base_url = ""
         order_no = order_snapshot.get("order_no") or f"#{oid}"
         bde_email = (order_snapshot.get("submitted_by_email") or "").strip().lower()
-        to_list = [HARRY_CS_EMAIL] + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
+        to_list = list(CS_TEAM_EMAILS) + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
         cc      = [bde_email] if bde_email else []
         cc     += SPRF_READONLY_CC
         subject = (f"[SPRF APPROVED {order_no}] {approver_name} · "
@@ -6711,7 +6728,7 @@ def api_orders_reject(oid):
             base_url = ""
         order_no = snap.get("order_no") or f"#{oid}"
         bde_email = (snap.get("submitted_by_email") or "").strip().lower()
-        to_list = [HARRY_CS_EMAIL] + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
+        to_list = list(CS_TEAM_EMAILS) + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
         cc      = ([bde_email] if bde_email else []) + list(SPRF_READONLY_CC)
         subject = (f"[SPRF REJECTED {order_no}] {rejector_name} · "
                    f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
@@ -6814,7 +6831,7 @@ def api_orders_cancel(oid):
             base_url = ""
         order_no = row.get("order_no") or f"#{oid}"
         bde_email = (row.get("submitted_by_email") or "").strip().lower()
-        to_list = [HARRY_CS_EMAIL] + list(MGMT_APPROVER_EMAILS)
+        to_list = list(CS_TEAM_EMAILS) + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
         subject = (f"[SPRF DELETED {order_no}] by {who or 'requester'} · "
                    f"{row.get('sold_to_name','')} ({row.get('sold_to','')})")
@@ -6899,7 +6916,7 @@ def api_orders_revive(oid):
             base_url = ""
         order_no = snap.get("order_no") or f"#{oid}"
         bde_email = (snap.get("submitted_by_email") or "").strip().lower()
-        to_list = [HARRY_CS_EMAIL] + list(MGMT_APPROVER_EMAILS)
+        to_list = list(CS_TEAM_EMAILS) + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
         subject = (f"[SPRF REVIVED {order_no}] by {who or 'requester'} · "
                    f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
@@ -6970,10 +6987,12 @@ def api_orders_whoami():
         # informational; the backend NEVER promotes local_user into
         # any role check.
         "local_user": local_user,
-        # Only Harry can flip Y/N — kept as a single field the front
-        # end can key off (no ALL-role fallback here).
-        "is_cs":         who == HARRY_CS_EMAIL,
-        "is_harry":      who == HARRY_CS_EMAIL,
+        # Oct-20: both Harry AND HKCustomerService can flip Y/N and
+        # stamp the SAP SD #.  is_cs / is_harry are now equivalent
+        # ("is this user a CS team member?") — kept as two fields
+        # only because the frontend reads both independently.
+        "is_cs":         _is_cs_user(who),
+        "is_harry":      _is_cs_user(who),
         "is_approver_a": who == MGMT_APPROVER_EMAILS[0],   # Hayden
         "is_approver_b": who == MGMT_APPROVER_EMAILS[1],   # JunJong
         "is_approver_c": who == MGMT_APPROVER_EMAILS[2],   # Kenny
@@ -7010,7 +7029,7 @@ def api_orders_list_excel():
         not who
         or who in {e.lower() for e in MGMT_APPROVER_EMAILS}
         or who in {e.lower() for e in SPRF_READONLY_CC}
-        or who == HARRY_CS_EMAIL.lower()
+        or _is_cs_user(who)
         or who in {e.lower() for e in DEV_ADMIN_EMAILS}
     )
     conn = get_connection(); cur = conn.cursor(dictionary=True)
