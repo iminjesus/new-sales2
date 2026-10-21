@@ -3123,6 +3123,24 @@ def _stock_report_rows_for_suggest():
         _brand = (r.get("brand")        or "").strip()
         _prod  = (r.get("product_name") or r.get("line") or "").strip()
         _pat   = (r.get("pattern")      or "").strip()
+        # Oct-21 user ask: surface OPE / Fade-Out status + per-state
+        # stock on each suggest row so the BDE sees at a glance whether
+        # the material is actively supplied and what the stock is in
+        # their own state.  stock_dashboard rows already carry both
+        # sku_status (collapsed primary label) and state_stock
+        # ({NSW: n, QLD: n, VIC: n, WA: n, …}).
+        _sku_status  = str(r.get("sku_status") or "").strip()
+        _state_stock = r.get("state_stock") or {}
+        if not isinstance(_state_stock, dict):
+            _state_stock = {}
+        # Keep only the 4 live states + round to int so JSON stays lean
+        # (STK dashboard sometimes sits on 0.0 floats).
+        _state_stock_slim = {}
+        for _st in ("NSW", "QLD", "VIC", "WA"):
+            try:
+                _state_stock_slim[_st] = int(float(_state_stock.get(_st) or 0))
+            except Exception:
+                _state_stock_slim[_st] = 0
         seen[mc] = {
             "m_code":       mc,
             # Stock report keeps raw "11R22.5" / "225/50R17" in size.
@@ -3134,6 +3152,10 @@ def _stock_report_rows_for_suggest():
             "brand":        _brand,
             "product_name": _prod,
             "pattern":      _pat,
+            # Oct-21: OPE / Fade-Out status and per-state stock for the
+            # SPRF popover.
+            "sku_status":   _sku_status,
+            "state_stock":  _state_stock_slim,
             # Oct-13 perf: pre-compute the normalised + digits-only
             # strings used by the suggest filter so the per-keystroke
             # pass doesn't have to re-regex each of 10k+ rows.  Keys

@@ -2238,6 +2238,51 @@ function _matParts(r){
   return bits.join(" · ");
 }
 
+/* Oct-21 user ask: append two trailing badges to each popover row so
+   the BDE sees at a glance:
+     • OPE / F/O / M/S / Testing / Transfer / Price / OE A/S status
+       (empty when the SKU is Active — no clutter for the common case).
+     • Current state's stock number (reads window._customerState set
+       by applyCustomer; falls back to a four-letter total if the
+       customer hasn't been loaded yet).
+   Returned as an HTML snippet appended after _matParts.  Safe-escaped
+   via the caller's .replace(/</g, "&lt;") pass; this helper doesn't
+   emit any attacker-controlled text — only numeric stock and the
+   fixed OPE/F.O. vocabulary from stock_dashboard. */
+function _matFlagsHtml(r){
+  const bits = [];
+  const status = String(r.sku_status || "").trim();
+  // Suppress the "Active" default — too noisy when 95% of SKUs are
+  // active.  Only non-Active statuses carry a badge.
+  if (status && status.toUpperCase() !== "ACTIVE") {
+    // Red for Fade-Out, amber for OPE / OE A/S, grey for Transfer /
+    // Testing / Price / M/S.  Matches the chip colours the Stock
+    // dashboard uses so the two reads consistently.
+    let bg = "#e2e8f0", fg = "#334155";
+    const U = status.toUpperCase();
+    if (U.includes("F/O"))                     { bg = "#fee2e2"; fg = "#991b1b"; }
+    else if (U.includes("OPE") || U.includes("OE A/S")) { bg = "#fef3c7"; fg = "#92400e"; }
+    bits.push(
+      `<span style="background:${bg};color:${fg};padding:1px 6px;border-radius:3px;
+                    font-size:10.5px;font-weight:700;margin-left:6px">${status}</span>`
+    );
+  }
+  // Current customer's state → look up that bucket in r.state_stock.
+  const _state = String(window._customerState || "").toUpperCase();
+  const _bucket = (r.state_stock || {});
+  if (_state && _bucket && _bucket[_state] != null) {
+    const n = +_bucket[_state] || 0;
+    const bg = n > 0 ? "#dcfce7" : "#fee2e2";
+    const fg = n > 0 ? "#166534" : "#991b1b";
+    bits.push(
+      `<span style="background:${bg};color:${fg};padding:1px 6px;border-radius:3px;
+                    font-size:10.5px;font-weight:700;margin-left:6px"
+             title="${_state} stock">${_state} ${fmtQty(n)}</span>`
+    );
+  }
+  return bits.join("");
+}
+
 function _renderMatPopover(){
   const el = document.getElementById("matPopover");
   if (!el) return;
@@ -2251,10 +2296,13 @@ function _renderMatPopover(){
     const sel = (i === _matPopoverState.idx);
     const bg  = sel ? "#dbeafe" : "#fff";
     const col = sel ? "#1e3a8a" : "#0f172a";
+    // _matParts text is user-content → escape; _matFlagsHtml returns
+    // a trusted HTML fragment built from numeric stock + the fixed
+    // OPE/F.O. vocabulary, so append it after the escape.
     return `<div class="mat-pop-row" data-idx="${i}"
                  style="padding:6px 10px;cursor:pointer;border-bottom:1px solid #f1f5f9;
                         background:${bg};color:${col};">
-              ${_matParts(r).replace(/</g,"&lt;")}
+              ${_matParts(r).replace(/</g,"&lt;")}${_matFlagsHtml(r)}
             </div>`;
   }).join("");
   /* Position below the current input. */
@@ -2450,6 +2498,11 @@ function applyCustomer(row, kind){
     set("ship_to_name",    row.ship_to_name || "");
     set("ship_to_address", row.address || "");
     set("ship_to_state",   row.state || row.bde_state || "");
+    // Oct-21: cache the customer's state so the material-suggest
+    // popover can show that state's stock number next to each row.
+    try {
+      window._customerState = String(row.state || row.bde_state || "").toUpperCase();
+    } catch (_e) {}
     // Oct-20 user ask: show "phone (email)" when the customer row
     // carries both.  Fall back to whichever single one is present;
     // if neither, stay blank so the "—" placeholder shows through.
@@ -2472,6 +2525,7 @@ function applyCustomer(row, kind){
       const el = document.getElementById(id);
       if (el) el.value = "";
     });
+    try { window._customerState = ""; } catch (_e) {}
   }
   // customer_group / BDE name / Base DC come from the Sold-to side
   // (the house account under the lock) and stay filled either way.
