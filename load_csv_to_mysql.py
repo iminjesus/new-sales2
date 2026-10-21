@@ -189,9 +189,13 @@ def parse_billing_date_day(val: str) -> str:
 # VARCHAR — it's a WWYY code (e.g. "4022" = week 40 of 2022), and the
 # leading zero on weeks 01-09 matters ("0326" ≠ "326").
 def load_stock(conn):
-    drop_sql   = f"DROP TABLE IF EXISTS `{TABLE_NAME}`;"
+    # Oct-21 user ask: prefer CREATE IF NOT EXISTS + TRUNCATE over
+    # DROP + CREATE so manual tweaks (extra indexes, grants, additional
+    # columns) that the operator may have added over time survive a
+    # reload.  CREATE IF NOT EXISTS is a no-op on an existing table;
+    # TRUNCATE empties the data in one atomic op and resets AUTO_INC.
     create_sql = f"""
-    CREATE TABLE `{TABLE_NAME}` (
+    CREATE TABLE IF NOT EXISTS `{TABLE_NAME}` (
       interface_date DATE,
       plant          VARCHAR(10),
       material       VARCHAR(20),
@@ -201,6 +205,7 @@ def load_stock(conn):
       INDEX idx_stock_dot       (dot_no)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
+    truncate_sql = f"TRUNCATE TABLE `{TABLE_NAME}`;"
 
     # STR_TO_DATE handles the DD.MM.YYYY that comes out of SAP, and the
     # numeric qty is REPLACE'd to strip thousand separators before the
@@ -227,8 +232,8 @@ def load_stock(conn):
 
     cur = conn.cursor()
     try:
-        cur.execute(drop_sql)
         cur.execute(create_sql)
+        cur.execute(truncate_sql)
         cur.execute(load_sql)
         conn.commit()
 
@@ -404,18 +409,23 @@ def _pick_latest_rt_stock_csv():
 
 
 def load_stock_rt(conn):
-    """(Re)build the stock_rt table from the newest rt_stock_*.csv.
-    DROP + CREATE on every load so column changes in /ART_TH layout
-    land cleanly without a manual ALTER."""
+    """Refresh the stock_rt table from the newest rt_stock_*.csv.
+
+    Oct-21 user ask: do NOT drop the table on every load — if the
+    operator adds a custom index or an extra column over time, those
+    changes must survive a reload.  CREATE IF NOT EXISTS on first run
+    only, then TRUNCATE + LOAD DATA every time after that so the row
+    set is a fresh snapshot but the table structure is preserved.
+    If the /ART_TH layout gains a new column later, the loader code
+    (and this CREATE) get updated in one commit — not an auto-DROP."""
     csv_path = _pick_latest_rt_stock_csv()
     if not csv_path:
         print(f"[stock_rt] no rt_stock_*.csv in {STOCK_RT_DIR} — skipping")
         return
     print(f"[stock_rt] loading from {csv_path}")
 
-    drop_sql   = f"DROP TABLE IF EXISTS `{STOCK_RT_TABLE}`;"
     create_sql = f"""
-    CREATE TABLE `{STOCK_RT_TABLE}` (
+    CREATE TABLE IF NOT EXISTS `{STOCK_RT_TABLE}` (
       plant         VARCHAR(10),
       material      VARCHAR(20),
       description   VARCHAR(255),
@@ -435,6 +445,7 @@ def load_stock_rt(conn):
       INDEX idx_stock_rt_plant (plant, material)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
+    truncate_sql = f"TRUNCATE TABLE `{STOCK_RT_TABLE}`;"
 
     # Derive snapshot_date from the filename (rt_stock_YYYYMMDD.csv)
     # when possible; fall back to today's date when the alias is used.
@@ -480,8 +491,8 @@ def load_stock_rt(conn):
 
     cur = conn.cursor()
     try:
-        cur.execute(drop_sql)
         cur.execute(create_sql)
+        cur.execute(truncate_sql)
         cur.execute(load_sql)
         conn.commit()
 
