@@ -300,10 +300,41 @@ def run_pipeline():
     # exception bubble so the orchestrator records it.
     # Oct-20: use sapcrawling_batch.py (batch-only fork of sapcrawling.py)
     # so the stable manually-runnable sapcrawling.py stays untouched.
-    stock_ok = _run_step(
-        "sapcrawling_batch.main - ZSDM64300 stock + DOT",
-        lambda: __import__("sapcrawling_batch").main(),
-    )
+    #
+    # Oct-21 user ask: the DOT snapshot (interface_date = yesterday) is
+    # generated overnight at SAP side, so it doesn't change throughout
+    # the business day — pulling it every hour is wasted SAP load.
+    # Run it only ONCE per day: the 08:00 slot, OR an immediate-kickoff
+    # run when nothing has recorded today's crawl yet.  The RT stock
+    # feed (ZMMR40430, next step) still runs every hour since it IS
+    # time-sensitive.
+    today_syd = _now_syd().strftime("%Y-%m-%d")
+    last_dot_date = (status_get("dot_stock_crawled_on") or "")[:10]
+    current_hour  = _now_syd().hour
+    dot_already_today = (last_dot_date == today_syd)
+    _is_8am_slot      = (current_hour == 8)
+    should_crawl_dot  = (not dot_already_today) and (_is_8am_slot or True)
+    # The condition reads a bit funny — _is_8am_slot OR True evaluates
+    # to True always.  Intent: run DOT whenever today's crawl hasn't
+    # happened yet (covers immediate kickoff at any hour AND the 08:00
+    # scheduled slot).  Subsequent hourly runs on the same day skip it.
+    if should_crawl_dot:
+        if _is_8am_slot:
+            log("DOT stock: 08:00 slot — running today's daily snapshot.")
+        else:
+            log(f"DOT stock: no run recorded for {today_syd} yet — "
+                f"running once now (hour={current_hour:02d}).")
+        stock_ok = _run_step(
+            "sapcrawling_batch.main - ZSDM64300 stock + DOT",
+            lambda: __import__("sapcrawling_batch").main(),
+        )
+        if stock_ok:
+            status_set("dot_stock_crawled_on", today_syd)
+    else:
+        log(f"DOT stock: already crawled today ({last_dot_date}) — "
+            f"skipping (hour={current_hour:02d}).  Next scheduled run "
+            f"is 08:00 tomorrow.")
+        stock_ok = False
 
     # If the stock crawl crashed partway it may have left SAP on a
     # mid-transaction screen (popup, selection screen, grid, …).  Reset
@@ -342,9 +373,11 @@ def run_pipeline():
         lambda: __import__("sapcrawling_sales1_batch").main(),
     )
 
-    # Loader needs AT LEAST one of the two CSVs to be fresh.  Run it
-    # even if only one crawl succeeded - load_csv_to_mysql skips the
-    # table whose CSV is missing (its own existence check).
+    # Loader needs AT LEAST one of the three CSVs to be fresh.  Run it
+    # even if only one crawl succeeded — load_csv_to_mysql skips the
+    # table whose CSV is missing (its own existence check).  DOT stock
+    # being skipped (not failed) still counts as "nothing fresh" for
+    # this slot, but RT + sales usually carry the load.
     if stock_ok or sales_ok or rt_ok:
         load_ok = _run_step(
             "load_csv_to_mysql.main - push CSVs into MySQL",
@@ -352,14 +385,20 @@ def run_pipeline():
         )
     else:
         load_ok = False
-        log("Both crawls failed - skipping MySQL load for this slot.")
+        log("All crawls skipped or failed - skipping MySQL load for this slot.")
 
     now_syd_str = _now_syd().strftime("%Y-%m-%d %H:%M:%S")
     if stock_ok and load_ok:
         status_set("stock_updated_at", now_syd_str)
     if sales_ok and load_ok:
         status_set("sales_updated_at", now_syd_str)
-    if stock_ok and sales_ok and load_ok:
+    if rt_ok and load_ok:
+        status_set("stock_rt_updated_at", now_syd_str)
+    # Clear last_error when THE RELEVANT crawls for this slot all
+    # succeeded.  DOT stock may be legitimately skipped (not failed),
+    # so don't require stock_ok on skip hours — just require that
+    # sales + RT succeeded AND the loader ran.
+    if sales_ok and rt_ok and load_ok and (stock_ok or dot_already_today):
         status_set("last_error", "")
         status_set("last_error_at", "")
 
