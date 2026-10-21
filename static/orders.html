@@ -746,9 +746,26 @@
      submitted order). */
   .cs-panel{
     display:flex;align-items:center;gap:10px;justify-content:flex-end;
+    flex-wrap:wrap;
     padding:8px 12px;margin:0 0 10px;background:#fef3c7;border:1px solid #f59e0b;
     border-radius:4px;font-size:13px;
   }
+  /* Oct-21 user ask: CS Comment row — full width under the SAP-flag /
+     SD No. row, centered, with a much wider textarea so the content
+     is easy to read while typing.  Label pins to the left of the
+     centered input group; Save button pins to the right of it. */
+  .cs-panel .cs-comment-row{
+    flex-basis:100%;
+    display:flex;align-items:flex-start;justify-content:center;gap:10px;
+    margin-top:4px;
+  }
+  .cs-panel .cs-comment-row textarea{
+    flex:1 1 auto;
+    max-width:900px;min-width:320px;
+    padding:6px 10px;border:1px solid #cbd5e1;border-radius:3px;
+    font-size:12.5px;line-height:1.4;resize:vertical;background:#fff;
+  }
+  .cs-panel .cs-comment-row .cs-lbl{align-self:center}
   .cs-panel .cs-lbl{font-weight:700;color:#92400e}
   .cs-panel .cs-flag{
     font-weight:800;padding:2px 10px;border-radius:3px;color:#fff;background:#dc2626;
@@ -1900,16 +1917,17 @@
     <span id="sdNoMeta" class="cs-meta"></span>
     <span id="csMeta" class="cs-meta"></span>
     <!-- Oct-21 user ask: CS comment on changes made during SAP entry.
-         CS-only write (Harry / HKCustomerService); every viewer sees
-         the saved text in the orders_list "Comment from CST" column. -->
-    <div style="flex-basis:100%;height:0"></div>
-    <span class="cs-lbl" style="align-self:flex-start;margin-top:6px">Comment from CST</span>
-    <textarea id="csComment" rows="2" maxlength="1000"
-              placeholder="Any change at SAP entry (e.g. changed to RA18 per customer, split SD, etc.)"
-              style="flex:1 1 320px;min-width:260px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:3px;font-size:12px;line-height:1.35;resize:vertical"></textarea>
-    <button id="btnSaveCsComment" class="ghost"
-            style="padding:4px 10px;font-size:12px;align-self:flex-start;margin-top:6px">Save Comment</button>
-    <span id="csCommentMeta" class="cs-meta" style="align-self:flex-start;margin-top:6px"></span>
+         Full-width row centered under the SAP-flag / SD No. row with
+         a wide textarea so the content is easy to read.  CS-only write
+         (Harry / HKCustomerService); every viewer sees the saved text
+         in the orders_list "Comment from CST" column too. -->
+    <div class="cs-comment-row">
+      <span class="cs-lbl">Comment from CST</span>
+      <textarea id="csComment" rows="2" maxlength="1000"
+                placeholder="Any change at SAP entry (e.g. changed to RA18 per customer, split SD, etc.)"></textarea>
+      <button id="btnSaveCsComment" class="ghost">Save Comment</button>
+      <span id="csCommentMeta" class="cs-meta"></span>
+    </div>
   </div>
   <!-- Bottom-of-page Approve bar.
        Appears ONLY when the current viewer is a named approver
