@@ -333,18 +333,45 @@ def set_selection_screen(session, valid_on_str):
 
 # ================= Export + layout =================
 def newest_export_xlsx(after_ts: float) -> str:
-    pattern = os.path.join(SAP_EXPORT_DIR, SAP_EXPORT_GLOB)
+    """Return the newest .xlsx under SAP_EXPORT_DIR with mtime >=
+    after_ts.  Oct-22: widened from the strict EXPORT_*.xlsx pattern
+    to ANY *.xlsx — some SAP builds / layouts default the save-as
+    filename to the TCODE ("ZMMR40430.xlsx") or to the ALV title
+    rather than "EXPORT_<timestamp>.xlsx", and the strict glob missed
+    those files entirely.  Still bounded by after_ts so a stale file
+    from a previous run can't match."""
+    patterns = (SAP_EXPORT_GLOB, "*.xlsx", "*.XLSX")
+    seen = set()
     candidates = []
-    for p in glob.glob(pattern):
-        try:
-            mtime = os.path.getmtime(p)
-            if mtime >= after_ts:
-                candidates.append((mtime, p))
-        except: pass
+    for pat in patterns:
+        for p in glob.glob(os.path.join(SAP_EXPORT_DIR, pat)):
+            if p in seen:
+                continue
+            seen.add(p)
+            try:
+                mtime = os.path.getmtime(p)
+                if mtime >= after_ts:
+                    candidates.append((mtime, p))
+            except: pass
     if not candidates:
         return ""
     candidates.sort(reverse=True)
     return candidates[0][1]
+
+
+def _list_recent_xlsx(after_ts: float, limit: int = 20):
+    """Diagnostic — list every .xlsx under SAP_EXPORT_DIR with mtime
+    anywhere near after_ts (±5 minute window), so a file-not-found
+    error can show what SAP actually wrote (or didn't)."""
+    rows = []
+    for p in glob.glob(os.path.join(SAP_EXPORT_DIR, "*")):
+        try:
+            mtime = os.path.getmtime(p)
+            if abs(mtime - after_ts) <= 300:
+                rows.append((mtime, p, os.path.getsize(p)))
+        except: pass
+    rows.sort(reverse=True)
+    return rows[:limit]
 
 
 def try_set_layout_on_selection(session, layout_name):
@@ -605,13 +632,25 @@ def trigger_export(session) -> bool:
     """Try every known SAP export path in rough success-order from the
     ZSDM64300 experience.  First one that returns True wins; falls
     through to a one-shot screen dump so we can see what controls the
-    ALV grid exposes on ZMMR40430's layout."""
+    ALV grid exposes on ZMMR40430's layout.
+
+    Each attempt is logged so a 'file not in C:\\temp' failure can be
+    traced back to which method claimed success — in particular the
+    ALV-toolbar &XXL / SPREADSHEET path opens Excel INLINE on some
+    SAP builds instead of saving to disk, which is a false-positive
+    'export triggered' with no file."""
     global _DEBUG_DUMPED
-    if try_export_via_system_menu(session):    return True
-    if try_export_via_alv_toolbar(session):    return True
-    if try_export_via_menu(session):           return True
-    if try_export_via_okcd(session):           return True
-    if try_export_via_toolbar_button(session): return True
+    for name, fn in (("system_menu",     try_export_via_system_menu),
+                     ("alv_toolbar",     try_export_via_alv_toolbar),
+                     ("menu_text",       try_export_via_menu),
+                     ("okcd_%pc",        try_export_via_okcd),
+                     ("toolbar_button",  try_export_via_toolbar_button)):
+        try:
+            if fn(session):
+                print(f"  [export] method '{name}' claimed success")
+                return True
+        except Exception as e:
+            print(f"  [export] method '{name}' raised: {e}")
     if DEBUG_DUMP_ON_EXPORT_FAIL and not _DEBUG_DUMPED:
         _DEBUG_DUMPED = True
         dump_screen(session)
@@ -754,6 +793,28 @@ def main():
                 break
         wait(0.6)
     if not xlsx_path:
+        # Oct-22 diagnostic: dump every recently-modified file in
+        # SAP_EXPORT_DIR so a "file not found" failure shows what SAP
+        # actually wrote (if anything).  Often reveals one of:
+        #   • SAP wrote the file but with an unexpected name (e.g.
+        #     "ZMMR40430.xlsx" instead of "EXPORT_<ts>.xlsx") — our
+        #     newest_export_xlsx now matches *.xlsx too but a legacy
+        #     pattern mismatch would still show here.
+        #   • SAP opened Excel INLINE (XXL path) and no file ever
+        #     hit disk — the folder listing stays empty.
+        #   • A dialog is still open waiting for user input — then
+        #     this listing shows the previous run's file, not today's.
+        print(f"\n  ==== C:\\temp listing (± 5 min window) ====")
+        recent = _list_recent_xlsx(export_start_ts)
+        if not recent:
+            print(f"    (nothing modified in the last 5 min)")
+        for mtime, p, size in recent:
+            try:
+                ts_str = datetime.fromtimestamp(mtime).isoformat()
+            except Exception:
+                ts_str = "?"
+            print(f"    {ts_str}  {size:>10,}  {os.path.basename(p)}")
+        print(f"  ==== end listing ====\n")
         raise RuntimeError(f"SAP export XLSX not found in {SAP_EXPORT_DIR}")
 
     _kill_excel("before copy of rt_stock XLSX")
