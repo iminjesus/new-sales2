@@ -3269,23 +3269,43 @@ function applyMaterial(rowEl, data){
 
 async function fillStockForRow(rowEl, mcode){
   const stockMap = {NSW:"stock_nsw", QLD:"stock_qld", VIC:"stock_vic", WA:"stock_wa"};
-  // Optimistic: clear before fetching so a re-link on the same row
-  // doesn't leave stale numbers if the API is slow.
+  // Oct-21 user ask: SPRF stock cells now read from stock_rt (ZMMR40430
+  // RT feed) instead of the DOT-aging roll-up.  Each cell shows
+  // "ATP / Unrestricted"; the row dataset carries the full pipeline
+  // breakdown so a double-click can open a popover showing on_order /
+  // at_dock / on_water / factory.
+  //
+  // Approved orders freeze the stock numbers — the hydrated payload
+  // already carries whatever was displayed at approval time, so we
+  // SKIP the live refetch when rowEl.dataset.frozenStock === "1"
+  // (set by hydrateSubmittedOrder when loading an approved order).
+  if (rowEl.dataset.frozenStock === "1") return;
+
   for (const col of Object.values(stockMap)){
     const td = rowEl.querySelector(`[data-col="${col}"]`)?.parentElement;
     td?.classList.remove("zero");
     const el = rowEl.querySelector(`[data-col="${col}"]`); if (el) el.value = "…";
   }
-  const data = await apiGet(`/api/orders/stock_by_material?m_code=${encodeURIComponent(mcode)}`);
-  const buckets = (data && data[mcode]) || {NSW:0, QLD:0, VIC:0, WA:0};
+  const data = await apiGet(`/api/orders/stock_rt_by_material?m_code=${encodeURIComponent(mcode)}`);
+  const perState = (data && data[mcode]) || {};
+  // Stash the full breakdown on the row dataset so the popover can
+  // render without re-fetching.
+  try {
+    rowEl.dataset.stockRt = JSON.stringify(perState);
+  } catch (_e) {}
   for (const [state, col] of Object.entries(stockMap)){
     const el = rowEl.querySelector(`[data-col="${col}"]`);
     if (!el) continue;
-    const n = +buckets[state] || 0;
-    el.value = n ? fmtQty(n) : "0";
-    // Zero-stock cell paints red so a stock-out is obvious at a glance.
+    const b = perState[state] || {atp:0, unrestricted:0};
+    const atp  = +b.atp          || 0;
+    const unr  = +b.unrestricted || 0;
+    // Cell reads "ATP / Unrestricted".  Both zero → "0" (same red tint
+    // as before).  Any non-zero → "ATP/Unrestricted" (e.g., "75/100").
+    el.value = (atp === 0 && unr === 0)
+      ? "0"
+      : `${fmtQty(atp)}/${fmtQty(unr)}`;
     const td = el.parentElement;
-    if (td) td.classList.toggle("zero", n === 0);
+    if (td) td.classList.toggle("zero", (atp === 0 && unr === 0));
   }
 }
 
@@ -4374,12 +4394,21 @@ function newRow(){
     const cell = tr.querySelector(`[data-col="${col}"]`);
     if (!cell) continue;
     cell.style.cursor = "pointer";
-    cell.title = "Click to see aging (DOT age) breakdown for this plant";
-    cell.addEventListener("click", () => {
+    cell.title = "Click: pipeline breakdown (On Order / At dock / On water / Factory).  Shift-click: DOT-age breakdown.";
+    cell.addEventListener("click", (ev) => {
       const mcode = tr.querySelector('[data-col="m_code"]')?.value?.trim();
       if (!mcode) return;
-      openStockAgingPopover(cell, mcode, _stockPlantByCol[col],
-                            col.replace("stock_", "").toUpperCase());
+      const state = col.replace("stock_", "").toUpperCase();
+      // Oct-21 user ask: default click now shows the RT pipeline
+      // breakdown (ATP / Unrestricted / On Order / At dock / On
+      // water / Factory) read from the row's cached dataset.stockRt.
+      // Shift-click still opens the DOT-age popover for operators
+      // who want the aging slice.
+      if (ev.shiftKey) {
+        openStockAgingPopover(cell, mcode, _stockPlantByCol[col], state);
+      } else {
+        openStockRtPopover(cell, tr, state);
+      }
     });
   }
   /* Qty auto-default — delegated input listener on the row.  Fires
@@ -4427,6 +4456,76 @@ function highlightEmptyQtyRows(){
     setTimeout(() => { try { first.focus(); } catch(_){} }, 250);
   }
 }
+/* ─── RT stock popover (Oct-21 user ask) ─────────────────────
+   Click a state-stock cell → show the row's cached per-plant
+   breakdown from stock_rt: Unrestricted, ATP, On Order, At dock,
+   On water, Factory.  Reads rowEl.dataset.stockRt (populated by
+   fillStockForRow) so the popover opens instantly without a round
+   trip.  Esc / outside-click closes it.  One popover at a time. */
+let _stockRtEl = null;
+function _closeStockRt(){
+  if (_stockRtEl) { _stockRtEl.remove(); _stockRtEl = null; }
+  document.removeEventListener("keydown", _stockRtKey);
+  document.removeEventListener("mousedown", _stockRtClickAway, true);
+}
+function _stockRtKey(e){ if (e.key === "Escape") _closeStockRt(); }
+function _stockRtClickAway(e){
+  if (_stockRtEl && !_stockRtEl.contains(e.target)) _closeStockRt();
+}
+function openStockRtPopover(anchorCell, rowEl, stateLabel){
+  _closeStockRt();
+  // Pull the breakdown out of the row's dataset (cached by
+  // fillStockForRow after the stock_rt endpoint call).  Approved
+  // orders will have whatever was saved on the hydrated payload.
+  let perState = {};
+  try { perState = JSON.parse(rowEl.dataset.stockRt || "{}"); }
+  catch (_e) { perState = {}; }
+  const b = perState[stateLabel] || {
+    atp: 0, unrestricted: 0, on_order: 0,
+    at_dock: 0, on_water: 0, factory: 0,
+  };
+  const mcode = rowEl.querySelector('[data-col="m_code"]')?.value?.trim() || "";
+  const _plantFor = {NSW: "42R1", QLD: "42R0", VIC: "42R2", WA: "42R4"}[stateLabel] || "";
+  const _row = (lbl, val, hint) => `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;
+                padding:3px 0;border-bottom:1px dashed #e2e8f0;">
+      <span style="color:#334155">${lbl}${hint ? ` <small style="color:#94a3b8">${hint}</small>` : ""}</span>
+      <b style="font-variant-numeric:tabular-nums">${fmtQty(val)}</b>
+    </div>`;
+  const rect = anchorCell.getBoundingClientRect();
+  const pop  = document.createElement("div");
+  pop.style.cssText = `
+    position:fixed; z-index:9999;
+    top:${Math.round(rect.bottom + 4)}px;
+    left:${Math.round(Math.min(rect.left, window.innerWidth - 290))}px;
+    width:270px; padding:10px 12px;
+    background:#fff; border:1px solid #cbd5e1;
+    border-radius:6px; box-shadow:0 4px 16px rgba(0,0,0,.12);
+    font-size:12px; color:#1e293b;
+  `;
+  pop.innerHTML = `
+    <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;">
+      ${mcode} · ${stateLabel}
+      <small style="color:#64748b;font-weight:400">(Plant ${_plantFor})</small>
+    </div>
+    ${_row("ATP (available)",   b.atp,          "unrestricted − on order")}
+    ${_row("Unrestricted",      b.unrestricted, "")}
+    ${_row("On Order",          b.on_order,     "")}
+    <div style="margin-top:6px;padding-top:4px;border-top:1px solid #cbd5e1;color:#64748b;font-size:11px">
+      In-transit pipeline
+    </div>
+    ${_row("At dock",           b.at_dock,  "")}
+    ${_row("On water",          b.on_water, "")}
+    ${_row("Factory",           b.factory,  "")}
+    <div style="margin-top:6px;font-size:10.5px;color:#94a3b8">
+      Shift-click the cell to see the DOT-age breakdown instead.
+    </div>`;
+  document.body.appendChild(pop);
+  _stockRtEl = pop;
+  document.addEventListener("keydown", _stockRtKey);
+  setTimeout(() => document.addEventListener("mousedown", _stockRtClickAway, true), 0);
+}
+
 /* ─── Aging popover for state-stock cells ──────────────────────
    Same colour scheme as the /stock aging popup (green ≤12M →
    deep red 37M+) so the two views read consistently.  Popover is
@@ -5591,6 +5690,12 @@ function serializeOrder(){
     if (tr.dataset.line)         row._line          = tr.dataset.line;
     if (tr.dataset.productGroup) row._product_group = tr.dataset.productGroup;
     if (tr.dataset.promo)        row._promo         = tr.dataset.promo;
+    // Oct-21: snapshot the row's cached stock_rt breakdown so an
+    // approved order's double-click popover still shows the ATP /
+    // On Order / At dock / On water / Factory values that were on
+    // screen when it was signed off, even though fillStockForRow is
+    // frozen out on approved rows.
+    if (tr.dataset.stockRt)      row._stock_rt      = tr.dataset.stockRt;
     if (hasAny) lines.push(row);
   });
 
@@ -6073,9 +6178,17 @@ async function hydrateSubmittedOrder(oid, editMode){
   });
   // 2. Lines — clear seeded blanks, then rebuild.
   $("#linesBody").innerHTML = "";
+  // Oct-21 user ask: on an APPROVED SPRF the stock numbers must stay
+  // at the saved snapshot — fillStockForRow would otherwise refetch
+  // the live stock_rt values on every open and the reader would see
+  // numbers that drift from what was signed off.  Freeze by setting
+  // tr.dataset.frozenStock BEFORE addRow() so fillStockForRow's
+  // early-return catches on first invocation.
+  const _freezeStock = !!data.approved_by_name;
   (p.lines || []).forEach(ln => {
     addRow();
     const tr = $("#linesBody").lastElementChild;
+    if (_freezeStock) tr.dataset.frozenStock = "1";
     LINE_FIELDS.forEach(c => {
       const el = tr.querySelector(`[data-col="${c}"]`);
       if (el) el.value = ln[c] ?? "";
@@ -6083,6 +6196,15 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (ln._line)          tr.dataset.line         = ln._line;
     if (ln._product_group) tr.dataset.productGroup = ln._product_group;
     if (ln._promo)         tr.dataset.promo        = ln._promo;
+    // Carry the row's cached stock_rt breakdown over too so the
+    // double-click popover still works on frozen (approved) rows.
+    if (ln._stock_rt) {
+      try {
+        tr.dataset.stockRt = typeof ln._stock_rt === "string"
+          ? ln._stock_rt
+          : JSON.stringify(ln._stock_rt);
+      } catch (_e) {}
+    }
     /* Re-lock aged rows on hydration — if the row was submitted with
        an Aging DC% value, it came in from the aged-stock ladder and
        stays read-only until the reviewer clears the Aging cell. */

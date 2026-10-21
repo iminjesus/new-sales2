@@ -314,6 +314,25 @@ def run_pipeline():
     except Exception as e:
         log(f"[warn] _reset_to_home between crawls failed: {e}")
 
+    # Oct-21: RT stock (ZMMR40430) — writes rawdata/unlock/rt_stock_<YYYYMMDD>.csv
+    # which load_csv_to_mysql picks up as the newest and loads into the
+    # stock_rt table.  Sits between the DOT-aging stock crawl above and
+    # the sales crawl below; failures here are logged but do NOT abort
+    # the pipeline (sales + loader must still run even if the RT feed
+    # misses one hour).
+    try:
+        _reset_to_home(sess)
+    except Exception as e:
+        log(f"[warn] _reset_to_home before stock_rt failed: {e}")
+    rt_ok = _run_step(
+        "sapcrawling_stock_rt_batch.main - ZMMR40430 RT stock + ATP",
+        lambda: __import__("sapcrawling_stock_rt_batch").main(),
+    )
+    try:
+        _reset_to_home(sess)
+    except Exception as e:
+        log(f"[warn] _reset_to_home after stock_rt failed: {e}")
+
     # Sales: sapcrawling_sales1_batch.main writes rawdata/unlock/sales_thismonth.csv.
     # Oct-20: use sapcrawling_sales1_batch.py (batch-only fork of
     # sapcrawling_sales1.py) so the stable manually-runnable
@@ -326,7 +345,7 @@ def run_pipeline():
     # Loader needs AT LEAST one of the two CSVs to be fresh.  Run it
     # even if only one crawl succeeded - load_csv_to_mysql skips the
     # table whose CSV is missing (its own existence check).
-    if stock_ok or sales_ok:
+    if stock_ok or sales_ok or rt_ok:
         load_ok = _run_step(
             "load_csv_to_mysql.main - push CSVs into MySQL",
             lambda: __import__("load_csv_to_mysql").main(),

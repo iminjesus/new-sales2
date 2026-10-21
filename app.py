@@ -3839,6 +3839,92 @@ def api_orders_stock_by_material():
         except: pass
 
 
+@app.get("/api/orders/stock_rt_by_material")
+def api_orders_stock_rt_by_material():
+    """Oct-21 user ask: SPRF stock cells now read from the stock_rt
+    table (populated by sapcrawling_stock_rt from ZMMR40430) instead
+    of the DOT-aging stock roll-up.
+
+    Returns, for every ?m_code=… listed:
+        { m_code: { NSW: {atp, unrestricted, on_order, at_dock,
+                          on_water, factory},
+                    QLD: {...}, VIC: {...}, WA: {...} } }
+
+    Each cell carries the four pipeline numbers the SPRF now
+    surfaces:  "ATP / Unrestricted" in the cell, and the on_order /
+    at_dock / on_water / factory breakdown in the double-click
+    popover.  Plants map to states the same way as the DOT endpoint:
+    42R0=QLD, 42R1=NSW, 42R2=VIC, 42R4=WA.
+
+    Missing (material, plant) returns zeros.  The endpoint is a
+    read-only lookup; the DOT /stock_by_material endpoint above is
+    kept intact for the aged-stock popover + the Stock page."""
+    codes = [c.strip() for c in request.args.getlist("m_code") if c.strip()]
+    if not codes:
+        return jsonify({})
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    # Silently no-op when stock_rt isn't loaded yet.  Returns zeros so
+    # the frontend doesn't crash before the first batch run has
+    # populated the table on a fresh deployment.
+    try:
+        try:
+            cur.execute("SHOW TABLES LIKE 'stock_rt'")
+            if not cur.fetchone():
+                blank = {c: {s: {"atp": 0, "unrestricted": 0, "on_order": 0,
+                                 "at_dock": 0, "on_water": 0, "factory": 0}
+                             for s in _ORDER_PLANT_STATE.values()}
+                         for c in codes}
+                return jsonify(blank)
+        except Exception:
+            return jsonify({})
+
+        ph = ",".join(["%s"] * len(codes))
+        plant_ph = ",".join(["%s"] * len(_ORDER_PLANT_STATE))
+        cur.execute(
+            f"SELECT material, plant, "
+            f"       SUM(COALESCE(atp_qt, 0))        AS atp, "
+            f"       SUM(COALESCE(unrestricted, 0))  AS unrestricted, "
+            f"       SUM(COALESCE(on_order, 0))      AS on_order, "
+            f"       SUM(COALESCE(at_dock, 0))       AS at_dock, "
+            f"       SUM(COALESCE(on_water, 0))      AS on_water, "
+            f"       SUM(COALESCE(factory, 0))       AS factory "
+            f"FROM stock_rt "
+            f"WHERE material IN ({ph}) "
+            f"  AND plant    IN ({plant_ph}) "
+            f"GROUP BY material, plant",
+            tuple(codes) + tuple(_ORDER_PLANT_STATE.keys()),
+        )
+        rows = cur.fetchall() or []
+        out = {c: {s: {"atp": 0, "unrestricted": 0, "on_order": 0,
+                       "at_dock": 0, "on_water": 0, "factory": 0}
+                   for s in _ORDER_PLANT_STATE.values()}
+               for c in codes}
+        for r in rows:
+            m  = str(r.get("material") or "").strip()
+            st = _ORDER_PLANT_STATE.get(r.get("plant"))
+            if not m or not st or m not in out:
+                continue
+            out[m][st] = {
+                "atp":           int(float(r.get("atp")          or 0)),
+                "unrestricted":  int(float(r.get("unrestricted") or 0)),
+                "on_order":      int(float(r.get("on_order")     or 0)),
+                "at_dock":       int(float(r.get("at_dock")      or 0)),
+                "on_water":      int(float(r.get("on_water")     or 0)),
+                "factory":       int(float(r.get("factory")      or 0)),
+            }
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 # No hard-coded fallback — per user rule "grep the data from the
 # table and do not have other options", Base DC cells stay BLANK
 # when dc_basic_customer carries no matching row.  The old 56 %

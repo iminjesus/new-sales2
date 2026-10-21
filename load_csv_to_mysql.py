@@ -376,6 +376,126 @@ def load_sales(conn):
             cur.close()
 
 
+# ---------------- STOCK_RT LOAD (Oct-21 user ask) ----------------
+# ZMMR40430 output — sapcrawling_stock_rt.py drops dated CSVs at
+# rawdata/unlock/rt_stock_<YYYYMMDD>.csv.  We pick the newest (so
+# a manual re-run of the crawler always wins over the hourly batch's
+# earlier output) and reload the stock_rt table from it.
+STOCK_RT_DIR     = os.path.join(BASE_DIR, "rawdata", "unlock")
+STOCK_RT_GLOB    = "rt_stock_*.csv"
+STOCK_RT_ALIAS   = os.path.join(STOCK_RT_DIR, "rt_stock.csv")
+STOCK_RT_TABLE   = "stock_rt"
+
+
+def _pick_latest_rt_stock_csv():
+    """Return the newest rt_stock_*.csv path, or the plain alias
+    rt_stock.csv as a fallback.  Returns None when neither exists."""
+    import glob as _g
+    files = _g.glob(os.path.join(STOCK_RT_DIR, STOCK_RT_GLOB))
+    # Exclude the alias (rt_stock.csv) from the dated-set sort so the
+    # DATED file always wins when both exist with the same mtime.
+    dated = [p for p in files if os.path.basename(p) != "rt_stock.csv"]
+    if dated:
+        dated.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return dated[0]
+    if os.path.exists(STOCK_RT_ALIAS):
+        return STOCK_RT_ALIAS
+    return None
+
+
+def load_stock_rt(conn):
+    """(Re)build the stock_rt table from the newest rt_stock_*.csv.
+    DROP + CREATE on every load so column changes in /ART_TH layout
+    land cleanly without a manual ALTER."""
+    csv_path = _pick_latest_rt_stock_csv()
+    if not csv_path:
+        print(f"[stock_rt] no rt_stock_*.csv in {STOCK_RT_DIR} — skipping")
+        return
+    print(f"[stock_rt] loading from {csv_path}")
+
+    drop_sql   = f"DROP TABLE IF EXISTS `{STOCK_RT_TABLE}`;"
+    create_sql = f"""
+    CREATE TABLE `{STOCK_RT_TABLE}` (
+      plant         VARCHAR(10),
+      material      VARCHAR(20),
+      description   VARCHAR(255),
+      pattern       VARCHAR(40),
+      load_index    VARCHAR(40),
+      hq_group      VARCHAR(40),
+      on_order      INT         DEFAULT 0,
+      unrestricted  INT         DEFAULT 0,
+      atp_qt        INT         DEFAULT 0,
+      list_price    DECIMAL(14,2) DEFAULT 0,
+      at_dock       INT         DEFAULT 0,
+      on_water      INT         DEFAULT 0,
+      factory       INT         DEFAULT 0,
+      avg_3m        DECIMAL(14,2) DEFAULT 0,
+      snapshot_date DATE,
+      INDEX idx_stock_rt_mat   (material),
+      INDEX idx_stock_rt_plant (plant, material)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """
+
+    # Derive snapshot_date from the filename (rt_stock_YYYYMMDD.csv)
+    # when possible; fall back to today's date when the alias is used.
+    import re as _re_dt
+    from datetime import date as _d_cls
+    m = _re_dt.search(r"rt_stock_(\d{8})\.csv$", csv_path)
+    if m:
+        try:
+            snap = _d_cls(int(m.group(1)[:4]), int(m.group(1)[4:6]), int(m.group(1)[6:8]))
+        except Exception:
+            snap = _d_cls.today()
+    else:
+        snap = _d_cls.today()
+
+    load_sql = f"""
+    LOAD DATA LOCAL INFILE '{mysql_path(csv_path)}'
+    INTO TABLE `{STOCK_RT_TABLE}`
+    CHARACTER SET utf8mb4
+    FIELDS TERMINATED BY ','
+    OPTIONALLY ENCLOSED BY '"'
+    LINES TERMINATED BY '{LINES_TERMINATED_BY}'
+    IGNORE 1 LINES
+    (@plant, @material, @description, @pattern, @load_index, @hq_group,
+     @on_order, @unrestricted, @atp_qt, @list_price,
+     @at_dock, @on_water, @factory, @avg_3m)
+    SET
+      plant         = TRIM(@plant),
+      material      = TRIM(@material),
+      description   = TRIM(@description),
+      pattern       = TRIM(@pattern),
+      load_index    = TRIM(@load_index),
+      hq_group      = TRIM(@hq_group),
+      on_order      = CAST(REPLACE(REPLACE(TRIM(@on_order),     ',', ''), '"', '') AS SIGNED),
+      unrestricted  = CAST(REPLACE(REPLACE(TRIM(@unrestricted), ',', ''), '"', '') AS SIGNED),
+      atp_qt        = CAST(REPLACE(REPLACE(TRIM(@atp_qt),       ',', ''), '"', '') AS SIGNED),
+      list_price    = CAST(REPLACE(REPLACE(TRIM(@list_price),   ',', ''), '"', '') AS DECIMAL(14,2)),
+      at_dock       = CAST(REPLACE(REPLACE(TRIM(@at_dock),      ',', ''), '"', '') AS SIGNED),
+      on_water      = CAST(REPLACE(REPLACE(TRIM(@on_water),     ',', ''), '"', '') AS SIGNED),
+      factory       = CAST(REPLACE(REPLACE(TRIM(@factory),      ',', ''), '"', '') AS SIGNED),
+      avg_3m        = CAST(REPLACE(REPLACE(TRIM(@avg_3m),       ',', ''), '"', '') AS DECIMAL(14,2)),
+      snapshot_date = '{snap.isoformat()}';
+    """
+
+    cur = conn.cursor()
+    try:
+        cur.execute(drop_sql)
+        cur.execute(create_sql)
+        cur.execute(load_sql)
+        conn.commit()
+
+        cur.execute(f"SELECT COUNT(*) FROM `{STOCK_RT_TABLE}`;")
+        cnt = cur.fetchone()[0]
+        cur.execute(f"SELECT plant, COUNT(*) FROM `{STOCK_RT_TABLE}` GROUP BY plant ORDER BY plant;")
+        by_plant = cur.fetchall()
+        print(f"[stock_rt] Loaded rows: {cnt}")
+        for p, n in by_plant:
+            print(f"           {p or '(none)':<6} {n:>10,}")
+    finally:
+        cur.close()
+
+
 # ---------------- MAIN ----------------
 def main():
     conn = mysql.connector.connect(
@@ -392,8 +512,17 @@ def main():
             raise FileNotFoundError(CSV_PATH)
         load_stock(conn)
         load_sales(conn)
+        # Oct-21 user ask: load the RT stock feed if a rt_stock_*.csv
+        # exists.  Missing CSV is a no-op (prints a skip line) so the
+        # sales + stock loads still complete on hosts that haven't
+        # run sapcrawling_stock_rt yet.
+        try:
+            load_stock_rt(conn)
+        except Exception as _e:
+            print(f"[stock_rt] load failed — skipping: {_e}")
         print("Table:", TABLE_NAME)
         print("Table:", SALES_TABLE)
+        print("Table:", STOCK_RT_TABLE)
     finally:
         conn.close()
 
