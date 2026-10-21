@@ -417,11 +417,71 @@ def load_stock_rt(conn):
     only, then TRUNCATE + LOAD DATA every time after that so the row
     set is a fresh snapshot but the table structure is preserved.
     If the /ART_TH layout gains a new column later, the loader code
-    (and this CREATE) get updated in one commit — not an auto-DROP."""
+    (and this CREATE) get updated in one commit — not an auto-DROP.
+
+    Oct-22 user ask: do NOT re-load an UNCHANGED CSV every hour.
+    Previously a failed hourly RT crawl left no new CSV, the loader
+    picked up yesterday's file again, and MySQL got reloaded with
+    identical stale data on every slot — making it look like the
+    pipeline was healthy when it wasn't.  Now:
+      • Skip the load when the newest CSV's mtime matches the value
+        stamped in batch_status.stock_rt_loaded_mtime (we already
+        have this version in MySQL — no work to do).
+      • Loud WARN when the newest CSV's filename date is OLDER
+        than today, so the operator sees that RT crawl is failing
+        instead of a silent 'Loaded rows: NNNN' repeat.
+    """
     csv_path = _pick_latest_rt_stock_csv()
     if not csv_path:
         print(f"[stock_rt] no rt_stock_*.csv in {STOCK_RT_DIR} — skipping")
         return
+
+    # Skip when the file we'd reload matches what's already in MySQL.
+    try:
+        csv_mtime = int(os.path.getmtime(csv_path))
+    except Exception:
+        csv_mtime = 0
+    try:
+        _cur = conn.cursor()
+        _cur.execute("SHOW TABLES LIKE 'batch_status'")
+        if _cur.fetchone():
+            _cur.execute(
+                "SELECT v FROM batch_status WHERE k = 'stock_rt_loaded_mtime'"
+            )
+            _row = _cur.fetchone()
+            prior_mtime = int(_row[0]) if _row and _row[0] else 0
+            if csv_mtime and prior_mtime == csv_mtime:
+                print(f"[stock_rt] {os.path.basename(csv_path)} is "
+                      f"unchanged since the last load (mtime={csv_mtime}) "
+                      f"— skipping reload.  MySQL already has this snapshot.")
+                _cur.close()
+                return
+        _cur.close()
+    except Exception as _e:
+        # batch_status missing or unreadable → fall through and reload
+        # anyway (first run of the day, or operator wiped the status).
+        pass
+
+    # Loud warn when the CSV's date is older than today.  Format of
+    # the dated filename is rt_stock_YYYYMMDD.csv.
+    import re as _re_dt
+    from datetime import date as _d_cls2
+    _m = _re_dt.search(r"rt_stock_(\d{8})\.csv$", csv_path)
+    if _m:
+        try:
+            _file_d = _d_cls2(int(_m.group(1)[:4]),
+                              int(_m.group(1)[4:6]),
+                              int(_m.group(1)[6:8]))
+            if _file_d < _d_cls2.today():
+                print(f"[stock_rt] [WARN] newest rt_stock CSV is "
+                      f"{_file_d.isoformat()} (not today).  The RT "
+                      f"crawl has not produced a fresh file yet — "
+                      f"check batch_orchestrator.log for ZMMR40430 "
+                      f"errors.  Reloading the stale file anyway "
+                      f"since this is the first load after a restart.")
+        except Exception:
+            pass
+
     print(f"[stock_rt] loading from {csv_path}")
 
     create_sql = f"""
@@ -503,6 +563,24 @@ def load_stock_rt(conn):
         print(f"[stock_rt] Loaded rows: {cnt}")
         for p, n in by_plant:
             print(f"           {p or '(none)':<6} {n:>10,}")
+
+        # Oct-22: stamp the loaded CSV's mtime so subsequent runs can
+        # detect "same file — skip reload".  Written to batch_status
+        # if the table exists; silent no-op otherwise (first-run of a
+        # brand-new deployment that hasn't started the orchestrator).
+        try:
+            cur.execute("SHOW TABLES LIKE 'batch_status'")
+            if cur.fetchone():
+                cur.execute(
+                    "INSERT INTO batch_status (k, v) VALUES "
+                    "('stock_rt_loaded_mtime', %s), "
+                    "('stock_rt_loaded_from',  %s) "
+                    "ON DUPLICATE KEY UPDATE v = VALUES(v)",
+                    (str(csv_mtime), os.path.basename(csv_path)),
+                )
+                conn.commit()
+        except Exception as _e:
+            print(f"[stock_rt] (couldn't stamp batch_status: {_e})")
     finally:
         cur.close()
 

@@ -213,6 +213,27 @@ def close_popups(session, max_steps=6):
 
 
 def start_tcode(session, tcode):
+    # Oct-22: aggressively close any lingering wnd[1] popups BEFORE
+    # typing the TCODE.  A previous attempt may have left SAP sitting
+    # on the Save-As dialog (prog='SAPLSFES') with wnd[1] still open;
+    # if we send "/n…" without clearing that popup first, SAP buffers
+    # the TCODE behind the dialog and the next F8 fires against the
+    # wrong screen.  Walk up to 8 steps of nested popups to be safe.
+    close_popups(session, 8)
+    # Belt-and-braces: if a stubborn popup refuses to close, dismiss
+    # with Escape (sendVKey 12 on wnd[1]) before trying /n.
+    for _ in range(3):
+        if not exists(session, "wnd[1]"):
+            break
+        try:
+            session.findById("wnd[1]").sendVKey(12)  # Esc
+            wait(0.3)
+        except Exception:
+            try:
+                session.findById("wnd[1]").close()
+                wait(0.3)
+            except Exception:
+                break
     session.findById("wnd[0]/tbar[0]/okcd").Text = f"/n{tcode}"
     session.findById("wnd[0]").sendVKey(0)
     wait(1.5)
