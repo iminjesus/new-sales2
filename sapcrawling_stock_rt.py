@@ -108,11 +108,15 @@ ZMMR_FIELDS = {
                         "wnd[0]/usr/ctxtP_VALID",
                         "wnd[0]/usr/ctxtP_VDATE",
                         "wnd[0]/usr/ctxtS_DATUM-LOW"],
-    # "All" stock-status radio — ticks every bucket (Unrestricted +
-    # Block + Quality Inspection).  The user's screenshot shows "All"
-    # as the live default.
-    "radio_all":       ["wnd[0]/usr/radP_ALL",
-                        "wnd[0]/usr/radRA_ALL"],
+    # Oct-22 user ask: switch from "All" to "Unrestricted Use" only.
+    # Keeps Block + Quality Inspection buckets out of the RT snapshot
+    # so stock_rt reads what's actually orderable.  Default on the SAP
+    # selection screen too, but we select it explicitly so a future
+    # SAP-default change can't silently drift the snapshot.
+    "radio_unrestricted": ["wnd[0]/usr/radP_UNR",
+                           "wnd[0]/usr/radP_URL",
+                           "wnd[0]/usr/radRA_URL",
+                           "wnd[0]/usr/radRB_UNR"],
     # "No Zero Stock Lines" checkbox — kept TICKED (skip zero rows).
     "no_zero":         ["wnd[0]/usr/chkP_NOZERO",
                         "wnd[0]/usr/chkP_NZERO"],
@@ -329,25 +333,26 @@ def _select_radio_by_text(session, wanted_text):
 
 def set_selection_screen(session, valid_on_str):
     """Fill the ZMMR40430 selection screen.  Plant range + Sales Org
-    + Distribute Channel + Valid On + 'All' radio + 'No Zero' tick."""
+    + Distribute Channel + Valid On + 'Unrestricted Use' radio +
+    'No Zero' tick."""
     _try_set_text(session, ZMMR_FIELDS["plant_low"],    PLANT_LOW)
     _try_set_text(session, ZMMR_FIELDS["plant_high"],   PLANT_HIGH)
     _try_set_text(session, ZMMR_FIELDS["sales_org"],    SALES_ORG)
     _try_set_text(session, ZMMR_FIELDS["distribute_ch"], DISTRIBUTE_CH)
     _try_set_text(session, ZMMR_FIELDS["valid_on"],     valid_on_str)
-    # 'All' stock-status radio — try the ID candidates first (fast,
-    # exact), fall back to a text-based scan when the IDs don't match
-    # this SAP build.  Reports success / fallback to the console so
-    # the log shows which path landed on the right radio.
-    if _try_select_radio(session, ZMMR_FIELDS["radio_all"]):
+    # Oct-22 user ask: 'Unrestricted Use' radio only (was 'All').
+    # Try the ID candidates first (fast, exact); fall back to a
+    # text-based scan when the IDs don't match this SAP build.
+    if _try_select_radio(session, ZMMR_FIELDS["radio_unrestricted"]):
         pass
-    elif _select_radio_by_text(session, "All"):
-        print("  [radio] 'All' selected via text-scan fallback (no stable ID)")
+    elif _select_radio_by_text(session, "Unrestricted Use"):
+        print("  [radio] 'Unrestricted Use' selected via text-scan "
+              "fallback (no stable ID)")
     else:
-        print("  [WARN] Could not find the 'All' radio button — "
-              "selection screen will fall back to its default (likely "
-              "'Unrestricted Use').  Export may miss Block / Quality "
-              "Inspection stock.")
+        print("  [WARN] Could not find the 'Unrestricted Use' radio "
+              "button — selection screen will keep whatever default "
+              "SAP shows (should still be 'Unrestricted Use' on this "
+              "box, but no guarantee).")
     _try_check(session, ZMMR_FIELDS["no_zero"], True)
     wait(0.3)
 
