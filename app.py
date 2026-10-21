@@ -21521,6 +21521,7 @@ def api_batch_status():
         if not cur.fetchone():
             return jsonify({
                 "stock_updated_at":    None,
+                "stock_rt_updated_at": None,
                 "sales_updated_at":    None,
                 "last_error":          None,
                 "last_error_at":       None,
@@ -21529,6 +21530,11 @@ def api_batch_status():
         rows = {r["k"]: r["v"] for r in (cur.fetchall() or [])}
         return jsonify({
             "stock_updated_at":    rows.get("stock_updated_at")    or None,
+            # Oct-22: RT stock (ZMMR40430) last-successful-load timestamp.
+            # Surfaced on the SPRF near the per-row state-stock columns
+            # so the BDE knows how fresh the ATP / Unrestricted numbers
+            # are without opening the batch log.
+            "stock_rt_updated_at": rows.get("stock_rt_updated_at") or None,
             "sales_updated_at":    rows.get("sales_updated_at")    or None,
             "last_error":          rows.get("last_error")          or None,
             "last_error_at":       rows.get("last_error_at")       or None,
