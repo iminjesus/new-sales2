@@ -483,6 +483,9 @@
      hide any residual overflow so the lines table always fits
      inside its parent, no scrollbar needed on desktop viewports. */
   .lines-wrap{border:1px solid var(--border);border-top:none;background:#fff;overflow:hidden;}
+  /* Columns are user-resizable (static/col_resize.js); when they are
+     widened past the screen, scroll sideways instead of clipping. */
+  @media screen{ .lines-wrap{overflow-x:auto;overflow-y:hidden} }
   table.lines{
     /* table-layout:fixed keeps declared column widths from being
        auto-shrunk by Chrome.  No min-width — the Remark column's
@@ -587,17 +590,6 @@
   /* Size — "205/50R20" is the widest common value. */
   table.lines th.wide,
   table.lines td.size-cell{width:74px;min-width:74px}
-  /* Resize handle — a 6 px hit-target on the right edge of every
-     header cell.  Cursor changes to col-resize on hover; the JS
-     resizer down in the script section watches mousedown/mousemove
-     to drag the column width live.  Behind the input, so a click
-     inside the header still selects text normally. */
-  table.lines thead th{position:relative}
-  table.lines thead th .col-resizer{
-    position:absolute; top:0; right:-3px; width:6px; height:100%;
-    cursor:col-resize; user-select:none; z-index:2;
-  }
-  table.lines thead th .col-resizer:hover{background:rgba(255,255,255,0.25)}
   table.lines tbody td.stock-cell input{
     background:#eefaf1;color:#1e3a2f;font-weight:700;text-align:right;
     font-variant-numeric:tabular-nums;
@@ -1223,6 +1215,8 @@
     .hdr, .orderBand, .meta, .sovd { page-break-after: avoid; }
   }
 </style>
+<script src="/static/col_resize.js?v=20261022a"></script>
+<style>@media print{ .crz-reset-link{display:none !important} }</style>
 </head>
 <body>
 <!-- Aged-stock side panel — filled when a customer is loaded so the
@@ -1674,10 +1668,16 @@
          (strip is flex-end justified), right above the stock
          columns of the lines table.  Hidden until /api/batch_status
          returns a value. -->
-    <span id="stockRtFreshness" hidden
-          style="margin-right:auto;font-weight:500;color:#64748b;font-size:11.5px;"
-          title="Last successful stock_rt (ZMMR40430) load into MySQL">
-      Stock Info updated: <b id="stockRtFreshnessAt" style="color:#334155"></b>
+    <span style="margin-right:auto;display:flex;align-items:center;gap:14px">
+      <!-- Column widths below are drag-resizable; this resets them. -->
+      <a href="#" id="btnResetLineCols" class="crz-reset-link"
+         style="font-weight:500;color:#0369a1;font-size:11.5px;text-decoration:none"
+         title="Drag the right edge of any column header to resize it (double-click to fit).  Click here to restore all default widths.">↔ Reset column widths</a>
+      <span id="stockRtFreshness" hidden
+            style="font-weight:500;color:#64748b;font-size:11.5px;"
+            title="Last successful stock_rt (ZMMR40430) load into MySQL">
+        Stock Info updated: <b id="stockRtFreshnessAt" style="color:#334155"></b>
+      </span>
     </span>
     Trueblu (HK PCLTs) TTL &nbsp;→
     <input id="sovd_ttl" readonly value="0"/>
@@ -4005,57 +4005,18 @@ document.getElementById("rebatePickNo")?.addEventListener("click", () => {
 });
 
 /* ────────────────────────── column resizer ──────────────────────────
-   Adds a 6 px drag zone to the right edge of every <th> in the Order
-   Details table.  Drag left/right widens or narrows the column live
-   by mutating the header's inline width — the tbody cells follow via
-   the same colgroup (or, absent a colgroup, via natural table layout).
-   Runs once on DOMContentLoaded; the .col-resizer div is idempotent
-   because we skip a header that already has one. */
+   Every column of the Order Details table (incl. NSW/QLD/VIC/WA stock
+   and Remark) can be resized by dragging the right edge of its header.
+   Double-click fits the column to its contents.  Widths are remembered
+   per browser; the "Reset column widths" link restores the defaults.
+   Shared logic lives in /static/col_resize.js. */
 function initColumnResizers(){
   const tbl = document.getElementById("linesTable");
-  if (!tbl) return;
-  tbl.querySelectorAll("thead th").forEach(th => {
-    if (th.querySelector(".col-resizer")) return;
-    const handle = document.createElement("div");
-    handle.className = "col-resizer";
-    handle.title = "Drag to resize this column";
-    th.appendChild(handle);
-    handle.addEventListener("mousedown", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const startX = e.clientX;
-      const startW = th.getBoundingClientRect().width;
-      document.body.style.cursor = "col-resize";
-      const onMove = (mv) => {
-        const w = Math.max(48, startW + (mv.clientX - startX));
-        th.style.width    = w + "px";
-        th.style.minWidth = w + "px";
-      };
-      const onUp = () => {
-        document.body.style.cursor = "";
-        document.removeEventListener("mousemove", onMove);
-        document.removeEventListener("mouseup", onUp);
-      };
-      document.addEventListener("mousemove", onMove);
-      document.addEventListener("mouseup", onUp);
-    });
-    /* Double-click auto-fits the column to the widest current cell,
-       so a truncated M-Code column can be snapped back to fit with
-       one gesture instead of dragging blind. */
-    handle.addEventListener("dblclick", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const idx = Array.from(th.parentElement.children).indexOf(th);
-      let widest = 0;
-      tbl.querySelectorAll("tbody tr").forEach(tr => {
-        const td = tr.children[idx];
-        if (!td) return;
-        const inp = td.querySelector("input");
-        const val = inp ? inp.value : td.textContent;
-        widest = Math.max(widest, (val || "").length);
-      });
-      const w = Math.max(60, Math.min(320, widest * 8 + 20));
-      th.style.width    = w + "px";
-      th.style.minWidth = w + "px";
-    });
+  if (!tbl || typeof makeTableResizable !== "function") return;
+  makeTableResizable(tbl, {storageKey: "sprf_lines", filler: "remark", minWidth: 30});
+  document.getElementById("btnResetLineCols")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    resetTableColumnWidths(tbl);
   });
 }
 document.addEventListener("DOMContentLoaded", initColumnResizers);

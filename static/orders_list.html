@@ -46,7 +46,7 @@
     background:#1e293b;color:#fff;padding:8px 10px;text-align:left;font-weight:600;
     position:sticky;top:0;font-size:11.5px;letter-spacing:.3px;text-transform:uppercase;
   }
-  table.list tbody td{padding:8px 10px;border-bottom:1px solid #eef2f7;vertical-align:top}
+  table.list tbody td{padding:8px 10px;border-bottom:1px solid #eef2f7;vertical-align:top;overflow-wrap:anywhere}
   table.list tbody tr{cursor:pointer;transition:background .1s}
   table.list tbody tr:hover td{background:#eff6ff}
   table.list td.num{text-align:right;font-variant-numeric:tabular-nums}
@@ -145,6 +145,10 @@
               style="margin-left:8px;padding:4px 12px;background:#0f766e;color:#fff;border:1px solid #115e59;border-radius:4px;font-weight:700;cursor:pointer">
         ⬇ Excel
       </button>
+      <button id="btnResetCols" type="button" title="Column widths can be changed by dragging the right edge of any header (double-click resets that column).  This button resets every column to its default width."
+              style="padding:4px 10px;background:#fff;color:#334155;border:1px solid var(--border);border-radius:4px;cursor:pointer">
+        ↔ Reset column widths
+      </button>
       <span class="totals-line">
         <span><b id="cntTotal">0</b> orders</span>
         <span>Pending: <b id="cntPending">0</b></span>
@@ -162,7 +166,7 @@
       <b>Brand × Line breakdown:</b> <span id="brandBreakdownRow"></span>
     </div>
     <div id="listWrap">
-      <table class="list">
+      <table class="list" id="ordersListTable">
         <thead>
           <tr>
             <th style="width:110px">Order #</th>
@@ -173,17 +177,17 @@
                  block on the right (Requested → Approved → SAP
                  Created → Elapsed) so nothing is repeated. -->
             <th style="width:170px" title="Signed-in user who filled the SPRF (from Cloudflare Access mail id).  May differ from the mapped BDE.">Requester</th>
-            <th>BDE</th>
-            <th>Sold-to</th>
-            <th>Ship-to</th>
+            <th style="width:110px">BDE</th>
+            <th style="width:180px">Sold-to</th>
+            <th style="width:180px">Ship-to</th>
             <th style="width:60px" class="center">State</th>
             <th style="width:70px" class="num">Qty</th>
             <th style="width:110px" class="num" title="Σ(list × qty) — total ex-GST if the customer paid full sticker">List Total</th>
-            <th style="width:65px" class="num" title="Order-wide chained Current DC% = 1 − Σ(current × qty) / Σ(list × qty).  Fraction of list already taken off by the customer contract stack (Base + 443/promo).">Current DC%</th>
+            <th style="width:75px" class="num" title="Order-wide chained Current DC% = 1 − Σ(current × qty) / Σ(list × qty).  Fraction of list already taken off by the customer contract stack (Base + 443/promo).">Current DC%</th>
             <th style="width:110px" class="num" title="Σ(current × qty) — what the customer would spend at their normal contract price">Current Order Amt</th>
-            <th style="width:70px" class="num" title="Order-wide Additional Support % = 1 − Σ(total) / Σ(current).  The negotiated concession stacked on top of the contract.">Add Support%</th>
+            <th style="width:80px" class="num" title="Order-wide Additional Support % = 1 − Σ(total) / Σ(current).  The negotiated concession stacked on top of the contract.">Add Support%</th>
             <th style="width:110px" class="num" title="Σ(total) — actual price the customer pays for this order (ex-GST)">Total Amount</th>
-            <th style="width:70px" class="num" title="Order-wide chained Proposed DC% = 1 − Σ(total) / Σ(list × qty)">Proposed DC%</th>
+            <th style="width:80px" class="num" title="Order-wide chained Proposed DC% = 1 − Σ(total) / Σ(list × qty)">Proposed DC%</th>
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
             <!-- SAP sales-doc number stamped by the CS after they
@@ -196,13 +200,13 @@
                  time.  Blank for orders that haven't been
                  approved yet or where the approver left the note
                  field empty. -->
-            <th style="width:200px" title="Free-form comment the approver typed at sign-off time.  First-approver-wins — the comment is the one from whichever named approver clicked first.">Note</th>
+            <th data-col="note" style="width:380px" title="Free-form comment the approver typed at sign-off time.  First-approver-wins — the comment is the one from whichever named approver clicked first.">Note</th>
             <!-- Oct-21 user ask: CS Comment column — free-form note the
                  CS team (Harry / HKCustomerService) types on the SPRF
                  after keying the order into SAP.  Writes gated by the
                  /api/orders/detail/<id>/cs_comment endpoint; this column
                  is read-only here. -->
-            <th style="width:200px" title="Free-form note the CS team (Harry / HKCustomerService) typed after keying the order into SAP — any change made at SAP entry (RA18 swap, SD split, back-order, etc.).">Comment from CST</th>
+            <th style="width:220px" title="Free-form note the CS team (Harry / HKCustomerService) typed after keying the order into SAP — any change made at SAP entry (RA18 swap, SD split, back-order, etc.).">Comment from CST</th>
             <!-- Edit column removed — the row itself is clickable and
                  opens the SPRF in view mode, where an Edit button
                  unlocks the form for authorised viewers.  The old
@@ -223,7 +227,7 @@
                  reviewer sees the full modification history in
                  one scroll, without opening the order.  Grows
                  vertically as new edits happen. -->
-            <th style="width:220px" title="Modification history — every edit appends a line here (editor · timestamp).">Remark</th>
+            <th data-col="remark" style="width:220px" title="Modification history — every edit appends a line here (editor · timestamp).">Remark</th>
           </tr>
         </thead>
         <tbody id="listBody">
@@ -657,6 +661,17 @@ $("#btnExcel").addEventListener("click", () => {
 (async () => {
   await loadWhoAmI();
   loadOrders();
+})();
+</script>
+<script src="/static/col_resize.js?v=20261022a"></script>
+<script>
+/* Drag any header's right edge to resize; widths are remembered per
+   browser.  Remark soaks up spare width so the table always reaches
+   the right edge. */
+(function () {
+  const t = document.getElementById("ordersListTable");
+  makeTableResizable(t, {storageKey: "orders_list", filler: "remark", minWidth: 40});
+  document.getElementById("btnResetCols")?.addEventListener("click", () => resetTableColumnWidths(t));
 })();
 </script>
 </body>
