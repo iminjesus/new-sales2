@@ -6383,6 +6383,27 @@ def api_orders_update(oid):
             # knows a re-check is needed on genuine data changes.
             # The expression evaluates on the DB side so we don't
             # need a second SELECT round-trip.
+            #
+            # Oct-21 user ask: a CS edit (Harry / HKCustomerService)
+            # is a post-approval touch-up for SAP entry (adjusting a
+            # line qty, swapping a pattern, etc.).  Those edits must
+            # NOT reset the approval slots or re-trigger the approval
+            # workflow — the order stays Approved, the mod_log entry
+            # (added above) is enough of an audit trail for the change.
+            # Non-CS edits (BDE / price editor / approver) still reset
+            # approvals so the order flows back through sign-off.
+            _reset_sql = ""
+            _reset_bind = tuple()
+            _needs_sql  = "needs_mgmt_approval=needs_mgmt_approval"
+            if not is_harry:
+                _reset_sql = (
+                    "  approved_a='N', approved_a_at=NULL, "
+                    "  approved_b='N', approved_b_at=NULL, "
+                    "  approved_c='N', approved_c_at=NULL, "
+                    "  approved_by_email=NULL, approved_by_name=NULL, approved_at=NULL, "
+                )
+                _needs_sql  = "needs_mgmt_approval=%s"
+                _reset_bind = (needs_approval,)
             cur2.execute(
                 "UPDATE submitted_orders SET "
                 "  sold_to=%s, sold_to_name=%s, ship_to=%s, ship_to_name=%s, "
@@ -6395,13 +6416,10 @@ def api_orders_update(oid):
                 "                           THEN status_changed_at ELSE NOW() END, "
                 "  status_changed_by = CASE WHEN sd_no IS NOT NULL AND TRIM(sd_no) <> '' "
                 "                           THEN status_changed_by ELSE %s END, "
-                "  needs_mgmt_approval=%s, mgmt_reason=%s, "
+                f"  {_needs_sql}, mgmt_reason=%s, "
                 "  rebateable = COALESCE(NULLIF(%s, ''), rebateable), "
                 "  interstate_flag=%s, interstate_amount=%s, "
-                "  approved_a='N', approved_a_at=NULL, "
-                "  approved_b='N', approved_b_at=NULL, "
-                "  approved_c='N', approved_c_at=NULL, "
-                "  approved_by_email=NULL, approved_by_name=NULL, approved_at=NULL, "
+                f"{_reset_sql}"
                 "  payload_json=%s "
                 "WHERE id=%s",
                 (
@@ -6420,7 +6438,7 @@ def api_orders_update(oid):
                     int(_num(totals.get("sovd_qty"))),
                     _num(totals.get("avg_dc_pct")),
                     who[:255],
-                    needs_approval,
+                    *_reset_bind,
                     mgmt_reason,
                     rebateable,
                     "Y" if str(totals.get("interstate_flag") or "").strip().upper().startswith("Y") else "N",
@@ -6479,6 +6497,13 @@ def api_orders_update(oid):
 
     # Notify Harry of the edit.  Subject prefixed with [UPDATE] so it's
     # easy to distinguish from the original submission thread.
+    #
+    # Oct-21: a CS edit is a post-approval SAP-entry touch-up — don't
+    # re-notify the whole approval chain for a routine Harry tweak.
+    # The mod_log entry in the Remark column is the audit trail.
+    if is_harry:
+        return jsonify({"ok": True, "id": oid, "status": "N",
+                        "cs_edit": True, "editor": _label})
     try:
         base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
     except Exception:

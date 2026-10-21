@@ -5913,11 +5913,17 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
       btn.disabled = false; btn.textContent = "💾 Save / Update"; return;
     }
     if (isEditingReal){
-      /* Update path — approvals were reset server-side.  Announce
-         the reset so the reader knows re-approval is coming and
-         land back on the list to see the Pending state. */
+      /* Update path — approvals were reset server-side UNLESS the
+         editor is CS (Harry / HKCustomerService), in which case
+         the backend preserves approvals and returns cs_edit:true.
+         Reflect that in the toast so the reader knows whether
+         re-approval is pending. */
       btn.textContent = `Saved · ${j.order_no || "#" + submitBtn.dataset.oid}`;
-      setStatus(`Order <b>${j.order_no || "#" + submitBtn.dataset.oid}</b> updated — approval reset to Pending, notifications re-fired.`, "ok");
+      if (j.cs_edit){
+        setStatus(`Order <b>${j.order_no || "#" + submitBtn.dataset.oid}</b> updated — approval kept intact; change logged in Remark.`, "ok");
+      } else {
+        setStatus(`Order <b>${j.order_no || "#" + submitBtn.dataset.oid}</b> updated — approval reset to Pending, notifications re-fired.`, "ok");
+      }
       setTimeout(() => { location.href = "/orders_list"; }, 1400);
     } else {
       /* Draft path — remember the id so subsequent Save clicks
@@ -6177,10 +6183,18 @@ async function hydrateSubmittedOrder(oid, editMode){
        • Real order (any state) → any allowed updater lands in edit
          mode straight away.  The user's rule: "Approver가 Order를
          조회할 때는 Update도 가능해야" — an approver reviewing a real
-         SPRF must be able to Update it without needing ?edit=1. */
+         SPRF must be able to Update it without needing ?edit=1.
+       • Oct-21: CS (Harry / HKCustomerService) must be able to edit
+         AFTER approval too, for SAP-entry touch-ups (adjust a line
+         qty, swap a pattern) — their save goes through /update which
+         (when is_harry) preserves the approval slots. */
   const canEdit = isTempDraft
       ? (isSubmitterMatch || who.role === "ALL")
       : (editMode || isAllowedUpdater);
+  // CS stays in edit mode even on an already-approved order so they
+  // can touch material lines before Mark-as-Y.  Everyone else is
+  // read-only on an approved SPRF.
+  const canCsEditApproved = !!who.is_cs;
 
   /* Every re-opened order shows BOTH toolbar buttons (Save as Draft
      + Submit).  What changes per state is which one is DIMMED:
@@ -6219,7 +6233,12 @@ async function hydrateSubmittedOrder(oid, editMode){
      (Save/Update already unlocks them), on already-approved
      orders (audit frozen), and for read-only viewers. */
   if (eBtn){
-    if (!isTempDraft && !isApproved && isAllowedUpdater){
+    // Oct-21: CS keeps Edit on even for approved orders (SAP-entry
+    // touch-up).  Everyone else still hides Edit on approved orders.
+    const _showEdit = !isTempDraft
+        && (!isApproved || canCsEditApproved)
+        && isAllowedUpdater;
+    if (_showEdit){
       eBtn.hidden = false;
       eBtn.onclick = () => {
         /* Reload the same order with ?edit=1 so hydrate lands in
@@ -6268,13 +6287,26 @@ async function hydrateSubmittedOrder(oid, editMode){
       undim(sBtn);
       undim(dBtn);
     } else if (isApproved){
-      /* Real order that's already approved.  The audit trail is
-         frozen — modifying it would break the approval chain.
-         Both buttons stay VISIBLE (per user rule) but dimmed so
-         it's obvious no change is allowed. */
+      /* Real order that's already approved.
+         Oct-21: CS (Harry / HKCustomerService) keeps Save/Update
+         ACTIVE on an approved order so they can tweak material
+         lines before marking SAP Y.  The backend's /update treats
+         a CS edit as a touch-up — approval slots stay intact, the
+         mod_log entry still fires, and the change surfaces in the
+         Remark column.  Submit still dims (approved orders don't
+         re-submit).  Everyone else: both buttons dim.           */
       sBtn.textContent = "Submit";
-      dimIt(sBtn, "This order is already approved — modifications are locked.");
-      dimIt(dBtn, "This order is already approved — modifications are locked.");
+      dimIt(sBtn, "This order is already approved — resubmit is locked.");
+      if (canCsEditApproved){
+        undim(dBtn);
+        dBtn.textContent = "Save / Update";
+        dBtn.dataset.mode = "edit";
+        dBtn.dataset.oid  = String(data.id);
+        sBtn.dataset.mode = "edit";
+        sBtn.dataset.oid  = String(data.id);
+      } else {
+        dimIt(dBtn, "This order is already approved — modifications are locked.");
+      }
     } else {
       /* Real order still Pending.  Save as Draft acts as an Update
          (api_orders_update — keeps the order_no, resets approval
@@ -6520,6 +6552,45 @@ async function _postApprove(order, who, srcBtn, note){
   const origText = srcBtn ? srcBtn.textContent : "";
   if (srcBtn){ srcBtn.disabled = true; srcBtn.textContent = "Approving…"; }
   try {
+    /* Oct-21 user ask: when the approver is in edit mode, their
+       Approve click must also save whatever they changed on the
+       material rows.  Fire /update first; the backend adds the
+       "updated" mod_log entry (visible in the Remark column),
+       resets the approval slots, then the /approve call below
+       flips THIS approver's slot straight back to Y.  Net result:
+       one click = save + approve.  Approvers who didn't open edit
+       mode skip the extra save round-trip. */
+    const _inEditMode = new URLSearchParams(location.search).get("edit") === "1";
+    if (_inEditMode){
+      if (srcBtn) srcBtn.textContent = "Saving…";
+      const _payload = serializeOrder();
+      // Qty guard — same as saveEditedOrder / Submit so a
+      // material-without-qty line can't slip through on approve.
+      const _emptyQty = _payload.lines.filter(ln => {
+        const mc  = String(ln.m_code || "").trim();
+        const qty = parseFloat(String(ln.qty || "0").replace(/,/g,''));
+        return mc && !(qty > 0);
+      });
+      if (_emptyQty.length){
+        const _codes = _emptyQty.map(ln => ln.m_code).join(", ");
+        highlightEmptyQtyRows();
+        showNotice(`Every M-Code needs a Qty greater than zero.\n\nMissing quantity on: ${_codes}\n\nFix these lines before approving.`);
+        if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
+        return;
+      }
+      const _u = await fetch(`/api/orders/detail/${order.id}/update`, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify(_payload),
+      });
+      const _uj = await _u.json();
+      if (!_u.ok || !_uj.ok){
+        setStatus(`Save before approve failed: ${_uj.error || _u.statusText}`, "warn");
+        if (srcBtn){ srcBtn.disabled = false; srcBtn.textContent = origText || "✓ Approve"; }
+        return;
+      }
+      if (srcBtn) srcBtn.textContent = "Approving…";
+    }
     const r = await fetch(`/api/orders/detail/${order.id}/approve`, {
       method: "POST", credentials: "same-origin",
       headers: {"Content-Type": "application/json"},
@@ -6978,7 +7049,16 @@ async function saveEditedOrder(oid){
       btn.disabled = false; btn.textContent = "Update"; return;
     }
     btn.textContent = "Updated";
-    setStatus(`Order <b>#${oid}</b> updated — approval reset to Pending, Harry re-notified, SAP flag back to N.`, "ok");
+    // CS edits (Harry / HKCustomerService) keep the approval intact
+    // — the backend returns cs_edit:true so we can tell the reader
+    // the row is NOT being bounced back through approval.  Non-CS
+    // edits still reset approvals and re-notify, so the original
+    // message stays accurate for them.
+    if (j.cs_edit){
+      setStatus(`Order <b>#${oid}</b> updated — approval kept intact; change logged in Remark.`, "ok");
+    } else {
+      setStatus(`Order <b>#${oid}</b> updated — approval reset to Pending, Harry re-notified, SAP flag back to N.`, "ok");
+    }
     setTimeout(() => { location.href = "/orders_list"; }, 1400);
   } catch(e){
     setStatus("Update failed: " + e, "warn");
