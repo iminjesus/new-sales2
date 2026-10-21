@@ -84,10 +84,10 @@ DATE_FORMATS = [
 
 # ALV Grid saved layout to auto-apply after F8 (Settings → Layout →
 # Choose).  Use the TECHNICAL name from the first column of the layout
-# dialog (starts with '/' and is uppercase).  /ART_TH is the layout
-# the user ships for this report — it carries On Order, Stock, ATP Qt,
-# At dock, On water, Factory, 3M Avrg.
-LAYOUT_NAME = "/ART_TH"
+# dialog — ZMMR40430 ships the layout with a space ("/ART TH"), NOT an
+# underscore.  Carries On Order, Stock, ATP Qt, At dock, On water,
+# Factory, 3M Avrg.
+LAYOUT_NAME = "/ART TH"
 
 # Field-ID candidates for the ZMMR40430 selection screen.  First
 # existing ID wins; unmatched candidates skip quietly.
@@ -466,6 +466,45 @@ def apply_layout_via_dialog(session, layout_name):
         return False
 
 
+def _complete_save_as_dialog(session, dest_filename):
+    """When SAP's Save-As dialog is on wnd[1] (prog SAPLSFES), fill
+    Directory + File Name and click the default Save button.  Returns
+    True if we closed the dialog, False otherwise."""
+    if not exists(session, "wnd[1]"):
+        return False
+    # Set Directory — try both ctxt (combo-box) and txt field IDs.
+    for wid in ("wnd[1]/usr/ctxtDY_PATH",
+                "wnd[1]/usr/txtDY_PATH"):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = SAP_EXPORT_DIR + "\\"
+                break
+            except Exception: pass
+    # Set File Name.
+    for wid in ("wnd[1]/usr/ctxtDY_FILENAME",
+                "wnd[1]/usr/txtDY_FILENAME"):
+        if exists(session, wid):
+            try:
+                session.findById(wid).Text = dest_filename
+                break
+            except Exception: pass
+    # Press the save button (Generate / Replace are both acceptable
+    # — Replace just overwrites if the file exists).  btn[0] is OK /
+    # Enter (Generate), btn[11] is Save (F11).  SAP's convention
+    # varies, so try multiple.
+    for sid in ("wnd[1]/tbar[0]/btn[0]",
+                "wnd[1]/tbar[0]/btn[11]"):
+        try:
+            session.findById(sid).press()
+            wait(0.8)
+            break
+        except Exception: pass
+    # Dismiss any lingering confirmation popups (e.g. "File exists,
+    # overwrite?") — press OK on wnd[1] again if it's still there.
+    close_popups(session, 4)
+    return True
+
+
 def try_export_via_alv_toolbar(session) -> bool:
     """ALV grid toolbar's Export → XXL / Spreadsheet context menu.
     This is the method that works on ZSDM64300; ZMMR40430 uses the
@@ -483,17 +522,23 @@ def try_export_via_alv_toolbar(session) -> bool:
         try:
             grid = session.findById(gid)
             opened = False
-            for export_btn in ("&MB_EXPORT", "EXPORT", "&EXPORT"):
+            for export_btn in ("&MB_EXPORT", "EXPORT", "&EXPORT",
+                               "&EXPORT_LIST", "&SPREADSHEET"):
                 try:
                     grid.pressToolbarContextButton(export_btn)
                     wait(0.4); opened = True; break
                 except: continue
             if not opened:
                 continue
-            for item in ("&XXL", "XXL", "&SPREADSHEET", "SPREADSHEET", "&PC", "PC"):
+            for item in ("&XXL", "XXL", "&SPREADSHEET", "SPREADSHEET",
+                         "&PC", "PC", "&XLS", "XLS"):
                 try:
                     grid.selectContextMenuItem(item)
-                    wait(0.8); close_popups(session, 4)
+                    wait(0.8)
+                    # If the Save-As dialog opened, complete it with
+                    # our target path + filename.
+                    _complete_save_as_dialog(session, "EXPORT_RTSTOCK.xlsx")
+                    close_popups(session, 4)
                     return True
                 except: continue
         except: continue
@@ -579,40 +624,71 @@ def try_export_via_menu(session) -> bool:
 
 
 def try_export_via_okcd(session) -> bool:
-    """SAP's %pc list-save backdoor."""
+    """SAP's %pc list-save backdoor.  Opens the format-select dialog
+    (Unconverted / Spreadsheet / Rich text / HTML), picks Spreadsheet
+    on wnd[1], confirms, then completes the Save-As dialog on wnd[1]
+    with Directory + Filename pointing at our target."""
     for cmd in ("%pc", "%%pc"):
         try:
             session.findById("wnd[0]/tbar[0]/okcd").Text = cmd
             session.findById("wnd[0]").sendVKey(0)
             wait(0.8)
-            if exists(session, "wnd[1]"):
-                for rid in ("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]",
-                            "wnd[1]/usr/radRB_SPRE",
-                            "wnd[1]/usr/radR_XLS",
-                            "wnd[1]/usr/radSPRE",
-                            "wnd[1]/usr/radR_SPRE"):
-                    if exists(session, rid):
-                        try: session.findById(rid).select(); break
-                        except: pass
-                try:
-                    session.findById("wnd[1]/tbar[0]/btn[0]").press(); wait(0.6)
-                except: pass
-                close_popups(session, 4)
-                return True
-        except: pass
+            if not exists(session, "wnd[1]"):
+                continue
+            # Format select — pick Spreadsheet.  If no radio IDs match
+            # the current SAP build, SAP's default (first radio) is
+            # usually "Unconverted"; try the SELFLAG[2,0] index that
+            # typically maps to Spreadsheet.
+            picked = False
+            for rid in ("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]",
+                        "wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[2,0]",
+                        "wnd[1]/usr/radRB_SPRE",
+                        "wnd[1]/usr/radR_XLS",
+                        "wnd[1]/usr/radSPRE",
+                        "wnd[1]/usr/radR_SPRE"):
+                if exists(session, rid):
+                    try:
+                        session.findById(rid).select()
+                        picked = True
+                        break
+                    except Exception: pass
+            # Confirm format dialog (green tick / Enter).
+            try:
+                session.findById("wnd[1]/tbar[0]/btn[0]").press(); wait(0.6)
+            except Exception: pass
+            # Save-As dialog next — fill path + filename and click
+            # the save button.
+            _complete_save_as_dialog(session, "EXPORT_RTSTOCK.xlsx")
+            close_popups(session, 4)
+            return True
+        except Exception: pass
     return False
 
 
 def try_export_via_toolbar_button(session) -> bool:
     """Some Z-transactions expose 'Local File' as a top-toolbar button
-    or via Ctrl+Shift+F9."""
-    for vk in (45,):   # Ctrl+Shift+F9 → standard "Local File" list menu
+    or via Ctrl+Shift+F9.
+
+    Oct-22: DISABLED by default on ZMMR40430 — the user's screenshot
+    showed Ctrl+Shift+F9 opened a TEXT save dialog (Directory /
+    File Name = ".txt" / Encoding / Generate / Replace / Extend / X)
+    rather than the Excel save path.  Returning True on that stuck
+    the pipeline on a text file dialog with no way out.  Kept here
+    for other TCODEs that benefit from Ctrl+Shift+F9, but trigger_export
+    no longer calls it as part of the ZMMR40430 chain."""
+    for vk in (45,):   # Ctrl+Shift+F9
         try:
             session.findById("wnd[0]").sendVKey(vk)
             wait(0.6)
             if exists(session, "wnd[1]"):
-                close_popups(session, 4)
-                return True
+                # Not sure this is the right dialog — close it and
+                # bail so a subsequent method can try cleanly.
+                try:
+                    session.findById("wnd[1]").sendVKey(12)  # Esc
+                    wait(0.3)
+                except Exception:
+                    close_popups(session, 4)
+                return False
         except: pass
     return False
 
@@ -661,11 +737,14 @@ def trigger_export(session) -> bool:
     SAP builds instead of saving to disk, which is a false-positive
     'export triggered' with no file."""
     global _DEBUG_DUMPED
+    # Oct-22: removed toolbar_button from the ZMMR40430 chain — on
+    # this TCODE Ctrl+Shift+F9 opens a TEXT save dialog, not Excel,
+    # and declaring that a success leaves the pipeline stuck on a
+    # ".txt" dialog with no way to produce an XLSX.
     for name, fn in (("system_menu",     try_export_via_system_menu),
                      ("alv_toolbar",     try_export_via_alv_toolbar),
                      ("menu_text",       try_export_via_menu),
-                     ("okcd_%pc",        try_export_via_okcd),
-                     ("toolbar_button",  try_export_via_toolbar_button)):
+                     ("okcd_%pc",        try_export_via_okcd)):
         try:
             if fn(session):
                 print(f"  [export] method '{name}' claimed success")
