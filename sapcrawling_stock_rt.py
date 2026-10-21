@@ -264,6 +264,48 @@ def _try_select_radio(session, id_candidates):
     return False
 
 
+def _select_radio_by_text(session, wanted_text):
+    """Walk every control under wnd[0]/usr and .select() the first
+    GuiRadioButton whose displayed Text matches `wanted_text`
+    (case-insensitive, whitespace-trimmed).  Robust to per-SAP-build
+    ID differences — ZMMR40430's 'All' radio has no stable radP_ALL
+    / radRA_ALL ID across SAP builds, so an ID-only match misses
+    and the screen stays on the default 'Unrestricted Use' radio.
+    This path only needs the label the operator sees on screen."""
+    wanted = (wanted_text or "").strip().lower()
+    if not wanted:
+        return False
+    try:
+        root = session.findById("wnd[0]/usr")
+    except Exception:
+        return False
+
+    def _walk(elem):
+        try:
+            if (elem.Type == "GuiRadioButton"
+                    and (elem.Text or "").strip().lower() == wanted):
+                try:
+                    elem.select()
+                    return True
+                except Exception:
+                    return False
+        except Exception:
+            pass
+        try:
+            n = elem.Children.Count
+        except Exception:
+            return False
+        for i in range(n):
+            try:
+                if _walk(elem.Children(i)):
+                    return True
+            except Exception:
+                pass
+        return False
+
+    return _walk(root)
+
+
 def set_selection_screen(session, valid_on_str):
     """Fill the ZMMR40430 selection screen.  Plant range + Sales Org
     + Distribute Channel + Valid On + 'All' radio + 'No Zero' tick."""
@@ -272,7 +314,19 @@ def set_selection_screen(session, valid_on_str):
     _try_set_text(session, ZMMR_FIELDS["sales_org"],    SALES_ORG)
     _try_set_text(session, ZMMR_FIELDS["distribute_ch"], DISTRIBUTE_CH)
     _try_set_text(session, ZMMR_FIELDS["valid_on"],     valid_on_str)
-    _try_select_radio(session, ZMMR_FIELDS["radio_all"])
+    # 'All' stock-status radio — try the ID candidates first (fast,
+    # exact), fall back to a text-based scan when the IDs don't match
+    # this SAP build.  Reports success / fallback to the console so
+    # the log shows which path landed on the right radio.
+    if _try_select_radio(session, ZMMR_FIELDS["radio_all"]):
+        pass
+    elif _select_radio_by_text(session, "All"):
+        print("  [radio] 'All' selected via text-scan fallback (no stable ID)")
+    else:
+        print("  [WARN] Could not find the 'All' radio button — "
+              "selection screen will fall back to its default (likely "
+              "'Unrestricted Use').  Export may miss Block / Quality "
+              "Inspection stock.")
     _try_check(session, ZMMR_FIELDS["no_zero"], True)
     wait(0.3)
 
