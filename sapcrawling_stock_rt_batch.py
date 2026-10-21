@@ -364,6 +364,40 @@ def apply_layout_via_dialog(session, layout_name):
         return False
 
 
+def try_export_via_alv_toolbar(session) -> bool:
+    """ALV grid toolbar's Export → XXL / Spreadsheet context menu.
+    This is the method that works on ZSDM64300; ZMMR40430 uses the
+    same ALV layer so the toolbar context should match."""
+    grid_ids = [
+        "wnd[0]/usr/cntlG_CONTAINER/shellcont/shell",
+        "wnd[0]/usr/cntlGRID1/shellcont/shell",
+        "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
+        "wnd[0]/usr/cntlALV_CONTAINER/shellcont/shell",
+        "wnd[0]/usr/cntlGRID1/shellcont/shellcont/shell",
+    ]
+    for gid in grid_ids:
+        if not exists(session, gid):
+            continue
+        try:
+            grid = session.findById(gid)
+            opened = False
+            for export_btn in ("&MB_EXPORT", "EXPORT", "&EXPORT"):
+                try:
+                    grid.pressToolbarContextButton(export_btn)
+                    wait(0.4); opened = True; break
+                except: continue
+            if not opened:
+                continue
+            for item in ("&XXL", "XXL", "&SPREADSHEET", "SPREADSHEET", "&PC", "PC"):
+                try:
+                    grid.selectContextMenuItem(item)
+                    wait(0.8); close_popups(session, 4)
+                    return True
+                except: continue
+        except: continue
+    return False
+
+
 def try_export_via_system_menu(session) -> bool:
     """SAP's universal 'List → Export → Local File' path.  Same hard-
     coded menu lookup as sapcrawling_batch — proven on ZSDM64300 and
@@ -411,6 +445,37 @@ def try_export_via_system_menu(session) -> bool:
     return False
 
 
+def try_export_via_menu(session) -> bool:
+    """Fallback: List → Export → Spreadsheet (menu text lookup)."""
+    try:
+        mbar = session.findById("wnd[0]/mbar")
+    except:
+        return False
+    target_path = ["List", "Export", "Spreadsheet"]
+    level = [mbar.Children(i) for i in range(mbar.Children.Count)]
+    for wanted in target_path:
+        found = None
+        for m in level:
+            try:
+                if m.Text.strip().lower() == wanted.lower():
+                    found = m; break
+            except: pass
+        if not found: return False
+        try:
+            level = [found.Children(i) for i in range(found.Children.Count)]
+        except:
+            try:
+                found.select(); wait(0.6); close_popups(session, 4)
+                return True
+            except:
+                return False
+    try:
+        level[0].select(); wait(0.6); close_popups(session, 4)
+        return True
+    except:
+        return False
+
+
 def try_export_via_okcd(session) -> bool:
     """SAP's %pc list-save backdoor."""
     for cmd in ("%pc", "%%pc"):
@@ -421,7 +486,9 @@ def try_export_via_okcd(session) -> bool:
             if exists(session, "wnd[1]"):
                 for rid in ("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]",
                             "wnd[1]/usr/radRB_SPRE",
-                            "wnd[1]/usr/radR_XLS"):
+                            "wnd[1]/usr/radR_XLS",
+                            "wnd[1]/usr/radSPRE",
+                            "wnd[1]/usr/radR_SPRE"):
                     if exists(session, rid):
                         try: session.findById(rid).select(); break
                         except: pass
@@ -434,9 +501,66 @@ def try_export_via_okcd(session) -> bool:
     return False
 
 
+def try_export_via_toolbar_button(session) -> bool:
+    """Some Z-transactions expose 'Local File' as a top-toolbar button
+    or via Ctrl+Shift+F9."""
+    for vk in (45,):   # Ctrl+Shift+F9 → standard "Local File" list menu
+        try:
+            session.findById("wnd[0]").sendVKey(vk)
+            wait(0.6)
+            if exists(session, "wnd[1]"):
+                close_popups(session, 4)
+                return True
+        except: pass
+    return False
+
+
+def dump_screen(session):
+    """Print the full SAP window tree.  Called ONCE on the first
+    export failure so the operator can share the output back; the
+    output names every toolbar button / menu path that ZMMR40430's
+    ALV grid is exposing on this box, so we can pin the right export
+    method for this layout."""
+    print("  ==== ZMMR40430 SCREEN DUMP ====")
+    def _walk(elem, depth=0):
+        try:    eid = elem.Id
+        except: eid = "?"
+        try:    etype = elem.Type
+        except: etype = "?"
+        try:    etext = (elem.Text or "").strip()[:40]
+        except: etext = ""
+        print(f"    {'  '*depth}[{etype}] {eid}  {etext!r}")
+        try:
+            for i in range(elem.Children.Count):
+                _walk(elem.Children(i), depth + 1)
+        except: pass
+    try:
+        _walk(session.findById("wnd[0]"))
+    except Exception as e:
+        print(f"    dump failed: {e}")
+    print("  ==== END DUMP ====")
+
+
+# Dump the screen ONCE per script run so a repeated failure doesn't
+# flood the log with the same 300-line listing.
+_DEBUG_DUMPED = False
+DEBUG_DUMP_ON_EXPORT_FAIL = True
+
+
 def trigger_export(session) -> bool:
+    """Try every known SAP export path in rough success-order from the
+    ZSDM64300 experience.  First one that returns True wins; falls
+    through to a one-shot screen dump so we can see what controls the
+    ALV grid exposes on ZMMR40430's layout."""
+    global _DEBUG_DUMPED
     if try_export_via_system_menu(session):    return True
+    if try_export_via_alv_toolbar(session):    return True
+    if try_export_via_menu(session):           return True
     if try_export_via_okcd(session):           return True
+    if try_export_via_toolbar_button(session): return True
+    if DEBUG_DUMP_ON_EXPORT_FAIL and not _DEBUG_DUMPED:
+        _DEBUG_DUMPED = True
+        dump_screen(session)
     return False
 
 
