@@ -4717,10 +4717,39 @@ HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
 # every submitted-order email, can flip "SAP order entered?" Y/N,
 # and enter the SAP SD #.  Access rights identical to Harry's.
 HKCUSTOMERSERVICE_EMAIL = "HKCustomerService@hankooktyre.com.au"
+# Oct-21 user ask: add Andy Niki and Hayden Lee to the CS team —
+# same access rights as Harry (receive every submit email, flip
+# the SAP flag, stamp the SD #, edit material lines before Mark-Y,
+# save CS comments).  Note: hayden.lee is distinct from
+# hayden.begbie (the MGMT approver) — the match is by exact email.
+ANDY_NIKI_EMAIL          = "andy.niki@hankooktyre.com.au"
+HAYDEN_LEE_EMAIL         = "hayden.lee@hankooktyre.com.au"
 # Everyone on the CS team.  Add new CS addresses here and both the
 # notification fan-out and the role-check helper pick them up with
 # no further edit.
-CS_TEAM_EMAILS = [HARRY_CS_EMAIL, HKCUSTOMERSERVICE_EMAIL]
+CS_TEAM_EMAILS = [HARRY_CS_EMAIL, HKCUSTOMERSERVICE_EMAIL,
+                  ANDY_NIKI_EMAIL, HAYDEN_LEE_EMAIL]
+# Short display name per CS address — shown in the mod_log entry
+# ("Andy updated"), on the Save/Update toast, and in the orders_list
+# Remark column.  Anything not in this map falls back to the mailbox
+# local part (text before '@').
+CS_DISPLAY_NAMES = {
+    HARRY_CS_EMAIL.lower():         "Harry",
+    HKCUSTOMERSERVICE_EMAIL.lower(): "CS Mailbox",
+    ANDY_NIKI_EMAIL.lower():        "Andy",
+    HAYDEN_LEE_EMAIL.lower():       "Hayden Lee",
+}
+
+
+def _cs_display_name(email) -> str:
+    """Return the CS-team display name for `email`, or the mailbox
+    local part if the email isn't in CS_DISPLAY_NAMES."""
+    e = (email or "").strip().lower()
+    name = CS_DISPLAY_NAMES.get(e)
+    if name:
+        return name
+    local = e.split("@", 1)[0]
+    return local or "CS"
 _CS_TEAM_LOWER = {e.lower() for e in CS_TEAM_EMAILS}
 
 
@@ -6095,7 +6124,7 @@ def api_orders_status(oid):
     # SAP-entered flag.  Leadership / ALL-role users can view the
     # panel but not write.
     if not _is_cs_user(who):
-        return jsonify({"error": "only CS (Harry / HKCustomerService) can change SAP status"}), 403
+        return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can change SAP status"}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         # Approval gate — mirror the frontend wireStatusPanel lock
@@ -6153,7 +6182,7 @@ def api_orders_set_sd_no(oid):
     val     = (str(payload.get("sd_no") or "")).strip()[:50]
     who     = (_bde_from_request() or "").strip().lower()
     if not _is_cs_user(who):
-        return jsonify({"error": "only CS (Harry / HKCustomerService) can stamp an SD No."}), 403
+        return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can stamp an SD No."}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         # Approval gate — same rule as the status endpoint above.
@@ -6211,7 +6240,7 @@ def api_orders_set_cs_comment(oid):
     val     = (str(payload.get("comment") or "")).strip()[:1000]
     who     = (_bde_from_request() or "").strip().lower()
     if not _is_cs_user(who):
-        return jsonify({"error": "only CS (Harry / HKCustomerService) can edit the CS comment"}), 403
+        return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can edit the CS comment"}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         cur.execute(
@@ -6333,7 +6362,7 @@ def api_orders_update(oid):
             if is_editor:
                 _who_label = editor_name
             elif is_harry:
-                _who_label = "Harry"
+                _who_label = _cs_display_name(who)
             else:
                 _who_label = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
                               MGMT_APPROVER_EMAILS[1].lower(): "JJ",
@@ -6360,7 +6389,7 @@ def api_orders_update(oid):
         if is_editor:
             _label = editor_name
         elif is_harry:
-            _label = "Harry"
+            _label = _cs_display_name(who)
         elif is_approver:
             _label = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
                       MGMT_APPROVER_EMAILS[1].lower(): "JJ",
@@ -6865,6 +6894,7 @@ def api_orders_cancel(oid):
             # sketch-line without the backend having to join on
             # anything else.
             del_name = (PRICE_EDITOR_EMAILS.get(who)
+                        or (CS_DISPLAY_NAMES.get((who or "").lower()) if _is_cs_user(who) else "")
                         or (_EMAIL_TO_DIR.get(who, (None, None, None))[0] or "")
                         or (who.split("@")[0] if who else "")
                         or "requester").strip()[:60]
