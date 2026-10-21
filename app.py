@@ -4912,6 +4912,13 @@ def _ensure_submitted_orders_table():
             # key the order into SAP.  Shown on orders_list for
             # cross-reference.
             ("sd_no",               "VARCHAR(50) NULL"),
+            # Oct-21 user ask: free-form comment the CS types when
+            # they key the order into SAP ("changed to RA18 per
+            # customer request", "back-order split into 2 SDs",
+            # etc.).  CS-only write (Harry / HKCustomerService); all
+            # viewers see the saved text on the orders_list page in
+            # a new "Comment from CST" column.
+            ("cs_comment",          "VARCHAR(1000) NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -5840,7 +5847,7 @@ def api_orders_list():
             f"       deleted_by_email, deleted_by_name, deleted_at, "
             f"       rebateable, mgmt_reason, "
             f"       interstate_flag, interstate_amount, "
-            f"       payment_method, sd_no "
+            f"       payment_method, sd_no, cs_comment "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -6007,7 +6014,7 @@ def api_orders_detail(oid):
             "       order_no, rebateable, "
             "       interstate_flag, interstate_amount, "
             "       payment_method, cc_number, cc_expiry, cc_ccv, "
-            "       sd_no, "
+            "       sd_no, cs_comment, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -6182,6 +6189,40 @@ def api_orders_set_sd_no(oid):
                 return jsonify({"error": "not found"}), 404
         conn.commit()
         return jsonify({"ok": True, "sd_no": val, "by": who})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.post("/api/orders/detail/<int:oid>/cs_comment")
+def api_orders_set_cs_comment(oid):
+    """Save the CS team's free-form comment for a submitted order.
+
+    POST body: { "comment": "…" } — empty string clears the saved
+    value.  Only CS (Harry / HKCustomerService) can write; every
+    other viewer sees the saved text in the orders_list page's
+    'Comment from CST' column (and in the SPRF detail payload)."""
+    payload = request.get_json(silent=True) or {}
+    val     = (str(payload.get("comment") or "")).strip()[:1000]
+    who     = (_bde_from_request() or "").strip().lower()
+    if not _is_cs_user(who):
+        return jsonify({"error": "only CS (Harry / HKCustomerService) can edit the CS comment"}), 403
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE submitted_orders SET cs_comment = %s WHERE id = %s",
+            (val or None, oid))
+        if cur.rowcount == 0 and val != "":
+            cur.execute("SELECT 1 FROM submitted_orders WHERE id = %s LIMIT 1", (oid,))
+            if not cur.fetchone():
+                return jsonify({"error": "not found"}), 404
+        conn.commit()
+        return jsonify({"ok": True, "cs_comment": val, "by": who})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500

@@ -197,6 +197,12 @@
                  approved yet or where the approver left the note
                  field empty. -->
             <th style="width:200px" title="Free-form comment the approver typed at sign-off time.  First-approver-wins — the comment is the one from whichever named approver clicked first.">Note</th>
+            <!-- Oct-21 user ask: CS Comment column — free-form note the
+                 CS team (Harry / HKCustomerService) types on the SPRF
+                 after keying the order into SAP.  Writes gated by the
+                 /api/orders/detail/<id>/cs_comment endpoint; this column
+                 is read-only here. -->
+            <th style="width:200px" title="Free-form note the CS team (Harry / HKCustomerService) typed after keying the order into SAP — any change made at SAP entry (RA18 swap, SD split, back-order, etc.).">Comment from CST</th>
             <!-- Edit column removed — the row itself is clickable and
                  opens the SPRF in view mode, where an Edit button
                  unlocks the form for authorised viewers.  The old
@@ -221,7 +227,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="22" class="empty">Loading…</td></tr>
+          <tr><td colspan="23" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -299,18 +305,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="22" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="23" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -387,6 +393,7 @@ function renderRows(){
             r.ship_to_name, r.state, String(r.id), r.order_no,
             r.approved_by_name, r.rejected_by_name,
             r.approval_note, r.reject_note, r.mgmt_reason,
+            r.cs_comment,
             r.requester_email, r.submitted_by_email]
       .some(v => String(v || "").toLowerCase().includes(q));
   };
@@ -402,7 +409,7 @@ function renderRows(){
   const _hlOid = String(new URLSearchParams(location.search).get("highlight") || "").trim();
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="22" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="23" class="empty">No orders match.</td></tr>`;
   } else {
     body.innerHTML = filtered.map(r => {
       // Approver cell — "Standard" pill when the order has no
@@ -561,6 +568,12 @@ function renderRows(){
         <td class="center"><small style="color:#0f172a;font-family:monospace">${escapeHtml(r.sd_no || "—")}</small></td>
         <td>${apprCell}</td>
         <td>${noteCell}</td>
+        <td>${(() => {
+          const _c = String(r.cs_comment || "").trim();
+          return _c
+            ? `<div style="font-size:11px;line-height:1.35;color:#0c4a6e;background:#e0f2fe;padding:4px 6px;border-radius:3px;white-space:pre-wrap">${escapeHtml(_c)}</div>`
+            : `<small style="color:#94a3b8">—</small>`;
+        })()}</td>
         <td><small style="color:#334155">${escapeHtml(r.submitted_at || "—")}</small></td>
         <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
         <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
