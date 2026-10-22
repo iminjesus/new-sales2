@@ -946,5 +946,89 @@ def main():
     print(f"Run load_csv_to_mysql.py next to push into MySQL stock_rt table.")
 
 
+def export_only():
+    """Oct-22 debug helper: attach to the currently-visible SAP
+    session and call trigger_export against WHATEVER is on screen,
+    skipping the 20-min TCODE + F8 + grid load.  Use when SAP already
+    has the ZMMR40430 ALV grid open — iterates the export methods +
+    file poller directly, so an export failure can be re-tested in
+    seconds instead of 20 minutes.
+
+    Also always dumps the screen first so we see the ALV grid's
+    toolbar / menu structure on this box's ZMMR40430 layout and can
+    pin the right export path from the dump output."""
+    ensure_dir(UNLOCK_DIR)
+    print("Export-only mode: attaching to current SAP session…")
+
+    _kill_excel("pre-flight: clear Excel locks before export")
+
+    sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
+    conn = sap.Children(0)
+    session = conn.Children(0)
+    try:
+        session.findById("wnd[0]").maximize()
+    except: pass
+
+    # Dump what's actually on screen so we know whether the ALV grid
+    # or some other screen is the starting point.  Comes before the
+    # trigger_export call so even a success leaves the dump in the log.
+    print("\n  ==== CURRENT SCREEN DUMP (export-only mode) ====")
+    dump_screen(session)
+
+    print("\nCalling trigger_export …")
+    export_start_ts = time.time()
+    ok = trigger_export(session)
+    print(f"trigger_export returned: {ok}")
+
+    print("\nPolling C:\\temp for a fresh .xlsx (up to 50 × 0.6 s) …")
+    xlsx_path = ""
+    for _ in range(50):
+        xlsx_path = newest_export_xlsx(export_start_ts)
+        if xlsx_path and os.path.exists(xlsx_path):
+            s1 = os.path.getsize(xlsx_path); wait(0.8)
+            s2 = os.path.getsize(xlsx_path)
+            if s2 >= s1 and s2 > 500:
+                break
+        wait(0.6)
+
+    if not xlsx_path:
+        print("\n  ==== C:\\temp listing (± 5 min window) ====")
+        recent = _list_recent_xlsx(export_start_ts)
+        if not recent:
+            print("    (nothing modified in the last 5 min)")
+        for mtime, p, size in recent:
+            try: ts_str = datetime.fromtimestamp(mtime).isoformat()
+            except Exception: ts_str = "?"
+            print(f"    {ts_str}  {size:>10,}  {os.path.basename(p)}")
+        print("  ==== end listing ====")
+        raise RuntimeError(f"SAP export XLSX not found in {SAP_EXPORT_DIR}")
+
+    _kill_excel("before copy of rt_stock XLSX")
+    import shutil
+    shutil.copy2(xlsx_path, OUT_XLSX)
+    print(f"\n  rt_stock XLSX -> {OUT_XLSX}")
+    _kill_excel("after copy of rt_stock XLSX")
+
+    _kill_excel("pre-convert: release lock before openpyxl load")
+    dated_csv = _dated_csv_path(today_date())
+    n = xlsx_to_csv(OUT_XLSX, dated_csv)
+    try:
+        shutil.copy2(dated_csv, os.path.join(UNLOCK_DIR, "rt_stock.csv"))
+    except Exception: pass
+    _kill_excel("post-convert: close every Excel window on the box")
+    print(f"\nDone.  {n:,} rows written to {dated_csv}.")
+
+
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] in ("--export-only", "-x",
+                                             "--xport"):
+        export_only()
+    elif len(sys.argv) > 1 and sys.argv[1] in ("--dump-only", "-d"):
+        # Just dump the current SAP screen and exit.  Zero cost on
+        # SAP; use this when you want to know what controls are on
+        # screen without triggering any export.
+        sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
+        session = sap.Children(0).Children(0)
+        dump_screen(session)
+    else:
+        main()
