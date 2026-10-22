@@ -89,10 +89,10 @@ DATE_FORMATS = [
 
 # ALV Grid saved layout to auto-apply after F8 (Settings → Layout →
 # Choose).  Use the TECHNICAL name from the first column of the layout
-# dialog — ZMMR40430 ships the layout with a space ("/ART TH"), NOT an
-# underscore.  Carries On Order, Stock, ATP Qt, At dock, On water,
-# Factory, 3M Avrg.
-LAYOUT_NAME = "/ART TH"
+# dialog — ZMMR40430 ships the layout with TWO spaces between 'ART'
+# and 'TH' ("/ART  TH"), not an underscore and not one space.  Carries
+# On Order, Stock, ATP Qt, At dock, On water, Factory, 3M Avrg.
+LAYOUT_NAME = "/ART  TH"
 
 # Field-ID candidates for the ZMMR40430 selection screen.  First
 # existing ID wins; unmatched candidates skip quietly.
