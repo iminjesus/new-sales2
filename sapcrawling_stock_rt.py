@@ -500,12 +500,23 @@ def newest_export_xlsx(after_ts: float) -> str:
     filename to the TCODE ("ZMMR40430.xlsx") or to the ALV title
     rather than "EXPORT_<timestamp>.xlsx", and the strict glob missed
     those files entirely.  Still bounded by after_ts so a stale file
-    from a previous run can't match."""
+    from a previous run can't match.
+
+    Oct-22 part 2: EXCLUDE files whose basename starts with '~$' —
+    those are Excel LOCK files, created the moment Excel opens a
+    workbook and deleted when Excel closes it.  They're newer than
+    the real .xlsx so a plain "newest" pick landed on the lock file,
+    then os.path.getsize blew up with FileNotFoundError when the
+    lock vanished between polling iterations."""
     patterns = (SAP_EXPORT_GLOB, "*.xlsx", "*.XLSX")
     seen = set()
     candidates = []
     for pat in patterns:
         for p in glob.glob(os.path.join(SAP_EXPORT_DIR, pat)):
+            name = os.path.basename(p)
+            # Excel lock-file guard (owner marker file).
+            if name.startswith("~$") or name.startswith("~"):
+                continue
             if p in seen:
                 continue
             seen.add(p)
@@ -1056,12 +1067,20 @@ def main():
 
     xlsx_path = ""
     for _ in range(50):
-        xlsx_path = newest_export_xlsx(export_start_ts)
-        if xlsx_path and os.path.exists(xlsx_path):
-            s1 = os.path.getsize(xlsx_path); wait(0.8)
-            s2 = os.path.getsize(xlsx_path)
-            if s2 >= s1 and s2 > 500:
-                break
+        try:
+            xlsx_path = newest_export_xlsx(export_start_ts)
+            if xlsx_path and os.path.exists(xlsx_path):
+                s1 = os.path.getsize(xlsx_path); wait(0.8)
+                # Belt-and-braces: between s1 and s2 the file may have
+                # been renamed / deleted (Excel juggles temp names),
+                # so re-exists before the second getsize.
+                if os.path.exists(xlsx_path):
+                    s2 = os.path.getsize(xlsx_path)
+                    if s2 >= s1 and s2 > 500:
+                        break
+        except (FileNotFoundError, OSError):
+            # File vanished mid-poll — reset and retry.
+            xlsx_path = ""
         wait(0.6)
     if not xlsx_path:
         # Oct-22 diagnostic: dump every recently-modified file in
@@ -1175,12 +1194,16 @@ def export_only():
     print("\nPolling C:\\temp for a fresh .xlsx (up to 50 × 0.6 s) …")
     xlsx_path = ""
     for _ in range(50):
-        xlsx_path = newest_export_xlsx(export_start_ts)
-        if xlsx_path and os.path.exists(xlsx_path):
-            s1 = os.path.getsize(xlsx_path); wait(0.8)
-            s2 = os.path.getsize(xlsx_path)
-            if s2 >= s1 and s2 > 500:
-                break
+        try:
+            xlsx_path = newest_export_xlsx(export_start_ts)
+            if xlsx_path and os.path.exists(xlsx_path):
+                s1 = os.path.getsize(xlsx_path); wait(0.8)
+                if os.path.exists(xlsx_path):
+                    s2 = os.path.getsize(xlsx_path)
+                    if s2 >= s1 and s2 > 500:
+                        break
+        except (FileNotFoundError, OSError):
+            xlsx_path = ""
         wait(0.6)
 
     if not xlsx_path:
