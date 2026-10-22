@@ -470,6 +470,18 @@
     padding:6px 10px;text-align:right;font-size:12.5px;font-weight:700;
     display:flex;justify-content:flex-end;align-items:center;gap:8px;
   }
+  /* Stock-freshness label pinned over the first stock column.  The
+     strip's right padding is widened so the Trueblu TTL ends just
+     before the stock columns instead of running underneath the label. */
+  @media screen{
+    .sovd.stock-anchored{position:relative;padding-right:var(--sovd-pr,10px)}
+    .sovd.stock-anchored #stockRtFreshness{
+      position:absolute;left:var(--stock-left,0px);top:50%;transform:translateY(-50%);
+      padding-left:4px;max-width:var(--stock-maxw,none);
+      white-space:normal !important;line-height:1.2;
+    }
+    .sovd.stock-anchored #stockRtFreshnessAt{white-space:nowrap}
+  }
   .sovd input{
     width:120px;text-align:right;background:#fffbe0;border:1px solid #d1b900;padding:2px 6px;border-radius:2px;
   }
@@ -1673,11 +1685,14 @@
       <a href="#" id="btnResetLineCols" class="crz-reset-link"
          style="font-weight:500;color:#0369a1;font-size:11.5px;text-decoration:none"
          title="Drag the right edge of any column header to resize it (double-click to fit).  Click here to restore all default widths.">↔ Reset column widths</a>
-      <span id="stockRtFreshness" hidden
-            style="font-weight:500;color:#64748b;font-size:11.5px;"
-            title="Last successful stock_rt (ZMMR40430) load into MySQL">
-        Stock Info updated: <b id="stockRtFreshnessAt" style="color:#334155"></b>
-      </span>
+    </span>
+    <!-- Anchored (screen only) to the left edge of the first stock
+         column (NSW) — positionStockFreshness() keeps it there when
+         columns are resized or the table scrolls sideways. -->
+    <span id="stockRtFreshness" hidden
+          style="font-weight:500;color:#64748b;font-size:11.5px;white-space:nowrap;"
+          title="Last successful stock_rt (ZMMR40430) load into MySQL">
+      <span style="white-space:nowrap">Stock Info updated:</span> <b id="stockRtFreshnessAt" style="color:#334155"></b>
     </span>
     Trueblu (HK PCLTs) TTL &nbsp;→
     <input id="sovd_ttl" readonly value="0"/>
@@ -4053,6 +4068,40 @@ document.addEventListener("DOMContentLoaded", async () => {
     at.style.color = "#dc2626";
   }
   label.hidden = false;
+  positionStockFreshness();
+});
+
+/* Keep the "Stock Info updated" label starting at the left edge of
+   the first stock column (NSW), following column resizes, sideways
+   scrolling of the lines table and window resizes. */
+function positionStockFreshness(){
+  const strip = document.querySelector(".sovd");
+  const label = document.getElementById("stockRtFreshness");
+  const th    = document.querySelector('#linesTable thead th[data-col="stock_nsw"]');
+  if (!strip || !label || !th || label.hidden) return;
+  const sR = strip.getBoundingClientRect();
+  const tR = th.getBoundingClientRect();
+  if (!sR.width || !tR.width) return;
+  // Start at the NSW column; if there isn't room to the right for
+  // one line, the label wraps (date on the 2nd line) instead of moving.
+  const left = Math.max(0, Math.min(sR.width - 112, tR.left - sR.left));
+  strip.style.setProperty("--stock-left", left + "px");
+  strip.style.setProperty("--stock-maxw", (sR.width - left - 4) + "px");
+  strip.style.setProperty("--sovd-pr", Math.max(10, sR.width - left + 12) + "px");
+  strip.classList.add("stock-anchored");
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const wrap = document.querySelector(".lines-wrap");
+  const tbl  = document.getElementById("linesTable");
+  const run  = () => requestAnimationFrame(positionStockFreshness);
+  wrap?.addEventListener("scroll", run, {passive: true});
+  window.addEventListener("resize", run);
+  if (window.ResizeObserver && tbl) {
+    const ro = new ResizeObserver(run);
+    ro.observe(tbl);
+    tbl.querySelectorAll("thead th").forEach(th => ro.observe(th));
+  }
+  run();
 });
 
 /* ────────────────────────── row template ────────────────────────── */
