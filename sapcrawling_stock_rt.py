@@ -962,9 +962,31 @@ def main():
         print(f"  ==== end listing ====\n")
         raise RuntimeError(f"SAP export XLSX not found in {SAP_EXPORT_DIR}")
 
-    _kill_excel("before copy of rt_stock XLSX")
+    # Oct-22: same ordering fix as export_only() — don't kill Excel
+    # before the copy; killing it while Excel holds the file can
+    # unlink the file on un-activated-Office boxes.  Copy first with
+    # a retry on PermissionError; kill Excel afterwards.
+    print(f"  Source XLSX: {xlsx_path}  ({os.path.getsize(xlsx_path):,} bytes)")
     import shutil
-    shutil.copy2(xlsx_path, OUT_XLSX)
+    _copied = False
+    for _try in range(3):
+        try:
+            shutil.copy2(xlsx_path, OUT_XLSX)
+            _copied = True
+            break
+        except PermissionError as _pe:
+            print(f"  [copy retry {_try+1}/3] PermissionError: {_pe} — "
+                  "killing Excel to release the lock…")
+            _kill_excel("permission-retry: release lock on source XLSX")
+            wait(1.0)
+        except FileNotFoundError as _fe:
+            print(f"  [copy error] FileNotFoundError: {_fe}")
+            print(f"  xlsx_path was: {xlsx_path!r}")
+            print(f"  exists? {os.path.exists(xlsx_path)}")
+            raise
+    if not _copied:
+        raise RuntimeError(
+            f"Could not copy {xlsx_path} to {OUT_XLSX} after 3 tries.")
     print(f"  rt_stock XLSX -> {OUT_XLSX}")
     _kill_excel("after copy of rt_stock XLSX")
 
@@ -1043,10 +1065,38 @@ def export_only():
         print("  ==== end listing ====")
         raise RuntimeError(f"SAP export XLSX not found in {SAP_EXPORT_DIR}")
 
-    _kill_excel("before copy of rt_stock XLSX")
+    # Oct-22: do NOT kill Excel before the copy — on an un-activated
+    # Office box SAP opens Excel inline on the just-saved XLSX, and
+    # killing Excel while it holds the file can delete the file
+    # (Excel treats some SAP-created files as recovery/temp and
+    # unlinks them on close).  Instead:
+    #   1. copy FIRST with a retry if PermissionError fires (Excel
+    #      typically opens with read-share so copy usually succeeds)
+    #   2. kill Excel AFTER the copy to clean up for the next loop
+    # The pre-copy xlsx path is logged so a disappearing-file bug is
+    # obvious in the console output.
+    print(f"\n  Source XLSX: {xlsx_path}  ({os.path.getsize(xlsx_path):,} bytes)")
     import shutil
-    shutil.copy2(xlsx_path, OUT_XLSX)
-    print(f"\n  rt_stock XLSX -> {OUT_XLSX}")
+    _copied = False
+    for _try in range(3):
+        try:
+            shutil.copy2(xlsx_path, OUT_XLSX)
+            _copied = True
+            break
+        except PermissionError as _pe:
+            print(f"  [copy retry {_try+1}/3] PermissionError: {_pe} — "
+                  "killing Excel to release the lock…")
+            _kill_excel("permission-retry: release lock on source XLSX")
+            wait(1.0)
+        except FileNotFoundError as _fe:
+            print(f"  [copy error] FileNotFoundError: {_fe}")
+            print(f"  xlsx_path was: {xlsx_path!r}")
+            print(f"  exists? {os.path.exists(xlsx_path)}")
+            raise
+    if not _copied:
+        raise RuntimeError(
+            f"Could not copy {xlsx_path} to {OUT_XLSX} after 3 tries.")
+    print(f"  rt_stock XLSX -> {OUT_XLSX}")
     _kill_excel("after copy of rt_stock XLSX")
 
     _kill_excel("pre-convert: release lock before openpyxl load")
