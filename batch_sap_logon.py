@@ -472,6 +472,60 @@ def _reset_to_home(session):
         time.sleep(1.5)   # a hair longer than before for slow mainframes
     except Exception as e:
         _slog(f"  _reset_to_home: /n didn't take ({e}) - continuing anyway")
+
+    # Oct-23 user ask: when SAP first logs in it lands on the S000
+    # splash with a "Start SAP Easy Access" button that nobody clicked
+    # — tcode='S000', program='SAPMSYST', window title='SAP'.  TCODE
+    # entry still works from here, but the ALV grid rendered later
+    # (ZMMR40430 etc.) sometimes fails to expose its export menu when
+    # the session never left the splash.  Click the button (or press
+    # Enter) when the window title is still bare "SAP", so every
+    # subsequent crawler starts from the real Easy Access screen.
+    try:
+        _title = str(session.findById("wnd[0]").Text or "").strip()
+        _tcode = str(session.Info.Transaction or "").strip().upper()
+        _prog  = str(session.Info.Program     or "").strip().upper()
+        _on_splash = (
+            _tcode in ("S000", "")
+            and _prog == "SAPMSYST"
+            and _title.upper() == "SAP"     # Easy Access title would be "SAP Easy Access"
+        )
+        if _on_splash:
+            _slog("  _reset_to_home: on S000 splash — dismissing to Easy Access")
+            # Preferred path: find the "Start SAP Easy Access" button
+            # by text and press it.  SAP's user screen puts the button
+            # directly under wnd[0]/usr; the id can be ":SAPMSYST:0040"
+            # or a positioned button, so walk the children by text
+            # instead of hard-coding an id.
+            _pressed = False
+            try:
+                _usr = session.findById("wnd[0]/usr")
+                _kids = _usr.Children
+                for _i in range(_kids.Count):
+                    try:
+                        _ch = _kids.ElementAt(_i)
+                        _txt = str(getattr(_ch, "Text", "") or "")
+                        if "easy access" in _txt.lower():
+                            _ch.press()
+                            _pressed = True
+                            _slog(f"  _reset_to_home: pressed button '{_txt}'")
+                            break
+                    except Exception:
+                        continue
+            except Exception as _e:
+                _slog(f"  _reset_to_home: splash child walk failed ({_e})")
+            # Fallback: Enter on the main window usually activates the
+            # default button, which on S000 IS 'Start SAP Easy Access'.
+            if not _pressed:
+                try:
+                    session.findById("wnd[0]").sendVKey(0)
+                    _slog("  _reset_to_home: splash dismissed via Enter")
+                except Exception as _e:
+                    _slog(f"  _reset_to_home: splash Enter failed ({_e})")
+            time.sleep(1.5)
+    except Exception as _e:
+        _slog(f"  _reset_to_home: splash check failed ({_e}) - continuing anyway")
+
     _dump_sap_state(session, "after-reset")
 
 
