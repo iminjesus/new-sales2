@@ -4132,9 +4132,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   const at    = document.getElementById("stockRtFreshnessAt");
   if (!label || !at) return;
   let ts = "";
+  let hb = "";
   try {
     const r = await fetch("/api/batch_status", {credentials: "same-origin", cache: "no-store"});
-    if (r.ok) ts = String((await r.json()).stock_rt_updated_at || "").trim();
+    if (r.ok) {
+      const j = await r.json();
+      ts = String(j.stock_rt_updated_at || "").trim();
+      hb = String(j.heartbeat_at         || "").trim();
+    }
   } catch (_e) { /* fall through to "unknown" */ }
   if (ts) {
     // "2026-10-22 09:11:49" → "2026-10-22 09:11"
@@ -4145,6 +4150,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (ts.slice(0, 10) !== today) {
       at.style.color = "#dc2626";
       label.title = "Stock data is not from today — the SAP stock interface may have failed.";
+    }
+    /* Oct-23 user ask: heartbeat check — orchestrator writes
+       batch_status.heartbeat_at every 60 s.  If it's stale by more
+       than 10 min, the process is dead or hung; surface that even
+       when the stock_rt timestamp itself looks recent. */
+    if (hb) {
+      const hbMs = Date.parse(hb.replace(" ", "T") + "+10:00");  // Sydney stamp
+      const ageMin = isNaN(hbMs) ? 0 : (Date.now() - hbMs) / 60000;
+      if (ageMin > 10) {
+        at.textContent = (at.textContent || "") +
+          `   ⚠ batch_orchestrator heartbeat stale (${Math.round(ageMin)} min)`;
+        at.style.color = "#dc2626";
+        label.title = (label.title || "") +
+          "\nOrchestrator heartbeat has not updated in 10+ minutes — the Windows watchdog should restart it shortly.";
+      }
     }
   } else {
     at.textContent = "unknown";

@@ -22299,6 +22299,10 @@ def api_batch_status():
             "sales_updated_at":    rows.get("sales_updated_at")    or None,
             "last_error":          rows.get("last_error")          or None,
             "last_error_at":       rows.get("last_error_at")       or None,
+            # Oct-23 user ask: liveness heartbeat.  The orchestrator
+            # writes NOW() to this key every 60 s.  Dashboard uses it
+            # to flag "orchestrator may be dead / hung" when stale.
+            "heartbeat_at":        rows.get("heartbeat_at")        or None,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

@@ -77,6 +77,28 @@ RUN_HOURS = list(range(8, 19))   # 8, 9, 10, …, 18
 MULTI_LOGON_RETRY_MIN = 5
 MULTI_LOGON_MAX_RETRIES_PER_HOUR = 11   # 11 × 5 min = ~55 min, bail into next slot
 
+# Oct-23 user ask (watchdog + heartbeat + task scheduler):
+#   • Per-step timeout — each crawl step is given a hard wall-clock
+#     ceiling.  When exceeded, the orchestrator logs the hang and
+#     os._exit()'s with code 2 so the Windows watchdog task restarts
+#     the whole process from a clean SAP attach.  Prevents the "SAP
+#     popup / Office activation wizard / Excel save-as dialog froze
+#     the whole box overnight" failure mode.
+#   • Heartbeat — a background thread writes
+#     batch_status.heartbeat_at = NOW() every HEARTBEAT_SEC seconds.
+#     The dashboard reads it and warns when it's > 10 min stale.
+STEP_TIMEOUT_MIN = {
+    "sap_attach":  5,
+    "dot_stock":  20,
+    "stock_rt":   15,
+    "sales":      15,
+    "mysql_load": 10,
+}
+HEARTBEAT_SEC = 60   # write batch_status.heartbeat_at every N seconds
+# Exit codes — matched by the Windows watchdog .bat / Task Scheduler.
+EXIT_STEP_TIMEOUT    = 2
+EXIT_UNCAUGHT        = 3
+
 # Email recipient for the "SAP in use elsewhere" warning
 MULTI_LOGON_NOTIFY_TO = ["brian.park@hankooktyre.com.au"]
 
@@ -263,23 +285,91 @@ def send_multi_logon_email(hour_key):
     return True
 
 
+# ── Heartbeat (Oct-23) ───────────────────────────────────────────────
+# A background daemon thread stamps batch_status.heartbeat_at every
+# HEARTBEAT_SEC seconds.  The dashboard polls this value and warns the
+# operator when it's > 10 minutes stale — fastest way to notice the
+# box went to sleep or the process hung.
+_HEARTBEAT_STARTED = False
+def _start_heartbeat_thread():
+    global _HEARTBEAT_STARTED
+    if _HEARTBEAT_STARTED:
+        return
+    _HEARTBEAT_STARTED = True
+    import threading
+    def _beat():
+        while True:
+            try:
+                status_set("heartbeat_at", _now_syd().strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception as _e:
+                # Never let the heartbeat loop crash the whole thread —
+                # a MySQL blip is survivable.
+                pass
+            time.sleep(HEARTBEAT_SEC)
+    t = threading.Thread(target=_beat, name="batch-heartbeat", daemon=True)
+    t.start()
+    log(f"heartbeat thread started (every {HEARTBEAT_SEC}s → batch_status.heartbeat_at).")
+
+
 # ── Pipeline step wrappers ──────────────────────────────────────────
-def _run_step(label, fn):
+def _run_step(label, fn, *, timeout_min=None):
     """Run one of the pipeline steps and log the outcome.  Returns
     True on success, False on failure (orchestrator keeps going).
     ASCII-only markers (-> / OK / FAIL) so cp1252 consoles don't
-    throw UnicodeEncodeError on the log line."""
+    throw UnicodeEncodeError on the log line.
+
+    Oct-23 user ask: when timeout_min is set, the step runs in a
+    daemon thread and the main thread joins with that wall-clock
+    ceiling.  A step that doesn't return in time (SAP popup / Office
+    activation wizard / modal Excel dialog) force-exits the whole
+    orchestrator with EXIT_STEP_TIMEOUT so the Windows watchdog task
+    restarts it from a clean SAP attach.  The hung thread is left
+    behind as a daemon — Python's exit skips it since daemon=True."""
+    import threading
     log(f"-> {label}")
-    try:
-        fn()
+    _result = {"ok": False, "err": None, "done": False}
+    def _runner():
+        try:
+            fn()
+            _result["ok"] = True
+        except Exception as e:
+            _result["err"] = (e, traceback.format_exc())
+        finally:
+            _result["done"] = True
+    if timeout_min:
+        t = threading.Thread(target=_runner, name=f"step-{label[:30]}", daemon=True)
+        t.start()
+        t.join(timeout=timeout_min * 60.0)
+        if not _result["done"]:
+            # Hard hang — write status, log the stuck step, bail out so
+            # the Windows watchdog takes over and relaunches from
+            # scratch.  Any cleaner "soft recovery" is risky because
+            # the hung thread is probably sitting inside a COM call
+            # that can't be interrupted from Python.
+            msg = (f"TIMEOUT {label} after {timeout_min} min — "
+                   f"orchestrator force-exiting so Windows watchdog "
+                   f"can relaunch with a fresh SAP attach.")
+            log(msg)
+            try:
+                status_set("last_error", f"{label}: TIMEOUT after {timeout_min} min")
+                status_set("last_error_at", _now_syd().strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                pass
+            try:
+                os.remove(PID_FILE)
+            except Exception:
+                pass
+            os._exit(EXIT_STEP_TIMEOUT)
+    else:
+        _runner()
+    if _result["ok"]:
         log(f"OK {label}")
         return True
-    except Exception as e:
-        tb = traceback.format_exc()
-        log(f"FAIL {label}: {e}\n{tb}")
-        status_set("last_error", f"{label}: {e}")
-        status_set("last_error_at", _now_syd().strftime("%Y-%m-%d %H:%M:%S"))
-        return False
+    e, tb = _result["err"] if _result["err"] else (RuntimeError("unknown"), "")
+    log(f"FAIL {label}: {e}\n{tb}")
+    status_set("last_error", f"{label}: {e}")
+    status_set("last_error_at", _now_syd().strftime("%Y-%m-%d %H:%M:%S"))
+    return False
 
 
 def run_pipeline():
@@ -327,6 +417,7 @@ def run_pipeline():
         stock_ok = _run_step(
             "sapcrawling_batch.main - ZSDM64300 stock + DOT",
             lambda: __import__("sapcrawling_batch").main(),
+            timeout_min=STEP_TIMEOUT_MIN["dot_stock"],
         )
         if stock_ok:
             status_set("dot_stock_crawled_on", today_syd)
@@ -358,6 +449,7 @@ def run_pipeline():
     rt_ok = _run_step(
         "sapcrawling_stock_rt_batch.main - ZMMR40430 RT stock + ATP",
         lambda: __import__("sapcrawling_stock_rt_batch").main(),
+        timeout_min=STEP_TIMEOUT_MIN["stock_rt"],
     )
     try:
         _reset_to_home(sess)
@@ -371,6 +463,7 @@ def run_pipeline():
     sales_ok = _run_step(
         "sapcrawling_sales1_batch.main - ZSDR24030 daily sales",
         lambda: __import__("sapcrawling_sales1_batch").main(),
+        timeout_min=STEP_TIMEOUT_MIN["sales"],
     )
 
     # Loader needs AT LEAST one of the three CSVs to be fresh.  Run it
@@ -382,6 +475,7 @@ def run_pipeline():
         load_ok = _run_step(
             "load_csv_to_mysql.main - push CSVs into MySQL",
             lambda: __import__("load_csv_to_mysql").main(),
+            timeout_min=STEP_TIMEOUT_MIN["mysql_load"],
         )
     else:
         load_ok = False
@@ -445,6 +539,10 @@ def main():
     log(f"batch_orchestrator PID={os.getpid()} starting.")
     log(f"Business hours: {RUN_HOURS[0]:02d}-{RUN_HOURS[-1]:02d} Sydney, Mon-Fri, "
         f"skipping {len(AU_NATIONAL_HOLIDAYS)} AU federal holidays.")
+    # Oct-23 user ask: fire the heartbeat before anything else so the
+    # dashboard sees the orchestrator alive even if the first kickoff
+    # run takes a while to finish.
+    _start_heartbeat_thread()
 
     # Oct-16 user ask: run the full pipeline IMMEDIATELY on startup
     # (via start_batch.bat or a manual launch), regardless of hour /
