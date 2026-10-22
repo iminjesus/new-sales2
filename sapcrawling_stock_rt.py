@@ -526,8 +526,21 @@ def _complete_save_as_dialog(session, dest_filename):
 def try_export_via_alv_toolbar(session) -> bool:
     """ALV grid toolbar's Export → XXL / Spreadsheet context menu.
     This is the method that works on ZSDM64300; ZMMR40430 uses the
-    same ALV layer so the toolbar context should match."""
+    same ALV layer so the toolbar context should match.
+
+    Oct-22: pinned ZMMR40430's actual GridViewCtrl.1 id from the live
+    screen dump — the real grid is INSIDE the splitter at
+      wnd[0]/usr/cntlGRID1/shellcont/shell/shellcont[1]/shell
+    (shellcont[0] = header HTML, shellcont[1] = GridViewCtrl, shellcont[2]
+    = footer HTML).  The older 'cntlGRID1/shellcont/shell' candidate
+    actually resolved to the SplitterCtrl, not the grid — so
+    pressToolbarContextButton silently failed and the method returned
+    False even though a grid WAS on screen."""
     grid_ids = [
+        # ZMMR40430 — GridViewCtrl inside the splitter (confirmed Oct-22)
+        "wnd[0]/usr/cntlGRID1/shellcont/shell/shellcont[1]/shell",
+        "wnd[0]/usr/cntlGRID1/shellcont/shell/shellcont[0]/shell",
+        # Legacy / other-TCODE candidates
         "wnd[0]/usr/cntlG_CONTAINER/shellcont/shell",
         "wnd[0]/usr/cntlGRID1/shellcont/shell",
         "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
@@ -564,10 +577,24 @@ def try_export_via_alv_toolbar(session) -> bool:
 
 
 def try_export_via_system_menu(session) -> bool:
-    """SAP's universal 'List → Export → Local File' path.  Same hard-
-    coded menu lookup as sapcrawling_batch — proven on ZSDM64300 and
-    typically identical on ZMMR40430."""
+    """SAP's universal 'List → Export → Spreadsheet' path.
+
+    Oct-22: pinned the exact ZMMR40430 menu path from the live screen
+    dump — the ALV grid exposes:
+      menu[0] 'List'
+        menu[1] 'Export'
+          menu[0] 'Word Processing…'
+          menu[1] 'Spreadsheet…'      ← THIS
+          menu[2] 'Local File…'
+    so menu[0]/menu[1]/menu[1] is 'List → Export → Spreadsheet'.
+    Kept the older ZSDM64300-style paths as fallbacks for other
+    TCODEs that share this function."""
     for path in (
+        # ZMMR40430 — List → Export → Spreadsheet (confirmed Oct-22)
+        "wnd[0]/mbar/menu[0]/menu[1]/menu[1]",
+        # ZMMR40430 — List → Export → Local File (plain-text fallback)
+        "wnd[0]/mbar/menu[0]/menu[1]/menu[2]",
+        # ZSDM64300 — System → List → Save → Local File
         "wnd[0]/mbar/menu[0]/menu[5]/menu[2]/menu[2]",
         "wnd[0]/mbar/menu[0]/menu[3]/menu[2]/menu[2]",
         "wnd[0]/mbar/menu[0]/menu[1]/menu[2]/menu[2]",
