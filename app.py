@@ -6702,6 +6702,109 @@ def api_orders_release_sap_lock(oid):
         except: pass
 
 
+# Oct-22 user ask: the Remark column on Submitted Orders shows "updated"
+# but not WHAT was updated.  _diff_order_payload builds a short list of
+# human-readable change strings between the stored payload and the one
+# posted by the current edit.  Stored on the mod_log entry as "changes"
+# so the orders_list.html renderer can print them under the main
+# "<who> · <when> · updated" line.
+def _diff_order_payload(prev, new):
+    """Return a list[str] of short change descriptions, e.g.
+       ["Qty 1017693: 3→5", "Added M-Code 1004321 ×2",
+        "Removed M-Code 1004111", "Order Date: 2026-10-15→2026-10-22"].
+    Both args are dict payloads (header + lines).  Falls back to [] on
+    any parse / shape error — the caller then keeps the plain
+    "updated" entry with no detail block."""
+    def _nz(v):
+        if v is None: return ""
+        s = str(v).strip()
+        return s if s and s.lower() not in ("none",) else ""
+    def _nn(v):
+        try:
+            s = str(v or "0").replace(",", "").replace("$", "").replace("%", "").strip()
+            return float(s or 0)
+        except Exception:
+            return 0.0
+    def _fmt_num(v):
+        # Keep ints as ints, 2-dp otherwise; strips trailing zeros.
+        try:
+            f = float(v)
+            if abs(f - int(f)) < 1e-9:
+                return str(int(f))
+            return f"{f:.2f}".rstrip("0").rstrip(".")
+        except Exception:
+            return str(v)
+    out = []
+    try:
+        if not isinstance(prev, dict) or not isinstance(new, dict):
+            return []
+        ph = prev.get("header") or {}
+        nh = new.get("header")  or {}
+        # Header-level fields the reader cares about.  (sold_to /
+        # ship_to codes change only on a replace, which is rare but
+        # worth surfacing.)
+        _HDR_LABELS = [
+            ("order_date",    "Order Date"),
+            ("po_number",     "PO No."),
+            ("sold_to",       "Sold-to"),
+            ("sold_to_name",  "Sold-to Name"),
+            ("ship_to",       "Ship-to"),
+            ("ship_to_name",  "Ship-to Name"),
+            ("state",         "State"),
+            ("mgmt_reason",   "Reason"),
+            ("rebateable",    "Rebate-able"),
+        ]
+        for k, lbl in _HDR_LABELS:
+            a = _nz(ph.get(k))
+            b = _nz(nh.get(k))
+            if a != b:
+                _trim = lambda s: (s[:40] + "…") if len(s) > 40 else s
+                out.append(f"{lbl}: {_trim(a) or '(blank)'}→{_trim(b) or '(blank)'}")
+        # Line comparisons keyed by m_code.  When the same m_code
+        # appears more than once in a payload (rare but possible after
+        # a split), we fold on the first occurrence — any downstream
+        # qty / dc difference still surfaces via the aggregate.
+        def _by_mc(lines):
+            d = {}
+            for ln in (lines or []):
+                if not isinstance(ln, dict): continue
+                mc = (ln.get("m_code") or "").strip()
+                if not mc: continue
+                if mc not in d: d[mc] = ln
+            return d
+        p_lines = _by_mc(prev.get("lines") or [])
+        n_lines = _by_mc(new.get("lines")  or [])
+        _LINE_LABELS = [
+            ("qty",         "Qty"),
+            ("sp_dc",       "Base DC%"),
+            ("mth_dc",      "MTH DC%"),
+            ("vol_dc",      "Vol DC%"),
+            ("add_dc",      "Add DC%"),
+            ("aging_dc",    "Aging DC%"),
+            ("proposed_dc", "Proposed DC%"),
+            ("unit_price",  "Unit Price"),
+        ]
+        for mc in n_lines.keys() - p_lines.keys():
+            q = _nn(n_lines[mc].get("qty"))
+            out.append(f"Added {mc} ×{_fmt_num(q)}")
+        for mc in p_lines.keys() - n_lines.keys():
+            out.append(f"Removed {mc}")
+        for mc in sorted(n_lines.keys() & p_lines.keys()):
+            a, b = p_lines[mc], n_lines[mc]
+            for k, lbl in _LINE_LABELS:
+                av = _nn(a.get(k)); bv = _nn(b.get(k))
+                if abs(av - bv) > 1e-9:
+                    out.append(f"{mc} {lbl}: {_fmt_num(av)}→{_fmt_num(bv)}")
+        # Soft cap so a mass edit doesn't blow out the Remark column —
+        # keep the first 12 details and summarise the rest.
+        if len(out) > 12:
+            _rest = len(out) - 12
+            out = out[:12] + [f"(+{_rest} more changes)"]
+    except Exception:
+        return []
+    return out
+
+
 @app.post("/api/orders/detail/<int:oid>/update")
 def api_orders_update(oid):
     """Update a previously-submitted order.  Only the BDE who
@@ -6723,12 +6826,24 @@ def api_orders_update(oid):
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         cur.execute(
-            "SELECT submitted_by_email, submitted_by_bde, status_sap, order_no "
+            "SELECT submitted_by_email, submitted_by_bde, status_sap, order_no, "
+            "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
         row = cur.fetchone()
         if not row:
             return jsonify({"error": "not found"}), 404
+        # Oct-22 user ask: capture the previous payload so the mod_log
+        # entry can list WHAT changed (Qty / DC% / lines added / etc.)
+        # instead of just "updated".  Parse once; drop on failure so the
+        # update path never breaks on malformed JSON.
+        _prev_payload = {}
+        try:
+            _prev_payload = _json.loads(row.get("payload_json") or "{}")
+            if not isinstance(_prev_payload, dict):
+                _prev_payload = {}
+        except Exception:
+            _prev_payload = {}
         # Ownership check — a previously-submitted (real) order can be
         # updated by:
         #   • the ORIGINAL SUBMITTER (their own request, self-service)
@@ -6836,10 +6951,15 @@ def api_orders_update(oid):
                       MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(who, who)
         else:
             _label = who or "unknown"
+        # Oct-22 user ask: attach the per-field change list so the
+        # Remark cell on the orders list spells out WHAT the editor
+        # changed, not just "updated".
+        _changes = _diff_order_payload(_prev_payload, payload)
         _existing_mods.append({
-            "by":     _label,
-            "at":     _now,
-            "action": "updated",
+            "by":      _label,
+            "at":      _now,
+            "action":  "updated",
+            "changes": _changes,
         })
         payload["mod_log"] = _existing_mods
         cur2 = conn.cursor()
