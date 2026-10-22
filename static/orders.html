@@ -3023,7 +3023,17 @@ async function applyAdditionalDCToRow(rowEl){
   try {
     const r = await fetch(`/api/orders/additional_dc?${q}`, {credentials: "same-origin"});
     data = await r.json();
-  } catch(e){ return; }
+  } catch(e){
+    /* Oct-22 fix: never leave pendingPromo stuck on a fetch error.
+       A stuck pendingPromo keeps isSOVDEligible returning false for
+       this row forever, so its qty drops out of the Trueblu TTL
+       until the user saves/reloads (hydration wipes the flag).
+       Clear it AND force a fresh TTL pass so the recovery is
+       immediate — the next unrelated recalc might be minutes away. */
+    delete rowEl.dataset.pendingPromo;
+    try { updateTotals(); } catch(_){}
+    return;
+  }
 
   /* Oct-20: per-material ATD / ATM Base DC override.
      When data.override_base_dc is set, THIS material has earned a
@@ -3051,7 +3061,18 @@ async function applyAdditionalDCToRow(rowEl){
   // Only stamp when there's no user override.  If the cell was empty
   // OR previously auto-filled by us (data-auto-sp-dc), rewrite it.
   const currentlyManual = spEl.value && spEl.dataset.autoSpDc !== "1";
-  if (currentlyManual) return;
+  if (currentlyManual) {
+    /* Oct-22 fix: clear pendingPromo even when we're respecting the
+       BDE's manual sp_dc entry.  A manually-priced HK-PCLT line is
+       still part of the Trueblu TTL count (it just doesn't get a
+       Trueblu rate re-written on top); leaving pendingPromo stuck
+       would exclude the row from the TTL until save/reload.  Force
+       a fresh TTL pass so the row's qty folds into the Trueblu TTL
+       immediately rather than waiting for the next unrelated recalc. */
+    delete rowEl.dataset.pendingPromo;
+    try { updateTotals(); } catch(_){}
+    return;
+  }
   /* Record whether this material has ANY non-SOVD promo planned so
      applySOVDRatesToRows never falls back onto a line that already
      belongs to a specific promo family (Kinergy, Dynapro, 443…). */
