@@ -81,6 +81,23 @@
       <div>
         <h1>Submitted Orders</h1>
         <div class="sub">Special Price Request Forms submitted by BDEs. Click a row to open the full order. CS (Harry) can flip the SAP-entered flag from the detail view.</div>
+        <!-- Oct-22 user ask: at-a-glance monthly snapshot above the
+             filters.  Three badges — total requested (excl. drafts),
+             waiting-on-approval, and approved-but-SAP-DO-not-entered
+             — all scoped to the current month on the Requested
+             timestamp.  Values repaint from _rowsCache every time
+             loadOrders runs. -->
+        <div id="monthStats" style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
+          <div style="padding:6px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;color:#1e3a8a;font-weight:700">
+            This month requested: <span id="msTotal" style="font-size:14px;font-weight:900">0</span>
+          </div>
+          <div style="padding:6px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-weight:700">
+            Awaiting approval: <span id="msPendingAppr" style="font-size:14px;font-weight:900">0</span>
+          </div>
+          <div style="padding:6px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;color:#92400e;font-weight:700">
+            Approved · DO not entered: <span id="msApprovedNoDO" style="font-size:14px;font-weight:900">0</span>
+          </div>
+        </div>
       </div>
       <!-- Prominent CTA for starting a new SPRF — the only entry
            point to the Order form now that the Order button was
@@ -552,16 +569,34 @@ function renderRows(){
         : `<small style="color:#94a3b8">—</small>`;
       const _isHl = _hlOid && String(r.id) === _hlOid;
       const _isDeleted = !!r.deleted_at;
+      /* Oct-22 user ask: tint rows that aren't Standard AND haven't
+         been signed off yet so the pending-approval queue stands out
+         at a glance.  Scope: has_additional_dc (not Standard) AND no
+         approver AND no rejector AND needs_mgmt_approval != "temp"
+         (not a draft) AND not deleted. */
+      const _nmaRow = String(r.needs_mgmt_approval || "").toLowerCase();
+      const _isAwaitingApproval = r.has_additional_dc
+                                  && !r.approved_by_name
+                                  && !r.rejected_by_name
+                                  && _nmaRow !== "temp"
+                                  && !_isDeleted;
       /* Deleted rows read as "retained for reference" — grey wash
          + line-through so they're visually distinct from active
          SPRFs without actually hiding the row.  Highlighted takes
-         precedence (fresh approvals land first). */
+         precedence (fresh approvals land first); awaiting-approval
+         sits in the middle, below highlight but above the untinted
+         default. */
       let _rowStyle = "";
       if (_isHl) {
         _rowStyle = 'background:#dcfce7 !important;box-shadow:inset 0 0 0 2px #16a34a;transition:background .3s';
       } else if (_isDeleted) {
         _rowStyle = 'background:repeating-linear-gradient(135deg,#f1f5f9,#f1f5f9 6px,#e2e8f0 6px,#e2e8f0 12px);'
                   + 'color:#64748b;text-decoration:line-through;text-decoration-color:#94a3b8;';
+      } else if (_isAwaitingApproval) {
+        /* Soft red wash + blue text so the row reads "waiting on a
+           sign-off" at a glance.  Kept subtle so a long queue doesn't
+           overwhelm the eye. */
+        _rowStyle = 'background:#fef2f2;color:#1e3a8a;';
       }
       const _rowClick = _isHl
         ? `onclick="event.currentTarget.style.background='';event.currentTarget.style.boxShadow='';location.href='/order?id=${r.id}'"`
@@ -619,6 +654,35 @@ function renderRows(){
   $("#cntTotal").textContent   = _rowsCache.length;
   $("#cntPending").textContent = _rowsCache.filter(r => r.status_sap !== "Y").length;
   $("#cntDone").textContent    = _rowsCache.filter(r => r.status_sap === "Y").length;
+
+  /* Oct-22 user ask: three current-month snapshots above the filter
+     strip.  "This month" = the Requested timestamp's YYYY-MM matches
+     the local today's YYYY-MM.
+       • msTotal         — every requested SPRF this month, drafts
+                           (needs_mgmt_approval = "temp") excluded.
+       • msPendingAppr   — not Standard (has_additional_dc)
+                           AND no approver yet
+                           AND not rejected / deleted / draft.
+       • msApprovedNoDO  — approved, SAP DO not yet entered
+                           (status_sap !== "Y"), not deleted.
+     All three are computed from _rowsCache (not the filtered set) so
+     a BDE-scoped filter view doesn't change the headline totals. */
+  const _now  = new Date();
+  const _ym   = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}`;
+  const _isThisMonth = r => String(r.submitted_at || "").slice(0, 7) === _ym;
+  const _msRows = _rowsCache.filter(r => _isThisMonth(r) && !r.deleted_at);
+  const _msTotal = _msRows.filter(r =>
+    String(r.needs_mgmt_approval || "").toLowerCase() !== "temp"
+  );
+  const _msPendingAppr = _msTotal.filter(r =>
+    r.has_additional_dc && !r.approved_by_name && !r.rejected_by_name
+  );
+  const _msApprovedNoDO = _msTotal.filter(r =>
+    r.approved_by_name && String(r.status_sap || "") !== "Y"
+  );
+  $("#msTotal")         .textContent = _msTotal.length;
+  $("#msPendingAppr")   .textContent = _msPendingAppr.length;
+  $("#msApprovedNoDO")  .textContent = _msApprovedNoDO.length;
   $("#sumTotal").textContent   = fmtMoney(sumAll);
   $("#sumPclt").textContent    = fmtMoney(sumPclt);
   $("#sumTbr").textContent     = fmtMoney(sumTbr);
