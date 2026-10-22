@@ -5051,6 +5051,21 @@ def _bde_manager_email(bde_name) -> str:
     import re as _re_bde
     key = _re_bde.sub(r"\s+", " ", (bde_name or "").strip().upper())
     return BDE_MANAGER_CC.get(key, "")
+
+
+def _bdes_under_manager(email: str):
+    """Oct-22 user ask: a Sales Manager must see every SPRF submitted
+    by the BDEs reporting to them, not just their own rows.  Returns
+    the list of upper-case BDE display names reporting to the given
+    manager email (empty when the caller isn't in BDE_MANAGER_CC's
+    value side).  Driven by inverting BDE_MANAGER_CC so adding a new
+    report to the map here is enough to extend the manager's scope on
+    the Submitted Orders list."""
+    e = (email or "").strip().lower()
+    if not e:
+        return []
+    return [bde for bde, mgr in BDE_MANAGER_CC.items()
+            if (mgr or "").strip().lower() == e]
 # Oct-22 user ask: single-CS-at-a-time soft lock on orders waiting
 # for SAP entry.  TTL = after this many minutes of inactivity on the
 # claimed lock, another CS user can take it over.  Keeps a tab
@@ -6183,6 +6198,12 @@ def api_orders_list():
     # a state manager still sees their own row when the ship-to
     # state doesn't match their group.
     my_states = _state_scope_for(who)
+    # Oct-22 user ask: a Sales Manager must see every SPRF submitted
+    # by the BDEs reporting to them, even when the manager wasn't the
+    # one who filled it.  Driven by BDE_MANAGER_CC (inverted) so the
+    # same list that CCs the manager on order emails also governs
+    # list visibility.
+    my_bdes = _bdes_under_manager(who)
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         wh, p = [], []
@@ -6193,20 +6214,25 @@ def api_orders_list():
         if date_to:
             wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
         if not global_scope:
-            # Non-global caller — own rows always, plus every ship-to
-            # SPRF in the states this caller manages (empty list =
-            # own-only, which is the default for anyone not in
-            # STATE_MANAGERS).
+            # Non-global caller — own rows always, PLUS:
+            #   • every ship-to SPRF in the states this caller manages
+            #     (empty list = no state scope — default for anyone
+            #     not in STATE_MANAGERS)
+            #   • every SPRF submitted by a BDE reporting to this
+            #     caller via BDE_MANAGER_CC (Oct-22 user ask — a Sales
+            #     Manager now sees their reports' rows alongside their
+            #     own, matching the order-email CC relationship).
+            or_bits = ["LOWER(submitted_by_email) = %s"]
+            p.append(who or "")
             if my_states:
                 placeholders = ",".join(["%s"] * len(my_states))
-                wh.append(
-                    f"(LOWER(submitted_by_email) = %s OR state IN ({placeholders}))"
-                )
-                p.append(who or "")
+                or_bits.append(f"state IN ({placeholders})")
                 p.extend(my_states)
-            else:
-                wh.append("LOWER(submitted_by_email) = %s")
-                p.append(who or "")
+            if my_bdes:
+                placeholders = ",".join(["%s"] * len(my_bdes))
+                or_bits.append(f"UPPER(TRIM(submitted_by_bde)) IN ({placeholders})")
+                p.extend([b.upper().strip() for b in my_bdes])
+            wh.append("(" + " OR ".join(or_bits) + ")")
         else:
             # Global-scope caller: hide OTHER users' Save-as-Draft
             # rows for IDENTIFIED callers (approvers / read-only CC /
@@ -7765,8 +7791,22 @@ def api_orders_list_excel():
         if date_to:
             wh.append("DATE(submitted_at) <= %s"); p.append(date_to)
         if not global_scope:
-            wh.append("LOWER(submitted_by_email) = %s")
+            # Oct-22: Excel export mirrors api_orders_list — own rows
+            # + managed states + reports' rows.  Keeps the download
+            # aligned with the on-screen list for every caller role.
+            my_states_x = _state_scope_for(who)
+            my_bdes_x   = _bdes_under_manager(who)
+            or_bits = ["LOWER(submitted_by_email) = %s"]
             p.append(who or "")
+            if my_states_x:
+                placeholders = ",".join(["%s"] * len(my_states_x))
+                or_bits.append(f"state IN ({placeholders})")
+                p.extend(my_states_x)
+            if my_bdes_x:
+                placeholders = ",".join(["%s"] * len(my_bdes_x))
+                or_bits.append(f"UPPER(TRIM(submitted_by_bde)) IN ({placeholders})")
+                p.extend([b.upper().strip() for b in my_bdes_x])
+            wh.append("(" + " OR ".join(or_bits) + ")")
         where_sql = ("WHERE " + " AND ".join(wh)) if wh else ""
         cur.execute(
             f"SELECT id, order_no, submitted_at, submitted_by_bde, "

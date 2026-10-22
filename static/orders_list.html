@@ -152,6 +152,15 @@
       <select id="fBde" title="BDE mapped to the ship-to on the SPRF.  Populated from the rows currently loaded.">
         <option value="">All</option>
       </select>
+      <!-- Oct-22 user ask: State dropdown so a reader can narrow the
+           list (and the three "this month" counts) to one state at a
+           time.  Options are rebuilt from the rows currently loaded
+           so a manager with a two-state scope sees exactly their two,
+           an approver sees every state the dataset carries. -->
+      <span class="lbl">State:</span>
+      <select id="fState" title="Ship-to state on the SPRF.  Populated from the rows currently loaded; filters both the table AND the monthly snapshot counts.">
+        <option value="">All</option>
+      </select>
       <span class="lbl">From:</span>
       <input id="fDateFrom" type="date" title="Include orders submitted on/after this date">
       <span class="lbl">To:</span>
@@ -166,10 +175,12 @@
               style="padding:4px 10px;background:#fff;color:#334155;border:1px solid var(--border);border-radius:4px;cursor:pointer">
         ↔ Reset column widths
       </button>
+      <!-- Oct-22 user ask: the "orders · Pending · SAP entered"
+           triple here was marked redundant — those three counts
+           already live in the monthly snapshot badges above the
+           filter row.  Dropped.  Keep Total / PCLT / TBR / Avg DC
+           since they're dollar sums the badges don't carry. -->
       <span class="totals-line">
-        <span><b id="cntTotal">0</b> orders</span>
-        <span>Pending: <b id="cntPending">0</b></span>
-        <span>SAP entered: <b id="cntDone">0</b></span>
         <span>Total: <b id="sumTotal">$0.00</b></span>
         <span>PCLT: <b id="sumPclt">$0.00</b></span>
         <span>TBR: <b id="sumTbr">$0.00</b></span>
@@ -348,6 +359,7 @@ function renderRows(){
   const fApprover  = ($("#fApprover")?.value || "").toLowerCase().trim();
   const fRequester = ($("#fRequester")?.value || "").toLowerCase().trim();
   const fBde       = ($("#fBde")?.value || "").toLowerCase().trim();
+  const fState     = ($("#fState")?.value || "").toUpperCase().trim();
 
   /* Repopulate the dynamic dropdowns from the rows currently in cache
      (preserving the current selection).  Doing it inside renderRows
@@ -385,6 +397,11 @@ function renderRows(){
     _rowsCache.map(r => r.submitted_by_bde || ""),
     fBde ? _rowsCache.map(r => r.submitted_by_bde || "").find(v => (v || "").toLowerCase() === fBde) || fBde : "",
   );
+  _buildSelect(
+    document.getElementById("fState"),
+    _rowsCache.map(r => String(r.state || "").toUpperCase()),
+    fState,
+  );
 
   const matchesApproval = (r) => {
     if (!fApp) return true;
@@ -408,6 +425,8 @@ function renderRows(){
     !fRequester || String(r.requester_email || r.submitted_by_email || "").toLowerCase() === fRequester;
   const matchesBde = (r) =>
     !fBde || String(r.submitted_by_bde || "").toLowerCase() === fBde;
+  const matchesState = (r) =>
+    !fState || String(r.state || "").toUpperCase() === fState;
   const matchesSearch = (r) => {
     if (!q) return true;
     return [r.submitted_by_bde, r.sold_to, r.sold_to_name, r.ship_to,
@@ -420,7 +439,8 @@ function renderRows(){
   };
   const filtered = _rowsCache.filter(r =>
     matchesApproval(r) && matchesReb(r) && matchesApprover(r)
-    && matchesRequester(r) && matchesBde(r) && matchesSearch(r)
+    && matchesRequester(r) && matchesBde(r) && matchesState(r)
+    && matchesSearch(r)
   );
   /* Row highlight — set when the approver came here via
      /orders_list?highlight=<oid> after signing off on the SPRF.
@@ -651,10 +671,6 @@ function renderRows(){
       brandTotals[k] = (brandTotals[k] || 0) + (+v || 0);
     });
   });
-  $("#cntTotal").textContent   = _rowsCache.length;
-  $("#cntPending").textContent = _rowsCache.filter(r => r.status_sap !== "Y").length;
-  $("#cntDone").textContent    = _rowsCache.filter(r => r.status_sap === "Y").length;
-
   /* Oct-22 user ask: three current-month snapshots above the filter
      strip.  "This month" = the Requested timestamp's YYYY-MM matches
      the local today's YYYY-MM.
@@ -665,12 +681,16 @@ function renderRows(){
                            AND not rejected / deleted / draft.
        • msApprovedNoDO  — approved, SAP DO not yet entered
                            (status_sap !== "Y"), not deleted.
-     All three are computed from _rowsCache (not the filtered set) so
-     a BDE-scoped filter view doesn't change the headline totals. */
+     Oct-22 revision: counting now runs against the FILTERED set (not
+     _rowsCache), so when the reader narrows by State / BDE / etc.
+     the headline badges track what's actually on screen.  Backend
+     scope already restricts _rowsCache to what this caller is
+     allowed to see (own rows + managed states + managed BDEs), so
+     the badges can never leak counts from outside their visibility. */
   const _now  = new Date();
   const _ym   = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}`;
   const _isThisMonth = r => String(r.submitted_at || "").slice(0, 7) === _ym;
-  const _msRows = _rowsCache.filter(r => _isThisMonth(r) && !r.deleted_at);
+  const _msRows = filtered.filter(r => _isThisMonth(r) && !r.deleted_at);
   const _msTotal = _msRows.filter(r =>
     String(r.needs_mgmt_approval || "").toLowerCase() !== "temp"
   );
@@ -720,7 +740,7 @@ $("#fSearch").addEventListener("input",  renderRows);
 /* The remaining filters (approval state, rebateable, approver,
    requester, BDE) are purely client-side — rebuild the dropdowns
    and re-render against the cache without a round-trip to the API. */
-["fApproval", "fReb", "fApprover", "fRequester", "fBde"].forEach(id => {
+["fApproval", "fReb", "fApprover", "fRequester", "fBde", "fState"].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener("change", renderRows);
 });
