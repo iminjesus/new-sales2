@@ -3022,6 +3022,71 @@ def _stock_report_mcodes():
 
 _STOCK_SUGGEST_CACHE = {"path": None, "mtime": 0, "rows": None}
 
+# Oct-22 user ask: populate the SPRF "Load / Speed" column.  carrying_26
+# on this deployment stores the LI/SS token inside Description, but the
+# in-text regex misses some truck sizes (e.g. "11R22.5" where the token
+# lives further along the string, or where no LI/SS token is present
+# at all in Description).  The stock dashboard loads the LI and SS
+# columns from Sheet2 — the master — as `li` + `ss`, which when
+# concatenated give "148L" / "91V" / "225/70R19.5 125/123J" etc.
+# This cache mirrors stock-report rows into a flat {m_code: load_speed}
+# dict so the material endpoint can look it up in O(1).
+_STOCK_LOAD_SPEED_CACHE = {"path": None, "mtime": 0, "lookup": None}
+
+def _stock_report_load_speed_lookup():
+    """Return {m_code: load_speed_str} built from the stock-balance
+    workbook.  load_speed_str is li+ss (e.g. "91V", "148L", "125/123J")
+    with no separator — mirrors how BDEs read it off the sidewall.
+    Cached by (path, mtime) so the per-keystroke / per-material lookup
+    doesn't re-parse the xlsm.  Returns {} on any error (never breaks
+    the caller)."""
+    try:
+        from stock_dashboard import _latest_stock_xlsm, load_stock_data
+    except Exception:
+        return {}
+    try:
+        path = _latest_stock_xlsm()
+        if not path:
+            return {}
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            mtime = 0
+        if (_STOCK_LOAD_SPEED_CACHE["lookup"] is not None
+                and _STOCK_LOAD_SPEED_CACHE["path"] == path
+                and _STOCK_LOAD_SPEED_CACHE["mtime"] == mtime):
+            return _STOCK_LOAD_SPEED_CACHE["lookup"]
+        rows, _meta = load_stock_data()
+        if not rows:
+            return {}
+    except Exception:
+        return {}
+    lookup = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        mc_raw = r.get("m_code")
+        if mc_raw is None:
+            continue
+        try:
+            mc = str(int(mc_raw))
+        except Exception:
+            mc = str(mc_raw).strip()
+        if not mc or mc in lookup:
+            continue
+        _li = str(r.get("li") or "").strip()
+        _ss = str(r.get("ss") or "").strip()
+        _ls = (_li + _ss).strip()
+        if _ls:
+            lookup[mc] = _ls
+    try:
+        _STOCK_LOAD_SPEED_CACHE["path"]   = path
+        _STOCK_LOAD_SPEED_CACHE["mtime"]  = mtime
+        _STOCK_LOAD_SPEED_CACHE["lookup"] = lookup
+    except Exception:
+        pass
+    return lookup
+
 # Oct-22 user ask: SPRF suggest for "LF91" returns 0 while "LF9" returns
 # the LF91 rows + more.  Root cause: the stock-balance xlsm's PATTERN
 # column sometimes carries a truncated form ("LF9") while carrying_26
@@ -3665,6 +3730,22 @@ def api_orders_material():
                 row["list_price"] = float(row["list_price"])
             except Exception:
                 row["list_price"] = None
+
+        # Oct-22 user ask: stock-report Sheet2 (Master) carries LI + SS
+        # in dedicated columns — strictly more reliable than hunting
+        # the token inside Description.  Try that FIRST so a BDE lands
+        # the canonical "148L" / "91V" / "125/123J" every time; the
+        # Description-scan below only runs when the Master has no row
+        # for this m_code (dropped from stock) or no LI/SS populated.
+        if not row.get("load_speed"):
+            try:
+                _ls = _stock_report_load_speed_lookup().get(
+                    str(row.get("m_code") or "").strip()
+                )
+                if _ls:
+                    row["load_speed"] = _ls
+            except Exception:
+                pass
 
         # Load/speed fallback — carrying_26 on this deployment doesn't
         # have a dedicated load_speed column, so hunt for the token in
