@@ -2618,6 +2618,12 @@ def api_orders_customer():
             "sold_to_group":   "sold_to_group",
             "bde_state":       "bde_state",
             "ship_to_state":   "ship_to_state",
+            # Oct-23 user ask: Delivery Plant per ship-to.  Column
+            # name on the customer table is `delivery_plant`
+            # (geocode.py now writes it in column 3 of
+            # customer_YYMM.csv); accept the SAP-style spelling too.
+            "delivery_plant":  "delivery_plant",
+            "delivering_plant":"delivering_plant",
             "channels":        "channels",
             "salesman_name":   "salesman_name",
             # optional / deployment-specific columns
@@ -2747,6 +2753,12 @@ def api_orders_customer():
         out["state"]   = out.get("ship_to_state") or out.get("state") or out.get("bde_state") or ""
         out["customer_group"] = out.get("sold_to_group") or ""
         out["bde_name"] = out.get("salesman_name") or ""
+        # Oct-23 user ask: surface the mapped Delivery Plant for the
+        # Orders form.  Prefer the dedicated column (either spelling);
+        # frontend has a state→plant fallback for rows that haven't
+        # been through the geocode.py re-export yet.
+        out["delivery_plant"] = (out.get("delivery_plant")
+                                 or out.get("delivering_plant") or "")
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()

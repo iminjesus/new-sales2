@@ -1464,10 +1464,18 @@
 
         <div class="lbl full-row">Ship-to Address</div>
         <div class="val full-row" style="padding:0">
-          <div class="valgroup two" style="grid-template-columns:2fr 1fr 1fr">
+          <!-- Oct-23 user ask: Plant field right next to State.  The
+               plant drives stock display (NSW/QLD/VIC/WA badges and
+               the per-row stock cells) in place of the ship-to state.
+               Reads customer.delivery_plant via /api/orders/customer;
+               falls back to the state→plant map when the customer
+               row doesn't carry one yet. -->
+          <div class="valgroup two" style="grid-template-columns:2fr 0.8fr 0.6fr 0.8fr 0.6fr">
             <div class="sub-val"><input id="ship_to_address" placeholder="—" style="border:none;width:100%;background:transparent;padding:2px 4px"/></div>
             <div class="sub-hdr" style="background:#eef1f4;font-weight:700;border-right:1px dashed var(--border)">State</div>
             <div class="sub-val"><input id="ship_to_state" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px"/></div>
+            <div class="sub-hdr" style="background:#eef1f4;font-weight:700;border-right:1px dashed var(--border)" title="Delivery Plant (SAP ship-from). Drives per-row stock display.">Plant</div>
+            <div class="sub-val"><input id="delivery_plant" placeholder="—" style="text-align:center;border:none;width:100%;background:transparent;padding:2px;font-weight:700"/></div>
           </div>
         </div>
 
@@ -2308,17 +2316,26 @@ function _matFlagsHtml(r){
                     font-size:10.5px;font-weight:700;margin-left:6px">${status}</span>`
     );
   }
-  // Current customer's state → look up that bucket in r.state_stock.
-  const _state = String(window._customerState || "").toUpperCase();
+  // Oct-23 user ask: show the DELIVERY PLANT's stock, not the ship-to
+  // state's stock.  state_stock on the suggest row is keyed by state
+  // code (NSW/QLD/VIC/WA), so translate plant → state once.  Falls
+  // back to window._customerState when the plant isn't resolved yet
+  // (older rows / customers without a delivery_plant mapping).
+  const _PLANT_TO_STATE = { "42R0": "QLD", "42R1": "NSW",
+                            "42R2": "VIC", "42R4": "WA" };
+  const _plant = String(window._customerPlant || "").toUpperCase();
+  const _state = _PLANT_TO_STATE[_plant] ||
+                 String(window._customerState || "").toUpperCase();
   const _bucket = (r.state_stock || {});
   if (_state && _bucket && _bucket[_state] != null) {
     const n = +_bucket[_state] || 0;
     const bg = n > 0 ? "#dcfce7" : "#fee2e2";
     const fg = n > 0 ? "#166534" : "#991b1b";
+    const _label = _plant ? `${_plant} (${_state})` : _state;
     bits.push(
       `<span style="background:${bg};color:${fg};padding:1px 6px;border-radius:3px;
                     font-size:10.5px;font-weight:700;margin-left:6px"
-             title="${_state} stock">${_state} ${fmtQty(n)}</span>`
+             title="${_label} stock">${_label} ${fmtQty(n)}</span>`
     );
   }
   return bits.join("");
@@ -2544,6 +2561,16 @@ function applyCustomer(row, kind){
     try {
       window._customerState = String(row.state || row.bde_state || "").toUpperCase();
     } catch (_e) {}
+    // Oct-23 user ask: Delivery Plant drives stock display from here on.
+    // Resolve order: explicit customer.delivery_plant → state→plant
+    // fallback (customer master not yet carrying the column) → blank.
+    const _STATE_TO_PLANT = { NSW: "42R1", QLD: "42R0", VIC: "42R2", WA: "42R4",
+                              SA: "42R2", TAS: "42R2", NT: "42R4", ACT: "42R1" };
+    const _rawPlant = String(row.delivery_plant || row.plant || "").trim().toUpperCase();
+    const _stateUp  = String(row.state || row.bde_state || "").toUpperCase();
+    const _plant    = _rawPlant || _STATE_TO_PLANT[_stateUp] || "";
+    set("delivery_plant", _plant);
+    try { window._customerPlant = _plant; } catch (_e) {}
     // Oct-20 user ask: show "phone (email)" when the customer row
     // carries both.  Fall back to whichever single one is present;
     // if neither, stay blank so the "—" placeholder shows through.
@@ -2562,11 +2589,12 @@ function applyCustomer(row, kind){
     // left on the form before the lock engaged, so the BDE starts
     // from a clean blank Ship-to row.
     ["ship_to", "ship_to_name", "ship_to_address",
-     "ship_to_state", "phone_email", "mobile"].forEach(id => {
+     "ship_to_state", "delivery_plant", "phone_email", "mobile"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = "";
     });
     try { window._customerState = ""; } catch (_e) {}
+    try { window._customerPlant = ""; } catch (_e) {}
   }
   // customer_group / BDE name / Base DC come from the Sold-to side
   // (the house account under the lock) and stay filled either way.
@@ -5843,6 +5871,10 @@ const HEADER_FIELDS = [
      Auto-populated from /api/orders/whoami on page load. */
   "requester_email",
   "special_instruction", "mgmt_reason", "ship_to_state",
+  /* Oct-23 user ask: Delivery Plant travels with the order so a
+     saved SPRF remembers which plant was chosen (stock display
+     reads this on re-hydration). */
+  "delivery_plant",
   // Rebateable Y/N — captured via the yes/no cells and normalised into
   // a single top-level "rebateable" field on the payload below.
   "rebateable",
@@ -6515,6 +6547,21 @@ async function hydrateSubmittedOrder(oid, editMode){
   if (_hyd_sold) {
     await fillBaseDC(_hyd_sold);
   }
+  /* Oct-23: restore _customerPlant from the saved header so the
+     material-suggest popover's stock badge reads the right plant
+     when a reviewer opens a submitted SPRF.  Prefer the stored
+     value; fall back to the state→plant map so pre-plant rows
+     still render a sensible badge. */
+  try {
+    const _savedPlant = String((p.header && p.header.delivery_plant) || "").trim().toUpperCase();
+    const _savedState = String((p.header && p.header.ship_to_state) || data.state || "").toUpperCase();
+    const _ST2PL = { NSW: "42R1", QLD: "42R0", VIC: "42R2", WA: "42R4",
+                     SA: "42R2", TAS: "42R2", NT: "42R4", ACT: "42R1" };
+    const _p = _savedPlant || _ST2PL[_savedState] || "";
+    window._customerPlant = _p;
+    const _cpEl = document.getElementById("delivery_plant");
+    if (_cpEl && !_cpEl.value) _cpEl.value = _p;
+  } catch (_e) {}
   $$("#linesBody tr").forEach(tr => recalcRow(tr));
   updateTotals();
   /* Belt-and-braces — if the recompute above landed on a real
