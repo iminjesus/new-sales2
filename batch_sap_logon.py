@@ -475,15 +475,77 @@ def _reset_to_home(session):
     _dump_sap_state(session, "after-reset")
 
 
+def _is_session_alive(sess) -> bool:
+    """Return True when a COM session object still responds — a session
+    returned from _try_attach may hold a stale pointer to a connection
+    that SAP has since disconnected, and calling it later yields
+    'object invoked has disconnected from its clients'.  Catch that
+    here so ensure_sap_session can retry with a fresh login."""
+    if sess is None:
+        return False
+    try:
+        _ = sess.findById("wnd[0]").Text   # cheap round-trip
+        return True
+    except Exception:
+        return False
+
+
 def ensure_sap_session():
-    """Public entry.  Attach or log in; return (session, status)."""
-    _slog("ensure_sap_session: checking for logged-in session…")
+    """Public entry.  Attach or log in; return (session, status).
+
+    Oct-22 user ask: fully-automatic logon when batch runs AND SAP
+    isn't signed in — but DO NOT touch any SAP window the operator
+    already has open (their manual work must survive).  Policy:
+
+      • Something logged-in and alive → attach and reuse.
+      • SAP Logon running but no live connection → OpenConnection
+        + enter credentials (new connection, no restart of saplogon).
+      • SAP Logon not running at all → launch saplogon.exe +
+        OpenConnection + enter credentials.
+
+    Up to 3 attempts, each validating the returned session before
+    returning.  A dead/stale COM pointer that only reveals itself
+    as 'disconnected' on first use is caught here and the next
+    attempt opens a fresh connection — WITHOUT killing saplogon."""
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            sess, status = _ensure_sap_session_once(attempt)
+            if _is_session_alive(sess):
+                _slog(f"attempt {attempt}/3: session validated as alive "
+                      f"(status={status})")
+                return sess, status
+            _slog(f"attempt {attempt}/3: returned session is DEAD "
+                  f"(COM disconnected) — retrying with a fresh "
+                  f"OpenConnection (saplogon.exe NOT touched).")
+            time.sleep(1.5)
+        except MultiLogonError:
+            raise  # caller handles the email + wait + retry
+        except Exception as e:
+            last_err = e
+            _slog(f"attempt {attempt}/3 raised: {e!r} — "
+                  f"retrying (saplogon.exe NOT touched).")
+            time.sleep(2.0)
+    raise NoSapError(
+        f"ensure_sap_session failed after 3 attempts.  Last error: {last_err!r}"
+    )
+
+
+def _ensure_sap_session_once(attempt):
+    """One attempt at attach-or-login.  Factored out of ensure_sap_session
+    so the retry wrapper can taskkill saplogon between attempts without
+    duplicating the attach/login logic."""
+    _slog(f"ensure_sap_session attempt {attempt}/3: checking for "
+          f"logged-in session…")
     # 1. Try to attach to an existing logged-in session.
     sess = _try_attach()
-    if sess is not None:
+    if sess is not None and _is_session_alive(sess):
         _slog("already logged in — attached; resetting to Easy Access.")
         _reset_to_home(sess)
         return sess, "attached"
+    if sess is not None:
+        _slog("_try_attach returned a session but it's already DEAD "
+              "— falling through to fresh login.")
 
     # 2. Launch SAP Logon if the scripting bridge isn't live yet.
     sap = _get_gui_auto()
@@ -495,7 +557,11 @@ def ensure_sap_session():
             _slog("still not reachable after launch — bailing.")
             raise NoSapError("SAP GUI scripting not reachable after launch")
     else:
-        _slog("SAP GUI scripting is live.")
+        try:
+            n_conn = sap.Children.Count
+        except Exception:
+            n_conn = -1
+        _slog(f"SAP GUI scripting is live (Children.Count={n_conn}).")
 
     # 3. Open the G.ERP (or SAP_CONN) connection and key credentials.
     _slog(f"opening connection {SAP_CONN!r}…")
