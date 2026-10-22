@@ -1494,6 +1494,21 @@
           </div>
         </div>
 
+        <!-- Oct-22 user ask: Customer Pickup checkbox.  CS gets a
+             re-confirm popup before saving the SAP DO on any order
+             that has this flag ticked, so a pickup-only order can't
+             accidentally be saved as a delivery.  Hidden input
+             #customer_pickup keeps the serializer tidy. -->
+        <div class="lbl full-row hide-cust">Customer Pickup</div>
+        <div class="val full-row hide-cust" style="padding:4px 8px;display:flex;align-items:center;gap:10px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;color:#0f172a">
+            <input type="checkbox" id="customerPickupChk" style="width:16px;height:16px;cursor:pointer"
+                   onchange="document.getElementById('customer_pickup').value = this.checked ? 'Y' : 'N'">
+            <span>Customer will pick up — <small style="color:#64748b;font-weight:500">CS will be prompted to confirm before saving the SAP DO</small></span>
+          </label>
+          <input type="hidden" id="customer_pickup" value="N"/>
+        </div>
+
         <!-- Payment Method — Cash + Credit Card are mutually exclusive;
              ticking one unticks the other via the paymentMethod JS
              wiring below.  Either flag forces Sold-to to the Hankook
@@ -5851,6 +5866,10 @@ function serializeOrder(){
   const rebY = ($("#rebate_yes")?.value || "").trim();
   const rebN = ($("#rebate_no")?.value  || "").trim();
   header.rebateable = rebY ? "Y" : (rebN ? "N" : "");
+  // Oct-22 user ask: Customer Pickup flag follows the checkbox.
+  // Hidden input mirrors the check state so a BDE flipping it after
+  // the form rendered gets serialised correctly.
+  header.customer_pickup = ($("#customer_pickup")?.value || "N").toUpperCase() === "Y" ? "Y" : "N";
   const base_dc = {};
   BASE_DC_FIELDS.forEach(id => { base_dc[id] = $("#"+id)?.value || ""; });
 
@@ -6339,6 +6358,16 @@ async function hydrateSubmittedOrder(oid, editMode){
   // picker cells, hidden inputs and border colour.
   const rebFlag = String(data.rebateable || (p.header && p.header.rebateable) || "").toUpperCase();
   if (rebFlag === "Y" || rebFlag === "N") setRebate(rebFlag);
+  // Oct-22 user ask: Customer Pickup flag hydration.  data.customer_
+  // pickup is the dedicated DB column; fall back to the header
+  // snapshot for rows saved before the column was added.
+  const _cpFlag = String(data.customer_pickup
+                         || (p.header && p.header.customer_pickup)
+                         || "N").toUpperCase();
+  const _cpInp  = document.getElementById("customer_pickup");
+  const _cpChk  = document.getElementById("customerPickupChk");
+  if (_cpInp) _cpInp.value = (_cpFlag === "Y") ? "Y" : "N";
+  if (_cpChk) _cpChk.checked = (_cpFlag === "Y");
   /* Order Number ribbon — show the saved order_no (or the numeric
      row id when a legacy row has no order_no) at the top centre of
      the page so a reviewer instantly sees which SPRF this is. */
@@ -7535,6 +7564,32 @@ async function wireStatusPanel(order){
         if (typeof showNotice === "function") showNotice(msg); else alert(msg);
         try { sdInp && sdInp.focus(); } catch(_e){}
         return;
+      }
+    }
+    // Oct-22 user ask: before flipping to Y, prompt the CS to double-
+    // check two SAP-side settings depending on the order's own flags.
+    //   • Customer Pickup on the header → confirm the SAP DO was
+    //     saved with the Customer Pickup option.
+    //   • Rebate-able = N on the header → confirm the SAP Order Type
+    //     is ZWH2.
+    // Both prompts are plain confirm()s so no modal plumbing is
+    // needed; a Cancel on either aborts the flip.
+    if (next === "Y"){
+      const _cp   = String(order?.customer_pickup || "").toUpperCase();
+      const _reb  = String(order?.rebateable      || "").toUpperCase();
+      if (_cp === "Y"){
+        const ok = window.confirm(
+          "Customer Pickup is marked on this order.\n\n" +
+          "Did you select the Customer Pickup option on the SAP DO before saving?"
+        );
+        if (!ok) return;
+      }
+      if (_reb === "N"){
+        const ok = window.confirm(
+          "This order is marked Non-Rebate-able.\n\n" +
+          "Did you save the SAP DO with Order Type = ZWH2?"
+        );
+        if (!ok) return;
       }
     }
     btn.disabled = true;

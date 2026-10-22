@@ -5140,6 +5140,72 @@ SPRF_READONLY_CC = [
     "minku.lee@hankooktyre.com.au",
     "pamela.lau@hankooktyre.com.au",
 ]
+
+# Oct-22 user ask: a specific cohort — the three MGMT approvers plus
+# Brian / Pamela / Russell — only want to be CC'd on the INITIAL
+# submit notification, not on every follow-up (update, approve,
+# reject, cancel, revive, SAP-marked-Y).  Exception: when THEY
+# themselves submitted the order, they stay on every mail about that
+# order so they can track their own request end-to-end.  The
+# filter is applied in _filter_notify_recipients, called from every
+# non-submit mail site.
+NOTIFY_SUBMIT_ONLY = {
+    e.lower() for e in [
+        "junjong.cho@hankooktyre.com.au",
+        "hayden.begbie@hankooktyre.com.au",
+        "kenny.kim@hankooktyre.com.au",
+        "brian.park@hankooktyre.com.au",
+        "pamela.lau@hankooktyre.com.au",
+        "russell.ng@hankooktyre.com.au",
+    ]
+}
+
+def _filter_notify_recipients(to_list, cc_list, requester_email=None):
+    """Strip any address in NOTIFY_SUBMIT_ONLY from both to_list and
+    cc_list, UNLESS that address matches `requester_email` (the person
+    who originally submitted the SPRF).  Returns (new_to, new_cc).
+    Preserves order and dedupes casing.  Caller sites that want the
+    full fan-out (initial submit) just skip this filter."""
+    _req = (requester_email or "").strip().lower()
+    def _keep(e):
+        el = (e or "").strip().lower()
+        if not el:
+            return False
+        if el in NOTIFY_SUBMIT_ONLY and el != _req:
+            return False
+        return True
+    _dedup_lower = set()
+    def _dedup(lst):
+        out = []
+        for e in lst:
+            el = (e or "").strip().lower()
+            if not el or el in _dedup_lower:
+                continue
+            _dedup_lower.add(el)
+            out.append(e)
+        return out
+    nt = _dedup([e for e in (to_list or []) if _keep(e)])
+    nc = _dedup([e for e in (cc_list or []) if _keep(e)])
+    return nt, nc
+
+
+# Oct-22 user ask: Kenny Kim keeps approval authority (route unchanged)
+# but every approval/rejection he writes should be RECORDED and
+# DISPLAYED as JunJong Cho's.  Returns (effective_email, display_name,
+# slot_column) so the approve/reject writers can swap in JJ's identity
+# in one place.  Non-Kenny approvers pass through unchanged.
+def _effective_approver_identity(who):
+    e = (who or "").strip().lower()
+    kenny = MGMT_APPROVER_EMAILS[2].lower()
+    jj    = MGMT_APPROVER_EMAILS[1].lower()
+    hayden = MGMT_APPROVER_EMAILS[0].lower()
+    if e == kenny:
+        return jj, "JJ", "approved_b"
+    if e == jj:
+        return jj, "JJ", "approved_b"
+    if e == hayden:
+        return hayden, "Hayden", "approved_a"
+    return e, "", ""
 # Price editors — only these people can PATCH an already-submitted
 # order's prices via /api/orders/detail/<oid>/update.  An edit by
 # any of them ALSO acts as an approval on their behalf (rule:
@@ -5316,6 +5382,11 @@ def _ensure_submitted_orders_table():
             # tab closed without releasing never permanently sticks.
             ("sap_lock_by_email",   "VARCHAR(120) NULL"),
             ("sap_lock_at",         "DATETIME NULL"),
+            # Oct-22 user ask: BDE marks "Customer Pickup" on the SPRF
+            # header so CS gets a confirm-pickup popup before saving
+            # the DO in SAP.  Y/N char kept parallel to the other
+            # flag columns on this table.
+            ("customer_pickup",     "CHAR(1) NOT NULL DEFAULT 'N'"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -5524,6 +5595,36 @@ def _revive_email_html(oid, snap, actor_email, base_url):
         <div style="margin-top:8px">
           {('<a href="' + link + '" style="background:#2563eb;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open SPRF</a>') if link else ''}
           <span style="color:#6b7280;margin-left:10px">Approval slots have been reset.</span>
+        </div>
+      </div>
+    </div>
+    """.strip()
+
+
+def _sap_marked_email_html(oid, snap, actor_email, base_url):
+    """Oct-22 user ask: short "DO entered in SAP" confirmation sent to
+    the BDE / requester when CS flips status_sap to Y."""
+    order_no = snap.get("order_no") or f"#{oid}"
+    sold_to_name = snap.get("sold_to_name") or ""
+    sold_to = snap.get("sold_to") or ""
+    bde = snap.get("submitted_by_bde") or ""
+    sd_no = snap.get("sd_no") or "—"
+    approver = snap.get("approved_by_name") or ""
+    link = f"{base_url}/order?id={oid}" if base_url else ""
+    ts  = datetime.now().strftime("%d/%m/%Y %H:%M")
+    return f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:720px">
+      <div style="background:#059669;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
+        ✓ SPRF {_esc_html(order_no)} — entered in SAP (DO {_esc_html(sd_no)})
+      </div>
+      <div style="padding:10px 12px;background:#ecfdf5;border:1px solid #059669;border-top:none;font-size:12.5px;line-height:1.7">
+        <div><b>CS user:</b> {_esc_html(actor_email or '—')} · {ts}</div>
+        <div><b>BDE:</b> {_esc_html(bde)}</div>
+        <div><b>Customer:</b> {_esc_html(sold_to_name)} ({_esc_html(sold_to)})</div>
+        <div><b>SAP DO No.:</b> {_esc_html(sd_no)}</div>
+        {('<div><b>Approved by:</b> ' + _esc_html(approver) + '</div>') if approver else ''}
+        <div style="margin-top:8px">
+          {('<a href="' + link + '" style="background:#059669;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open SPRF</a>') if link else ''}
         </div>
       </div>
     </div>
@@ -5879,13 +5980,18 @@ def api_orders_submit():
             _cc_number = _cc_expiry = _cc_ccv = ""
         _interstate_flag = "Y" if str(totals.get("interstate_flag") or "").strip().upper().startswith("Y") else "N"
         _interstate_amt  = _num(totals.get("interstate_amount"))
+        # Oct-22 user ask: Customer Pickup flag persists on submit so
+        # CS can be prompted to re-confirm it before saving the DO.
+        _cust_pickup = "Y" if str(header.get("customer_pickup") or "").strip().upper().startswith("Y") else "N"
         cur.execute(
             "UPDATE submitted_orders SET "
             "  interstate_flag=%s, interstate_amount=%s, "
-            "  payment_method=%s, cc_number=%s, cc_expiry=%s, cc_ccv=%s "
+            "  payment_method=%s, cc_number=%s, cc_expiry=%s, cc_ccv=%s, "
+            "  customer_pickup=%s "
             "WHERE id=%s",
             (_interstate_flag, _interstate_amt,
              _pay_method, _cc_number or None, _cc_expiry or None, _cc_ccv or None,
+             _cust_pickup,
              oid),
         )
         # If this submission came from a saved draft (Save-as-Draft
@@ -6259,7 +6365,8 @@ def api_orders_list():
             f"       deleted_by_email, deleted_by_name, deleted_at, "
             f"       rebateable, mgmt_reason, "
             f"       interstate_flag, interstate_amount, "
-            f"       payment_method, sd_no, cs_comment "
+            f"       payment_method, sd_no, cs_comment, "
+            f"       customer_pickup "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -6428,6 +6535,7 @@ def api_orders_detail(oid):
             "       payment_method, cc_number, cc_expiry, cc_ccv, "
             "       sd_no, cs_comment, "
             "       sap_lock_by_email, sap_lock_at, "
+            "       customer_pickup, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -6543,6 +6651,51 @@ def api_orders_status(oid):
         if cur.rowcount == 0:
             return jsonify({"error": "not found"}), 404
         conn.commit()
+        # Oct-22 user ask: when CS flips the SAP flag to Y (DO entered),
+        # notify the salesmen on the order so BDE / requester / regional
+        # manager know the order is now live in SAP.  Submit-only cohort
+        # (JJ / Hayden / Kenny / Brian / Pamela / Russell) is excluded
+        # from this mail unless they themselves requested the SPRF.
+        _snap_for_mail = None
+        if new_stat == "Y":
+            try:
+                _c2 = conn.cursor(dictionary=True)
+                _c2.execute(
+                    "SELECT id, order_no, submitted_by_bde, submitted_by_email, "
+                    "       sold_to, sold_to_name, grand_total, sd_no, "
+                    "       approved_by_name, approved_at, mgmt_reason "
+                    "FROM submitted_orders WHERE id = %s LIMIT 1", (oid,))
+                _snap_for_mail = _c2.fetchone()
+                _c2.close()
+            except Exception:
+                _snap_for_mail = None
+        if _snap_for_mail is not None:
+            try:
+                base_url = DASHBOARD_URL.rstrip("/") or request.host_url.rstrip("/")
+            except Exception:
+                base_url = ""
+            order_no = _snap_for_mail.get("order_no") or f"#{oid}"
+            bde_email = (_snap_for_mail.get("submitted_by_email") or "").strip().lower()
+            # To: the requester BDE + the full CS team (so Harry's
+            # colleagues see the same confirmation).  CC: the BDE's
+            # regional manager so sales management sees the ship-ready
+            # flag land.  Submit-only cohort filtered after assembly.
+            to_list = ([bde_email] if bde_email else []) + list(CS_TEAM_EMAILS)
+            cc = []
+            _mgr = _bde_manager_email(_snap_for_mail.get("submitted_by_bde"))
+            if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+                cc.append(_mgr)
+            to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
+            subject = (f"[SPRF SAP-ENTERED {order_no}] DO {_snap_for_mail.get('sd_no') or '—'} · "
+                       f"{_snap_for_mail.get('sold_to_name','')} "
+                       f"({_snap_for_mail.get('sold_to','')})")
+            try:
+                _send_mail_async(
+                    to_list, cc, subject,
+                    _sap_marked_email_html(oid, _snap_for_mail, who, base_url),
+                )
+            except Exception as e:
+                print(f"[sap-marked] mail queue failed: {e}")
         return jsonify({"ok": True, "status": new_stat, "by": who})
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -7081,6 +7234,7 @@ def api_orders_update(oid):
                 f"  {_needs_sql}, mgmt_reason=%s, "
                 "  rebateable = COALESCE(NULLIF(%s, ''), rebateable), "
                 "  interstate_flag=%s, interstate_amount=%s, "
+                "  customer_pickup=%s, "
                 f"{_reset_sql}"
                 "  payload_json=%s "
                 "WHERE id=%s",
@@ -7105,6 +7259,10 @@ def api_orders_update(oid):
                     rebateable,
                     "Y" if str(totals.get("interstate_flag") or "").strip().upper().startswith("Y") else "N",
                     _num(totals.get("interstate_amount")),
+                    # Oct-22 user ask: Customer Pickup flag follows the
+                    # edit so a BDE can flip it on / off before the DO
+                    # is keyed into SAP.
+                    "Y" if str(header.get("customer_pickup") or "").strip().upper().startswith("Y") else "N",
                     _json.dumps(payload, ensure_ascii=False, default=str),
                     oid,
                 ),
@@ -7193,6 +7351,12 @@ def api_orders_update(oid):
     _mgr = _bde_manager_email(submitted_by_bde)
     if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
         cc.append(_mgr)
+    # Oct-22 user ask: the submit-only cohort (JJ / Hayden / Kenny /
+    # Brian / Pamela / Russell) gets stripped from every non-submit
+    # mail unless they themselves are the requester.  update() is a
+    # non-submit event, so apply the filter here.
+    _req = (row.get("submitted_by_email") or "").strip().lower()
+    to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=_req)
     try:
         _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
@@ -7231,12 +7395,12 @@ def api_orders_approve(oid):
     (MD) can act — Hayden and Kenny get a 403 telling the front-
     end to escalate."""
     import json as _json_md
-    who = (_bde_from_request() or "").strip().lower()
-    approver_col = None
-    approver_name = None
-    if   who == MGMT_APPROVER_EMAILS[0]: approver_col, approver_name = "approved_a", "Hayden"
-    elif who == MGMT_APPROVER_EMAILS[1]: approver_col, approver_name = "approved_b", "JJ"
-    elif who == MGMT_APPROVER_EMAILS[2]: approver_col, approver_name = "approved_c", "Kenny"
+    who_raw = (_bde_from_request() or "").strip().lower()
+    # Oct-22 user ask: Kenny Kim keeps his approval authority but every
+    # record / display reads as JunJong Cho's.  _effective_approver_
+    # identity returns (effective_email, display_name, slot_column) so
+    # Kenny's clicks land in slot B as "JJ" instead of slot C "Kenny".
+    who, approver_name, approver_col = _effective_approver_identity(who_raw)
     if not approver_col:
         return jsonify({"error": "only the named approvers can approve"}), 403
     # Optional free-form comment the approver types in the modal
@@ -7364,6 +7528,9 @@ def api_orders_approve(oid):
         _mgr = _bde_manager_email(order_snapshot.get("submitted_by_bde"))
         if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
             cc.append(_mgr)
+        # Oct-22 user ask: approve is a non-submit event — strip the
+        # submit-only cohort unless they themselves submitted the SPRF.
+        to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF APPROVED {order_no}] {approver_name} · "
                    f"{order_snapshot.get('sold_to_name','')} "
                    f"({order_snapshot.get('sold_to','')})")
@@ -7405,12 +7572,9 @@ def api_orders_reject(oid):
     /api/orders/detail/<oid>/revive — until then it stays visible
     on the list with a red "Rejected" badge and the reject_note on
     display."""
-    who = (_bde_from_request() or "").strip().lower()
-    rejector_col = None   # not persisted but drives the "which named approver" label
-    rejector_name = None
-    if   who == MGMT_APPROVER_EMAILS[0]: rejector_name = "Hayden"
-    elif who == MGMT_APPROVER_EMAILS[1]: rejector_name = "JJ"
-    elif who == MGMT_APPROVER_EMAILS[2]: rejector_name = "Kenny"
+    who_raw = (_bde_from_request() or "").strip().lower()
+    # Oct-22 user ask: Kenny Kim's reject records read as JJ Cho's too.
+    who, rejector_name, _slot = _effective_approver_identity(who_raw)
     if not rejector_name:
         return jsonify({"error": "only the named approvers can reject"}), 403
     try:
@@ -7470,6 +7634,8 @@ def api_orders_reject(oid):
         _mgr = _bde_manager_email(snap.get("submitted_by_bde"))
         if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
             cc.append(_mgr)
+        # Oct-22 user ask: reject is a non-submit event.
+        to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF REJECTED {order_no}] {rejector_name} · "
                    f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
         try:
@@ -7578,6 +7744,8 @@ def api_orders_cancel(oid):
         _mgr = _bde_manager_email(row.get("submitted_by_bde"))
         if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
             cc.append(_mgr)
+        # Oct-22 user ask: cancel is a non-submit event.
+        to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF DELETED {order_no}] by {who or 'requester'} · "
                    f"{row.get('sold_to_name','')} ({row.get('sold_to','')})")
         body_html = _cancel_email_html(oid, row, who, base_url)
@@ -7667,6 +7835,8 @@ def api_orders_revive(oid):
         _mgr = _bde_manager_email(snap.get("submitted_by_bde"))
         if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
             cc.append(_mgr)
+        # Oct-22 user ask: revive is a non-submit event.
+        to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF REVIVED {order_no}] by {who or 'requester'} · "
                    f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
         body_html = _revive_email_html(oid, snap, who, base_url)
