@@ -4821,6 +4821,40 @@ def api_orders_additional_dc():
 # order form and the list page both read/write via /api/orders/* below.
 # ══════════════════════════════════════════════════════════════════════
 HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
+# Oct-22 user ask: CC each BDE's regional manager on every
+# submitted-order email.  BDE display names (as they appear on the
+# SPRF 'HKAU BDE Name' field) map to a manager's email; the
+# submit / approve / reject / delete / revive mail blasts all pick
+# up this CC alongside the usual SPRF_READONLY_CC fan-out.
+#
+# The map keys are normalised (upper-case, single-space) so a
+# BDE name typed with slight whitespace variations still matches.
+# Add new BDE→manager rows here; the fan-out code reads this map
+# only — no further edit needed.
+BDE_MANAGER_CC = {
+    # Paul Buckley manages:
+    "MAKRIS GEORGE":    "paul.buckley@hankooktyre.com.au",
+    "BORGHESE LUCA":    "paul.buckley@hankooktyre.com.au",
+    "VALLIS BRETT":     "paul.buckley@hankooktyre.com.au",
+    # Aaron Marsh manages:
+    "MACLURE ADAM":     "aaron.marsh@hankooktyre.com.au",
+    "SPIRES STEVEN":    "aaron.marsh@hankooktyre.com.au",
+    "BOVEY CRAIG":      "aaron.marsh@hankooktyre.com.au",
+    # Calvin Hobkirk manages:
+    "DUCIE ROBERT":     "calvin.hobkirk@hankooktyre.com.au",
+    "BILSTON KELLEY":   "calvin.hobkirk@hankooktyre.com.au",
+    "GULTJAEFF JASON":  "calvin.hobkirk@hankooktyre.com.au",
+    # Asim Qureshi manages:
+    "DAIS JIM":         "asim.qureshi@hankooktyre.com.au",
+}
+
+
+def _bde_manager_email(bde_name) -> str:
+    """Return the manager's email for a BDE display name, or '' if
+    the BDE isn't in BDE_MANAGER_CC.  Case / whitespace tolerant."""
+    import re as _re_bde
+    key = _re_bde.sub(r"\s+", " ", (bde_name or "").strip().upper())
+    return BDE_MANAGER_CC.get(key, "")
 # Oct-22 user ask: single-CS-at-a-time soft lock on orders waiting
 # for SAP entry.  TTL = after this many minutes of inactivity on the
 # claimed lock, another CS user can take it over.  Keeps a tab
@@ -5706,6 +5740,10 @@ def api_orders_submit():
         to_list += MGMT_APPROVER_EMAILS
     cc = [submitted_by_email] if submitted_by_email else []
     cc += SPRF_READONLY_CC
+    # Oct-22: CC the BDE's regional manager (BDE_MANAGER_CC map).
+    _mgr = _bde_manager_email(submitted_by_bde)
+    if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+        cc.append(_mgr)
     # COD + Credit Card orders go to the accounts team too so they can
     # settle remittance (COD) or capture the card charge (Credit Card)
     # against the SPRF the sales side just submitted.  Dedupe so a
@@ -6809,6 +6847,10 @@ def api_orders_update(oid):
         to_list += MGMT_APPROVER_EMAILS
     cc = [who] if who else []
     cc += SPRF_READONLY_CC
+    # Oct-22: CC the BDE's regional manager.
+    _mgr = _bde_manager_email(submitted_by_bde)
+    if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+        cc.append(_mgr)
     try:
         _send_mail_async(to_list, cc, subject,
                          _submitted_order_email_html(oid, payload_for_mail, base_url))
@@ -6976,6 +7018,10 @@ def api_orders_approve(oid):
         to_list = list(CS_TEAM_EMAILS) + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
         cc      = [bde_email] if bde_email else []
         cc     += SPRF_READONLY_CC
+        # Oct-22: CC the BDE's regional manager.
+        _mgr = _bde_manager_email(order_snapshot.get("submitted_by_bde"))
+        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+            cc.append(_mgr)
         subject = (f"[SPRF APPROVED {order_no}] {approver_name} · "
                    f"{order_snapshot.get('sold_to_name','')} "
                    f"({order_snapshot.get('sold_to','')})")
@@ -7078,6 +7124,10 @@ def api_orders_reject(oid):
         bde_email = (snap.get("submitted_by_email") or "").strip().lower()
         to_list = list(CS_TEAM_EMAILS) + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
         cc      = ([bde_email] if bde_email else []) + list(SPRF_READONLY_CC)
+        # Oct-22: CC the BDE's regional manager.
+        _mgr = _bde_manager_email(snap.get("submitted_by_bde"))
+        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+            cc.append(_mgr)
         subject = (f"[SPRF REJECTED {order_no}] {rejector_name} · "
                    f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
         try:
@@ -7182,6 +7232,10 @@ def api_orders_cancel(oid):
         bde_email = (row.get("submitted_by_email") or "").strip().lower()
         to_list = list(CS_TEAM_EMAILS) + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
+        # Oct-22: CC the BDE's regional manager.
+        _mgr = _bde_manager_email(row.get("submitted_by_bde"))
+        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+            cc.append(_mgr)
         subject = (f"[SPRF DELETED {order_no}] by {who or 'requester'} · "
                    f"{row.get('sold_to_name','')} ({row.get('sold_to','')})")
         body_html = _cancel_email_html(oid, row, who, base_url)
@@ -7267,6 +7321,10 @@ def api_orders_revive(oid):
         bde_email = (snap.get("submitted_by_email") or "").strip().lower()
         to_list = list(CS_TEAM_EMAILS) + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
+        # Oct-22: CC the BDE's regional manager.
+        _mgr = _bde_manager_email(snap.get("submitted_by_bde"))
+        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
+            cc.append(_mgr)
         subject = (f"[SPRF REVIVED {order_no}] by {who or 'requester'} · "
                    f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
         body_html = _revive_email_html(oid, snap, who, base_url)
