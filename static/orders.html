@@ -2331,11 +2331,15 @@ function _matFlagsHtml(r){
     const n = +_bucket[_state] || 0;
     const bg = n > 0 ? "#dcfce7" : "#fee2e2";
     const fg = n > 0 ? "#166534" : "#991b1b";
-    const _label = _plant ? `${_plant} (${_state})` : _state;
+    // Oct-23 user ask: badge shows plant code only (no "(STATE)" tail
+    // once a plant is resolved).  Fall back to the bare state code
+    // for the pre-plant case so a customer whose master still has no
+    // delivery_plant renders something sensible.
+    const _label = _plant || _state;
     bits.push(
       `<span style="background:${bg};color:${fg};padding:1px 6px;border-radius:3px;
                     font-size:10.5px;font-weight:700;margin-left:6px"
-             title="${_label} stock">${_label} ${fmtQty(n)}</span>`
+             title="${_plant || _state} stock (state: ${_state})">${_label} ${fmtQty(n)}</span>`
     );
   }
   return bits.join("");
