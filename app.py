@@ -3022,6 +3022,62 @@ def _stock_report_mcodes():
 
 _STOCK_SUGGEST_CACHE = {"path": None, "mtime": 0, "rows": None}
 
+# Oct-22 user ask: SPRF suggest for "LF91" returns 0 while "LF9" returns
+# the LF91 rows + more.  Root cause: the stock-balance xlsm's PATTERN
+# column sometimes carries a truncated form ("LF9") while carrying_26
+# — the real master — carries the full code ("LF91").  Overlay the
+# canonical pattern / product_name values from carrying_26 onto the
+# per-m_code suggest rows so searching the full code matches again.
+# Cached as a flat dict (bulk one-shot SELECT) with a 10-minute TTL;
+# invalidated alongside the stock-report cache below when the xlsm is
+# re-read, so a mid-day master update is picked up within the window.
+_CARRYING_OVERLAY_CACHE = {"map": None, "fetched_at": 0.0}
+_CARRYING_OVERLAY_TTL   = 600.0  # seconds
+
+def _carrying_product_overlay():
+    """Return {m_code: {"pattern": str, "product_name": str}} for every
+    row in carrying_26 so the stock suggest can prefer the master's
+    canonical values over whatever happens to be in the stock xlsm.
+    Falls back to {} on any error — overlay is cosmetic, must never
+    break the suggest path."""
+    import time as _time
+    now = _time.time()
+    if (_CARRYING_OVERLAY_CACHE["map"] is not None
+            and (now - _CARRYING_OVERLAY_CACHE["fetched_at"]) < _CARRYING_OVERLAY_TTL):
+        return _CARRYING_OVERLAY_CACHE["map"]
+    overlay = {}
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
+        try:
+            cols = _list_columns(cur, "carrying_26")
+            if "m_code" not in cols:
+                return {}
+            c_pat  = "pattern" if "pattern" in cols else None
+            c_prod = next((c for c in ("product_name", "product_group") if c in cols), None)
+            select_parts = ["m_code"]
+            if c_pat:  select_parts.append(f"{c_pat} AS pattern")
+            if c_prod: select_parts.append(f"{c_prod} AS product_name")
+            cur.execute(f"SELECT DISTINCT {', '.join(select_parts)} FROM carrying_26")
+            for r in cur.fetchall():
+                mc = (r.get("m_code") or "").strip()
+                if not mc:
+                    continue
+                overlay[mc] = {
+                    "pattern":      (r.get("pattern") or "").strip() if c_pat else "",
+                    "product_name": (r.get("product_name") or "").strip() if c_prod else "",
+                }
+        finally:
+            try: cur.close()
+            except: pass
+            try: conn.close()
+            except: pass
+    except Exception:
+        return _CARRYING_OVERLAY_CACHE["map"] or {}
+    _CARRYING_OVERLAY_CACHE["map"]        = overlay
+    _CARRYING_OVERLAY_CACHE["fetched_at"] = now
+    return overlay
+
 def _stock_report_rows_for_suggest():
     """Pull the latest Stock Balance workbook rows reshaped for the
     SPRF material suggest.  Returns None when the stock dashboard
@@ -3123,6 +3179,17 @@ def _stock_report_rows_for_suggest():
         _brand = (r.get("brand")        or "").strip()
         _prod  = (r.get("product_name") or r.get("line") or "").strip()
         _pat   = (r.get("pattern")      or "").strip()
+        # Oct-22: overlay carrying_26's canonical pattern / product_name
+        # when the master carries a non-empty value — stock xlsm's
+        # PATTERN column sometimes drops a trailing character (saw
+        # "LF9" where the master has "LF91"), which breaks the suggest
+        # for the exact code the BDE types.  Overlay is per-m_code so
+        # it leaves the xlsm-only rows alone.
+        _ov = _carrying_product_overlay().get(mc) or {}
+        _ov_pat  = (_ov.get("pattern")      or "").strip()
+        _ov_prod = (_ov.get("product_name") or "").strip()
+        if _ov_pat:  _pat  = _ov_pat
+        if _ov_prod: _prod = _ov_prod
         # Oct-21 user ask: surface OPE / Fade-Out status + per-state
         # stock on each suggest row so the BDE sees at a glance whether
         # the material is actively supplied and what the stock is in
