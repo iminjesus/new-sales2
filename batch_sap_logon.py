@@ -492,37 +492,87 @@ def _reset_to_home(session):
         )
         if _on_splash:
             _slog("  _reset_to_home: on S000 splash — dismissing to Easy Access")
-            # Preferred path: find the "Start SAP Easy Access" button
-            # by text and press it.  SAP's user screen puts the button
-            # directly under wnd[0]/usr; the id can be ":SAPMSYST:0040"
-            # or a positioned button, so walk the children by text
-            # instead of hard-coding an id.
             _pressed = False
+            # Path A: find the "Start SAP Easy Access" button by text and
+            # press it.  SAP's user screen puts the button directly
+            # under wnd[0]/usr; the id can be ":SAPMSYST:0040" or a
+            # positioned name, so walk children by text instead of
+            # hard-coding an id.  pywin32 wraps the SAP GUI
+            # GuiComponentCollection as a COM object whose index method
+            # is .Item(i) (NOT .ElementAt — that's .NET syntax); also
+            # try plain iteration as a belt-and-braces fallback since
+            # some pywin32 builds expose __iter__ via Count/Item.
             try:
                 _usr = session.findById("wnd[0]/usr")
                 _kids = _usr.Children
-                for _i in range(_kids.Count):
+                try:
+                    _count = int(_kids.Count)
+                except Exception:
+                    _count = 0
+                _slog(f"  _reset_to_home: splash usr has {_count} children")
+                for _i in range(_count):
                     try:
-                        _ch = _kids.ElementAt(_i)
+                        try:
+                            _ch = _kids.Item(_i)      # SAP GUI Scripting way
+                        except Exception:
+                            _ch = _kids.ElementAt(_i) # .NET-style fallback
                         _txt = str(getattr(_ch, "Text", "") or "")
+                        _typ = str(getattr(_ch, "Type", "") or "")
+                        _slog(f"    child[{_i}] type={_typ!r} text={_txt!r}")
                         if "easy access" in _txt.lower():
-                            _ch.press()
+                            try:
+                                _ch.press()
+                            except Exception:
+                                _ch.setFocus(); session.findById("wnd[0]").sendVKey(0)
                             _pressed = True
                             _slog(f"  _reset_to_home: pressed button '{_txt}'")
                             break
-                    except Exception:
+                    except Exception as _ce:
+                        _slog(f"    child[{_i}] inspect failed: {_ce}")
                         continue
             except Exception as _e:
                 _slog(f"  _reset_to_home: splash child walk failed ({_e})")
-            # Fallback: Enter on the main window usually activates the
-            # default button, which on S000 IS 'Start SAP Easy Access'.
+            # Path B: id-guess.  The button on this release is
+            # ":SAPMSYST:0040" more often than not; try a handful of
+            # the most common variants.
+            if not _pressed:
+                for _bid in (
+                    "wnd[0]/usr/btnBUTTON_SMS",
+                    "wnd[0]/usr/btnWELCOMEBUTTON",
+                    "wnd[0]/usr/btnBUTTON",
+                ):
+                    try:
+                        session.findById(_bid).press()
+                        _pressed = True
+                        _slog(f"  _reset_to_home: pressed splash button by id {_bid}")
+                        break
+                    except Exception:
+                        pass
+            # Path C: Enter on the main window — the default button on
+            # S000 IS 'Start SAP Easy Access' so Enter equals a click.
             if not _pressed:
                 try:
                     session.findById("wnd[0]").sendVKey(0)
                     _slog("  _reset_to_home: splash dismissed via Enter")
+                    _pressed = True
                 except Exception as _e:
                     _slog(f"  _reset_to_home: splash Enter failed ({_e})")
             time.sleep(1.5)
+            # Path D (last resort — user's own suggestion): type the
+            # harmless 'SMEN' TCODE in the OK-code field.  SMEN is
+            # SAP's canonical Easy Access entry — this works even when
+            # none of the button presses did, because the OK-code field
+            # at top is live on S000.  Doesn't do anything if we're
+            # already past the splash.
+            if not _pressed:
+                try:
+                    okcd = session.findById("wnd[0]/tbar[0]/okcd")
+                    okcd.Text = "/nSMEN"
+                    session.findById("wnd[0]").sendVKey(0)
+                    time.sleep(1.5)
+                    _slog("  _reset_to_home: splash bypassed via /nSMEN okcd")
+                except Exception as _e:
+                    _slog(f"  _reset_to_home: /nSMEN fallback failed ({_e})")
     except Exception as _e:
         _slog(f"  _reset_to_home: splash check failed ({_e}) - continuing anyway")
 
