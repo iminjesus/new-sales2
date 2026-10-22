@@ -370,6 +370,40 @@ def start_tcode(session, tcode):
                 wait(0.3)
             except Exception:
                 break
+    # Oct-23 user ask: when SAP is sitting on the S000 "Start SAP Easy
+    # Access" splash (window title = bare "SAP"), typing a TCODE +
+    # Enter sometimes submits Enter to the splash's default button
+    # instead of the okcd field — the TCODE never navigates.  Force
+    # a splash → Easy Access transition first.  Title "SAP Easy
+    # Access" means we're already past it; any other title (another
+    # transaction) is also fine.
+    try:
+        _ttl = str(session.findById("wnd[0]").Text or "").strip()
+        if _ttl.upper() == "SAP":
+            try:
+                session.findById("wnd[0]/tbar[0]/okcd").Text = "/nSMEN"
+                session.findById("wnd[0]").sendVKey(0)
+                wait(1.2)
+            except Exception:
+                try:
+                    session.findById("wnd[0]").sendVKey(0)  # press default btn
+                    wait(1.2)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    # Also: StartTransaction() is SAP GUI Scripting's canonical TCODE
+    # launcher and works from any screen (including the splash),
+    # bypassing the okcd/Enter dance entirely.  Try it first; if the
+    # COM method isn't present on this SAP GUI build, fall back to
+    # the classic okcd + Enter path we've relied on so far.
+    try:
+        session.StartTransaction(tcode)
+        wait(1.5)
+        close_popups(session, 4)
+        return
+    except Exception:
+        pass
     session.findById("wnd[0]/tbar[0]/okcd").Text = f"/n{tcode}"
     session.findById("wnd[0]").sendVKey(0)
     wait(1.5)
