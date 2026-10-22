@@ -1666,8 +1666,8 @@
          refreshed from SAP (stock_rt / ZMMR40430).  Sits on the
          left side of the SOVD strip which was previously blank
          (strip is flex-end justified), right above the stock
-         columns of the lines table.  Hidden until /api/batch_status
-         returns a value. -->
+         columns of the lines table.  Always shown; red when the data
+         is not from today. -->
     <span style="margin-right:auto;display:flex;align-items:center;gap:14px">
       <!-- Column widths below are drag-resizable; this resets them. -->
       <a href="#" id="btnResetLineCols" class="crz-reset-link"
@@ -4027,21 +4027,32 @@ document.addEventListener("DOMContentLoaded", initColumnResizers);
    "YYYY-MM-DD HH:MM" string next to the stock columns.  Silent on
    failure — the label stays hidden rather than showing an error. */
 document.addEventListener("DOMContentLoaded", async () => {
+  /* Always show the label (it used to stay hidden whenever the hourly
+     RT crawl hadn't stamped a time, so users never saw it).  Red when
+     the stock data is not from today, "unknown" when no time exists. */
+  const label = document.getElementById("stockRtFreshness");
+  const at    = document.getElementById("stockRtFreshnessAt");
+  if (!label || !at) return;
+  let ts = "";
   try {
-    const r = await fetch("/api/batch_status", {credentials: "same-origin"});
-    if (!r.ok) return;
-    const j = await r.json();
-    const ts = String(j.stock_rt_updated_at || "").trim();
-    if (!ts) return;
-    const label = document.getElementById("stockRtFreshness");
-    const at    = document.getElementById("stockRtFreshnessAt");
-    if (!label || !at) return;
-    // Clip seconds for readability: "2026-10-22 09:11:49" → "2026-10-22 09:11"
+    const r = await fetch("/api/batch_status", {credentials: "same-origin", cache: "no-store"});
+    if (r.ok) ts = String((await r.json()).stock_rt_updated_at || "").trim();
+  } catch (_e) { /* fall through to "unknown" */ }
+  if (ts) {
+    // "2026-10-22 09:11:49" → "2026-10-22 09:11"
     at.textContent = ts.length >= 16 ? ts.slice(0, 16) : ts;
-    label.hidden = false;
-  } catch (_e) {
-    /* silent */
+    const d = new Date();
+    const today = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
+                + "-" + String(d.getDate()).padStart(2, "0");
+    if (ts.slice(0, 10) !== today) {
+      at.style.color = "#dc2626";
+      label.title = "Stock data is not from today — the SAP stock interface may have failed.";
+    }
+  } else {
+    at.textContent = "unknown";
+    at.style.color = "#dc2626";
   }
+  label.hidden = false;
 });
 
 /* ────────────────────────── row template ────────────────────────── */

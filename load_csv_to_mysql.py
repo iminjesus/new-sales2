@@ -568,17 +568,33 @@ def load_stock_rt(conn):
         # detect "same file — skip reload".  Written to batch_status
         # if the table exists; silent no-op otherwise (first-run of a
         # brand-new deployment that hasn't started the orchestrator).
+        # Oct-22: also stamp stock_rt_csv_at (when SAP exported the
+        # CSV, local Sydney time) so the SPRF "Stock Info updated"
+        # label works for manual loads too, not only when the hourly
+        # batch's RT crawl succeeds.  batch_status is created here if
+        # the orchestrator hasn't made it yet.
         try:
-            cur.execute("SHOW TABLES LIKE 'batch_status'")
-            if cur.fetchone():
-                cur.execute(
-                    "INSERT INTO batch_status (k, v) VALUES "
-                    "('stock_rt_loaded_mtime', %s), "
-                    "('stock_rt_loaded_from',  %s) "
-                    "ON DUPLICATE KEY UPDATE v = VALUES(v)",
-                    (str(csv_mtime), os.path.basename(csv_path)),
-                )
-                conn.commit()
+            from datetime import datetime as _dt_stamp
+            csv_at = (_dt_stamp.fromtimestamp(csv_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                      if csv_mtime else "")
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS batch_status ("
+                "  k VARCHAR(64) PRIMARY KEY,"
+                "  v TEXT NULL,"
+                "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP "
+                "    ON UPDATE CURRENT_TIMESTAMP"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            )
+            cur.execute(
+                "INSERT INTO batch_status (k, v) VALUES "
+                "('stock_rt_loaded_mtime', %s), "
+                "('stock_rt_loaded_from',  %s), "
+                "('stock_rt_csv_at',       %s) "
+                "ON DUPLICATE KEY UPDATE v = VALUES(v)",
+                (str(csv_mtime), os.path.basename(csv_path), csv_at),
+            )
+            conn.commit()
+            print(f"[stock_rt] stamped stock_rt_csv_at = {csv_at}")
         except Exception as _e:
             print(f"[stock_rt] (couldn't stamp batch_status: {_e})")
     finally:

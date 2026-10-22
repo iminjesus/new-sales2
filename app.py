@@ -21509,6 +21509,33 @@ def potential_customers_stats():
 # at …" since Orders / Incoming aren't refreshed on the hourly batch.
 # Reads only — no auth, no writes.  Minimal payload.
 # ---------------------------------------------------------------------------
+def _stock_rt_freshness(cur, rows):
+    """Best-known 'as of' time of the stock_rt data, 'YYYY-MM-DD HH:MM:SS'
+    (Sydney), or None.  Order: CSV export time stamped by the loader →
+    hourly-batch success stamp (whichever is newer) → stock_rt table
+    (MySQL UPDATE_TIME, else snapshot_date)."""
+    cands = [str(rows.get(k) or "").strip()
+             for k in ("stock_rt_csv_at", "stock_rt_updated_at")]
+    cands = [c for c in cands if c]
+    if cands:
+        return max(cands)  # same fixed format → string max == newest
+    try:
+        cur.execute(
+            "SELECT UPDATE_TIME AS t FROM information_schema.tables "
+            "WHERE table_schema = DATABASE() AND table_name = 'stock_rt'"
+        )
+        r = cur.fetchone()
+        if r and r.get("t"):
+            return r["t"].strftime("%Y-%m-%d %H:%M:%S")
+        cur.execute("SELECT MAX(snapshot_date) AS d FROM stock_rt")
+        r = cur.fetchone()
+        if r and r.get("d"):
+            return str(r["d"])
+    except Exception:
+        pass
+    return None
+
+
 @app.get("/api/batch_status")
 def api_batch_status():
     conn = get_connection()
@@ -21521,7 +21548,7 @@ def api_batch_status():
         if not cur.fetchone():
             return jsonify({
                 "stock_updated_at":    None,
-                "stock_rt_updated_at": None,
+                "stock_rt_updated_at": _stock_rt_freshness(cur, {}),
                 "sales_updated_at":    None,
                 "last_error":          None,
                 "last_error_at":       None,
@@ -21529,12 +21556,17 @@ def api_batch_status():
         cur.execute("SELECT k, v FROM batch_status")
         rows = {r["k"]: r["v"] for r in (cur.fetchall() or [])}
         return jsonify({
+            # Oct-22 fix: the label was blank because stock_rt_updated_at
+            # is only written when the hourly RT crawl succeeds.  Prefer
+            # the loaded CSV's own export time, then the batch stamp,
+            # then the stock_rt table itself.
+            "stock_rt_updated_at": _stock_rt_freshness(cur, rows),
             "stock_updated_at":    rows.get("stock_updated_at")    or None,
             # Oct-22: RT stock (ZMMR40430) last-successful-load timestamp.
             # Surfaced on the SPRF near the per-row state-stock columns
             # so the BDE knows how fresh the ATP / Unrestricted numbers
             # are without opening the batch log.
-            "stock_rt_updated_at": rows.get("stock_rt_updated_at") or None,
+            "stock_rt_batch_at":   rows.get("stock_rt_updated_at") or None,
             "sales_updated_at":    rows.get("sales_updated_at")    or None,
             "last_error":          rows.get("last_error")          or None,
             "last_error_at":       rows.get("last_error_at")       or None,
