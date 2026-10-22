@@ -58,6 +58,11 @@ DISTRIBUTE_CH  = "d1"
 PLANT_LOW      = "42R0"
 PLANT_HIGH     = "42R4"
 
+# Oct-22 user ask: pin Storage Location to 5530 so SAP can prune the
+# search up front — the full-plant scan (every location) takes ~20
+# minutes; limiting to 5530 cuts that by a lot.
+STORAGE_LOCATION = "5530"
+
 SAP_EXPORT_DIR  = r"C:\temp"
 SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 
@@ -100,6 +105,11 @@ ZMMR_FIELDS = {
                         "wnd[0]/usr/ctxtP_WERKS"],
     "plant_high":      ["wnd[0]/usr/ctxtS_WERKS-HIGH",
                         "wnd[0]/usr/ctxtS_PLANT-HIGH"],
+    # Storage Location — SAP uses S_LGORT / P_LGORT field names.
+    "storage_loc_low": ["wnd[0]/usr/ctxtS_LGORT-LOW",
+                        "wnd[0]/usr/ctxtP_LGORT",
+                        "wnd[0]/usr/ctxtS_SLOC-LOW",
+                        "wnd[0]/usr/ctxtP_SLOC"],
     "sales_org":       ["wnd[0]/usr/ctxtP_VKORG",
                         "wnd[0]/usr/ctxtS_VKORG-LOW"],
     "distribute_ch":   ["wnd[0]/usr/ctxtP_VTWEG",
@@ -337,6 +347,9 @@ def set_selection_screen(session, valid_on_str):
     'No Zero' tick."""
     _try_set_text(session, ZMMR_FIELDS["plant_low"],    PLANT_LOW)
     _try_set_text(session, ZMMR_FIELDS["plant_high"],   PLANT_HIGH)
+    # Oct-22 user ask: Storage Location pinned to 5530 (prunes the
+    # SAP search up front; full-plant scan took ~20 min).
+    _try_set_text(session, ZMMR_FIELDS["storage_loc_low"], STORAGE_LOCATION)
     _try_set_text(session, ZMMR_FIELDS["sales_org"],    SALES_ORG)
     _try_set_text(session, ZMMR_FIELDS["distribute_ch"], DISTRIBUTE_CH)
     _try_set_text(session, ZMMR_FIELDS["valid_on"],     valid_on_str)
