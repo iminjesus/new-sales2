@@ -3007,6 +3007,13 @@ async function applyAdditionalDCToRow(rowEl){
     sold_to: soldTo, brand, qty: String(qty),
   });
   if (pg) q.set("product_group", pg);
+  /* Oct-22 user ask: the 443DC / Special / SOVD lookup must gate on
+     the Order Date (`#doc_date`), not today's wall-clock.  A BDE
+     who ships two weeks out should pick up the promo that will be
+     live on the ship date.  Pass through verbatim; the backend
+     silently defaults to today on empty / malformed. */
+  const _onDate = ($("#doc_date")?.value || "").trim();
+  if (_onDate) q.set("on_date", _onDate);
   // Pattern + material feed the new gates on dc_additional_customer.
   // Rows that leave those columns blank act as wildcards, so passing
   // an empty value is fine — the endpoint accepts absent as "match
@@ -4006,6 +4013,30 @@ function updateTotals(){
 // "Y" or clears the box.
 document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
 document.getElementById("interstateFlag")?.addEventListener("input", updateTotals);
+
+/* Oct-22 user ask: the Order Date drives the Additional DC lookup.
+   When the BDE picks a future date, every priced row has to re-run
+   its /api/orders/additional_dc call so the on-date gate against
+   dc_additional_customer's valid_from / valid_to picks up the right
+   promo for the chosen date.  Also refresh Base DC — dc_basic_customer
+   is date-scoped the same way.  Debounced so a <input type="date">
+   that fires every keystroke of a typed year doesn't thrash the
+   backend. */
+let _docDateReapplyTimer = null;
+document.getElementById("doc_date")?.addEventListener("change", () => {
+  clearTimeout(_docDateReapplyTimer);
+  _docDateReapplyTimer = setTimeout(async () => {
+    const _soldTo = window._orderSoldTo || "";
+    if (_soldTo) {
+      try { await fillBaseDC(_soldTo); } catch(_){}
+    }
+    $$("#linesBody tr").forEach(tr => {
+      if (tr.querySelector('[data-col="m_code"]')?.value) {
+        applyAdditionalDCToRow(tr);
+      }
+    });
+  }, 150);
+});
 
 // Rebate-able V-check wiring — YES / NO cells act like radio buttons.
 // Clicking either flips its picker to a big ✓ on a coloured background,

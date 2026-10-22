@@ -4638,6 +4638,25 @@ def api_orders_additional_dc():
         qty = float((request.args.get("qty") or "0").replace(",", "").strip())
     except Exception:
         qty = 0.0
+    # Oct-22 user ask: honour the Order Date on the SPRF form.  A BDE
+    # setting a future ship date should pick up the promo that will be
+    # live at that date, not today's.  Parse "on_date" as YYYY-MM-DD
+    # and fall back silently to today on an empty / bad value so the
+    # endpoint stays safe for existing callers.
+    from datetime import date as _date_cls
+    _on_date_raw = (request.args.get("on_date") or "").strip()
+    on_date = None
+    if _on_date_raw:
+        import re as _re_od
+        _m = _re_od.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})$", _on_date_raw)
+        if _m:
+            try:
+                on_date = _date_cls(int(_m.group(1)), int(_m.group(2)), int(_m.group(3)))
+            except Exception:
+                on_date = None
+    if not on_date:
+        on_date = _date_cls.today()
+    on_date_iso = on_date.isoformat()
     debug = request.args.get("debug") in ("1", "true", "yes")
 
     out = {"additional_dc": None, "matched": False}
@@ -4718,9 +4737,12 @@ def api_orders_additional_dc():
             " AND (ac.min_qty IS NULL OR ac.min_qty <= %s)"
         )
         if has_dates:
+            # Oct-22 user ask: compare valid_from/to against the Order
+            # Date the BDE picked, not CURDATE().  Lets a future ship
+            # date pick up a promo that starts next week.
             common_gate += (
-                " AND (ac.valid_from IS NULL OR ac.valid_from <= CURDATE())"
-                " AND (ac.valid_to   IS NULL OR ac.valid_to   >= CURDATE())"
+                " AND (ac.valid_from IS NULL OR ac.valid_from <= %s)"
+                " AND (ac.valid_to   IS NULL OR ac.valid_to   >= %s)"
             )
         # Standard ordering: sold_to match beats customer_grp match,
         # then bigger discount wins on ties, then tighter min_qty.
@@ -4730,7 +4752,13 @@ def api_orders_additional_dc():
             "          ac.min_qty DESC"
             " LIMIT 1"
         )
+        # base_params order mirrors the SQL binding order of
+        # customer_gate + common_gate.  When has_dates is true, the
+        # common gate carries two extra %s for valid_from / valid_to;
+        # add them here so every _tier(...) call stays aligned.
         base_params = [sold_to, gc, brand, qty]
+        if has_dates:
+            base_params += [on_date_iso, on_date_iso]
 
         has_promo_col = "promo" in ac_cols
         promo_select  = ", ac.promo" if has_promo_col else ", NULL AS promo"
@@ -4869,6 +4897,24 @@ def api_orders_additional_dc():
                         " AND UPPER(TRIM(ac.product_group)) = UPPER(%s))")
                     scope_params.append(product_group)
                 if scope_where_bits:
+                    # Oct-22: honour on_date for the "customer has a
+                    # specific promo" suppression flag too.  A promo
+                    # that's not live on the picked ship date must
+                    # NOT suppress Trueblu — otherwise moving the
+                    # Order Date forward would silently kill SOVD.
+                    # The date params go BEFORE the scope-where params
+                    # so the binding order matches the SQL fragment
+                    # order (customer_gate → brand → promo-not-SOVD →
+                    # date_bits → scope_where_bits).
+                    _date_bits = ""
+                    if has_dates:
+                        _date_bits = (
+                            "  AND (ac.valid_from IS NULL OR ac.valid_from <= %s) "
+                            "  AND (ac.valid_to   IS NULL OR ac.valid_to   >= %s) "
+                        )
+                        scope_params = (scope_params[:4]
+                                        + [on_date_iso, on_date_iso]
+                                        + scope_params[4:])
                     scope_sql = (
                         f"SELECT 1 FROM {ac_table} ac "
                         "WHERE " + customer_gate +
@@ -4876,6 +4922,7 @@ def api_orders_additional_dc():
                         "  AND (ac.promo IS NULL OR UPPER(ac.promo) NOT LIKE %s) "
                         "  AND ac.additional_dc IS NOT NULL "
                         "  AND ac.additional_dc <> 0 "
+                        + _date_bits +
                         "  AND (" + " OR ".join(scope_where_bits) + ") "
                         "LIMIT 1"
                     )
