@@ -743,7 +743,7 @@
     border-radius:4px;font-size:13px;
   }
   /* Oct-21 user ask: CS Comment row — full width under the SAP-flag /
-     SD No. row, centered, with a much wider textarea so the content
+     DO No. row, centered, with a much wider textarea so the content
      is easy to read while typing.  Label pins to the left of the
      centered input group; Save button pins to the right of it. */
   .cs-panel .cs-comment-row{
@@ -1912,7 +1912,7 @@
   </div>
   <!-- CS toggle: only visible when Harry (or an ALL-role user) is
        viewing a submitted order.  Flips submitted_orders.status_sap.
-       SD No. input lives in the same bar — the CS types the SAP
+       DO No. input lives in the same bar — the CS types the SAP
        sales-doc number here after entering the order into SAP; the
        value saves on blur (and on Enter) to submitted_orders.sd_no
        and surfaces on the orders_list Note column. -->
@@ -1920,15 +1920,15 @@
     <span class="cs-lbl">SAP order entered?</span>
     <span class="cs-flag" id="csFlag">N</span>
     <button id="btnFlipStatus" class="primary">Mark as Y</button>
-    <span class="cs-lbl" style="margin-left:16px">SD No.</span>
-    <input id="sdNo" placeholder="SAP SD #" maxlength="40"
+    <span class="cs-lbl" style="margin-left:16px">DO No.</span>
+    <input id="sdNo" placeholder="SAP DO #" maxlength="40"
            style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace;width:140px">
     <button id="btnSaveSdNo" class="ghost"
-            style="padding:4px 10px;font-size:12px">Save SD #</button>
+            style="padding:4px 10px;font-size:12px">Save DO #</button>
     <span id="sdNoMeta" class="cs-meta"></span>
     <span id="csMeta" class="cs-meta"></span>
     <!-- Oct-21 user ask: CS comment on changes made during SAP entry.
-         Full-width row centered under the SAP-flag / SD No. row with
+         Full-width row centered under the SAP-flag / DO No. row with
          a wide textarea so the content is easy to read.  CS-only write
          (Harry / HKCustomerService); every viewer sees the saved text
          in the orders_list "Comment from CST" column too. -->
@@ -6138,7 +6138,7 @@ async function hydrateSubmittedOrder(oid, editMode){
   if (!data || data.error){
     setStatus("Order not found.", "warn"); return;
   }
-  // Stash the loaded order id so the SD No. save button knows which
+  // Stash the loaded order id so the DO No. save button knows which
   // row to post to (and any other per-order post-load wiring can
   // read it off window instead of threading through callbacks).
   window._currentOrderId = data.id;
@@ -7272,8 +7272,8 @@ async function wireStatusPanel(order){
         order.status_changed_at
           ? `Last changed ${order.status_changed_at} by ${order.status_changed_by || "?"}`
           : "");
-  // Seed the SD No. field for everyone — the Oct-9 user request:
-  // "if SD No. has been inputted and Mark as Y has clicked, they
+  // Seed the DO No. field for everyone — the Oct-9 user request:
+  // "if DO No. has been inputted and Mark as Y has clicked, they
   //  should also [be] shown in the order page to all users, not
   //  only the inputter".  Only Harry (CS) can WRITE; every other
   //  viewer sees the read-only value and the dim SAP flag.
@@ -7283,7 +7283,7 @@ async function wireStatusPanel(order){
   }
   // Oct-21 user ask: CS Comment field — seed for everyone, readable
   // by all SPRF viewers (shows the CS's SAP-entry notes); the input +
-  // button are locked for non-CS viewers below alongside the SD No.
+  // button are locked for non-CS viewers below alongside the DO No.
   // lock, so only Harry / HKCustomerService can actually edit.
   const cmt  = document.getElementById("csComment");
   const cmtB = document.getElementById("btnSaveCsComment");
@@ -7293,23 +7293,23 @@ async function wireStatusPanel(order){
     cmt.dataset.saved = cmt.value;
     if (cmtM) cmtM.textContent = cmt.value ? "" : "";
   }
-  // Approval gate — unlocks SD No. input + Mark-as-Y when the
+  // Approval gate — unlocks DO No. input + Mark-as-Y when the
   // order has been signed off (Standard Pricing OR approved AND
   // not rejected).
   const _needsApp = String(order.needs_mgmt_approval || "").toUpperCase();
   const _isApproved = (_needsApp === "N")
                    || (!!order.approved_by_name && !order.rejected_by_name);
   // Writer-visibility gate — only Harry (CS) ever gets the live
-  // Save SD # button + the Mark-as-Y click handler.  Every other
+  // Save DO # button + the Mark-as-Y click handler.  Every other
   // viewer sees the panel but the controls are permanently
-  // disabled (SD No. input readOnly, both buttons dim).
+  // disabled (DO No. input readOnly, both buttons dim).
   const _canWrite = !!who.is_cs;
   if (!_canWrite || !_isApproved){
     const _lockMsg = !_canWrite
-      ? "View only — only the CS team can enter SD No. or flip the SAP flag."
+      ? "View only — only the CS team can enter DO No. or flip the SAP flag."
       : (order.rejected_by_name
-          ? "Order was rejected — SD No. and SAP flag locked until it's revived + re-approved."
-          : "SD No. and SAP flag unlock once the order has been approved.");
+          ? "Order was rejected — DO No. and SAP flag locked until it's revived + re-approved."
+          : "DO No. and SAP flag unlock once the order has been approved.");
     if (sd){
       sd.readOnly = true;
       sd.disabled = true;
@@ -7349,20 +7349,20 @@ async function wireStatusPanel(order){
   if (!_canWrite) return;
   btn.addEventListener("click", async () => {
     const next = flag.textContent === "Y" ? "N" : "Y";
-    // Flipping TO Y requires an SD No. that's both typed AND saved.
+    // Flipping TO Y requires an DO No. that's both typed AND saved.
     // Flipping back to N is a correction path and skips the gate.
     if (next === "Y"){
       const sdInp   = document.getElementById("sdNo");
       const sdVal   = (sdInp?.value || "").trim();
       const sdSaved = (sdInp?.dataset.saved || "").trim();
       if (!sdVal){
-        const msg = "Please input and save the SAP SD No. before marking as Y.";
+        const msg = "Please input and save the SAP DO No. before marking as Y.";
         if (typeof showNotice === "function") showNotice(msg); else alert(msg);
         try { sdInp && sdInp.focus(); } catch(_e){}
         return;
       }
       if (sdVal !== sdSaved){
-        const msg = "SAP SD No. has unsaved changes. Please click Save SD # first.";
+        const msg = "SAP DO No. has unsaved changes. Please click Save DO # first.";
         if (typeof showNotice === "function") showNotice(msg); else alert(msg);
         try { sdInp && sdInp.focus(); } catch(_e){}
         return;
@@ -7660,7 +7660,7 @@ async function wireStatusPanel(order){
   }
 })();
 
-/* ────────────── SD No. (SAP sales-doc) wiring ──────────────
+/* ────────────── DO No. (SAP sales-doc) wiring ──────────────
    The CS types the SAP SD number here after entering the order into
    SAP; the value saves to submitted_orders.sd_no via /api/orders/
    detail/<id>/sd_no and shows on the orders_list Note column.
@@ -7674,7 +7674,7 @@ async function wireStatusPanel(order){
 
   const _save = async () => {
     const id = window._currentOrderId;
-    if (!id){ setStatus("Submit the order first before stamping an SD No.", "warn"); return; }
+    if (!id){ setStatus("Submit the order first before stamping an DO No.", "warn"); return; }
     const val = (inp.value || "").trim();
     btn.disabled = true;
     try {
@@ -7685,12 +7685,12 @@ async function wireStatusPanel(order){
       });
       const j = await r.json();
       if (!r.ok || !j.ok){
-        setStatus(`SD No. save failed: ${j.error || r.statusText}`, "warn");
+        setStatus(`DO No. save failed: ${j.error || r.statusText}`, "warn");
       } else {
         if (meta) meta.textContent = val
           ? ` · saved ${new Date().toISOString().slice(0,16).replace("T"," ")}`
           : " · cleared";
-        setStatus(val ? `SD No. <b>${val}</b> saved.` : "SD No. cleared.", "ok");
+        setStatus(val ? `DO No. <b>${val}</b> saved.` : "DO No. cleared.", "ok");
         // Mirror the just-persisted value onto dataset.saved so the
         // Mark-as-Y gate can compare live-input to last-saved and
         // detect "typed but not yet saved" the next time the CS
@@ -7698,7 +7698,7 @@ async function wireStatusPanel(order){
         inp.dataset.saved = val;
       }
     } catch (e){
-      setStatus("SD No. save failed: " + e, "warn");
+      setStatus("DO No. save failed: " + e, "warn");
     } finally { btn.disabled = false; }
   };
   btn.addEventListener("click", _save);

@@ -6256,7 +6256,7 @@ def api_orders_status(oid):
         # even on a non-approved order so the CS can undo themselves.
         if new_stat == "Y" and not _is_approved:
             return jsonify({
-                "error": "Order has not been approved yet — SD No. and "
+                "error": "Order has not been approved yet — DO No. and "
                          "Mark-as-Y are locked until approval."
             }), 409
         cur.execute(
@@ -6290,13 +6290,13 @@ def api_orders_set_sd_no(oid):
     val     = (str(payload.get("sd_no") or "")).strip()[:50]
     who     = (_bde_from_request() or "").strip().lower()
     if not _is_cs_user(who):
-        return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can stamp an SD No."}), 403
+        return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can stamp an DO No."}), 403
     conn = get_connection(); cur = conn.cursor()
     try:
         # Approval gate — same rule as the status endpoint above.
         # Standard Pricing (needs_mgmt_approval='N') OR approved +
         # not rejected.  Pending / rejected orders can't be stamped
-        # with an SD No. because SAP entry shouldn't happen until
+        # with an DO No. because SAP entry shouldn't happen until
         # the pricing has been signed off.
         cur.execute(
             "SELECT needs_mgmt_approval, approved_by_name, rejected_by_name "
@@ -6311,7 +6311,7 @@ def api_orders_set_sd_no(oid):
         _is_approved = (_needs == "N") or (bool(_approved) and not _rejected)
         if not _is_approved:
             return jsonify({
-                "error": "Order has not been approved yet — SD No. and "
+                "error": "Order has not been approved yet — DO No. and "
                          "Mark-as-Y are locked until approval."
             }), 409
         cur.execute(
