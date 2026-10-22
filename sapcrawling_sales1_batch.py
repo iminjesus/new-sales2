@@ -531,15 +531,20 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
 def main():
     today   = date.today()
 
-    # 이달 첫 번째 비즈니스 데이 당일 또는 그 이전이면 전달 데이터로 다운로드
+    # Oct-22 user ask: Billing Date "to" is ALWAYS today's date — no
+    # longer last_business_day(today).  Captures same-day sales so an
+    # order billed earlier in the day shows up in the hourly load.
+    # "from" still rolls back to last month's start on the early
+    # business days of the current month so a cross-month window
+    # covers both periods; otherwise it's the first of this month.
     if today <= first_business_day(today):
         last_day_prev = month_start(today) - timedelta(days=1)
         d_from = month_start(last_day_prev)
-        d_to   = last_business_day(month_start(today))
-        print("[INFO] 이달 첫 번째 비즈니스 데이 이전 → 전달 데이터 범위로 다운로드")
+        d_to   = today
+        print("[INFO] 이달 첫 번째 비즈니스 데이 이전 → 전달 1일 ~ 오늘 범위로 다운로드")
     else:
         d_from = month_start(today)
-        d_to   = last_business_day(today)
+        d_to   = today
 
     print(f"Output file  : {OUT_CSV}")
 
