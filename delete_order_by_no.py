@@ -21,19 +21,57 @@ import sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def _db_conn():
+    """Open MySQL connection using credentials from .env.  Resilient:
+      • parses .env MANUALLY so python-dotenv doesn't have to be
+        installed in the Python this script happens to run under
+        (Oct-23: Python 3.13 at C:\\Users\\...\\Python313 doesn't carry
+        it; the batch's own Python does — same box, two interpreters);
+      • auto-discovers the database if DB_NAME isn't set, by asking
+        information_schema which schema owns submitted_orders;
+      • accepts DB_PASSWORD or DB_PASS (both names seen in the wild),
+        and DB_NAME or DB_DATABASE."""
     import mysql.connector
+    # Manual .env parse — no dotenv dependency.
     try:
-        from dotenv import load_dotenv
-        load_dotenv(os.path.join(BASE_DIR, ".env"))
+        with open(os.path.join(BASE_DIR, ".env")) as _f:
+            for _line in _f:
+                _s = _line.strip()
+                if not _s or _s.startswith("#") or "=" not in _s:
+                    continue
+                _k, _v = _s.split("=", 1)
+                os.environ.setdefault(_k.strip(),
+                                      _v.strip().strip('"').strip("'"))
     except Exception:
         pass
-    return mysql.connector.connect(
+    _db = os.getenv("DB_NAME") or os.getenv("DB_DATABASE") or ""
+    _kw = dict(
         host=os.getenv("DB_HOST", "127.0.0.1"),
         port=int(os.getenv("DB_PORT", "3306")),
         user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "sales"),
+        password=os.getenv("DB_PASSWORD") or os.getenv("DB_PASS", ""),
     )
+    if _db:
+        _kw["database"] = _db
+        return mysql.connector.connect(**_kw)
+    # DB_NAME not configured — connect without one, ask the server
+    # which schema actually owns submitted_orders, then USE it.
+    conn = mysql.connector.connect(**_kw)
+    cur  = conn.cursor()
+    cur.execute(
+        "SELECT TABLE_SCHEMA FROM information_schema.TABLES "
+        "WHERE TABLE_NAME = 'submitted_orders' LIMIT 1"
+    )
+    row = cur.fetchone()
+    cur.close()
+    if not row:
+        raise RuntimeError(
+            "No submitted_orders table on this server — set DB_NAME in "
+            ".env or create the table first."
+        )
+    cur = conn.cursor()
+    cur.execute(f"USE `{row[0]}`")
+    cur.close()
+    return conn
 
 def main(argv):
     if not argv:

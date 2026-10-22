@@ -196,19 +196,35 @@ def _next_run_at(now):
 
 # ── MySQL status table ──────────────────────────────────────────────
 def _db_conn():
-    """Open MySQL using the same env vars load_csv_to_mysql uses."""
+    """Open MySQL using the same env vars load_csv_to_mysql uses.
+
+    Oct-23 hardening: parse .env manually when python-dotenv isn't on
+    this interpreter's path (the operator PC has two Pythons — the
+    batch's venv has dotenv, their user-shell Python 3.13 doesn't).
+    Accepts DB_PASSWORD or DB_PASS and DB_NAME or DB_DATABASE so a
+    one-off .env with different casing still works."""
     import mysql.connector
     try:
         from dotenv import load_dotenv
         load_dotenv(os.path.join(BASE_DIR, ".env"))
     except Exception:
-        pass
+        try:
+            with open(os.path.join(BASE_DIR, ".env")) as _f:
+                for _line in _f:
+                    _s = _line.strip()
+                    if not _s or _s.startswith("#") or "=" not in _s:
+                        continue
+                    _k, _v = _s.split("=", 1)
+                    os.environ.setdefault(
+                        _k.strip(), _v.strip().strip('"').strip("'"))
+        except Exception:
+            pass
     return mysql.connector.connect(
         host=os.getenv("DB_HOST", "100.127.139.79"),
         port=int(os.getenv("DB_PORT", "3306")),
         user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", ""),
-        database=os.getenv("DB_NAME", "sales"),
+        password=os.getenv("DB_PASSWORD") or os.getenv("DB_PASS", ""),
+        database=os.getenv("DB_NAME") or os.getenv("DB_DATABASE", "my_new_database"),
     )
 
 
