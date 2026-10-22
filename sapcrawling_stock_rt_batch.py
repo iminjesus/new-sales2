@@ -182,6 +182,128 @@ def exists(session, wid):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Office Activation Wizard auto-dismisser
+# ──────────────────────────────────────────────────────────────────────
+# On an un-activated Office box, every time SAP opens Excel inline on the
+# just-saved XLSX, the "Microsoft Office Activation Wizard" (or "Office
+# Setup", "Updates Available", etc.) pops up and BLOCKS Excel.  While that
+# wizard sits there, SAP's OLE call waits, Excel can't be killed cleanly,
+# and the temp XLSX can get orphaned when the OLE call eventually fails.
+#
+# Fix: spawn a background thread that polls for every known blocking
+# Office dialog by window title, dismisses it (WM_CLOSE + Close-button
+# click), and exits.  Armed BEFORE trigger_export so the dialog is
+# gone by the time our file-poller runs.
+import threading as _threading
+
+
+def _find_office_popup():
+    """Return the HWND of any blocking Office dialog visible on the
+    desktop, or None.  Matches by title substring so EN / DE / KR
+    localisations all catch."""
+    try:
+        import win32gui
+    except ImportError:
+        return None
+    MARKERS = (
+        "activation wizard",
+        "microsoft office activation",
+        "activation failed",
+        "office setup",
+        "updates available",
+        "updates for office",
+        "office activation",
+        "activate office",
+        "sign in to activate",
+        "product activation",
+        "지원되는 것",
+        "활성화",
+    )
+    found = []
+
+    def _enum(h, _):
+        try:
+            if not win32gui.IsWindowVisible(h):
+                return True
+            t = (win32gui.GetWindowText(h) or "").lower()
+            if any(m in t for m in MARKERS):
+                found.append(h)
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_enum, None)
+    except Exception:
+        return None
+    return found[0] if found else None
+
+
+def _dismiss_office_popup_background(timeout_sec=90):
+    """Daemon thread: poll for Office activation / setup / updates
+    popups and dismiss each one as it appears.  Lives for `timeout_sec`
+    then exits; a fresh call is cheap, so arm it before each SAP export.
+    Silent no-op when pywin32 isn't installed."""
+    try:
+        import win32gui, win32con
+    except ImportError:
+        return None
+
+    def _click_close_in(dlg_hwnd):
+        clicked = {"done": False}
+        CLOSE_LABELS = ("close", "cancel", "ok", "later", "nicht jetzt",
+                        "닫기", "취소", "확인")
+
+        def _enum_children(h, _):
+            try:
+                txt = (win32gui.GetWindowText(h) or "").strip().lower().strip("&")
+                cls = (win32gui.GetClassName(h) or "").lower()
+                if "button" in cls and any(txt == l for l in CLOSE_LABELS):
+                    # BM_CLICK = 0x00F5
+                    win32gui.SendMessage(h, 0x00F5, 0, 0)
+                    clicked["done"] = True
+                    return False
+            except Exception:
+                pass
+            return True
+
+        try:
+            win32gui.EnumChildWindows(dlg_hwnd, _enum_children, None)
+        except Exception:
+            pass
+        return clicked["done"]
+
+    def _runner():
+        deadline = time.time() + timeout_sec
+        last_hwnd = None
+        while time.time() < deadline:
+            hwnd = _find_office_popup()
+            if hwnd and hwnd != last_hwnd:
+                try:
+                    try:
+                        win32gui.SetForegroundWindow(hwnd)
+                    except Exception:
+                        pass
+                    if _click_close_in(hwnd):
+                        print(f"  [office] dismissed popup via Close button "
+                              f"(hwnd=0x{hwnd:x})")
+                    else:
+                        # WM_CLOSE as fallback.
+                        win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                        print(f"  [office] dismissed popup via WM_CLOSE "
+                              f"(hwnd=0x{hwnd:x})")
+                    last_hwnd = hwnd
+                except Exception as e:
+                    print(f"  [office] popup dismiss failed: {e}")
+            time.sleep(0.3)
+
+    t = _threading.Thread(target=_runner, name="office-popup-dismiss",
+                          daemon=True)
+    t.start()
+    return t
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Excel killer — stops Office from locking the files we're about to write
 # ──────────────────────────────────────────────────────────────────────
 def _kill_excel(reason=""):
@@ -925,6 +1047,10 @@ def main():
     else:
         print(f"  [WARN] Could not auto-apply layout '{LAYOUT_NAME}' — using SAP default")
 
+    # Oct-22: arm the Office popup dismisser so the un-activated-Office
+    # Activation Wizard that pops up when SAP opens Excel inline on the
+    # just-saved XLSX gets auto-dismissed without a human click.
+    _dismiss_office_popup_background(timeout_sec=120)
     if not trigger_export(session):
         raise RuntimeError("Could not trigger export (no path worked).")
 
@@ -1036,6 +1162,10 @@ def export_only():
     # trigger_export call so even a success leaves the dump in the log.
     print("\n  ==== CURRENT SCREEN DUMP (export-only mode) ====")
     dump_screen(session)
+
+    # Oct-22: arm the Office popup dismisser so the un-activated-Office
+    # Activation Wizard gets auto-dismissed when SAP opens Excel inline.
+    _dismiss_office_popup_background(timeout_sec=120)
 
     print("\nCalling trigger_export …")
     export_start_ts = time.time()
