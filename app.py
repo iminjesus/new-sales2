@@ -4983,6 +4983,7 @@ BDE_MANAGER_CC = {
     # Paul Buckley manages:
     "MAKRIS GEORGE":    "paul.buckley@hankooktyre.com.au",
     "BORGHESE LUCA":    "paul.buckley@hankooktyre.com.au",
+    "BORGHESE ALESSIO": "paul.buckley@hankooktyre.com.au",
     "VALLIS BRETT":     "paul.buckley@hankooktyre.com.au",
     # Aaron Marsh manages:
     "MACLURE ADAM":     "aaron.marsh@hankooktyre.com.au",
