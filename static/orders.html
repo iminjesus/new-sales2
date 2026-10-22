@@ -1227,7 +1227,7 @@
     .hdr, .orderBand, .meta, .sovd { page-break-after: avoid; }
   }
 </style>
-<script src="/static/col_resize.js?v=20261022a"></script>
+<script src="/static/col_resize.js?v=20261023a"></script>
 <style>@media print{ .crz-reset-link{display:none !important} }</style>
 </head>
 <body>
@@ -4029,6 +4029,9 @@ function initColumnResizers(){
   const tbl = document.getElementById("linesTable");
   if (!tbl || typeof makeTableResizable !== "function") return;
   makeTableResizable(tbl, {storageKey: "sprf_lines", filler: "remark", minWidth: 30});
+  // Header stays visible while scrolling through many lines; a second
+  // horizontal scroll bar sits right above the header.
+  makeScrollViewport(tbl.parentElement, tbl, {fill: false, minHeight: 260});
   document.getElementById("btnResetLineCols")?.addEventListener("click", (e) => {
     e.preventDefault();
     resetTableColumnWidths(tbl);

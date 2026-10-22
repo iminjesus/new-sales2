@@ -663,7 +663,7 @@ $("#btnExcel").addEventListener("click", () => {
   loadOrders();
 })();
 </script>
-<script src="/static/col_resize.js?v=20261022a"></script>
+<script src="/static/col_resize.js?v=20261023a"></script>
 <script>
 /* Drag any header's right edge to resize; widths are remembered per
    browser.  Remark soaks up spare width so the table always reaches
@@ -671,6 +671,9 @@ $("#btnExcel").addEventListener("click", () => {
 (function () {
   const t = document.getElementById("ordersListTable");
   makeTableResizable(t, {storageKey: "orders_list", filler: "remark", minWidth: 40});
+  // Header stays visible while scrolling; horizontal bar sits right
+  // above the header as well as at the bottom of the screen.
+  makeScrollViewport(document.getElementById("listWrap"), t, {fill: true});
   document.getElementById("btnResetCols")?.addEventListener("click", () => resetTableColumnWidths(t));
 })();
 </script>

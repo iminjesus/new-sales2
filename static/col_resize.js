@@ -150,7 +150,7 @@
     }
 
     ths.forEach((th, i) => {
-      th.classList.add("crz-th");
+      if (getComputedStyle(th).position === "static") th.classList.add("crz-th");
       th.querySelectorAll(".col-resizer, .crz-handle").forEach(n => n.remove());
       const h = document.createElement("div");
       h.className = "crz-handle";
@@ -205,6 +205,78 @@
     if (table && table.__crz) table.__crz.reset();
   }
 
+  /* makeScrollViewport(wrap, table, opts)
+     Turns the table's wrapper into a screen-sized scroll box so that
+       - the header row stays visible while scrolling down (sticky
+         inside the box), and
+       - the horizontal scroll bar at the bottom of the box is always
+         on screen, plus a second, synced bar right above the header.
+     opts.fill = true  → box height runs from where it starts on the
+                         page to the bottom of the window (list pages).
+     opts.fill = false → box height = window height (box sits mid-page;
+                         scroll the page to it, then everything fits).
+     Screen only — print layouts are untouched. */
+  const VP_CSS = `
+@media screen {
+  .crz-vp { overflow: auto !important; max-height: var(--crz-vp-h, none); }
+  .crz-vp > table > thead > tr > th { position: sticky; top: 0; z-index: 4; }
+  .crz-topbar { overflow-x: auto; overflow-y: hidden; height: 14px; }
+  .crz-topbar > div { height: 1px; }
+}
+@media print { .crz-topbar { display: none !important; } }`;
+
+  function makeScrollViewport(wrap, table, opts) {
+    opts = opts || {};
+    if (!wrap || !table || wrap.__crzVp) return;
+    wrap.__crzVp = true;
+    if (!document.getElementById("crz-vp-css")) {
+      const st = document.createElement("style");
+      st.id = "crz-vp-css"; st.textContent = VP_CSS;
+      document.head.appendChild(st);
+    }
+    wrap.classList.add("crz-vp");
+
+    const bar = document.createElement("div");
+    bar.className = "crz-topbar";
+    bar.title = "Scroll the table left / right";
+    const inner = document.createElement("div");
+    bar.appendChild(inner);
+    wrap.parentNode.insertBefore(bar, wrap);
+
+    // Copy only when the values differ, so the echo event is a no-op
+    // (vertical scrolls of the box don't touch the top bar at all).
+    bar.addEventListener("scroll", () => {
+      if (Math.abs(wrap.scrollLeft - bar.scrollLeft) > 0.5) wrap.scrollLeft = bar.scrollLeft;
+    }, {passive: true});
+    wrap.addEventListener("scroll", () => {
+      if (Math.abs(bar.scrollLeft - wrap.scrollLeft) > 0.5) bar.scrollLeft = wrap.scrollLeft;
+    }, {passive: true});
+
+    const minH = opts.minHeight || 320;
+    function layout() {
+      inner.style.width = table.scrollWidth + "px";
+      bar.style.width = wrap.clientWidth + "px";
+      bar.style.visibility = table.scrollWidth > wrap.clientWidth + 1 ? "visible" : "hidden";
+      let h;
+      if (opts.fill) {
+        const top = wrap.getBoundingClientRect().top + window.scrollY;
+        h = window.innerHeight - top - (opts.bottomGap || 16);
+      } else {
+        h = window.innerHeight - bar.offsetHeight - (opts.bottomGap || 12);
+      }
+      wrap.style.setProperty("--crz-vp-h", Math.max(minH, Math.floor(h)) + "px");
+    }
+    const run = () => requestAnimationFrame(layout);
+    window.addEventListener("resize", run);
+    if (window.ResizeObserver) {
+      const ro = new ResizeObserver(run);
+      ro.observe(table); ro.observe(wrap);
+    }
+    layout();
+    return {refresh: layout};
+  }
+
+  window.makeScrollViewport = makeScrollViewport;
   window.makeTableResizable = makeTableResizable;
   window.resetTableColumnWidths = resetTableColumnWidths;
 })();
