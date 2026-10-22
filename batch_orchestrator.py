@@ -345,12 +345,33 @@ def _run_step(label, fn, *, timeout_min=None):
     log(f"-> {label}")
     _result = {"ok": False, "err": None, "done": False}
     def _runner():
+        # Oct-23 user ask: when _run_step is given a timeout we run
+        # the callable in a worker thread.  COM is initialised PER
+        # THREAD on Windows, so the sub-crawler's
+        # win32com.client.GetObject("SAPGUI") fails with (-2147221020
+        # "Invalid syntax") in the worker because CoInitialize was
+        # never called here.  Initialise COM (STA — SAP GUI only
+        # supports STA) at the top of the thread and uninit on exit
+        # so the orchestrator's main thread stays unaffected.
+        _co_initialised = False
         try:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+                _co_initialised = True
+            except Exception:
+                pass
             fn()
             _result["ok"] = True
         except Exception as e:
             _result["err"] = (e, traceback.format_exc())
         finally:
+            if _co_initialised:
+                try:
+                    import pythoncom
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
             _result["done"] = True
     if timeout_min:
         t = threading.Thread(target=_runner, name=f"step-{label[:30]}", daemon=True)
