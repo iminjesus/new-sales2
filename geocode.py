@@ -77,6 +77,12 @@ ADDRESS_COLUMNS = ["Address 1", "City", "Region", "Postal Code", "Country"]
 FLAT_FILE_COLUMNS = [
     "channel2",
     "Parent CGR3",
+    # Oct-23 user ask: Delivery Plant (SAP ship-from) lives in column
+    # C of Customer Master ("Delivering Plant" — the header truncates
+    # to "Delivering Pla" on narrow Excel views).  Positioned right
+    # after Parent CGR3 so downstream consumers can read ship-to →
+    # plant in one row without a join.
+    "Delivery Plant",
     "Sold-to",
     "Sold-to Name",
     "Ship-to State",
@@ -111,6 +117,15 @@ CUSTOMER_COLUMN_ALIASES = {
     "channel2":        ["channel", "Channel",
                         "channel2", "Channel2", "Channel 2"],
     "Parent CGR3":     ["Parent CGR3", "ParentCGR3", "Parent CGR 3"],
+    # Oct-23 user ask: Customer Master column C header reads
+    # "Delivering Plant" (shows as "Delivering Pla…" in a narrow
+    # view).  Accept the SAP spellings too in case a future export
+    # renames it.
+    "Delivery Plant":  ["Delivering Plant", "Delivery Plant",
+                        "DeliveringPlant", "DeliveryPlant",
+                        "Delivering Pl.", "Delivery Pl.",
+                        "Delv. Plant", "Delv Plant",
+                        "Plant", "DlvPlt"],
     "Sold-to":         ["Sold-to", "Sold to", "SoldTo"],
     "Sold-to Name":    ["Sold-to Name", "Sold to Name", "SoldToName"],
     "Ship-to":         ["Ship-to", "Ship to", "ShipTo", "Customer"],
