@@ -544,11 +544,12 @@ def main():
     print(f"Output file  : {OUT_CSV}")
 
     ensure_out_dir(OUT_CSV)
-    if os.path.exists(OUT_CSV):
-        try:
-            os.remove(OUT_CSV)
-        except:
-            pass
+    # Oct-22: do NOT delete the previous OUT_CSV upfront.  If the SAP
+    # crawl below fails, the pre-delete would leave the loader with
+    # nothing — operator's dashboard goes blank between a failed run
+    # and the next successful one.  Instead, xlsx_to_csv at the end
+    # of this function overwrites OUT_CSV atomically on success, so
+    # the previous CSV stays intact across a failed run.
 
     # Before SAP writes a single XLSX, kill any Excel window that would
     # otherwise lock C:\temp\EXPORT_*.xlsx or sales_thismonth.csv.  Also
