@@ -4039,6 +4039,19 @@ function initColumnResizers(){
 }
 document.addEventListener("DOMContentLoaded", initColumnResizers);
 
+/* Oct-22: release the SAP-entry soft lock when the tab closes.
+   Uses navigator.sendBeacon so the POST survives the page tearing
+   down (fetch() in beforeunload is cancelled by the browser).
+   Only fires when hydrate claimed a mine-lock earlier. */
+window.addEventListener("beforeunload", () => {
+  try {
+    if (window._sapLockMine && window._sapLockOid) {
+      const url = `/api/orders/detail/${window._sapLockOid}/release_sap_lock`;
+      navigator.sendBeacon(url);
+    }
+  } catch (_e) { /* best-effort — the server-side TTL cleans up */ }
+});
+
 /* Oct-22 user ask: show the operator when the stock_rt (ZMMR40430)
    data was last loaded into MySQL.  Fetches /api/batch_status once
    on page load and formats the Sydney timestamp as a short
@@ -6194,6 +6207,58 @@ async function hydrateSubmittedOrder(oid, editMode){
   // row to post to (and any other per-order post-load wiring can
   // read it off window instead of threading through callbacks).
   window._currentOrderId = data.id;
+
+  /* Oct-22 user ask: single-CS-at-a-time SAP-entry lock.  When the
+     order is Approved or Standard-Pricing AND SAP=N, only ONE CS
+     member can hold the detail open at a time.  Try to claim the
+     lock; if someone else holds it fresh, show a blocking modal
+     and send the viewer back to the list.  Non-CS viewers skip
+     this entirely (they can't press Mark-as-Y anyway). */
+  try {
+    let _who;
+    try {
+      const _wr = await fetch("/api/orders/whoami", {credentials: "same-origin"});
+      _who = await _wr.json();
+    } catch (_e) { _who = {}; }
+    if (_who && _who.is_cs) {
+      const _lockR = await fetch(
+        `/api/orders/detail/${oid}/claim_sap_lock`,
+        {method: "POST", credentials: "same-origin"}
+      );
+      const _lockJ = await _lockR.json();
+      if (_lockJ && _lockJ.needed === false) {
+        /* Order no longer qualifies for the lock (SAP already Y, or
+           Pending approval).  Just proceed. */
+      } else if (_lockJ && _lockJ.ok && _lockJ.mine) {
+        /* We own the lock — stamp window state so beforeunload can
+           release it on tab-close. */
+        window._sapLockOid = oid;
+        window._sapLockMine = true;
+      } else if (_lockJ && _lockJ.ok === false) {
+        /* Someone else holds a fresh lock.  Show a blocking modal
+           and bounce to the list after acknowledgement. */
+        const _by  = _lockJ.by_name || _lockJ.by || "another CS user";
+        const _at  = _lockJ.at || "";
+        const _rem = _lockJ.minutes_left != null ? _lockJ.minutes_left : "?";
+        const msg = `This order is being worked on by ${_by}` +
+                    (_at ? ` since ${_at}` : "") +
+                    `.\n\nTry again in about ${_rem} minute(s), or coordinate ` +
+                    `directly with ${_by}.`;
+        if (typeof showNotice === "function") {
+          await showNotice(msg);
+        } else {
+          alert(msg);
+        }
+        location.href = "/orders_list";
+        return;
+      }
+    }
+  } catch (_e) {
+    /* Lock claim failed over the network — soft-fail; proceed so a
+       transient /whoami or /claim outage doesn't lock a legit CS
+       user out of the order. */
+    console.warn("SAP lock claim failed:", _e);
+  }
   const p = data.payload || {};
   // Push the persisted payment-method flags back onto the form so a
   // reloaded COD / Credit Card order keeps its ticks, the matching

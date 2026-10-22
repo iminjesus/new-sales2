@@ -4821,6 +4821,11 @@ def api_orders_additional_dc():
 # order form and the list page both read/write via /api/orders/* below.
 # ══════════════════════════════════════════════════════════════════════
 HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
+# Oct-22 user ask: single-CS-at-a-time soft lock on orders waiting
+# for SAP entry.  TTL = after this many minutes of inactivity on the
+# claimed lock, another CS user can take it over.  Keeps a tab
+# closed without releasing from permanently blocking the order.
+SAP_LOCK_TTL_MINUTES = 15
 # Oct-20 user ask: HKCustomerService shares Harry's CS role — gets
 # every submitted-order email, can flip "SAP order entered?" Y/N,
 # and enter the SAP SD #.  Access rights identical to Harry's.
@@ -5056,6 +5061,16 @@ def _ensure_submitted_orders_table():
             # viewers see the saved text on the orders_list page in
             # a new "Comment from CST" column.
             ("cs_comment",          "VARCHAR(1000) NULL"),
+            # Oct-22 user ask: single-CS-at-a-time soft lock.  When
+            # the order is Approved or Standard-Pricing AND SAP=N
+            # (SAP entry still pending), only ONE CS member can hold
+            # the order open at a time.  The CS panel claims the
+            # lock on hydrate; a competing CS opener sees a modal
+            # 'currently being worked on by X since Y'.  Lock
+            # auto-expires after SAP_LOCK_TTL minutes so a browser
+            # tab closed without releasing never permanently sticks.
+            ("sap_lock_by_email",   "VARCHAR(120) NULL"),
+            ("sap_lock_at",         "DATETIME NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -6152,6 +6167,7 @@ def api_orders_detail(oid):
             "       interstate_flag, interstate_amount, "
             "       payment_method, cc_number, cc_expiry, cc_ccv, "
             "       sd_no, cs_comment, "
+            "       sap_lock_by_email, sap_lock_at, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -6360,6 +6376,135 @@ def api_orders_set_cs_comment(oid):
                 return jsonify({"error": "not found"}), 404
         conn.commit()
         return jsonify({"ok": True, "cs_comment": val, "by": who})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Oct-22 user ask: single-CS-at-a-time soft lock on orders waiting for
+# SAP entry.  Prevents two CS members from both opening the same
+# approved / standard-pricing order and racing to Mark-as-Y.
+# ══════════════════════════════════════════════════════════════════════
+def _order_needs_sap_lock(row) -> bool:
+    """True when the row qualifies for the SAP-entry lock:
+       (needs_mgmt_approval='N' OR approved_by_name set) AND status_sap='N'."""
+    if (row.get("status_sap") or "").upper() != "N":
+        return False
+    needs = (row.get("needs_mgmt_approval") or "").upper()
+    if needs == "N":
+        return True
+    if row.get("approved_by_name"):
+        return True
+    return False
+
+
+@app.post("/api/orders/detail/<int:oid>/claim_sap_lock")
+def api_orders_claim_sap_lock(oid):
+    """CS-only.  Try to claim the SAP-entry lock on this order.
+
+    Response:
+      { ok: True,  mine: True,  by: <email>, at: <datetime>, by_name }
+        — we hold the lock (either took a free/stale lock or already had it).
+      { ok: False, mine: False, by: <email>, at: <datetime>, by_name,
+        minutes_left: <N> }
+        — someone else holds a fresh lock; wait N minutes before retrying."""
+    who = (_bde_from_request() or "").strip().lower()
+    if not _is_cs_user(who):
+        return jsonify({"error": "only the CS team can claim the SAP lock"}), 403
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT id, status_sap, needs_mgmt_approval, approved_by_name, "
+            "       sap_lock_by_email, sap_lock_at "
+            "FROM submitted_orders WHERE id = %s LIMIT 1",
+            (oid,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"error": "not found"}), 404
+        if not _order_needs_sap_lock(row):
+            # Lock not relevant for this order (e.g. SAP already Y, or
+            # Pending approval) — treat as "no lock needed".
+            return jsonify({"ok": True, "mine": False, "needed": False})
+
+        current_by = (row.get("sap_lock_by_email") or "").strip().lower()
+        current_at = row.get("sap_lock_at")
+        now = datetime.now()
+        is_mine     = (current_by == who) if current_by else False
+        is_stale    = True
+        if current_at and not is_mine:
+            try:
+                age_min = (now - current_at).total_seconds() / 60.0
+                is_stale = (age_min >= SAP_LOCK_TTL_MINUTES)
+            except Exception:
+                is_stale = True
+        # Claim if free, stale, or already mine.
+        if (not current_by) or is_mine or is_stale:
+            cur.execute(
+                "UPDATE submitted_orders SET "
+                "  sap_lock_by_email = %s, sap_lock_at = %s "
+                "WHERE id = %s",
+                (who, now.strftime("%Y-%m-%d %H:%M:%S"), oid))
+            conn.commit()
+            return jsonify({
+                "ok":     True,
+                "mine":   True,
+                "needed": True,
+                "by":     who,
+                "by_name": _cs_display_name(who),
+                "at":     now.strftime("%Y-%m-%d %H:%M:%S"),
+                "ttl_minutes": SAP_LOCK_TTL_MINUTES,
+            })
+        # Someone else holds a fresh lock → report it.
+        minutes_left = None
+        if current_at:
+            try:
+                minutes_left = max(0, int(SAP_LOCK_TTL_MINUTES
+                                          - (now - current_at).total_seconds() / 60.0))
+            except Exception:
+                minutes_left = None
+        return jsonify({
+            "ok":     False,
+            "mine":   False,
+            "needed": True,
+            "by":     current_by,
+            "by_name": _cs_display_name(current_by),
+            "at":     current_at.strftime("%Y-%m-%d %H:%M:%S") if current_at else "",
+            "minutes_left": minutes_left,
+            "ttl_minutes":  SAP_LOCK_TTL_MINUTES,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.post("/api/orders/detail/<int:oid>/release_sap_lock")
+def api_orders_release_sap_lock(oid):
+    """CS-only.  Release the SAP-entry lock on this order IF it's mine.
+    Does nothing if someone else holds it (prevents a stray release
+    from one CS member stealing another's active lock)."""
+    who = (_bde_from_request() or "").strip().lower()
+    if not _is_cs_user(who):
+        return jsonify({"error": "only the CS team can release the SAP lock"}), 403
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE submitted_orders SET "
+            "  sap_lock_by_email = NULL, sap_lock_at = NULL "
+            "WHERE id = %s AND LOWER(TRIM(sap_lock_by_email)) = %s",
+            (oid, who))
+        conn.commit()
+        return jsonify({"ok": True, "released": cur.rowcount > 0})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e)}), 500
