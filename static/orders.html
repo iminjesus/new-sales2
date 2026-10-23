@@ -607,6 +607,36 @@
     font-variant-numeric:tabular-nums;
   }
   table.lines tbody td.stock-cell.zero input{background:#fdecec;color:#a03030}
+  /* Oct-23 user ask: highlight the Material-table stock column that
+     matches the delivery plant.  The table carries data-highlight-
+     plant='42R0' / '42R1' / '42R2' / '42R4' once a customer with a
+     mapped plant is loaded (set in applyCustomer).  Four narrow
+     selectors — one per plant — thicken the border and darken the
+     background on the matching column's header + per-row cell so a
+     BDE reads "this is my plant" at a glance without losing the
+     other-state columns next to it. */
+  table.lines[data-highlight-plant="42R1"] thead th[data-col="stock_nsw"],
+  table.lines[data-highlight-plant="42R1"] tbody td[data-cell-col="stock_nsw"],
+  table.lines[data-highlight-plant="42R0"] thead th[data-col="stock_qld"],
+  table.lines[data-highlight-plant="42R0"] tbody td[data-cell-col="stock_qld"],
+  table.lines[data-highlight-plant="42R2"] thead th[data-col="stock_vic"],
+  table.lines[data-highlight-plant="42R2"] tbody td[data-cell-col="stock_vic"],
+  table.lines[data-highlight-plant="42R4"] thead th[data-col="stock_wa"],
+  table.lines[data-highlight-plant="42R4"] tbody td[data-cell-col="stock_wa"] {
+    box-shadow: inset 0 0 0 2px #f59e0b;
+  }
+  table.lines[data-highlight-plant="42R1"] thead th[data-col="stock_nsw"],
+  table.lines[data-highlight-plant="42R0"] thead th[data-col="stock_qld"],
+  table.lines[data-highlight-plant="42R2"] thead th[data-col="stock_vic"],
+  table.lines[data-highlight-plant="42R4"] thead th[data-col="stock_wa"] {
+    background: #b45309 !important;    /* amber-700, override th.stock green */
+  }
+  table.lines[data-highlight-plant="42R1"] tbody td[data-cell-col="stock_nsw"] input,
+  table.lines[data-highlight-plant="42R0"] tbody td[data-cell-col="stock_qld"] input,
+  table.lines[data-highlight-plant="42R2"] tbody td[data-cell-col="stock_vic"] input,
+  table.lines[data-highlight-plant="42R4"] tbody td[data-cell-col="stock_wa"] input {
+    background: #fef3c7;               /* amber-100 tint for the input */
+  }
   /* Remark column at the far right — full-word promo tags
      ("Trueblu (18.00%)", "443 (12.00%)", "Special (30.00%)",
      "Aging (T2)", "Manual (25.00%)").  Needs more than the shared
@@ -2611,11 +2641,23 @@ function applyCustomer(row, kind){
   // out of the main /customer response so a deployment that hasn't
   // loaded dc_basic_customer yet still returns customer instantly.
   if (row.sold_to) fillBaseDC(row.sold_to);
-  // Aged-stock side panel — populated from the customer's state so
-  // the BDE can see 19M+ stock at their own plant right when they
-  // pull up the shop.
-  const state = (row.state || row.bde_state || "").toUpperCase();
-  if (state) fillAgedStockPanel(state);
+  // Oct-23 user ask: aged-stock side panel now reads the delivery
+  // plant's state (not the ship-to state) so a customer whose plant
+  // ships from a neighbouring state sees aged stock at the right
+  // warehouse.  Falls back to ship-to state when no plant is set.
+  const _PLANT_TO_STATE_AS = { "42R0": "QLD", "42R1": "NSW",
+                               "42R2": "VIC", "42R4": "WA" };
+  const _agedState =
+    _PLANT_TO_STATE_AS[String(window._customerPlant || "").toUpperCase()] ||
+    (row.state || row.bde_state || "").toUpperCase();
+  if (_agedState) fillAgedStockPanel(_agedState);
+  // Oct-23: tag the Material lines table with the mapped plant so
+  // CSS can highlight that column's header + per-row stock cell.
+  try {
+    const _lt = document.getElementById("linesTable");
+    if (_lt) _lt.dataset.highlightPlant =
+      String(window._customerPlant || "").toUpperCase();
+  } catch (_e) {}
   // Programmatic .value assignments above don't fire `input`, so
   // refresh the ✕ clear buttons on the four customer inputs.
   if (typeof syncAllClearBtns === "function") syncAllClearBtns();
