@@ -165,33 +165,65 @@ def click_clear(driver):
         pass
 
 
-def search_brand(driver, wait, brand):
-    """Type the brand name into #simpleSearchText and click Search —
-    mirrors the original crawler's search_tyres() but with a brand
-    word instead of a digit size code."""
-    # Make sure the search panel is clean before each brand.
-    click_clear(driver)
-
-    # Resolve the search input; fall back to common alternates if the
-    # id was renamed on the site.
-    search_input = None
+def _try_find_search_input(driver, wait):
+    """Return the search <input> element or None.  Tries #simpleSearch
+    Text first, then a short list of common fallback locators."""
     try:
-        search_input = wait.until(
+        return wait.until(
             EC.presence_of_element_located((By.ID, "simpleSearchText"))
         )
     except Exception:
+        pass
+    for loc in [
+        (By.CSS_SELECTOR, "input[placeholder*='Search' i]"),
+        (By.CSS_SELECTOR, "input[name*='search' i][type='text']"),
+        (By.CSS_SELECTOR, "input[type='search']"),
+    ]:
+        try:
+            el = driver.find_element(*loc)
+            print(f"  [DIAG] fallback locator로 입력창 찾음: {loc}")
+            return el
+        except Exception:
+            continue
+    return None
+
+
+def search_brand(driver, wait, brand):
+    """Type the brand name into #simpleSearchText and click Search —
+    mirrors the original crawler's search_tyres() but with a brand
+    word instead of a digit size code.
+
+    Oct-23 hardening: when the search input isn't on the current
+    page, try re-navigating to the Search Tyres page once; if THAT
+    still fails, pause and ask the operator to manually bring Chrome
+    to the search page before continuing.  Prevents the whole brand
+    loop from exiting empty just because a redirect bounced us back
+    to the WebOrder root."""
+    # Make sure the search panel is clean before each brand.
+    click_clear(driver)
+
+    search_input = _try_find_search_input(driver, wait)
+    if search_input is None:
         print(f"  [DIAG] simpleSearchText 없음 — URL={driver.current_url}")
-        for loc in [
-            (By.CSS_SELECTOR, "input[placeholder*='Search' i]"),
-            (By.CSS_SELECTOR, "input[name*='search' i][type='text']"),
-            (By.CSS_SELECTOR, "input[type='search']"),
-        ]:
-            try:
-                search_input = driver.find_element(*loc)
-                print(f"  [DIAG] fallback locator로 입력창 찾음: {loc}")
-                break
-            except Exception:
-                continue
+        # Second chance — re-nav to the Search Tyres URL and retry.
+        try:
+            print(f"  → Search Tyres 페이지로 재이동 시도…")
+            driver.get(SEARCH_URL)
+            time.sleep(2)
+            search_input = _try_find_search_input(driver, wait)
+        except Exception:
+            search_input = None
+    if search_input is None:
+        # Third chance — manual intervention.  Pause until the operator
+        # points Chrome at the Search Tyres page themselves (menu
+        # click, bookmark, whatever works on their account).
+        print(f"  → [MANUAL] Chrome에서 Search Tyres 페이지로 직접 이동한 뒤 Enter.")
+        print(f"           현재 URL={driver.current_url}  title={driver.title!r}")
+        try:
+            input("  >>> 준비되면 Enter: ")
+        except Exception:
+            pass
+        search_input = _try_find_search_input(driver, wait)
     if search_input is None:
         raise RuntimeError(f"Search input not found on {driver.current_url}")
 
