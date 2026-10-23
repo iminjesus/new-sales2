@@ -3348,10 +3348,16 @@ async function applyTempeRefPriceToRow(rowEl, data){
   const size  = String((data && data.description) || "").trim();
   const pat   = String((data && data.pattern)     || "").trim();
   const ls    = String((data && data.load_speed)  || "").trim();
+  const brand = String((data && data.brand)       || "").trim();
   if (!size) return;
   const qs = new URLSearchParams({ size });
-  if (pat) qs.set("pattern", pat);
-  if (ls)  qs.set("load_speed", ls);
+  if (pat)   qs.set("pattern", pat);
+  if (ls)    qs.set("load_speed", ls);
+  /* Oct-23 user ask: scope the Tempe match to Hankook / Laufenn
+     rows when the SPRF material is HK / LF — otherwise a Falken row
+     with the same size wins first and the user's own-brand price
+     stays hidden. */
+  if (brand) qs.set("brand", brand);
   let j;
   try {
     const r = await fetch(`/api/orders/tempe_price_lookup?${qs}`,

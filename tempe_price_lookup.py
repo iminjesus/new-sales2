@@ -108,6 +108,59 @@ def _nrm(s: str) -> str:
     return _NOISE_RE.sub("", (s or "").upper()).replace("ZR", "R")
 
 
+# Oct-23 user ask: when the SPRF side holds a truncated size
+# ("225/70R17" because carrying_26 lost its ".5"), the Tempe CSV
+# still has the correct "225/70R17.5" — so the lookup must try the
+# decimal variant too, otherwise an obvious match is missed.
+# Mirror of KNOWN_DECIMAL_RIM_UPGRADES in retrofit_price_csv_sizes.py
+# (kept in sync by hand — small list, rare to change).
+_KNOWN_DECIMAL_UPGRADES = {
+    "205/70R17", "205/75R17", "215/75R17", "225/70R17", "225/75R17",
+    "235/75R17", "245/70R17", "265/70R17",
+    "215/75R19", "225/70R19", "245/70R19", "265/70R19", "285/70R19", "305/70R19",
+    "275/70R22", "275/80R22", "285/75R22", "295/60R22", "295/75R22",
+    "295/80R22", "305/70R22", "315/60R22", "315/70R22", "315/80R22",
+    "385/55R22", "385/65R22", "425/65R22", "445/50R22", "445/65R22",
+    "275/80R24", "285/75R24", "315/80R24",
+    "11R22", "11R24", "12R22", "12R24", "13R22",
+}
+
+def _size_variants(raw: str):
+    """Return the set of normalised size strings worth trying.  Always
+    the normalised form of `raw` itself; plus the ".5" upgrade when
+    `raw` is one of the known-truncated sizes so a carrying_26 miss
+    on the SPRF side still lands the right Tempe row."""
+    _n = _nrm(raw)
+    out = {_n}
+    _up = raw.strip().upper().replace(" ", "")
+    if _up in _KNOWN_DECIMAL_UPGRADES:
+        out.add(_nrm(_up + ".5"))
+    return out
+
+
+def _brand_match(row_brand: str, caller_brand: str) -> bool:
+    """Oct-23 user ask: scope Tempe matching to HK / LF when the SPRF
+    material is HK / LF (user's own words: 'Hankook Brand 또는 Laufenn
+    Brand만 확인하여 Mapping하면 되기에').  Returns True when the row
+    carries the same manufacturer, with the common aliases:
+      HK  ⟷ "Hankook"
+      LF  ⟷ "Laufenn"
+    `caller_brand` empty → everything matches (used for the fallback
+    pass when the brand-scoped pass finds nothing)."""
+    if not caller_brand:
+        return True
+    rb = (row_brand or "").strip().upper()
+    cb = caller_brand.strip().upper()
+    aliases = {
+        "HK": {"HK", "HANKOOK"},
+        "LF": {"LF", "LAUFENN"},
+    }
+    for k, al in aliases.items():
+        if cb in al and rb in al:
+            return True
+    return rb == cb
+
+
 _LOAD_SPEED_RE = re.compile(
     r"\b((?:[6-9]\d|1\d{2})(?:/\d{2,3})?(?:ZR|[BCDEFGHJKLMNPQRSTUVWY]))\b",
     re.IGNORECASE,
@@ -130,16 +183,26 @@ def _pick_col(row: dict, *names: str) -> str:
     return ""
 
 
-def _best_match(rows, ns_size: str, np_pattern: str, ul_load: str, *,
+def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
+                caller_brand: str, *,
                 price_cols: tuple, stock_col: str | None,
                 source_label: str, source_file: str | None):
     """Walk `rows` once, picking the FIRST row that satisfies each
     tier of the match hierarchy.  Returns the best-tier hit as a
-    serialisable dict, or None when no row carries the same size."""
+    serialisable dict, or None when no row carries an acceptable size.
+
+    size_variants : set of normalised size strings — any one of them
+                    matching is enough (lets carrying_26's truncated
+                    "225/70R17" still find Tempe's "225/70R17.5").
+    caller_brand  : "" / "HK" / "LF" — restricts to Hankook / Laufenn
+                    rows when non-empty.
+    """
     exact = same_pattern = size_only = None
     for r in rows:
         size_raw = _pick_col(r, "SIZE", "size")
-        if _nrm(size_raw) != ns_size:
+        if _nrm(size_raw) not in size_variants:
+            continue
+        if not _brand_match(_pick_col(r, "brand", "BRAND"), caller_brand):
             continue
         desc = _pick_col(r, "DESCRIPTION", "description", "title")
         brand = _pick_col(r, "brand", "BRAND")
@@ -187,30 +250,56 @@ def _best_match(rows, ns_size: str, np_pattern: str, ul_load: str, *,
     return exact or same_pattern or size_only
 
 
-def lookup_tempe_prices(size: str, pattern: str = "", load_speed: str = ""):
-    """Primary entry.  Returns {dealer, consumer, sources}."""
-    ns = _nrm(size)
-    if not ns:
+def lookup_tempe_prices(size: str, pattern: str = "",
+                        load_speed: str = "", brand: str = ""):
+    """Primary entry.  Returns {dealer, consumer, sources}.
+
+    Oct-23 (two user asks landed here):
+      • `brand` scopes the Tempe match to Hankook / Laufenn when the
+        SPRF material is HK / LF — avoids a Falken row with the same
+        size winning on first-match-wins.  Non-HK/LF brands skip the
+        brand gate (match any row).
+      • Size variants: carrying_26 may still carry the truncated form
+        ("225/70R17") while the Tempe CSV holds the correct
+        "225/70R17.5" — _size_variants() expands the input to both so
+        the match lands either way.
+      • Two-pass strategy: run brand-scoped first; if nothing hits in
+        BOTH dealer and consumer, run a second pass unscoped so the
+        reader still gets a sensible fallback.  Preserves user intent
+        (prefer own brand) without going silent when no own-brand
+        row exists.
+    """
+    ns_set = _size_variants(size) if size else set()
+    if not ns_set:
         return {"dealer": None, "consumer": None,
                 "sources": {"dealer_file": "", "consumer_file": ""}}
     np = _nrm(pattern) if pattern else ""
     ul = (load_speed or "").upper().replace(" ", "")
-    dealer_rows, dealer_file = _rows_for("Tempeweborder")
+    _brand_up = (brand or "").strip().upper()
+    _scope    = _brand_up if _brand_up in ("HK", "LF") else ""
+    dealer_rows,   dealer_file   = _rows_for("Tempeweborder")
     consumer_rows, consumer_file = _rows_for("Tempe")
-    dealer = _best_match(
-        dealer_rows, ns, np, ul,
-        price_cols=("PRICE", "price", "COST", "cost"),
-        stock_col="STOCK",
-        source_label="dealer",
-        source_file=dealer_file,
-    )
-    consumer = _best_match(
-        consumer_rows, ns, np, ul,
-        price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
-        stock_col=None,
-        source_label="consumer",
-        source_file=consumer_file,
-    )
+    def _run(_scope_brand: str):
+        d = _best_match(
+            dealer_rows, ns_set, np, ul, _scope_brand,
+            price_cols=("PRICE", "price", "COST", "cost"),
+            stock_col="STOCK",
+            source_label="dealer",
+            source_file=dealer_file,
+        )
+        c = _best_match(
+            consumer_rows, ns_set, np, ul, _scope_brand,
+            price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
+            stock_col=None,
+            source_label="consumer",
+            source_file=consumer_file,
+        )
+        return d, c
+    dealer, consumer = _run(_scope)
+    if _scope and not dealer and not consumer:
+        # Brand-scoped pass found nothing — fall back to any-brand so
+        # the reader still sees Falken / Michelin / etc. for context.
+        dealer, consumer = _run("")
     return {
         "dealer":   dealer,
         "consumer": consumer,

@@ -3854,6 +3854,7 @@ def api_orders_tempe_price_lookup():
     size       = (request.args.get("size")       or "").strip()
     pattern    = (request.args.get("pattern")    or "").strip()
     load_speed = (request.args.get("load_speed") or "").strip()
+    brand      = (request.args.get("brand")      or "").strip()
     if not size:
         return jsonify({"dealer": None, "consumer": None,
                         "sources": {"dealer_file": "", "consumer_file": ""}})
@@ -3862,7 +3863,8 @@ def api_orders_tempe_price_lookup():
     except Exception as e:
         return jsonify({"error": f"tempe_price_lookup import failed: {e}"}), 500
     try:
-        out = lookup_tempe_prices(size, pattern=pattern, load_speed=load_speed)
+        out = lookup_tempe_prices(size, pattern=pattern,
+                                  load_speed=load_speed, brand=brand)
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
