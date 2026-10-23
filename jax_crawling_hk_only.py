@@ -337,7 +337,9 @@ return (function() {
         if (szm) {
             size = szm[1].toUpperCase();
         } else {
-            var szm2 = text.match(/(\d{3}R\d{2})/i);
+            // Oct-23 user ask: accept decimal rim diameters so 19.5 /
+            // 22.5 / 24.5 truck sizes aren't truncated to the integer.
+            var szm2 = text.match(/(\d{3}R\d{2}(?:\.\d)?)/i);
             if (szm2) size = szm2[1].toUpperCase();
         }
 
@@ -365,7 +367,7 @@ return (function() {
              6) Detail-page link text
         */
         var name = '';
-        var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}/i));
+        var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}(?:\.\d)?/i));
 
         // Aggressive promo-recogniser used to validate every candidate.
         // A hit means "this is promo text, not a product name" → reject.

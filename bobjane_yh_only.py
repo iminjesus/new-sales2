@@ -202,10 +202,13 @@ def normalize_size(size):
     Force the slash form into the X form so a size only appears one way
     in the output.  Standard passenger sizes ("315/35R20") never have a
     decimal in the aspect ratio, so they keep their slash — the match
-    below requires `\\d+\\.\\d+` so it does not touch them."""
+    below requires `\\d+\\.\\d+` so it does not touch them.
+
+    Oct-23 user ask: rim diameter may also be decimal (265/70R19.5,
+    11R22.5, 295/80R22.5…)."""
     if not size:
         return size
-    m = re.match(r'^(\d{2,3})/(\d{1,2}\.\d+)([A-Za-z]{1,2}\d{2})$', size)
+    m = re.match(r'^(\d{2,3})/(\d{1,2}\.\d+)([A-Za-z]{1,2}\d{2}(?:\.\d)?)$', size)
     if m:
         return f"{m.group(1)}X{m.group(2)}{m.group(3)}"
     return size
@@ -223,17 +226,20 @@ def extract_size_from_title(title):
     # so their more specific pattern wins over the fallback rim-only
     # regex below.  The match runs through normalize_size() so a slash
     # notation with decimal comes out as X notation.
-    m = re.search(r'(\d{2,3}[/Xx]\d{1,2}\.\d+[A-Za-z]{1,2}\d{2})', title)
+    # Oct-23 user ask: every rim-diameter capture widened from \d{2}
+    # to \d{2}(?:\.\d)? so decimal rims (265/70R19.5, 11R22.5, …)
+    # aren't truncated to the integer.
+    m = re.search(r'(\d{2,3}[/Xx]\d{1,2}\.\d+[A-Za-z]{1,2}\d{2}(?:\.\d)?)', title)
     if m:
         return normalize_size(m.group(1).upper().replace("ZR", "R").replace("x", "X"))
-    m = re.search(r'(\d{3}/\d{2}[A-Za-z]{1,2}\d{2})', title)
+    m = re.search(r'(\d{3}/\d{2}[A-Za-z]{1,2}\d{2}(?:\.\d)?)', title)
     if m:
         return m.group(1).upper().replace("ZR", "R")
     # LT with X but WITHOUT a decimal aspect ratio: 33X12R15
-    m = re.search(r'(\d{2,3}X\d{1,2}[A-Za-z]{1,2}\d{2})', title, re.IGNORECASE)
+    m = re.search(r'(\d{2,3}X\d{1,2}[A-Za-z]{1,2}\d{2}(?:\.\d)?)', title, re.IGNORECASE)
     if m:
         return m.group(1).upper().replace("ZR", "R").replace("x", "X")
-    m = re.search(r'(\d{3}[A-Za-z]{1,2}\d{2})', title)
+    m = re.search(r'(\d{3}[A-Za-z]{1,2}\d{2}(?:\.\d)?)', title)
     if m:
         return m.group(1).upper().replace("ZR", "R")
     return ""

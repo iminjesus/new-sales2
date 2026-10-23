@@ -120,8 +120,12 @@ return (function() {
 
         // Size
         var size = '';
-        var szm = text.match(/(\d{3}\/\d{2}[A-Za-z]\d{2,3}(?:C)?(?:\s+XL)?)/i);
-        if (!szm) szm = text.match(/(\d{3}R\d{2,3}(?:C)?)/i);
+        // Oct-23: allow decimal rim diameter on the primary size regex
+        // too (e.g. "265/70R19.5"), not just on the fallback below.
+        var szm = text.match(/(\d{3}\/\d{2}[A-Za-z]\d{2,3}(?:\.\d)?(?:C)?(?:\s+XL)?)/i);
+        // Oct-23 user ask: accept decimal rim diameters so truck sizes
+        // (265/70R19.5, 11R22.5, 295/80R22.5, …) aren't truncated.
+        if (!szm) szm = text.match(/(\d{3}R\d{2,3}(?:\.\d)?(?:C)?)/i);
         if (szm) size = szm[1].replace(/\s+/g,'').toUpperCase();
 
         // Spec (size + load/speed)

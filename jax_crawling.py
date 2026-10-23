@@ -328,7 +328,9 @@ return (function() {
         if (szm) {
             size = szm[1].toUpperCase();
         } else {
-            var szm2 = text.match(/(\d{3}R\d{2})/i);
+            // Oct-23 user ask: accept decimal rim diameters so 19.5 /
+            // 22.5 / 24.5 truck sizes aren't truncated to the integer.
+            var szm2 = text.match(/(\d{3}R\d{2}(?:\.\d)?)/i);
             if (szm2) size = szm2[1].toUpperCase();
         }
 
@@ -342,7 +344,7 @@ return (function() {
 
         /* Name: text before the tyre-size pattern, after stripping noise */
         var name = '';
-        var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}/i));
+        var sizePos = szm ? szm.index : (text.search(/\d{3}R\d{2}(?:\.\d)?/i));
         if (sizePos > 0) {
             var pre = text.substring(0, sizePos)
                          .replace(JUNK_RE, ' ')

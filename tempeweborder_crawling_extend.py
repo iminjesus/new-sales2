@@ -69,7 +69,9 @@ OUTPUT_FILE = datetime.now().strftime("Tempeweborder_extend_%Y%m%d_%H%M.csv")
 # Size regex extracted from the DESCRIPTION column (we no longer
 # filter by size via the input).  Covers the usual passenger
 # <width>/<aspect>R<rim> plus commercial <w>R<rim> / C-rated.
-SIZE_RE = re.compile(r'\b(\d{3}(?:/\d{2})?R\d{2}C?)\b', re.IGNORECASE)
+# Oct-23 user ask: accept decimal rim diameters (265/70R19.5, 11R22.5,
+# 295/80R22.5, …) so truck sizes aren't truncated to the integer.
+SIZE_RE = re.compile(r'\b(\d{3}(?:/\d{2})?R\d{2}(?:\.\d)?C?)\b', re.IGNORECASE)
 
 
 def clean(text):
@@ -346,7 +348,7 @@ def scrape_rows(driver):
             desc = full_desc
             if brand and desc.lower().startswith(brand.lower()):
                 desc = desc[len(brand):].strip()
-            desc = re.sub(r'^\d{3}(?:/\d{2})?R\d{2}C?\s*', '', desc, flags=re.IGNORECASE).strip()
+            desc = re.sub(r'^\d{3}(?:/\d{2})?R\d{2}(?:\.\d)?C?\s*', '', desc, flags=re.IGNORECASE).strip()
             if not desc:
                 desc = full_desc
             if not desc:
