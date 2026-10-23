@@ -295,6 +295,60 @@ def scrape_rows(driver):
             except Exception:
                 price = re.sub(r"[^\d.]", "", dollar_texts[1]) if len(dollar_texts) >= 2 else ""
 
+            # Oct-23 user ask: capture Tempe stock info from the column
+            # right next to the price.  Three-step defensive lookup
+            # because the exact selector for the stock cell varies
+            # across Tempe skins:
+            #   1. explicit [class*='stock'] span (most SPAs name the
+            #      cell that way);
+            #   2. "N in stock" / "In Stock: N" text pattern anywhere
+            #      in the row;
+            #   3. the first bare integer span AFTER the price span —
+            #      follows the "right next to the price column" cue;
+            #      we take at most 2 integer candidates and pick the
+            #      larger one as the stock qty.
+            stock = ""
+            try:
+                stock_el = row.find_element(By.CSS_SELECTOR,
+                    "[class*='stock'] span, span[class*='stock'], "
+                    "[class*='availability'] span, span[class*='availability']")
+                _s = clean(stock_el.text)
+                _m = re.search(r"(\d+)", _s or "")
+                if _m: stock = _m.group(1)
+            except Exception:
+                pass
+            if not stock:
+                try:
+                    _row_text = clean(row.text or "")
+                    _m = re.search(r"(\d+)\s*(?:in\s*stock|stock)\b",
+                                   _row_text, re.IGNORECASE)
+                    if not _m:
+                        _m = re.search(r"(?:in\s*stock|stock)[\s:#]*(\d+)",
+                                       _row_text, re.IGNORECASE)
+                    if _m: stock = _m.group(1)
+                except Exception:
+                    pass
+            if not stock:
+                try:
+                    # Fallback — bare integer span sitting after the
+                    # price in DOM order.  Walk every ng-binding span,
+                    # keep the ones whose text is pure integer, drop
+                    # the ones that are the leading size digits (brand
+                    # column at the front).  Pick the largest; it's
+                    # much more likely to be stock than aux data like
+                    # min-qty.
+                    _ints = []
+                    for el in row.find_elements(By.CSS_SELECTOR, "span.ng-binding"):
+                        _t = clean(el.text)
+                        if _t and re.fullmatch(r"\d{1,5}", _t):
+                            _ints.append(int(_t))
+                    # Skip the first int (often the size prefix like
+                    # "175") and keep subsequent ints as stock candidates.
+                    if len(_ints) >= 2:
+                        stock = str(max(_ints[1:]))
+                except Exception:
+                    pass
+
             # Full description is other_texts[1] (other_texts[0] is the brand name)
             # Strip leading brand and size to keep only load rating + model name
             full_desc = other_texts[1] if len(other_texts) > 1 else other_texts[0] if other_texts else ""
@@ -302,9 +356,11 @@ def scrape_rows(driver):
             # Remove brand prefix (case-insensitive)
             if brand and desc.lower().startswith(brand.lower()):
                 desc = desc[len(brand):].strip()
-            # Remove size prefix e.g. "175/65R14" or "185R14"
-            desc = re.sub(r'^\d{3}/\d{2}[A-Za-z]\d{2}\s*', '', desc).strip()
-            desc = re.sub(r'^\d{3}[A-Za-z]\d{2}\s*', '', desc).strip()
+            # Remove size prefix e.g. "175/65R14" or "185R14" — Oct-23:
+            # allow decimal rim diameters (265/70R19.5, 11R22.5, …) so
+            # the .5 isn't left dangling on the description.
+            desc = re.sub(r'^\d{3}/\d{2}[A-Za-z]\d{2}(?:\.\d)?\s*', '', desc).strip()
+            desc = re.sub(r'^\d{3}[A-Za-z]\d{2}(?:\.\d)?\s*', '', desc).strip()
 
             if not desc:
                 desc = full_desc  # fallback to full text if stripping removed everything
@@ -313,8 +369,8 @@ def scrape_rows(driver):
                 continue
 
             results.append({"brand": brand, "description": desc,
-                            "cost": cost, "price": price})
-            print(f"  {brand:<15} | {desc[:50]} | cost={cost} | price={price}")
+                            "cost": cost, "price": price, "stock": stock})
+            print(f"  {brand:<15} | {desc[:50]} | cost={cost} | price={price} | stock={stock or '—'}")
 
         except Exception as e:
             print(f"  [WARN] {e}")
@@ -354,7 +410,9 @@ def main():
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE"])
+            # Oct-23 user ask: capture STOCK column (right of PRICE)
+            # so the Price dashboard can show it on hover later.
+            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
 
             for query, size in SEARCH_QUERIES:
                 print(f"\n=== Searching: {query}  ({size}) ===")
@@ -370,7 +428,8 @@ def main():
                     rows = scrape_rows(driver)
                     for r in rows:
                         writer.writerow([size, r["brand"], r["description"],
-                                         r["cost"], r["price"]])
+                                         r["cost"], r["price"],
+                                         r.get("stock", "")])
                     f.flush()
                     print(f"  {len(rows)} rows written")
 
