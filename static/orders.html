@@ -6335,55 +6335,52 @@ async function hydrateSubmittedOrder(oid, editMode){
   // read it off window instead of threading through callbacks).
   window._currentOrderId = data.id;
 
-  /* Oct-22 user ask: single-CS-at-a-time SAP-entry lock.  When the
-     order is Approved or Standard-Pricing AND SAP=N, only ONE CS
-     member can hold the detail open at a time.  Try to claim the
-     lock; if someone else holds it fresh, show a blocking modal
-     and send the viewer back to the list.  Non-CS viewers skip
-     this entirely (they can't press Mark-as-Y anyway). */
+  /* Oct-23 user ask: single-user SAP-entry lock, extended to EVERY
+     viewer (not just CS).  When the order is Approved or Standard-
+     Pricing AND SAP=N, only ONE person can hold the detail open at
+     a time.  Try to claim the lock; if someone else holds a fresh
+     lock, the prompt NAMES who it is and the viewer is bounced back
+     to the list.  Lock auto-expires after the backend's TTL so a
+     browser tab closed without releasing never permanently blocks. */
   try {
-    let _who;
-    try {
-      const _wr = await fetch("/api/orders/whoami", {credentials: "same-origin"});
-      _who = await _wr.json();
-    } catch (_e) { _who = {}; }
-    if (_who && _who.is_cs) {
-      const _lockR = await fetch(
-        `/api/orders/detail/${oid}/claim_sap_lock`,
-        {method: "POST", credentials: "same-origin"}
-      );
-      const _lockJ = await _lockR.json();
-      if (_lockJ && _lockJ.needed === false) {
-        /* Order no longer qualifies for the lock (SAP already Y, or
-           Pending approval).  Just proceed. */
-      } else if (_lockJ && _lockJ.ok && _lockJ.mine) {
-        /* We own the lock — stamp window state so beforeunload can
-           release it on tab-close. */
-        window._sapLockOid = oid;
-        window._sapLockMine = true;
-      } else if (_lockJ && _lockJ.ok === false) {
-        /* Someone else holds a fresh lock.  Show a blocking modal
-           and bounce to the list after acknowledgement. */
-        const _by  = _lockJ.by_name || _lockJ.by || "another CS user";
-        const _at  = _lockJ.at || "";
-        const _rem = _lockJ.minutes_left != null ? _lockJ.minutes_left : "?";
-        const msg = `This order is being worked on by ${_by}` +
-                    (_at ? ` since ${_at}` : "") +
-                    `.\n\nTry again in about ${_rem} minute(s), or coordinate ` +
-                    `directly with ${_by}.`;
-        if (typeof showNotice === "function") {
-          await showNotice(msg);
-        } else {
-          alert(msg);
-        }
-        location.href = "/orders_list";
-        return;
+    const _lockR = await fetch(
+      `/api/orders/detail/${oid}/claim_sap_lock`,
+      {method: "POST", credentials: "same-origin"}
+    );
+    const _lockJ = await _lockR.json();
+    if (_lockJ && _lockJ.needed === false) {
+      /* Order no longer qualifies for the lock (SAP already Y, or
+         Pending approval, or caller is unauthenticated).  Proceed. */
+    } else if (_lockJ && _lockJ.ok && _lockJ.mine) {
+      /* We own the lock — stamp window state so beforeunload can
+         release it on tab-close. */
+      window._sapLockOid = oid;
+      window._sapLockMine = true;
+    } else if (_lockJ && _lockJ.ok === false) {
+      /* Someone else holds a fresh lock.  Show a blocking modal
+         and bounce to the list after acknowledgement.  The holder's
+         display name comes from the backend's universal
+         _display_name_for() resolver so we always have a readable
+         label (CS name / approver / Brian·Pamela / BDE / local-part). */
+      const _by  = _lockJ.by_name || _lockJ.by || "another user";
+      const _at  = _lockJ.at || "";
+      const _rem = _lockJ.minutes_left != null ? _lockJ.minutes_left : "?";
+      const msg = `This order is currently open by ${_by}` +
+                  (_at ? ` since ${_at}` : "") +
+                  `.\n\nOnly one user can hold an SAP-pending order ` +
+                  `at a time.  Try again in about ${_rem} minute(s), ` +
+                  `or coordinate directly with ${_by}.`;
+      if (typeof showNotice === "function") {
+        await showNotice(msg);
+      } else {
+        alert(msg);
       }
+      location.href = "/orders_list";
+      return;
     }
   } catch (_e) {
     /* Lock claim failed over the network — soft-fail; proceed so a
-       transient /whoami or /claim outage doesn't lock a legit CS
-       user out of the order. */
+       transient /claim outage doesn't lock a legit viewer out. */
     console.warn("SAP lock claim failed:", _e);
   }
   const p = data.payload || {};

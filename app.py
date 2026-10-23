@@ -5132,6 +5132,46 @@ def _cs_display_name(email) -> str:
         return name
     local = e.split("@", 1)[0]
     return local or "CS"
+
+
+def _display_name_for(email) -> str:
+    """Oct-23 user ask: universal display-name resolver used by the
+    SAP-entry soft-lock prompt so a viewer sees WHO is currently
+    holding the order open ("JJ is editing this order" rather than
+    "junjong.cho@... is editing").  Resolution order:
+      1. CS team (Harry / HKCustomerService / Andy / Hayden Lee)
+      2. MGMT approvers (Hayden / JJ / Kenny)
+      3. Price editors (Brian / Pamela)
+      4. BDE directory (full name from _EMAIL_TO_DIR)
+      5. Mailbox local-part fallback
+    """
+    e = (email or "").strip().lower()
+    if not e:
+        return "another user"
+    _cs = CS_DISPLAY_NAMES.get(e)
+    if _cs:
+        return _cs
+    try:
+        _ap = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+               MGMT_APPROVER_EMAILS[1].lower(): "JJ",
+               MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(e)
+        if _ap:
+            return _ap
+    except Exception:
+        pass
+    try:
+        _ed = PRICE_EDITOR_EMAILS.get(e)
+        if _ed:
+            return _ed
+    except Exception:
+        pass
+    try:
+        _dir = _EMAIL_TO_DIR.get(e)
+        if _dir and _dir[0]:
+            return _dir[0]
+    except Exception:
+        pass
+    return e.split("@", 1)[0] or e
 _CS_TEAM_LOWER = {e.lower() for e in CS_TEAM_EMAILS}
 
 
@@ -6843,7 +6883,14 @@ def _order_needs_sap_lock(row) -> bool:
 
 @app.post("/api/orders/detail/<int:oid>/claim_sap_lock")
 def api_orders_claim_sap_lock(oid):
-    """CS-only.  Try to claim the SAP-entry lock on this order.
+    """Try to claim the SAP-entry single-user lock on this order.
+
+    Oct-23 user ask: single-user rule now applies to EVERY viewer (not
+    just the CS team).  Any user opening an SAP=N order that's past
+    approval takes the lock; a second viewer sees a blocking prompt
+    with the holder's display name.  Lock still auto-expires after
+    SAP_LOCK_TTL_MINUTES so a browser tab closed without releasing
+    never permanently blocks.
 
     Response:
       { ok: True,  mine: True,  by: <email>, at: <datetime>, by_name }
@@ -6852,8 +6899,9 @@ def api_orders_claim_sap_lock(oid):
         minutes_left: <N> }
         — someone else holds a fresh lock; wait N minutes before retrying."""
     who = (_bde_from_request() or "").strip().lower()
-    if not _is_cs_user(who):
-        return jsonify({"error": "only the CS team can claim the SAP lock"}), 403
+    if not who:
+        # Unauthenticated / office caller — nothing to lock against.
+        return jsonify({"ok": True, "mine": False, "needed": False})
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         cur.execute(
@@ -6893,7 +6941,7 @@ def api_orders_claim_sap_lock(oid):
                 "mine":   True,
                 "needed": True,
                 "by":     who,
-                "by_name": _cs_display_name(who),
+                "by_name": _display_name_for(who),
                 "at":     now.strftime("%Y-%m-%d %H:%M:%S"),
                 "ttl_minutes": SAP_LOCK_TTL_MINUTES,
             })
@@ -6910,7 +6958,7 @@ def api_orders_claim_sap_lock(oid):
             "mine":   False,
             "needed": True,
             "by":     current_by,
-            "by_name": _cs_display_name(current_by),
+            "by_name": _display_name_for(current_by),
             "at":     current_at.strftime("%Y-%m-%d %H:%M:%S") if current_at else "",
             "minutes_left": minutes_left,
             "ttl_minutes":  SAP_LOCK_TTL_MINUTES,
