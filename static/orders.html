@@ -1738,6 +1738,13 @@
       <a href="#" id="btnResetLineCols" class="crz-reset-link"
          style="font-weight:500;color:#0369a1;font-size:11.5px;text-decoration:none"
          title="Drag the right edge of any column header to resize it (double-click to fit).  Click here to restore all default widths.">↔ Reset column widths</a>
+      <!-- Oct-23 user ask: copy the whole Material table (or any
+           drag-selected subset the user picks in the preview modal)
+           to the clipboard as tab-separated values so a BDE can
+           paste straight into Excel without re-typing each cell. -->
+      <a href="#" id="btnCopyLines" class="crz-reset-link"
+         style="font-weight:500;color:#0369a1;font-size:11.5px;text-decoration:none"
+         title="Open a text preview of every non-empty line in this order.  Drag-select the cells you want and press Ctrl+C — paste straight into Excel (tab-separated).">📋 Copy for Excel</a>
     </span>
     <!-- Anchored (screen only) to the left edge of the first stock
          column (NSW) — positionStockFreshness() keeps it there when
@@ -4177,6 +4184,154 @@ function initColumnResizers(){
     e.preventDefault();
     resetTableColumnWidths(tbl);
   });
+  /* Oct-23 user ask: drag-select + copy of visible lines.  Previously
+     a BDE could only Ctrl+C one input cell at a time because every
+     cell is an <input> and the browser's drag selection doesn't
+     cross input boundaries.  This handler opens a preview modal
+     rendering every non-empty row as a plain <table> of text cells —
+     drag-select across cells works natively there, Ctrl+C copies
+     tab-separated so a paste into Excel lands in the right grid. */
+  document.getElementById("btnCopyLines")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    openCopyLinesModal();
+  });
+}
+
+/* Build the preview modal for "Copy for Excel".  Collects headers
+   from thead, builds one text TR per non-empty tbody row, and renders
+   it in a native-selectable <table> so the browser does the drag-
+   select + clipboard work for us.  No per-cell Shift-click row
+   tracking needed. */
+function openCopyLinesModal(){
+  const srcTbl = document.getElementById("linesTable");
+  if (!srcTbl) return;
+  /* Headers — read the th data-col when present (lets us drop the
+     tiny "No" / "X" columns the user never wants to export). */
+  const hdrs = [];
+  const skipCols = new Set(["row_no", "row_del"]);
+  srcTbl.querySelectorAll("thead th").forEach(th => {
+    const col = th.getAttribute("data-col") || "";
+    if (!col) {
+      /* no data-col = housekeeping column (No / X) — skip. */
+      hdrs.push(null);
+      return;
+    }
+    if (skipCols.has(col)) { hdrs.push(null); return; }
+    /* Flatten the two-line "NSW<br>stock" style headers. */
+    hdrs.push({
+      col,
+      label: (th.innerText || "").replace(/\s+/g, " ").trim(),
+    });
+  });
+  /* Body — one plain-text row per populated input row. */
+  const bodyRows = [];
+  document.querySelectorAll("#linesBody tr").forEach(tr => {
+    const vals = hdrs.map(h => {
+      if (!h) return null;
+      const el = tr.querySelector(`[data-col="${h.col}"]`);
+      return el ? (el.value || "").trim() : "";
+    });
+    const hasAny = vals.some(v => v !== null && v !== "");
+    if (hasAny) bodyRows.push(vals);
+  });
+  const keptHdrs = hdrs.filter(Boolean);
+  if (!bodyRows.length){
+    alert("No populated lines to copy.");
+    return;
+  }
+  /* Modal shell. */
+  const dim = document.createElement("div");
+  dim.style.cssText =
+    "position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;" +
+    "display:flex;align-items:center;justify-content:center;padding:24px";
+  const panel = document.createElement("div");
+  panel.style.cssText =
+    "background:#fff;border-radius:8px;max-width:95vw;max-height:90vh;" +
+    "display:flex;flex-direction:column;overflow:hidden;box-shadow:0 20px 48px rgba(0,0,0,.3)";
+  panel.innerHTML = `
+    <div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;
+                display:flex;align-items:center;gap:12px;background:#f8fafc">
+      <b style="font-size:14px;color:#0f172a">Copy for Excel</b>
+      <span style="color:#64748b;font-size:12px">
+        Drag-select the cells (or whole rows) you want and press
+        <b>Ctrl+C</b> — paste straight into Excel.
+      </span>
+      <span style="flex:1"></span>
+      <button type="button" id="copyAllBtn"
+              style="padding:5px 12px;background:#0f766e;color:#fff;border:1px solid #115e59;
+                     border-radius:4px;font-weight:700;cursor:pointer;font-size:12px">
+        Copy ALL to clipboard
+      </button>
+      <button type="button" id="closeCopyBtn"
+              style="padding:5px 12px;background:#fff;color:#334155;border:1px solid #cbd5e1;
+                     border-radius:4px;cursor:pointer;font-size:12px">Close</button>
+    </div>
+    <div id="copyBox" style="overflow:auto;padding:12px 16px;background:#fff">
+      <table id="copyGrid"
+             style="border-collapse:collapse;font-family:ui-monospace,Menlo,Consolas,monospace;
+                    font-size:12px;color:#0f172a;user-select:text">
+        <thead></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  `;
+  const grid = panel.querySelector("#copyGrid");
+  const thead = grid.querySelector("thead");
+  const tbody = grid.querySelector("tbody");
+  const cellCss = "border:1px solid #cbd5e1;padding:3px 8px;white-space:nowrap";
+  const hdrCss  = cellCss + ";background:#1e293b;color:#fff;font-weight:700;text-align:center";
+  const htr = document.createElement("tr");
+  keptHdrs.forEach(h => {
+    const th = document.createElement("th");
+    th.textContent = h.label;
+    th.style.cssText = hdrCss;
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  bodyRows.forEach(vals => {
+    const tr = document.createElement("tr");
+    vals.filter(v => v !== null).forEach(v => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      td.style.cssText = cellCss;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  dim.appendChild(panel);
+  document.body.appendChild(dim);
+  const close = () => dim.remove();
+  panel.querySelector("#closeCopyBtn").addEventListener("click", close);
+  dim.addEventListener("click", (ev) => { if (ev.target === dim) close(); });
+  panel.querySelector("#copyAllBtn").addEventListener("click", async () => {
+    const tsv = [
+      keptHdrs.map(h => h.label).join("\t"),
+      ...bodyRows.map(vals =>
+        vals.filter(v => v !== null).join("\t")),
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(tsv);
+      const btn = panel.querySelector("#copyAllBtn");
+      const prev = btn.textContent;
+      btn.textContent = "Copied ✓";
+      btn.style.background = "#059669";
+      setTimeout(() => {
+        btn.textContent = prev;
+        btn.style.background = "#0f766e";
+      }, 1200);
+    } catch (_e) {
+      alert("Clipboard write failed — select the rows manually and Ctrl+C instead.");
+    }
+  });
+  /* Auto-select everything inside the grid on open so the user can
+     just press Ctrl+C without first clicking. */
+  try {
+    const sel = window.getSelection();
+    const rng = document.createRange();
+    rng.selectNodeContents(grid);
+    sel.removeAllRanges();
+    sel.addRange(rng);
+  } catch (_e) {}
 }
 document.addEventListener("DOMContentLoaded", initColumnResizers);
 
