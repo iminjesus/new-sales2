@@ -512,6 +512,37 @@ body.tables-expanded .left {
 body.tables-expanded .left-title { background: #143756; }
 body.tables-expanded .expand-btn { background: #C62828; border-color: #C62828; }
 body.tables-expanded .ctable { font-size: 14px; }
+
+/* Oct-23 user ask: mirror the expand icon on the RIGHT chart panel
+   so a user can enlarge the chart to the whole viewport the same
+   way the LEFT tables panel can.  Overlay styling identical to the
+   left-expand branch (fixed viewport + dim backdrop).  While
+   right-expanded, the LEFT panel is hidden instead of overlaid so
+   the two can't simultaneously claim the viewport. */
+body.chart-expanded .right {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    width: 100vw; height: 100vh; z-index: 9998;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.35);
+    background: #fff;
+}
+body.chart-expanded .left { display: none; }
+body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C62828; }
+/* The expand button sits in the title bar — same style tokens as
+   .expand-btn so the two feel identical. */
+.right-title {
+    display: flex; align-items: center;
+    background: #1F4E79; color: #fff;
+    padding: 4px 10px; font-size: 11px; font-weight: 700;
+    letter-spacing: .05em; text-transform: uppercase;
+    border-bottom: 1px solid #163a60;
+}
+.right-title .rt-text { flex: 1; }
+.expand-chart-btn { background: rgba(255,255,255,0.12); color: #fff;
+                    border: 1px solid rgba(255,255,255,0.45); border-radius: 3px;
+                    width: 22px; height: 22px; padding: 0; margin-left: 8px;
+                    font: 14px/1 system-ui, sans-serif; cursor: pointer;
+                    display: flex; align-items: center; justify-content: center; }
+.expand-chart-btn:hover { background: rgba(255,255,255,0.28); }
 #chart-table-wrap { padding: 4px 0 0; }
 /* ── Base pattern table ── */
 .base-section { border-top: 3px solid #1F4E79; margin-top: 14px; }
@@ -703,6 +734,17 @@ body.tables-expanded .ctable { font-size: 14px; }
 
   <!-- ── RIGHT: controls + chart ── -->
   <div class="right">
+
+    <!-- Oct-23 user ask: mirror the LEFT panel's expand icon on the
+         RIGHT so a user can blow the chart up to the full viewport,
+         then collapse back to the split view.  Same icon vocabulary
+         (⛶ expand / ✕ collapse) as the left title bar. -->
+    <div class="right-title">
+      <span class="rt-text">Price comparison chart</span>
+      <button id="expand-chart-btn" class="expand-chart-btn"
+              onclick="toggleChartExpand()" title="Expand chart to full view"
+              aria-label="Expand chart">&#x26F6;</button>
+    </div>
 
     <div class="btn-panel">
 
@@ -1520,7 +1562,37 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape' && document.body.classList.contains('tables-expanded')) {
         toggleTablesExpand();
     }
+    if (e.key === 'Escape' && document.body.classList.contains('chart-expanded')) {
+        toggleChartExpand();
+    }
 });
+
+/* Oct-23 user ask: expand / collapse the RIGHT chart panel.  Same
+   overlay mechanic as toggleTablesExpand, plus a mutual-exclusion:
+   if the LEFT tables are currently expanded, collapse THAT first so
+   the two overlays never fight for the viewport.  After the layout
+   shifts we also trigger a Plotly relayout so the SVG re-fits the
+   larger area without a browser resize. */
+function toggleChartExpand() {
+    if (document.body.classList.contains('tables-expanded')) {
+        toggleTablesExpand();        // collapse LEFT first
+    }
+    const on = document.body.classList.toggle('chart-expanded');
+    const btn = document.getElementById('expand-chart-btn');
+    if (btn) {
+        btn.innerHTML = on ? '✕' : '⛶';
+        btn.title     = on ? 'Return to split view' : 'Expand chart to full view';
+    }
+    /* Nudge Plotly so the chart re-fits its container now that the
+       available width + height just changed.  Deferred one frame so
+       the CSS transition has finished before we measure. */
+    requestAnimationFrame(() => {
+        try {
+            const el = document.getElementById('chart');
+            if (el && typeof Plotly !== 'undefined') Plotly.Plots.resize(el);
+        } catch (_e) {}
+    });
+}
 
 /* ── Size buttons ─────────────────────────────────────── */
 function _setSize(size, btn) {
