@@ -58,6 +58,68 @@ _INT_SIZE_RE = re.compile(
     r"|\d{2,3}[A-Za-z]{1,2}\d{2}"   # covers 11R22, 205R16, 7.5R15, etc.
     r")\s*$"
 )
+
+# Oct-23 user ask: a specific set of truck sizes NEVER exists in
+# integer-rim form on the market — they only ship with a .5 rim.
+# When the crawler's old regex dropped the ".5" from the SIZE cell,
+# the integer form it left behind is a dead giveaway of truncation.
+# For those, we can safely auto-upgrade WITHOUT needing the ".5"
+# text to live in the description column too.
+#
+# Rule set — keyed by the integer form the crawler produced, value
+# is the correct decimal form.  All entries are "size that does not
+# exist as a passenger / LT tyre with the integer rim":
+#
+#   • Light-truck 17.5" / 19.5" radials
+#   • TBR 22.5" / 24.5" radials
+#   • Numeric-tread TBR (11R, 12R, 13R) — the industry only sells
+#     those with a .5 rim.
+#
+# User can extend this map as more sizes surface.
+KNOWN_DECIMAL_RIM_UPGRADES = {
+    # 17.5" rim — light-truck
+    "205/70R17":  "205/70R17.5",
+    "205/75R17":  "205/75R17.5",
+    "215/75R17":  "215/75R17.5",
+    "225/70R17":  "225/70R17.5",
+    "225/75R17":  "225/75R17.5",
+    "235/75R17":  "235/75R17.5",
+    "245/70R17":  "245/70R17.5",
+    "265/70R17":  "265/70R17.5",
+    # 19.5" rim — light-truck
+    "215/75R19":  "215/75R19.5",
+    "225/70R19":  "225/70R19.5",
+    "245/70R19":  "245/70R19.5",
+    "265/70R19":  "265/70R19.5",
+    "285/70R19":  "285/70R19.5",
+    "305/70R19":  "305/70R19.5",
+    # 22.5" rim — TBR
+    "275/70R22":  "275/70R22.5",
+    "275/80R22":  "275/80R22.5",
+    "285/75R22":  "285/75R22.5",
+    "295/60R22":  "295/60R22.5",
+    "295/75R22":  "295/75R22.5",
+    "295/80R22":  "295/80R22.5",
+    "305/70R22":  "305/70R22.5",
+    "315/60R22":  "315/60R22.5",
+    "315/70R22":  "315/70R22.5",
+    "315/80R22":  "315/80R22.5",
+    "385/55R22":  "385/55R22.5",
+    "385/65R22":  "385/65R22.5",
+    "425/65R22":  "425/65R22.5",
+    "445/50R22":  "445/50R22.5",
+    "445/65R22":  "445/65R22.5",
+    # 24.5" rim — TBR
+    "275/80R24":  "275/80R24.5",
+    "285/75R24":  "285/75R24.5",
+    "315/80R24":  "315/80R24.5",
+    # Numeric-tread TBR (always .5 in the market)
+    "11R22":      "11R22.5",
+    "11R24":      "11R24.5",
+    "12R22":      "12R22.5",
+    "12R24":      "12R24.5",
+    "13R22":      "13R22.5",
+}
 # For every integer-rim size the row carries, build a regex that
 # matches the SAME size with a .d suffix on the rim.  Pulled out
 # per-row below.
@@ -163,28 +225,38 @@ def _fix_file(path: Path, apply: bool, max_examples: int = 5):
             m = _INT_SIZE_RE.match(size_val)
             if not m:
                 new_rows.append(row); continue
-            # Size is integer-rim.  Does the description carry the
-            # decimal form of the SAME size?
-            desc_val = (row.get(desc_col) or "") if desc_col else ""
-            # Scan every column's text, not just description — tempe /
-            # tempeweborder sometimes put the full spec in COST or an
-            # extra column so a .d can hide there too.
-            haystack = " ".join(str(v or "") for v in row.values())
-            cand_re = _decimal_variant_re(m.group(1))
-            if not cand_re:
-                new_rows.append(row); continue
-            hit = cand_re.search(haystack)
-            if not hit:
-                new_rows.append(row); continue
-            # Found a decimal variant — replace the SIZE cell with it.
-            new_size = hit.group(0).upper().replace("ZR", "R")
+            # ---- Pass 1 (Oct-23 user ask): known-truck table.  If
+            # the integer-rim form on the SIZE cell is one of the
+            # sizes that CANNOT exist as a passenger / LT tyre, the
+            # ".5" was definitely dropped by the old crawler — upgrade
+            # directly, without needing the description to carry the
+            # full spelling.
+            _size_key = m.group(1).upper().replace("ZR", "R")
+            new_size = KNOWN_DECIMAL_RIM_UPGRADES.get(_size_key)
+            # ---- Pass 2: cross-reference against description.  For
+            # sizes NOT in the known-truck table, fall back to the
+            # original rule — only upgrade when the decimal form of
+            # this exact size appears somewhere else in the row.
+            if not new_size:
+                desc_val = (row.get(desc_col) or "") if desc_col else ""
+                haystack = " ".join(str(v or "") for v in row.values())
+                cand_re = _decimal_variant_re(m.group(1))
+                if not cand_re:
+                    new_rows.append(row); continue
+                hit = cand_re.search(haystack)
+                if not hit:
+                    new_rows.append(row); continue
+                new_size = hit.group(0).upper().replace("ZR", "R")
             if new_size == size_val:
                 new_rows.append(row); continue
             new_row = dict(row)
             new_row[size_col] = new_size
             new_rows.append(new_row)
             if len(changed_rows) < max_examples:
-                _snippet = desc_val[:60].replace("\n", " ")
+                # desc_val may be undefined when the known-truck pass
+                # fired (Pass 2 was skipped) — resolve defensively.
+                _desc_val = (row.get(desc_col) or "") if desc_col else ""
+                _snippet = _desc_val[:60].replace("\n", " ")
                 changed_rows.append((i, size_val, new_size + f"  ← desc: {_snippet!r}"))
             else:
                 changed_rows.append((i, size_val, new_size))
@@ -225,9 +297,10 @@ def _diagnose_file(path: Path, want_rows: int = 6):
             return
         rows_total = 0
         rows_int   = 0        # SIZE is integer-rim
-        rows_fixable = 0      # integer-rim AND row text has .d variant
-        samples_int = []      # integer-rim rows (regardless of fixability)
-        samples_fix = []      # fixable rows
+        rows_fix_known  = 0   # fixable via KNOWN_DECIMAL_RIM_UPGRADES
+        rows_fix_desc   = 0   # fixable via description cross-reference
+        samples_int = []      # integer-rim rows that are NOT fixable
+        samples_fix = []      # fixable rows (either pass)
         # No \b around R — size strings like "265/70R19.5" have a
         # digit immediately before the R, so a word boundary at that
         # position (digit→R) fails even though the match IS present.
@@ -242,21 +315,31 @@ def _diagnose_file(path: Path, want_rows: int = 6):
                 _any_dec_hit = True
             if m:
                 rows_int += 1
+                _key = m.group(1).upper().replace("ZR", "R")
+                _upgrade = KNOWN_DECIMAL_RIM_UPGRADES.get(_key)
+                if _upgrade:
+                    rows_fix_known += 1
+                    if len(samples_fix) < want_rows:
+                        samples_fix.append(("known", size_val, _upgrade, row_text[:100]))
+                    continue
                 cand_re = _decimal_variant_re(m.group(1))
                 hit = cand_re.search(row_text) if cand_re else None
                 if hit:
-                    rows_fixable += 1
+                    rows_fix_desc += 1
                     if len(samples_fix) < want_rows:
-                        samples_fix.append((size_val, hit.group(0), row_text[:100]))
+                        samples_fix.append(("desc", size_val, hit.group(0), row_text[:100]))
                 else:
                     if len(samples_int) < want_rows:
                         samples_int.append((size_val, row_text[:100]))
+        rows_fixable = rows_fix_known + rows_fix_desc
         print(f"  rows total: {rows_total:>6}   int-rim SIZE: {rows_int:>6}   "
-              f"of those, fixable: {rows_fixable:>6}   any R\\d\\d\\.d in file: {_any_dec_hit}")
+              f"fixable total: {rows_fixable:>6}  (known-truck table: "
+              f"{rows_fix_known}, desc cross-ref: {rows_fix_desc})   "
+              f"any R\\d\\d\\.d in file: {_any_dec_hit}")
         if samples_fix:
             print(f"  FIXABLE samples:")
-            for s_before, s_after, snippet in samples_fix:
-                print(f"    {s_before!r:>14}  ->  {s_after!r:<14}  row: {snippet!r}")
+            for src, s_before, s_after, snippet in samples_fix:
+                print(f"    [{src:>5}]  {s_before!r:>14}  ->  {s_after!r:<14}  row: {snippet!r}")
         if samples_int and not samples_fix:
             print(f"  int-rim samples (NOT fixable — no .d variant in row):")
             for s_val, snippet in samples_int:
