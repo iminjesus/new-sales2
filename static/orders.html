@@ -3582,11 +3582,23 @@ function applyMaterial(rowEl, data){
   // Fire the promo-based Additional DC lookup — uses brand +
   // product_group + qty + customer to decide.  Auto-fills add_dc
   // only when the cell hasn't been keyed manually.
-  applyAdditionalDCToRow(rowEl);
-  /* Oct-23 user ask: fire the Tempe dealer/consumer reference-price
-     lookup and append the result as a compact reference chip at the
-     end of the Remark cell.  Non-blocking; silent on no-match. */
-  try { applyTempeRefPriceToRow(rowEl, data); } catch (_e) {}
+  /* Oct-23 user ask: Tempe reference chip ("(Tempe: EC-.../SI-.../
+     DR-...)") lives in the Remark cell.  Sequence matters:
+     applyAdditionalDCToRow may call setRemarkFromPromo which
+     OVERWRITES the entire remark cell — if we fire the Tempe
+     lookup in parallel and it finishes first, the chip gets wiped
+     out when the promo setter runs.  Chain the Tempe call AFTER
+     applyAdditionalDCToRow resolves (via .finally so a lookup
+     failure doesn't block the chip either). */
+  const _p = applyAdditionalDCToRow(rowEl);
+  const _runRef = () => {
+    try { applyTempeRefPriceToRow(rowEl, data); } catch (_e) {}
+  };
+  if (_p && typeof _p.finally === "function") {
+    _p.finally(_runRef);
+  } else {
+    _runRef();
+  }
   /* If the material is in the currently-loaded aged-stock cache
      for this customer's state, tag the row with the matching tier
      and populate Aging DC Guide% + the chained Additional Special
