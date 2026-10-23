@@ -3371,43 +3371,52 @@ async function applyTempeRefPriceToRow(rowEl, data){
 function _renderTempeRefOnRow(rowEl, j){
   const remEl = rowEl.querySelector('[data-col="remark"]');
   if (!remEl) return;
-  /* Oct-23 user ask: show BOTH prices from Tempeweborder — the COST
-     column (dealer sell-in = what the dealer pays Tempe) AND the
-     PRICE column (dealer's recommended retail quote via the web-
-     order portal).  Tempe (consumer file) carries only one retail
-     price.  Labels are explicit so a reader knows which is which:
-       SI = dealer Sell-In  (TempeWebOrder COST)
-       DR = Dealer Retail   (TempeWebOrder PRICE)
-       C  = Consumer price  (Tempe retail site)
-     Stock figure stays attached to the dealer chunk since the
-     Tempeweborder CSV is the one carrying the STOCK column. */
+  /* Oct-23 user ask: compact chip format
+         "(Tempe: EC-100/SI-89/DR-129 ~Qty 8+)"
+     where
+       EC = End Consumer   (Tempe retail site)
+       SI = dealer Sell-In (TempeWebOrder COST column)
+       DR = Dealer Retail  (TempeWebOrder PRICE column)
+       Qty N+ = stock on hand from the STOCK column, with the "+"
+                suffix hinting "at least this many available right now"
+     Match-quality flags still appended to each individual figure:
+       *  load/speed differs
+       ?  pattern differs
+     Order inside the parens: EC → SI → DR so the end-consumer
+     reference reads first (that's what the user asked to put ahead
+     of the dealer figures in the example). */
   function _flags(src){
     let f = "";
-    if (src.match === "same_pattern") f += "*";
-    if (src.match === "size_only")    f += "?";
+    if (src && src.match === "same_pattern") f += "*";
+    if (src && src.match === "size_only")    f += "?";
     return f;
   }
-  function _mkDealer(src){
-    if (!src) return "";
-    const parts = [];
-    if (src.cost)  parts.push(`SI$${Number(src.cost ).toLocaleString()}`);
-    if (src.price) parts.push(`DR$${Number(src.price).toLocaleString()}`);
-    if (!parts.length) return "";
-    const stock = (src.stock && String(src.stock).trim())
-      ? ` (${src.stock})` : "";
-    return parts.join(" / ") + _flags(src) + stock;
+  function _fmt(v){
+    // Trim trailing zeros ("129.00" → "129"); comma-format thousands.
+    const n = Number(v);
+    if (!isFinite(n)) return "";
+    const rounded = Math.round(n * 100) / 100;
+    return Number(rounded).toLocaleString();
   }
-  function _mkConsumer(src){
-    if (!src || !src.price) return "";
-    return `C$${Number(src.price).toLocaleString()}` + _flags(src);
+  const parts = [];
+  if (j.consumer && j.consumer.price) {
+    parts.push(`EC-${_fmt(j.consumer.price)}${_flags(j.consumer)}`);
   }
-  const d = _mkDealer(j.dealer);
-  const c = _mkConsumer(j.consumer);
-  if (!d && !c) return;
-  const chip = [d, c].filter(Boolean).join("  ·  ");
-  /* Append to existing Remark value.  Separator "·" so an existing
-     promo tag ("Trueblu (12.00%)") stays readable with the appended
-     chip ("Trueblu (12.00%) · SI$250 / DR$290 (8) · C$345"). */
+  if (j.dealer && j.dealer.cost) {
+    parts.push(`SI-${_fmt(j.dealer.cost)}${_flags(j.dealer)}`);
+  }
+  if (j.dealer && j.dealer.price) {
+    parts.push(`DR-${_fmt(j.dealer.price)}${_flags(j.dealer)}`);
+  }
+  if (!parts.length) return;
+  let chip = `(Tempe: ${parts.join("/")}`;
+  if (j.dealer && j.dealer.stock && String(j.dealer.stock).trim()) {
+    chip += ` ~Qty ${j.dealer.stock}+`;
+  }
+  chip += ")";
+  /* Append to existing Remark value with " · " separator so an
+     existing promo tag ("Trueblu (12.00%)") stays readable before
+     the Tempe chip. */
   const cur = (remEl.value || "").trim();
   const sep = cur ? " · " : "";
   remEl.value = cur + sep + chip;
@@ -3432,8 +3441,8 @@ function _renderTempeRefOnRow(rowEl, j){
   _detail("Dealer (TempeWebOrder, sell-in / dealer retail)", j.dealer);
   _detail("Consumer (Tempe retail)",                         j.consumer);
   _lines.push("");
-  _lines.push("Legend: SI = dealer sell-in,  DR = dealer retail,  C = consumer");
-  _lines.push("         * = load/speed differs,  ? = pattern differs,  (n) = stock");
+  _lines.push("Legend: EC = end consumer (Tempe retail),  SI = dealer sell-in,  DR = dealer retail");
+  _lines.push("         * = load/speed differs,  ? = pattern differs,  ~Qty N+ = stock on hand");
   remEl.title = _lines.join("\n");
 }
 
