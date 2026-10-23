@@ -118,11 +118,34 @@ def _looks_like_price_csv(path: Path) -> bool:
     return any(p in low for p in _NAME_PATTERNS)
 
 
+_ENCODING_FALLBACKS = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
+
+def _open_csv_tolerant(path: Path):
+    """Open a CSV with the first encoding that decodes without error.
+    cp1252 / latin-1 catch most legacy Windows exports; utf-8-sig
+    strips a BOM when present.  Returns (file-handle, encoding)."""
+    for enc in _ENCODING_FALLBACKS:
+        try:
+            fh = open(path, "r", encoding=enc, newline="")
+            fh.read(16384)   # force decode of a chunk to validate
+            fh.seek(0)
+            return fh, enc
+        except (UnicodeDecodeError, UnicodeError):
+            try: fh.close()
+            except Exception: pass
+            continue
+    # Last-resort: open with errors='replace' so a bad byte never
+    # kills the whole retrofit.  The replacement char ('�') is
+    # tolerable in a description cell and no size regex touches it.
+    return open(path, "r", encoding="utf-8", errors="replace", newline=""), "utf-8+replace"
+
+
 def _fix_file(path: Path, apply: bool, max_examples: int = 5):
     """Scan one CSV; return (rows_total, rows_changed, examples)."""
     rows_total = 0
     changed_rows: list[tuple[int, str, str]] = []   # (lineno, before, after)
-    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+    fh, _enc = _open_csv_tolerant(path)
+    with fh as f:
         rdr = csv.DictReader(f)
         if not rdr.fieldnames:
             return (0, [], None, [])
@@ -179,11 +202,79 @@ def _fix_file(path: Path, apply: bool, max_examples: int = 5):
     return (rows_total, changed_rows, size_col, [bak] if apply else [])
 
 
+def _diagnose_file(path: Path, want_rows: int = 6):
+    """Oct-23 user ask: when a dry-run reports 0 changes, we need to
+    see WHY.  This dump shows:
+      • the detected SIZE / DESCRIPTION column names
+      • how many rows carry an INTEGER-rim SIZE
+      • of those, how many have ANY "Rdd.d" decimal-rim token in the
+        row's text (that's the pool a retrofit can touch)
+      • up to want_rows sample rows (SIZE | row-text first 100 chars)
+    Non-destructive; writes nothing."""
+    fh, enc = _open_csv_tolerant(path)
+    with fh as f:
+        rdr = csv.DictReader(f)
+        if not rdr.fieldnames:
+            print(f"  (empty / no header)")
+            return
+        size_col = _pick_size_col(rdr.fieldnames)
+        desc_col = _pick_desc_col(rdr.fieldnames)
+        print(f"  encoding={enc!r}  size_col={size_col!r}  desc_col={desc_col!r}")
+        if not size_col:
+            print(f"  no SIZE column — nothing to retrofit here.")
+            return
+        rows_total = 0
+        rows_int   = 0        # SIZE is integer-rim
+        rows_fixable = 0      # integer-rim AND row text has .d variant
+        samples_int = []      # integer-rim rows (regardless of fixability)
+        samples_fix = []      # fixable rows
+        # No \b around R — size strings like "265/70R19.5" have a
+        # digit immediately before the R, so a word boundary at that
+        # position (digit→R) fails even though the match IS present.
+        _any_decimal_in_file = re.compile(r"R\d{2}\.\d(?!\d)", re.IGNORECASE)
+        _any_dec_hit = False
+        for row in rdr:
+            rows_total += 1
+            size_val = (row.get(size_col) or "").strip()
+            m = _INT_SIZE_RE.match(size_val) if size_val else None
+            row_text = " ".join(str(v or "") for v in row.values())
+            if _any_decimal_in_file.search(row_text):
+                _any_dec_hit = True
+            if m:
+                rows_int += 1
+                cand_re = _decimal_variant_re(m.group(1))
+                hit = cand_re.search(row_text) if cand_re else None
+                if hit:
+                    rows_fixable += 1
+                    if len(samples_fix) < want_rows:
+                        samples_fix.append((size_val, hit.group(0), row_text[:100]))
+                else:
+                    if len(samples_int) < want_rows:
+                        samples_int.append((size_val, row_text[:100]))
+        print(f"  rows total: {rows_total:>6}   int-rim SIZE: {rows_int:>6}   "
+              f"of those, fixable: {rows_fixable:>6}   any R\\d\\d\\.d in file: {_any_dec_hit}")
+        if samples_fix:
+            print(f"  FIXABLE samples:")
+            for s_before, s_after, snippet in samples_fix:
+                print(f"    {s_before!r:>14}  ->  {s_after!r:<14}  row: {snippet!r}")
+        if samples_int and not samples_fix:
+            print(f"  int-rim samples (NOT fixable — no .d variant in row):")
+            for s_val, snippet in samples_int:
+                print(f"    {s_val!r:>14}  row: {snippet!r}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("root", help="Folder to walk (recursively).")
     ap.add_argument("--apply", action="store_true",
                     help="Write changes back (default: dry-run).")
+    ap.add_argument("--diagnose", action="store_true",
+                    help="Non-destructive dump — print per-file samples "
+                         "+ counts so you can see WHY a dry-run found no "
+                         "fixable rows (usually: the crawler stripped "
+                         "the decimal rim from the description too, so "
+                         "the CSV alone can't recover it; re-crawl is "
+                         "the only option in that case).")
     ap.add_argument("--pattern-only", action="store_true",
                     help="Only touch files whose name matches a known "
                          "crawler prefix (jax / bobjane / tempe / "
@@ -202,6 +293,14 @@ def main(argv=None):
         if not _looks_like_price_csv(p):
             continue
         scanned += 1
+        if args.diagnose:
+            rel = p.relative_to(root) if root in p.parents else p
+            print(f"\n--- {rel}")
+            try:
+                _diagnose_file(p)
+            except Exception as e:
+                print(f"  diagnose failed: {e!r}")
+            continue
         try:
             rows_total, changes, size_col, baks = _fix_file(p, args.apply)
         except Exception as e:
