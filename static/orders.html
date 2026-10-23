@@ -3385,11 +3385,11 @@ function _renderTempeRefOnRow(rowEl, j){
      Order inside the parens: EC → SI → DR so the end-consumer
      reference reads first (that's what the user asked to put ahead
      of the dealer figures in the example). */
-  function _flags(src){
-    let f = "";
-    if (src && src.match === "same_pattern") f += "*";
-    if (src && src.match === "size_only")    f += "?";
-    return f;
+  function _flags(_src){
+    // Oct-23 user ask: drop ALL match-tier flags (* and ?).  Chip
+    // shows just the numbers now.  Full detail still lives in the
+    // hover tooltip for anyone who wants to see the match quality.
+    return "";
   }
   function _fmt(v){
     // Trim trailing zeros ("129.00" → "129"); comma-format thousands.
@@ -3409,7 +3409,17 @@ function _renderTempeRefOnRow(rowEl, j){
     parts.push(`DR-${_fmt(j.dealer.price)}${_flags(j.dealer)}`);
   }
   if (!parts.length) return;
-  let chip = `(Tempe: ${parts.join("/")}`;
+  /* Oct-23 user ask: when the match came from a PAST month (no
+     current-month row), prefix with the month label so the reader
+     knows the figure isn't current.  Collect fallback-month labels
+     from dealer / consumer; show the oldest-seen (most conservative
+     tag).  Blank when both are current-month hits. */
+  let monthTag = "";
+  const _dM = (j.dealer   && !j.dealer.is_current)   ? j.dealer.month_label   : "";
+  const _cM = (j.consumer && !j.consumer.is_current) ? j.consumer.month_label : "";
+  const fallbacks = [_dM, _cM].filter(Boolean);
+  if (fallbacks.length) monthTag = ` ${fallbacks[0]}`;
+  let chip = `(Tempe${monthTag}: ${parts.join("/")}`;
   if (j.dealer && j.dealer.stock && String(j.dealer.stock).trim()) {
     chip += ` ~Qty ${j.dealer.stock}+`;
   }

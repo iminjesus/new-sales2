@@ -70,6 +70,65 @@ def _latest_file(prefix: str) -> str | None:
     return max(hits, key=os.path.getmtime)
 
 
+# Oct-23 user ask: when the current-month CSV doesn't carry the size
+# the SPRF asked about, walk backwards month-by-month until a hit is
+# found; chip label spells out the fallback month ("'26.9" style).
+_MONTH_ABBR = {
+    'JAN':'01','JANUARY':'01','FEB':'02','FEBRUARY':'02','MAR':'03','MARCH':'03',
+    'APR':'04','APRIL':'04','MAY':'05','JUN':'06','JUNE':'06',
+    'JUL':'07','JULY':'07','AUG':'08','AUGUST':'08','SEP':'09','SEPTEMBER':'09',
+    'OCT':'10','OCTOBER':'10','NOV':'11','NOVEMBER':'11','DEC':'12','DECEMBER':'12',
+}
+def _month_key_from_name(name: str) -> str:
+    """Return YYYYMM extracted from a crawler-output filename.  Covers
+    the two shapes in production: timestamped (Tempe_20260401_1439.csv)
+    and month-named (Tempe_Apr_2026.csv)."""
+    up = name.upper()
+    m = re.search(r"(\d{4})(\d{2})\d{2}", up)
+    if m:
+        return f"{m.group(1)}{m.group(2)}"
+    yr = re.search(r"(\d{4})", up)
+    if yr:
+        yyyy = yr.group(1)
+        best_len, best = 0, None
+        for key, num in _MONTH_ABBR.items():
+            if key in up and len(key) > best_len:
+                best_len, best = len(key), num
+        if best: return f"{yyyy}{best}"
+    return "000000"
+
+
+def month_label(yyyymm: str) -> str:
+    """YYYYMM → "'26.9" compact label (same style the price dashboard
+    uses).  Blank for the "000000" sentinel."""
+    s = str(yyyymm or "")
+    if len(s) != 6 or not s.isdigit():
+        return ""
+    yy = int(s[2:4])
+    mm = int(s[4:6])
+    return f"'{yy:02d}.{mm}"
+
+
+def _files_by_month(prefix: str):
+    """Return [(yyyymm, path), ...] sorted newest-month-first.  When
+    multiple files share a month-key, keep the one with the newest
+    mtime (crawler re-runs within the same month)."""
+    pl = prefix.lower()
+    by_month: dict = {}
+    try:
+        for name in os.listdir(_BASE):
+            nl = name.lower()
+            if not (nl.startswith(pl + "_") and nl.endswith(".csv")):
+                continue
+            fp = os.path.join(_BASE, name)
+            mk = _month_key_from_name(name)
+            if mk not in by_month or os.path.getmtime(fp) > os.path.getmtime(by_month[mk]):
+                by_month[mk] = fp
+    except OSError:
+        return []
+    return sorted(by_month.items(), key=lambda t: t[0], reverse=True)
+
+
 def _load(path: str):
     """Open the CSV with the same encoding fallback as retrofit_price_
     csv_sizes.py — a mix of UTF-8 and cp1252 lives on disk."""
@@ -388,43 +447,92 @@ def lookup_tempe_prices(size: str, pattern: str = "",
     ul = (load_speed or "").upper().replace(" ", "")
     _brand_up = (brand or "").strip().upper()
     _scope    = _brand_up if _brand_up in ("HK", "LF") else ""
-    dealer_rows,   dealer_file   = _rows_for("Tempeweborder")
-    consumer_rows, consumer_file = _rows_for("Tempe")
-    def _run(_scope_brand: str):
-        # Dealer side (Tempeweborder):
-        #   price → PRICE column (dealer's recommended retail quote
-        #                         via the web-order portal)
-        #   cost  → COST  column (what the dealer PAYS Tempe —
-        #                         "sell-in" in the user's wording)
-        d = _best_match(
-            dealer_rows, ns_set, np, ul, _scope_brand,
-            price_cols=("PRICE", "price"),
-            cost_cols=("COST", "cost"),
-            stock_col="STOCK",
-            source_label="dealer",
-            source_file=dealer_file,
-        )
-        # Consumer side (Tempe): single retail price column, no cost
-        # concept (Tempe's own retail site charges consumers directly).
-        c = _best_match(
-            consumer_rows, ns_set, np, ul, _scope_brand,
-            price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
-            cost_cols=(),
-            stock_col=None,
-            source_label="consumer",
-            source_file=consumer_file,
-        )
-        return d, c
-    dealer, consumer = _run(_scope)
+
+    # Oct-23 user ask: when the newest-month CSV has no match for
+    # this size, walk back through older months until a hit lands.
+    # Chip label then shows the fallback month ("'26.9") so the
+    # operator knows the data isn't current.
+    dealer_months   = _files_by_month("Tempeweborder")
+    consumer_months = _files_by_month("Tempe")
+    def _match_in_months(months, scope_brand, *, is_dealer):
+        """Walk months newest-first; return (entry, yyyymm, path) when
+        a row matches, else (None, "", "")."""
+        for yyyymm, fp in months:
+            rows, _ = _rows_for_path(fp)
+            if is_dealer:
+                e = _best_match(
+                    rows, ns_set, np, ul, scope_brand,
+                    price_cols=("PRICE", "price"),
+                    cost_cols=("COST", "cost"),
+                    stock_col="STOCK",
+                    source_label="dealer",
+                    source_file=fp,
+                )
+            else:
+                e = _best_match(
+                    rows, ns_set, np, ul, scope_brand,
+                    price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
+                    cost_cols=(),
+                    stock_col=None,
+                    source_label="consumer",
+                    source_file=fp,
+                )
+            if e is not None:
+                return e, yyyymm, fp
+        return None, "", ""
+
+    def _run_scoped(scope_brand):
+        d, dm, df = _match_in_months(dealer_months,   scope_brand, is_dealer=True)
+        c, cm, cf = _match_in_months(consumer_months, scope_brand, is_dealer=False)
+        return d, dm, df, c, cm, cf
+    dealer, dm, df, consumer, cm, cf = _run_scoped(_scope)
     if _scope and not dealer and not consumer:
-        # Brand-scoped pass found nothing — fall back to any-brand so
-        # the reader still sees Falken / Michelin / etc. for context.
-        dealer, consumer = _run("")
+        # Brand-scoped walk missed everywhere — any-brand fallback.
+        dealer, dm, df, consumer, cm, cf = _run_scoped("")
+
+    # Oct-23 user ask: "current" is TODAY's calendar month (not
+    # whatever the latest file on disk happens to be).  So if today
+    # is Oct 2026 and the hit came from Sep 2026, the chip prefixes
+    # "'26.9".  If the hit is Oct 2026 (same calendar month), no
+    # prefix — the data is fresh.
+    from datetime import datetime as _dt
+    _today = _dt.now()
+    _cur_month = f"{_today.year:04d}{_today.month:02d}"
+    latest_dealer_month   = dealer_months[0][0]   if dealer_months   else ""
+    latest_consumer_month = consumer_months[0][0] if consumer_months else ""
+    if dealer:
+        dealer["month"]       = dm
+        dealer["is_current"]  = (dm == _cur_month)
+        dealer["month_label"] = month_label(dm)
+    if consumer:
+        consumer["month"]       = cm
+        consumer["is_current"]  = (cm == _cur_month)
+        consumer["month_label"] = month_label(cm)
     return {
         "dealer":   dealer,
         "consumer": consumer,
         "sources": {
-            "dealer_file":   os.path.basename(dealer_file or ""),
-            "consumer_file": os.path.basename(consumer_file or ""),
+            "dealer_file":           os.path.basename(df or ""),
+            "consumer_file":         os.path.basename(cf or ""),
+            "latest_dealer_month":   latest_dealer_month,
+            "latest_consumer_month": latest_consumer_month,
         },
     }
+
+
+def _rows_for_path(path: str):
+    """Variant of _rows_for() that takes an explicit path instead of a
+    prefix — used by the month walker in lookup_tempe_prices."""
+    if not path:
+        return [], None
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    now = time.time()
+    cached = _CACHE.get(path)
+    if cached and cached[0] == mtime and (now - cached[1]) < _CACHE_TTL_SEC:
+        return cached[2], path
+    rows = _load(path)
+    _CACHE[path] = (mtime, now, rows)
+    return rows, path

@@ -295,57 +295,56 @@ def scrape_rows(driver):
             except Exception:
                 price = re.sub(r"[^\d.]", "", dollar_texts[1]) if len(dollar_texts) >= 2 else ""
 
-            # Oct-23 user ask: capture Tempe stock info from the column
-            # right next to the price.  Three-step defensive lookup
-            # because the exact selector for the stock cell varies
-            # across Tempe skins:
-            #   1. explicit [class*='stock'] span (most SPAs name the
-            #      cell that way);
-            #   2. "N in stock" / "In Stock: N" text pattern anywhere
-            #      in the row;
-            #   3. the first bare integer span AFTER the price span —
-            #      follows the "right next to the price column" cue;
-            #      we take at most 2 integer candidates and pick the
-            #      larger one as the stock qty.
+            # Oct-23 user clarification: stock is the COLUMN right
+            # after sell-in and sell-out prices.  So the DOM is a row
+            # of bootstrap col-xs-* divs, cost sits in one, price in
+            # the next, stock in the one after that.
+            #
+            # Capture strategy — three paths tried in order, first hit
+            # wins so a theme change on either direction still works:
+            #   1. XPath walk — find the price's col-xs ancestor and
+            #      grab the NEXT col-xs sibling.  This matches the
+            #      user's description exactly.
+            #   2. Enumerate every col-xs div in the row, record their
+            #      text in DOM order, pick the first integer-looking
+            #      text that comes AFTER the one carrying the price.
+            #   3. Explicit "stock" / "availability" class selectors
+            #      as a last resort.
             stock = ""
             try:
-                stock_el = row.find_element(By.CSS_SELECTOR,
-                    "[class*='stock'] span, span[class*='stock'], "
-                    "[class*='availability'] span, span[class*='availability']")
-                _s = clean(stock_el.text)
-                _m = re.search(r"(\d+)", _s or "")
+                _nx = row.find_element(
+                    By.XPATH,
+                    ".//div[contains(@class,'col-xs-9')]"
+                    "/following-sibling::div[contains(@class,'col-xs')][1]")
+                _s = clean(_nx.text or "")
+                _m = re.search(r"(\d+)", _s)
                 if _m: stock = _m.group(1)
             except Exception:
                 pass
             if not stock:
                 try:
-                    _row_text = clean(row.text or "")
-                    _m = re.search(r"(\d+)\s*(?:in\s*stock|stock)\b",
-                                   _row_text, re.IGNORECASE)
-                    if not _m:
-                        _m = re.search(r"(?:in\s*stock|stock)[\s:#]*(\d+)",
-                                       _row_text, re.IGNORECASE)
-                    if _m: stock = _m.group(1)
+                    _cols = row.find_elements(
+                        By.CSS_SELECTOR, "div[class*='col-xs']")
+                    _texts = [clean(c.text or "") for c in _cols]
+                    _price_idx = -1
+                    for i, t in enumerate(_texts):
+                        if price and price in t:
+                            _price_idx = i; break
+                    if _price_idx != -1:
+                        for t in _texts[_price_idx + 1:]:
+                            _m = re.fullmatch(r"\$?\s*(\d{1,5})\+?", (t or "").strip())
+                            if _m:
+                                stock = _m.group(1); break
                 except Exception:
                     pass
             if not stock:
                 try:
-                    # Fallback — bare integer span sitting after the
-                    # price in DOM order.  Walk every ng-binding span,
-                    # keep the ones whose text is pure integer, drop
-                    # the ones that are the leading size digits (brand
-                    # column at the front).  Pick the largest; it's
-                    # much more likely to be stock than aux data like
-                    # min-qty.
-                    _ints = []
-                    for el in row.find_elements(By.CSS_SELECTOR, "span.ng-binding"):
-                        _t = clean(el.text)
-                        if _t and re.fullmatch(r"\d{1,5}", _t):
-                            _ints.append(int(_t))
-                    # Skip the first int (often the size prefix like
-                    # "175") and keep subsequent ints as stock candidates.
-                    if len(_ints) >= 2:
-                        stock = str(max(_ints[1:]))
+                    _st = row.find_element(By.CSS_SELECTOR,
+                        "[class*='stock'] span, span[class*='stock'], "
+                        "[class*='availability'] span, span[class*='availability']")
+                    _s = clean(_st.text or "")
+                    _m = re.search(r"(\d+)", _s)
+                    if _m: stock = _m.group(1)
                 except Exception:
                     pass
 
