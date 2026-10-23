@@ -108,6 +108,27 @@ def _nrm(s: str) -> str:
     return _NOISE_RE.sub("", (s or "").upper()).replace("ZR", "R")
 
 
+# Oct-23 user ask: "195/70R14T" (trailing speed symbol), "195/70ZR14"
+# (ZR high-speed form), and "195/70R14 82T" (load-index + speed
+# symbol tail) all mean the SAME tyre size for comparison purposes.
+# Extract just the canonical "<width>[/X]<aspect?><letter(s)><rim[.d]>C?"
+# core so comparisons line up.
+_SIZE_CORE_RE = re.compile(
+    r"("
+    r"\d{2,3}[/X]\d{1,2}(?:\.\d)?[A-Z]{0,2}\d{2}(?:\.\d)?C?"   # 195/70R14, 33X12.5R15
+    r"|\d{2,3}[A-Z]{1,2}\d{2}(?:\.\d)?C?"                        # 11R22.5, 205R16
+    r")"
+)
+def _canon_size(raw: str) -> str:
+    """Extract the canonical size core — strips a trailing load / speed
+    tail ("195/70R14T" → "195/70R14") and folds ZR to R.  When no
+    canonical core is found, returns the raw string so an unexpected
+    shape still gets a chance to match verbatim."""
+    _up = (raw or "").upper().replace("ZR", "R").replace(" ", "")
+    m = _SIZE_CORE_RE.search(_up)
+    return m.group(1) if m else _up
+
+
 # Oct-23 user ask: when the SPRF side holds a truncated size
 # ("225/70R17" because carrying_26 lost its ".5"), the Tempe CSV
 # still has the correct "225/70R17.5" — so the lookup must try the
@@ -126,16 +147,21 @@ _KNOWN_DECIMAL_UPGRADES = {
 }
 
 def _size_variants(raw: str):
-    """Return the set of normalised size strings worth trying.  Always
-    the normalised form of `raw` itself; plus the ".5" upgrade when
-    `raw` is one of the known-truncated sizes so a carrying_26 miss
-    on the SPRF side still lands the right Tempe row."""
-    _n = _nrm(raw)
-    out = {_n}
-    _up = raw.strip().upper().replace(" ", "")
-    if _up in _KNOWN_DECIMAL_UPGRADES:
-        out.add(_nrm(_up + ".5"))
-    return out
+    """Return the set of normalised size strings worth trying.  Steps:
+      1. Canonicalise the raw string — strips trailing load / speed
+         ("195/70R14T" → "195/70R14") and folds ZR to R.
+      2. Normalise that canonical form (strip punct, upper).
+      3. If the canonical form is one of the known-truncated truck
+         sizes (carrying_26 may still carry the integer-rim version
+         while Tempe has the ".5"), also add the ".5" variant.
+      4. Also keep the raw-normalised form in the set — a seller may
+         list the size with a load/speed suffix that happens to match
+         the SPRF side literally."""
+    _canon = _canon_size(raw)
+    out = {_nrm(_canon), _nrm(raw)}
+    if _canon in _KNOWN_DECIMAL_UPGRADES:
+        out.add(_nrm(_canon + ".5"))
+    return {v for v in out if v}
 
 
 def _brand_match(row_brand: str, caller_brand: str) -> bool:
@@ -170,17 +196,48 @@ def _extract_load_speed(text: str) -> str:
     return m.group(1).upper() if m else ""
 
 
+_MONEY_RE = re.compile(r"^\$?\d+(?:,\d{3})*(?:\.\d+)?$")
+def _is_money(s: str) -> bool:
+    """True when `s` parses as a dollar amount (optional $ / thousands
+    separators / decimals).  Used to reject stray non-numeric cells
+    that landed in the COST column of the extend-variant CSV
+    ("K435" is a pattern code, not a price)."""
+    return bool(_MONEY_RE.match((s or "").strip()))
+
+
 def _pick_col(row: dict, *names: str) -> str:
     for n in names:
         if n in row and row[n] is not None:
             v = str(row[n]).strip()
             if v: return v
-        # case-insensitive fallback
+        # case-insensitive fallback — skip the None key csv.DictReader
+        # uses for overflow fields (row with more fields than header).
         for k in row.keys():
+            if k is None: continue
             if k.strip().lower() == n.lower():
                 v = str(row[k] or "").strip()
                 if v: return v
     return ""
+
+
+def _row_cells(row: dict):
+    """Flatten every value in `row` to a list of trimmed strings —
+    including the overflow list csv.DictReader stashes at row[None]
+    when a row carries MORE fields than the header declares.  The
+    Tempeweborder_extend_*.csv file is exactly that case: 6-field
+    rows under a 5-field header, so the real PRICE (6th field) sits
+    inside row[None] and would otherwise be invisible to the numeric
+    fallback that picks the dealer sell-in / retail amounts."""
+    cells = []
+    for k, v in row.items():
+        if v is None:
+            continue
+        if isinstance(v, list):
+            cells.extend(str(x or "").strip() for x in v if x is not None)
+        else:
+            s = str(v).strip()
+            if s: cells.append(s)
+    return cells
 
 
 def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
@@ -209,22 +266,62 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
     exact = same_pattern = size_only = None
     for r in rows:
         size_raw = _pick_col(r, "SIZE", "size")
-        if _nrm(size_raw) not in size_variants:
+        # Oct-23: canonical size compare — covers "195/70R14T",
+        # "195/70ZR14", "195/70R14 82T" etc. all mapping to the same
+        # normalised form as "195/70R14".
+        _row_size_variants = _size_variants(size_raw)
+        if size_variants.isdisjoint(_row_size_variants):
             continue
         if not _brand_match(_pick_col(r, "brand", "BRAND"), caller_brand):
             continue
         desc = _pick_col(r, "DESCRIPTION", "description", "title")
         brand = _pick_col(r, "brand", "BRAND")
-        rl = _extract_load_speed(desc)
-        rpat_norm = _nrm(desc)
+        # Oct-23 user ask: when the extend crawler misaligned the
+        # columns (K435 landed in the COST slot instead of its own
+        # PATTERN column), scanning only DESCRIPTION missed the
+        # pattern code and misread K435 as a dollar amount.  Build
+        # pattern-search text from ALL cell values + run the numeric
+        # fallback across every cell too — robust against any column
+        # drift in the extend / future crawler variants.
+        _all_cells = _row_cells(r)
+        _all_text  = " ".join(_all_cells)
+        rl = _extract_load_speed(_all_text) or _extract_load_speed(desc)
+        rpat_norm = _nrm(_all_text)
         price = ""
         for pc in price_cols:
-            price = _pick_col(r, pc)
-            if price: break
+            v = _pick_col(r, pc)
+            if v and _is_money(v):
+                price = v; break
         cost = ""
         for pc in cost_cols:
-            cost = _pick_col(r, pc)
-            if cost: break
+            v = _pick_col(r, pc)
+            if v and _is_money(v):
+                cost = v; break
+        if not price or not cost:
+            # Smart fallback — scan every cell for dollar-looking
+            # values.  Smaller = COST (dealer sell-in), larger = PRICE
+            # (dealer retail quote).  Covers extend-variant rows where
+            # the pattern code landed in the COST slot and pushed the
+            # real dollars one column over.
+            _nums = []
+            for v in _all_cells:
+                if _is_money(v):
+                    try: _nums.append((float(v.replace(",", "").replace("$", "")), v))
+                    except Exception: pass
+            if len(_nums) >= 2:
+                _nums.sort(key=lambda t: t[0])
+                # When the named COST column was empty (its slot held
+                # a non-money value like a pattern code), the named
+                # PRICE is probably in the wrong column too — the real
+                # dollars just shifted one position over.  Trust the
+                # positional sort for BOTH in that case.
+                if not cost:
+                    cost  = _nums[0][1]
+                    price = _nums[-1][1]
+                elif not price:
+                    price = _nums[-1][1]
+            elif len(_nums) == 1 and not price:
+                price = _nums[0][1]
         stock = _pick_col(r, stock_col) if stock_col else ""
         has_pattern = bool(np_pattern) and np_pattern in rpat_norm
         has_load    = bool(ul_load) and rl.upper() == ul_load.upper()
