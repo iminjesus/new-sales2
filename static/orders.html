@@ -3371,33 +3371,54 @@ async function applyTempeRefPriceToRow(rowEl, data){
 function _renderTempeRefOnRow(rowEl, j){
   const remEl = rowEl.querySelector('[data-col="remark"]');
   if (!remEl) return;
-  /* Build the compact single-line chip.  Keep each source's render
-     deterministic so hover of a value corresponds to the same place
-     in the detail tooltip. */
-  function _mk(label, src){
-    if (!src || !src.price) return "";
-    const price = `$${Number(src.price).toLocaleString()}`;
-    let flags = "";
-    if (src.match === "same_pattern") flags += "*";       // load/speed differs
-    if (src.match === "size_only")    flags += "?";       // pattern differs
+  /* Oct-23 user ask: show BOTH prices from Tempeweborder — the COST
+     column (dealer sell-in = what the dealer pays Tempe) AND the
+     PRICE column (dealer's recommended retail quote via the web-
+     order portal).  Tempe (consumer file) carries only one retail
+     price.  Labels are explicit so a reader knows which is which:
+       SI = dealer Sell-In  (TempeWebOrder COST)
+       DR = Dealer Retail   (TempeWebOrder PRICE)
+       C  = Consumer price  (Tempe retail site)
+     Stock figure stays attached to the dealer chunk since the
+     Tempeweborder CSV is the one carrying the STOCK column. */
+  function _flags(src){
+    let f = "";
+    if (src.match === "same_pattern") f += "*";
+    if (src.match === "size_only")    f += "?";
+    return f;
+  }
+  function _mkDealer(src){
+    if (!src) return "";
+    const parts = [];
+    if (src.cost)  parts.push(`SI$${Number(src.cost ).toLocaleString()}`);
+    if (src.price) parts.push(`DR$${Number(src.price).toLocaleString()}`);
+    if (!parts.length) return "";
     const stock = (src.stock && String(src.stock).trim())
       ? ` (${src.stock})` : "";
-    return `${label}${price}${flags}${stock}`;
+    return parts.join(" / ") + _flags(src) + stock;
   }
-  const d = _mk("D", j.dealer);
-  const c = _mk("C", j.consumer);
+  function _mkConsumer(src){
+    if (!src || !src.price) return "";
+    return `C$${Number(src.price).toLocaleString()}` + _flags(src);
+  }
+  const d = _mkDealer(j.dealer);
+  const c = _mkConsumer(j.consumer);
   if (!d && !c) return;
-  const chip = [d, c].filter(Boolean).join("  ");
+  const chip = [d, c].filter(Boolean).join("  ·  ");
   /* Append to existing Remark value.  Separator "·" so an existing
      promo tag ("Trueblu (12.00%)") stays readable with the appended
-     chip ("Trueblu (12.00%) · D$620 (12)  C$780"). */
+     chip ("Trueblu (12.00%) · SI$250 / DR$290 (8) · C$345"). */
   const cur = (remEl.value || "").trim();
   const sep = cur ? " · " : "";
   remEl.value = cur + sep + chip;
-  /* Hover tooltip — full match detail for both sources. */
+  /* Hover tooltip — full match detail for both sources, with every
+     label spelled out. */
   const _lines = [];
   function _detail(label, src){
     if (!src) { _lines.push(`${label}: no match`); return; }
+    const money = [];
+    if (src.cost)  money.push(`$${src.cost} (sell-in)`);
+    if (src.price) money.push(`$${src.price}` + (src.cost ? " (dealer retail)" : ""));
     const bits = [
       src.description ? `desc=${src.description}` : "",
       src.load_speed_seen ? `L/S=${src.load_speed_seen}` : "",
@@ -3406,12 +3427,13 @@ function _renderTempeRefOnRow(rowEl, j){
       src.mismatch ? `(${src.mismatch})` : "",
       src.source_file ? `src=${src.source_file}` : "",
     ].filter(Boolean);
-    _lines.push(`${label}: $${src.price}  ${bits.join("  ")}`);
+    _lines.push(`${label}: ${money.join(" / ")}  ${bits.join("  ")}`);
   }
-  _detail("Dealer (TempeWebOrder)", j.dealer);
-  _detail("Consumer (Tempe)",       j.consumer);
+  _detail("Dealer (TempeWebOrder, sell-in / dealer retail)", j.dealer);
+  _detail("Consumer (Tempe retail)",                         j.consumer);
   _lines.push("");
-  _lines.push("Legend: * load/speed differs,  ? pattern differs,  (n) stock");
+  _lines.push("Legend: SI = dealer sell-in,  DR = dealer retail,  C = consumer");
+  _lines.push("         * = load/speed differs,  ? = pattern differs,  (n) = stock");
   remEl.title = _lines.join("\n");
 }
 

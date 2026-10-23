@@ -185,7 +185,8 @@ def _pick_col(row: dict, *names: str) -> str:
 
 def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
                 caller_brand: str, *,
-                price_cols: tuple, stock_col: str | None,
+                price_cols: tuple, cost_cols: tuple = (),
+                stock_col: str | None,
                 source_label: str, source_file: str | None):
     """Walk `rows` once, picking the FIRST row that satisfies each
     tier of the match hierarchy.  Returns the best-tier hit as a
@@ -196,6 +197,14 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
                     "225/70R17" still find Tempe's "225/70R17.5").
     caller_brand  : "" / "HK" / "LF" — restricts to Hankook / Laufenn
                     rows when non-empty.
+    price_cols    : primary dollar field (Tempe = retail; Tempeweborder
+                    = PRICE which is the dealer's recommended retail
+                    quote through the web-order portal).
+    cost_cols     : (Oct-23 user ask) secondary dollar field —
+                    Tempeweborder's COST column, which is the dealer
+                    SELL-IN price (what Tempe charges the dealer).
+                    Returned alongside `price` so the Remark chip can
+                    show BOTH figures.
     """
     exact = same_pattern = size_only = None
     for r in rows:
@@ -212,11 +221,16 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
         for pc in price_cols:
             price = _pick_col(r, pc)
             if price: break
+        cost = ""
+        for pc in cost_cols:
+            cost = _pick_col(r, pc)
+            if cost: break
         stock = _pick_col(r, stock_col) if stock_col else ""
         has_pattern = bool(np_pattern) and np_pattern in rpat_norm
         has_load    = bool(ul_load) and rl.upper() == ul_load.upper()
         entry = {
             "price":            price,
+            "cost":             cost,
             "stock":            stock,
             "description":      desc,
             "brand":            brand,
@@ -280,16 +294,25 @@ def lookup_tempe_prices(size: str, pattern: str = "",
     dealer_rows,   dealer_file   = _rows_for("Tempeweborder")
     consumer_rows, consumer_file = _rows_for("Tempe")
     def _run(_scope_brand: str):
+        # Dealer side (Tempeweborder):
+        #   price → PRICE column (dealer's recommended retail quote
+        #                         via the web-order portal)
+        #   cost  → COST  column (what the dealer PAYS Tempe —
+        #                         "sell-in" in the user's wording)
         d = _best_match(
             dealer_rows, ns_set, np, ul, _scope_brand,
-            price_cols=("PRICE", "price", "COST", "cost"),
+            price_cols=("PRICE", "price"),
+            cost_cols=("COST", "cost"),
             stock_col="STOCK",
             source_label="dealer",
             source_file=dealer_file,
         )
+        # Consumer side (Tempe): single retail price column, no cost
+        # concept (Tempe's own retail site charges consumers directly).
         c = _best_match(
             consumer_rows, ns_set, np, ul, _scope_brand,
             price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
+            cost_cols=(),
             stock_col=None,
             source_label="consumer",
             source_file=consumer_file,
