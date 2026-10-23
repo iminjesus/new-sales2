@@ -3839,6 +3839,36 @@ def api_orders_material():
         except: pass
 
 # plant 醫뚰몴 留ㅽ븨 (?덇? 以?媛믪쑝濡??낅뜲?댄듃)
+@app.get("/api/orders/tempe_price_lookup")
+def api_orders_tempe_price_lookup():
+    """Oct-23 user ask: show Tempe dealer / consumer reference prices
+    on the Orders form's Remark cell.  Match hierarchy — size →
+    size+pattern → size+pattern+load/speed — handled by
+    tempe_price_lookup.lookup_tempe_prices().  Caller passes
+    ?size=…&pattern=…&load_speed=…; absent / blank params are
+    tolerated (the lookup just degrades to a less-specific match).
+
+    Returns {"dealer": {...}|None, "consumer": {...}|None,
+             "sources": {dealer_file, consumer_file}}.  See
+    tempe_price_lookup.py for the inner dict's shape."""
+    size       = (request.args.get("size")       or "").strip()
+    pattern    = (request.args.get("pattern")    or "").strip()
+    load_speed = (request.args.get("load_speed") or "").strip()
+    if not size:
+        return jsonify({"dealer": None, "consumer": None,
+                        "sources": {"dealer_file": "", "consumer_file": ""}})
+    try:
+        from tempe_price_lookup import lookup_tempe_prices
+    except Exception as e:
+        return jsonify({"error": f"tempe_price_lookup import failed: {e}"}), 500
+    try:
+        out = lookup_tempe_prices(size, pattern=pattern, load_speed=load_speed)
+        return jsonify(out)
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 # Plant → State mapping for the Orders form's per-state stock columns.
 # Kept next to the endpoint that uses it so the schema-agnostic lookup
 # doesn't have to reach into PLANT_GEO for something that's really

@@ -3327,6 +3327,88 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
   setRemark(rowEl, pct ? `${label} (${pct})` : label);
 }
 
+
+/* ──────────── Oct-23 user ask: Tempe dealer/consumer reference ───────────
+   After applyMaterial resolves, call /api/orders/tempe_price_lookup
+   with size + pattern + load_speed and inject a compact reference
+   chip into the Remark cell.  Shape of the chip:
+
+     [existing promo tag]
+     D$620 (12 pcs)  C$780      ← when both found + exact match
+     D$620 L148L*    C$780 P?   ← when load/speed differs (*),
+                                   pattern differs (P?)
+
+   Hover-tooltip (title attr) spells out the full match detail:
+   source file, product description, actual load/speed seen.  Keeps
+   the visible cell tight while giving the reader a right-click-friendly
+   detail trail.  Non-blocking — fires async; the row's existing promo
+   tag renders first so a slow Tempe fetch never delays the price
+   display.  Silent on no-match. */
+async function applyTempeRefPriceToRow(rowEl, data){
+  const size  = String((data && data.description) || "").trim();
+  const pat   = String((data && data.pattern)     || "").trim();
+  const ls    = String((data && data.load_speed)  || "").trim();
+  if (!size) return;
+  const qs = new URLSearchParams({ size });
+  if (pat) qs.set("pattern", pat);
+  if (ls)  qs.set("load_speed", ls);
+  let j;
+  try {
+    const r = await fetch(`/api/orders/tempe_price_lookup?${qs}`,
+                          {credentials: "same-origin"});
+    j = await r.json();
+  } catch (_e) { return; }
+  if (!j || j.error) return;
+  _renderTempeRefOnRow(rowEl, j);
+}
+
+function _renderTempeRefOnRow(rowEl, j){
+  const remEl = rowEl.querySelector('[data-col="remark"]');
+  if (!remEl) return;
+  /* Build the compact single-line chip.  Keep each source's render
+     deterministic so hover of a value corresponds to the same place
+     in the detail tooltip. */
+  function _mk(label, src){
+    if (!src || !src.price) return "";
+    const price = `$${Number(src.price).toLocaleString()}`;
+    let flags = "";
+    if (src.match === "same_pattern") flags += "*";       // load/speed differs
+    if (src.match === "size_only")    flags += "?";       // pattern differs
+    const stock = (src.stock && String(src.stock).trim())
+      ? ` (${src.stock})` : "";
+    return `${label}${price}${flags}${stock}`;
+  }
+  const d = _mk("D", j.dealer);
+  const c = _mk("C", j.consumer);
+  if (!d && !c) return;
+  const chip = [d, c].filter(Boolean).join("  ");
+  /* Append to existing Remark value.  Separator "·" so an existing
+     promo tag ("Trueblu (12.00%)") stays readable with the appended
+     chip ("Trueblu (12.00%) · D$620 (12)  C$780"). */
+  const cur = (remEl.value || "").trim();
+  const sep = cur ? " · " : "";
+  remEl.value = cur + sep + chip;
+  /* Hover tooltip — full match detail for both sources. */
+  const _lines = [];
+  function _detail(label, src){
+    if (!src) { _lines.push(`${label}: no match`); return; }
+    const bits = [
+      src.description ? `desc=${src.description}` : "",
+      src.load_speed_seen ? `L/S=${src.load_speed_seen}` : "",
+      src.stock ? `stock=${src.stock}` : "",
+      src.match ? `match=${src.match}` : "",
+      src.mismatch ? `(${src.mismatch})` : "",
+      src.source_file ? `src=${src.source_file}` : "",
+    ].filter(Boolean);
+    _lines.push(`${label}: $${src.price}  ${bits.join("  ")}`);
+  }
+  _detail("Dealer (TempeWebOrder)", j.dealer);
+  _detail("Consumer (Tempe)",       j.consumer);
+  _lines.push("");
+  _lines.push("Legend: * load/speed differs,  ? pattern differs,  (n) stock");
+  remEl.title = _lines.join("\n");
+}
+
 // Given the row's brand + line, look up which of the three customer
 // Base DC values applies and stamp it into the row's base_dc cell.
 // TBR line → TBR (HK & LF fixed 56 %); PCLT line splits by brand.
@@ -3464,6 +3546,10 @@ function applyMaterial(rowEl, data){
   // product_group + qty + customer to decide.  Auto-fills add_dc
   // only when the cell hasn't been keyed manually.
   applyAdditionalDCToRow(rowEl);
+  /* Oct-23 user ask: fire the Tempe dealer/consumer reference-price
+     lookup and append the result as a compact reference chip at the
+     end of the Remark cell.  Non-blocking; silent on no-match. */
+  try { applyTempeRefPriceToRow(rowEl, data); } catch (_e) {}
   /* If the material is in the currently-loaded aged-stock cache
      for this customer's state, tag the row with the matching tier
      and populate Aging DC Guide% + the chained Additional Special
