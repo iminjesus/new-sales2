@@ -4332,6 +4332,63 @@ function openCopyLinesModal(){
     sel.removeAllRanges();
     sel.addRange(rng);
   } catch (_e) {}
+  /* Oct-23 user ask: every Ctrl+C should carry the column HEADERS
+     for the cells the user selected, even when the selection
+     covers only body rows.  Browser's default copy skips the thead
+     unless it's explicitly in the selection — intercept the copy
+     event, figure out which columns the selection touches, and
+     rebuild the TSV with the matching headers on top. */
+  grid.addEventListener("copy", (ev) => {
+    try {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const rng = sel.getRangeAt(0);
+      /* Collect every td/th that intersects the range. */
+      const allCells = Array.from(grid.querySelectorAll("td, th"));
+      const hit = allCells.filter(c => rng.intersectsNode(c));
+      if (!hit.length) return;
+      /* Group hit cells by parent row + remember the column index
+         of each.  Column index comes from the cell's position in
+         its own row.  Mixed thead/tbody selections are supported;
+         we just dedupe thead so we never prepend an EXTRA header
+         row when the user already included it in the selection. */
+      const colsHit = new Set();
+      const rowsMap = new Map();
+      hit.forEach(c => {
+        const tr = c.parentElement;
+        if (!tr) return;
+        const cols = Array.from(tr.children);
+        const idx = cols.indexOf(c);
+        if (idx < 0) return;
+        colsHit.add(idx);
+        if (!rowsMap.has(tr)) rowsMap.set(tr, {kind: c.tagName.toLowerCase(), cells: new Map()});
+        rowsMap.get(tr).cells.set(idx, c.innerText.replace(/\r?\n/g, " ").trim());
+      });
+      const colList = Array.from(colsHit).sort((a, b) => a - b);
+      /* Header row for the hit columns — always on top, even if the
+         user's selection didn't include the thead. */
+      const headerTds = thead.querySelector("tr")?.children || [];
+      const hdrLine = colList.map(i =>
+        (headerTds[i]?.innerText || "").replace(/\s+/g, " ").trim()
+      ).join("\t");
+      /* Preserve document order of selected rows.  Skip the thead
+         row (already represented by hdrLine) to avoid duplication. */
+      const orderedRows = Array.from(rowsMap.keys()).sort((a, b) => {
+        return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1;
+      });
+      const bodyLines = orderedRows
+        .filter(tr => tr.parentElement && tr.parentElement.tagName.toLowerCase() !== "thead")
+        .map(tr => {
+          const m = rowsMap.get(tr).cells;
+          return colList.map(i => m.has(i) ? m.get(i) : "").join("\t");
+        });
+      const payload = [hdrLine, ...bodyLines].join("\n");
+      ev.clipboardData.setData("text/plain", payload);
+      ev.preventDefault();
+    } catch (_e) {
+      /* Fall through to browser default copy on any failure. */
+    }
+  });
 }
 document.addEventListener("DOMContentLoaded", initColumnResizers);
 
