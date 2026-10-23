@@ -20,10 +20,15 @@ Design notes:
   • Connection name defaults to "G.ERP" per the user's SAP Logon
     screenshot — override with env SAP_CONN.
   • Multi-logon dialog is detected by the "already logged on" wording
-    in wnd[1].  We select the "Terminate this logon" radio (radio 3 on
-    the standard dialog) and press ✓, which closes the dialog without
-    kicking the other session.  Then we raise MultiLogonError so the
-    orchestrator can send the warning email + sleep 5 min + retry.
+    in wnd[1].  Oct-23 user ask: the batch now has PRIORITY — we pick
+    "Continue with this logon and end any other logons" (OPT1 radio)
+    so this seat wins and the OTHER desktop's session is terminated.
+    No MultiLogonError is raised; the orchestrator continues as if
+    this were a normal fresh_login.
+  • If an ATTACHED session is detected to have been killed by another
+    logon (SAP's "Back-end session closed by system" popup), we
+    dismiss the popup and fall through to a fresh login, which then
+    hits the multi-logon dialog and steals the seat back.
 """
 import os
 import sys
@@ -357,9 +362,16 @@ def _enter_credentials(session):
 
 
 def _handle_multi_logon(session):
-    """If wnd[1] shows the 'User is already logged on' dialog, select
-    'Terminate this logon' and ✓ it so the dialog closes without
-    bumping the other desktop.  Returns True if the dialog was there."""
+    """If wnd[1] shows the 'User is already logged on' dialog, pick
+    "Continue with this logon and end any other logons" (OPT1) and ✓
+    it so THIS seat wins — the OTHER desktop's session is terminated.
+
+    Oct-23 user ask: "이쪽이 우선이 되서 다른 login을 죽이고라도
+    들어가도록" — the batch has priority; a late operator logon from
+    another desktop must NOT kick the orchestrator off.  Flipped from
+    OPT3 (give up here) to OPT1 (end others, keep this).
+
+    Returns True when the dialog was present and handled."""
     try:
         dlg = session.findById("wnd[1]")
     except Exception:
@@ -374,29 +386,30 @@ def _handle_multi_logon(session):
             except Exception: pass
     except Exception:
         pass
-    if "already logged on" not in txt.lower() and "multiple logon" not in txt.lower():
+    _tl = txt.lower()
+    if "already logged on" not in _tl and "multiple logon" not in _tl:
         return False
-    # The three radios have ids radMULTI_LOGON_OPT1 / 2 / 3 on standard
-    # S/4 and ECC layouts (OPT1 = Continue + end others, OPT2 = Continue
-    # keep others, OPT3 = Terminate).  Fall back by position when the
-    # id drifts.
+    _slog("[multi_logon] dialog present — selecting OPT1 "
+          "(end OTHER logons, keep this seat)")
+    # radMULTI_LOGON_OPT1 = Continue with this logon and end any other
+    # logons in this system.  radRBOX1 is the positional fallback that
+    # some SAP releases use.  Previously we picked OPT3 (terminate
+    # this logon) which gave up the seat — now we take it.
     picked = False
     for rid in [
-        "wnd[1]/usr/radMULTI_LOGON_OPT3",
-        "wnd[1]/usr/radRBOX3",
+        "wnd[1]/usr/radMULTI_LOGON_OPT1",
+        "wnd[1]/usr/radRBOX1",
     ]:
         try:
             session.findById(rid).Select()
             picked = True
+            _slog(f"[multi_logon] selected radio {rid}")
             break
         except Exception:
             continue
     if not picked:
-        # Last-ditch: send Alt-T (Terminate accelerator on English SAP).
-        try:
-            dlg.sendVKey(0)
-        except Exception:
-            pass
+        _slog("[multi_logon] OPT1 radio not found by id — relying on "
+              "SAP's default (usually OPT1 anyway)")
     try:
         session.findById("wnd[1]/tbar[0]/btn[0]").press()  # ✓
     except Exception:
@@ -405,6 +418,41 @@ def _handle_multi_logon(session):
         except Exception:
             pass
     return True
+
+
+def _check_backend_closed(session):
+    """Oct-23 user ask: detect the "HKP: SAP System Message / Back-end
+    session closed by system" popup that appears when another desktop's
+    logon kicks THIS session off the server.  When found: dismiss the
+    popup and return True so the caller tears down this COM session
+    and re-logs in (which will trigger _handle_multi_logon to steal
+    the seat back).  Returns False when no such popup is present."""
+    for wi in (1, 2, 3):
+        try:
+            w = session.findById(f"wnd[{wi}]")
+        except Exception:
+            continue
+        try:
+            txt = str(w.Text or "") + " " + str(getattr(w, "PopupTitle", "") or "")
+        except Exception:
+            txt = ""
+        try:
+            for ci in range(w.Children.Count):
+                try: txt += " " + str(w.Children(ci).Text or "")
+                except Exception: pass
+        except Exception:
+            pass
+        _tl = txt.lower()
+        if "back-end session" in _tl or "closed by system" in _tl \
+                or "session closed" in _tl:
+            _slog(f"[backend_closed] popup detected on wnd[{wi}]: {txt[:200]!r}")
+            try:
+                w.sendVKey(0)   # Enter / OK
+            except Exception:
+                try: w.close()
+                except Exception: pass
+            return True
+    return False
 
 
 def _dump_sap_state(session, label):
@@ -644,9 +692,21 @@ def _ensure_sap_session_once(attempt):
     # 1. Try to attach to an existing logged-in session.
     sess = _try_attach()
     if sess is not None and _is_session_alive(sess):
-        _slog("already logged in — attached; resetting to Easy Access.")
-        _reset_to_home(sess)
-        return sess, "attached"
+        # Oct-23 user ask: before trusting an attached session, check
+        # for the "Back-end session closed by system" popup that
+        # appears when another desktop's logon just killed this one.
+        # If present, treat this seat as dead and fall through to a
+        # fresh login — _handle_multi_logon will then steal the seat
+        # back (OPT1).
+        if _check_backend_closed(sess):
+            _slog("attached session was killed by another logon — "
+                  "popup dismissed, falling through to fresh login "
+                  "so we can re-claim the seat (OPT1).")
+            sess = None
+        else:
+            _slog("already logged in — attached; resetting to Easy Access.")
+            _reset_to_home(sess)
+            return sess, "attached"
     if sess is not None:
         _slog("_try_attach returned a session but it's already DEAD "
               "— falling through to fresh login.")
@@ -680,14 +740,16 @@ def _ensure_sap_session_once(attempt):
     time.sleep(2.5)
 
     # 4. Multi-logon check — if the "already logged on" dialog appears,
-    #    terminate it and bail with MultiLogonError so the caller can
-    #    email the owner + wait + retry.
+    #    pick OPT1 so THIS seat wins and the other logon is terminated.
+    #    Oct-23 user ask: no longer raises MultiLogonError — we take
+    #    the seat and continue.  The orchestrator's old wait-and-retry
+    #    branch becomes a no-op in this flow (kept for backwards
+    #    compat in case a future SAP release blocks OPT1).
     _slog("checking for multi-logon dialog…")
     if _handle_multi_logon(session):
-        _slog("multi-logon dialog handled — raising MultiLogonError.")
-        raise MultiLogonError(
-            f"User {SAP_USER} is already logged on another desktop."
-        )
+        _slog("multi-logon dialog handled — THIS seat kept, other "
+              "logon(s) terminated.  Proceeding as fresh_login.")
+        time.sleep(1.5)  # let SAP settle after the ✓
 
     # 5. Dismiss any licence / disclaimer popup.
     _slog("dismissing any post-login popup (licence / disclaimer / password)…")
