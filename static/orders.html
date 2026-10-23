@@ -2446,6 +2446,25 @@ function _pickMatPopover(idx){
   const mc = r.m_code;
   const mcInp = tr.querySelector('[data-col="m_code"]');
   if (mcInp) {
+    /* Oct-23 bug fix: when the user picks a row from the popover
+       while focused in the Size / Pattern / Product-name cell and
+       then clicks another cell (Qty, DC%, …), that cell loses focus
+       and the browser fires a native `change` because its value
+       changed between focus (user's typed partial, e.g. "225") and
+       blur (the canonical description applyMaterial wrote, e.g.
+       "225/65R17").  The change handler then re-runs
+       fillMaterialFromDesc against the raw size string and resolves
+       to the FIRST m_code matching that size — a different material
+       than the one the user actually picked.
+       Mark the row with a one-shot "suppress next description-side
+       change" flag so the first blur after a pick is swallowed; the
+       deliberate m_code change below is what drives applyMaterial.
+       Auto-clear in 2 s as a safety net so a later genuine edit
+       still re-resolves. */
+    try {
+      tr.dataset.suppressNextMatResolve = "1";
+      setTimeout(() => { try { delete tr.dataset.suppressNextMatResolve; } catch (_e) {} }, 2000);
+    } catch (_e) {}
     mcInp.value = mc;
     /* fire change so fillMaterialFromCode runs the full resolve
        pipeline (base DC, additional DC, aging, promos). */
@@ -4610,7 +4629,18 @@ function newRow(){
      fillMaterialFromCode path. */
   mcodeInp.addEventListener("paste", e => handleMcodePaste(e, tr));
   descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
-  descInp.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
+  descInp.addEventListener("change",  e => {
+    /* Oct-23 fix: swallow the stray blur-change that fires right
+       after a popover pick (applyMaterial rewrote this cell, so the
+       browser treats focus→blur as a value change).  Flag is set in
+       _pickMatPopover; a 2 s auto-clear in the same place protects
+       the next genuine edit. */
+    if (tr.dataset.suppressNextMatResolve === "1") {
+      delete tr.dataset.suppressNextMatResolve;
+      return;
+    }
+    fillMaterialFromDesc(tr, e.target.value);
+  });
   descInp.addEventListener("focus",   e => {
     _matPopoverState.rows = [];
     _hideMatPopover();
@@ -4623,7 +4653,13 @@ function newRow(){
      Description field.  Typing "Dyna" in Product Name or "K435" in
      Pattern fires the same suggest fetch. */
   prodInp?.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
-  prodInp?.addEventListener("change",  e => fillMaterialFromDesc(tr, e.target.value));
+  prodInp?.addEventListener("change",  e => {
+    if (tr.dataset.suppressNextMatResolve === "1") {
+      delete tr.dataset.suppressNextMatResolve;
+      return;
+    }
+    fillMaterialFromDesc(tr, e.target.value);
+  });
   prodInp?.addEventListener("focus",   e => {
     _matPopoverState.rows = [];
     _hideMatPopover();
@@ -4632,7 +4668,13 @@ function newRow(){
   });
   prodInp?.addEventListener("keydown", _matPopoverKeydown);
   patInp?.addEventListener("input",    e => debouncedSuggestMat(e.target.value));
-  patInp?.addEventListener("change",   e => fillMaterialFromDesc(tr, e.target.value));
+  patInp?.addEventListener("change",   e => {
+    if (tr.dataset.suppressNextMatResolve === "1") {
+      delete tr.dataset.suppressNextMatResolve;
+      return;
+    }
+    fillMaterialFromDesc(tr, e.target.value);
+  });
   patInp?.addEventListener("focus",    e => {
     _matPopoverState.rows = [];
     _hideMatPopover();
