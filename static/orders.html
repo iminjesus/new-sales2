@@ -6873,13 +6873,18 @@ async function hydrateSubmittedOrder(oid, editMode){
   });
   // 2. Lines — clear seeded blanks, then rebuild.
   $("#linesBody").innerHTML = "";
-  // Oct-21 user ask: on an APPROVED SPRF the stock numbers must stay
-  // at the saved snapshot — fillStockForRow would otherwise refetch
-  // the live stock_rt values on every open and the reader would see
-  // numbers that drift from what was signed off.  Freeze by setting
-  // tr.dataset.frozenStock BEFORE addRow() so fillStockForRow's
-  // early-return catches on first invocation.
-  const _freezeStock = !!data.approved_by_name;
+  /* Oct-25 user ask: freeze the stock_rt numbers at the moment CS
+     marks SAP=Y, NOT at the approval moment.  Rationale: between
+     approval and SAP entry the CS still needs the LIVE stock so
+     they can decide whether to swap patterns, backorder, etc.  The
+     moment Y is marked, backend has stashed the per-material
+     snapshot into payload.stock_snapshot — hydrate from THAT and
+     block the live refetch via dataset.frozenStock. */
+  const _snapshotMap = (p && typeof p.stock_snapshot === "object" && p.stock_snapshot) || {};
+  const _freezeStock = (String(data.status_sap || "").toUpperCase() === "Y")
+                      && Object.keys(_snapshotMap).length > 0;
+  const _PLANT_TO_COL = { "NSW": "stock_nsw", "QLD": "stock_qld",
+                          "VIC": "stock_vic", "WA":  "stock_wa" };
   (p.lines || []).forEach(ln => {
     addRow();
     const tr = $("#linesBody").lastElementChild;
@@ -6891,9 +6896,30 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (ln._line)          tr.dataset.line         = ln._line;
     if (ln._product_group) tr.dataset.productGroup = ln._product_group;
     if (ln._promo)         tr.dataset.promo        = ln._promo;
-    // Carry the row's cached stock_rt breakdown over too so the
-    // double-click popover still works on frozen (approved) rows.
-    if (ln._stock_rt) {
+    /* Oct-25: when the order is frozen, overlay the saved snapshot
+       onto the 4 state stock cells + dataset.stockRt so the popover
+       breakdown also matches what was captured at Y-mark time.
+       Falls through to ln._stock_rt (older behaviour) when the row
+       isn't in the snapshot map. */
+    const _mc = String(ln.m_code || "").trim();
+    if (_freezeStock && _mc && _snapshotMap[_mc]) {
+      const _byState = _snapshotMap[_mc];   // {NSW:{atp,unrestricted,…}, …}
+      for (const [state, col] of Object.entries(_PLANT_TO_COL)) {
+        const _b = _byState[state] || {};
+        const _atp = +(_b.atp || 0);
+        const _un  = +(_b.unrestricted || 0);
+        const el   = tr.querySelector(`[data-col="${col}"]`);
+        if (el) {
+          el.value = `${_atp}/${_un}`;
+          const _td = el.closest("td");
+          if (_td) _td.classList.toggle("zero", (_atp + _un) <= 0);
+        }
+      }
+      try {
+        tr.dataset.stockRt = JSON.stringify(_byState);
+      } catch (_e) {}
+    } else if (ln._stock_rt) {
+      // Legacy — ln._stock_rt from pre-snapshot submits.
       try {
         tr.dataset.stockRt = typeof ln._stock_rt === "string"
           ? ln._stock_rt
@@ -6949,6 +6975,36 @@ async function hydrateSubmittedOrder(oid, editMode){
   } catch (_e) {}
   $$("#linesBody tr").forEach(tr => recalcRow(tr));
   updateTotals();
+  /* Oct-25 user ask: when stock is frozen (SAP=Y path), override the
+     "Stock Info updated: …" label so it shows the data's interface
+     time captured at Y-mark instead of the live batch_status value.
+     The DOMContentLoaded handler fires first with the live time;
+     this override replaces it the moment hydrate learns the order
+     is frozen.  Non-frozen orders fall through to the live label. */
+  if (_freezeStock) {
+    try {
+      const _src = (p.stock_snapshot_source_at || "").trim();
+      const _at  = document.getElementById("stockRtFreshnessAt");
+      const _lbl = document.getElementById("stockRtFreshness");
+      if (_at && _src) {
+        _at.textContent = _src.length >= 16 ? _src.slice(0, 16) : _src;
+        _at.style.color = "#334155";    // reset any "data is stale" red
+        _at.style.fontStyle = "italic";
+      }
+      if (_lbl) {
+        _lbl.title = "Stock frozen at " +
+          (p.stock_snapshot_at || "—") +
+          "  (data interfaced at " + (_src || "—") + ")";
+        // Prepend a small "frozen" badge in front of the "Stock Info
+        // updated:" text so the status is obvious at a glance.
+        const _txt = _lbl.querySelector("span");
+        if (_txt && !_lbl.dataset.frozenLabelled) {
+          _txt.textContent = "❄ Stock frozen at:";
+          _lbl.dataset.frozenLabelled = "1";
+        }
+      }
+    } catch (_e) {}
+  }
   /* Belt-and-braces — if the recompute above landed on a real
      Trueblu TTL (fillBaseDC → applySOVDRatesToRows already ran),
      leave it alone.  If it ended up at 0 while the persisted

@@ -6739,11 +6739,115 @@ def api_orders_status(oid):
                 "error": "Order has not been approved yet — DO No. and "
                          "Mark-as-Y are locked until approval."
             }), 409
-        cur.execute(
-            "UPDATE submitted_orders SET status_sap = %s, "
-            "  status_changed_at = NOW(), status_changed_by = %s "
-            "WHERE id = %s",
-            (new_stat, who[:255], oid))
+        # Oct-25 user ask: freeze the stock_rt numbers at the moment
+        # Y is marked so re-opening the order later shows the same
+        # figures (not a drifting live view).  Mirror behaviour when
+        # Y → N: wipe the snapshot so the row goes back to live mode.
+        import json as _json_snap
+        _c3 = conn.cursor(dictionary=True)
+        try:
+            _c3.execute(
+                "SELECT payload_json FROM submitted_orders WHERE id = %s LIMIT 1",
+                (oid,))
+            _pr = _c3.fetchone() or {}
+            _pld = _json_snap.loads(_pr.get("payload_json") or "{}")
+            if not isinstance(_pld, dict):
+                _pld = {}
+        except Exception:
+            _pld = {}
+        finally:
+            try: _c3.close()
+            except Exception: pass
+        _snap_json = None
+        if new_stat == "Y":
+            _snap = {}
+            _mcodes = []
+            for ln in (_pld.get("lines") or []):
+                _mc = str(ln.get("m_code") or "").strip()
+                if _mc and _mc not in _mcodes:
+                    _mcodes.append(_mc)
+            if _mcodes:
+                try:
+                    _c4 = conn.cursor(dictionary=True)
+                    _ph = ",".join(["%s"] * len(_mcodes))
+                    _plant_ph = ",".join(["%s"] * len(_ORDER_PLANT_STATE))
+                    _c4.execute(
+                        f"SELECT material, plant, "
+                        f"       SUM(COALESCE(atp_qt, 0))       AS atp, "
+                        f"       SUM(COALESCE(unrestricted, 0)) AS unrestricted, "
+                        f"       SUM(COALESCE(on_order, 0))     AS on_order, "
+                        f"       SUM(COALESCE(at_dock, 0))      AS at_dock, "
+                        f"       SUM(COALESCE(on_water, 0))     AS on_water, "
+                        f"       SUM(COALESCE(factory, 0))      AS factory "
+                        f"FROM stock_rt "
+                        f"WHERE material IN ({_ph}) "
+                        f"  AND plant    IN ({_plant_ph}) "
+                        f"GROUP BY material, plant",
+                        tuple(_mcodes) + tuple(_ORDER_PLANT_STATE.keys()),
+                    )
+                    for r in (_c4.fetchall() or []):
+                        _m  = str(r.get("material") or "").strip()
+                        _st = _ORDER_PLANT_STATE.get(r.get("plant"))
+                        if not _m or not _st:
+                            continue
+                        _snap.setdefault(_m, {})[_st] = {
+                            "atp":          int(float(r.get("atp")          or 0)),
+                            "unrestricted": int(float(r.get("unrestricted") or 0)),
+                            "on_order":     int(float(r.get("on_order")     or 0)),
+                            "at_dock":      int(float(r.get("at_dock")      or 0)),
+                            "on_water":     int(float(r.get("on_water")     or 0)),
+                            "factory":      int(float(r.get("factory")      or 0)),
+                        }
+                    _c4.close()
+                except Exception:
+                    _snap = {}
+            _pld["stock_snapshot"] = _snap
+            _pld["stock_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Oct-25 user ask: freeze the "Stock Info updated" label
+            # too — the operator should see the data's interface time
+            # (when the stock_rt table was loaded), not drift to the
+            # live batch_status value.  Pull it from the batch_status
+            # row we already stamp on each hourly load; fall back to
+            # the stock_rt table's max loaded time; blank if neither
+            # is reachable.
+            try:
+                _bc = conn.cursor(dictionary=True)
+                _bc.execute(
+                    "SELECT v FROM batch_status WHERE k = 'stock_rt_updated_at' LIMIT 1")
+                _br = _bc.fetchone()
+                _src_at = (_br.get("v") if _br else "") or ""
+                if not _src_at:
+                    _bc.execute("SELECT v FROM batch_status WHERE k = 'stock_rt_csv_at' LIMIT 1")
+                    _br = _bc.fetchone()
+                    _src_at = (_br.get("v") if _br else "") or ""
+                _bc.close()
+                _pld["stock_snapshot_source_at"] = _src_at
+            except Exception:
+                _pld["stock_snapshot_source_at"] = ""
+            _snap_json = _json_snap.dumps(_pld, ensure_ascii=False, default=str)
+        else:
+            # Y → N correction path: drop the snapshot so the row goes
+            # back to a live stock_rt read on the next hydrate.
+            _dirty = False
+            for _k in ("stock_snapshot", "stock_snapshot_at",
+                       "stock_snapshot_source_at"):
+                if _pld.pop(_k, None) is not None:
+                    _dirty = True
+            if _dirty:
+                _snap_json = _json_snap.dumps(_pld, ensure_ascii=False, default=str)
+        if _snap_json is not None:
+            cur.execute(
+                "UPDATE submitted_orders SET status_sap = %s, "
+                "  status_changed_at = NOW(), status_changed_by = %s, "
+                "  payload_json = %s "
+                "WHERE id = %s",
+                (new_stat, who[:255], _snap_json, oid))
+        else:
+            cur.execute(
+                "UPDATE submitted_orders SET status_sap = %s, "
+                "  status_changed_at = NOW(), status_changed_by = %s "
+                "WHERE id = %s",
+                (new_stat, who[:255], oid))
         if cur.rowcount == 0:
             return jsonify({"error": "not found"}), 404
         conn.commit()
