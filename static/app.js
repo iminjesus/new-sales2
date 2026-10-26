@@ -43,6 +43,43 @@ if (SHOW_BAR_VALUES && typeof showDataValuesPlugin !== "undefined") {
 })();
 
 const REGION_STACK_ORDER = ["NSW", "QLD", "VIC", "SA", "WA", "COMMON"];
+
+/* ── Stack / legend ordering ────────────────────────────────────
+   For the salesman group-by on Stacked Daily, the user wants the
+   legend ordered NSW → QLD → VIC → SA → WA (same order used for
+   region grouping) with each state's BDEs sorted by their monthly
+   qty descending.  A plain alphabetical / insertion order mixes
+   states together.  This helper maps a group label — region
+   abbreviation OR BDE name — to its REGION_STACK_ORDER slot.
+
+   Match rules:
+     • Exact region name ("NSW") → that region's slot.
+     • BDE name present in REGION_SALESMEN (case-insensitive) →
+       its state's slot.
+     • Anything else (COMMON / "Other" / unknown) → appended after
+       the known slots so it stays at the tail of the legend.
+   The within-state ordering is handled by the caller via a
+   per-group total; this function only returns the state slot. */
+const _STATE_BY_BDE = (() => {
+  const m = {};
+  const n = s => (s == null ? "" : String(s)).trim().toUpperCase();
+  Object.entries(REGION_SALESMEN).forEach(([st, list]) => {
+    (list || []).forEach(name => { m[n(name)] = st; });
+  });
+  return m;
+})();
+function _stackStateSlot(group) {
+  const g = (group == null ? "" : String(group));
+  const regIdx = REGION_STACK_ORDER.indexOf(g);
+  if (regIdx !== -1) return regIdx;                      // group IS a region name
+  const key = g.trim().toUpperCase();
+  const st  = _STATE_BY_BDE[key];
+  if (st) {
+    const idx = REGION_STACK_ORDER.indexOf(st);
+    if (idx !== -1) return idx;
+  }
+  return REGION_STACK_ORDER.length;                      // unknown → tail
+}
   
 /* -------------------------- state & helpers -------------------------- */
 const COLORS=["#374388ff","#90359cff","#3e9150ff","#93b14dff","#d6c635ff","#95E4E5","#275ccfff","#175d96ff","#366592ff","#667c91ff","#FF968A","#FFAEA6"];
@@ -1431,11 +1468,26 @@ function buildDailyStacks(rows){
     })
   )];
 
-  // force region stack order NSW, QLD, VIC, SA, WA, COMMON
-  const ordered = [];
-  REGION_STACK_ORDER.forEach(name => { if (groups.includes(name)) ordered.push(name); });
-  groups.forEach(g => { if (!REGION_STACK_ORDER.includes(g)) ordered.push(g); });
-  groups = ordered;
+  // Sort order (TOP → BOTTOM of legend / stack):
+  //   • NSW BDEs (highest monthly qty first), then QLD, VIC, SA, WA,
+  //     then COMMON / unmapped.
+  //   • For region grouping the group labels ARE the region names,
+  //     so _stackStateSlot returns the slot of the group itself and
+  //     the sort still produces the canonical NSW→COMMON order.
+  //   • For salesman grouping the labels are BDE names; the slot
+  //     comes from REGION_SALESMEN and the within-state tiebreak
+  //     is total qty descending (rawTotals already built above).
+  // We then REVERSE the array so datasets[0] (which Chart.js draws
+  // at Y=0 — the bottom of the stack) becomes the LAST item in the
+  // legend-reading order.  Combined with legend.reverse:true on
+  // the Stacked Daily charts, this gives the user's requested
+  // "top of stack lines up with top of legend" behaviour.
+  groups.sort((a, b) => {
+    const sa = _stackStateSlot(a), sb = _stackStateSlot(b);
+    if (sa !== sb) return sa - sb;
+    return (rawTotals[b] || 0) - (rawTotals[a] || 0);
+  });
+  groups.reverse();
 
   // Determine last day where actual exists (based on rows)
   // - If a day appears in rows (even value 0), treat it as "actual exists"
@@ -1630,23 +1682,33 @@ async function drawDailyStacked(){
   [stackedDailyInst, stackedDailyCumInst, stackedDailyPctInst, stackedDailyCumPctInst]
     .forEach(c=>c&&c.destroy());
 
+  // Oct-27: stacked-daily legends read bottom-of-stack → top-of-
+  // stack by default (Chart.js shows datasets[0] first).  buildDaily-
+  // Stacks reversed `groups` so datasets[0] IS the bottom of the
+  // stack; flipping legend.reverse puts the top-of-stack items at
+  // the top of the legend, matching the stack visually.
+  const _stackedOpts = (max, title) => {
+    const o = getCommonOptions(true, max, title);
+    if (o.plugins && o.plugins.legend) o.plugins.legend.reverse = true;
+    return o;
+  };
   stackedDailyInst = new Chart(document.getElementById("stackedDailyChart"), {
-    type:"bar", data:{ labels, datasets }, options:getCommonOptions(true, undefined, "Daily")
+    type:"bar", data:{ labels, datasets }, options:_stackedOpts(undefined, "Daily")
   });
   // IMPORTANT: match the IDs in your HTML (second box in row 1)
   stackedDailyCumInst = new Chart(document.getElementById("stackedDailyCumChart"), {
-    type:"bar", data:{ labels, datasets:datasetsCum }, options:getCommonOptions(true, undefined, "Cumulative by Day")
+    type:"bar", data:{ labels, datasets:datasetsCum }, options:_stackedOpts(undefined, "Cumulative by Day")
   });
   // Boundary connector lines — this chart has 1 bar per day so the
   // reader can trace region-share drift across days.  Drawn on top of
   // the bars via an inline plugin so the line hugs each bar's left/
   // right pixel edges (true edge-to-edge, not centre-to-centre).
   stackedDailyPctInst = new Chart(document.getElementById("stackedDailyPercentChart"), {
-    type:"bar", data:{ labels, datasets:datasetsPct },  options:getCommonOptions(true, 100, "Daily %"),
+    type:"bar", data:{ labels, datasets:datasetsPct },  options:_stackedOpts(100, "Daily %"),
     plugins: [makeBoundaryLinesPlugin(groups, pct)]
   });
   stackedDailyCumPctInst = new Chart(document.getElementById("stackedDailyCumPercentChart"), {
-    type:"bar", data:{ labels, datasets:datasetsPctC }, options:getCommonOptions(true, 100, "Cumulative %"),
+    type:"bar", data:{ labels, datasets:datasetsPctC }, options:_stackedOpts(100, "Cumulative %"),
     plugins: [makeBoundaryLinesPlugin(groups, pctCum)]
   });
 }
