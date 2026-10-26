@@ -5037,18 +5037,10 @@ def api_orders_additional_dc():
                 if cust_group in ("ATD", "ATM") and not is_tbr_line:
                     is_hm = (cust_channel == "MFC") or (cust_group == "ATM")
                     override_base_dc = 52.0 if is_hm else 50.0
-                elif cust_group == "ATP" and not is_tbr_line:
-                    # Oct-23 user ask: ATP + 443-tagged promo match →
-                    # Base DC = 51 %.  PER-MATERIAL (unlike ATD/ATM
-                    # where the override is customer-wide): fires only
-                    # when THIS material's matched dc_additional_customer
-                    # row carries a promo column containing "443".  A
-                    # non-443 promo match (or no match at all — early-
-                    # return handles that) leaves override_base_dc as
-                    # None so the frontend keeps the master Base DC.
-                    _matched_promo = str(row.get("promo") if row else "").upper()
-                    if row and "443" in _matched_promo:
-                        override_base_dc = 51.0
+                # Oct-26: ATP + 443 promo → 51% override was removed
+                # on user request.  ATP customers now follow the same
+                # Base DC rules as any non-ATD/ATM customer — the
+                # dc_basic_customer master value stands.
         except Exception:
             override_base_dc = None
         out["override_base_dc"] = override_base_dc
