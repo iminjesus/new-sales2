@@ -18660,9 +18660,12 @@ _BDE_DIRECTORY = [
     ("Robinson Peter",   "peter.robinson@hankooktyre.com.au",   "NSW", "BDE"),
     ("Buckley Paul",     "paul.buckley@hankooktyre.com.au",     "NSW", "SM"),
     # Oct-27: Alessio Borghese replaced by Luca Borghese (NSW BDE
-    # seat).  Email pattern follows the house firstname.lastname
-    # convention — verify + adjust if HR confirms a different alias.
+    # seat); Brett Vallis joined as a second NSW BDE (already in
+    # BDE_MANAGER_CC → Paul Buckley).  Email pattern follows the
+    # house firstname.lastname convention — verify + adjust if HR
+    # confirms a different alias.
     ("Borghese Luca",    "luca.borghese@hankooktyre.com.au",    "NSW", "BDE"),
+    ("Vallis Brett",     "brett.vallis@hankooktyre.com.au",     "NSW", "BDE"),
     ("Makris George",    "george.makris@hankooktyre.com.au",    "NSW", "BDE"),
     # QLD
     ("Marsh Aaron",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
