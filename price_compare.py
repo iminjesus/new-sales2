@@ -176,9 +176,21 @@ def _pattern_key(desc, size, abbr):
     s = desc.strip()
     # Strip trailing load rating: "91V" / "88Y XL" / "108T" / "94/92R"
     s = re.sub(r'\s+\d{2,3}(?:/\d{2,3})?[A-Za-z]{1,2}(?:\s+XL)?\s*$', '', s)
+    # Oct-26: Tempe WebOrder descriptions put the load rating at the
+    # START instead of the end — "84H K435 KINERGY ECO2",
+    # "107/103S ALL-TERRAIN T/A KO3", "91V SK10 ROAD FIT".  Without
+    # stripping it, every load variant of the same pattern (84H / 86H /
+    # 91H / 94H …) becomes its own legend line, so the chart shows a
+    # cloud of near-duplicate labels instead of one line per pattern.
+    s = re.sub(r'^\s*\d{2,3}(?:/\d{2,3})?[A-Za-z]{1,2}\s+', '', s)
     # Strip any remaining trailing badge / spec suffix so "Primacy 5
     # XL" or "Grandtrek AT5 M+S" doesn't inflate the label.
     s = re.sub(r'\s+(?:XL|OWT|RWL|OBL|TL|TT|FR|MFS|DOT|M\+S)\s*$',
+               '', s, flags=re.IGNORECASE)
+    # Also drop those badges when they sit at the START of a Tempe
+    # description that already had load stripped — e.g. "RWL ALL-
+    # TERRAIN T/A KO3".
+    s = re.sub(r'^\s*(?:XL|OWT|RWL|OBL|TL|TT|FR|MFS|DOT|M\+S)\s+',
                '', s, flags=re.IGNORECASE)
     s = s.strip(' -–|,')
     if s:
@@ -248,15 +260,24 @@ def build_data(monthly):
     # the product changed month-over-month or fell back to the
     # COMPETITOR_PATTERNS filter because Tempe had no reference row.
     def _mk_slots():
+        # Oct-26 ask: TempeWOS Sell Out / Sell In also need per-point
+        # descriptions AND per-pattern series dicts so the By-Brand
+        # legend reads "KH Kumho — Kinergy Eco2 K425" (and extra dashed
+        # lines for sibling patterns) instead of a bare "KH Kumho".
+        # The CSV from tempeweborder_crawling_extend.py already carries
+        # the full desc (e.g. "84H K435 KINERGY ECO2" or "107/103S
+        # ALL-TERRAIN T/A KO3") — we just weren't exposing it before.
         return {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
                 "tempe_d": [], "bj_d": [], "jax_d": [],
+                "tw_d":    [], "twi_d":  [],
                 "bj_f":    [], "jax_f":  [],
                 # Per-pattern series: pattern_label → {prices, descs}
                 # Populated month-by-month below.  Front-end expands
                 # these into extra dashed lines on the "By Brand"
                 # chart so competing series (Kinergy Eco 2 vs Kinergy
                 # GT for HK/K135) show up side-by-side.
-                "jax_series": {}, "bj_series": {}}
+                "jax_series": {}, "bj_series": {},
+                "tw_series":  {}, "twi_series": {}}
     size_data = {s: {a: _mk_slots() for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
@@ -331,10 +352,15 @@ def build_data(monthly):
                 size_data[size][abbr]["tw"].append(tw_price)
                 size_data[size][abbr]["twi"].append(twi_price)
 
-                # Descriptions (per month) — used by the front-end tooltip.
-                size_data[size][abbr]["tempe_d"].append(t_desc  or "")
-                size_data[size][abbr]["bj_d"].append(bj_desc    or "")
-                size_data[size][abbr]["jax_d"].append(jx_desc   or "")
+                # Descriptions (per month) — used by the front-end tooltip
+                # AND (for tw/twi, Oct-26) by _guessPatternFromDescs() so
+                # the Legend reads e.g. "KH Kumho — Centara 3 CT667"
+                # instead of a bare "KH Kumho".
+                size_data[size][abbr]["tempe_d"].append(t_desc    or "")
+                size_data[size][abbr]["bj_d"].append(bj_desc      or "")
+                size_data[size][abbr]["jax_d"].append(jx_desc     or "")
+                size_data[size][abbr]["tw_d"].append(_tw_desc     or "")
+                size_data[size][abbr]["twi_d"].append(_twi_desc   or "")
 
                 # Flag: "cat_fb" when the row came from the
                 # COMPETITOR_PATTERNS fallback (Tempe had no reference),
@@ -355,6 +381,23 @@ def build_data(monthly):
                 _accumulate_series("bj", bj_lk.get((size, abbr), []),
                                    size, abbr,
                                    size_data[size][abbr]["bj_series"],
+                                   mk_idx, price_idx=1)
+                # Oct-26 ask: same per-pattern breakdown for TempeWOS
+                # Sell Out (tw) and Sell In (twi).  tw_lk tuples are
+                # (desc, sell_in_price, sell_out_price), so Sell Out
+                # reads index 2 and Sell In reads index 1.  Without
+                # these the By-Brand chart's TempeWOS views only ever
+                # drew ONE line per brand with no pattern label in the
+                # legend — e.g. "KH Kumho" alone, instead of
+                # "KH Kumho — Centara 3 CT667" plus dashed sibling
+                # lines for the other patterns in the same size.
+                _accumulate_series("tw", tw_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["tw_series"],
+                                   mk_idx, price_idx=2)
+                _accumulate_series("twi", tw_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["twi_series"],
                                    mk_idx, price_idx=1)
 
                 if t_price:   tp.append(t_price)
@@ -1275,8 +1318,11 @@ function _descsFor(abbr, size, store) {
     if (abbr === 'ALL' || size === 'ALL') return months.map(() => '');
     const bsd = (D.brand_size_data[abbr] || {})[size];
     if (!bsd) return months.map(() => '');
-    // Only tempe / bj / jax have desc arrays; tw/twi share their
-    // tempe-lookup style so no per-point description is stored.
+    // All five stores now expose <store>_d (tempe / bj / jax / tw / twi)
+    // so the Legend's _guessPatternFromDescs fallback and the tooltip
+    // both have real product descriptions to show.  Oct-26 fix: before
+    // this, tw/twi returned a blank-month array here, which is why the
+    // Legend on the TempeWOS views read just "KH Kumho" with no pattern.
     const key = store + '_d';
     return bsd[key] || months.map(() => '');
 }
