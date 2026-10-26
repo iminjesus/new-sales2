@@ -6719,54 +6719,12 @@ async function hydrateSubmittedOrder(oid, editMode){
   // read it off window instead of threading through callbacks).
   window._currentOrderId = data.id;
 
-  /* Oct-23 user ask: single-user SAP-entry lock, extended to EVERY
-     viewer (not just CS).  When the order is Approved or Standard-
-     Pricing AND SAP=N, only ONE person can hold the detail open at
-     a time.  Try to claim the lock; if someone else holds a fresh
-     lock, the prompt NAMES who it is and the viewer is bounced back
-     to the list.  Lock auto-expires after the backend's TTL so a
-     browser tab closed without releasing never permanently blocks. */
-  try {
-    const _lockR = await fetch(
-      `/api/orders/detail/${oid}/claim_sap_lock`,
-      {method: "POST", credentials: "same-origin"}
-    );
-    const _lockJ = await _lockR.json();
-    if (_lockJ && _lockJ.needed === false) {
-      /* Order no longer qualifies for the lock (SAP already Y, or
-         Pending approval, or caller is unauthenticated).  Proceed. */
-    } else if (_lockJ && _lockJ.ok && _lockJ.mine) {
-      /* We own the lock — stamp window state so beforeunload can
-         release it on tab-close. */
-      window._sapLockOid = oid;
-      window._sapLockMine = true;
-    } else if (_lockJ && _lockJ.ok === false) {
-      /* Someone else holds a fresh lock.  Show a blocking modal
-         and bounce to the list after acknowledgement.  The holder's
-         display name comes from the backend's universal
-         _display_name_for() resolver so we always have a readable
-         label (CS name / approver / Brian·Pamela / BDE / local-part). */
-      const _by  = _lockJ.by_name || _lockJ.by || "another user";
-      const _at  = _lockJ.at || "";
-      const _rem = _lockJ.minutes_left != null ? _lockJ.minutes_left : "?";
-      const msg = `This order is currently open by ${_by}` +
-                  (_at ? ` since ${_at}` : "") +
-                  `.\n\nOnly one user can hold an SAP-pending order ` +
-                  `at a time.  Try again in about ${_rem} minute(s), ` +
-                  `or coordinate directly with ${_by}.`;
-      if (typeof showNotice === "function") {
-        await showNotice(msg);
-      } else {
-        alert(msg);
-      }
-      location.href = "/orders_list";
-      return;
-    }
-  } catch (_e) {
-    /* Lock claim failed over the network — soft-fail; proceed so a
-       transient /claim outage doesn't lock a legit viewer out. */
-    console.warn("SAP lock claim failed:", _e);
-  }
+  /* Oct-26 user clarification: previously the SAP lock was claimed
+     at hydrate time, which blocked a second user from even OPENING
+     the order to look.  User wants viewing to always be allowed —
+     the lock only matters at the moment someone tries to EDIT.
+     Lock-claim therefore moved into the canEdit branch below; the
+     hydrate path proceeds without any lock interaction. */
   const p = data.payload || {};
   // Push the persisted payment-method flags back onto the form so a
   // reloaded COD / Credit Card order keeps its ticks, the matching
@@ -7076,7 +7034,7 @@ async function hydrateSubmittedOrder(oid, editMode){
          AFTER approval too, for SAP-entry touch-ups (adjust a line
          qty, swap a pattern) — their save goes through /update which
          (when is_harry) preserves the approval slots. */
-  const canEdit = isTempDraft
+  let canEdit = isTempDraft
       ? (isSubmitterMatch || who.role === "ALL")
       : (editMode || isAllowedUpdater);
   // CS stays in edit mode even on an already-approved order so they
@@ -7151,6 +7109,50 @@ async function hydrateSubmittedOrder(oid, editMode){
      current order state and the viewer's role. */
   wireRejectBtns(data, who);
   wireCancelReviveBtns(data, who);
+  /* Oct-26 user ask: single-user LOCK gates EDIT only (not view).
+     Try to claim the SAP-entry lock the moment we're about to flip
+     inputs editable.  Rules:
+       • "needed === false"      → lock doesn't apply to this order
+                                   (SAP already Y / pending approval
+                                   / unauthenticated).  Edit proceeds.
+       • "ok && mine"            → we hold the lock.  Edit proceeds.
+       • "ok === false"          → someone else holds a fresh lock.
+                                   DO NOT bounce the user out — they
+                                   can still view.  Just block editing:
+                                   show a notice, demote canEdit=false,
+                                   and the view-only branch below runs. */
+  if (canEdit) {
+    try {
+      const _lockR = await fetch(
+        `/api/orders/detail/${oid}/claim_sap_lock`,
+        {method: "POST", credentials: "same-origin"},
+      );
+      const _lockJ = await _lockR.json();
+      if (_lockJ && _lockJ.needed === false) {
+        /* No lock applies — proceed. */
+      } else if (_lockJ && _lockJ.ok && _lockJ.mine) {
+        window._sapLockOid  = oid;
+        window._sapLockMine = true;
+      } else if (_lockJ && _lockJ.ok === false) {
+        const _by  = _lockJ.by_name || _lockJ.by || "another user";
+        const _at  = _lockJ.at || "";
+        const _rem = _lockJ.minutes_left != null ? _lockJ.minutes_left : "?";
+        const msg =
+          `${_by} is currently editing this order` +
+          (_at ? ` since ${_at}` : "") +
+          `.\n\nYou can view it in read-only, but editing is blocked ` +
+          `until the other session finishes (about ${_rem} min) ` +
+          `or you coordinate directly with ${_by}.`;
+        if (typeof showNotice === "function") { await showNotice(msg); }
+        else { alert(msg); }
+        canEdit = false;
+      }
+    } catch (_e) {
+      /* Lock-claim network failure — soft-fail so a transient
+         outage doesn't block a legit editor. */
+      console.warn("SAP lock claim failed:", _e);
+    }
+  }
   if (canEdit){
     // Unlock inputs — the form is editable in this state.
     $("#btnAddRow").disabled = false;

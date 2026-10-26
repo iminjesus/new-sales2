@@ -5277,18 +5277,31 @@ def _filter_notify_recipients(to_list, cc_list, requester_email=None):
     return nt, nc
 
 
-# Oct-22 user ask: Kenny Kim keeps approval authority (route unchanged)
-# but every approval/rejection he writes should be RECORDED and
-# DISPLAYED as JunJong Cho's.  Returns (effective_email, display_name,
-# slot_column) so the approve/reject writers can swap in JJ's identity
-# in one place.  Non-Kenny approvers pass through unchanged.
-def _effective_approver_identity(who):
+# Oct-22 original ask: Kenny Kim keeps approval authority (route
+# unchanged) but could act "as JJ" on MD-only requests.
+#
+# Oct-26 user clarification:
+#   "Kenny 가 JJ 결재 대상인 것을 결재할 수 있다고 했지, Kenny 가
+#    결재할 수 있는 것을 Kenny 가 결재한 경우는 당연히 Kenny 가
+#    결재한 것으로 남아야 함"
+#
+# Translation: Kenny only acts "as JJ" when the request is MD-only
+# (JJ-only).  When Kenny acts on a request that any approver could
+# handle, the record MUST stay as Kenny.
+#
+# `md_required` flips the behaviour:
+#   True  → Kenny's action is recorded as JJ (he's standing in for JJ)
+#   False → Kenny's action stays as Kenny (he's acting as himself)
+# Hayden / JJ pass through unchanged either way.
+def _effective_approver_identity(who, md_required: bool = False):
     e = (who or "").strip().lower()
-    kenny = MGMT_APPROVER_EMAILS[2].lower()
-    jj    = MGMT_APPROVER_EMAILS[1].lower()
+    kenny  = MGMT_APPROVER_EMAILS[2].lower()
+    jj     = MGMT_APPROVER_EMAILS[1].lower()
     hayden = MGMT_APPROVER_EMAILS[0].lower()
     if e == kenny:
-        return jj, "JJ", "approved_b"
+        if md_required:
+            return jj, "JJ", "approved_b"
+        return kenny, "Kenny", "approved_c"
     if e == jj:
         return jj, "JJ", "approved_b"
     if e == hayden:
@@ -7596,11 +7609,51 @@ def api_orders_approve(oid):
     end to escalate."""
     import json as _json_md
     who_raw = (_bde_from_request() or "").strip().lower()
-    # Oct-22 user ask: Kenny Kim keeps his approval authority but every
-    # record / display reads as JunJong Cho's.  _effective_approver_
-    # identity returns (effective_email, display_name, slot_column) so
-    # Kenny's clicks land in slot B as "JJ" instead of slot C "Kenny".
-    who, approver_name, approver_col = _effective_approver_identity(who_raw)
+    # Oct-26 user clarification: Kenny Kim's identity remap now hinges
+    # on whether this request is MD-only.  Compute md_required first
+    # from the stored payload so the identity call below knows which
+    # branch to take.
+    _md_conn = get_connection(); _md_cur = _md_conn.cursor(dictionary=True)
+    try:
+        try:
+            _md_cur.execute(
+                "SELECT avg_dc_pct, payload_json FROM submitted_orders "
+                "WHERE id = %s LIMIT 1", (oid,))
+            _pre_md = _md_cur.fetchone() or {}
+            _avg_dc_pre = float(_pre_md.get("avg_dc_pct") or 0)
+            _pj_pre     = _pre_md.get("payload_json") or "{}"
+        except Exception:
+            _avg_dc_pre = 0.0
+            _pj_pre     = "{}"
+    finally:
+        try: _md_cur.close()
+        except Exception: pass
+        try: _md_conn.close()
+        except Exception: pass
+    def _f_pre(v):
+        try: return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
+        except Exception: return 0.0
+    _md_lines_pre = 0
+    try:
+        _pj_md = _json_md.loads(_pj_pre)
+        for _ln in (_pj_md.get("lines") or []):
+            if _f_pre(_ln.get("aging_dc")) > 0: continue
+            if (_f_pre(_ln.get("mth_dc")) == 0
+                    and _f_pre(_ln.get("vol_dc")) == 0
+                    and _f_pre(_ln.get("add_dc")) == 0):
+                continue
+            if _f_pre(_ln.get("proposed_dc")) >= 64.0:
+                _md_lines_pre += 1
+    except Exception:
+        _md_lines_pre = 1 if _avg_dc_pre >= 64.0 else 0
+    _md_required_now = _md_lines_pre > 0
+    # Kenny acts "as JJ" ONLY on MD-only requests; otherwise he's
+    # recorded as Kenny himself.  (Oct-26 user clarification —
+    # Oct-22 behaviour unconditionally remapped Kenny to JJ, which
+    # masked who actually clicked on standard non-MD orders.)
+    who, approver_name, approver_col = _effective_approver_identity(
+        who_raw, md_required=_md_required_now,
+    )
     if not approver_col:
         return jsonify({"error": "only the named approvers can approve"}), 403
     # Optional free-form comment the approver types in the modal
@@ -7773,8 +7826,48 @@ def api_orders_reject(oid):
     on the list with a red "Rejected" badge and the reject_note on
     display."""
     who_raw = (_bde_from_request() or "").strip().lower()
-    # Oct-22 user ask: Kenny Kim's reject records read as JJ Cho's too.
-    who, rejector_name, _slot = _effective_approver_identity(who_raw)
+    # Oct-26 user clarification: Kenny Kim's reject records read as JJ
+    # only when the order is MD-only.  Standard non-MD rejects stay as
+    # Kenny so the audit trail reflects who actually clicked.  Compute
+    # md_required from the stored payload first.
+    import json as _json_rej
+    _mr_conn = get_connection(); _mr_cur = _mr_conn.cursor(dictionary=True)
+    try:
+        try:
+            _mr_cur.execute(
+                "SELECT avg_dc_pct, payload_json FROM submitted_orders "
+                "WHERE id = %s LIMIT 1", (oid,))
+            _pre_r = _mr_cur.fetchone() or {}
+            _avg_r = float(_pre_r.get("avg_dc_pct") or 0)
+            _pj_r  = _pre_r.get("payload_json") or "{}"
+        except Exception:
+            _avg_r = 0.0
+            _pj_r  = "{}"
+    finally:
+        try: _mr_cur.close()
+        except Exception: pass
+        try: _mr_conn.close()
+        except Exception: pass
+    def _fr(v):
+        try: return float(str(v or "0").replace(",", "").replace("$", "").replace("%", ""))
+        except Exception: return 0.0
+    _md_lines_r = 0
+    try:
+        _pj_rr = _json_rej.loads(_pj_r)
+        for _ln in (_pj_rr.get("lines") or []):
+            if _fr(_ln.get("aging_dc")) > 0: continue
+            if (_fr(_ln.get("mth_dc")) == 0
+                    and _fr(_ln.get("vol_dc")) == 0
+                    and _fr(_ln.get("add_dc")) == 0):
+                continue
+            if _fr(_ln.get("proposed_dc")) >= 64.0:
+                _md_lines_r += 1
+    except Exception:
+        _md_lines_r = 1 if _avg_r >= 64.0 else 0
+    _md_required_r = _md_lines_r > 0
+    who, rejector_name, _slot = _effective_approver_identity(
+        who_raw, md_required=_md_required_r,
+    )
     if not rejector_name:
         return jsonify({"error": "only the named approvers can reject"}), 403
     try:
