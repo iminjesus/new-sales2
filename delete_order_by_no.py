@@ -1,15 +1,24 @@
 """
-delete_order_by_no.py — safe draft deletion helper.
+delete_order_by_no.py — safe hard-delete helper for submitted_orders.
 
 Usage (PowerShell OR cmd):
+    # Default: drafts only (safe)
     python delete_order_by_no.py T261022_022N T261022_019N
 
+    # Hard-delete a SUBMITTED order (approved / rejected / standard).
+    # Requires typing "DELETE" at the confirm prompt so a stray run
+    # can't nuke live rows.
+    python delete_order_by_no.py 261026_011N --force
+
 Rules the script enforces:
-  • Only rows with needs_mgmt_approval = 'temp' (drafts) can be
-    hard-deleted.  Anything else (Y / N / R / blank) is refused.
-    Submitted orders should be soft-deleted via the UI's Delete
-    button so the audit trail is kept intact.
-  • A dry-run SELECT is printed first; the actual DELETE then runs.
+  • Default mode (no --force): only rows with needs_mgmt_approval
+    = 'temp' (drafts) are deleted; anything else is refused.
+  • --force mode: deletes ANY matched row AFTER an explicit typed
+    confirmation.  Use when the Submitted Orders UI's soft-delete
+    isn't enough (e.g. the submitter can't be impersonated or you
+    want the row completely gone, not just greyed out).
+  • A dry-run SELECT is printed first so you can verify who / what
+    before the DELETE runs.
   • Credentials come from the same .env batch_orchestrator.py uses,
     so no secrets end up on your PowerShell history.
 
@@ -75,9 +84,18 @@ def _db_conn():
 
 def main(argv):
     if not argv:
-        print("Usage: python delete_order_by_no.py <order_no> [order_no ...]")
+        print("Usage: python delete_order_by_no.py <order_no> [order_no ...] [--force]")
         return 1
-    order_nos = [a.strip() for a in argv if a.strip()]
+    force = False
+    cleaned = []
+    for a in argv:
+        a = a.strip()
+        if not a: continue
+        if a == "--force":
+            force = True
+            continue
+        cleaned.append(a)
+    order_nos = cleaned
     if not order_nos:
         print("No order_no supplied.")
         return 1
@@ -87,7 +105,8 @@ def main(argv):
         ph = ",".join(["%s"] * len(order_nos))
         cur.execute(
             f"SELECT id, order_no, submitted_by_email, submitted_by_bde, "
-            f"       sold_to_name, needs_mgmt_approval, submitted_at "
+            f"       sold_to_name, needs_mgmt_approval, submitted_at, "
+            f"       approved_by_name, rejected_by_name, status_sap "
             f"FROM submitted_orders WHERE order_no IN ({ph})",
             tuple(order_nos),
         )
@@ -99,24 +118,52 @@ def main(argv):
         for r in rows:
             print(f"  id={r['id']:>6}  order_no={r['order_no']}  "
                   f"state={r['needs_mgmt_approval']!r:>6}  "
+                  f"approved_by={r.get('approved_by_name')!r}  "
+                  f"rejected_by={r.get('rejected_by_name')!r}  "
+                  f"sap={r.get('status_sap')!r}  "
                   f"bde={r['submitted_by_bde']!r}  "
                   f"email={r['submitted_by_email']!r}  "
                   f"customer={r['sold_to_name']!r}  "
                   f"at={r['submitted_at']}")
-        # Refuse anything that is not a draft.
         non_drafts = [r for r in rows
                       if (r.get("needs_mgmt_approval") or "").strip().lower() != "temp"]
-        if non_drafts:
+        if non_drafts and not force:
             print()
             print("REFUSED — the following rows are NOT drafts:")
             for r in non_drafts:
                 print(f"  id={r['id']}  order_no={r['order_no']}  "
                       f"state={r['needs_mgmt_approval']!r}")
             print()
-            print("Delete submitted orders through the Submitted Orders UI "
-                  "so the deleted_by_* / deleted_at audit columns are set.")
+            print("Options:")
+            print("  (a) Soft-delete via the Submitted Orders UI's Delete button")
+            print("      — keeps the row with deleted_by_* / deleted_at stamps.")
+            print("  (b) Re-run with --force to HARD-DELETE these rows (irreversible).")
+            print("      e.g.: python delete_order_by_no.py", " ".join(order_nos), "--force")
             return 1
-        # All drafts — hard delete.
+        if force and non_drafts:
+            # Oct-26 user ask: safeguard against a stray --force run
+            # by requiring an explicit typed confirmation that names
+            # the row count.
+            print()
+            print(f"⚠  --force will HARD-DELETE {len(rows)} row(s), "
+                  f"{len(non_drafts)} of which are NOT drafts.")
+            print(f"⚠  This is IRREVERSIBLE — no audit trail is kept.")
+            try:
+                ans = input('    Type exactly "DELETE" to proceed: ')
+            except Exception:
+                ans = ""
+            if ans.strip() != "DELETE":
+                print("Confirmation did not match — nothing deleted.")
+                return 1
+            cur.execute(
+                f"DELETE FROM submitted_orders WHERE order_no IN ({ph})",
+                tuple(order_nos),
+            )
+            conn.commit()
+            print()
+            print(f"Hard-deleted {cur.rowcount} row(s).")
+            return 0
+        # All drafts path — safe hard delete gated by needs_mgmt_approval='temp'.
         cur.execute(
             f"DELETE FROM submitted_orders WHERE order_no IN ({ph}) "
             f"AND needs_mgmt_approval = 'temp'",
