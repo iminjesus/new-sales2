@@ -112,7 +112,11 @@ function makeBoundaryLinesPlugin(groups, pctByGroup) {
   };
 }
 const REGION_SALESMEN={
-  NSW:["Makris George","Borghese Alessio","Buckley Paul"],
+  // Oct-27: Alessio Borghese seat taken over by Luca Borghese.  The
+  // DB (customer.salesman_name, target_26.bde) is swapped by SQL in
+  // the same change; this list is just the UI's roster of known
+  // BDEs for the Monthly KPI table and the Daily Sales chart.
+  NSW:["Makris George","Borghese Luca","Buckley Paul"],
   QLD:["Maclure Adam","Spires Steven","Bovey Craig","Marsh Aaron"],
   VIC:["Ducie Robert","Bilston Kelley","Gultjaeff Jason","Hobkirk Calvin"],
   WA:["DAIS Jim","Asim Qureshi"]

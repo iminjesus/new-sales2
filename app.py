@@ -5077,8 +5077,9 @@ HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
 BDE_MANAGER_CC = {
     # Paul Buckley manages:
     "MAKRIS GEORGE":    "paul.buckley@hankooktyre.com.au",
+    # Oct-27: Alessio Borghese seat taken over by Luca Borghese
+    # (Luca already had an entry; Alessio's entry removed).
     "BORGHESE LUCA":    "paul.buckley@hankooktyre.com.au",
-    "BORGHESE ALESSIO": "paul.buckley@hankooktyre.com.au",
     "VALLIS BRETT":     "paul.buckley@hankooktyre.com.au",
     # Aaron Marsh manages:
     "MACLURE ADAM":     "aaron.marsh@hankooktyre.com.au",
@@ -18658,7 +18659,10 @@ _BDE_DIRECTORY = [
     # NSW
     ("Robinson Peter",   "peter.robinson@hankooktyre.com.au",   "NSW", "BDE"),
     ("Buckley Paul",     "paul.buckley@hankooktyre.com.au",     "NSW", "SM"),
-    ("Borghese Alessio", "alessio.borghese@hankooktyre.com.au", "NSW", "BDE"),
+    # Oct-27: Alessio Borghese replaced by Luca Borghese (NSW BDE
+    # seat).  Email pattern follows the house firstname.lastname
+    # convention — verify + adjust if HR confirms a different alias.
+    ("Borghese Luca",    "luca.borghese@hankooktyre.com.au",    "NSW", "BDE"),
     ("Makris George",    "george.makris@hankooktyre.com.au",    "NSW", "BDE"),
     # QLD
     ("Marsh Aaron",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
