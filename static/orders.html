@@ -7086,10 +7086,73 @@ async function hydrateSubmittedOrder(oid, editMode){
         && isAllowedUpdater;
     if (_showEdit){
       eBtn.hidden = false;
-      eBtn.onclick = () => {
+      eBtn.onclick = async () => {
+        /* Oct-26 user ask: Edit-button flow must try to CLAIM the
+           SAP-entry lock up front.
+             • If someone else holds a fresh lock → notice, stay in
+               view-only, and remember that we were blocked so a
+               later successful claim can offer the "content may
+               have been updated" reload prompt.
+             • If we claim the lock cleanly:
+                 - prior contention? → confirm "The other user has
+                   finished editing — content may have been updated.
+                   Continue?"  Yes: reload with ?edit=1.  No: release
+                   the lock we just claimed and stay in view-only.
+                 - no prior contention → reload with ?edit=1 as
+                   before. */
+        try {
+          const _r = await fetch(
+            `/api/orders/detail/${oid}/claim_sap_lock`,
+            {method: "POST", credentials: "same-origin"});
+          const _j = await _r.json();
+          const _needed = !(_j && _j.needed === false);
+          const _mine   = !!(_j && _j.ok && _j.mine);
+          if (_needed && !_mine && _j && _j.ok === false) {
+            const _by  = _j.by_name || _j.by || "another user";
+            const _at  = _j.at || "";
+            const _rem = _j.minutes_left != null ? _j.minutes_left : "?";
+            const _msg = `${_by} is currently editing this order` +
+                        (_at ? ` since ${_at}` : "") +
+                        `.\n\nEdit is blocked until the other session ` +
+                        `finishes (about ${_rem} min) or you coordinate ` +
+                        `directly with ${_by}.`;
+            if (typeof showNotice === "function") await showNotice(_msg);
+            else alert(_msg);
+            window._sapLockWasBlocked = true;
+            window._sapLockPrevBy     = _by;
+            return;   // stay in view-only
+          }
+          if (_mine) {
+            window._sapLockOid  = oid;
+            window._sapLockMine = true;
+          }
+          if (window._sapLockWasBlocked) {
+            const _prev = window._sapLockPrevBy || "another user";
+            const _ok = window.confirm(
+              `${_prev} has finished editing this order.\n\n` +
+              `The content may have been updated.  The page will ` +
+              `reload with the latest version before entering edit ` +
+              `mode.\n\nContinue?`
+            );
+            if (!_ok) {
+              /* Release the lock we just claimed since the user
+                 declined to proceed.  sendBeacon is fire-and-
+                 forget — the TTL would release eventually anyway. */
+              try { navigator.sendBeacon(
+                `/api/orders/detail/${oid}/release_sap_lock`); } catch (_e) {}
+              window._sapLockOid  = null;
+              window._sapLockMine = false;
+              return;
+            }
+            window._sapLockWasBlocked = false;
+          }
+        } catch (_e) {
+          /* Soft-fail — proceed with the reload so a transient
+             outage doesn't block a legit editor. */
+          console.warn("SAP lock claim failed:", _e);
+        }
         /* Reload the same order with ?edit=1 so hydrate lands in
-           the canEdit branch and unlocks every input.  If we're
-           already in edit mode this button is redundant — hide it. */
+           the canEdit branch and unlocks every input. */
         const u = new URL(location.href);
         u.searchParams.set("edit", "1");
         location.href = u.toString();
@@ -7146,6 +7209,11 @@ async function hydrateSubmittedOrder(oid, editMode){
         if (typeof showNotice === "function") { await showNotice(msg); }
         else { alert(msg); }
         canEdit = false;
+        /* Oct-26: remember so the Edit button's later re-attempt
+           knows to show the "content may have been updated" confirm
+           once the lock is finally free. */
+        window._sapLockWasBlocked = true;
+        window._sapLockPrevBy     = _by;
       }
     } catch (_e) {
       /* Lock-claim network failure — soft-fail so a transient

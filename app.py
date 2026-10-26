@@ -5277,30 +5277,30 @@ def _filter_notify_recipients(to_list, cc_list, requester_email=None):
     return nt, nc
 
 
-# Oct-22 original ask: Kenny Kim keeps approval authority (route
-# unchanged) but could act "as JJ" on MD-only requests.
+# Oct-26 user clarification (second pass):
+#   "Kenny 것 안 Kenny, MD only 는 Kenny 던 JJ 던 Approve 던 reject
+#    던 하면 무조건 JJ(MD) 가 한 것으로 처리해 줄 것."
 #
-# Oct-26 user clarification:
-#   "Kenny 가 JJ 결재 대상인 것을 결재할 수 있다고 했지, Kenny 가
-#    결재할 수 있는 것을 Kenny 가 결재한 경우는 당연히 Kenny 가
-#    결재한 것으로 남아야 함"
-#
-# Translation: Kenny only acts "as JJ" when the request is MD-only
-# (JJ-only).  When Kenny acts on a request that any approver could
-# handle, the record MUST stay as Kenny.
-#
-# `md_required` flips the behaviour:
-#   True  → Kenny's action is recorded as JJ (he's standing in for JJ)
-#   False → Kenny's action stays as Kenny (he's acting as himself)
-# Hayden / JJ pass through unchanged either way.
+# Rule now reads:
+#   • MD-only request (any approver / rejector) → recorded as JJ (MD)
+#   • Non-MD request:
+#       - Kenny  → recorded as Kenny
+#       - JJ     → recorded as JJ
+#       - Hayden → recorded as Hayden
+# So the MD gate drives the identity on MD-required rows, and the
+# actor's own identity drives it on everything else.
 def _effective_approver_identity(who, md_required: bool = False):
     e = (who or "").strip().lower()
     kenny  = MGMT_APPROVER_EMAILS[2].lower()
     jj     = MGMT_APPROVER_EMAILS[1].lower()
     hayden = MGMT_APPROVER_EMAILS[0].lower()
+    # MD-only — the record always reads as JJ regardless of who
+    # actually clicked.  Kenny / Hayden get the stand-in treatment;
+    # JJ himself passes through as JJ (same destination).
+    if md_required and e in (kenny, jj, hayden):
+        return jj, "JJ", "approved_b"
+    # Non-MD — credit whoever clicked, by their real identity.
     if e == kenny:
-        if md_required:
-            return jj, "JJ", "approved_b"
         return kenny, "Kenny", "approved_c"
     if e == jj:
         return jj, "JJ", "approved_b"
