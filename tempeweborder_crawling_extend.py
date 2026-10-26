@@ -386,12 +386,74 @@ def scrape_rows(driver):
             if not desc:
                 continue
 
+            # Oct-26 user ask: capture the ON HAND column (green badge
+            # at Tempe WebOrder's product-row).  The badge sits as the
+            # column AFTER PRICE on the right side.  Three-step hunt
+            # ordered newest-page-structure first:
+            #   1. XPath by badge content — any element whose own text
+            #      is "N" or "N+" (padded with whitespace), inside the
+            #      product row.  Covers the green pill rendered as a
+            #      small <span> / <div>.
+            #   2. XPath from the price column — next col-xs sibling,
+            #      first integer-text inside.
+            #   3. Any element with a stock-ish class name.
+            stock = ""
+            try:
+                _bs = row.find_elements(
+                    By.XPATH,
+                    ".//*[self::span or self::div][normalize-space()!='']"
+                    "[string-length(normalize-space()) <= 4]"
+                    "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
+                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
+                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
+                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
+                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
+                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'green')"
+                    "]"
+                )
+                for _b in _bs:
+                    _t = clean(_b.text or "")
+                    _m = re.fullmatch(r"(\d{1,5})\+?", _t)
+                    if _m:
+                        stock = _t   # keep the trailing "+" if present
+                        break
+            except Exception:
+                pass
+            if not stock:
+                try:
+                    _nx = row.find_element(
+                        By.XPATH,
+                        ".//div[contains(@class,'col-xs-9')]"
+                        "/following-sibling::div[contains(@class,'col-xs')][1]")
+                    _s = clean(_nx.text or "")
+                    _m = re.search(r"(\d{1,5})\+?", _s)
+                    if _m:
+                        stock = _m.group(0)
+                except Exception:
+                    pass
+            if not stock:
+                try:
+                    _cols = row.find_elements(By.CSS_SELECTOR, "div[class*='col-xs']")
+                    _texts = [clean(c.text or "") for c in _cols]
+                    _price_idx = -1
+                    for i, t in enumerate(_texts):
+                        if price and price in t:
+                            _price_idx = i; break
+                    if _price_idx != -1:
+                        for t in _texts[_price_idx + 1:]:
+                            _m = re.fullmatch(r"\$?\s*(\d{1,5})\+?", (t or "").strip())
+                            if _m:
+                                stock = _m.group(0).replace("$", "").strip()
+                                break
+                except Exception:
+                    pass
             results.append({
                 "size": size,
                 "brand": brand,
                 "description": desc,
                 "cost": cost,
                 "price": price,
+                "stock": stock,
             })
             print(f"    {size:<12} | {brand:<12} | {desc[:50]} | ${cost}/${price}")
         except Exception as e:
@@ -431,7 +493,11 @@ def main():
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE"])
+            # Oct-26 user ask: new STOCK column holds the "ON HAND"
+            # badge value from the Tempe WebOrder product row.  Keeps
+            # the "+" suffix verbatim ("8+", "2") so the dashboard can
+            # distinguish "exactly N" from "N or more".
+            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
 
             for brand in BRANDS:
                 print(f"\n=== {brand} ===")
@@ -451,7 +517,7 @@ def main():
                     for r in rows:
                         writer.writerow([
                             r["size"], r["brand"], r["description"],
-                            r["cost"], r["price"],
+                            r["cost"], r["price"], r.get("stock", ""),
                         ])
                     f.flush()
                     if not has_next_page(driver):
