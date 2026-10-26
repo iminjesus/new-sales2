@@ -268,10 +268,22 @@ def build_data(monthly):
         # the full desc (e.g. "84H K435 KINERGY ECO2" or "107/103S
         # ALL-TERRAIN T/A KO3") — we just weren't exposing it before.
         return {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
+                # Promo-price arrays — Bob Jane and JAX publish both a
+                # regular PRICE and a promotional DISC_PRICE in their
+                # CSVs; the toggle at the top of the Price Comparison
+                # Chart switches which array the chart / tables read.
+                # Fallback: when a month has no DISC_PRICE, we store
+                # the normal PRICE so the promo line stays continuous
+                # and the chart still reads "the effective customer
+                # price for that month".  Tempe / TempeWOS have no
+                # promo concept — the toggle is a no-op for them.
+                "bj_promo":  [], "jax_promo": [],
                 "tempe_d": [], "bj_d": [], "jax_d": [],
                 "tw_d":    [], "twi_d":  [],
                 "bj_f":    [], "jax_f":  [],
-                # Per-pattern series: pattern_label → {prices, descs}
+                # Per-pattern series: pattern_label → {prices, descs,
+                # promos}.  Promos array parallel to prices; the
+                # front-end switches between them based on pricingMode.
                 # Populated month-by-month below.  Front-end expands
                 # these into extra dashed lines on the "By Brand"
                 # chart so competing series (Kinergy Eco 2 vs Kinergy
@@ -289,7 +301,17 @@ def build_data(monthly):
     # append this month's price into the running series arrays.  New
     # patterns discovered mid-series get back-filled with None for
     # prior months so all series arrays stay length-aligned.
-    def _accumulate_series(store, cands, size, abbr, series_dict, mk_idx, price_idx):
+    def _accumulate_series(store, cands, size, abbr, series_dict, mk_idx, price_idx,
+                           promo_idx=None):
+        # Oct-26 ask: track promo prices alongside normal so the Normal/
+        # Promo toggle at the top of the chart can switch each series
+        # between its regular and discounted price-per-month without a
+        # second data pass.  promo_idx = tuple index of the DISC_PRICE
+        # field in each candidate (2 for JAX / BJ, where candidates are
+        # (desc, price, disc, promo_name, save_text, flag)).  Stores
+        # without a promo concept (Tempe / TempeWOS) pass promo_idx=None
+        # and we fall back to the normal price so the array stays well-
+        # defined (toggle is a no-op for them).
         by_pat = {}
         for c in cands:
             cd = c[0]
@@ -301,26 +323,42 @@ def build_data(monthly):
                     continue
             except (TypeError, ValueError):
                 continue
+            # Pull the promo price when available; drop sentinels.
+            cpr = None
+            if promo_idx is not None and len(c) > promo_idx:
+                _cpr = c[promo_idx]
+                try:
+                    if _cpr is not None and float(_cpr) not in VOID_PRICES:
+                        cpr = _cpr
+                except (TypeError, ValueError):
+                    cpr = None
             pk = _pattern_key(cd, size, abbr)
             if not pk:
                 continue
             if pk not in by_pat or cp < by_pat[pk][0]:
-                by_pat[pk] = (cp, cd)
+                by_pat[pk] = (cp, cd, cpr)
         # Extend every already-tracked pattern with this month's slot
         for pk, entry in series_dict.items():
             if pk in by_pat:
-                entry["prices"].append(by_pat[pk][0])
-                entry["descs"].append(by_pat[pk][1])
+                _cp, _cd, _cpr = by_pat[pk]
+                entry["prices"].append(_cp)
+                entry["descs"].append(_cd)
+                # Promo falls back to normal when the row carried no
+                # DISC_PRICE this month — keeps the "effective customer
+                # price" line continuous.
+                entry["promos"].append(_cpr if _cpr is not None else _cp)
             else:
                 entry["prices"].append(None)
                 entry["descs"].append("")
+                entry["promos"].append(None)
         # Register any new pattern discovered this month, back-filling
         # None for the (mk_idx) months that came before it.
-        for pk, (cp, cd) in by_pat.items():
+        for pk, (cp, cd, cpr) in by_pat.items():
             if pk not in series_dict:
                 series_dict[pk] = {
-                    "prices": [None] * mk_idx + [cp],
-                    "descs":  [""]   * mk_idx + [cd],
+                    "prices":  [None] * mk_idx + [cp],
+                    "descs":   [""]   * mk_idx + [cd],
+                    "promos":  [None] * mk_idx + [cpr if cpr is not None else cp],
                 }
 
     for mk_idx, mk in enumerate(months):
@@ -334,8 +372,8 @@ def build_data(monthly):
         for size in sizes:
             for abbr in abbrs:
                 t_desc, t_cost, t_price               = best_tempe(size, abbr, t_lk)
-                bj_desc, bj_price, _, _, _, bj_flag   = best_bj(size, abbr, bj_lk, t_desc)
-                jx_desc, jx_price, _, _, _, jx_flag   = best_jax(size, abbr, jx_lk, t_desc)
+                bj_desc, bj_price, bj_disc, _, _, bj_flag = best_bj(size, abbr, bj_lk, t_desc)
+                jx_desc, jx_price, jx_disc, _, _, jx_flag = best_jax(size, abbr, jx_lk, t_desc)
                 _tw_desc, _tw_cost, tw_price          = best_tw(size, abbr, tw_lk)
                 _twi_desc, _, twi_price               = best_twi(size, abbr, tw_lk)
                 # Void the meaningless sentinels (0 / 999) so the chart and
@@ -345,12 +383,23 @@ def build_data(monthly):
                 jx_price = _norm(jx_price)
                 tw_price = _norm(tw_price)
                 twi_price = _norm(twi_price)
+                bj_disc  = _norm(bj_disc)
+                jx_disc  = _norm(jx_disc)
 
                 size_data[size][abbr]["tempe"].append(t_price)
                 size_data[size][abbr]["bj"].append(bj_price)
                 size_data[size][abbr]["jax"].append(jx_price)
                 size_data[size][abbr]["tw"].append(tw_price)
                 size_data[size][abbr]["twi"].append(twi_price)
+                # Promo arrays: effective customer price per month.
+                # Fallback = normal price when DISC_PRICE is absent, so
+                # the Promo view's line stays unbroken.  Null-when-null
+                # happens only when the whole row is missing (same gap
+                # as the Normal view).
+                size_data[size][abbr]["bj_promo"].append(
+                    bj_disc if bj_disc is not None else bj_price)
+                size_data[size][abbr]["jax_promo"].append(
+                    jx_disc if jx_disc is not None else jx_price)
 
                 # Descriptions (per month) — used by the front-end tooltip
                 # AND (for tw/twi, Oct-26) by _guessPatternFromDescs() so
@@ -373,15 +422,16 @@ def build_data(monthly):
                 # Per-pattern series: JAX + BJ candidates grouped by
                 # pattern label (Kinergy Eco 2 vs Kinergy GT etc.).
                 # price_idx=1 because build_bj_lookup / build_jax_lookup
-                # both put price at tuple index [1].
+                # both put price at tuple index [1].  promo_idx=2 so
+                # the Normal/Promo toggle also works for sibling lines.
                 _accumulate_series("jax", jx_lk.get((size, abbr), []),
                                    size, abbr,
                                    size_data[size][abbr]["jax_series"],
-                                   mk_idx, price_idx=1)
+                                   mk_idx, price_idx=1, promo_idx=2)
                 _accumulate_series("bj", bj_lk.get((size, abbr), []),
                                    size, abbr,
                                    size_data[size][abbr]["bj_series"],
-                                   mk_idx, price_idx=1)
+                                   mk_idx, price_idx=1, promo_idx=2)
                 # Oct-26 ask: same per-pattern breakdown for TempeWOS
                 # Sell Out (tw) and Sell In (twi).  tw_lk tuples are
                 # (desc, sell_in_price, sell_out_price), so Sell Out
@@ -820,7 +870,24 @@ body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C628
         </div>
       </div>
 
-      <!-- Row 3: Sub-buttons (brand list or store list) -->
+      <!-- Row 3: Normal / Promo pricing toggle.  BJ and JAX publish
+           both a regular PRICE and a DISC_PRICE in their CSVs; this
+           bar switches which one the chart + tables read.  Tempe /
+           TempeWOS have no promo concept so the toggle is a no-op
+           for those stores (both buttons show the same line). -->
+      <div class="btn-row">
+        <span class="row-label">Price</span>
+        <div class="btns">
+          <button class="btn mode" id="btn-normal" onclick="onPricingNormal(this)">Normal</button>
+          <button class="btn mode" id="btn-promo"  onclick="onPricingPromo(this)">Promo</button>
+          <span id="pricing-hint"
+                style="margin-left:10px;font-size:11px;color:#777;align-self:center">
+            Promo = DISC_PRICE where available (BJ / JAX)
+          </span>
+        </div>
+      </div>
+
+      <!-- Row 4: Sub-buttons (brand list or store list) -->
       <div class="btn-row" id="sub-row">
         <span class="row-label" id="sub-label"></span>
         <div class="btns" id="sub-btns"></div>
@@ -1062,7 +1129,7 @@ function _renderStoreTable(wrap) {
         if (abbr === 'ALL') return _avgAllBrands(selectedSize, s.key);
         if (selectedSize === 'ALL') return _avgAllSizes(abbr, s.key);
         const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
-        return bsd ? (bsd[s.key] || []) : [];
+        return bsd ? (bsd[_priceKey(s.key)] || []) : [];
     });
 
     // ── Price table ──
@@ -1122,7 +1189,7 @@ function _renderBrandTable(wrap) {
     Object.keys(BRANDS).forEach(function(abbr) {
         const primaryPrices = selectedSize === 'ALL'
             ? _avgAllSizes(abbr, store)
-            : ((D.size_data[selectedSize] || {})[abbr] || {})[store];
+            : ((D.size_data[selectedSize] || {})[abbr] || {})[_priceKey(store)];
         if (!primaryPrices || !primaryPrices.some(p => p != null)) return;
 
         const descs   = _descsFor(abbr, selectedSize, store);
@@ -1224,10 +1291,32 @@ function _renderBrandTable(wrap) {
 let selectedSize    = null;
 let selectedMode    = null;   // 'store' | 'brand'
 let selectedSubKey  = null;   // abbr (store mode) | 'tempe'/'bj'/'jax' (brand mode)
+let pricingMode     = 'normal';   // 'normal' | 'promo'  (toggle at top)
 let _chart          = null;
 let _activeSizeBtn  = null;
 let _activeModeBtn  = null;
 let _activeSubBtn   = null;
+let _activePricingBtn = null;
+
+/* Which backend key holds the price array for a store under the
+   current pricingMode.  Only BJ and JAX have a separate promo array;
+   Tempe / TempeWOS fall through so the toggle is a no-op for them. */
+function _priceKey(store) {
+    if (pricingMode === 'promo' && (store === 'bj' || store === 'jax')) {
+        return store + '_promo';
+    }
+    return store;
+}
+/* Mirror helper for a per-pattern series dict entry — "prices" vs
+   "promos".  Both arrays are populated by _accumulate_series and
+   fall back to the normal price when the row carries no DISC_PRICE,
+   so there's no missing-data gap when the toggle is on. */
+function _seriesKey(store) {
+    if (pricingMode === 'promo' && (store === 'bj' || store === 'jax')) {
+        return 'promos';
+    }
+    return 'prices';
+}
 
 /* ── chart helpers ────────────────────────────────────── */
 function _render(title, datasets) {
@@ -1358,7 +1447,7 @@ function _pointStyles(flags, prices, lineColour) {
 function _avgAllSizes(abbr, store) {
     const nM = months.length;
     const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
-    const storeKey = store;  // 'tempe','bj','jax','tw'
+    const storeKey = _priceKey(store);  // switches to <store>_promo in Promo mode
     Object.values(D.size_data).forEach(function(sizeAbbrs) {
         const prices = ((sizeAbbrs[abbr] || {})[storeKey]) || [];
         prices.forEach(function(p, i) {
@@ -1370,11 +1459,17 @@ function _avgAllSizes(abbr, store) {
 
 /* average across every brand for a store */
 function _avgAllBrands(size, store) {
+    // Note: D.store_avg is Normal-only — we fall back to it only for
+    // the "ALL sizes" aggregate.  Promo mode on an "ALL sizes" view
+    // would need its own aggregate; keeping Normal here avoids a
+    // misleading number.  Users can still see the per-size Promo
+    // numbers by picking a specific size.
     if (size === 'ALL') return D.store_avg[store] || [];
     const nM = months.length;
     const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
+    const storeKey = _priceKey(store);
     Object.keys(BRANDS).forEach(function(abbr) {
-        const prices = ((D.size_data[size] || {})[abbr] || {})[store] || [];
+        const prices = ((D.size_data[size] || {})[abbr] || {})[storeKey] || [];
         prices.forEach(function(p, i) {
             if (p !== null && p !== undefined) { sums[i] += p; counts[i]++; }
         });
@@ -1401,7 +1496,7 @@ function _renderStore() {
             prices = _avgAllSizes(abbr, s);
         } else {
             const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
-            prices = bsd ? bsd[s] : null;
+            prices = bsd ? bsd[_priceKey(s)] : null;
         }
         if (prices && !prices.every(p => p === null)) {
             const descs = _descsFor(abbr, selectedSize, s);
@@ -1434,7 +1529,7 @@ function _renderBrand() {
     Object.keys(BRANDS).forEach(function(abbr) {
         const prices = selectedSize === 'ALL'
             ? _avgAllSizes(abbr, store)
-            : ((D.size_data[selectedSize] || {})[abbr] || {})[store];
+            : ((D.size_data[selectedSize] || {})[abbr] || {})[_priceKey(store)];
         if (!prices || prices.every(p => p === null)) return;
         const c = '#' + (BCOLORS[abbr] || PALETTE[ci%PALETTE.length].slice(1));
         const solid = (abbr === 'HK' || abbr === 'LF');
@@ -1519,9 +1614,13 @@ function _seriesDict(abbr, size, store) {
 function _seriesPattern(abbr, size, store) {
     const sd = _seriesDict(abbr, size, store);
     if (!sd) return '';
+    // Pick the cheapest-latest pattern under whichever price array the
+    // current toggle wants.  Keeps the legend's primary label in sync
+    // with the primary line's actual data points.
+    const key = _seriesKey(store);
     let bestPat = '', bestPrice = Infinity;
     Object.keys(sd).forEach(function(pk) {
-        const prices = sd[pk].prices || [];
+        const prices = sd[pk][key] || sd[pk].prices || [];
         for (let i = prices.length - 1; i >= 0; i--) {
             const p = prices[i];
             if (p !== null && p !== undefined) {
@@ -1554,11 +1653,15 @@ function _extraSeries(abbr, size, store, primaryPattern, primaryPrices) {
     const PRICE_BAND_LO = 0.55;  /* >= 45 % below primary median */
     const primaryMed = _median(primaryPrices);
     if (primaryMed == null) return [];
+    // When the toggle is on Promo, read promos out of each series
+    // entry — otherwise read prices.  Both arrays are populated for
+    // BJ / JAX; non-promo stores only have prices and we fall back.
+    const key = _seriesKey(store);
     const extras = [];
     Object.keys(sd).forEach(function(pk) {
         if (pk === primaryPattern) return;
         const series = sd[pk];
-        const prices = series.prices || [];
+        const prices = series[key] || series.prices || [];
         if (prices.every(p => p == null)) return;
         const med = _median(prices);
         if (med == null) return;
@@ -1722,6 +1825,25 @@ function onModeBrand(btn) {
     if (subBtns.firstChild) subBtns.firstChild.click();
 }
 
+/* ── Pricing: Normal / Promo toggle ───────────────────────
+   JAX and BJ carry a DISC_PRICE separate from PRICE; this bar
+   switches which one the chart + both side tables read.  State
+   update + re-render only — no data refetch, so flipping is
+   instant.  Tempe / TempeWOS have no promo concept so their
+   lines look identical in both modes. */
+function onPricingNormal(btn) {
+    if (_activePricingBtn) _activePricingBtn.classList.remove('active');
+    _activePricingBtn = btn; btn.classList.add('active');
+    pricingMode = 'normal';
+    _tryRender();
+}
+function onPricingPromo(btn) {
+    if (_activePricingBtn) _activePricingBtn.classList.remove('active');
+    _activePricingBtn = btn; btn.classList.add('active');
+    pricingMode = 'promo';
+    _tryRender();
+}
+
 /* ── Size dropdown ────────────────────────────────────── */
 /* Oct-12 PM 2nd pass: replaced the full-grid button bar (hid the
    chart) with a native <select> dropdown.
@@ -1790,6 +1912,11 @@ function _buildSizeDropdown() {
     document.getElementById('size-reserved-only')
             .addEventListener('change', _buildSizeDropdown);
     _buildSizeDropdown();
+    // Normal is the default pricing mode on first load so the chart
+    // shows regular retail prices until the user flips Promo on.  We
+    // click the button rather than set the state directly so the
+    // button's "active" visual stays in sync.
+    document.getElementById('btn-normal').click();
     // auto-select By Brand mode
     document.getElementById('btn-brand').click();
 }());
