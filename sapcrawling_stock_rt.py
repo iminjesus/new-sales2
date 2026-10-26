@@ -1012,9 +1012,44 @@ def main():
 
     _kill_excel("pre-flight: clear Excel locks before SAP export")
 
-    sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
-    conn = sap.Children(0)
-    session = conn.Children(0)
+    # Oct-27 fix: route through batch_sap_logon.ensure_sap_session()
+    # instead of raw GetObject/Children, so a manual run of this
+    # script survives the two states that used to crash it:
+    #   • SAPGUI running but no connection open — the old
+    #     `sap.Children(0)` call raised "The enumerator of the
+    #     collection cannot find en element with the specified
+    #     index" (hr 614 / saplogon).  ensure_sap_session opens
+    #     a fresh G.ERP connection and logs in.
+    #   • SAPGUI not running at all — the old
+    #     `GetObject("SAPGUI")` call raised "Invalid syntax"
+    #     because the Running Object Table had no SAPGUI entry.
+    #     ensure_sap_session launches saplogon.exe first.
+    # It also handles the multi-logon popup (steals the seat with
+    # OPT1) and the native Win32 "Back-end session closed by system"
+    # dismiss, so an operator who just ran a parallel batch doesn't
+    # have to click through them by hand before re-running this.
+    try:
+        from batch_sap_logon import ensure_sap_session, _reset_to_home
+        session, _status = ensure_sap_session()
+        print(f"  [SAP] attached ({_status})")
+        # Make sure we're on the SAP Easy Access home before firing
+        # the TCODE — a leftover screen from a previous run would
+        # otherwise send start_tcode's /n sequence through the
+        # wrong context.
+        try:
+            _reset_to_home(session)
+        except Exception as _rh_err:
+            print(f"  [SAP] reset_to_home soft-fail: {_rh_err}")
+    except Exception as _attach_err:
+        # Fallback — if batch_sap_logon can't be imported for some
+        # reason (e.g. a user running a stripped checkout), surface
+        # the real GetObject error path so the operator still sees
+        # something actionable rather than an ImportError.
+        print(f"  [SAP] ensure_sap_session unavailable ({_attach_err!r}); "
+              f"falling back to raw COM attach")
+        sap = win32com.client.GetObject("SAPGUI").GetScriptingEngine
+        conn = sap.Children(0)
+        session = conn.Children(0)
     try:
         session.findById("wnd[0]").maximize()
     except: pass
