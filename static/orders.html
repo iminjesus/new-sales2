@@ -3667,12 +3667,19 @@ function _renderTempeRefOnRow(rowEl, j){
         || u === "SOLD OUT" || u === "NO STOCK"
         || u === "CALL FOR AVAILABILITY" || u === "CALL FOR AVAIL";
   };
-  function _buildSourceChip(src, label, kind /* "D" or "C" */) {
+  function _buildSourceChip(src, label, kind /* "D" / "C" / "P" */) {
     if (!src) return "";
     const parts = [];
     if (kind === "C" && src.price) parts.push(`EC-${_fmt(src.price)}`);
     if (kind === "D" && src.cost)  parts.push(`SI-${_fmt(src.cost)}`);
     if (kind === "D" && src.price) parts.push(`DR-${_fmt(src.price)}`);
+    // Oct-27-pm user ask: JAX / Bob Jane rows carry PRICE (regular)
+    // and DISC_PRICE (promo).  Show them as separate labels so the
+    // reader sees the retail quote AND the current promotion in one
+    // line.  src.price → Normal, src.cost → Promo (the backend
+    // sorts the DISC_PRICE into cost_cols for these feeds).
+    if (kind === "P" && src.price) parts.push(`Normal-${_fmt(src.price)}`);
+    if (kind === "P" && src.cost)  parts.push(`Promo-${_fmt(src.cost)}`);
     if (!parts.length) return "";
     const monthTag = (!src.is_current && src.month_label)
                    ? ` ${src.month_label}` : "";
@@ -3683,15 +3690,22 @@ function _renderTempeRefOnRow(rowEl, j){
     s += ")";
     const d = (src.description || "").trim();
     if (d) s += ` [${d}]`;
+    // Oct-27-pm user ask: tag the chip with the PROMO column text
+    // ("SAVE $20", "Trade price", etc.) when the feed carries it.
+    // Appended in curly braces so it reads apart from the product
+    // description bracket.  JAX / Bob Jane only — Tempe feeds don't
+    // populate promo_text today.
+    const ptxt = String(src.promo_text || "").trim();
+    if (ptxt) s += ` {${ptxt}}`;
     return s;
   }
   const dealerChip   = _buildSourceChip(j.dealer,   "TempeDealer",   "D");
   const consumerChip = _buildSourceChip(j.consumer, "TempeConsumer", "C");
-  // Oct-27: JAX + Bob Jane use the same price shape as the retail
-  // (consumer) feed — PRICE / DISC_PRICE columns, no stock badge
-  // (crawlers don't scrape stock from either site).
-  const jaxChip      = _buildSourceChip(j.jax,     "JAX",     "C");
-  const bobJaneChip  = _buildSourceChip(j.bobjane, "BobJane", "C");
+  // Oct-27-pm: JAX + Bob Jane use the dedicated "P" (Price + Promo)
+  // kind — Normal from PRICE, Promo from DISC_PRICE, plus the PROMO
+  // text column appended in {curly braces}.
+  const jaxChip      = _buildSourceChip(j.jax,     "JAX",     "P");
+  const bobJaneChip  = _buildSourceChip(j.bobjane, "BobJane", "P");
   if (!dealerChip && !consumerChip && !jaxChip && !bobJaneChip) return;
   /* Compose the final Remark text:
        line 1 — existing promo tag (Trueblu / 443 / Aging / Manual

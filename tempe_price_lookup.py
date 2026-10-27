@@ -398,6 +398,13 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
             elif len(_nums) == 1 and not price:
                 price = _nums[0][1]
         stock = _pick_col(r, stock_col) if stock_col else ""
+        # Oct-27-pm user ask: JAX / Bob Jane rows carry a PROMO text
+        # column (e.g. "SAVE $20", "Trade price") beside the DISC
+        # price.  Expose it on the entry dict so the SPRF chip can
+        # label the promo line with its description.  Harmless for
+        # Tempe / tempeweborder rows that don't have the column
+        # (returns "").
+        promo_text = _pick_col(r, "PROMO", "promo", "SAVE_TEXT", "save_text")
         # Oct-27 user ask: pattern match MUST be whole-token.
         # Previously "K127" matched "K127E" and "K127A" via plain
         # substring containment, which pulled a cheaper K127E row
@@ -426,6 +433,7 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
             "price":            price,
             "cost":             cost,
             "stock":            stock,
+            "promo_text":       promo_text,
             "description":      desc,
             "brand":            brand,
             "size_seen":        size_raw,

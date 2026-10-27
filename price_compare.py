@@ -1686,7 +1686,15 @@ function _renderStore() {
             const flags = _flagsFor(abbr, selectedSize, s);
             const stks  = _stocksFor(abbr, selectedSize, s);
             const st    = _pointStyles(flags, prices, SC[s], stks);
-            arr.push({ label:SL[s], data:prices, borderColor:SC[s],
+            // Oct-27-pm user ask: label each channel line with the
+            // product the primary pick came from, so the legend
+            // reads e.g. "Tempe — Kinergy Eco2 K127E" instead of
+            // just "Tempe".  Falls back to the bare store name when
+            // we can't derive a pattern label.
+            const primaryPattern = _seriesPattern(abbr, selectedSize, s)
+                                || _guessPatternFromDescs(descs);
+            const label = SL[s] + (primaryPattern ? ' — ' + primaryPattern : '');
+            arr.push({ label: label, data: prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
                        spanGaps:true, tension:.3, fill:false,
                        pointRadius: st.radius,
@@ -1698,6 +1706,34 @@ function _renderStore() {
                        // disappearing (0-width hid the border).
                        pointBorderWidth: 1.5,
                        _descs: descs, _flags: flags, _stocks: stks });
+            // Oct-27-pm user ask: in By Channel view, don't collapse
+            // every match down to one line — expand the sibling SKUs
+            // the same way By Brand already does for sibling patterns
+            // in a brand.  Each extra SKU gets its own dashed line in
+            // the channel's palette so the reader can compare "Tempe
+            // Kinergy Eco2 vs Tempe Kinergy GT" at a glance.
+            if (selectedSize !== 'ALL' && abbr !== 'ALL') {
+                const extras = _extraSeries(abbr, selectedSize, s,
+                                            primaryPattern, prices);
+                extras.forEach(function(series, si) {
+                    const label2 = SL[s] + ' — ' + series.pattern;
+                    const dashPatterns = [[2,3], [10,4], [4,2,1,2], [6,6,2,6]];
+                    const dash = dashPatterns[si % dashPatterns.length];
+                    const sflags  = series.flags  || series.descs.map(() => '');
+                    const sstocks = series.stocks || series.prices.map(() => null);
+                    const sst     = _pointStyles(sflags, series.prices, SC[s], sstocks);
+                    arr.push({ label: label2, data: series.prices,
+                               borderColor: SC[s], backgroundColor: SC[s]+'22',
+                               borderDash: dash, borderWidth: 1.2,
+                               pointRadius: sst.radius,
+                               pointHoverRadius: sst.radius.map(r => r + 2),
+                               pointBackgroundColor: sst.bg,
+                               pointBorderColor: sst.border,
+                               pointBorderWidth: 1.5,
+                               spanGaps:true, tension:.3, fill:false,
+                               _descs: series.descs, _flags: sflags });
+                });
+            }
         }
         return arr;
     }, []);
@@ -2007,16 +2043,18 @@ function toggleChartSplit() {
                 '.hdr{display:none !important}'
                 + '.left{display:none !important}'
                 + '#split-chart-btn,#expand-chart-btn{display:none !important}'
-                /* Oct-27-pm user ask: match the main pane's top edge
-                   exactly — zero every margin + padding on the root
-                   containers so the duplicate's title bar lines up
-                   with the main pane's title bar. */
+                /* Oct-27-pm user ask: EXACT height match between the
+                   main pane and the duplicate.  Keep every CSS value
+                   that affects vertical layout (padding on .right-
+                   title / .btn-panel / .chart-panel) at the main
+                   window's default so the two panes have identical
+                   .btn-panel + .chart-title + .chart-wrap heights.
+                   Only hide the elements we don't want duplicated
+                   (.hdr, .left, split/expand buttons) and pin
+                   height:100% so the flex chain propagates. */
                 + 'html,body{height:100% !important;margin:0 !important;padding:0 !important}'
                 + '.body{height:100% !important;margin:0 !important}'
-                + '.right{width:100% !important;height:100% !important;margin:0 !important}'
-                + '.right-title{padding:4px 10px !important;margin:0 !important}'
-                + '.chart-panel{padding:8px 10px !important;height:100%}'
-                + '.btn-panel{padding:4px 8px 6px !important;margin:0 !important}';
+                + '.right{width:100% !important;height:100% !important;margin:0 !important}';
             document.head.appendChild(style);
             const _nudge = () => {
                 try { window.dispatchEvent(new Event('resize')); } catch (_e) {}
