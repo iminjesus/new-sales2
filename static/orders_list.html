@@ -204,7 +204,11 @@
                  is gone; the same value now reads from the timeline
                  block on the right (Requested → Approved → SAP
                  Created → Elapsed) so nothing is repeated. -->
-            <th style="width:170px" title="Signed-in user who filled the SPRF (from Cloudflare Access mail id).  May differ from the mapped BDE.">Requester</th>
+            <!-- Oct-27 user ask: narrower column + two-line name
+                 ("luca" above "borghese") so the requester reads
+                 compact.  The full email still lives in the title
+                 tooltip for anyone who needs the exact alias. -->
+            <th style="width:92px" title="Signed-in user who filled the SPRF (from Cloudflare Access mail id).  May differ from the mapped BDE.">Requester</th>
             <th style="width:110px">BDE</th>
             <th style="width:180px">Sold-to</th>
             <th style="width:180px">Ship-to</th>
@@ -218,11 +222,19 @@
             <th style="width:80px" class="num" title="Order-wide chained Proposed DC% = 1 − Σ(total) / Σ(list × qty)">Proposed DC%</th>
             <th style="width:60px" class="center">Reb</th>
             <th style="width:80px" class="center">SAP</th>
+            <!-- Oct-27 user ask: Submitted column promoted into the
+                 timeline strip here (date on line 1, time on line 2)
+                 so the reader doesn't have to scroll to the far right
+                 to see when the order came in.  Replaces the long-form
+                 "Submitted" column that used to sit next to Approved
+                 / SAP Created on the right-hand side. -->
+            <th style="width:88px" class="center" title="When the BDE submitted this Order Request (date on line 1, time on line 2)">Submitted</th>
+            <th style="width:130px">Approver</th>
             <!-- SAP sales-doc number stamped by the CS after they
                  enter the order into SAP.  Blank until Harry (or any
-                 CS) fills it from the SPRF detail page. -->
+                 CS) fills it from the SPRF detail page.  Moved to
+                 AFTER Approver per the Oct-27 reorder. -->
             <th style="width:100px" class="center" title="SAP delivery order (DO) number stamped after the order was keyed into SAP.">DO No.</th>
-            <th style="width:130px">Approver</th>
             <!-- Approver note — free-form comment the approver
                  typed in the approve-with-note modal at sign-off
                  time.  Blank for orders that haven't been
@@ -246,8 +258,11 @@
                  life: BDE submits → an approver signs off → Harry
                  flips SAP-entered.  Elapsed is computed on-the-fly
                  from Requested and Approved so nothing extra needs
-                 to be stored on the row. -->
-            <th style="width:130px" title="When the BDE submitted this Order Request">Submitted</th>
+                 to be stored on the row.
+                 Oct-27: the "Submitted" column that used to sit here
+                 is now in the timeline strip BEFORE Approver (date
+                 line 1, time line 2) so the reader doesn't have to
+                 scroll to the far right for the submit timestamp. -->
             <th style="width:130px" title="When the first approver signed off (first-approver-wins)">Approved</th>
             <th style="width:130px" title="When Harry flipped SAP-entered to Y for this order">SAP Created</th>
             <th style="width:90px" class="num" title="Time from Requested to Approved, in days and hours">Elapsed<br>to&nbsp;Approval</th>
@@ -624,7 +639,25 @@ function renderRows(){
       return `
       <tr ${_rowClick}${_rowStyle ? ` style="${_rowStyle}"` : ''}>
         <td class="id-col"><b>${escapeHtml(r.order_no || ('#'+r.id))}</b></td>
-        <td><small style="color:#334155">${escapeHtml(_shortRequester(r.requester_email) || "—")}</small></td>
+        ${(() => {
+          /* Oct-27 user ask: 2-line requester — split on dot
+             (first.last → first on line 1, last on line 2) so the
+             column can be narrower.  Non-firstname.lastname aliases
+             (shared mailboxes, legacy ids) fall back to the single
+             line we had before. */
+          const _s = _shortRequester(r.requester_email) || "";
+          if (!_s) return '<td><small style="color:#94a3b8">—</small></td>';
+          const _dot = _s.indexOf(".");
+          if (_dot <= 0) {
+            return `<td><small style="color:#334155" title="${escapeHtml(r.requester_email || "")}">${escapeHtml(_s)}</small></td>`;
+          }
+          const _first = _s.slice(0, _dot);
+          const _last  = _s.slice(_dot + 1);
+          return `<td style="padding:3px 5px">`
+               + `<div style="font-size:11px;line-height:1.15;color:#334155" title="${escapeHtml(r.requester_email || "")}">`
+               + `<div>${escapeHtml(_first)}</div><div>${escapeHtml(_last)}</div>`
+               + `</div></td>`;
+        })()}
         <td>${escapeHtml(r.submitted_by_bde || "—")}</td>
         <td class="name-cell"><b>${escapeHtml(r.sold_to_name || "—")}</b><small>${escapeHtml(r.sold_to || "")}</small></td>
         <td class="name-cell"><b>${escapeHtml(r.ship_to_name || "—")}</b><small>${escapeHtml(r.ship_to || "")}</small></td>
@@ -638,8 +671,23 @@ function renderRows(){
         <td class="num" style="${totDcStyle}">${totDC ? totDC.toFixed(2) + "%" : "—"}</td>
         <td class="center">${rebPill}</td>
         <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
-        <td class="center"><small style="color:#0f172a;font-family:monospace">${escapeHtml(r.sd_no || "—")}</small></td>
+        ${(() => {
+          /* Oct-27: Submitted column now sits in the timeline strip
+             BEFORE Approver.  Date on line 1, time on line 2 so the
+             column stays narrow.  Blank "—" when the row has no
+             timestamp (shouldn't happen but keeps the layout clean). */
+          const _ts = String(r.submitted_at || "").trim();
+          if (!_ts) return '<td class="center"><small style="color:#94a3b8">—</small></td>';
+          const _parts = _ts.split(/[ T]/);
+          const _d = _parts[0] || "";
+          const _t = (_parts[1] || "").slice(0, 5);
+          return `<td class="center" style="padding:3px 5px">`
+               + `<div style="font-size:11px;line-height:1.2;color:#334155">`
+               + `<div>${escapeHtml(_d)}</div><div style="color:#64748b">${escapeHtml(_t)}</div>`
+               + `</div></td>`;
+        })()}
         <td>${apprCell}</td>
+        <td class="center"><small style="color:#0f172a;font-family:monospace">${escapeHtml(r.sd_no || "—")}</small></td>
         <td>${noteCell}</td>
         <td>${(() => {
           const _c = String(r.cs_comment || "").trim();
@@ -647,7 +695,6 @@ function renderRows(){
             ? `<div style="font-size:11px;line-height:1.35;color:#0c4a6e;background:#e0f2fe;padding:4px 6px;border-radius:3px;white-space:pre-wrap">${escapeHtml(_c)}</div>`
             : `<small style="color:#94a3b8">—</small>`;
         })()}</td>
-        <td><small style="color:#334155">${escapeHtml(r.submitted_at || "—")}</small></td>
         <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
         <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
         <td class="num">${fmtElapsed(r.submitted_at, r.approved_at)}</td>
