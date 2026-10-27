@@ -641,19 +641,27 @@ body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C628
    filter / view state.  Half-width layout only kicks in when
    #chart-split-pane exists in the DOM (toggled by toggleChartSplit).
    Keeps the LEFT comparison tables single — the duplicate is only
-   for the chart panel. */
+   for the chart panel.
+
+   Oct-27-pm rework: no pane title bar — a title bar steals ~30 px
+   of vertical space that the iframe chart needs.  Close button is
+   now an absolute-positioned floating ✕ in the top-right corner
+   of the pane so the iframe itself can take the FULL pane height
+   and the two charts render at matching physical sizes. */
 .chart-split-pane {
     width: 50%; border-left: 1px solid #d0d5dd;
-    display: flex; flex-direction: column; min-width: 0; background:#fff;
+    position: relative; min-width: 0; min-height: 0; background:#fff;
+    display: flex; flex-direction: column;
 }
 .chart-split-pane iframe {
-    flex: 1; width: 100%; height: 100%; border: 0;
-    background:#fff;
+    flex: 1 1 auto; width: 100%; height: 100%; border: 0;
+    background:#fff; display:block; min-height: 0;
 }
 .chart-split-close {
+    position: absolute; top: 6px; right: 6px; z-index: 10;
     background: #C62828; color: #fff;
     border: 1px solid #a81d1d; border-radius: 3px;
-    width: 22px; height: 22px; padding: 0; margin-left: 8px;
+    width: 22px; height: 22px; padding: 0;
     font: 14px/1 system-ui, sans-serif; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
 }
@@ -1919,12 +1927,12 @@ function toggleChartSplit() {
     const pane = document.createElement('div');
     pane.id = 'chart-split-pane';
     pane.className = 'chart-split-pane';
+    // No wrapping title bar — the floating ✕ in the corner is enough.
+    // That gives the iframe the full pane height so the duplicate's
+    // chart matches the main chart's physical size.
     pane.innerHTML =
-        '<div class="right-title">'
-        + '<span class="rt-text">Second chart (independent filters)</span>'
-        + '<button class="chart-split-close" onclick="toggleChartSplit()"'
+        '<button class="chart-split-close" onclick="toggleChartSplit()"'
         + ' title="Close second chart" aria-label="Close">✕</button>'
-        + '</div>'
         + '<iframe src="' + location.pathname + '?split=1"'
         + ' title="Second chart"></iframe>';
     bodyEl.appendChild(pane);

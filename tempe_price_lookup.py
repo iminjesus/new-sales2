@@ -423,18 +423,26 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
                 f"load/speed: {rl or '—'} (yours: {ul_load or '—'})"
             ) if ul_load or rl else ""
             same_pattern = entry
-        elif (not np_pattern or not same_pattern) and not size_only:
-            # Record the size-only hit if we haven't got anything
-            # better yet.  Don't overwrite a same-pattern hit found
-            # earlier.
+        elif not np_pattern and not size_only:
+            # Oct-27-pm user ask: NEVER fall back to a size-only hit
+            # when the caller explicitly gave us a pattern.  Previously
+            # a K137A order with no K137A in the Tempe catalog would
+            # drop into the size_only bucket and surface a K127E row
+            # (same size, different pattern) as the "match", which
+            # misled the SPRF reader.  With this change, the resolver
+            # returns None in that case and the Remark chip stays
+            # empty.  The branch here fires only when np_pattern is
+            # blank (caller doesn't care about pattern).
             entry["match"] = "size_only"
             _bits = []
-            if np_pattern and not has_pattern:
-                _bits.append(f"pattern mismatch")
             if ul_load and not has_load:
                 _bits.append(f"load/speed: {rl or '—'} (yours: {ul_load})")
             entry["mismatch"] = " · ".join(_bits)
             size_only = entry
+    # When a pattern was supplied, require an exact or same_pattern
+    # match — don't let size_only sneak through.
+    if np_pattern:
+        return exact or same_pattern
     return exact or same_pattern or size_only
 
 

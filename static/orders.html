@@ -4471,8 +4471,9 @@ function openCopyLinesModal(){
                 display:flex;align-items:center;gap:12px;background:#f8fafc">
       <b style="font-size:14px;color:#0f172a">Copy for Excel</b>
       <span style="color:#64748b;font-size:12px">
-        <b>Click</b> a column header to copy just that column
-        (Shift-click to add more).  Or drag-select cells + <b>Ctrl+C</b>.
+        <b>Click</b> any column cell (header OR body) to copy just that column.
+        <b>Ctrl-</b> or <b>Shift-click</b> to add more columns.
+        Or drag-select cells + <b>Ctrl+C</b>.
       </span>
       <span id="copyColStatus"
             style="color:#059669;font-size:12px;font-weight:700;min-width:140px"></span>
@@ -4498,7 +4499,7 @@ function openCopyLinesModal(){
   const grid = panel.querySelector("#copyGrid");
   const thead = grid.querySelector("thead");
   const tbody = grid.querySelector("tbody");
-  const cellCss = "border:1px solid #cbd5e1;padding:3px 8px;white-space:nowrap";
+  const cellCss = "border:1px solid #cbd5e1;padding:3px 8px;white-space:nowrap;cursor:pointer";
   const hdrCss  = cellCss + ";background:#1e293b;color:#fff;font-weight:700;text-align:center;"
                 + "cursor:pointer;user-select:none";
   const htr = document.createElement("tr");
@@ -4541,13 +4542,28 @@ function openCopyLinesModal(){
     clearTimeout(_statusEl._t);
     _statusEl._t = setTimeout(() => { _statusEl.textContent = ""; }, 1500);
   };
+  // Track hover column so we can light up the column before the user
+  // commits with a click.
+  let _hoverCol = -1;
   const _repaintCols = () => {
     htr.querySelectorAll("th").forEach((th, i) => {
-      th.style.background = _selectedCols.has(i) ? "#059669" : "#1e293b";
+      if (_selectedCols.has(i)) {
+        th.style.background = "#059669";          // green = selected
+      } else if (i === _hoverCol) {
+        th.style.background = "#334155";          // lighter navy on hover
+      } else {
+        th.style.background = "#1e293b";
+      }
     });
     tbody.querySelectorAll("tr").forEach(tr => {
       Array.from(tr.children).forEach((td, i) => {
-        td.style.background = _selectedCols.has(i) ? "#d1fae5" : "";
+        if (_selectedCols.has(i)) {
+          td.style.background = "#d1fae5";        // pale green = selected
+        } else if (i === _hoverCol) {
+          td.style.background = "#f1f5f9";        // pale grey on hover
+        } else {
+          td.style.background = "";
+        }
       });
     });
   };
@@ -4566,16 +4582,38 @@ function openCopyLinesModal(){
       _flashStatus("Clipboard blocked — Ctrl+C instead");
     }
   };
-  htr.addEventListener("click", (e) => {
-    const th = e.target.closest("th");
-    if (!th) return;
-    const i = +th.dataset.colIdx;
+  // Shared click handler for both header (th) and body (td) cells —
+  // user feedback: "I was clicking the data cells, nothing happened".
+  // Now any click in a column toggles that column.  Ctrl, Meta (Cmd
+  // on Mac), and Shift all extend the selection.
+  const _onColClick = (e) => {
+    const cell = e.target.closest("th, td");
+    if (!cell || !grid.contains(cell)) return;
+    const i = +cell.dataset.colIdx;
     if (!Number.isInteger(i)) return;
-    if (!e.shiftKey) _selectedCols.clear();
+    const extend = e.shiftKey || e.ctrlKey || e.metaKey;
+    if (!extend) _selectedCols.clear();
     if (_selectedCols.has(i)) _selectedCols.delete(i);
     else                       _selectedCols.add(i);
     _repaintCols();
     _copySelectedCols();
+    // Prevent the native drag-select from stealing the follow-up
+    // click when the user toggles multiple columns quickly.
+    if (extend) try { window.getSelection().removeAllRanges(); } catch (_err) {}
+  };
+  grid.addEventListener("click", _onColClick);
+  grid.addEventListener("mousemove", (e) => {
+    const cell = e.target.closest("th, td");
+    const next = (cell && grid.contains(cell) && cell.dataset.colIdx != null)
+                   ? +cell.dataset.colIdx : -1;
+    if (next === _hoverCol) return;
+    _hoverCol = next;
+    _repaintCols();
+  });
+  grid.addEventListener("mouseleave", () => {
+    if (_hoverCol < 0) return;
+    _hoverCol = -1;
+    _repaintCols();
   });
   dim.appendChild(panel);
   document.body.appendChild(dim);
