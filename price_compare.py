@@ -865,7 +865,7 @@ body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C628
       <div class="btn-row">
         <span class="row-label">View</span>
         <div class="btns">
-          <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Whole seller</button>
+          <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Channel</button>
           <button class="btn mode" id="btn-brand" onclick="onModeBrand(this)">By Brand</button>
         </div>
       </div>

@@ -447,6 +447,16 @@ def scrape_rows(driver):
                                 break
                 except Exception:
                     pass
+            # Oct-27: with "On Sale Only" no longer ticked at startup
+            # (so OOS rows DO get scraped) the stock column must
+            # distinguish "I looked and saw a 0-value / OOS badge"
+            # from "I never saw a badge".  If none of the three stock
+            # paths above found anything, record "0" so the dashboard
+            # treats that month as listed-but-OOS instead of absent.
+            # A "-" string from the page is kept verbatim too so
+            # downstream code can see the raw signal.
+            if not stock:
+                stock = "0"
             results.append({
                 "size": size,
                 "brand": brand,
@@ -455,7 +465,7 @@ def scrape_rows(driver):
                 "price": price,
                 "stock": stock,
             })
-            print(f"    {size:<12} | {brand:<12} | {desc[:50]} | ${cost}/${price}")
+            print(f"    {size:<12} | {brand:<12} | {desc[:50]} | ${cost}/${price} | stk={stock}")
         except Exception as e:
             print(f"    [WARN] {e}")
     return results
@@ -489,7 +499,16 @@ def main():
     wait = WebDriverWait(driver, 25)
     try:
         wait_for_manual_login(driver)
-        check_on_sale_only(driver)
+        # Oct-27 user ask: capture OOS rows too — the dashboard uses the
+        # STOCK column to render hollow / parenthesised prices when a
+        # product is listed but out of stock, which only works if the
+        # 0-stock rows are in the CSV in the first place.  Previously
+        # "On Sale Only" ticked at startup hid every zero-stock row.
+        # Leave the checkbox UNTICKED so the sweep returns the full
+        # catalogue; the STOCK column still records "0" / "" for OOS
+        # rows so downstream filters can skip them if they wish.
+        print("  [sweep] 'On Sale Only' intentionally LEFT UNTICKED "
+              "(Oct-27 change) so out-of-stock rows are captured too.")
 
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
