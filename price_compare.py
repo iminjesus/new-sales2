@@ -1434,8 +1434,32 @@ function _seriesKey(store) {
 }
 
 /* ── chart helpers ────────────────────────────────────── */
+/* Short identity label for the top blue bar — "Tempe · ALL · Normal
+   · By Brand" style.  Updates on every render so filter changes in
+   either pane (host or iframe) are reflected in the header. */
+function _chartIdentityLabel() {
+    const bits = [];
+    if (selectedMode === 'store') {
+        bits.push(selectedSubKey === 'ALL'
+            ? 'All Brands'
+            : (BRANDS[selectedSubKey] || selectedSubKey));
+    } else if (selectedMode === 'brand') {
+        bits.push(SL[selectedSubKey] || selectedSubKey);
+    }
+    bits.push(selectedSize === 'ALL' ? 'All Sizes' : selectedSize);
+    bits.push(pricingMode === 'promo' ? 'Promo' : 'Normal');
+    bits.push(selectedMode === 'store' ? 'By Channel' : 'By Brand');
+    return bits.join(' · ');
+}
 function _render(title, datasets) {
     document.getElementById('chart-title').textContent = title;
+    /* Oct-27-pm user ask: in split-view, the two panes often carry
+       different filters.  Promote the chart identity (store · size
+       · price mode · view mode) into the top blue title bar so the
+       reader sees at a glance what each pane is showing — the
+       difference is obvious before even looking at the chart. */
+    const _rt = document.querySelector('.right-title .rt-text');
+    if (_rt) _rt.textContent = _chartIdentityLabel() || 'Price comparison chart';
     if (_chart) { _chart.destroy(); _chart = null; }
 
     const yrSelf = _yRange(datasets);
@@ -1947,10 +1971,18 @@ function toggleChartSplit() {
      • .left comparison tables — single-table only.
      • The duplicate's own split + expand buttons — no recursive
        nesting; one duplicate is enough.
-     • PRICE COMPARISON CHART label inside .right-title — already
-       labelled by the parent's "SECOND CHART" title.
-   Also compress the chart-panel filter rows so the chart canvas
-   gets the full remaining height. */
+   .right-title is KEPT — it now carries the per-pane chart identity
+   ("Tempe · All Sizes · Normal · By Brand") so the reader sees at
+   a glance what each pane is showing.  Chart canvas still gets the
+   remaining height because the title bar is only ~26 px.
+
+   Oct-27-pm chart-size fix: Chart.js initial measurement sometimes
+   fires before the iframe's internal flex layout settles, which
+   leaves the canvas tiny and no further resize ever retries.  We
+   force a window-resize event after DOMContentLoaded + after full
+   load, so Chart.js's responsive observer catches up.  A short
+   polling fallback (3 × every 250 ms) picks up the case where the
+   iframe body sizes a few frames later than expected. */
 (function _hideSplitInsideIframe(){
     try {
         const sp = new URLSearchParams(location.search);
@@ -1960,12 +1992,29 @@ function toggleChartSplit() {
                 '.hdr{display:none !important}'
                 + '.left{display:none !important}'
                 + '#split-chart-btn,#expand-chart-btn{display:none !important}'
-                + '.right-title{display:none !important}'
                 + '.right{width:100% !important}'
-                + '.body{overflow:hidden}'
-                + '.chart-panel{padding:8px 10px !important}'
+                + 'html,body{height:100% !important;min-height:0 !important}'
+                + '.body{overflow:hidden;height:100% !important}'
+                + '.chart-panel{padding:8px 10px !important;min-height:0 !important}'
+                + '.chart-wrap{min-height:0 !important}'
                 + '.btn-panel{padding:4px 8px 6px !important}';
             document.head.appendChild(style);
+            const _nudge = () => {
+                try { window.dispatchEvent(new Event('resize')); } catch (_e) {}
+            };
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', _nudge);
+            } else {
+                _nudge();
+            }
+            window.addEventListener('load', _nudge);
+            // Polling backstop — ResizeObserver races the first few
+            // layout frames; a handful of resize events across the
+            // first second guarantees Chart.js catches up without
+            // leaving the canvas tiny.
+            setTimeout(_nudge, 250);
+            setTimeout(_nudge, 500);
+            setTimeout(_nudge, 1000);
         }
     } catch (_e) {}
 })();
