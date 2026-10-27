@@ -447,14 +447,26 @@ def scrape_rows(driver):
                                 break
                 except Exception:
                     pass
-            # Oct-27: with "On Sale Only" no longer ticked at startup
-            # (so OOS rows DO get scraped) the stock column must
-            # distinguish "I looked and saw a 0-value / OOS badge"
-            # from "I never saw a badge".  If none of the three stock
-            # paths above found anything, record "0" so the dashboard
-            # treats that month as listed-but-OOS instead of absent.
-            # A "-" string from the page is kept verbatim too so
-            # downstream code can see the raw signal.
+            # Oct-27: TempeWebOrder marks OOS rows with the phrase
+            # "CALL FOR AVAILABILITY" (sometimes "CALL FOR AVAIL" or
+            # just "CALL" inside a badge) instead of a numeric stock
+            # value.  Scan the whole row text — if we see that phrase
+            # anywhere AND we didn't find a numeric badge above, treat
+            # the row as explicitly OOS (stock = "0").
+            if not stock:
+                try:
+                    _full = clean(row.text or "")
+                    if re.search(r"\bcall\s+for\s+avail(?:ability)?\b",
+                                 _full, re.IGNORECASE):
+                        stock = "0"
+                except Exception:
+                    pass
+            # With "On Sale Only" no longer ticked at startup (so OOS
+            # rows DO get scraped) the stock column must distinguish
+            # "I looked and saw a 0-value / OOS badge" from "I never
+            # saw a badge".  If none of the paths above found anything
+            # at this point, record "0" so the dashboard treats that
+            # month as listed-but-OOS instead of absent.
             if not stock:
                 stock = "0"
             results.append({
