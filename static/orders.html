@@ -3674,12 +3674,19 @@ function _renderTempeRefOnRow(rowEl, j){
     if (kind === "D" && src.cost)  parts.push(`SI-${_fmt(src.cost)}`);
     if (kind === "D" && src.price) parts.push(`DR-${_fmt(src.price)}`);
     // Oct-27-pm user ask: JAX / Bob Jane rows carry PRICE (regular)
-    // and DISC_PRICE (promo).  Show them as separate labels so the
-    // reader sees the retail quote AND the current promotion in one
-    // line.  src.price → Normal, src.cost → Promo (the backend
-    // sorts the DISC_PRICE into cost_cols for these feeds).
-    if (kind === "P" && src.price) parts.push(`Normal-${_fmt(src.price)}`);
-    if (kind === "P" && src.cost)  parts.push(`Promo-${_fmt(src.cost)}`);
+    // and DISC_PRICE (promo).  Render as "205 → 160" when both
+    // present (user's preferred shape), or just the available value
+    // when only one is set.  src.price → Normal, src.cost → Promo
+    // (the backend sorts DISC_PRICE into cost_cols for these feeds).
+    if (kind === "P") {
+      if (src.price && src.cost) {
+        parts.push(`${_fmt(src.price)} → ${_fmt(src.cost)}`);
+      } else if (src.price) {
+        parts.push(`${_fmt(src.price)}`);
+      } else if (src.cost) {
+        parts.push(`(promo) ${_fmt(src.cost)}`);
+      }
+    }
     if (!parts.length) return "";
     const monthTag = (!src.is_current && src.month_label)
                    ? ` ${src.month_label}` : "";
