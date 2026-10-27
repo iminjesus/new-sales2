@@ -411,8 +411,11 @@ def go_next_page(driver, wait):
 
 
 def main():
+    from crawler_progress import Progress
     driver = init_driver()
     wait   = WebDriverWait(driver, 25)
+    prog = Progress("tempeweborder_crawling", total_steps=len(SEARCH_QUERIES),
+                    label="tempeweborder_crawling (size sweep)")
 
     try:
         wait_for_manual_login(driver)
@@ -423,12 +426,13 @@ def main():
             # so the Price dashboard can show it on hover later.
             writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
 
-            for query, size in SEARCH_QUERIES:
+            for _si, (query, size) in enumerate(SEARCH_QUERIES, 1):
                 print(f"\n=== Searching: {query}  ({size}) ===")
                 try:
                     search_tyres(driver, wait, query)
                 except Exception as e:
                     print(f"  [ERROR] search failed: {e} — skipping")
+                    prog.step(_si)
                     continue
 
                 page = 1
@@ -447,7 +451,9 @@ def main():
                         page += 1
                     else:
                         break
+                prog.step(_si)
 
+        prog.finish()
         print(f"\nDone. Saved to: {OUTPUT_FILE}")
 
     finally:

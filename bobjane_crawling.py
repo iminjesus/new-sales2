@@ -292,10 +292,18 @@ def write_rows(writer, rows):
 
 
 def main():
+    from crawler_progress import Progress
     driver = init_driver()
 
     print(f"\nOutput: {OUTPUT_FILE}")
     print("Loading Bob Jane catalogue — extracts + saves after every Load More click.\n")
+
+    # Bob Jane crawls via "Load More" clicks until the catalogue runs
+    # out — the true total is unknown up-front.  Use historical
+    # duration when available (progress = elapsed / avg_hist) and fall
+    # back to click_num / MAX_CLICKS when there's no history yet.
+    prog = Progress("bobjane_crawling", total_steps=None,
+                    label="bobjane_crawling (Load More sweep)")
 
     try:
         driver.get(BASE_URL)
@@ -369,10 +377,18 @@ def main():
                 total += len(rows)
                 tag = "" if rows else f"  [extract failed {extract_fail}/5]"
                 print(f"  Click {click_num:>3}: +{after:>3} cards → {len(rows):>3} products  (total: {total}){tag}")
+                # Tick progress — time-based when history is on file,
+                # click-based otherwise.  Capped at 0.99 so the final
+                # "finish()" is the only thing that emits the 100 % bucket.
+                if prog.hist_avg:
+                    prog.tick(min(0.99, (time.time() - prog.start) / prog.hist_avg))
+                else:
+                    prog.tick(min(0.99, click_num / MAX_CLICKS))
                 if extract_fail >= 5:
                     print("  Too many extraction failures in a row — stopping")
                     break
 
+        prog.finish()
         print(f"\nFinished. {total} products saved → {OUTPUT_FILE}")
 
     finally:

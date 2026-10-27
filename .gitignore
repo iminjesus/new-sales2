@@ -26,3 +26,4 @@ static/*.geojson
 
 # Vehicle registration / rego processing output
 out/rego/
+/.crawler_progress.json

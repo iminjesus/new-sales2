@@ -422,18 +422,21 @@ def scrape_brand(driver, abbr, brand_name, url_slug, writer, f_out):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    from crawler_progress import Progress
     driver = init_driver()
     print(f"\nOutput: {OUTPUT_FILE}")
     print("Tempe Tyres retail crawler — brand-by-brand, URL pagination\n")
 
     grand_total = 0
+    prog = Progress("tempe_crawling", total_steps=len(BRANDS),
+                    label="tempe_crawling (retail site)")
 
     try:
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(["SIZE", "brand", "DESCRIPTION", "price", "disc_price", "PROMO", "SAVE_TEXT", "STOCK"])
 
-            for abbr, (brand_name, url_slug) in BRANDS.items():
+            for i, (abbr, (brand_name, url_slug)) in enumerate(BRANDS.items(), 1):
                 try:
                     count = scrape_brand(driver, abbr, brand_name, url_slug, writer, f)
                     grand_total += count
@@ -441,7 +444,9 @@ def main():
                 except Exception as e:
                     print(f"\n  ✗ {brand_name}: ERROR — {e}")
                     import traceback; traceback.print_exc()
+                prog.step(i)
 
+        prog.finish()
         print(f"\n{'='*68}")
         print(f"Done. {grand_total} total products → {OUTPUT_FILE}")
 

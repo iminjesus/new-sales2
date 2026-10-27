@@ -720,11 +720,14 @@ def scrape_brand(driver, abbr, brand_name, slug, writer, f_out):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    from crawler_progress import Progress
     driver = init_driver()
     print(f"\nOutput: {OUTPUT_FILE}")
     print("JAX Tyres crawler — brand-by-brand, URL pagination (pagesize=45)\n")
 
     grand_total = 0
+    prog = Progress("jax_crawling_hk_only", total_steps=len(BRANDS),
+                    label="jax_crawling_hk_only")
 
     try:
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
@@ -732,14 +735,16 @@ def main():
             writer.writerow(["SIZE", "brand", "DESCRIPTION",
                              "PRICE", "DISC_PRICE", "PROMO", "RUN_FLAT"])
 
-            for abbr, (brand_name, slug) in BRANDS.items():
+            for _i, (abbr, (brand_name, slug)) in enumerate(BRANDS.items(), 1):
                 try:
                     count = scrape_brand(driver, abbr, brand_name, slug, writer, f)
                     grand_total += count
                     print(f"\n  ✓ {brand_name}: {count} products saved")
                 except Exception as e:
                     print(f"\n  ✗ {brand_name}: ERROR — {e}")
+                prog.step(_i)
 
+        prog.finish()
         print(f"\n{'='*65}")
         print(f"Done. {grand_total} total products → {OUTPUT_FILE}")
 

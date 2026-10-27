@@ -507,8 +507,11 @@ def go_next_page(driver, wait):
 # ── Main orchestrator ─────────────────────────────────────────────────────
 
 def main():
+    from crawler_progress import Progress
     driver = init_driver()
     wait = WebDriverWait(driver, 25)
+    prog = Progress("tempeweborder_extend", total_steps=len(BRANDS),
+                    label="tempeweborder_extend (dealer web)")
     try:
         wait_for_manual_login(driver)
         # Oct-27 user ask: capture OOS rows too — the dashboard uses the
@@ -530,15 +533,17 @@ def main():
             # distinguish "exactly N" from "N or more".
             writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
 
-            for brand in BRANDS:
+            for _bi, brand in enumerate(BRANDS, 1):
                 print(f"\n=== {brand} ===")
                 try:
                     search_brand(driver, wait, brand)
                 except Exception as e:
                     print(f"  [ERROR] search 설정 실패: {e} — skip")
+                    prog.step(_bi)
                     continue
 
                 if not wait_results(driver):
+                    prog.step(_bi)
                     continue
 
                 page = 1
@@ -559,7 +564,9 @@ def main():
                         print(f"  [WARN] next page 실패: {e}")
                         break
                     page += 1
+                prog.step(_bi)
 
+        prog.finish()
         print(f"\n✓ 저장 완료: {OUTPUT_FILE}")
     finally:
         try:
