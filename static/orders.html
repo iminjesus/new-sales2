@@ -3302,7 +3302,18 @@ async function applyAdditionalDCToRow(rowEl){
 */
 function setRemark(rowEl, text){
   const el = rowEl?.querySelector('[data-col="remark"]');
-  if (el) el.value = text || "";
+  if (!el) return;
+  el.value = text || "";
+  // Oct-27: textarea auto-grow for multi-line Remark content (promo
+  // on top line, Tempe dealer / consumer chips below).  Counts \n in
+  // the value, bounds to 1..6 lines so a runaway doesn't blow out
+  // the row.  32 px matches the single-line row height; each extra
+  // line adds 16 px so the cell stays compact.
+  if (el.tagName === "TEXTAREA") {
+    const n = Math.min(6, Math.max(1, (text || "").split("\n").length));
+    el.style.height = (16 * n + 16) + "px";
+    el.setAttribute("rows", String(n));
+  }
 }
 function setRemarkFromPromo(rowEl, promoRaw, dcPct){
   const promo = String(promoRaw || "").trim().toUpperCase();
@@ -3404,87 +3415,56 @@ function _renderTempeRefOnRow(rowEl, j){
     const rounded = Math.round(n * 100) / 100;
     return Number(rounded).toLocaleString();
   }
-  const parts = [];
-  if (j.consumer && j.consumer.price) {
-    parts.push(`EC-${_fmt(j.consumer.price)}${_flags(j.consumer)}`);
-  }
-  if (j.dealer && j.dealer.cost) {
-    parts.push(`SI-${_fmt(j.dealer.cost)}${_flags(j.dealer)}`);
-  }
-  if (j.dealer && j.dealer.price) {
-    parts.push(`DR-${_fmt(j.dealer.price)}${_flags(j.dealer)}`);
-  }
-  if (!parts.length) return;
-  /* Oct-23 user ask: when the match came from a PAST month (no
-     current-month row), prefix with the month label so the reader
-     knows the figure isn't current.  Collect fallback-month labels
-     from dealer / consumer; show the oldest-seen (most conservative
-     tag).  Blank when both are current-month hits. */
-  let monthTag = "";
-  const _dM = (j.dealer   && !j.dealer.is_current)   ? j.dealer.month_label   : "";
-  const _cM = (j.consumer && !j.consumer.is_current) ? j.consumer.month_label : "";
-  const fallbacks = [_dM, _cM].filter(Boolean);
-  if (fallbacks.length) monthTag = ` ${fallbacks[0]}`;
-  let chip = `(Tempe${monthTag}: ${parts.join("/")}`;
-  // Oct-27: stock badge after the price triplet.  Priority order:
-  //   • dealer (TempeWebOrder) stock when non-empty — matches old
-  //     "~Qty 8+" / "~Qty 3" rendering (keep the "+" verbatim).
-  //   • consumer (retail-site) stock as a fallback — the public
-  //     tempetyres.com.au card badge, used when the dealer feed
-  //     doesn't have a row (new size, pre-launch, etc.).
-  //   • "~OOS" when EITHER source explicitly reports 0 stock, so
-  //     the reader doesn't mistake a reachable retail row for a
-  //     stock-available position.
-  // Oct-27-pm: the stock cell is sometimes a string ("0" / "8+") and
-  // sometimes an int (0 / 8) depending on which crawler the row came
-  // from.  `String(x || "")` incorrectly turned integer 0 into "" via
-  // the || coercion, which read as "unknown stock" and dropped the
-  // ~OOS tag entirely.  Use the explicit null check so a true 0 /
-  // "0" / "OOS" / "SOLD OUT" / "CALL FOR AVAILABILITY" all surface
-  // as OOS, and only a genuinely absent value (null / undefined /
-  // blank) is treated as "unknown".
+  /* Oct-27 user ask: when BOTH tempeweborder (dealer) AND tempe
+     (consumer) feeds have a match, split them onto SEPARATE lines
+     in the Remark instead of mashing EC + SI + DR together on one
+     chip.  Build each source's chip independently; join with "\n"
+     at the end so the textarea renders them stacked.  The promo
+     tag (Trueblu / 443 / Aging / Manual) already lives on the
+     first line of the Remark — we insert the Tempe chip(s)
+     BELOW it so the pricing authority stays on top. */
   const _normStock = (v) => (v == null) ? "" : String(v).trim();
-  const _ds = j.dealer   ? _normStock(j.dealer.stock)   : "";
-  const _cs = j.consumer ? _normStock(j.consumer.stock) : "";
   const _isZero = (s) => {
     const u = s.toUpperCase();
     return s === "0" || u === "OOS" || u === "OUT OF STOCK"
         || u === "SOLD OUT" || u === "NO STOCK"
         || u === "CALL FOR AVAILABILITY" || u === "CALL FOR AVAIL";
   };
-  if (_isZero(_ds) || _isZero(_cs)) {
-    chip += " ~OOS";
-  } else if (_ds) {
-    chip += ` ~Qty ${_ds}`;      // dealer feed carries the "+"
-  } else if (_cs) {
-    chip += ` ~Qty ${_cs}`;      // consumer feed may also carry "+"
+  function _buildSourceChip(src, label, kind /* "D" or "C" */) {
+    if (!src) return "";
+    const parts = [];
+    if (kind === "C" && src.price) parts.push(`EC-${_fmt(src.price)}`);
+    if (kind === "D" && src.cost)  parts.push(`SI-${_fmt(src.cost)}`);
+    if (kind === "D" && src.price) parts.push(`DR-${_fmt(src.price)}`);
+    if (!parts.length) return "";
+    const monthTag = (!src.is_current && src.month_label)
+                   ? ` ${src.month_label}` : "";
+    let s = `(${label}${monthTag}: ${parts.join("/")}`;
+    const stk = _normStock(src.stock);
+    if (_isZero(stk))      s += " ~OOS";
+    else if (stk)          s += ` ~Qty ${stk}`;
+    s += ")";
+    const d = (src.description || "").trim();
+    if (d) s += ` [${d}]`;
+    return s;
   }
-  chip += ")";
-  // Oct-27 user ask: with strict-pattern matching now in place (K127
-  // only matches K127, no longer K127E / K127A substrings), append
-  // the full picked descriptions after the chip so the reader can
-  // verify what the resolver actually picked.  Format:
-  //   [D: Hankook K127 VENTUS S1 EVO3 · C: Hankook K127 VENTUS S1 EVO3]
-  // Dealer and consumer descriptions shown separately when they differ;
-  // collapsed to one entry when they're identical.
-  const _dDesc = (j.dealer   && j.dealer.description   || "").trim();
-  const _cDesc = (j.consumer && j.consumer.description || "").trim();
-  if (_dDesc || _cDesc) {
-    const descParts = [];
-    if (_dDesc && _cDesc && _dDesc === _cDesc) {
-      descParts.push(_dDesc);
-    } else {
-      if (_dDesc) descParts.push("D:" + _dDesc);
-      if (_cDesc) descParts.push("C:" + _cDesc);
-    }
-    chip += " [" + descParts.join(" · ") + "]";
-  }
-  /* Append to existing Remark value with " · " separator so an
-     existing promo tag ("Trueblu (12.00%)") stays readable before
-     the Tempe chip. */
-  const cur = (remEl.value || "").trim();
-  const sep = cur ? " · " : "";
-  remEl.value = cur + sep + chip;
+  const dealerChip   = _buildSourceChip(j.dealer,   "TempeDealer",   "D");
+  const consumerChip = _buildSourceChip(j.consumer, "TempeConsumer", "C");
+  if (!dealerChip && !consumerChip) return;
+  /* Compose the final Remark text:
+       line 1 — existing promo tag (Trueblu / 443 / Aging / Manual
+                / Special).  Comes from setRemarkFromPromo which
+                ran earlier in applyAdditionalDCToRow.
+       line 2 — dealer Tempe chip (TempeWebOrder sell-in + retail)
+       line 3 — consumer Tempe chip (Tempe public retail)
+     Either Tempe line is omitted when its source had no match. */
+  const existing = (remEl.value || "").split("\n")[0].trim();
+  const promoLine = existing;   // promo tag (if any) is already line 1
+  const lines = [];
+  if (promoLine) lines.push(promoLine);
+  if (dealerChip)   lines.push(dealerChip);
+  if (consumerChip) lines.push(consumerChip);
+  setRemark(rowEl, lines.join("\n"));
   /* Hover tooltip — full match detail for both sources, with every
      label spelled out. */
   const _lines = [];
@@ -4837,7 +4817,23 @@ function newRow(){
        no `.value` property, so M-Code lookup + every per-cell
        computation would silently break. */
     td.setAttribute("data-cell-col", cell.c);
-    const inp = document.createElement("input");
+    // Oct-27 user ask: Remark cell now carries multi-line content —
+    // promo tag on line 1, dealer Tempe chip on line 2, consumer
+    // Tempe chip on line 3 — so it needs a textarea instead of an
+    // input (plain <input> drops \n characters silently).  Auto-
+    // grows height via rows attribute + a line-count driven setter
+    // the chip renderer calls after writing new text.
+    const inp = (cell.c === "remark")
+                  ? document.createElement("textarea")
+                  : document.createElement("input");
+    if (cell.c === "remark") {
+      inp.setAttribute("rows", "1");
+      inp.setAttribute("wrap", "off");
+      inp.style.cssText =
+        "width:100%;min-height:32px;height:32px;border:none;background:transparent;"
+        + "padding:4px 6px;font:inherit;outline:none;resize:none;"
+        + "white-space:pre;overflow:hidden";
+    }
     inp.setAttribute("data-col", cell.c);
     if(cell.ro) inp.readOnly = true;
     /* The m_code / description / product_name / pattern inputs used
