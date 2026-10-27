@@ -1988,21 +1988,26 @@ function toggleChartSplit() {
         const sp = new URLSearchParams(location.search);
         if (sp.get('split') === '1') {
             const style = document.createElement('style');
-            // Oct-27-pm v3: previous attempt set min-height:0 on
-            // .chart-wrap, which collapsed the canvas to 0 px and
-            // left the pane completely blank.  Reverted to leave
-            // chart-wrap's default min-height:220 intact; the only
-            // size tweaks we actually need are to hide the top nav
-            // and compress the padding so the filter rows don't
-            // steal extra pixels.  Chart.js's responsive observer
-            // already handles the resize on its own once the pane
-            // has a real height.
+            // Oct-27 v4: explicit height:100% at EVERY level of the
+            // layout chain inside the iframe, because flex-stretch
+            // isn't propagating height all the way down to .chart-
+            // wrap — the chart renders at its min-height:220 floor
+            // instead of filling the available pane.  v3 removed
+            // the min-height:0 overrides that had broken this; v4
+            // keeps those out AND pins height:100% explicitly on
+            // html / body / the .body container / .right / .chart-
+            // panel so the final flex:1 on .chart-wrap actually has
+            // a real parent height to grow into.  NOT setting min-
+            // height:0 on .chart-wrap this time (that was the bug
+            // the user saw as a totally blank pane).
             style.textContent =
                 '.hdr{display:none !important}'
                 + '.left{display:none !important}'
                 + '#split-chart-btn,#expand-chart-btn{display:none !important}'
-                + '.right{width:100% !important}'
-                + '.chart-panel{padding:8px 10px !important}'
+                + 'html,body{height:100% !important}'
+                + '.body{height:100% !important}'
+                + '.right{width:100% !important;height:100% !important}'
+                + '.chart-panel{padding:8px 10px !important;height:100%}'
                 + '.btn-panel{padding:4px 8px 6px !important}';
             document.head.appendChild(style);
             const _nudge = () => {

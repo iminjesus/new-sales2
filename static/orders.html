@@ -3457,34 +3457,44 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
   setRemark(rowEl, lines.join("\n"));
 }
 
-/* Oct-27-pm helper: pull every "(Tempe…" chip out of the current
-   Remark cell so a promo re-apply can keep them.  Handles both
-   layouts a line can have on disk:
+/* Oct-27-pm helper: pull every price-reference chip out of the
+   current Remark cell so a promo re-apply can keep them.  Handles
+   both layouts a line can have on disk:
      • NEW layout — multiple "\n"-separated lines, each starting
-       with "(TempeDealer:" / "(TempeConsumer:" / "(Tempe".
+       with "(TempeDealer:" / "(TempeConsumer:" / "(JAX:" /
+       "(BobJane:" (and legacy "(Tempe").
      • OLD layout — one line with " · " separating a promo tag
        from a single "(Tempe: EC-…" chip.
    Returns an array of chip strings (promo tag NOT included). */
 function _extractTempeChipLines(rowEl){
   const el = rowEl?.querySelector('[data-col="remark"]');
   if (!el) return [];
-  const raw = (el.value || "");
+  // Oct-27-pm: dataset.remarkFull may hold MORE than the visible
+  // textarea if the user has filtered some sources out — use it
+  // when present so the preserved set covers every chip the
+  // resolver ever wrote, not just the currently-shown subset.
+  const raw = (rowEl.dataset && rowEl.dataset.remarkFull != null)
+                ? rowEl.dataset.remarkFull
+                : (el.value || "");
   const out = [];
-  // Multi-line layout: pick every non-first line that starts with
-  // "(Tempe" — the first line is the promo tag we're about to
+  const _isSrcChip = (t) => /^\(Tempe/i.test(t)
+                         || /^\(JAX\b/i.test(t)
+                         || /^\(Bob\s*Jane\b|^\(BobJane\b/i.test(t);
+  // Multi-line layout: pick every non-first line that is a known
+  // source chip — the first line is the promo tag we're about to
   // rewrite, so skip it.
   const nlLines = raw.split(/\n+/);
   for (let i = 1; i < nlLines.length; i++) {
     const t = nlLines[i].trim();
-    if (t && /^\(Tempe/i.test(t)) out.push(t);
+    if (t && _isSrcChip(t)) out.push(t);
   }
   if (out.length) return out;
   // Legacy " · " layout: split line 1 on " · ", keep every chunk
-  // starting with "(Tempe".
+  // starting with a known source prefix.
   const parts = (nlLines[0] || "").split(/\s*·\s*/);
   for (const p of parts) {
     const t = p.trim();
-    if (t && /^\(Tempe/i.test(t)) out.push(t);
+    if (t && _isSrcChip(t)) out.push(t);
   }
   return out;
 }
@@ -3601,7 +3611,12 @@ function _renderTempeRefOnRow(rowEl, j){
   }
   const dealerChip   = _buildSourceChip(j.dealer,   "TempeDealer",   "D");
   const consumerChip = _buildSourceChip(j.consumer, "TempeConsumer", "C");
-  if (!dealerChip && !consumerChip) return;
+  // Oct-27: JAX + Bob Jane use the same price shape as the retail
+  // (consumer) feed — PRICE / DISC_PRICE columns, no stock badge
+  // (crawlers don't scrape stock from either site).
+  const jaxChip      = _buildSourceChip(j.jax,     "JAX",     "C");
+  const bobJaneChip  = _buildSourceChip(j.bobjane, "BobJane", "C");
+  if (!dealerChip && !consumerChip && !jaxChip && !bobJaneChip) return;
   /* Compose the final Remark text:
        line 1 — existing promo tag (Trueblu / 443 / Aging / Manual
                 / Special).  Comes from setRemarkFromPromo which
@@ -3615,6 +3630,8 @@ function _renderTempeRefOnRow(rowEl, j){
   if (promoLine) lines.push(promoLine);
   if (dealerChip)   lines.push(dealerChip);
   if (consumerChip) lines.push(consumerChip);
+  if (jaxChip)      lines.push(jaxChip);
+  if (bobJaneChip)  lines.push(bobJaneChip);
   setRemark(rowEl, lines.join("\n"));
   /* Hover tooltip — full match detail for both sources, with every
      label spelled out. */

@@ -500,45 +500,67 @@ def lookup_tempe_prices(size: str, pattern: str = "",
     # operator knows the data isn't current.
     dealer_months   = _files_by_month("Tempeweborder")
     consumer_months = _files_by_month("Tempe")
-    def _match_in_months(months, scope_brand, *, is_dealer):
+    # Oct-27 user ask: add JAX and Bob Jane lookups too so the per-
+    # source Remark checkboxes have actual data to show when ticked.
+    # The crawlers already drop Jax_*.csv and Bobjane_*.csv into the
+    # same folder as the Tempe files, with price in PRICE / disc_price
+    # columns — same shape _best_match already understands.
+    jax_months      = _files_by_month("Jax")
+    bobjane_months  = _files_by_month("Bobjane")
+    def _match_in_months(months, scope_brand, *, kind):
         """Walk months newest-first; return (entry, yyyymm, path) when
-        a row matches, else (None, "", "")."""
+        a row matches, else (None, "", "").  kind: "dealer" / "consumer"
+        / "jax" / "bobjane"."""
+        if kind == "dealer":
+            price_cols = ("PRICE", "price")
+            cost_cols  = ("COST", "cost")
+            stock_col  = "STOCK"
+            label      = "dealer"
+        elif kind == "consumer":
+            # Oct-27: the consumer (retail-site) CSV now carries a
+            # STOCK column too — "8+" / "3" / "0" / "" — so the
+            # Remark chip can show "~OOS" or "~8+" on the EC
+            # side as well, not just the dealer side.
+            price_cols = ("price", "disc_price", "PRICE", "DISC_PRICE")
+            cost_cols  = ()
+            stock_col  = "STOCK"
+            label      = "consumer"
+        elif kind == "jax":
+            price_cols = ("PRICE", "price")
+            cost_cols  = ("DISC_PRICE", "disc_price")
+            stock_col  = None
+            label      = "jax"
+        elif kind == "bobjane":
+            price_cols = ("PRICE", "price")
+            cost_cols  = ("DISC_PRICE", "disc_price")
+            stock_col  = None
+            label      = "bobjane"
+        else:
+            return None, "", ""
         for yyyymm, fp in months:
             rows, _ = _rows_for_path(fp)
-            if is_dealer:
-                e = _best_match(
-                    rows, ns_set, np, ul, scope_brand,
-                    price_cols=("PRICE", "price"),
-                    cost_cols=("COST", "cost"),
-                    stock_col="STOCK",
-                    source_label="dealer",
-                    source_file=fp,
-                )
-            else:
-                # Oct-27: the consumer (retail-site) CSV now carries a
-                # STOCK column too — "8+" / "3" / "0" / "" — so the
-                # Remark chip can show "~OOS" or "~8+" on the EC
-                # side as well, not just the dealer side.
-                e = _best_match(
-                    rows, ns_set, np, ul, scope_brand,
-                    price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
-                    cost_cols=(),
-                    stock_col="STOCK",
-                    source_label="consumer",
-                    source_file=fp,
-                )
+            e = _best_match(
+                rows, ns_set, np, ul, scope_brand,
+                price_cols=price_cols,
+                cost_cols=cost_cols,
+                stock_col=stock_col,
+                source_label=label,
+                source_file=fp,
+            )
             if e is not None:
                 return e, yyyymm, fp
         return None, "", ""
 
     def _run_scoped(scope_brand):
-        d, dm, df = _match_in_months(dealer_months,   scope_brand, is_dealer=True)
-        c, cm, cf = _match_in_months(consumer_months, scope_brand, is_dealer=False)
-        return d, dm, df, c, cm, cf
-    dealer, dm, df, consumer, cm, cf = _run_scoped(_scope)
-    if _scope and not dealer and not consumer:
+        d, dm, df = _match_in_months(dealer_months,   scope_brand, kind="dealer")
+        c, cm, cf = _match_in_months(consumer_months, scope_brand, kind="consumer")
+        j, jm, jf = _match_in_months(jax_months,      scope_brand, kind="jax")
+        b, bm, bf = _match_in_months(bobjane_months,  scope_brand, kind="bobjane")
+        return d, dm, df, c, cm, cf, j, jm, jf, b, bm, bf
+    dealer, dm, df, consumer, cm, cf, jax, jm, jf, bobjane, bm, bf = _run_scoped(_scope)
+    if _scope and not dealer and not consumer and not jax and not bobjane:
         # Brand-scoped walk missed everywhere — any-brand fallback.
-        dealer, dm, df, consumer, cm, cf = _run_scoped("")
+        dealer, dm, df, consumer, cm, cf, jax, jm, jf, bobjane, bm, bf = _run_scoped("")
 
     # Oct-23 user ask: "current" is TODAY's calendar month (not
     # whatever the latest file on disk happens to be).  So if today
@@ -550,6 +572,8 @@ def lookup_tempe_prices(size: str, pattern: str = "",
     _cur_month = f"{_today.year:04d}{_today.month:02d}"
     latest_dealer_month   = dealer_months[0][0]   if dealer_months   else ""
     latest_consumer_month = consumer_months[0][0] if consumer_months else ""
+    latest_jax_month      = jax_months[0][0]     if jax_months     else ""
+    latest_bobjane_month  = bobjane_months[0][0] if bobjane_months else ""
     if dealer:
         dealer["month"]       = dm
         dealer["is_current"]  = (dm == _cur_month)
@@ -558,14 +582,28 @@ def lookup_tempe_prices(size: str, pattern: str = "",
         consumer["month"]       = cm
         consumer["is_current"]  = (cm == _cur_month)
         consumer["month_label"] = month_label(cm)
+    if jax:
+        jax["month"]       = jm
+        jax["is_current"]  = (jm == _cur_month)
+        jax["month_label"] = month_label(jm)
+    if bobjane:
+        bobjane["month"]       = bm
+        bobjane["is_current"]  = (bm == _cur_month)
+        bobjane["month_label"] = month_label(bm)
     return {
         "dealer":   dealer,
         "consumer": consumer,
+        "jax":      jax,
+        "bobjane":  bobjane,
         "sources": {
             "dealer_file":           os.path.basename(df or ""),
             "consumer_file":         os.path.basename(cf or ""),
+            "jax_file":              os.path.basename(jf or ""),
+            "bobjane_file":          os.path.basename(bf or ""),
             "latest_dealer_month":   latest_dealer_month,
             "latest_consumer_month": latest_consumer_month,
+            "latest_jax_month":      latest_jax_month,
+            "latest_bobjane_month":  latest_bobjane_month,
         },
     }
 
