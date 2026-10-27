@@ -3435,9 +3435,23 @@ function _renderTempeRefOnRow(rowEl, j){
   //   • "~OOS" when EITHER source explicitly reports 0 stock, so
   //     the reader doesn't mistake a reachable retail row for a
   //     stock-available position.
-  const _ds = j.dealer   ? String(j.dealer.stock   || "").trim() : "";
-  const _cs = j.consumer ? String(j.consumer.stock || "").trim() : "";
-  const _isZero = (s) => s === "0";
+  // Oct-27-pm: the stock cell is sometimes a string ("0" / "8+") and
+  // sometimes an int (0 / 8) depending on which crawler the row came
+  // from.  `String(x || "")` incorrectly turned integer 0 into "" via
+  // the || coercion, which read as "unknown stock" and dropped the
+  // ~OOS tag entirely.  Use the explicit null check so a true 0 /
+  // "0" / "OOS" / "SOLD OUT" / "CALL FOR AVAILABILITY" all surface
+  // as OOS, and only a genuinely absent value (null / undefined /
+  // blank) is treated as "unknown".
+  const _normStock = (v) => (v == null) ? "" : String(v).trim();
+  const _ds = j.dealer   ? _normStock(j.dealer.stock)   : "";
+  const _cs = j.consumer ? _normStock(j.consumer.stock) : "";
+  const _isZero = (s) => {
+    const u = s.toUpperCase();
+    return s === "0" || u === "OOS" || u === "OUT OF STOCK"
+        || u === "SOLD OUT" || u === "NO STOCK"
+        || u === "CALL FOR AVAILABILITY" || u === "CALL FOR AVAIL";
+  };
   if (_isZero(_ds) || _isZero(_cs)) {
     chip += " ~OOS";
   } else if (_ds) {

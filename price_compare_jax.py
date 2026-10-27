@@ -246,17 +246,24 @@ def extract_series(desc):
 
 def _stock_raw_to_int(raw):
     """Normalise a STOCK cell to an int-or-None.
-      "8+" / "8"    → 8
-      "0" / "OOS"   → 0  (listed-but-out-of-stock)
-      "" / missing  → None (unknown)
+      "8+" / "8"                      → 8
+      "0" / "OOS" / various OOS text  → 0  (listed-but-out-of-stock)
+      "" / missing                    → None (unknown)
     The dashboard's hollow-point / parenthesised-price treatment
     only fires when the result is EXACTLY 0; None keeps the normal
     rendering so months before the STOCK column existed still look
-    like regular points."""
+    like regular points.
+
+    Oct-27-pm: covers every OOS synonym the two crawlers can emit —
+    the retail site uses OUT OF STOCK / SOLD OUT / NO STOCK, the
+    dealer web uses CALL FOR AVAILABILITY (also "CALL FOR AVAIL"
+    short form).  All collapse to 0."""
     s = str(raw or "").strip()
     if not s:
         return None
-    if s.upper() in ("OOS", "OUT OF STOCK", "SOLD OUT", "NO STOCK"):
+    u = s.upper()
+    if u in ("OOS", "OUT OF STOCK", "SOLD OUT", "NO STOCK",
+             "CALL FOR AVAILABILITY", "CALL FOR AVAIL", "CALL"):
         return 0
     m = re.match(r"^(\d+)\+?$", s)
     if not m:
