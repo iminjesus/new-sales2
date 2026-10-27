@@ -294,7 +294,12 @@
   /* header */
   .hdr{
     display:grid;
-    grid-template-columns:auto 1fr auto auto;
+    /* Oct-27 user ask: give the yellow "Special Price Request Form"
+       title its own dedicated grid slot between the company info and
+       the Internal/Customer badges, so it sits CENTRED along the top
+       row instead of wrapping down under the logo.  5 columns now:
+       logo · company (1fr) · title · internal · customer. */
+    grid-template-columns:auto 1fr auto auto auto;
     gap:12px;align-items:center;
     background:var(--panel);border:1px solid var(--border);border-bottom:none;
     padding:10px 14px;
@@ -1418,12 +1423,17 @@
       Suite 3, Level 3/5 Eden Park Dr, Macquarie Park NSW 2113<br>
       Ph 1300 13 30 30 &nbsp;|&nbsp; ABN 77 082 389 704 &nbsp;|&nbsp; www.hankooktyre.com.au
     </div>
+    <!-- Oct-27 user ask: the yellow "Special Price Request Form"
+         badge moves from its wrapped position under the logo up to
+         the top strip, sitting between the company info and the
+         Internal/Customer badges.  Grid gets a 5th column; the
+         element order below places title in that slot. -->
+    <div class="title">Special Price Request Form<small id="hdrPeriod">June 2026</small></div>
     <div class="internal">Internal Use Only</div>
     <!-- Companion badge shown only when the Customer PDF button
          flips <body> into .print-customer; hidden on screen + on
          the regular print path. -->
     <div class="customer-only">Customer Copy</div>
-    <div class="title">Special Price Request Form<small id="hdrPeriod">June 2026</small></div>
   </div>
   <!-- Order Number ribbon — populated by hydrateSubmittedOrder for
        existing orders (submitted, drafts, edit mode).  Stays hidden
