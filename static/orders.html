@@ -3414,18 +3414,42 @@ function _applyRemarkFilterToAll(){
 function setRemark(rowEl, text){
   const el = rowEl?.querySelector('[data-col="remark"]');
   if (!el) return;
-  // Oct-27: store the FULL text (every chip the resolver wrote) on
-  // the row dataset, then let _applyRemarkFilterToRow render only
-  // the sources the user has ticked in the Remark-column filter bar.
-  if (rowEl) rowEl.dataset.remarkFull = text || "";
-  el.value = text || "";
-  // Oct-27: textarea auto-grow for multi-line Remark content (promo
-  // on top line, Tempe dealer / consumer chips below).  Counts \n in
-  // the value, bounds to 1..6 lines so a runaway doesn't blow out
-  // the row.  32 px matches the single-line row height; each extra
-  // line adds 16 px so the cell stays compact.
+  // Oct-27-pm user ask: preserving every piece of context on the
+  // Remark cell — Aging status, promo tag, Tempe/JAX/BJ chips, etc.
+  // Rule:
+  //   • multi-line input ("<line1>\n<line2>\n…") — caller is
+  //     rebuilding the whole cell (chip renderer path).  Use as-is.
+  //   • single-line input — treat as "update line 1 ONLY" and keep
+  //     every existing line below.  An empty input clears line 1
+  //     but keeps the chip lines underneath intact.
+  // This way setRemarkFromPromo rewriting the "SPECIAL (34.67%)"
+  // tag never again wipes the Tempe chip that applyTempeRefPrice-
+  // ToRow had just appended, Aging / Manual status writes keep the
+  // chip rows, etc.
+  const incoming = text == null ? "" : String(text);
+  let finalText;
+  if (/\n/.test(incoming)) {
+    finalText = incoming;
+  } else {
+    const raw = (rowEl && rowEl.dataset && rowEl.dataset.remarkFull != null)
+                  ? rowEl.dataset.remarkFull
+                  : (el.value || "");
+    const existing = raw.split(/\n/);
+    const rest = existing.slice(1).map(s => s.trimEnd()).filter(Boolean);
+    const lines = [];
+    if (incoming) lines.push(incoming);
+    rest.forEach(l => lines.push(l));
+    finalText = lines.join("\n");
+  }
+  if (rowEl) rowEl.dataset.remarkFull = finalText;
+  el.value = finalText;
+  // Oct-27-pm: textarea auto-grows to accommodate every line the
+  // user wanted to see — the cap went from 6 up to 10 so the full
+  // Aging / promo / Tempe / JAX / Bob Jane stack reads at once
+  // without the row stealing the whole screen.  Each extra line
+  // adds 16 px over the single-line 32 px baseline.
   if (el.tagName === "TEXTAREA") {
-    const n = Math.min(6, Math.max(1, (text || "").split("\n").length));
+    const n = Math.min(10, Math.max(1, finalText.split("\n").length));
     el.style.height = (16 * n + 16) + "px";
     el.setAttribute("rows", String(n));
   }
@@ -3441,17 +3465,13 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
   const pct   = (dcPct != null && dcPct !== "")
     ? Number(dcPct).toFixed(2) + "%"
     : "";
-  // Oct-27-pm bug fix: this function used to replace the whole
-  // Remark cell with just the promo tag, which wiped out any
-  // Tempe reference chip the user had already captured on this
-  // line.  That was especially bad on hydrate — fillBaseDC's
-  // reapply loop fires setRemarkFromPromo on every hydrated row,
-  // which deleted the saved Tempe chip from reopened SPRFs.
-  // Rebuild the whole cell: promo tag on line 1, every pre-
-  // existing Tempe chip (either multi-line "(Tempe…" starts or
-  // the legacy " · (Tempe…" tail from one-line Remarks) kept
-  // underneath.
-  const _tempeLines = _extractTempeChipLines(rowEl);
+  // Oct-27-pm: build the new promo tag + hand it to setRemark as
+  // a SINGLE-LINE value.  setRemark's "update line 1 only" semantics
+  // keep every chip (Tempe / JAX / Bob Jane) and any other context
+  // line below untouched.  When there's no promo at all (empty
+  // tag), bail out — a null-op setRemark call would still clear
+  // line 1 and risk losing an existing Aging / Trueblu / Manual
+  // tag the user explicitly set elsewhere.
   let newPromoLine = "";
   if (promo === "SOVD") {
     newPromoLine = pct ? `Trueblu (${pct})` : "Trueblu";
@@ -3461,10 +3481,8 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
     const label = promo || "Special";
     newPromoLine = pct ? `${label} (${pct})` : label;
   }
-  const lines = [];
-  if (newPromoLine) lines.push(newPromoLine);
-  _tempeLines.forEach(l => lines.push(l));
-  setRemark(rowEl, lines.join("\n"));
+  if (!newPromoLine) return;
+  setRemark(rowEl, newPromoLine);
 }
 
 /* Oct-27-pm helper: pull every price-reference chip out of the
