@@ -5586,21 +5586,35 @@ function newRow(){
     const cell = tr.querySelector(`[data-col="${col}"]`);
     if (!cell) continue;
     cell.style.cursor = "pointer";
-    cell.title = "Click: pipeline breakdown (On Order / At dock / On water / Factory).  Shift-click: DOT-age breakdown.";
+    cell.title = "Click: pipeline breakdown (On Order / At dock / On water / Factory).  Double-click: DOT-age breakdown.";
+    // Oct-28 user ask: swap Shift+click → double-click for the DOT-age
+    // popover.  Shift+click is awkward on a trackpad; a plain double-
+    // click is more discoverable and matches the convention elsewhere
+    // in the app.  A plain click waits ~250 ms to see whether a second
+    // click lands first; if so, the single-click handler is cancelled
+    // and the double-click opens the Aging popover instead of the RT
+    // pipeline popover.
+    let _singleClickTimer = null;
     cell.addEventListener("click", (ev) => {
       const mcode = tr.querySelector('[data-col="m_code"]')?.value?.trim();
       if (!mcode) return;
       const state = col.replace("stock_", "").toUpperCase();
-      // Oct-21 user ask: default click now shows the RT pipeline
-      // breakdown (ATP / Unrestricted / On Order / At dock / On
-      // water / Factory) read from the row's cached dataset.stockRt.
-      // Shift-click still opens the DOT-age popover for operators
-      // who want the aging slice.
-      if (ev.shiftKey) {
-        openStockAgingPopover(cell, mcode, _stockPlantByCol[col], state);
-      } else {
+      if (ev.detail && ev.detail > 1) return;  // second click handled below
+      if (_singleClickTimer) clearTimeout(_singleClickTimer);
+      _singleClickTimer = setTimeout(() => {
+        _singleClickTimer = null;
         openStockRtPopover(cell, tr, state);
+      }, 250);
+    });
+    cell.addEventListener("dblclick", (ev) => {
+      const mcode = tr.querySelector('[data-col="m_code"]')?.value?.trim();
+      if (!mcode) return;
+      const state = col.replace("stock_", "").toUpperCase();
+      if (_singleClickTimer) {
+        clearTimeout(_singleClickTimer);
+        _singleClickTimer = null;
       }
+      openStockAgingPopover(cell, mcode, _stockPlantByCol[col], state);
     });
   }
   /* Qty auto-default — delegated input listener on the row.  Fires
