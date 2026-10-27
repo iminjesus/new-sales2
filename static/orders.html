@@ -663,7 +663,16 @@
     background:#f1f5f9;color:#334155;
     width:99%;min-width:140px;
   }
-  table.lines tbody td.remark-cell{width:99%;min-width:140px}
+  table.lines tbody td.remark-cell{
+    width:99%;min-width:140px;
+    /* Oct-27-pm user ask: let the Remark cell grow vertically when
+       it carries multi-line content (promo + Tempe chip + JAX chip
+       + Bob Jane chip, up to 5+ lines).  height:auto overrides the
+       table-wide fixed 32 px row height below for just this cell;
+       the <tr> picks up the tallest cell's height so the whole row
+       grows with it. */
+    height:auto !important;vertical-align:top;
+  }
   table.lines tbody td.remark-cell input{
     background:#f8fafc;color:#334155;font-weight:600;text-align:center;
     font-size:11px;letter-spacing:.02em;
@@ -5145,9 +5154,15 @@ function newRow(){
                   ? document.createElement("div")
                   : document.createElement("input");
     if (cell.c === "remark") {
+      // Oct-27-pm user ask: multi-line Remark content was being
+      // clipped by overflow:hidden + the parent td's fixed 32 px
+      // row height.  Switched to overflow:visible so the div grows
+      // with its content, and the td.remark-cell CSS below drops
+      // the fixed height so the <tr> grows to the tallest cell —
+      // standard HTML-table auto-height behaviour.
       inp.style.cssText =
         "width:100%;min-height:32px;padding:4px 6px;font:inherit;"
-        + "white-space:pre-wrap;overflow:hidden;line-height:1.3;"
+        + "white-space:pre-wrap;overflow:visible;line-height:1.3;"
         + "font-size:11px;letter-spacing:.02em;background:#f8fafc;"
         + "color:#334155";
       // .value shim so existing `el.value = x` / `el.value` readers
