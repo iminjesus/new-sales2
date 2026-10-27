@@ -661,6 +661,24 @@ body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C628
 body.chart-split .right { width: 50%; min-width: 0; }
 body.chart-split .left  { width: 25%; }
 body.chart-split #split-chart-btn { background: #C62828; border-color: #C62828; }
+/* Oct-27 "hide tables" state — the LEFT panel collapses entirely so
+   the two chart panes get the full viewport.  A fixed-position chip
+   at the top-left (visible only when the state is on) lets the user
+   bring the tables back. */
+body.left-hidden .left { display: none; }
+body.left-hidden .right { width: 50%; }
+body.left-hidden .chart-split-pane { width: 50%; }
+body:not(.chart-split).left-hidden .right { width: 100%; }
+.show-tables-chip {
+    position: fixed; top: 46px; left: 8px; z-index: 9997;
+    background: #1F4E79; color: #fff;
+    border: 1px solid #163a60; border-radius: 3px;
+    padding: 3px 10px; font-size: 10.5px; font-weight: 700;
+    letter-spacing: .03em; cursor: pointer;
+    display: none;
+}
+body.left-hidden .show-tables-chip { display: inline-block; }
+.show-tables-chip:hover { background: #163a60; }
 /* The expand button sits in the title bar — same style tokens as
    .expand-btn so the two feel identical. */
 .right-title {
@@ -814,12 +832,26 @@ body.chart-split #split-chart-btn { background: #C62828; border-color: #C62828; 
   </nav>
 </div>
 
+<!-- Oct-27: appears when the LEFT comparison tables are hidden.
+     Click → restore the tables.  Hidden by default (CSS). -->
+<button class="show-tables-chip" onclick="toggleTablesHidden()"
+        title="Show the comparison tables again">&#x2630; Show tables</button>
+
 <div class="body">
 
   <!-- ── LEFT: comparison tables ── -->
   <div class="left">
     <div class="left-title">
       <span class="lt-text">Comparison Base table for popular size</span>
+      <!-- Oct-27 user ask: close button hides the LEFT panel entirely
+           so the two chart panes (main + split duplicate) take the
+           full viewport.  A small "Show tables" chip appears at the
+           top-left corner when hidden so the user can bring the
+           tables back. -->
+      <button id="close-tables-btn" class="expand-btn"
+              onclick="toggleTablesHidden()" title="Hide the comparison tables"
+              aria-label="Hide tables"
+              style="background:#C62828;border-color:#C62828">&#x2715;</button>
       <button id="expand-tables-btn" class="expand-btn"
               onclick="toggleTablesExpand()" title="Expand tables to full view"
               aria-label="Expand tables">&#x26F6;</button>
@@ -1398,7 +1430,14 @@ function _render(title, datasets) {
     document.getElementById('chart-title').textContent = title;
     if (_chart) { _chart.destroy(); _chart = null; }
 
-    const yr   = _yRange(datasets);
+    const yrSelf = _yRange(datasets);
+    /* Oct-27 split-view: merge in the sibling pane's current Y range
+       so both charts show the same Y window.  Both panes do the same
+       merge so the result is deterministic — whichever pane renders
+       last applies the union of both ranges.  Also broadcasts our
+       own range before the merge so the sibling can match. */
+    _publishYRange(yrSelf.min, yrSelf.max);
+    const yr = _mergedYRange(yrSelf);
     const opts = JSON.parse(JSON.stringify(baseOpts));  // deep-clone so baseOpts is not mutated
     if (yr.min !== undefined) {
         opts.scales.y.min = yr.min;
@@ -1806,6 +1845,23 @@ function _median(arr) {
    right-most month columns (‘26.8 / ‘26.9) that get clipped at
    40 % left-panel width become fully readable.  Icon swaps to an
    ✕ while expanded so the click target's meaning is obvious. */
+/* Oct-27 "hide tables" toggle.  The LEFT panel collapses entirely
+   so the chart panes get the full viewport; a "Show tables" chip
+   (CSS-pinned top-left) brings it back on next click.  Also fires
+   Chart.js resize nudge so Chart.js re-measures the (now wider)
+   canvas without waiting for a window resize event. */
+function toggleTablesHidden() {
+    const body = document.body;
+    const on = body.classList.toggle('left-hidden');
+    if (on && body.classList.contains('tables-expanded')) {
+        body.classList.remove('tables-expanded');
+    }
+    requestAnimationFrame(() => {
+        try { if (_chart && typeof _chart.resize === 'function') _chart.resize(); }
+        catch (_e) {}
+    });
+}
+
 function toggleTablesExpand() {
     const on = document.body.classList.toggle('tables-expanded');
     const btn = document.getElementById('expand-tables-btn');
@@ -1876,22 +1932,77 @@ function toggleChartSplit() {
     if (btn) btn.innerHTML = '✕';
 }
 
-/* The iframe loads this same page with ?split=1 appended.  Hide
-   the split + expand buttons inside the iframe so the duplicate
-   can't recursively open another duplicate (infinite nesting). */
+/* The iframe loads this same page with ?split=1 appended.  Strip
+   every piece of chrome the duplicate doesn't need so its chart
+   area matches the main pane's physical height:
+     • Top .hdr (title + nav) — same links the parent already shows.
+     • .left comparison tables — single-table only.
+     • The duplicate's own split + expand buttons — no recursive
+       nesting; one duplicate is enough.
+     • PRICE COMPARISON CHART label inside .right-title — already
+       labelled by the parent's "SECOND CHART" title.
+   Also compress the chart-panel filter rows so the chart canvas
+   gets the full remaining height. */
 (function _hideSplitInsideIframe(){
     try {
         const sp = new URLSearchParams(location.search);
         if (sp.get('split') === '1') {
             const style = document.createElement('style');
             style.textContent =
-                '#split-chart-btn,#expand-chart-btn{display:none !important}'
+                '.hdr{display:none !important}'
                 + '.left{display:none !important}'
-                + '.right{width:100% !important}';
+                + '#split-chart-btn,#expand-chart-btn{display:none !important}'
+                + '.right-title{display:none !important}'
+                + '.right{width:100% !important}'
+                + '.body{overflow:hidden}'
+                + '.chart-panel{padding:8px 10px !important}'
+                + '.btn-panel{padding:4px 8px 6px !important}';
             document.head.appendChild(style);
         }
     } catch (_e) {}
 })();
+
+/* Oct-27 Y-axis sync.  When the main window and the iframe both
+   show the "same scale" the reader can compare prices across
+   panes at a glance.  Each chart computes its own Y range off its
+   own datasets (so independent filters still work) BUT also broad-
+   casts the range to the sibling window via localStorage.  The
+   sibling listens for storage events and re-renders its chart
+   using max(selfRange, siblingRange) so both end up on the
+   larger of the two — nothing ever gets clipped.  Same origin so
+   localStorage.setItem is the simplest cross-window bus. */
+let _siblingYRange = null;
+const _SYNC_KEY = 'pc_y_range_sync';
+function _publishYRange(min, max) {
+    try {
+        localStorage.setItem(_SYNC_KEY, JSON.stringify({
+            min: min, max: max, t: Date.now(),
+            src: (new URLSearchParams(location.search).get('split') === '1')
+                 ? 'iframe' : 'main',
+        }));
+    } catch (_e) {}
+}
+function _mergedYRange(selfRange) {
+    if (!_siblingYRange) return selfRange;
+    const r = selfRange || {};
+    return {
+        min: Math.min(r.min != null ? r.min : _siblingYRange.min,
+                       _siblingYRange.min),
+        max: Math.max(r.max != null ? r.max : _siblingYRange.max,
+                       _siblingYRange.max),
+    };
+}
+window.addEventListener('storage', function(e) {
+    if (e.key !== _SYNC_KEY || !e.newValue) return;
+    try {
+        const d = JSON.parse(e.newValue);
+        if (!d || typeof d.min !== 'number' || typeof d.max !== 'number') return;
+        _siblingYRange = { min: d.min, max: d.max };
+        /* Re-render current chart with the merged range so the two
+           panes line up visually. */
+        try { if (typeof _tryRender === 'function') _tryRender(); } catch (_err) {}
+    } catch (_err) {}
+});
 
 function toggleChartExpand() {
     if (document.body.classList.contains('tables-expanded')) {
