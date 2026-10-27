@@ -166,19 +166,26 @@ def _find_sap_security_popup():
 
 
 def _find_sap_system_message_popup():
-    """Oct-23 user ask: find the native Win32 "SAP GUI for Windows 740"
-    message box that appears when another desktop's logon kills this
-    seat ("HKP: SAP System Message / Back-end session closed by
-    system").  This dialog is NOT a SAP Scripting wnd[1] — it's a
-    plain Win32 MessageBox drawn by SAP GUI's front-end client, so
-    _check_backend_closed() (which walks session.findById) can't see
-    it.  We enumerate every top-level window, look for a title
-    containing "SAP GUI for Windows" or just "SAP", and match the
-    body against markers for the session-closed message."""
+    """Find the native Win32 "SAP GUI for Windows" message box that
+    appears when another desktop's logon kills this seat ("HKP: SAP
+    System Message / Back-end session closed by system") or on any
+    comparable blocking SAP system message.  This dialog is NOT a
+    SAP Scripting wnd[1] — it's a plain Win32 MessageBox drawn by
+    SAP GUI's front-end client, so _check_backend_closed() (which
+    walks session.findById) can't see it.
+
+    Oct-28 rework after a reporter saw an operator PC stuck at this
+    popup for the overnight 8:00 run: broadened the match so ANY
+    top-level window whose title OR body contains "sap" AND an OK
+    button finder below hits — not just the specific "Back-end
+    session closed" phrase.  Also returns ALL matches so the
+    dismisser can clear a stack of them in one pass instead of
+    one-popup-per-call.
+    """
     try:
         import win32gui
     except ImportError:
-        return None
+        return []
     BODY_MARKERS = (
         "back-end session closed",
         "back end session closed",
@@ -186,6 +193,14 @@ def _find_sap_system_message_popup():
         "session closed by system",
         "closed by system",
         "sap system message",
+        "system message",
+        "connection closed",
+        "connection to the server",
+    )
+    TITLE_MARKERS = (
+        "sap gui for windows",
+        "sap system message",
+        "sap",
     )
     found = []
     def _enum(h, _):
@@ -193,8 +208,6 @@ def _find_sap_system_message_popup():
             if not win32gui.IsWindowVisible(h):
                 return True
             title = (win32gui.GetWindowText(h) or "").lower()
-            if "sap" not in title:
-                return True
             texts = []
             def _collect(child, _c):
                 try:
@@ -208,7 +221,13 @@ def _find_sap_system_message_popup():
                 pass
             texts.append(title)
             full = " ".join(texts)
-            if any(m in full for m in BODY_MARKERS):
+            # Match if (a) title explicitly carries a known SAP
+            # dialog marker, OR (b) body text contains one of the
+            # known session-closed / system-message phrases AND
+            # the title has "sap" somewhere.
+            title_hit = any(m in title for m in TITLE_MARKERS)
+            body_hit  = any(m in full  for m in BODY_MARKERS)
+            if (title_hit and body_hit) or ("sap system message" in full):
                 found.append(h)
         except Exception:
             pass
@@ -216,66 +235,130 @@ def _find_sap_system_message_popup():
     try:
         win32gui.EnumWindows(_enum, None)
     except Exception:
-        return None
-    return found[0] if found else None
+        return []
+    return found
 
 
 def _dismiss_sap_system_message_popup():
-    """Click OK on a "Back-end session closed by system" Win32 message
-    box.  Returns True when a popup was found and dismissed, False
-    otherwise.  Non-blocking — bails fast when no such dialog exists.
-    Called from ensure_sap_session() BEFORE _try_attach so a leftover
-    popup from a kicked seat doesn't poison the next attempt."""
+    """Click OK on EVERY "Back-end session closed" / SAP System
+    Message Win32 message box currently on screen.  Returns True
+    when at least one popup was found and dismissed, False otherwise.
+    Non-blocking — bails fast when no such dialog exists.
+
+    Oct-28 rework: a stack of popups (seen when SAP has fired more
+    than one system message while the operator was away) is now
+    cleared in one call instead of leaving the deeper ones in place.
+    Each popup gets four dismissal attempts in order so an edge-case
+    client build that ignores BM_CLICK still gets dismissed:
+      1. BM_CLICK on the OK button (by text + class)
+      2. WM_COMMAND IDOK on the dialog
+      3. VK_RETURN keydown/up on the dialog
+      4. WM_CLOSE on the dialog
+    Logs every step for troubleshooting."""
     try:
         import win32gui, win32con
     except ImportError:
         _slog("pywin32 missing — can't auto-dismiss SAP system-message popup")
         return False
-    hwnd = _find_sap_system_message_popup()
-    if not hwnd:
+    hwnds = _find_sap_system_message_popup()
+    if not hwnds:
         return False
-    _slog(f"[sap_system_msg] found Win32 popup hwnd=0x{hwnd:x} — clicking OK")
-    try:
-        try: win32gui.SetForegroundWindow(hwnd)
-        except Exception: pass
-        OK_LABELS = ("ok", "확인", "yes", "예", "ja", "da")
-        clicked = {"done": False}
-        def _enum_children(h, _c):
-            try:
-                txt = (win32gui.GetWindowText(h) or "").strip().lower().strip("&")
-                cls = win32gui.GetClassName(h) or ""
-                if "button" in cls.lower() and any(txt == l for l in OK_LABELS):
-                    win32gui.SendMessage(h, 0x00F5, 0, 0)   # BM_CLICK
-                    clicked["done"] = True
-                    return False
-            except Exception:
-                pass
-            return True
+    dismissed_any = False
+    for hwnd in hwnds:
+        if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            continue
+        _slog(f"[sap_system_msg] popup hwnd=0x{hwnd:x} "
+              f"title={win32gui.GetWindowText(hwnd)!r} — dismissing")
         try:
-            win32gui.EnumChildWindows(hwnd, _enum_children, None)
-        except Exception:
-            pass
-        if clicked["done"]:
-            _slog("[sap_system_msg] OK clicked via BM_CLICK")
-        else:
-            # Fallback — Enter key.  OK is almost always the default
-            # button on these message boxes.
-            win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
-            time.sleep(0.05)
-            win32gui.PostMessage(hwnd, win32con.WM_KEYUP,   win32con.VK_RETURN, 0)
-            _slog("[sap_system_msg] dismissed via Enter keypress")
-        # Belt-and-braces: if nothing worked, send WM_CLOSE.
-        time.sleep(0.4)
-        if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+            try: win32gui.SetForegroundWindow(hwnd)
+            except Exception: pass
+            # (1) BM_CLICK on the OK button.
+            OK_LABELS = ("ok", "확인", "yes", "예", "ja", "da", "close", "닫기")
+            clicked = {"done": False}
+            def _enum_children(h, _c):
+                try:
+                    txt = (win32gui.GetWindowText(h) or "").strip().lower().strip("&")
+                    cls = win32gui.GetClassName(h) or ""
+                    if "button" in cls.lower() and any(txt == l for l in OK_LABELS):
+                        win32gui.SendMessage(h, 0x00F5, 0, 0)   # BM_CLICK
+                        clicked["done"] = True
+                        return False
+                except Exception:
+                    pass
+                return True
+            try: win32gui.EnumChildWindows(hwnd, _enum_children, None)
+            except Exception: pass
+            if clicked["done"]:
+                _slog(f"[sap_system_msg]   step 1 ok (BM_CLICK)")
+            # (2) WM_COMMAND IDOK (1) on the dialog — covers message
+            #     boxes that don't expose their OK button via
+            #     EnumChildWindows (owner-drawn / custom).
+            time.sleep(0.2)
+            if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+                try:
+                    win32gui.PostMessage(hwnd, win32con.WM_COMMAND, 1, 0)
+                    _slog(f"[sap_system_msg]   step 2 ok (WM_COMMAND IDOK)")
+                except Exception:
+                    pass
+            # (3) VK_RETURN keydown/up on the dialog — default-button
+            #     fallback.
+            time.sleep(0.2)
+            if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+                try:
+                    win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+                    time.sleep(0.05)
+                    win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+                    _slog(f"[sap_system_msg]   step 3 ok (VK_RETURN)")
+                except Exception:
+                    pass
+            # (4) WM_CLOSE — belt-and-braces.
+            time.sleep(0.2)
+            if win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
+                try:
+                    win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                    _slog(f"[sap_system_msg]   step 4 ok (WM_CLOSE)")
+                except Exception:
+                    pass
+            dismissed_any = True
+        except Exception as e:
+            _slog(f"[sap_system_msg] dismiss failed on hwnd=0x{hwnd:x}: {e}")
+    return dismissed_any
+
+
+_SAP_POPUP_WATCHER_STOP = None
+def _start_sap_popup_watcher():
+    """Oct-28 user ask: a one-shot dismiss at the start of ensure_sap_
+    session isn't enough — a stale "Back-end session closed" popup can
+    appear a few seconds LATER (SAP's own front-end client re-raises
+    it after the connection re-negotiates), and the orchestrator ends
+    up blocked at the modal.  Fire a daemon thread that polls for the
+    popup every 400 ms and dismisses it the moment it appears.  The
+    thread lives until _stop_sap_popup_watcher() is called at the end
+    of ensure_sap_session.  Returns a stop handle."""
+    import threading
+    stop_flag = threading.Event()
+    def _runner():
+        while not stop_flag.is_set():
             try:
-                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
-                _slog("[sap_system_msg] fallback WM_CLOSE sent")
-            except Exception:
-                pass
-        return True
-    except Exception as e:
-        _slog(f"[sap_system_msg] dismiss failed: {e}")
-        return False
+                if _dismiss_sap_system_message_popup():
+                    _slog("[sap_popup_watcher] auto-dismissed a system "
+                          "message popup during logon attempt")
+            except Exception as _e:
+                _slog(f"[sap_popup_watcher] poll error: {_e}")
+            # 400 ms cadence — fast enough to catch an eye-blink popup
+            # before it blocks the scripting bridge, light enough that
+            # it never shows up on CPU graphs.
+            stop_flag.wait(0.4)
+    t = threading.Thread(target=_runner, name="sap-popup-watcher",
+                         daemon=True)
+    t.start()
+    return stop_flag
+def _stop_sap_popup_watcher(stop_flag):
+    try:
+        if stop_flag is not None:
+            stop_flag.set()
+    except Exception:
+        pass
 
 
 def _dismiss_sap_connect_popup_background(timeout_sec=25):
@@ -771,45 +854,57 @@ def ensure_sap_session():
     Up to 3 attempts, each validating the returned session before
     returning.  A dead/stale COM pointer that only reveals itself
     as 'disconnected' on first use is caught here and the next
-    attempt opens a fresh connection — WITHOUT killing saplogon."""
+    attempt opens a fresh connection — WITHOUT killing saplogon.
+
+    Oct-28 user ask: a background popup watcher runs for the whole
+    duration of this call so a stale "Back-end session closed"
+    dialog that appears MID-logon (not just before attach) gets
+    auto-dismissed without the batch getting stuck."""
     last_err = None
-    for attempt in range(1, 4):
-        try:
-            # Oct-23 user ask: when another desktop's logon has kicked
-            # this seat off, SAP leaves a native Win32 message box
-            # ("SAP GUI for Windows 740 / Back-end session closed by
-            # system") covering the SAP window.  Any scripting call
-            # against that session is blocked until the box is OK'd.
-            # Clear it before every attach attempt so the orchestrator
-            # can proceed on its own.  Non-blocking + idempotent — no-op
-            # when no such popup exists.
+    # Start the popup watcher BEFORE the first attach attempt and
+    # keep it running through every retry.  Guarantees a stale
+    # Win32 modal doesn't block scripting at any point during logon.
+    _popup_watcher = None
+    try:
+        _popup_watcher = _start_sap_popup_watcher()
+    except Exception as _e:
+        _slog(f"popup watcher failed to start: {_e!r} — continuing without it")
+    try:
+        for attempt in range(1, 4):
             try:
-                if _dismiss_sap_system_message_popup():
-                    _slog(f"attempt {attempt}/3: dismissed stale "
-                          f"'Back-end session closed' popup; proceeding "
-                          f"with attach/login")
-                    time.sleep(0.8)
-            except Exception as _e:
-                _slog(f"attempt {attempt}/3: popup-dismiss helper failed: {_e!r}")
-            sess, status = _ensure_sap_session_once(attempt)
-            if _is_session_alive(sess):
-                _slog(f"attempt {attempt}/3: session validated as alive "
-                      f"(status={status})")
-                return sess, status
-            _slog(f"attempt {attempt}/3: returned session is DEAD "
-                  f"(COM disconnected) — retrying with a fresh "
-                  f"OpenConnection (saplogon.exe NOT touched).")
-            time.sleep(1.5)
-        except MultiLogonError:
-            raise  # caller handles the email + wait + retry
-        except Exception as e:
-            last_err = e
-            _slog(f"attempt {attempt}/3 raised: {e!r} — "
-                  f"retrying (saplogon.exe NOT touched).")
-            time.sleep(2.0)
-    raise NoSapError(
-        f"ensure_sap_session failed after 3 attempts.  Last error: {last_err!r}"
-    )
+                # Belt-and-braces one-shot dismiss on top of the
+                # continuous watcher — catches any popup that was
+                # already up when ensure_sap_session was called,
+                # even if the watcher thread hasn't ticked yet.
+                try:
+                    if _dismiss_sap_system_message_popup():
+                        _slog(f"attempt {attempt}/3: dismissed stale "
+                              f"'Back-end session closed' popup; proceeding "
+                              f"with attach/login")
+                        time.sleep(0.8)
+                except Exception as _e:
+                    _slog(f"attempt {attempt}/3: popup-dismiss helper failed: {_e!r}")
+                sess, status = _ensure_sap_session_once(attempt)
+                if _is_session_alive(sess):
+                    _slog(f"attempt {attempt}/3: session validated as alive "
+                          f"(status={status})")
+                    return sess, status
+                _slog(f"attempt {attempt}/3: returned session is DEAD "
+                      f"(COM disconnected) — retrying with a fresh "
+                      f"OpenConnection (saplogon.exe NOT touched).")
+                time.sleep(1.5)
+            except MultiLogonError:
+                raise  # caller handles the email + wait + retry
+            except Exception as e:
+                last_err = e
+                _slog(f"attempt {attempt}/3 raised: {e!r} — "
+                      f"retrying (saplogon.exe NOT touched).")
+                time.sleep(2.0)
+        raise NoSapError(
+            f"ensure_sap_session failed after 3 attempts.  Last error: {last_err!r}"
+        )
+    finally:
+        _stop_sap_popup_watcher(_popup_watcher)
 
 
 def _ensure_sap_session_once(attempt):
