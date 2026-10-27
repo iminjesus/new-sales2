@@ -1482,26 +1482,25 @@ function buildDailyStacks(rows){
     })
   )];
 
-  // Sort order (TOP → BOTTOM of legend / stack):
-  //   • NSW BDEs (highest monthly qty first), then QLD, VIC, SA, WA,
-  //     then COMMON / unmapped.
-  //   • For region grouping the group labels ARE the region names,
-  //     so _stackStateSlot returns the slot of the group itself and
-  //     the sort still produces the canonical NSW→COMMON order.
-  //   • For salesman grouping the labels are BDE names; the slot
-  //     comes from REGION_SALESMEN and the within-state tiebreak
-  //     is total qty descending (rawTotals already built above).
-  // We then REVERSE the array so datasets[0] (which Chart.js draws
-  // at Y=0 — the bottom of the stack) becomes the LAST item in the
-  // legend-reading order.  Combined with legend.reverse:true on
-  // the Stacked Daily charts, this gives the user's requested
-  // "top of stack lines up with top of legend" behaviour.
+  // Sort order — user's rule: HIGHEST priority goes to the BOTTOM
+  // of the stack (and the bottom of the legend when legend.reverse
+  // is on).  Priority: NSW > QLD > VIC > SA > WA > COMMON, and
+  // within a state the biggest-qty BDE outranks the smaller ones.
+  //
+  // Chart.js draws datasets[0] at Y=0 (bottom of the stack), so to
+  // put the top-priority item at the bottom we need it FIRST in
+  // the array.  That's exactly what the sort below produces:
+  //   • state slot ASCENDING (NSW slot 0 → COMMON slot 5)
+  //   • within-state qty DESCENDING (biggest first)
+  // Combined with plugins.legend.reverse = true on the four stacked-
+  // daily charts, the legend ends up reading top-to-bottom as
+  // COMMON → … → NSW biggest, matching the visual stack order
+  // (COMMON at top, NSW biggest at bottom).
   groups.sort((a, b) => {
     const sa = _stackStateSlot(a), sb = _stackStateSlot(b);
     if (sa !== sb) return sa - sb;
     return (rawTotals[b] || 0) - (rawTotals[a] || 0);
   });
-  groups.reverse();
 
   // Determine last day where actual exists (based on rows)
   // - If a day appears in rows (even value 0), treat it as "actual exists"
