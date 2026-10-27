@@ -3168,7 +3168,14 @@ async function applyAdditionalDCToRow(rowEl){
      always shows the raw master values. */
   try {
     const baseEl = rowEl.querySelector('[data-col="base_dc"]');
-    if (baseEl) {
+    if (baseEl && baseEl.dataset.basePersisted === "1") {
+      // Oct-27: hydrated row — Base DC is frozen at the persisted
+      // value.  Don't let the live override_base_dc rewrite it, and
+      // don't fall back to the master rate when the override is
+      // gone.  Everything else in this handler (sp_dc write, promo
+      // tagging, recalc) still runs so the rest of the row stays
+      // live with the current customer / promo contract.
+    } else if (baseEl) {
       if (data && data.override_base_dc != null) {
         baseEl.value = fmtPct(data.override_base_dc);
         baseEl.dataset.baseOverride = "1";
@@ -3524,6 +3531,14 @@ function applyBaseDCToRow(rowEl, brand, line){
   if (pct == null && B === "LF" && rates.LF_PCLT != null) pct = rates.LF_PCLT;
   const el = rowEl.querySelector('[data-col="base_dc"]');
   if (!el) return;
+  // Oct-27 user ask: on a hydrated row, Base DC is FROZEN at the
+  // value persisted in payload_json.  Skip the auto-write entirely
+  // so an expired promo doesn't rewind the row to the current
+  // customer-master rate (that was the 52 % → 62 % drift the user
+  // reported on Form 261027_015Y).  recalcRow still fires so any
+  // downstream math (Current DC %, Current Unit Price) catches up
+  // to the current sp_dc / add_dc; the Base DC itself stays put.
+  if (el.dataset.basePersisted === "1") { recalcRow(rowEl); return; }
   // Oct-19 user ask: do NOT clear a cell that already carries a
   // typed/auto value just because a late recompute happened with
   // unknown brand/line (that wiped Base DC on first material-pick
@@ -3603,6 +3618,13 @@ function applyMaterial(rowEl, data){
      back to "1" when the new material actually earns a promo DC. */
   const _baseElReset = rowEl.querySelector('[data-col="base_dc"]');
   if (_baseElReset) delete _baseElReset.dataset.baseOverride;
+  /* Oct-27: a new material pick on a hydrated row is an INTENTIONAL
+     recalc — the user wants the current promo + base to re-resolve
+     against the newly-chosen SKU.  Drop the "basePersisted" freeze
+     so the next applyBaseDCToRow / applyAdditionalDCToRow pass can
+     write to the cell again. */
+  if (_baseElReset) delete _baseElReset.dataset.basePersisted;
+  delete rowEl.dataset.basePersisted;
   set("m_code",       data.m_code);
   set("description",  data.description);
   set("brand",        data.brand);
@@ -4796,7 +4818,12 @@ function newRow(){
     {c:"pattern",        cls:"center", list:"desc_list"},
     {c:"load_speed",     cls:"center readonly", ro:true},
     {c:"list_price",     cls:"num readonly", ro:true},
-    {c:"base_dc",        cls:"num base-dc-cell"},
+    // Oct-27 user ask: Base DC should NEVER be manually editable.
+    // The number comes from the customer-master lookup (fillBaseDC)
+    // and the per-material override (applyAdditionalDCToRow), both
+    // of which run automatically.  Marking the cell read-only
+    // prevents an accidental keystroke from derailing the pricing.
+    {c:"base_dc",        cls:"num base-dc-cell readonly", ro:true},
     {c:"sp_dc",          cls:"num sky-cell"},
     {c:"current_dc",     cls:"num readonly", ro:true},
     {c:"current_price",  cls:"num red-num readonly", ro:true},
@@ -7083,6 +7110,21 @@ async function hydrateSubmittedOrder(oid, editMode){
       const el = tr.querySelector(`[data-col="${c}"]`);
       if (el) el.value = ln[c] ?? "";
     });
+    // Oct-27 user ask: Base DC saved on this line must stay exactly
+    // as persisted.  Promo masters change over the SPRF's lifetime
+    // (a line entered at 52 % base + 35 % promo would re-resolve to
+    // 62 % base + 35 % promo after the promo expires, deepening the
+    // total DC from 68.80 % to 75.30 %), so we tag the base_dc cell
+    // + the whole row with "basePersisted" the moment they're
+    // hydrated.  applyBaseDCToRow / applyAdditionalDCToRow early-
+    // return before writing when they see the flag.  The flag is
+    // cleared on applyMaterial (user picked a new material =
+    // intentional recalc).
+    const _baseEl = tr.querySelector('[data-col="base_dc"]');
+    if (_baseEl && (ln.base_dc || "").toString().trim()) {
+      _baseEl.dataset.basePersisted = "1";
+      tr.dataset.basePersisted = "1";
+    }
     if (ln._line)          tr.dataset.line         = ln._line;
     if (ln._product_group) tr.dataset.productGroup = ln._product_group;
     if (ln._promo)         tr.dataset.promo        = ln._promo;
