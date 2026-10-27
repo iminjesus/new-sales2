@@ -3597,6 +3597,24 @@ function applyMaterial(rowEl, data){
   set("pattern",      data.pattern);
   set("load_speed",   data.load_speed);
   set("list_price",   data.list_price != null ? fmtMoney(data.list_price) : "");
+  // Oct-27 safety: snapshot the m_code + each resolver cell's final
+  // value right after applyMaterial finishes writing them.  Any
+  // subsequent "change" event on those cells can compare current
+  // value vs snapshot: unchanged → nothing to re-resolve, skip the
+  // material fetch entirely.  This closes the user-reported line-
+  // interference bug where tabbing from Line 1 to Line 2 would
+  // sometimes re-fire Line 1's description `change` event (a stray
+  // blur-after-pick quirk) and that stale re-resolve picked a
+  // different material (AH15 instead of LF22) because the datalist
+  // had rotated to the next brand's suggestions mid-flight.  Flag
+  // cleared when the user actually edits one of these cells (see
+  // the input-event listeners which delete it before processing).
+  rowEl.dataset.lastResolvedMcode = String(data.m_code || "");
+  const _snapCell = (name) => {
+    const el = rowEl.querySelector(`[data-col="${name}"]`);
+    if (el) el.dataset.resolvedValue = (el.value || "");
+  };
+  ["m_code", "description", "product_name", "pattern"].forEach(_snapCell);
   // Stash line + product_group on the row so applyBaseDCToRow /
   // applyAdditionalDCToRow can read them without going back to the
   // API (neither is a visible column on the form).
@@ -4774,8 +4792,21 @@ function newRow(){
   const descInp  = tr.querySelector('[data-col="description"]');
   const prodInp  = tr.querySelector('[data-col="product_name"]');
   const patInp   = tr.querySelector('[data-col="pattern"]');
-  mcodeInp.addEventListener("input",  e => debouncedSuggestMat(e.target.value));
-  mcodeInp.addEventListener("change", e => fillMaterialFromCode(tr, e.target.value));
+  mcodeInp.addEventListener("input",  e => {
+    delete e.target.dataset.resolvedValue;
+    debouncedSuggestMat(e.target.value);
+  });
+  mcodeInp.addEventListener("change", e => {
+    // Oct-27 safety guard: same resolved-value snapshot pattern as
+    // the desc / product / pattern inputs above.  Prevents a stray
+    // blur-after-pick from re-fetching the material and silently
+    // rotating the row to a different SKU.
+    if (e.target.dataset.resolvedValue !== undefined
+        && e.target.dataset.resolvedValue === e.target.value) {
+      return;
+    }
+    fillMaterialFromCode(tr, e.target.value);
+  });
   mcodeInp.addEventListener("focus",  e => {
     /* Fresh focus — clear whatever stale rows the popover was
        holding from the previous cell and re-fetch against this
@@ -4796,7 +4827,13 @@ function newRow(){
      Each row then resolves its material through the same
      fillMaterialFromCode path. */
   mcodeInp.addEventListener("paste", e => handleMcodePaste(e, tr));
-  descInp.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
+  descInp.addEventListener("input",   e => {
+    // User typing clears the resolved-value snapshot so the next
+    // change event is treated as a genuine edit (not a stray blur-
+    // after-pick).  Snapshot is re-set when applyMaterial resolves.
+    delete e.target.dataset.resolvedValue;
+    debouncedSuggestMat(e.target.value);
+  });
   descInp.addEventListener("change",  e => {
     /* Oct-23 fix: swallow the stray blur-change that fires right
        after a popover pick (applyMaterial rewrote this cell, so the
@@ -4805,6 +4842,16 @@ function newRow(){
        the next genuine edit. */
     if (tr.dataset.suppressNextMatResolve === "1") {
       delete tr.dataset.suppressNextMatResolve;
+      return;
+    }
+    /* Oct-27 safety: if the cell's current value is identical to
+       what applyMaterial last wrote here (dataset.resolvedValue
+       snapshot), the "change" event is a false positive — the row
+       is already resolved.  Skip the re-fetch so a stray blur
+       can't rotate the row to a different m_code.  Any genuine
+       user edit clears resolvedValue via the input handler above. */
+    if (e.target.dataset.resolvedValue !== undefined
+        && e.target.dataset.resolvedValue === e.target.value) {
       return;
     }
     fillMaterialFromDesc(tr, e.target.value);
@@ -4820,10 +4867,17 @@ function newRow(){
      resolve the row through the same "#M-Code"-tail extractor as the
      Description field.  Typing "Dyna" in Product Name or "K435" in
      Pattern fires the same suggest fetch. */
-  prodInp?.addEventListener("input",   e => debouncedSuggestMat(e.target.value));
+  prodInp?.addEventListener("input",   e => {
+    delete e.target.dataset.resolvedValue;
+    debouncedSuggestMat(e.target.value);
+  });
   prodInp?.addEventListener("change",  e => {
     if (tr.dataset.suppressNextMatResolve === "1") {
       delete tr.dataset.suppressNextMatResolve;
+      return;
+    }
+    if (e.target.dataset.resolvedValue !== undefined
+        && e.target.dataset.resolvedValue === e.target.value) {
       return;
     }
     fillMaterialFromDesc(tr, e.target.value);
@@ -4835,10 +4889,17 @@ function newRow(){
     if (v) suggestMaterial(v);
   });
   prodInp?.addEventListener("keydown", _matPopoverKeydown);
-  patInp?.addEventListener("input",    e => debouncedSuggestMat(e.target.value));
+  patInp?.addEventListener("input",    e => {
+    delete e.target.dataset.resolvedValue;
+    debouncedSuggestMat(e.target.value);
+  });
   patInp?.addEventListener("change",   e => {
     if (tr.dataset.suppressNextMatResolve === "1") {
       delete tr.dataset.suppressNextMatResolve;
+      return;
+    }
+    if (e.target.dataset.resolvedValue !== undefined
+        && e.target.dataset.resolvedValue === e.target.value) {
       return;
     }
     fillMaterialFromDesc(tr, e.target.value);
