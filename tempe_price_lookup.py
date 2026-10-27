@@ -346,6 +346,22 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
         _all_text  = " ".join(_all_cells)
         rl = _extract_load_speed(_all_text) or _extract_load_speed(desc)
         rpat_norm = _nrm(_all_text)
+        # Oct-27-pm bug fix: the whole-token pattern check below needs
+        # TOKEN BOUNDARIES to work.  _nrm strips every separator and
+        # collapses "K127E 104W" into "K127E104W" with nothing non-
+        # alphanumeric between — the boundary regex can never fire
+        # against that.  Build a parallel view that strips only the
+        # intra-token punctuation (dash / slash / dot / etc.) while
+        # KEEPING whitespace, so tokens stay separated:
+        #   • "K127E 104W"         → "K127E 104W"
+        #   • "LF-91 TRACTION"     → "LF91 TRACTION"   (dash gone)
+        #   • "K137A · PERFECT 7"  → "K137A  PERFECT 7"
+        # The pattern we search for was already _nrm'd by the caller
+        # (so "LF-91" came in as "LF91"), so this strip-but-keep-
+        # spaces view meets it half-way.
+        rpat_search = re.sub(
+            r"[/,.\-'&+()·]+", "", _all_text.upper()
+        )
         price = ""
         for pc in price_cols:
             v = _pick_col(r, pc)
@@ -389,15 +405,19 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
         # pattern code as a token delimited by non-alphanumeric
         # characters (or the start/end of the text) so K127 only
         # matches K127, never K127E / K127A / K1270.
+        #
+        # Oct-27-pm follow-up: run the whole-token search against
+        # rpat_search (raw text with separators intact), NOT the
+        # fully-normalised rpat_norm — the latter collapses every
+        # separator, so the boundary assertions can never fire and
+        # the chip never appears.  np_pattern comes in from the
+        # caller already upper-cased + stripped; we re.escape it
+        # defensively for any oddball punctuation.
         if np_pattern:
-            # The row text has already been _nrm'd; np_pattern was
-            # passed in via lookup_tempe_prices after the same _nrm.
-            # Escape metacharacters just in case a pattern code
-            # contains "-" or "/" (shouldn't but cheap).
             _esc = re.escape(np_pattern)
             has_pattern = re.search(
                 r"(?:^|[^A-Z0-9])" + _esc + r"(?:[^A-Z0-9]|$)",
-                rpat_norm,
+                rpat_search,
             ) is not None
         else:
             has_pattern = False
