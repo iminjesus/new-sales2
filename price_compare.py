@@ -1691,8 +1691,29 @@ function _renderStore() {
             // reads e.g. "Tempe — Kinergy Eco2 K127E" instead of
             // just "Tempe".  Falls back to the bare store name when
             // we can't derive a pattern label.
-            const primaryPattern = _seriesPattern(abbr, selectedSize, s)
-                                || _guessPatternFromDescs(descs);
+            //
+            // Oct-27-pm follow-up: when brand is ALL + a specific
+            // size is picked, _seriesPattern / _descsFor can't give
+            // a single pattern (the line averages across brands).
+            // Walk every brand's primary pattern at that (size,
+            // store) and surface the distinct patterns as the
+            // description, so "Tempe · 225/45R17 · ALL brands" reads
+            // "Tempe — Primacy 5 / Turanza 6 / Pilot Sport 5 / …"
+            // rather than a bare "Tempe".  Capped at 4 names so the
+            // legend row doesn't stretch across the chart.
+            let primaryPattern = _seriesPattern(abbr, selectedSize, s)
+                              || _guessPatternFromDescs(descs);
+            if (!primaryPattern && abbr === 'ALL' && selectedSize !== 'ALL') {
+                const _pats = new Set();
+                Object.keys(BRANDS).forEach(function(_b) {
+                    const _p = _seriesPattern(_b, selectedSize, s);
+                    if (_p) _pats.add(_p);
+                });
+                if (_pats.size) {
+                    const list = Array.from(_pats).slice(0, 4);
+                    primaryPattern = list.join(' / ');
+                }
+            }
             const label = SL[s] + (primaryPattern ? ' — ' + primaryPattern : '');
             arr.push({ label: label, data: prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
