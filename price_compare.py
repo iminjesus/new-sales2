@@ -1463,13 +1463,16 @@ function _render(title, datasets) {
     if (_chart) { _chart.destroy(); _chart = null; }
 
     const yrSelf = _yRange(datasets);
-    /* Oct-27 split-view: merge in the sibling pane's current Y range
-       so both charts show the same Y window.  Both panes do the same
-       merge so the result is deterministic — whichever pane renders
-       last applies the union of both ranges.  Also broadcasts our
-       own range before the merge so the sibling can match. */
-    _publishYRange(yrSelf.min, yrSelf.max);
+    /* Oct-27-pm user ask: both panes' Y-axis ticks must match.
+       Earlier the publish was yrSelf (self-only), which left the
+       sibling pane shrunk to its own smaller data range because its
+       own re-render could never pull the self-data-range sibling up.
+       Publish the MERGED range so each pane carries the UNION as
+       its "latest published" value — the next sibling event then
+       recognises it as "already contained" and the two converge on
+       the same max rather than oscillating or getting stuck. */
     const yr = _mergedYRange(yrSelf);
+    _publishYRange(yr.min, yr.max);
     const opts = JSON.parse(JSON.stringify(baseOpts));  // deep-clone so baseOpts is not mutated
     if (yr.min !== undefined) {
         opts.scales.y.min = yr.min;
@@ -2004,11 +2007,16 @@ function toggleChartSplit() {
                 '.hdr{display:none !important}'
                 + '.left{display:none !important}'
                 + '#split-chart-btn,#expand-chart-btn{display:none !important}'
-                + 'html,body{height:100% !important}'
-                + '.body{height:100% !important}'
-                + '.right{width:100% !important;height:100% !important}'
+                /* Oct-27-pm user ask: match the main pane's top edge
+                   exactly — zero every margin + padding on the root
+                   containers so the duplicate's title bar lines up
+                   with the main pane's title bar. */
+                + 'html,body{height:100% !important;margin:0 !important;padding:0 !important}'
+                + '.body{height:100% !important;margin:0 !important}'
+                + '.right{width:100% !important;height:100% !important;margin:0 !important}'
+                + '.right-title{padding:4px 10px !important;margin:0 !important}'
                 + '.chart-panel{padding:8px 10px !important;height:100%}'
-                + '.btn-panel{padding:4px 8px 6px !important}';
+                + '.btn-panel{padding:4px 8px 6px !important;margin:0 !important}';
             document.head.appendChild(style);
             const _nudge = () => {
                 try { window.dispatchEvent(new Event('resize')); } catch (_e) {}
