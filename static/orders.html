@@ -4491,9 +4491,11 @@ function openCopyLinesModal(){
                 display:flex;align-items:center;gap:12px;background:#f8fafc">
       <b style="font-size:14px;color:#0f172a">Copy for Excel</b>
       <span style="color:#64748b;font-size:12px">
-        Drag-select the cells (or whole rows) you want and press
-        <b>Ctrl+C</b> — paste straight into Excel.
+        <b>Click</b> a column header to copy just that column
+        (Shift-click to add more).  Or drag-select cells + <b>Ctrl+C</b>.
       </span>
+      <span id="copyColStatus"
+            style="color:#059669;font-size:12px;font-weight:700;min-width:140px"></span>
       <span style="flex:1"></span>
       <button type="button" id="copyAllBtn"
               style="padding:5px 12px;background:#0f766e;color:#fff;border:1px solid #115e59;
@@ -4517,24 +4519,83 @@ function openCopyLinesModal(){
   const thead = grid.querySelector("thead");
   const tbody = grid.querySelector("tbody");
   const cellCss = "border:1px solid #cbd5e1;padding:3px 8px;white-space:nowrap";
-  const hdrCss  = cellCss + ";background:#1e293b;color:#fff;font-weight:700;text-align:center";
+  const hdrCss  = cellCss + ";background:#1e293b;color:#fff;font-weight:700;text-align:center;"
+                + "cursor:pointer;user-select:none";
   const htr = document.createElement("tr");
-  keptHdrs.forEach(h => {
+  keptHdrs.forEach((h, i) => {
     const th = document.createElement("th");
     th.textContent = h.label;
     th.style.cssText = hdrCss;
+    th.title = "Click to copy this column (Shift-click to add more)";
+    th.dataset.colIdx = String(i);
     htr.appendChild(th);
   });
   thead.appendChild(htr);
-  bodyRows.forEach(vals => {
+  // Keep a 2-D grid of visible-only cells for column copy / highlight.
+  // bodyRows carries nulls where columns were dropped; the rendered
+  // grid skips them, so the on-screen column index maps to the
+  // filtered values array.
+  const filteredBodyRows = bodyRows.map(vals => vals.filter(v => v !== null));
+  filteredBodyRows.forEach(vals => {
     const tr = document.createElement("tr");
-    vals.filter(v => v !== null).forEach(v => {
+    vals.forEach((v, i) => {
       const td = document.createElement("td");
       td.textContent = v;
       td.style.cssText = cellCss;
+      td.dataset.colIdx = String(i);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
+  });
+  // Oct-27 user ask: click a column header to copy just that column
+  // (M-Code only / Size only / etc.).  Shift-click toggles additional
+  // columns into the selection — paste in Excel gets exactly those
+  // columns in header-order.  Visual: selected columns' cells get a
+  // green tint, header turns green, and a brief "N column(s) copied ✓"
+  // status reassures the user the clipboard write succeeded.
+  const _selectedCols = new Set();
+  const _statusEl = panel.querySelector("#copyColStatus");
+  const _flashStatus = (msg) => {
+    if (!_statusEl) return;
+    _statusEl.textContent = msg;
+    clearTimeout(_statusEl._t);
+    _statusEl._t = setTimeout(() => { _statusEl.textContent = ""; }, 1500);
+  };
+  const _repaintCols = () => {
+    htr.querySelectorAll("th").forEach((th, i) => {
+      th.style.background = _selectedCols.has(i) ? "#059669" : "#1e293b";
+    });
+    tbody.querySelectorAll("tr").forEach(tr => {
+      Array.from(tr.children).forEach((td, i) => {
+        td.style.background = _selectedCols.has(i) ? "#d1fae5" : "";
+      });
+    });
+  };
+  const _copySelectedCols = async () => {
+    if (!_selectedCols.size) return;
+    const cols = Array.from(_selectedCols).sort((a, b) => a - b);
+    const lines = [];
+    lines.push(cols.map(i => keptHdrs[i].label).join("\t"));
+    filteredBodyRows.forEach(vals => {
+      lines.push(cols.map(i => vals[i] == null ? "" : vals[i]).join("\t"));
+    });
+    try {
+      await navigator.clipboard.writeText(lines.join("\n"));
+      _flashStatus(`${cols.length} column${cols.length > 1 ? "s" : ""} copied ✓`);
+    } catch (_e) {
+      _flashStatus("Clipboard blocked — Ctrl+C instead");
+    }
+  };
+  htr.addEventListener("click", (e) => {
+    const th = e.target.closest("th");
+    if (!th) return;
+    const i = +th.dataset.colIdx;
+    if (!Number.isInteger(i)) return;
+    if (!e.shiftKey) _selectedCols.clear();
+    if (_selectedCols.has(i)) _selectedCols.delete(i);
+    else                       _selectedCols.add(i);
+    _repaintCols();
+    _copySelectedCols();
   });
   dim.appendChild(panel);
   document.body.appendChild(dim);
