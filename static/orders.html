@@ -3345,6 +3345,12 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
    tag renders first so a slow Tempe fetch never delays the price
    display.  Silent on no-match. */
 async function applyTempeRefPriceToRow(rowEl, data){
+  // Oct-27: on a post-approval SPRF (Approved OR Rejected), the chip
+  // the approver signed off on must stay exactly as it was.  Early-
+  // return so no fetch happens and the Remark cell keeps the frozen
+  // payload text.  Flag is set in setupOrderForm() off isApproved
+  // / isRejected.
+  if (window._tempeChipFrozen) return;
   const size  = String((data && data.description) || "").trim();
   const pat   = String((data && data.pattern)     || "").trim();
   const ls    = String((data && data.load_speed)  || "").trim();
@@ -4895,8 +4901,28 @@ function newRow(){
   });
   // Qty change → re-run the Additional DC lookup so a row that crosses
   // (or drops below) a min_qty threshold picks up (or loses) its %.
+  // Oct-27: Additional DC lookup internally calls setRemarkFromPromo
+  // which overwrites the Remark cell — wiping the Tempe reference
+  // chip the user just confirmed.  Chain the Tempe re-apply via
+  // .finally() so the chip comes back after the promo tag is set,
+  // same pattern applyMaterial already uses.  Builds the lookup
+  // params from the row's current cells (description = size cell,
+  // pattern / load_speed / brand from their own columns), so the
+  // call still carries the full matching context the resolver needs.
   tr.querySelector('[data-col="qty"]')?.addEventListener("change", () => {
-    if (tr.querySelector('[data-col="m_code"]').value) applyAdditionalDCToRow(tr);
+    if (!tr.querySelector('[data-col="m_code"]').value) return;
+    const _p = applyAdditionalDCToRow(tr);
+    const _rowData = () => ({
+      description: (tr.querySelector('[data-col="size"]')       ?.value || "").trim(),
+      pattern:     (tr.querySelector('[data-col="pattern"]')    ?.value || "").trim(),
+      load_speed:  (tr.querySelector('[data-col="load_speed"]') ?.value || "").trim(),
+      brand:       (tr.querySelector('[data-col="brand"]')      ?.value || "").trim(),
+    });
+    const _runRef = () => {
+      try { applyTempeRefPriceToRow(tr, _rowData()); } catch (_e) {}
+    };
+    if (_p && typeof _p.finally === "function") _p.finally(_runRef);
+    else _runRef();
   });
   /* sp_dc handler pair.
        • input  — track user's typing.  When an auto-fill original is
@@ -7070,6 +7096,16 @@ async function hydrateSubmittedOrder(oid, editMode){
          allowed; the audit trail is frozen).
        • Read-only viewer with no update rights → both dimmed. */
   const isApproved = !!data.approved_by_name;
+  const isRejected = !!data.rejected_by_name;
+  // Oct-27: once an order has been Approved or Rejected the Remark
+  // cell's Tempe reference chip is FROZEN per the user's rule
+  // ("Approval/Reject 받은 이후는 Fix").  Setting this global flag
+  // tells applyTempeRefPriceToRow + the Qty-change / applyMaterial
+  // chainers to skip the lookup entirely; the Remark cell keeps
+  // whatever text was saved on the approved payload.  CS editing a
+  // post-approval row changes qty / material but the chip they
+  // signed off on stays intact.
+  window._tempeChipFrozen = (isApproved || isRejected);
   const sBtn  = $("#btnSubmit");
   const dBtn  = $("#btnSaveTemp");
   const eBtn  = $("#btnEdit");
