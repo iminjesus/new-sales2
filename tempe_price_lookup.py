@@ -469,11 +469,15 @@ def lookup_tempe_prices(size: str, pattern: str = "",
                     source_file=fp,
                 )
             else:
+                # Oct-27: the consumer (retail-site) CSV now carries a
+                # STOCK column too — "8+" / "3" / "0" / "" — so the
+                # Remark chip can show "~OOS" or "~8+" on the EC
+                # side as well, not just the dealer side.
                 e = _best_match(
                     rows, ns_set, np, ul, scope_brand,
                     price_cols=("price", "disc_price", "PRICE", "DISC_PRICE"),
                     cost_cols=(),
-                    stock_col=None,
+                    stock_col="STOCK",
                     source_label="consumer",
                     source_file=fp,
                 )

@@ -3420,8 +3420,24 @@ function _renderTempeRefOnRow(rowEl, j){
   const fallbacks = [_dM, _cM].filter(Boolean);
   if (fallbacks.length) monthTag = ` ${fallbacks[0]}`;
   let chip = `(Tempe${monthTag}: ${parts.join("/")}`;
-  if (j.dealer && j.dealer.stock && String(j.dealer.stock).trim()) {
-    chip += ` ~Qty ${j.dealer.stock}+`;
+  // Oct-27: stock badge after the price triplet.  Priority order:
+  //   • dealer (TempeWebOrder) stock when non-empty — matches old
+  //     "~Qty 8+" / "~Qty 3" rendering (keep the "+" verbatim).
+  //   • consumer (retail-site) stock as a fallback — the public
+  //     tempetyres.com.au card badge, used when the dealer feed
+  //     doesn't have a row (new size, pre-launch, etc.).
+  //   • "~OOS" when EITHER source explicitly reports 0 stock, so
+  //     the reader doesn't mistake a reachable retail row for a
+  //     stock-available position.
+  const _ds = j.dealer   ? String(j.dealer.stock   || "").trim() : "";
+  const _cs = j.consumer ? String(j.consumer.stock || "").trim() : "";
+  const _isZero = (s) => s === "0";
+  if (_isZero(_ds) || _isZero(_cs)) {
+    chip += " ~OOS";
+  } else if (_ds) {
+    chip += ` ~Qty ${_ds}`;      // dealer feed carries the "+"
+  } else if (_cs) {
+    chip += ` ~Qty ${_cs}`;      // consumer feed may also carry "+"
   }
   chip += ")";
   /* Append to existing Remark value with " · " separator so an
@@ -3452,7 +3468,8 @@ function _renderTempeRefOnRow(rowEl, j){
   _detail("Consumer (Tempe retail)",                         j.consumer);
   _lines.push("");
   _lines.push("Legend: EC = end consumer (Tempe retail),  SI = dealer sell-in,  DR = dealer retail");
-  _lines.push("         * = load/speed differs,  ? = pattern differs,  ~Qty N+ = stock on hand");
+  _lines.push("         * = load/speed differs,  ? = pattern differs,"
+            + "  ~Qty N(+) = stock on hand,  ~OOS = out of stock");
   remEl.title = _lines.join("\n");
 }
 

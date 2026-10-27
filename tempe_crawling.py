@@ -187,6 +187,21 @@ return (function() {
             }
         }
 
+        // Oct-27: capture the stock-status badge so the SPRF Remark
+        // chip can show "~8+" / "~3" / "~OOS" after the EC price.
+        // Three shapes to detect:
+        //   • "8+ IN STOCK NOW" / "3 IN STOCK" → the digit before
+        //     "IN STOCK" is the count ("8+" / "3").
+        //   • "OUT OF STOCK" / "SOLD OUT" / "NO STOCK" → "0".
+        //   • Anything else (badge missing, loading state) → "".
+        var stock = '';
+        var stkM = text.match(/(\d+\+?)\s*in\s*stock/i);
+        if (stkM) {
+            stock = stkM[1];
+        } else if (/\bout\s*of\s*stock\b|\bsold\s*out\b|\bno\s*stock\b/i.test(text)) {
+            stock = '0';
+        }
+
         // SAVE_TEXT: "SALE" badge — check card wrapper and card itself
         var saveText = '';
         var saleBadge = wrapEl.querySelector('[class*="sale"],[class*="Sale"],[class*="ribbon"]');
@@ -200,7 +215,8 @@ return (function() {
         }
         if (!saveText && /\bSALE\b/i.test(wrapText.substring(0, 50))) saveText = 'SALE';
 
-        return { name: name, size: size, price: price, discPrice: discPrice, saveText: saveText };
+        return { name: name, size: size, price: price, discPrice: discPrice,
+                 saveText: saveText, stock: stock };
     }
 
     function addCard(card) {
@@ -307,6 +323,7 @@ def process_raw(raw_items, brand_name):
         price      = (item.get("price")     or "").strip()
         disc_price = (item.get("discPrice") or "").strip()
         save_text  = (item.get("saveText")  or "").strip()
+        stock      = (item.get("stock")     or "").strip()
 
         if not size or not price:
             continue
@@ -321,20 +338,29 @@ def process_raw(raw_items, brand_name):
             "price":      price_fmt,
             "disc_price": disc_fmt,
             "save_text":  save_text,
+            "stock":      stock,
         })
     return rows
 
 
 def write_rows(writer, rows):
     for r in rows:
-        # SIZE | brand | DESCRIPTION | price | disc_price | PROMO | SAVE_TEXT
+        # Oct-27: new STOCK column at the tail — "8+"/"3" when a
+        # retail card shows a stock-count badge, "0" when the card
+        # explicitly says OUT OF STOCK / SOLD OUT, blank when no
+        # badge is present (unknown state, don't guess).  The SPRF
+        # Remark chip reads this to render "~Qty 8+" or "~OOS".
+        # SIZE | brand | DESCRIPTION | price | disc_price | PROMO | SAVE_TEXT | STOCK
         writer.writerow([r["size"], r["brand"], r["desc"],
-                         r["price"], r["disc_price"], "", r["save_text"]])
+                         r["price"], r["disc_price"], "", r["save_text"],
+                         r.get("stock","")])
         line = f"  {r['brand']:<14} | {r['size']:<13} | {r['desc'][:40]:<40} | ${r['price']}"
         if r["disc_price"]:
             line += f"  (buy4: ${r['disc_price']})"
         if r["save_text"]:
             line += f"  [{r['save_text']}]"
+        if r.get("stock"):
+            line += f"  stk={r['stock']}"
         print(line)
 
 
@@ -405,7 +431,7 @@ def main():
     try:
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "price", "disc_price", "PROMO", "SAVE_TEXT"])
+            writer.writerow(["SIZE", "brand", "DESCRIPTION", "price", "disc_price", "PROMO", "SAVE_TEXT", "STOCK"])
 
             for abbr, (brand_name, url_slug) in BRANDS.items():
                 try:
