@@ -382,7 +382,25 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
             elif len(_nums) == 1 and not price:
                 price = _nums[0][1]
         stock = _pick_col(r, stock_col) if stock_col else ""
-        has_pattern = bool(np_pattern) and np_pattern in rpat_norm
+        # Oct-27 user ask: pattern match MUST be whole-token.
+        # Previously "K127" matched "K127E" and "K127A" via plain
+        # substring containment, which pulled a cheaper K127E row
+        # into the SPRF Remark chip for a K137A order.  Treat the
+        # pattern code as a token delimited by non-alphanumeric
+        # characters (or the start/end of the text) so K127 only
+        # matches K127, never K127E / K127A / K1270.
+        if np_pattern:
+            # The row text has already been _nrm'd; np_pattern was
+            # passed in via lookup_tempe_prices after the same _nrm.
+            # Escape metacharacters just in case a pattern code
+            # contains "-" or "/" (shouldn't but cheap).
+            _esc = re.escape(np_pattern)
+            has_pattern = re.search(
+                r"(?:^|[^A-Z0-9])" + _esc + r"(?:[^A-Z0-9]|$)",
+                rpat_norm,
+            ) is not None
+        else:
+            has_pattern = False
         has_load    = bool(ul_load) and rl.upper() == ul_load.upper()
         entry = {
             "price":            price,

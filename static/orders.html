@@ -3446,6 +3446,25 @@ function _renderTempeRefOnRow(rowEl, j){
     chip += ` ~Qty ${_cs}`;      // consumer feed may also carry "+"
   }
   chip += ")";
+  // Oct-27 user ask: with strict-pattern matching now in place (K127
+  // only matches K127, no longer K127E / K127A substrings), append
+  // the full picked descriptions after the chip so the reader can
+  // verify what the resolver actually picked.  Format:
+  //   [D: Hankook K127 VENTUS S1 EVO3 · C: Hankook K127 VENTUS S1 EVO3]
+  // Dealer and consumer descriptions shown separately when they differ;
+  // collapsed to one entry when they're identical.
+  const _dDesc = (j.dealer   && j.dealer.description   || "").trim();
+  const _cDesc = (j.consumer && j.consumer.description || "").trim();
+  if (_dDesc || _cDesc) {
+    const descParts = [];
+    if (_dDesc && _cDesc && _dDesc === _cDesc) {
+      descParts.push(_dDesc);
+    } else {
+      if (_dDesc) descParts.push("D:" + _dDesc);
+      if (_cDesc) descParts.push("C:" + _cDesc);
+    }
+    chip += " [" + descParts.join(" · ") + "]";
+  }
   /* Append to existing Remark value with " · " separator so an
      existing promo tag ("Trueblu (12.00%)") stays readable before
      the Tempe chip. */

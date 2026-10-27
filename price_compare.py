@@ -1970,10 +1970,30 @@ function toggleChartSplit() {
    sibling listens for storage events and re-renders its chart
    using max(selfRange, siblingRange) so both end up on the
    larger of the two — nothing ever gets clipped.  Same origin so
-   localStorage.setItem is the simplest cross-window bus. */
+   localStorage.setItem is the simplest cross-window bus.
+
+   Oct-27-pm bug fix: the first version blinked endlessly because
+   each sibling-triggered re-render fired _publishYRange again,
+   which fired a fresh storage event in the other window, which
+   re-rendered + republished, ad infinitum.  Three guards close
+   the loop:
+     • _publishingDisabled: set true for the duration of a sibling-
+       triggered re-render so the chain doesn't bounce.
+     • _lastPublishedRange: skip publishing when the range hasn't
+       actually changed since the last publish.
+     • Noop re-render: skip _tryRender when the incoming sibling
+       range is already dominated by our own last published one. */
 let _siblingYRange = null;
+let _lastPublishedRange = null;
+let _publishingDisabled = false;
 const _SYNC_KEY = 'pc_y_range_sync';
 function _publishYRange(min, max) {
+    if (_publishingDisabled) return;
+    if (min == null || max == null) return;
+    if (_lastPublishedRange
+        && _lastPublishedRange.min === min
+        && _lastPublishedRange.max === max) return;
+    _lastPublishedRange = { min: min, max: max };
     try {
         localStorage.setItem(_SYNC_KEY, JSON.stringify({
             min: min, max: max, t: Date.now(),
@@ -1997,10 +2017,26 @@ window.addEventListener('storage', function(e) {
     try {
         const d = JSON.parse(e.newValue);
         if (!d || typeof d.min !== 'number' || typeof d.max !== 'number') return;
+        // Skip the re-render when the new sibling range is already
+        // "contained" by our last published range — nothing visual
+        // would change AND it would just bounce another storage
+        // event back.
+        if (_lastPublishedRange
+            && d.min >= _lastPublishedRange.min
+            && d.max <= _lastPublishedRange.max) {
+            _siblingYRange = { min: d.min, max: d.max };
+            return;
+        }
         _siblingYRange = { min: d.min, max: d.max };
-        /* Re-render current chart with the merged range so the two
-           panes line up visually. */
-        try { if (typeof _tryRender === 'function') _tryRender(); } catch (_err) {}
+        _publishingDisabled = true;
+        try { if (typeof _tryRender === 'function') _tryRender(); }
+        catch (_err) {}
+        finally {
+            // Clear in next tick so the current render completes
+            // publishing-silent, but a user-driven filter change
+            // after this one still broadcasts normally.
+            setTimeout(() => { _publishingDisabled = false; }, 50);
+        }
     } catch (_err) {}
 });
 
