@@ -1463,16 +1463,19 @@ function _render(title, datasets) {
     if (_chart) { _chart.destroy(); _chart = null; }
 
     const yrSelf = _yRange(datasets);
-    /* Oct-27-pm user ask: both panes' Y-axis ticks must match.
-       Earlier the publish was yrSelf (self-only), which left the
-       sibling pane shrunk to its own smaller data range because its
-       own re-render could never pull the self-data-range sibling up.
-       Publish the MERGED range so each pane carries the UNION as
-       its "latest published" value — the next sibling event then
-       recognises it as "already contained" and the two converge on
-       the same max rather than oscillating or getting stuck. */
+    /* Oct-27-pm follow-up: publish the SELF range (what our data
+       actually spans), NOT the merged union.  Earlier "publish
+       merged" fix made the two panes converge on the common max —
+       but that max could only ever grow, so a user picking a size
+       with tightly-bunched data (Kumho 225/65R17 at $73-$160)
+       kept the ceiling from a previous large-range size and
+       wasted the vertical space.  Publishing self lets the ceiling
+       SHRINK when both panes land on a smaller dataset: once each
+       pane publishes its new self range, the storage listener on
+       the other pane updates _siblingYRange to the smaller value
+       and the next render's _mergedYRange drops to that union. */
+    _publishYRange(yrSelf.min, yrSelf.max);
     const yr = _mergedYRange(yrSelf);
-    _publishYRange(yr.min, yr.max);
     const opts = JSON.parse(JSON.stringify(baseOpts));  // deep-clone so baseOpts is not mutated
     if (yr.min !== undefined) {
         opts.scales.y.min = yr.min;
@@ -2120,10 +2123,24 @@ function toggleChartSplit() {
        range is already dominated by our own last published one. */
 let _siblingYRange = null;
 let _lastPublishedRange = null;
-let _publishingDisabled = false;
 const _SYNC_KEY = 'pc_y_range_sync';
+/* Oct-27-pm user ask: when both panes land on a size whose data is
+   tightly bunched (e.g. Kumho 225/65R17: $73-$160), the Y range
+   should SHRINK to fit — not stay stuck at a huge max carried over
+   from a previous size.  Earlier implementation published the
+   MERGED range, which only ever grew; this version publishes the
+   SELF range (what the local data actually spans) and does the
+   merge only at display time.  The two guards are now:
+     • _lastPublishedRange: suppresses duplicate publishes (same
+       value → no storage event anyway in modern browsers, but we
+       short-circuit explicitly so the cost is predictable).
+     • Equal-sibling check in the storage listener: a sibling
+       event carrying a range we already have on file is ignored
+       (no re-render).
+   The loop stops naturally because once both panes publish the
+   SAME self range, further publishes have identical values and
+   get dropped. */
 function _publishYRange(min, max) {
-    if (_publishingDisabled) return;
     if (min == null || max == null) return;
     if (_lastPublishedRange
         && _lastPublishedRange.min === min
@@ -2152,26 +2169,16 @@ window.addEventListener('storage', function(e) {
     try {
         const d = JSON.parse(e.newValue);
         if (!d || typeof d.min !== 'number' || typeof d.max !== 'number') return;
-        // Skip the re-render when the new sibling range is already
-        // "contained" by our last published range — nothing visual
-        // would change AND it would just bounce another storage
-        // event back.
-        if (_lastPublishedRange
-            && d.min >= _lastPublishedRange.min
-            && d.max <= _lastPublishedRange.max) {
-            _siblingYRange = { min: d.min, max: d.max };
-            return;
-        }
+        // No change — don't re-render.  Convergence check: when both
+        // panes already carry the same sibling-range on file, further
+        // publishes with the same values stop here instead of ping-
+        // ponging a redundant re-render.
+        if (_siblingYRange
+            && _siblingYRange.min === d.min
+            && _siblingYRange.max === d.max) return;
         _siblingYRange = { min: d.min, max: d.max };
-        _publishingDisabled = true;
         try { if (typeof _tryRender === 'function') _tryRender(); }
         catch (_err) {}
-        finally {
-            // Clear in next tick so the current render completes
-            // publishing-silent, but a user-driven filter change
-            // after this one still broadcasts normally.
-            setTimeout(() => { _publishingDisabled = false; }, 50);
-        }
     } catch (_err) {}
 });
 
