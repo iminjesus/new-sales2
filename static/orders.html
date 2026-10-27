@@ -3179,6 +3179,17 @@ async function applyAdditionalDCToRow(rowEl){
       if (data && data.override_base_dc != null) {
         baseEl.value = fmtPct(data.override_base_dc);
         baseEl.dataset.baseOverride = "1";
+        // Oct-27-pm user ask: once the promo logic has written the
+        // override (62 % → 52 % on this line's BLACK FRIDAY promo),
+        // LOCK it immediately.  Any later recompute (a stray change
+        // event, a late promo-master refresh, a save-time refire)
+        // must not rewind the cell to the customer-master rate.
+        // basePersisted makes applyBaseDCToRow + this handler both
+        // early-return on subsequent calls.  applyMaterial clears
+        // the flag only when the user picks a different material,
+        // which is the one path we WANT to re-resolve.
+        baseEl.dataset.basePersisted = "1";
+        rowEl.dataset.basePersisted  = "1";
       } else if (baseEl.dataset.baseOverride === "1") {
         delete baseEl.dataset.baseOverride;
         const _brand = (rowEl.querySelector('[data-col="brand"]')?.value || "").trim();
@@ -3327,22 +3338,62 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
   const pct   = (dcPct != null && dcPct !== "")
     ? Number(dcPct).toFixed(2) + "%"
     : "";
-  if (!promo && !pct) { setRemark(rowEl, ""); return; }
-  /* SOVD → "Trueblu" per user rule.  Everything else lands as
-     "<PROMO> (x%)" for readability. */
+  // Oct-27-pm bug fix: this function used to replace the whole
+  // Remark cell with just the promo tag, which wiped out any
+  // Tempe reference chip the user had already captured on this
+  // line.  That was especially bad on hydrate — fillBaseDC's
+  // reapply loop fires setRemarkFromPromo on every hydrated row,
+  // which deleted the saved Tempe chip from reopened SPRFs.
+  // Rebuild the whole cell: promo tag on line 1, every pre-
+  // existing Tempe chip (either multi-line "(Tempe…" starts or
+  // the legacy " · (Tempe…" tail from one-line Remarks) kept
+  // underneath.
+  const _tempeLines = _extractTempeChipLines(rowEl);
+  let newPromoLine = "";
   if (promo === "SOVD") {
-    setRemark(rowEl, pct ? `Trueblu (${pct})` : "Trueblu");
-    return;
+    newPromoLine = pct ? `Trueblu (${pct})` : "Trueblu";
+  } else if (promo === "443") {
+    newPromoLine = pct ? `443 (${pct})` : "443";
+  } else if (promo || pct) {
+    const label = promo || "Special";
+    newPromoLine = pct ? `${label} (${pct})` : label;
   }
-  if (promo === "443") {
-    setRemark(rowEl, pct ? `443 (${pct})` : "443");
-    return;
+  const lines = [];
+  if (newPromoLine) lines.push(newPromoLine);
+  _tempeLines.forEach(l => lines.push(l));
+  setRemark(rowEl, lines.join("\n"));
+}
+
+/* Oct-27-pm helper: pull every "(Tempe…" chip out of the current
+   Remark cell so a promo re-apply can keep them.  Handles both
+   layouts a line can have on disk:
+     • NEW layout — multiple "\n"-separated lines, each starting
+       with "(TempeDealer:" / "(TempeConsumer:" / "(Tempe".
+     • OLD layout — one line with " · " separating a promo tag
+       from a single "(Tempe: EC-…" chip.
+   Returns an array of chip strings (promo tag NOT included). */
+function _extractTempeChipLines(rowEl){
+  const el = rowEl?.querySelector('[data-col="remark"]');
+  if (!el) return [];
+  const raw = (el.value || "");
+  const out = [];
+  // Multi-line layout: pick every non-first line that starts with
+  // "(Tempe" — the first line is the promo tag we're about to
+  // rewrite, so skip it.
+  const nlLines = raw.split(/\n+/);
+  for (let i = 1; i < nlLines.length; i++) {
+    const t = nlLines[i].trim();
+    if (t && /^\(Tempe/i.test(t)) out.push(t);
   }
-  /* Anything else — treat the promo name as-is; if the promo name is
-     empty but a % was set, tag it "Special" so the reader knows a
-     manual/per-material special applied. */
-  const label = promo || "Special";
-  setRemark(rowEl, pct ? `${label} (${pct})` : label);
+  if (out.length) return out;
+  // Legacy " · " layout: split line 1 on " · ", keep every chunk
+  // starting with "(Tempe".
+  const parts = (nlLines[0] || "").split(/\s*·\s*/);
+  for (const p of parts) {
+    const t = p.trim();
+    if (t && /^\(Tempe/i.test(t)) out.push(t);
+  }
+  return out;
 }
 
 
