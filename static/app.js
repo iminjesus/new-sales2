@@ -60,20 +60,34 @@ const REGION_STACK_ORDER = ["NSW", "QLD", "VIC", "SA", "WA", "COMMON"];
        the known slots so it stays at the tail of the legend.
    The within-state ordering is handled by the caller via a
    per-group total; this function only returns the state slot. */
-const _STATE_BY_BDE = (() => {
+// Oct-27 bug fix: the previous version built this map inside an IIFE
+// at module load, which runs top-to-bottom BEFORE the REGION_SALESMEN
+// const (~90 lines below) is initialised.  Hitting that const in the
+// temporal-dead-zone threw a ReferenceError that killed the entire
+// script, so every chart on the page stayed blank.  Build the map
+// lazily on first use instead — by then REGION_SALESMEN is defined.
+let _STATE_BY_BDE_CACHE = null;
+function _stateByBde() {
+  if (_STATE_BY_BDE_CACHE) return _STATE_BY_BDE_CACHE;
   const m = {};
   const n = s => (s == null ? "" : String(s)).trim().toUpperCase();
-  Object.entries(REGION_SALESMEN).forEach(([st, list]) => {
-    (list || []).forEach(name => { m[n(name)] = st; });
-  });
+  // Guard against the roster not being loaded yet — if somehow this
+  // runs before REGION_SALESMEN exists, return an empty map so the
+  // call-site falls back to "unknown slot" instead of throwing.
+  if (typeof REGION_SALESMEN !== "undefined" && REGION_SALESMEN) {
+    Object.entries(REGION_SALESMEN).forEach(([st, list]) => {
+      (list || []).forEach(name => { m[n(name)] = st; });
+    });
+  }
+  _STATE_BY_BDE_CACHE = m;
   return m;
-})();
+}
 function _stackStateSlot(group) {
   const g = (group == null ? "" : String(group));
   const regIdx = REGION_STACK_ORDER.indexOf(g);
   if (regIdx !== -1) return regIdx;                      // group IS a region name
   const key = g.trim().toUpperCase();
-  const st  = _STATE_BY_BDE[key];
+  const st  = _stateByBde()[key];
   if (st) {
     const idx = REGION_STACK_ORDER.indexOf(st);
     if (idx !== -1) return idx;
