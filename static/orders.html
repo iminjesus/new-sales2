@@ -1789,7 +1789,31 @@
           <th class="stock narrow" data-col="stock_qld" title="Stock in QLD plant (42R0)">QLD<br>stock</th>
           <th class="stock narrow" data-col="stock_vic" title="Stock in VIC plant (42R2)">VIC<br>stock</th>
           <th class="stock narrow" data-col="stock_wa"  title="Stock in WA plant (42R4)">WA<br>stock</th>
-          <th class="remark-hdr" data-col="remark" title="Auto-applied promo tag — 443 / Special / Trueblu / Aging / Manual — so the reader sees at a glance where each line's Additional Special DC% came from.">Remark</th>
+          <th class="remark-hdr" data-col="remark" title="Auto-applied promo tag — 443 / Special / Trueblu / Aging / Manual — so the reader sees at a glance where each line's Additional Special DC% came from.">
+            <!-- Oct-27 user ask: per-source checkbox strip above the
+                 Remark column.  Lets the reader hide / show each
+                 pricing source independently.  Defaults: TempeConsumer
+                 + TempeDealer on; JAX + Bob Jane off (no lookup yet,
+                 the toggles are reserved for the day those crawlers
+                 land).  Choice is remembered in localStorage so the
+                 next SPRF opens with the same filter active. -->
+            <div style="font-size:11px;color:inherit;font-weight:700;letter-spacing:.02em">Remark</div>
+            <div id="remarkFilter"
+                 style="display:flex;flex-wrap:wrap;gap:8px;margin-top:3px;font-weight:500;font-size:10px;color:#64748b">
+              <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" data-rfilter="tempe_consumer" style="margin:0;cursor:pointer"> TempeConsumer
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" data-rfilter="tempe_dealer" style="margin:0;cursor:pointer"> TempeDealer
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" data-rfilter="jax" style="margin:0;cursor:pointer"> JAX
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap">
+                <input type="checkbox" data-rfilter="bobjane" style="margin:0;cursor:pointer"> Bob Jane
+              </label>
+            </div>
+          </th>
         </tr>
       </thead>
       <tbody id="linesBody">
@@ -3318,9 +3342,72 @@ async function applyAdditionalDCToRow(rowEl){
    touch sp_dc / aging / manual entry funnel through setRemark() so
    the cell stays in sync.
 */
+/* Oct-27 user ask: per-source filter above the Remark column lets
+   the user hide / show individual price chips (TempeConsumer,
+   TempeDealer, JAX, Bob Jane) without losing the data behind them.
+   The "full" text — every line any resolver has written — is kept
+   on tr.dataset.remarkFull; the visible textarea renders a FILTERED
+   subset based on the checkbox state cached in localStorage.
+   Default: TempeConsumer + TempeDealer checked; JAX / Bob Jane
+   off (no backend lookup for those yet — the toggles are reserved
+   for when the lookups arrive). */
+const _REMARK_FILTER_KEY = "sprf_remark_filter_v1";
+const _REMARK_FILTER_DEFAULT = {
+  tempe_consumer: true,
+  tempe_dealer:   true,
+  jax:            false,
+  bobjane:        false,
+};
+const _REMARK_SOURCE_PATTERNS = {
+  tempe_consumer: /^\(TempeConsumer\b/i,
+  tempe_dealer:   /^\(TempeDealer\b/i,
+  jax:            /^\(JAX\b/i,
+  bobjane:        /^\(Bob\s*Jane\b|^\(BobJane\b/i,
+};
+function _loadRemarkFilter(){
+  try {
+    const saved = JSON.parse(localStorage.getItem(_REMARK_FILTER_KEY) || "{}");
+    return Object.assign({}, _REMARK_FILTER_DEFAULT, saved);
+  } catch (_) { return Object.assign({}, _REMARK_FILTER_DEFAULT); }
+}
+function _saveRemarkFilter(f){
+  try { localStorage.setItem(_REMARK_FILTER_KEY, JSON.stringify(f)); } catch (_) {}
+}
+function _applyRemarkFilterToRow(tr){
+  const el = tr?.querySelector('[data-col="remark"]');
+  if (!el) return;
+  const full = (tr.dataset.remarkFull != null) ? tr.dataset.remarkFull : (el.value || "");
+  const filter = _loadRemarkFilter();
+  const kept = full.split("\n").filter(line => {
+    const t = line.trim();
+    if (!t) return false;
+    // Lines that don't start with "(" are promo / manual tags —
+    // always visible.
+    if (!/^\(/.test(t)) return true;
+    for (const [key, re] of Object.entries(_REMARK_SOURCE_PATTERNS)) {
+      if (re.test(t)) return !!filter[key];
+    }
+    // Unknown "(…)" chunk — keep it (safer than silently hiding).
+    return true;
+  });
+  el.value = kept.join("\n");
+  if (el.tagName === "TEXTAREA") {
+    const n = Math.min(6, Math.max(1, kept.length || 1));
+    el.style.height = (16 * n + 16) + "px";
+    el.setAttribute("rows", String(n));
+  }
+}
+function _applyRemarkFilterToAll(){
+  document.querySelectorAll("#linesBody tr").forEach(_applyRemarkFilterToRow);
+}
+
 function setRemark(rowEl, text){
   const el = rowEl?.querySelector('[data-col="remark"]');
   if (!el) return;
+  // Oct-27: store the FULL text (every chip the resolver wrote) on
+  // the row dataset, then let _applyRemarkFilterToRow render only
+  // the sources the user has ticked in the Remark-column filter bar.
+  if (rowEl) rowEl.dataset.remarkFull = text || "";
   el.value = text || "";
   // Oct-27: textarea auto-grow for multi-line Remark content (promo
   // on top line, Tempe dealer / consumer chips below).  Counts \n in
@@ -3332,6 +3419,12 @@ function setRemark(rowEl, text){
     el.style.height = (16 * n + 16) + "px";
     el.setAttribute("rows", String(n));
   }
+  // Oct-27: now that the FULL remark is on dataset, re-apply the
+  // active per-source filter so the visible value only carries the
+  // chips the user has ticked.  Keeps the behaviour consistent
+  // whether setRemark fires from a promo lookup, a Tempe-chip
+  // append, or any other code path.
+  if (rowEl) _applyRemarkFilterToRow(rowEl);
 }
 function setRemarkFromPromo(rowEl, promoRaw, dcPct){
   const promo = String(promoRaw || "").trim().toUpperCase();
@@ -4824,6 +4917,24 @@ document.addEventListener("DOMContentLoaded", () => {
     tbl.querySelectorAll("thead th").forEach(th => ro.observe(th));
   }
   run();
+  /* Oct-27: wire the Remark filter checkboxes.  Initial state comes
+     from localStorage (TempeConsumer + TempeDealer default-on; JAX +
+     Bob Jane default-off).  Change on any box persists and re-paints
+     every line's Remark cell so the user sees the effect immediately. */
+  const filterBar = document.getElementById("remarkFilter");
+  if (filterBar) {
+    const current = _loadRemarkFilter();
+    filterBar.querySelectorAll("input[type=checkbox][data-rfilter]").forEach(cb => {
+      const key = cb.dataset.rfilter;
+      cb.checked = !!current[key];
+      cb.addEventListener("change", () => {
+        const f = _loadRemarkFilter();
+        f[cb.dataset.rfilter] = cb.checked;
+        _saveRemarkFilter(f);
+        _applyRemarkFilterToAll();
+      });
+    });
+  }
 });
 
 /* ────────────────────────── row template ────────────────────────── */
