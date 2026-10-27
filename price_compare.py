@@ -636,6 +636,31 @@ body.chart-expanded .right {
 }
 body.chart-expanded .left { display: none; }
 body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C62828; }
+/* Oct-27 split-view: the right-half pane holds an iframe loading
+   this same dashboard, so each side can carry its own independent
+   filter / view state.  Half-width layout only kicks in when
+   #chart-split-pane exists in the DOM (toggled by toggleChartSplit).
+   Keeps the LEFT comparison tables single — the duplicate is only
+   for the chart panel. */
+.chart-split-pane {
+    width: 50%; border-left: 1px solid #d0d5dd;
+    display: flex; flex-direction: column; min-width: 0; background:#fff;
+}
+.chart-split-pane iframe {
+    flex: 1; width: 100%; height: 100%; border: 0;
+    background:#fff;
+}
+.chart-split-close {
+    background: #C62828; color: #fff;
+    border: 1px solid #a81d1d; border-radius: 3px;
+    width: 22px; height: 22px; padding: 0; margin-left: 8px;
+    font: 14px/1 system-ui, sans-serif; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+}
+.chart-split-close:hover { background: #a81d1d; }
+body.chart-split .right { width: 50%; min-width: 0; }
+body.chart-split .left  { width: 25%; }
+body.chart-split #split-chart-btn { background: #C62828; border-color: #C62828; }
 /* The expand button sits in the title bar — same style tokens as
    .expand-btn so the two feel identical. */
 .right-title {
@@ -850,6 +875,18 @@ body.chart-expanded .expand-chart-btn { background: #C62828; border-color: #C628
          (⛶ expand / ✕ collapse) as the left title bar. -->
     <div class="right-title">
       <span class="rt-text">Price comparison chart</span>
+      <!-- Oct-27 user ask: side-by-side duplicate chart.  Clicking
+           opens a second instance of this dashboard in an iframe to
+           the right of the main panel, each half carrying its own
+           independent filter / view state.  Closing either half
+           returns to single-chart.  Done as an iframe (over refacto-
+           ring the whole chart-panel into two cloned columns) so the
+           duplicate's internal state is naturally isolated — no
+           global clash between the two chart instances. -->
+      <button id="split-chart-btn" class="expand-chart-btn"
+              onclick="toggleChartSplit()" title="Open a second chart beside this one"
+              aria-label="Split chart"
+              style="font-size:11px;width:auto;padding:0 6px">&#x25A6;</button>
       <button id="expand-chart-btn" class="expand-chart-btn"
               onclick="toggleChartExpand()" title="Expand chart to full view"
               aria-label="Expand chart">&#x26F6;</button>
@@ -1800,6 +1837,62 @@ document.addEventListener('keydown', function(e) {
    the two overlays never fight for the viewport.  After the layout
    shifts we also trigger a Plotly relayout so the SVG re-fits the
    larger area without a browser resize. */
+/* ── Chart split-view ─────────────────────────────────────
+   Open / close a sibling .chart-split-pane that holds an iframe of
+   this same page.  The main chart narrows to 50 %; the LEFT tables
+   panel narrows to 25 % to free room; the duplicate takes the
+   remaining 50 %.  Each half carries its own state because they
+   live in separate browsing contexts, so a filter change on one
+   doesn't ripple to the other.  Closing either half removes the
+   iframe and restores the 40 / 60 default. */
+function toggleChartSplit() {
+    const body = document.body;
+    const btn  = document.getElementById('split-chart-btn');
+    const existing = document.getElementById('chart-split-pane');
+    if (existing) {
+        existing.remove();
+        body.classList.remove('chart-split');
+        if (btn) btn.innerHTML = '▦';
+        return;
+    }
+    // Append the pane as a sibling of .right so both share the
+    // .body flex container.  URL has ?split=1 so the duplicate can
+    // hide its OWN split button (no infinite nesting).
+    const bodyEl = document.querySelector('.body');
+    if (!bodyEl) return;
+    const pane = document.createElement('div');
+    pane.id = 'chart-split-pane';
+    pane.className = 'chart-split-pane';
+    pane.innerHTML =
+        '<div class="right-title">'
+        + '<span class="rt-text">Second chart (independent filters)</span>'
+        + '<button class="chart-split-close" onclick="toggleChartSplit()"'
+        + ' title="Close second chart" aria-label="Close">✕</button>'
+        + '</div>'
+        + '<iframe src="' + location.pathname + '?split=1"'
+        + ' title="Second chart"></iframe>';
+    bodyEl.appendChild(pane);
+    body.classList.add('chart-split');
+    if (btn) btn.innerHTML = '✕';
+}
+
+/* The iframe loads this same page with ?split=1 appended.  Hide
+   the split + expand buttons inside the iframe so the duplicate
+   can't recursively open another duplicate (infinite nesting). */
+(function _hideSplitInsideIframe(){
+    try {
+        const sp = new URLSearchParams(location.search);
+        if (sp.get('split') === '1') {
+            const style = document.createElement('style');
+            style.textContent =
+                '#split-chart-btn,#expand-chart-btn{display:none !important}'
+                + '.left{display:none !important}'
+                + '.right{width:100% !important}';
+            document.head.appendChild(style);
+        }
+    } catch (_e) {}
+})();
+
 function toggleChartExpand() {
     if (document.body.classList.contains('tables-expanded')) {
         toggleTablesExpand();        // collapse LEFT first
