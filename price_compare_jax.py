@@ -244,6 +244,25 @@ def extract_series(desc):
         return w.upper()
     return ""
 
+def _stock_raw_to_int(raw):
+    """Normalise a STOCK cell to an int-or-None.
+      "8+" / "8"    → 8
+      "0" / "OOS"   → 0  (listed-but-out-of-stock)
+      "" / missing  → None (unknown)
+    The dashboard's hollow-point / parenthesised-price treatment
+    only fires when the result is EXACTLY 0; None keeps the normal
+    rendering so months before the STOCK column existed still look
+    like regular points."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    if s.upper() in ("OOS", "OUT OF STOCK", "SOLD OUT", "NO STOCK"):
+        return 0
+    m = re.match(r"^(\d+)\+?$", s)
+    if not m:
+        return None
+    return int(m.group(1))
+
 def build_tempe_lookup(rows):
     lk = {}
     for r in rows:
@@ -255,10 +274,15 @@ def build_tempe_lookup(rows):
         desc  = r.get("DESCRIPTION","").strip()
         cost  = r.get("COST","").strip()
         price = r.get("PRICE","").strip()
+        # Oct-27: carry STOCK as a 4th tuple field so build_data() can
+        # read it alongside the price without a second lookup table.
+        # None = unknown (pre-STOCK CSV), 0 = explicit OOS, N = qty.
+        stock = _stock_raw_to_int(r.get("STOCK",""))
         lk.setdefault((size, abbr), []).append((
             desc,
             float(cost)  if cost  else None,
             float(price) if price else None,
+            stock,
         ))
     return lk
 
@@ -285,6 +309,9 @@ def build_bj_lookup(rows):
 build_jax_lookup = build_bj_lookup   # JAX CSV has same columns (SAVE_TEXT absent → "")
 
 def best_tempe(size, abbr, t_lk):
+    """Returns (desc, cost, price, stock).  Pre-Oct-27 callers that
+    only unpack three fields keep working because the tuple's extra
+    slot is at the tail; new callers can read best[3] for stock."""
     cands = t_lk.get((size, abbr), [])
     cat   = SIZE_CATEGORY.get(size)
     if cat:
@@ -293,9 +320,10 @@ def best_tempe(size, abbr, t_lk):
     else:
         pool = cands
     if not pool:
-        return None, None, None
+        return None, None, None, None
     best = sorted(pool, key=lambda x: (x[2] is None, x[2] or 0))[0]
-    return best[0], best[1], best[2]
+    _stk = best[3] if len(best) > 3 else None
+    return best[0], best[1], best[2], _stk
 
 def _best_competitor(size, abbr, lk, t_desc):
     """Pick the best-matching competitor row for (size, abbr) given a Tempe
@@ -373,23 +401,35 @@ def build_tw_lookup(rows):
             price_val = float(price_raw) if price_raw else None
         except ValueError:
             continue
-        # Keep row if either sell-in or sell-out is positive
-        if (not cost_val or cost_val <= 0) and (not price_val or price_val <= 0):
+        # Oct-27: with the extend crawler no longer ticking "On Sale
+        # Only" at startup, OOS rows (cost=0 AND price=0) now land in
+        # the CSV too — keep them so the dashboard can render the
+        # hollow-point treatment.  The "neither price is positive"
+        # guard that used to drop them is relaxed when STOCK is
+        # present and parseable; without a STOCK column the row stays
+        # dropped (pre-Oct CSVs).
+        stock = _stock_raw_to_int(r.get("STOCK",""))
+        both_zero = ((not cost_val or cost_val <= 0)
+                     and (not price_val or price_val <= 0))
+        if both_zero and stock is None:
             continue
-        lk.setdefault((size, abbr), []).append((desc, cost_val, price_val))
+        lk.setdefault((size, abbr), []).append((desc, cost_val, price_val, stock))
     return lk
 
 def best_tw(size, abbr, tw_lk):
-    """Returns (desc, sell_in_price, sell_out_price)."""
+    """Returns (desc, sell_in_price, sell_out_price, stock)."""
     return best_tempe(size, abbr, tw_lk)
 
 def best_twi(size, abbr, tw_lk):
-    """Returns (desc, None, sell_in_price) — for the Sell In line."""
+    """Returns (desc, None, sell_in_price, stock) — for the Sell In line."""
     items = tw_lk.get((size, abbr))
     if not items:
-        return "", None, None
-    desc, cost_val, _price_val = items[0]
-    return desc, None, cost_val
+        return "", None, None, None
+    first = items[0]
+    desc    = first[0]
+    cost_val = first[1]
+    stock   = first[3] if len(first) > 3 else None
+    return desc, None, cost_val, stock
 
 # ── Chunk 3: Sheet 1 — Summary (9 cols/brand) ───────────────────────────────────────────────────
 

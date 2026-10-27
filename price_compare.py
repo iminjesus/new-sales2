@@ -278,6 +278,14 @@ def build_data(monthly):
                 # price for that month".  Tempe / TempeWOS have no
                 # promo concept — the toggle is a no-op for them.
                 "bj_promo":  [], "jax_promo": [],
+                # Oct-27: per-month stock arrays for the stores whose
+                # CSVs now carry a STOCK column (tempe retail, tw/twi
+                # TempeWebOrder).  Value per month: None (unknown /
+                # pre-STOCK CSV), 0 (listed-but-OOS), N (available).
+                # Front-end turns 0 into a hollow point on the chart
+                # and parentheses around the price in the left tables.
+                # BJ / JAX stock info not yet scraped so no array yet.
+                "tempe_stk": [], "tw_stk": [], "twi_stk": [],
                 "tempe_d": [], "bj_d": [], "jax_d": [],
                 "tw_d":    [], "twi_d":  [],
                 "bj_f":    [], "jax_f":  [],
@@ -371,11 +379,16 @@ def build_data(monthly):
 
         for size in sizes:
             for abbr in abbrs:
-                t_desc, t_cost, t_price               = best_tempe(size, abbr, t_lk)
+                # Oct-27: best_tempe / best_tw / best_twi now return
+                # a 4-tuple ending in stock (int or None).  Capture it
+                # into size_data[size][abbr]["<store>_stk"] so the
+                # front-end can render OOS months with the hollow-dot
+                # + parenthesised-price treatment.
+                t_desc, t_cost, t_price, t_stock      = best_tempe(size, abbr, t_lk)
                 bj_desc, bj_price, bj_disc, _, _, bj_flag = best_bj(size, abbr, bj_lk, t_desc)
                 jx_desc, jx_price, jx_disc, _, _, jx_flag = best_jax(size, abbr, jx_lk, t_desc)
-                _tw_desc, _tw_cost, tw_price          = best_tw(size, abbr, tw_lk)
-                _twi_desc, _, twi_price               = best_twi(size, abbr, tw_lk)
+                _tw_desc, _tw_cost, tw_price, tw_stock      = best_tw(size, abbr, tw_lk)
+                _twi_desc, _, twi_price, twi_stock          = best_twi(size, abbr, tw_lk)
                 # Void the meaningless sentinels (0 / 999) so the chart and
                 # tables treat them as missing instead of plotting them.
                 t_price  = _norm(t_price)
@@ -391,6 +404,9 @@ def build_data(monthly):
                 size_data[size][abbr]["jax"].append(jx_price)
                 size_data[size][abbr]["tw"].append(tw_price)
                 size_data[size][abbr]["twi"].append(twi_price)
+                size_data[size][abbr]["tempe_stk"].append(t_stock)
+                size_data[size][abbr]["tw_stk"].append(tw_stock)
+                size_data[size][abbr]["twi_stk"].append(twi_stock)
                 # Promo arrays: effective customer price per month.
                 # Fallback = normal price when DISC_PRICE is absent, so
                 # the Promo view's line stays unbroken.  Null-when-null
@@ -1131,6 +1147,16 @@ function _renderStoreTable(wrap) {
         const bsd = (D.brand_size_data[abbr] || {})[selectedSize];
         return bsd ? (bsd[_priceKey(s.key)] || []) : [];
     });
+    // Oct-27: parallel stocks array per store so a cell with stock=0
+    // can render its price wrapped in parentheses.  Averaged views
+    // ("ALL brands" / "ALL sizes") can't carry a single stock value
+    // per cell so we leave those as nulls — the parenthesising only
+    // fires for the drilled-down (brand, size) view where the row
+    // actually represents one real product.
+    const storeStocks = stores.map(function(s) {
+        if (abbr === 'ALL' || selectedSize === 'ALL') return [];
+        return _stocksFor(abbr, selectedSize, s.key);
+    });
 
     // ── Price table ──
     let html = '<table class="ctable"><thead><tr><th class="th-month">Store</th>';
@@ -1140,8 +1166,20 @@ function _renderStoreTable(wrap) {
         const hasData = storePrices[si].some(function(p){ return p !== null && p !== undefined; });
         if (!hasData) return;
         html += '<tr><td style="color:' + s.c + ';font-weight:700">' + s.label + '</td>';
-        storePrices[si].forEach(function(p) {
-            html += '<td class="r">' + (p !== null && p !== undefined ? '$' + p : '—') + '</td>';
+        const stks = storeStocks[si] || [];
+        storePrices[si].forEach(function(p, i) {
+            if (p === null || p === undefined) {
+                html += '<td class="r">—</td>';
+                return;
+            }
+            const isOos = (stks[i] === 0);
+            // Parentheses signal "listed but out of stock" — grey the
+            // cell too so the eye catches the OOS state before
+            // reading the figure.
+            const cell = isOos
+                ? '<span style="color:#777">($' + p + ')</span>'
+                : '$' + p;
+            html += '<td class="r">' + cell + '</td>';
         });
         html += '</tr>';
     });
@@ -1423,22 +1461,56 @@ function _flagsFor(abbr, size, store) {
     const key = store + '_f';
     return bsd[key] || months.map(() => '');
 }
+/* Oct-27: per-month stock arrays — only populated for stores whose
+   CSV carries a STOCK column (tempe retail, tw / twi TempeWebOrder).
+   Returns an all-null array otherwise so callers don't need to
+   handle "no data" separately. */
+function _stocksFor(abbr, size, store) {
+    if (!store) return months.map(() => null);
+    if (abbr === 'ALL' || size === 'ALL') return months.map(() => null);
+    const bsd = (D.brand_size_data[abbr] || {})[size];
+    if (!bsd) return months.map(() => null);
+    const key = store + '_stk';
+    return bsd[key] || months.map(() => null);
+}
 /* Per-point colour + radius arrays for Chart.js.  Normal points
    are small dots painted in the line's own colour (no white ring
    any more — the ring made the dots look larger than they were and
    almost lost their identity against the line).  Anomalous points
    (product changed vs previous month, or COMPETITOR_PATTERNS
    fallback fired) are slightly larger and painted red so they
-   stand out without dominating the chart. */
-function _pointStyles(flags, prices, lineColour) {
+   stand out without dominating the chart.
+
+   Oct-27: when the row for that month carried stock = 0 (listed-
+   but-OOS), render the point as a HOLLOW dot — line colour on the
+   border, white fill.  Keeps the line connected and the price
+   visible while signalling "price exists but item isn't actually
+   buyable right now".  Takes precedence over the "normal" style
+   but not the anomaly red (if a product also changed, the red
+   anomaly dot still wins so the reader doesn't miss the pattern
+   switch). */
+function _pointStyles(flags, prices, lineColour, stocks) {
     const border = [], bg = [], radius = [];
+    const _st = stocks || [];
     for (let i = 0; i < prices.length; i++) {
         const f = flags[i] || '';
         const anom = f.includes('chg') || f.includes('cat_fb');
-        // Anomaly: red dot 3px.  Normal: line-coloured dot 2px.
-        border.push(anom ? '#C62828' : lineColour);
-        bg.push(anom ? '#E53935' : lineColour);
-        radius.push(anom ? 3 : 2);
+        const oos  = (_st[i] === 0);
+        if (anom) {
+            border.push('#C62828');
+            bg.push('#E53935');
+            radius.push(3);
+        } else if (oos) {
+            // Hollow: line colour on border, white fill, same size as
+            // normal so the dot stays legible on the line.
+            border.push(lineColour);
+            bg.push('#ffffff');
+            radius.push(3);
+        } else {
+            border.push(lineColour);
+            bg.push(lineColour);
+            radius.push(2);
+        }
     }
     return { border, bg, radius };
 }
@@ -1501,7 +1573,8 @@ function _renderStore() {
         if (prices && !prices.every(p => p === null)) {
             const descs = _descsFor(abbr, selectedSize, s);
             const flags = _flagsFor(abbr, selectedSize, s);
-            const st    = _pointStyles(flags, prices, SC[s]);
+            const stks  = _stocksFor(abbr, selectedSize, s);
+            const st    = _pointStyles(flags, prices, SC[s], stks);
             arr.push({ label:SL[s], data:prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
                        spanGaps:true, tension:.3, fill:false,
@@ -1509,8 +1582,11 @@ function _renderStore() {
                        pointHoverRadius: st.radius.map(r => r + 2),
                        pointBackgroundColor: st.bg,
                        pointBorderColor: st.border,
-                       pointBorderWidth: 0,
-                       _descs: descs, _flags: flags });
+                       // Oct-27: width 1.5 so hollow-dot OOS points
+                       // actually render as a ring instead of
+                       // disappearing (0-width hid the border).
+                       pointBorderWidth: 1.5,
+                       _descs: descs, _flags: flags, _stocks: stks });
         }
         return arr;
     }, []);
@@ -1536,7 +1612,8 @@ function _renderBrand() {
         ci++;
         const descs = _descsFor(abbr, selectedSize, store);
         const flags = _flagsFor(abbr, selectedSize, store);
-        const st    = _pointStyles(flags, prices, c);
+        const stks  = _stocksFor(abbr, selectedSize, store);
+        const st    = _pointStyles(flags, prices, c, stks);
         // Point size is small + uniform (2px normal, 3px anomaly) so
         // the dot doesn't dominate over the line.  The old code varied
         // radius per brand which produced inconsistent-sized markers
@@ -1556,9 +1633,9 @@ function _renderBrand() {
                   pointHoverRadius: finalR.map(r => r + 2),
                   pointBackgroundColor: st.bg,
                   pointBorderColor: st.border,
-                  pointBorderWidth: 0,
+                  pointBorderWidth: 1.5,
                   spanGaps:true, tension:.3, fill:false,
-                  _descs: descs, _flags: flags });
+                  _descs: descs, _flags: flags, _stocks: stks });
 
         // Extra dashed lines for sibling patterns (Kinergy Eco 2 vs
         // Kinergy GT etc.) filtered to prices in a reasonable band
@@ -1576,7 +1653,8 @@ function _renderBrand() {
                 const dashPatterns = [[2,3], [10,4], [4,2,1,2], [6,6,2,6]];
                 const dash = dashPatterns[si % dashPatterns.length];
                 const sflags = series.flags || series.descs.map(() => '');
-                const sst    = _pointStyles(sflags, series.prices, c);
+                const sstocks = series.stocks || series.prices.map(() => null);
+                const sst    = _pointStyles(sflags, series.prices, c, sstocks);
                 ds.push({ label: label, data: series.prices,
                           borderColor: c, backgroundColor: c+'22',
                           borderDash: dash, borderWidth: 1.2,
@@ -1584,7 +1662,7 @@ function _renderBrand() {
                           pointHoverRadius: sst.radius.map(r => r + 2),
                           pointBackgroundColor: sst.bg,
                           pointBorderColor: sst.border,
-                          pointBorderWidth: 0,
+                          pointBorderWidth: 1.5,
                           spanGaps:true, tension:.3, fill:false,
                           _descs: series.descs, _flags: sflags });
             });
