@@ -558,7 +558,8 @@ def _enter_credentials(session):
 
 
 def _handle_multi_logon(session):
-    """If wnd[1] shows the 'User is already logged on' dialog, pick
+    """If any popup window shows the 'User is already logged on' /
+    'License Information for Multiple Logon' dialog, pick
     "Continue with this logon and end any other logons" (OPT1) and ✓
     it so THIS seat wins — the OTHER desktop's session is terminated.
 
@@ -567,53 +568,103 @@ def _handle_multi_logon(session):
     another desktop must NOT kick the orchestrator off.  Flipped from
     OPT3 (give up here) to OPT1 (end others, keep this).
 
+    Oct-28 user ask: screenshot shows title "License Information for
+    Multiple Logon" and the default radio is OPT3 (Terminate).  Make
+    the detection scan wnd[1..3], add "license information" as a
+    title marker, and add more OPT1 radio-ID fallbacks so we never
+    accidentally take the SAP default (which would kill THIS seat).
+
     Returns True when the dialog was present and handled."""
-    try:
-        dlg = session.findById("wnd[1]")
-    except Exception:
-        return False
-    try:
-        txt = str(dlg.Text or "") + " " + str(dlg.PopupTitle or "")
-    except Exception:
-        txt = ""
-    try:
-        for i in range(dlg.Children.Count):
-            try: txt += " " + str(dlg.Children(i).Text or "")
-            except Exception: pass
-    except Exception:
-        pass
-    _tl = txt.lower()
-    if "already logged on" not in _tl and "multiple logon" not in _tl:
-        return False
-    _slog("[multi_logon] dialog present — selecting OPT1 "
-          "(end OTHER logons, keep this seat)")
-    # radMULTI_LOGON_OPT1 = Continue with this logon and end any other
-    # logons in this system.  radRBOX1 is the positional fallback that
-    # some SAP releases use.  Previously we picked OPT3 (terminate
-    # this logon) which gave up the seat — now we take it.
-    picked = False
-    for rid in [
-        "wnd[1]/usr/radMULTI_LOGON_OPT1",
-        "wnd[1]/usr/radRBOX1",
-    ]:
+    # Oct-28: iterate every popup window — SAP occasionally puts the
+    # multi-logon dialog on wnd[2] when wnd[1] is already used for a
+    # licence/disclaimer panel.
+    for wi in (1, 2, 3):
         try:
-            session.findById(rid).Select()
-            picked = True
-            _slog(f"[multi_logon] selected radio {rid}")
-            break
+            dlg = session.findById(f"wnd[{wi}]")
         except Exception:
             continue
-    if not picked:
-        _slog("[multi_logon] OPT1 radio not found by id — relying on "
-              "SAP's default (usually OPT1 anyway)")
-    try:
-        session.findById("wnd[1]/tbar[0]/btn[0]").press()  # ✓
-    except Exception:
         try:
-            session.findById("wnd[1]").sendVKey(0)
+            txt = str(dlg.Text or "") + " " + str(getattr(dlg, "PopupTitle", "") or "")
+        except Exception:
+            txt = ""
+        try:
+            for i in range(dlg.Children.Count):
+                try: txt += " " + str(dlg.Children(i).Text or "")
+                except Exception: pass
         except Exception:
             pass
-    return True
+        _tl = txt.lower()
+        # Oct-28: added "license information" / "licence information" —
+        # the dialog's own title bar carries that phrase even though the
+        # body says "already logged on".  Keeping the older markers so
+        # SAP variants that only say "multiple logon" still trip the branch.
+        if ("already logged on" not in _tl
+                and "multiple logon" not in _tl
+                and "license information" not in _tl
+                and "licence information" not in _tl):
+            continue
+        _slog(f"[multi_logon] dialog present on wnd[{wi}] — selecting "
+              f"OPT1 (end OTHER logons, keep this seat)")
+        # radMULTI_LOGON_OPT1 = Continue with this logon and end any other
+        # logons in this system.  radRBOX1 is the positional fallback that
+        # some SAP releases use.  Previously we picked OPT3 (terminate
+        # this logon) which gave up the seat — now we take it.
+        picked = False
+        for rid in [
+            f"wnd[{wi}]/usr/radMULTI_LOGON_OPT1",
+            f"wnd[{wi}]/usr/radRBOX1",
+            # Oct-28 additional fallbacks seen in older/newer SAP
+            # releases:
+            f"wnd[{wi}]/usr/radMULTI_LOGON_OPT_1",
+            f"wnd[{wi}]/usr/radRB_LOGON_OPT1",
+            f"wnd[{wi}]/usr/radMULTI_LOGON1",
+        ]:
+            try:
+                session.findById(rid).Select()
+                picked = True
+                _slog(f"[multi_logon] selected radio {rid}")
+                break
+            except Exception:
+                continue
+        if not picked:
+            # Oct-28 last-ditch: walk the dialog's children for the
+            # first radio-button-like control and select it (visual
+            # order is OPT1 → OPT2 → OPT3, so the first radio is
+            # always OPT1).
+            try:
+                def _first_radio(ctrl):
+                    try:
+                        if str(getattr(ctrl, "Type", "")).lower() == "guiradiobutton":
+                            return ctrl
+                        for ci in range(ctrl.Children.Count):
+                            r = _first_radio(ctrl.Children(ci))
+                            if r is not None:
+                                return r
+                    except Exception:
+                        pass
+                    return None
+                r = _first_radio(dlg)
+                if r is not None:
+                    r.Select()
+                    picked = True
+                    _slog(f"[multi_logon] selected first radio control (walk) "
+                          f"{getattr(r, 'Id', '?')}")
+            except Exception as _e:
+                _slog(f"[multi_logon] walk-for-radio failed: {_e!r}")
+        if not picked:
+            _slog("[multi_logon] OPT1 radio not found — SAP default is "
+                  "OPT3 (Terminate), which would kill this seat.  "
+                  "Pressing ✓ anyway so the flow does not hang; the "
+                  "subsequent attach will discover the failure and retry.")
+        try:
+            session.findById(f"wnd[{wi}]/tbar[0]/btn[0]").press()  # ✓
+        except Exception:
+            try:
+                session.findById(f"wnd[{wi}]").sendVKey(0)
+            except Exception:
+                pass
+        return True
+    return False
 
 
 def _check_backend_closed(session):
@@ -928,6 +979,18 @@ def _ensure_sap_session_once(attempt):
                   "so we can re-claim the seat (OPT1).")
             sess = None
         else:
+            # Oct-28 user ask: the "License Information for Multiple
+            # Logon" dialog may already be sitting on the attached
+            # session (e.g. an earlier logon from another desktop
+            # triggered it and the operator never dismissed it).
+            # Click OPT1 immediately so this seat stays live.
+            try:
+                if _handle_multi_logon(sess):
+                    _slog("attached session had a pending Multiple-Logon "
+                          "dialog — OPT1 selected, other logon(s) terminated.")
+                    time.sleep(1.5)
+            except Exception as _e:
+                _slog(f"[attach] multi_logon check raised: {_e!r} — continuing")
             _slog("already logged in — attached; resetting to Easy Access.")
             _reset_to_home(sess)
             return sess, "attached"
