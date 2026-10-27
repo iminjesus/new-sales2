@@ -1988,15 +1988,21 @@ function toggleChartSplit() {
         const sp = new URLSearchParams(location.search);
         if (sp.get('split') === '1') {
             const style = document.createElement('style');
+            // Oct-27-pm v3: previous attempt set min-height:0 on
+            // .chart-wrap, which collapsed the canvas to 0 px and
+            // left the pane completely blank.  Reverted to leave
+            // chart-wrap's default min-height:220 intact; the only
+            // size tweaks we actually need are to hide the top nav
+            // and compress the padding so the filter rows don't
+            // steal extra pixels.  Chart.js's responsive observer
+            // already handles the resize on its own once the pane
+            // has a real height.
             style.textContent =
                 '.hdr{display:none !important}'
                 + '.left{display:none !important}'
                 + '#split-chart-btn,#expand-chart-btn{display:none !important}'
                 + '.right{width:100% !important}'
-                + 'html,body{height:100% !important;min-height:0 !important}'
-                + '.body{overflow:hidden;height:100% !important}'
-                + '.chart-panel{padding:8px 10px !important;min-height:0 !important}'
-                + '.chart-wrap{min-height:0 !important}'
+                + '.chart-panel{padding:8px 10px !important}'
                 + '.btn-panel{padding:4px 8px 6px !important}';
             document.head.appendChild(style);
             const _nudge = () => {
