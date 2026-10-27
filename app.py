@@ -3749,15 +3749,21 @@ def api_orders_material():
         # the canonical "148L" / "91V" / "125/123J" every time; the
         # Description-scan below only runs when the Master has no row
         # for this m_code (dropped from stock) or no LI/SS populated.
-        if not row.get("load_speed"):
-            try:
-                _ls = _stock_report_load_speed_lookup().get(
-                    str(row.get("m_code") or "").strip()
-                )
-                if _ls:
-                    row["load_speed"] = _ls
-            except Exception:
-                pass
+        #
+        # Oct-27-pm user ask: the Stock Report is AUTHORITATIVE — a
+        # value already parsed off the description scan (which the
+        # material table or an earlier lookup may have populated) can
+        # be wrong (reporter saw "92V" for M-code 1034615 where Stock
+        # Report Sheet2 clearly says "92H").  Always overwrite with
+        # the Stock Report value when one exists.
+        try:
+            _ls = _stock_report_load_speed_lookup().get(
+                str(row.get("m_code") or "").strip()
+            )
+            if _ls:
+                row["load_speed"] = _ls
+        except Exception:
+            pass
 
         # Load/speed fallback — carrying_26 on this deployment doesn't
         # have a dedicated load_speed column, so hunt for the token in
