@@ -3352,6 +3352,36 @@ async function applyAdditionalDCToRow(rowEl){
    touch sp_dc / aging / manual entry funnel through setRemark() so
    the cell stays in sync.
 */
+/* Oct-27-pm colour-coded Remark lines — per user ask.  Each line
+   gets its own colour based on where it came from:
+     • Tempe (TempeConsumer / TempeDealer)  → red
+     • JAX                                  → dark olive green
+     • Bob Jane                             → brown
+     • everything else (promo / Aging / Manual / 443 / Trueblu /
+       Special, plus unknown "(" chips)    → dark blue
+   Called by setRemark + _applyRemarkFilterToRow; returns a block
+   of <div>s to drop into the Remark cell's innerHTML.  Text is
+   HTML-escaped first so a tyre description like "<K137A>" can't
+   inject markup. */
+function _buildColoredRemarkHTML(text){
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;",
+  }[c]));
+  const colourFor = (line) => {
+    if (/^\(Tempe/i.test(line))                              return "#C62828"; // red
+    if (/^\(JAX\b/i.test(line))                              return "#558B2F"; // dark olive green
+    if (/^\(Bob\s*Jane\b|^\(BobJane\b/i.test(line))          return "#5D4037"; // brown (고동색)
+    return "#1565C0"; // dark blue (promo / pricing / status default)
+  };
+  const html = (text || "").split("\n").map(line => {
+    const t = line.trim();
+    if (!t) return "";
+    const c = colourFor(t);
+    return `<div style="color:${c};font-weight:600">${esc(t)}</div>`;
+  }).join("");
+  return html || "&nbsp;";
+}
+
 /* Oct-27 user ask: per-source filter above the Remark column lets
    the user hide / show individual price chips (TempeConsumer,
    TempeDealer, JAX, Bob Jane) without losing the data behind them.
@@ -3400,11 +3430,16 @@ function _applyRemarkFilterToRow(tr){
     // Unknown "(…)" chunk — keep it (safer than silently hiding).
     return true;
   });
-  el.value = kept.join("\n");
-  if (el.tagName === "TEXTAREA") {
-    const n = Math.min(6, Math.max(1, kept.length || 1));
-    el.style.height = (16 * n + 16) + "px";
-    el.setAttribute("rows", String(n));
+  const _joined = kept.join("\n");
+  if (el.tagName === "DIV") {
+    el.innerHTML = _buildColoredRemarkHTML(_joined);
+  } else {
+    el.value = _joined;
+    if (el.tagName === "TEXTAREA") {
+      const n = Math.min(10, Math.max(1, kept.length || 1));
+      el.style.height = (16 * n + 16) + "px";
+      el.setAttribute("rows", String(n));
+    }
   }
 }
 function _applyRemarkFilterToAll(){
@@ -3442,16 +3477,20 @@ function setRemark(rowEl, text){
     finalText = lines.join("\n");
   }
   if (rowEl) rowEl.dataset.remarkFull = finalText;
-  el.value = finalText;
-  // Oct-27-pm: textarea auto-grows to accommodate every line the
-  // user wanted to see — the cap went from 6 up to 10 so the full
-  // Aging / promo / Tempe / JAX / Bob Jane stack reads at once
-  // without the row stealing the whole screen.  Each extra line
-  // adds 16 px over the single-line 32 px baseline.
-  if (el.tagName === "TEXTAREA") {
-    const n = Math.min(10, Math.max(1, finalText.split("\n").length));
-    el.style.height = (16 * n + 16) + "px";
-    el.setAttribute("rows", String(n));
+  // Oct-27-pm: Remark is now a <div> for colour-coded lines.  Build
+  // the HTML through _buildColoredRemarkHTML so each chip renders in
+  // its source colour (red Tempe, olive JAX, brown Bob Jane, dark
+  // blue promo).  Legacy <textarea> fallback stays so this helper
+  // doesn't crash on any row still rendered with the old element.
+  if (el.tagName === "DIV") {
+    el.innerHTML = _buildColoredRemarkHTML(finalText);
+  } else {
+    el.value = finalText;
+    if (el.tagName === "TEXTAREA") {
+      const n = Math.min(10, Math.max(1, finalText.split("\n").length));
+      el.style.height = (16 * n + 16) + "px";
+      el.setAttribute("rows", String(n));
+    }
   }
   // Oct-27: now that the FULL remark is on dataset, re-apply the
   // active per-source filter so the visible value only carries the
@@ -5095,16 +5134,39 @@ function newRow(){
     // input (plain <input> drops \n characters silently).  Auto-
     // grows height via rows attribute + a line-count driven setter
     // the chip renderer calls after writing new text.
+    // Oct-27-pm user ask: Remark cell colour-codes each line by its
+    // source so the reader can tell at a glance which price feed
+    // each row came from.  Switched the cell from <textarea> to a
+    // <div> (it's read-only anyway) because textareas can't render
+    // per-line colour.  A getter/setter shim exposes .value /
+    // readOnly so the ~120 existing callers that touched the cell
+    // keep working unchanged.
     const inp = (cell.c === "remark")
-                  ? document.createElement("textarea")
+                  ? document.createElement("div")
                   : document.createElement("input");
     if (cell.c === "remark") {
-      inp.setAttribute("rows", "1");
-      inp.setAttribute("wrap", "off");
       inp.style.cssText =
-        "width:100%;min-height:32px;height:32px;border:none;background:transparent;"
-        + "padding:4px 6px;font:inherit;outline:none;resize:none;"
-        + "white-space:pre;overflow:hidden";
+        "width:100%;min-height:32px;padding:4px 6px;font:inherit;"
+        + "white-space:pre-wrap;overflow:hidden;line-height:1.3;"
+        + "font-size:11px;letter-spacing:.02em;background:#f8fafc;"
+        + "color:#334155";
+      // .value shim so existing `el.value = x` / `el.value` readers
+      // across the file keep working without any site-level edits.
+      // Reads prefer dataset.remarkFull (the full un-filtered text
+      // the setRemark pipeline maintains); writes mirror to both
+      // the dataset and the rendered innerHTML (via setRemark the
+      // actual HTML build goes through _buildColoredRemarkHTML).
+      Object.defineProperty(inp, "value", {
+        get() { return this.dataset.remarkFull != null
+                       ? this.dataset.remarkFull
+                       : (this.textContent || ""); },
+        set(v) { this.dataset.remarkFull = String(v || "");
+                 this.textContent        = String(v || ""); },
+        configurable: true,
+      });
+      Object.defineProperty(inp, "readOnly", {
+        get() { return true; }, set() {}, configurable: true,
+      });
     }
     inp.setAttribute("data-col", cell.c);
     if(cell.ro) inp.readOnly = true;

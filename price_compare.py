@@ -2143,7 +2143,43 @@ function _setSize(size, btn) {
     _activeSizeBtn = btn; btn.classList.add('active');
     selectedSize = size;
     _tryRender();
+    // Oct-27-pm user ask: when either pane in split-view changes
+    // its size, the other pane should pick it up.  Publish through
+    // localStorage; the sibling's storage-event listener (below)
+    // applies the change without echoing it back.
+    _publishSizeChange(size);
 }
+
+/* Oct-27-pm size sync between the host window and the ?split=1
+   iframe.  Same localStorage bus the Y-range sync already uses;
+   a dedicated key so we don't collide. */
+const _SIZE_SYNC_KEY = 'pc_size_sync';
+let _syncingSize = false;
+function _publishSizeChange(size) {
+    if (_syncingSize) return;
+    try {
+        localStorage.setItem(_SIZE_SYNC_KEY, JSON.stringify({
+            size: size, t: Date.now(),
+        }));
+    } catch (_e) {}
+}
+window.addEventListener('storage', function(e) {
+    if (e.key !== _SIZE_SYNC_KEY || !e.newValue) return;
+    try {
+        const d = JSON.parse(e.newValue);
+        if (!d || typeof d.size !== 'string') return;
+        if (d.size === selectedSize) return;  // already in sync
+        const sel = document.getElementById('size-select');
+        if (!sel) return;
+        _syncingSize = true;
+        try {
+            sel.value = d.size;
+            _setSize(d.size, sel);
+        } finally {
+            setTimeout(() => { _syncingSize = false; }, 50);
+        }
+    } catch (_err) {}
+});
 
 /* ── Mode: By Store ───────────────────────────────────── */
 function onModeStore(btn) {
