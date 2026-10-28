@@ -4759,6 +4759,16 @@ function updateTotals(){
     // lines and require approval from any approver (Hayden / Kenny
     // / JJ).  needs_mgmt_approval auto-flips below in serializeOrder.
     const anyInterstate = !!window._orderHasInterstate;
+    // Shared tag appended after the primary approval banner on ANY
+    // route (MD-only, Hayden/Kenny, Standard) when an inter-state
+    // line is present.  Standard already gets the full red
+    // "STANDARD (inter-state)" badge in place; the other branches
+    // tack this smaller tag on so the reader sees the inter-state
+    // flag regardless of which approval tier runs.
+    const _interstateTag =
+      ` <span style="background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px;`
+      + `font-weight:800;font-size:11px;margin-left:6px;letter-spacing:.02em">`
+      + `⚑ INTER-STATE</span>`;
     if (!hasAdditional && anyInterstate){
       el.innerHTML =
         `<span style="color:#fff;background:#b91c1c;padding:1px 6px;border-radius:3px;font-weight:800">`
@@ -4774,13 +4784,17 @@ function updateTotals(){
       el.innerHTML =
         `<span style="color:#fff;background:#7f1d1d;padding:1px 6px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
         + `— <b>${mdDeepLineCount}</b> non-aged, non-Standard line${s} with Proposed DC ≥ 64 %. `
-        + `Only <b>JJ (MD)</b> can approve.`;
+        + `Only <b>JJ (MD)</b> can approve.`
+        + (anyInterstate ? _interstateTag : "");
       fullText =
         `MANAGING DIRECTOR APPROVAL REQUIRED — ${mdDeepLineCount} non-aged, `
-        + `non-Standard line${s} with Proposed DC ≥ 64 %. Only JJ (MD) can approve.`;
+        + `non-Standard line${s} with Proposed DC ≥ 64 %. Only JJ (MD) can approve.`
+        + (anyInterstate ? "  (⚑ Inter-state)" : "");
     } else {
-      el.innerHTML = `<b>Kenny or Hayden</b> can approve.`;
-      fullText = `Kenny or Hayden can approve.`;
+      el.innerHTML = `<b>Kenny or Hayden</b> can approve.`
+        + (anyInterstate ? _interstateTag : "");
+      fullText = `Kenny or Hayden can approve.`
+        + (anyInterstate ? "  (⚑ Inter-state)" : "");
     }
     const badgesEl = document.getElementById("approvalPathBadges");
     if (badgesEl) badgesEl.innerHTML = dcBadge;
