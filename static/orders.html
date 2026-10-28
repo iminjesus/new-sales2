@@ -249,6 +249,23 @@
     padding:0 3px;border-radius:2px;
   }
   .sprf-attach-strip .attach-chip .del:hover{ background:#fee2e2; }
+  /* Oct-28: drop-target highlight — bluish dashed outline + "Drop
+     to attach" hint shown via ::after.  Fires on dragover of a File
+     payload (dataTransfer.types contains 'Files'). */
+  .sprf-attach-strip.sprf-attach-drop{
+    background:#eff6ff;
+    outline:2px dashed #3b82f6;
+    outline-offset:-2px;
+    position:relative;
+  }
+  .sprf-attach-strip.sprf-attach-drop::after{
+    content:"⤓ Drop here to attach";
+    position:absolute;inset:0;
+    display:flex;align-items:center;justify-content:center;
+    background:rgba(239,246,255,0.9);color:#1d4ed8;
+    font-weight:800;font-size:12px;letter-spacing:.02em;
+    pointer-events:none;border-radius:3px;
+  }
   /* Approve-with-note modal — pops when a named approver clicks the
      toolbar Approve button.  Same visual language as #mdNoticeOverlay
      (dim overlay, centred card, header + body + foot) but tinted
@@ -8888,6 +8905,50 @@ function _renderAttachStrip(stripId, oid, allAtts, who, visible){
                               window._whoamiCache || {});
       }
     });
+  });
+  // Oct-28 user ask: drag-and-drop files directly onto the strip.
+  // Prevent default on dragover (otherwise the browser opens the
+  // file instead of giving us the drop event); add a highlight class
+  // during drag; on drop iterate dataTransfer.files and feed each
+  // one through the same hydrated-vs-pending path the "+ Attach"
+  // button uses.
+  const _handleFile = async (f) => {
+    if (!f) return;
+    if (oid) {
+      await _uploadAttachment(oid, source, f);
+    } else {
+      if (f.size > 10 * 1024 * 1024) {
+        setStatus(`${f.name} is ${Math.round(f.size/1024)} KB; cap is 10 MB.`, "warn");
+      } else {
+        window._pendingAttachments[source] = window._pendingAttachments[source] || [];
+        window._pendingAttachments[source].push({file: f});
+        setStatus(`Staged ${f.name} — will upload on Submit.`, "ok");
+        renderAllAttachStrips({id: null, attachments: []},
+                              window._whoamiCache || {});
+      }
+    }
+  };
+  el.addEventListener("dragover", (ev) => {
+    if (!ev.dataTransfer || !ev.dataTransfer.types) return;
+    if (!ev.dataTransfer.types.includes("Files")) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = "copy";
+    el.classList.add("sprf-attach-drop");
+  });
+  el.addEventListener("dragleave", (ev) => {
+    // Only clear the highlight when leaving the strip itself, not when
+    // moving between child chips (relatedTarget inside the strip).
+    if (!ev.relatedTarget || !el.contains(ev.relatedTarget)) {
+      el.classList.remove("sprf-attach-drop");
+    }
+  });
+  el.addEventListener("drop", async (ev) => {
+    ev.preventDefault();
+    el.classList.remove("sprf-attach-drop");
+    const files = (ev.dataTransfer && ev.dataTransfer.files) || [];
+    for (const f of files) {
+      await _handleFile(f);
+    }
   });
 }
 
