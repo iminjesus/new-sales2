@@ -3403,6 +3403,20 @@ async function applyAdditionalDCToRow(rowEl){
   if (_isSovd && _rowLine !== "PCLT"){
     data = Object.assign({}, data, {matched: false, additional_dc: null});
   }
+  // Oct-28 diagnostic: log every /api/orders/additional_dc response so
+  // the user can see WHY a line's promo tag is or isn't landing on
+  // the Remark cell.  Watch for data.matched / data.promo / data.
+  // additional_dc; a matched row with no .promo string lands as
+  // "Special (<pct>%)" via the fallback in setRemarkFromPromo.
+  try {
+    const _mc = rowEl.querySelector('[data-col="m_code"]')?.value || "?";
+    console.log("[additional_dc]", _mc, "brand=" + brand, "pattern=" + pat,
+      "→ matched=" + !!(data && data.matched),
+      "add_dc=" + (data && data.additional_dc),
+      "promo=" + (data && data.promo),
+      "tier=" + (data && data.tier),
+      "source=" + (data && data.source));
+  } catch (_e) {}
   if (data && data.matched && data.additional_dc != null){
     spEl.value = fmtPct(data.additional_dc);
     spEl.dataset.autoSpDc = "1";
@@ -3642,7 +3656,16 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
     const label = promo || "Special";
     newPromoLine = pct ? `${label} (${pct})` : label;
   }
-  if (!newPromoLine) return;
+  if (!newPromoLine) {
+    try { console.log("[setRemarkFromPromo] bail — no promo + no pct",
+      "promoRaw=" + promoRaw, "dcPct=" + dcPct); } catch (_e) {}
+    return;
+  }
+  try {
+    const _mc = rowEl?.querySelector('[data-col="m_code"]')?.value || "?";
+    console.log("[setRemarkFromPromo] write to Remark line 1", _mc, "→",
+      newPromoLine);
+  } catch (_e) {}
   setRemark(rowEl, newPromoLine);
 }
 
