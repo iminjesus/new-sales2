@@ -218,6 +218,37 @@
     margin-right: 8px;
   }
   #mdNoticeOverlay .foot button.cancel:hover{ background: #f1f5f9; color: #0f172a; }
+  /* Oct-28 user ask: attachment strip under the Reason / Approver
+     Feedback textareas and inside the Approve / Reject modals.  Lists
+     the already-uploaded files + offers an "Attach file" button.  Each
+     item renders as a chip with a filename, size, uploader and a
+     download / delete action. */
+  .sprf-attach-strip{
+    display:flex;flex-wrap:wrap;gap:6px;
+    padding:6px 8px;background:#fafbfc;border-top:1px dashed #e2e8f0;
+    font-size:11px;align-items:center;
+  }
+  .sprf-attach-strip .attach-add{
+    background:#eef2ff;color:#3730a3;border:1px dashed #a5b4fc;
+    padding:3px 8px;border-radius:3px;cursor:pointer;font-weight:700;
+    font-size:11px;
+  }
+  .sprf-attach-strip .attach-add:hover{ background:#dbeafe; }
+  .sprf-attach-strip .attach-chip{
+    display:inline-flex;align-items:center;gap:4px;
+    background:#fff;border:1px solid #cbd5e1;border-radius:3px;
+    padding:2px 6px;color:#334155;
+  }
+  .sprf-attach-strip .attach-chip a{
+    color:#1e40af;text-decoration:none;font-weight:600;
+  }
+  .sprf-attach-strip .attach-chip a:hover{ text-decoration:underline; }
+  .sprf-attach-strip .attach-chip small{ color:#64748b; }
+  .sprf-attach-strip .attach-chip .del{
+    cursor:pointer;color:#b91c1c;font-weight:800;margin-left:2px;
+    padding:0 3px;border-radius:2px;
+  }
+  .sprf-attach-strip .attach-chip .del:hover{ background:#fee2e2; }
   /* Approve-with-note modal — pops when a named approver clicks the
      toolbar Approve button.  Same visual language as #mdNoticeOverlay
      (dim overlay, centred card, header + body + foot) but tinted
@@ -1424,6 +1455,11 @@
         Your note is saved with the approval and shown on the SPRF and in the Orders list.
         Up to 500 characters.
       </div>
+      <!-- Oct-28: attachment strip inside the Approve modal.  Lets
+           the approver attach supporting PDF / image / Excel before
+           signing off. -->
+      <div id="attachStrip-approve" class="sprf-attach-strip" data-source="approve" hidden
+           style="margin-top:10px"></div>
     </div>
     <div class="foot">
       <button type="button" class="cancel" id="approveCancel">Cancel</button>
@@ -1460,6 +1496,9 @@
         The reason is required — it's attached to the SPRF and surfaces on the
         orders list so the BDE sees exactly what to address if they Revive.
       </div>
+      <!-- Oct-28: attachment strip inside the Reject modal. -->
+      <div id="attachStrip-reject" class="sprf-attach-strip" data-source="reject" hidden
+           style="margin-top:10px"></div>
     </div>
     <div class="foot" style="padding:10px 16px 14px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid #e2e8f0">
       <button type="button" id="rejectCancel"
@@ -1803,6 +1842,33 @@
           <textarea id="mgmt_reason" rows="2"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
                     style="width:100%;height:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none"></textarea>
+          <!-- Oct-28: attachment strip under the Reason textarea.
+               Shown on a hydrated SPRF only (needs an order id to
+               upload against). -->
+          <div id="attachStrip-reason" class="sprf-attach-strip" data-source="reason" hidden></div>
+        </div>
+        <!-- Oct-28 user ask: Approver Feedback — a textarea the three
+             MGMT approvers (Hayden/Kenny/JJ) can use to send a message
+             BACK to the requester before approving.  Hidden by default;
+             the hydrator unhides it when the viewer is an approver and
+             the order is in a Pending state (not yet approved / rejected
+             / drafted). -->
+        <div class="lbl" id="approverFeedbackLbl" hidden
+             style="grid-column: span 4;background:#dbeafe;color:#1e3a8a;justify-content:flex-start;font-weight:800;padding:2px 8px;min-height:0;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          Approver's Feedback <span style="color:#64748b;font-weight:600">(sends only to the requester)</span>
+        </div>
+        <div class="val" id="approverFeedbackWrap" hidden
+             style="grid-column: span 4;padding:0;align-self:stretch">
+          <textarea id="approver_feedback" rows="2"
+                    placeholder="Leave a message that will be emailed to the requester only (not CS, not other approvers).  Use this to request a revision or ask a clarifying question BEFORE signing off."
+                    style="width:100%;resize:vertical;border:none;background:#eff6ff;padding:6px 8px;font:inherit;outline:none"></textarea>
+          <div id="attachStrip-approver_feedback" class="sprf-attach-strip" data-source="approver_feedback" hidden></div>
+          <div style="display:flex;justify-content:flex-end;gap:8px;padding:6px 8px;background:#eff6ff">
+            <button type="button" id="btnSendFeedback"
+                    style="background:#1e40af;color:#fff;border:0;padding:6px 14px;border-radius:3px;font-weight:700;cursor:pointer;font-size:12px">
+              📧 Send Feedback to Requester
+            </button>
+          </div>
         </div>
         <!-- Approval-status band — auto-shows on submitted orders that
              carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
@@ -8256,6 +8322,9 @@ async function hydrateSubmittedOrder(oid, editMode){
   let who = {};
   try {
     who = await (await fetch("/api/orders/whoami", {credentials: "same-origin"})).json();
+    // Oct-28: cache for attachment-strip re-renders that happen
+    // after upload/delete without a full hydrate.
+    window._whoamiCache = who;
   } catch {}
   const isTempDraft = (data.needs_mgmt_approval || "").toLowerCase() === "temp";
   /* Update-permission set for a real (non-temp) SPRF:
@@ -8610,6 +8679,9 @@ async function hydrateSubmittedOrder(oid, editMode){
   wireStatusPanel(data);
   // 6. Management-approval status band + Approve button.
   wireApprovalPanel(data, who);
+  // Oct-28: Approver Feedback box + attachment strips.
+  try { wireApproverFeedback(data, who); } catch (_e) {}
+  try { renderAllAttachStrips(data, who); } catch (_e) {}
   /* 7. Belt-and-braces: an already-approved order stays LOCKED
         regardless of who's viewing and which URL flags they used
         to reach it.  Both Save/Update and Submit dim, the Edit
@@ -8617,6 +8689,185 @@ async function hydrateSubmittedOrder(oid, editMode){
         one of the branches above accidentally undimmed a button,
         this last pass restores the frozen state. */
   if (isApproved) lockFormForApproval();
+}
+
+/* Oct-28 user ask: Approver's Feedback — show the textarea + Send
+   button only to named approvers viewing a Pending order.  Hydrate
+   the textarea with the last-saved feedback (if any), and wire the
+   Send button to POST /api/orders/detail/<oid>/feedback (which also
+   fires an email to the requester). */
+function wireApproverFeedback(order, who){
+  const lbl    = document.getElementById("approverFeedbackLbl");
+  const wrap   = document.getElementById("approverFeedbackWrap");
+  const ta     = document.getElementById("approver_feedback");
+  const btn    = document.getElementById("btnSendFeedback");
+  if (!lbl || !wrap || !ta || !btn) return;
+  const isApprover = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
+  const isPending  = !order.approved_by_name && !order.rejected_by_name
+                     && (String(order.needs_mgmt_approval||"").toLowerCase() !== "temp");
+  if (!isApprover || !isPending) {
+    lbl.hidden = true; wrap.hidden = true; return;
+  }
+  lbl.hidden = false; wrap.hidden = false;
+  ta.value = String(order.approver_feedback || "");
+  // Hint the previous author + timestamp above the textarea so the
+  // approver sees the context of any earlier round.
+  if (order.approver_feedback_by_name && order.approver_feedback_at) {
+    lbl.innerHTML = `Approver's Feedback <span style="color:#64748b;font-weight:600">`
+      + `(last by ${escapeHtmlSafe(order.approver_feedback_by_name)} · `
+      + `${escapeHtmlSafe(order.approver_feedback_at)}) — sends only to the requester</span>`;
+  }
+  // Fresh clone to drop any older click listener from a previous
+  // hydrate pass.
+  const fresh = btn.cloneNode(true);
+  btn.parentNode.replaceChild(fresh, btn);
+  fresh.addEventListener("click", async () => {
+    const txt = String(ta.value || "").trim();
+    if (!txt) {
+      setStatus("Type a message before sending.", "warn");
+      return;
+    }
+    fresh.disabled = true;
+    const _lbl = fresh.textContent; fresh.textContent = "Sending…";
+    try {
+      const r = await fetch(`/api/orders/detail/${order.id}/feedback`, {
+        method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({feedback: txt}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.error) {
+        setStatus("Feedback send failed: " + (j.error || r.statusText), "warn");
+      } else {
+        setStatus("✓ Feedback emailed to the requester.", "ok");
+      }
+    } catch (e) {
+      setStatus("Feedback send failed: " + e, "warn");
+    } finally {
+      fresh.disabled = false; fresh.textContent = _lbl;
+    }
+  });
+}
+
+function escapeHtmlSafe(s){
+  return String(s||"").replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+/* Oct-28 user ask: file attachments on the Reason / Approver Feedback
+   textareas + inside the Approve / Reject modals.  Each strip is a
+   <div class="sprf-attach-strip" data-source="…"> that lists already-
+   uploaded files for this source and offers an "Attach file" button
+   that opens a hidden file input. */
+function renderAllAttachStrips(order, who){
+  const atts = Array.isArray(order.attachments) ? order.attachments : [];
+  const oid  = order.id;
+  const isApprover = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
+  // Visible sources depend on viewer:
+  //   reason  — always visible on hydrated SPRF (BDE + viewers)
+  //   approver_feedback — only when the Feedback box is visible
+  //   approve / reject  — only when the matching modal is open
+  //                        (strip is inside the modal body itself)
+  _renderAttachStrip("attachStrip-reason",            oid, atts, who, true);
+  _renderAttachStrip("attachStrip-approver_feedback", oid, atts, who, isApprover);
+  _renderAttachStrip("attachStrip-approve",           oid, atts, who, isApprover);
+  _renderAttachStrip("attachStrip-reject",            oid, atts, who, isApprover);
+}
+
+function _renderAttachStrip(stripId, oid, allAtts, who, visible){
+  const el = document.getElementById(stripId);
+  if (!el) return;
+  if (!oid || !visible) { el.hidden = true; el.innerHTML = ""; return; }
+  const source = el.dataset.source || "reason";
+  const mine = (allAtts || []).filter(a => (a.source || "reason") === source);
+  const myEmail = String((who && who.email) || "").toLowerCase();
+  const isAdmin = !!(who && who.is_admin);
+  const canDelete = (a) => (isAdmin
+                            || String(a.uploaded_by_email || "").toLowerCase() === myEmail);
+  const chips = mine.map(a => {
+    const kb = Math.max(1, Math.round((+a.size_bytes || 0) / 1024));
+    const dl = `<a href="${escapeHtmlSafe(a.download_url)}" download="${escapeHtmlSafe(a.original_filename)}">📎 ${escapeHtmlSafe(a.original_filename)}</a>`;
+    const meta = `<small>${kb} KB · ${escapeHtmlSafe(a.uploaded_by_name || "")}</small>`;
+    const del  = canDelete(a)
+      ? `<span class="del" title="Remove attachment" data-att-id="${a.id}">✕</span>` : "";
+    return `<span class="attach-chip">${dl} ${meta} ${del}</span>`;
+  }).join("");
+  el.innerHTML = chips
+    + `<button type="button" class="attach-add" data-add-source="${escapeHtmlSafe(source)}">`
+    + `+ Attach file</button>`
+    + `<small style="color:#94a3b8;margin-left:4px">up to 10 MB · pdf/image/xlsx/docx/csv/msg/zip</small>`;
+  el.hidden = false;
+  // Wire the "+ Attach" button to open a hidden <input type="file">.
+  const addBtn = el.querySelector(".attach-add");
+  if (addBtn){
+    addBtn.addEventListener("click", () => {
+      const inp = document.createElement("input");
+      inp.type = "file";
+      inp.style.display = "none";
+      inp.addEventListener("change", async () => {
+        const f = inp.files && inp.files[0];
+        if (f) await _uploadAttachment(oid, source, f);
+        inp.remove();
+      });
+      document.body.appendChild(inp);
+      inp.click();
+    });
+  }
+  // Wire delete chips.
+  el.querySelectorAll(".del[data-att-id]").forEach(x => {
+    x.addEventListener("click", async () => {
+      if (!confirm("Remove this attachment?")) return;
+      const id = x.dataset.attId;
+      try {
+        const r = await fetch(`/api/orders/attachment/${id}/delete`,
+          {method: "POST", credentials: "same-origin"});
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) {
+          setStatus("Delete failed: " + (j.error || r.statusText), "warn");
+          return;
+        }
+        setStatus("Attachment removed.", "ok");
+        _reloadAttachmentsFor(oid);
+      } catch (e) { setStatus("Delete failed: " + e, "warn"); }
+    });
+  });
+}
+
+async function _uploadAttachment(oid, source, file){
+  if (file.size > 10 * 1024 * 1024) {
+    setStatus(`File is ${Math.round(file.size/1024)} KB; the cap is 10 MB.`, "warn");
+    return;
+  }
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("source", source);
+  setStatus(`Uploading ${file.name}…`, "info");
+  try {
+    const r = await fetch(`/api/orders/detail/${oid}/attach`,
+      {method: "POST", credentials: "same-origin", body: fd});
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.error) {
+      setStatus("Upload failed: " + (j.error || r.statusText), "warn");
+      return;
+    }
+    setStatus(`✓ ${file.name} attached.`, "ok");
+    _reloadAttachmentsFor(oid);
+  } catch (e) {
+    setStatus("Upload failed: " + e, "warn");
+  }
+}
+
+async function _reloadAttachmentsFor(oid){
+  // Lightweight re-fetch: pull the detail payload again and re-render
+  // just the attachment strips.  Avoids a full hydrate.
+  try {
+    const r = await fetch(`/api/orders/detail/${oid}`, {credentials:"same-origin"});
+    const d = await r.json();
+    if (!d || d.error) return;
+    const who = window._whoamiCache || {};
+    renderAllAttachStrips(d, who);
+  } catch (_e) {}
 }
 
 // Approval-band renderer.  Shows Y/N chips for the two named approvers
@@ -8786,6 +9037,11 @@ function openApproveNoteModal(order, who, srcBtn){
   }
   ta.value = "";
   ov.classList.add("show");
+  // Oct-28: render the attach strip inside the Approve modal using
+  // the current order's attachments.
+  try {
+    renderAllAttachStrips(order, who || window._whoamiCache || {});
+  } catch (_e) {}
   setTimeout(() => ta.focus(), 30);
   const cleanup = () => {
     ov.classList.remove("show");
@@ -8946,6 +9202,10 @@ function openRejectNoteModal(order, who, srcBtn){
   }
   ta.value = "";
   ov.classList.add("show");
+  // Oct-28: render the attach strip inside the Reject modal.
+  try {
+    renderAllAttachStrips(order, who || window._whoamiCache || {});
+  } catch (_e) {}
   setTimeout(() => ta.focus(), 30);
   const cleanup = () => {
     ov.classList.remove("show");
