@@ -8002,7 +8002,13 @@ async function hydrateSubmittedOrder(oid, editMode){
                       && Object.keys(_snapshotMap).length > 0;
   const _PLANT_TO_COL = { "NSW": "stock_nsw", "QLD": "stock_qld",
                           "VIC": "stock_vic", "WA":  "stock_wa" };
-  (p.lines || []).forEach(ln => {
+  // Oct-28 user ask: legacy orders saved before the empty-row filter
+  // (commit bf4d415) still carry blank placeholder lines in their
+  // payload_json.  Skip any line that has no m_code — those are the
+  // stub rows the BDE never filled, and showing them clutters the
+  // hydrated SPRF.  Keeps hydrate consistent with the submit-side
+  // filter so a legacy order renders only the real lines.
+  (p.lines || []).filter(ln => String(ln.m_code || "").trim()).forEach(ln => {
     addRow();
     const tr = $("#linesBody").lastElementChild;
     if (_freezeStock) tr.dataset.frozenStock = "1";

@@ -6841,6 +6841,16 @@ def api_orders_detail(oid):
             row["payload"] = _json.loads(row.pop("payload_json") or "{}")
         except Exception:
             row["payload"] = {}
+        # Oct-28 user ask: strip blank placeholder lines (no m_code) from
+        # the hydrated payload — legacy orders saved before the submit-
+        # time filter (commit bf4d415) still carry empty stub rows.
+        try:
+            _pl = row.get("payload") or {}
+            if isinstance(_pl.get("lines"), list):
+                _pl["lines"] = [ln for ln in _pl["lines"]
+                                if str((ln or {}).get("m_code") or "").strip()]
+        except Exception:
+            pass
         # Surface the modification log at the top level so the
         # front-end doesn't have to reach into payload.mod_log.
         row["mod_log"] = (row["payload"].get("mod_log") or []) if isinstance(row.get("payload"), dict) else []
