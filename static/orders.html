@@ -7366,6 +7366,14 @@ function _recomputeInterstateOrderFlag(){
   window._orderHasInterstate = anyInterstate;
   // Touch updateTotals so the approval banner re-renders.
   try { if (typeof updateTotals === "function") updateTotals(); } catch (_e) {}
+  // Oct-28: a hydrated order whose saved needs_mgmt_approval was 'N'
+  // but is now interstate (plant pick happened post-hydrate OR was
+  // saved before this feature existed) must unhide the approval
+  // panel so any approver can click Approve.
+  try {
+    const panel = document.getElementById("approvalPanel");
+    if (panel && anyInterstate) panel.hidden = false;
+  } catch (_e) {}
 }
 
 function serializeOrder(){
@@ -8546,12 +8554,31 @@ function wireApprovalPanel(order, who){
   // instead of a bureaucratic block.
   const _nma = String(order.needs_mgmt_approval || "").toUpperCase();
   const _isRejected = _nma === "R" || !!order.rejected_by_name;
-  if (_nma !== "Y" && !_isRejected){
+  // Oct-28 user ask: an order with ANY interstate line (plant_override
+  // differs from the mapped plant) requires approval even if its
+  // original saved needs_mgmt_approval was 'N' (saved before this
+  // feature existed, or re-flagged after a plant pick post-hydrate).
+  // Detect it from the live row state so a saved-N / currently-
+  // interstate order still shows the inter-state banner + unhides
+  // the approval panel.
+  const _anyInterstate = !!window._orderHasInterstate
+    || $$("#linesBody tr").some(tr => typeof _isInterstateLine === "function" && _isInterstateLine(tr));
+  if (_nma !== "Y" && !_isRejected && !_anyInterstate){
     panel.hidden = true;
     const el = $("#approvalPathText");
     if (el) el.innerHTML =
       `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required.`;
     return;
+  }
+  // Standard-pricing + interstate: show the red two-line badge and
+  // keep the approval panel visible so any approver can click
+  // Approve.
+  if (_nma !== "Y" && _anyInterstate && !_isRejected){
+    const el = $("#approvalPathText");
+    if (el) el.innerHTML =
+      `<span style="color:#fff;background:#b91c1c;padding:1px 6px;border-radius:3px;font-weight:800">`
+      + `STANDARD<br>(inter-state)</span>`
+      + ` — <b>Hayden / Kenny / JJ</b> can approve (any one).`;
   }
   panel.hidden = false;
   const esc = s => String(s || "").replace(/[&<>"']/g,
