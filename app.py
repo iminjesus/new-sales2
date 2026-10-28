@@ -4145,6 +4145,104 @@ def api_orders_stock_rt_by_material():
         except: pass
 
 
+@app.get("/api/orders/incoming_schedule")
+def api_orders_incoming_schedule():
+    """Oct-28 user ask: double-clicking the In-transit pipeline rows
+    (At dock / On water / Factory) on the SPRF stock popover opens a
+    calendar showing exactly how much is arriving on which date.
+
+    Reads the `incoming` table (crawled from SAP open-PO list).  Each
+    row carries plant / material / eta_date / po_qty / confirm_qty /
+    po_no / origin.  Group by eta_date so the popover can render a
+    daily calendar.
+
+    Query params:
+      ?m_code=<material>   required
+      ?plant=<plant>       required  (42R0 QLD / 42R1 NSW / 42R2 VIC
+                                      / 42R4 WA)
+      ?metric=po|confirm   optional, default 'po' (uses po_qty).  The
+                           SPRF asks for "incoming" so po_qty is the
+                           natural default (what's ordered, not just
+                           what's confirmed to ship).
+
+    Returns:
+      {
+        "by_date": [
+          {"eta_date": "2026-11-05", "qty": 240, "lines": [
+             {"po_no":"4200012345","origin":"KOR","qty":240}
+          ]},
+          …
+        ],
+        "total_qty": 720,
+        "unscheduled_qty": 48,   # rows with no eta_date
+        "metric": "po",
+      }
+    """
+    code  = (request.args.get("m_code") or "").strip()
+    plant = (request.args.get("plant")  or "").strip().upper()
+    metric = (request.args.get("metric") or "po").strip().lower()
+    metric_col = "po_qty" if metric != "confirm" else "confirm_qty"
+    if not code or not plant:
+        return jsonify({"error": "m_code and plant are required"}), 400
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        try:
+            cur.execute("SHOW TABLES LIKE 'incoming'")
+            if not cur.fetchone():
+                return jsonify({"by_date": [], "total_qty": 0,
+                                "unscheduled_qty": 0, "metric": metric})
+        except Exception:
+            return jsonify({"by_date": [], "total_qty": 0,
+                            "unscheduled_qty": 0, "metric": metric})
+        cur.execute(
+            f"SELECT eta_date, po_no, origin, "
+            f"       SUM(COALESCE({metric_col}, 0)) AS qty "
+            f"FROM incoming "
+            f"WHERE material = %s AND plant = %s "
+            f"GROUP BY eta_date, po_no, origin "
+            f"ORDER BY eta_date, po_no",
+            (code, plant),
+        )
+        rows = cur.fetchall() or []
+
+        by_date_map = {}
+        unscheduled_qty = 0
+        total_qty = 0
+        for r in rows:
+            qty = int(float(r.get("qty") or 0))
+            if qty <= 0:
+                continue
+            total_qty += qty
+            d = r.get("eta_date")
+            ds = d.isoformat() if hasattr(d, "isoformat") else (str(d) if d else "")
+            po = (r.get("po_no") or "").strip()
+            og = (r.get("origin") or "").strip()
+            if not ds:
+                unscheduled_qty += qty
+                continue
+            slot = by_date_map.setdefault(ds, {"eta_date": ds, "qty": 0, "lines": []})
+            slot["qty"] += qty
+            slot["lines"].append({"po_no": po, "origin": og, "qty": qty})
+
+        by_date = sorted(by_date_map.values(), key=lambda s: s["eta_date"])
+        return jsonify({
+            "by_date": by_date,
+            "total_qty": total_qty,
+            "unscheduled_qty": unscheduled_qty,
+            "metric": metric,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
 # No hard-coded fallback — per user rule "grep the data from the
 # table and do not have other options", Base DC cells stay BLANK
 # when dc_basic_customer carries no matching row.  The old 56 %

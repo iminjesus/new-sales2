@@ -5801,19 +5801,157 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
     ${_row("ATP (available)",   b.atp,          "unrestricted − on order")}
     ${_row("Unrestricted",      b.unrestricted, "")}
     ${_row("On Order",          b.on_order,     "")}
-    <div style="margin-top:6px;padding-top:4px;border-top:1px solid #cbd5e1;color:#64748b;font-size:11px">
-      In-transit pipeline
+    <div id="_stockRtPipelineHdr"
+         title="Double-click to open the incoming calendar"
+         style="margin-top:6px;padding-top:4px;border-top:1px solid #cbd5e1;color:#64748b;font-size:11px;cursor:pointer;user-select:none">
+      In-transit pipeline <span style="opacity:.55">· double-click for calendar ⇲</span>
     </div>
-    ${_row("At dock",           b.at_dock,  "")}
-    ${_row("On water",          b.on_water, "")}
-    ${_row("Factory",           b.factory,  "")}
+    <div id="_stockRtPipeline" style="cursor:pointer" title="Double-click to open the incoming calendar">
+      ${_row("At dock",           b.at_dock,  "")}
+      ${_row("On water",          b.on_water, "")}
+      ${_row("Factory",           b.factory,  "")}
+    </div>
+    <div id="_stockRtCal"></div>
     <div style="margin-top:6px;font-size:10.5px;color:#94a3b8">
       Double-click the cell to see the DOT-age breakdown instead.
     </div>`;
   document.body.appendChild(pop);
   _stockRtEl = pop;
+  // Oct-28 user ask: double-click anywhere on the "In-transit pipeline"
+  // block to open an incoming-shipment calendar for this material at
+  // this plant.  Reads /api/orders/incoming_schedule which groups the
+  // open-PO list by eta_date.  First dblclick fetches + renders; a
+  // second dblclick collapses the calendar.
+  const _calTarget = pop.querySelector("#_stockRtCal");
+  const _openCal = () => _openIncomingCalendar(_calTarget, mcode, _plantFor, stateLabel);
+  pop.querySelector("#_stockRtPipelineHdr")?.addEventListener("dblclick", _openCal);
+  pop.querySelector("#_stockRtPipeline")   ?.addEventListener("dblclick", _openCal);
   document.addEventListener("keydown", _stockRtKey);
   setTimeout(() => document.addEventListener("mousedown", _stockRtClickAway, true), 0);
+}
+
+/* Oct-28 user ask: calendar view of incoming shipments for a given
+   (m_code, plant).  Fetches /api/orders/incoming_schedule, groups by
+   month, renders a 7-column grid per month with the arriving qty on
+   each day.  Hovering a day reveals the per-PO breakdown.  Called
+   from openStockRtPopover's dblclick handler.  Idempotent — a second
+   call collapses the calendar. */
+async function _openIncomingCalendar(target, mcode, plant, stateLabel){
+  if (!target || !mcode || !plant) return;
+  // Toggle off if already open.
+  if (target.dataset.open === "1") {
+    target.innerHTML = "";
+    target.dataset.open = "";
+    _stockRtEl && (_stockRtEl.style.width = "270px");
+    return;
+  }
+  target.dataset.open = "1";
+  target.innerHTML = `<div style="padding:6px 0;color:#94a3b8;font-size:11px">
+    Loading incoming schedule…
+  </div>`;
+  // Expand the popover width so a month calendar actually fits.
+  if (_stockRtEl) _stockRtEl.style.width = "360px";
+  let data;
+  try {
+    const r = await fetch(
+      `/api/orders/incoming_schedule`
+      + `?m_code=${encodeURIComponent(mcode)}`
+      + `&plant=${encodeURIComponent(plant)}`,
+      {credentials: "same-origin"},
+    );
+    data = await r.json();
+  } catch (e) {
+    target.innerHTML = `<div style="padding:4px 0;color:#b91c1c;font-size:11px">
+      Load failed: ${String(e).slice(0, 120)}
+    </div>`;
+    return;
+  }
+  if (!data || data.error) {
+    target.innerHTML = `<div style="padding:4px 0;color:#b91c1c;font-size:11px">
+      Error: ${(data && data.error) || "no data"}
+    </div>`;
+    return;
+  }
+  const slots = data.by_date || [];
+  if (!slots.length && !(data.unscheduled_qty > 0)) {
+    target.innerHTML = `<div style="padding:4px 0;color:#94a3b8;font-size:11px">
+      No open PO lines on file for ${mcode} at plant ${plant}.
+    </div>`;
+    return;
+  }
+  // Group slots by YYYY-MM.
+  const byMonth = {};
+  for (const s of slots) {
+    const ym = String(s.eta_date || "").slice(0, 7);
+    if (!ym) continue;
+    (byMonth[ym] = byMonth[ym] || []).push(s);
+  }
+  // Sort months chronologically.
+  const months = Object.keys(byMonth).sort();
+  // Build one grid per month.
+  const parts = [];
+  parts.push(`<div style="margin-top:6px;padding-top:4px;border-top:1px solid #cbd5e1;
+                           font-size:11px;color:#334155;font-weight:700;
+                           display:flex;justify-content:space-between;">
+    <span>Incoming schedule</span>
+    <span style="color:#64748b;font-weight:400">
+      Total ${fmtQty(data.total_qty)}${data.unscheduled_qty ? ` · ${fmtQty(data.unscheduled_qty)} unscheduled` : ""}
+    </span>
+  </div>`);
+  for (const ym of months) {
+    const [y, m] = ym.split("-").map(n => +n);
+    const first = new Date(y, m - 1, 1);
+    const last  = new Date(y, m,     0);  // last day of this month
+    const daysInMonth = last.getDate();
+    const startWeekday = first.getDay();  // 0 Sun .. 6 Sat
+    // Build a qty map keyed by day of month.
+    const dayMap = {};
+    const dayLines = {};
+    for (const s of byMonth[ym]) {
+      const d = new Date(s.eta_date + "T00:00:00");
+      const dd = d.getDate();
+      dayMap[dd] = (dayMap[dd] || 0) + (s.qty || 0);
+      (dayLines[dd] = dayLines[dd] || []).push(...(s.lines || []));
+    }
+    const _mName = first.toLocaleString(undefined, {month: "long", year: "numeric"});
+    const cells = [];
+    cells.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:#e2e8f0;
+                              font-size:10px;text-align:center;color:#64748b">
+      ${["S","M","T","W","T","F","S"].map(x => `<div style="background:#f1f5f9;padding:2px 0">${x}</div>`).join("")}
+    </div>`);
+    const grid = [];
+    for (let i = 0; i < startWeekday; i++) grid.push(`<div style="background:#fff"></div>`);
+    for (let d = 1; d <= daysInMonth; d++) {
+      const q = dayMap[d] || 0;
+      const title = q > 0
+        ? (dayLines[d] || []).map(l => `PO ${l.po_no || "—"} · ${l.origin || "—"}: ${fmtQty(l.qty)}`).join("\n")
+        : "";
+      const bg   = q > 0 ? "#dcfce7" : "#fff";
+      const col  = q > 0 ? "#166534" : "#94a3b8";
+      const bold = q > 0 ? "700"     : "400";
+      grid.push(`
+        <div title="${title.replace(/"/g, "&quot;")}"
+             style="background:${bg};min-height:34px;padding:2px;text-align:center;
+                    font-size:10px;color:${col};font-weight:${bold};
+                    display:flex;flex-direction:column;justify-content:center;line-height:1.1">
+          <div style="opacity:.65">${d}</div>
+          ${q > 0 ? `<div style="font-size:11px">${fmtQty(q)}</div>` : ""}
+        </div>`);
+    }
+    cells.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:#e2e8f0">
+      ${grid.join("")}
+    </div>`);
+    parts.push(`<div style="margin-top:6px">
+      <div style="font-size:11px;font-weight:700;color:#334155;margin-bottom:3px">${_mName}</div>
+      ${cells.join("")}
+    </div>`);
+  }
+  if (data.unscheduled_qty > 0) {
+    parts.push(`<div style="margin-top:6px;font-size:10.5px;color:#64748b">
+      ${fmtQty(data.unscheduled_qty)} unit(s) on file with no ETA date.
+    </div>`);
+  }
+  target.innerHTML = parts.join("");
 }
 
 /* ─── Aging popover for state-stock cells ──────────────────────
