@@ -5749,7 +5749,12 @@ function _closeStockRt(){
 }
 function _stockRtKey(e){ if (e.key === "Escape") _closeStockRt(); }
 function _stockRtClickAway(e){
-  if (_stockRtEl && !_stockRtEl.contains(e.target)) _closeStockRt();
+  if (!_stockRtEl) return;
+  // Oct-28 user ask: popover is draggable — mid-drag mousedowns on
+  // the handle must NOT close the popover (handle is inside, so
+  // this normally wouldn't trigger, but keep the guard explicit).
+  if (_stockRtEl.dataset && _stockRtEl.dataset.dragging === "1") return;
+  if (!_stockRtEl.contains(e.target)) _closeStockRt();
 }
 function openStockRtPopover(anchorCell, rowEl, stateLabel){
   _closeStockRt();
@@ -5783,9 +5788,16 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
     font-size:12px; color:#1e293b;
   `;
   pop.innerHTML = `
-    <div style="font-weight:700;font-size:12.5px;margin-bottom:6px;">
-      ${mcode} · ${stateLabel}
-      <small style="color:#64748b;font-weight:400">(Plant ${_plantFor})</small>
+    <div id="_stockRtDragHandle"
+         title="Drag to move; double-click In-transit pipeline to open the incoming calendar"
+         style="font-weight:700;font-size:12.5px;margin-bottom:6px;
+                cursor:move;user-select:none;
+                display:flex;justify-content:space-between;align-items:baseline;
+                padding:2px 2px 4px;border-bottom:1px dashed #e2e8f0">
+      <span>${mcode} · ${stateLabel}
+        <small style="color:#64748b;font-weight:400">(Plant ${_plantFor})</small></span>
+      <span style="color:#cbd5e1;font-size:14px;font-weight:400"
+            title="Drag me">⋮⋮</span>
     </div>
     ${_row("ATP (available)",   b.atp,          "unrestricted − on order")}
     ${_row("Unrestricted",      b.unrestricted, "")}
@@ -5817,6 +5829,40 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
   pop.querySelector("#_stockRtPipeline")   ?.addEventListener("dblclick", _openCal);
   document.addEventListener("keydown", _stockRtKey);
   setTimeout(() => document.addEventListener("mousedown", _stockRtClickAway, true), 0);
+  // Oct-28 user ask: drag the popover anywhere on the viewport by its
+  // title bar.  Also suppress the click-away listener while a drag is
+  // in progress so the popover doesn't close on mouseup inside its
+  // own body (clickaway fires on mousedown — the drag start — but a
+  // subsequent mousemove outside the popover would also mis-count).
+  const _handle = pop.querySelector("#_stockRtDragHandle");
+  if (_handle) {
+    let _drag = null;
+    _handle.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();   // keep clickaway from closing us mid-drag
+      const r = pop.getBoundingClientRect();
+      _drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      pop.dataset.dragging = "1";
+      document.body.style.userSelect = "none";
+    });
+    document.addEventListener("mousemove", (ev) => {
+      if (!_drag) return;
+      const w = pop.offsetWidth, h = pop.offsetHeight;
+      const nx = Math.min(Math.max(0, ev.clientX - _drag.dx),
+                          window.innerWidth  - w);
+      const ny = Math.min(Math.max(0, ev.clientY - _drag.dy),
+                          window.innerHeight - h);
+      pop.style.left = nx + "px";
+      pop.style.top  = ny + "px";
+    });
+    document.addEventListener("mouseup", () => {
+      if (!_drag) return;
+      _drag = null;
+      delete pop.dataset.dragging;
+      document.body.style.userSelect = "";
+    });
+  }
 }
 
 /* Oct-28 user ask: calendar view of incoming shipments for a given
