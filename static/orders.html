@@ -3641,13 +3641,19 @@ function _extractTempeChipLines(rowEl){
    detail trail.  Non-blocking — fires async; the row's existing promo
    tag renders first so a slow Tempe fetch never delays the price
    display.  Silent on no-match. */
-async function applyTempeRefPriceToRow(rowEl, data){
+async function applyTempeRefPriceToRow(rowEl, data, opts){
   // Oct-27: on a post-approval SPRF (Approved OR Rejected), the chip
   // the approver signed off on must stay exactly as it was.  Early-
   // return so no fetch happens and the Remark cell keeps the frozen
   // payload text.  Flag is set in setupOrderForm() off isApproved
   // / isRejected.
-  if (window._tempeChipFrozen) return;
+  //
+  // Oct-28: hydrateSubmittedOrder may call us with
+  // {bypassFreeze:true} to backfill a row whose saved Remark is
+  // empty — in that case the freeze has nothing to protect, so we
+  // run the lookup and let the chip render anyway.
+  const _bypass = opts && opts.bypassFreeze;
+  if (window._tempeChipFrozen && !_bypass) return;
   const size  = String((data && data.description) || "").trim();
   const pat   = String((data && data.pattern)     || "").trim();
   const ls    = String((data && data.load_speed)  || "").trim();
@@ -7631,28 +7637,31 @@ async function hydrateSubmittedOrder(oid, editMode){
      the reader still sees the pricing reference the BDE should have
      captured.  Common cause: the user clicked Submit before the
      async Tempe lookup resolved, so the saved payload has an empty
-     Remark.  The lookup only runs when the chip is NOT frozen
-     (status_sap !== 'Y'); once a DO has been keyed into SAP, the
-     Remark is historical and never overwritten.  Fires in parallel
-     per row — no await blocks hydrate from returning. */
-  const _hasSapDoNow = (String(data.status_sap || "").toUpperCase() === "Y");
-  if (!_hasSapDoNow) {
-    $$("#linesBody tr").forEach(tr => {
-      const mc = tr.querySelector('[data-col="m_code"]')?.value?.trim();
-      if (!mc) return;
-      const full = (tr.dataset && tr.dataset.remarkFull) || "";
-      // Already carries a Tempe / JAX / Bob Jane chip?  Leave it alone.
-      if (/\(TempeConsumer\b|\(TempeDealer\b|\(JAX\b|\(Bob Jane\b/i.test(full)) return;
-      try {
-        applyTempeRefPriceToRow(tr, {
-          description: (tr.querySelector('[data-col="size"]')      ?.value || "").trim(),
-          pattern:     (tr.querySelector('[data-col="pattern"]')   ?.value || "").trim(),
-          load_speed:  (tr.querySelector('[data-col="load_speed"]')?.value || "").trim(),
-          brand:       (tr.querySelector('[data-col="brand"]')     ?.value || "").trim(),
-        });
-      } catch (_e) {}
-    });
-  }
+     Remark.
+
+     Two cases:
+     - saved Remark already has a chip → never overwrite (frozen or
+       not — the saved text is what was signed off on).
+     - saved Remark is EMPTY of chip markers → always try to fill it
+       from current Tempe data, even for status_sap='Y' orders.  "No
+       chip at all" is worse than "current chip retrieved on view";
+       empty text has nothing to protect.  The bypassFreeze opt tells
+       applyTempeRefPriceToRow to ignore window._tempeChipFrozen for
+       this one call. */
+  $$("#linesBody tr").forEach(tr => {
+    const mc = tr.querySelector('[data-col="m_code"]')?.value?.trim();
+    if (!mc) return;
+    const full = (tr.dataset && tr.dataset.remarkFull) || "";
+    if (/\(TempeConsumer\b|\(TempeDealer\b|\(JAX\b|\(Bob Jane\b/i.test(full)) return;
+    try {
+      applyTempeRefPriceToRow(tr, {
+        description: (tr.querySelector('[data-col="size"]')      ?.value || "").trim(),
+        pattern:     (tr.querySelector('[data-col="pattern"]')   ?.value || "").trim(),
+        load_speed:  (tr.querySelector('[data-col="load_speed"]')?.value || "").trim(),
+        brand:       (tr.querySelector('[data-col="brand"]')     ?.value || "").trim(),
+      }, {bypassFreeze: true});
+    } catch (_e) {}
+  });
   /* Oct-25 user ask: when stock is frozen (SAP=Y path), override the
      "Stock Info updated: …" label so it shows the data's interface
      time captured at Y-mark instead of the live batch_status value.
