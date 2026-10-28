@@ -5514,7 +5514,11 @@ function newRow(){
     if (!tr.querySelector('[data-col="m_code"]').value) return;
     const _p = applyAdditionalDCToRow(tr);
     const _rowData = () => ({
-      description: (tr.querySelector('[data-col="size"]')       ?.value || "").trim(),
+      // Size cell is data-col="description" in the DOM — this was
+      // wrong before and silently made applyTempeRefPriceToRow bail
+      // on `if (!size) return`, so Qty-change never actually refreshed
+      // the chip; it just happened to leave the earlier chip in place.
+      description: (tr.querySelector('[data-col="description"]')?.value || "").trim(),
       pattern:     (tr.querySelector('[data-col="pattern"]')    ?.value || "").trim(),
       load_speed:  (tr.querySelector('[data-col="load_speed"]') ?.value || "").trim(),
       brand:       (tr.querySelector('[data-col="brand"]')      ?.value || "").trim(),
@@ -7654,11 +7658,17 @@ async function hydrateSubmittedOrder(oid, editMode){
     const full = (tr.dataset && tr.dataset.remarkFull) || "";
     if (/\(TempeConsumer\b|\(TempeDealer\b|\(JAX\b|\(Bob Jane\b/i.test(full)) return;
     try {
+      // The size cell's attribute is data-col="description" (the DOM
+      // header reads "Size" but the data column name is "description").
+      // applyTempeRefPriceToRow then reads data.description as its
+      // size; an empty string makes the function early-return at
+      // `if (!size) return`, which is why the earlier pass that
+      // queried `data-col="size"` silently did nothing.
       applyTempeRefPriceToRow(tr, {
-        description: (tr.querySelector('[data-col="size"]')      ?.value || "").trim(),
-        pattern:     (tr.querySelector('[data-col="pattern"]')   ?.value || "").trim(),
-        load_speed:  (tr.querySelector('[data-col="load_speed"]')?.value || "").trim(),
-        brand:       (tr.querySelector('[data-col="brand"]')     ?.value || "").trim(),
+        description: (tr.querySelector('[data-col="description"]')?.value || "").trim(),
+        pattern:     (tr.querySelector('[data-col="pattern"]')    ?.value || "").trim(),
+        load_speed:  (tr.querySelector('[data-col="load_speed"]') ?.value || "").trim(),
+        brand:       (tr.querySelector('[data-col="brand"]')      ?.value || "").trim(),
       }, {bypassFreeze: true});
     } catch (_e) {}
   });
