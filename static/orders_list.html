@@ -263,7 +263,9 @@
                  is now in the timeline strip BEFORE Approver (date
                  line 1, time line 2) so the reader doesn't have to
                  scroll to the far right for the submit timestamp. -->
-            <th style="width:130px" title="When the first approver signed off (first-approver-wins)">Approved</th>
+            <!-- Oct-28 user ask: Approved column removed — the Approver
+                 column already carries the approver name + timestamp,
+                 so a separate Approved column was redundant. -->
             <th style="width:130px" title="When Harry flipped SAP-entered to Y for this order">SAP Created</th>
             <th style="width:90px" class="num" title="Time from Requested to Approved, in days and hours">Elapsed<br>to&nbsp;Approval</th>
             <!-- Remark — every edit appends one line here so a
@@ -274,7 +276,7 @@
           </tr>
         </thead>
         <tbody id="listBody">
-          <tr><td colspan="23" class="empty">Loading…</td></tr>
+          <tr><td colspan="22" class="empty">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -352,18 +354,18 @@ async function loadOrders(){
   if (dateFrom) qs.set("date_from", dateFrom);
   if (dateTo)   qs.set("date_to",   dateTo);
   const body = $("#listBody");
-  body.innerHTML = `<tr><td colspan="23" class="empty">Loading…</td></tr>`;
+  body.innerHTML = `<tr><td colspan="22" class="empty">Loading…</td></tr>`;
   try {
     const r = await fetch(`/api/orders/list?${qs}`, {credentials:"same-origin"});
     const j = await r.json();
     if (!r.ok || j.error){
-      body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
+      body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${j.error || r.statusText}</td></tr>`;
       return;
     }
     _rowsCache = j.rows || [];
     renderRows();
   } catch(e){
-    body.innerHTML = `<tr><td colspan="23" class="empty">Load failed: ${e}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${e}</td></tr>`;
   }
 }
 
@@ -469,7 +471,7 @@ function renderRows(){
   const _hlOid = String(new URLSearchParams(location.search).get("highlight") || "").trim();
   const body = $("#listBody");
   if (!filtered.length){
-    body.innerHTML = `<tr><td colspan="23" class="empty">No orders match.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="22" class="empty">No orders match.</td></tr>`;
   } else {
     body.innerHTML = filtered.map(r => {
       // Approver cell — "Standard" pill when the order has no
@@ -531,12 +533,15 @@ function renderRows(){
            now, so the Pending / MD-only pill reads cleanly on its
            own. */
       }
-      // Oct-28 user ask: ALWAYS stamp an "Inter-state" badge on the
-      // second line of the Approver cell for inter-state orders, so
-      // a reviewer scanning the list sees the delivery flag at a
-      // glance regardless of what the primary pill shows.
+      // Oct-28 user ask: match the SPRF-form "STANDARD (inter-state)"
+      // two-line red badge on the orders_list Approver cell for every
+      // inter-state row (second line below the primary pill).  Reads
+      // "STANDARD" on top and "(inter-state)" below in a red pill, so
+      // a reviewer scanning the list recognises the delivery flag at
+      // a glance regardless of the primary pill (Pending / Approved /
+      // Rejected / etc.).
       if (r.has_interstate && !r.deleted_at){
-        apprCell += `<br><span style="background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em">Inter-state</span>`;
+        apprCell += `<br><span style="background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em;display:inline-block;text-align:center;line-height:1.15">STANDARD<br>(inter-state)</span>`;
       }
       const rebPill = r.rebateable === "Y"
         ? `<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Y</span>`
@@ -712,7 +717,6 @@ function renderRows(){
             ? `<div style="font-size:11px;line-height:1.35;color:#0c4a6e;background:#e0f2fe;padding:4px 6px;border-radius:3px;white-space:pre-wrap">${escapeHtml(_c)}</div>`
             : `<small style="color:#94a3b8">—</small>`;
         })()}</td>
-        <td><small style="color:#166534">${escapeHtml(r.approved_at || "—")}</small></td>
         <td><small style="color:#0f172a">${(r.status_sap === "Y" && r.status_changed_at) ? escapeHtml(r.status_changed_at) : "—"}</small></td>
         <td class="num">${fmtElapsed(r.submitted_at, r.approved_at)}</td>
         <td>${remarkCell}</td>
