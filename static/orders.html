@@ -664,32 +664,21 @@
   /* Oct-23 user ask: highlight the Material-table stock column that
      matches the delivery plant.  The table carries data-highlight-
      plant='42R0' / '42R1' / '42R2' / '42R4' once a customer with a
-     mapped plant is loaded (set in applyCustomer).  Four narrow
-     selectors — one per plant — thicken the border and darken the
-     background on the matching column's header + per-row cell so a
-     BDE reads "this is my plant" at a glance without losing the
-     other-state columns next to it. */
-  table.lines[data-highlight-plant="42R1"] thead th[data-col="stock_nsw"],
-  table.lines[data-highlight-plant="42R1"] tbody td[data-cell-col="stock_nsw"],
-  table.lines[data-highlight-plant="42R0"] thead th[data-col="stock_qld"],
-  table.lines[data-highlight-plant="42R0"] tbody td[data-cell-col="stock_qld"],
-  table.lines[data-highlight-plant="42R2"] thead th[data-col="stock_vic"],
-  table.lines[data-highlight-plant="42R2"] tbody td[data-cell-col="stock_vic"],
-  table.lines[data-highlight-plant="42R4"] thead th[data-col="stock_wa"],
-  table.lines[data-highlight-plant="42R4"] tbody td[data-cell-col="stock_wa"] {
-    box-shadow: inset 0 0 0 2px #f59e0b;
-  }
+     mapped plant is loaded (set in applyCustomer).
+
+     Oct-28 revision: the body-cell amber tint is OUT — the user wants
+     the stock cells to read the same as the other columns.  Only the
+     HEADER stays amber as the "this is my plant" marker.  The header
+     amber must also survive the post-approval lock state (previously
+     the lock stylesheet overrode .stock green back onto the amber
+     header; keep the amber via !important). */
   table.lines[data-highlight-plant="42R1"] thead th[data-col="stock_nsw"],
   table.lines[data-highlight-plant="42R0"] thead th[data-col="stock_qld"],
   table.lines[data-highlight-plant="42R2"] thead th[data-col="stock_vic"],
   table.lines[data-highlight-plant="42R4"] thead th[data-col="stock_wa"] {
     background: #b45309 !important;    /* amber-700, override th.stock green */
-  }
-  table.lines[data-highlight-plant="42R1"] tbody td[data-cell-col="stock_nsw"] input,
-  table.lines[data-highlight-plant="42R0"] tbody td[data-cell-col="stock_qld"] input,
-  table.lines[data-highlight-plant="42R2"] tbody td[data-cell-col="stock_vic"] input,
-  table.lines[data-highlight-plant="42R4"] tbody td[data-cell-col="stock_wa"] input {
-    background: #fef3c7;               /* amber-100 tint for the input */
+    color: #fff !important;
+    box-shadow: inset 0 0 0 2px #f59e0b !important;
   }
   /* Remark column at the far right — full-word promo tags
      ("Trueblu (18.00%)", "443 (12.00%)", "Special (30.00%)",
@@ -5873,12 +5862,10 @@ async function _openIncomingCalendar(target, mcode, plant, stateLabel){
     return;
   }
   const slots = data.by_date || [];
-  if (!slots.length && !(data.unscheduled_qty > 0)) {
-    target.innerHTML = `<div style="padding:4px 0;color:#94a3b8;font-size:11px">
-      No open PO lines on file for ${mcode} at plant ${plant}.
-    </div>`;
-    return;
-  }
+  // Oct-28 user ask: ALWAYS render the calendar, even when the lookup
+  // returned no incoming lines.  An empty month grid with "Total 0"
+  // at the top is much easier to read than a lone "no data" sentence
+  // (and it also hints at WHERE incoming would appear once it lands).
   // Group slots by YYYY-MM.
   const byMonth = {};
   for (const s of slots) {
@@ -5886,16 +5873,31 @@ async function _openIncomingCalendar(target, mcode, plant, stateLabel){
     if (!ym) continue;
     (byMonth[ym] = byMonth[ym] || []).push(s);
   }
-  // Sort months chronologically.
-  const months = Object.keys(byMonth).sort();
+  // Sort months chronologically; if nothing was returned, fall back
+  // to this month + next month so the grid still has something to
+  // render.
+  let months = Object.keys(byMonth).sort();
+  if (!months.length) {
+    const _now = new Date();
+    const _ym = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const _next = new Date(_now.getFullYear(), _now.getMonth() + 1, 1);
+    months = [_ym(_now), _ym(_next)];
+    byMonth[months[0]] = [];
+    byMonth[months[1]] = [];
+  }
   // Build one grid per month.
   const parts = [];
-  parts.push(`<div style="margin-top:6px;padding-top:4px;border-top:1px solid #cbd5e1;
+  // Oct-28 user ask: Total goes at the TOP of the calendar as a
+  // standalone banner so the number reads before the grid.
+  const _totTxt = data.total_qty > 0
+    ? `${fmtQty(data.total_qty)}`
+    : "0";
+  parts.push(`<div style="margin-top:6px;padding-top:6px;border-top:1px solid #cbd5e1;
                            font-size:11px;color:#334155;font-weight:700;
-                           display:flex;justify-content:space-between;">
+                           display:flex;justify-content:space-between;align-items:baseline">
     <span>Incoming schedule</span>
-    <span style="color:#64748b;font-weight:400">
-      Total ${fmtQty(data.total_qty)}${data.unscheduled_qty ? ` · ${fmtQty(data.unscheduled_qty)} unscheduled` : ""}
+    <span style="font-size:13px;color:${data.total_qty > 0 ? "#166534" : "#94a3b8"}">
+      Total <b>${_totTxt}</b>${data.unscheduled_qty ? ` <span style="color:#64748b;font-weight:400">· ${fmtQty(data.unscheduled_qty)} unscheduled</span>` : ""}
     </span>
   </div>`);
   for (const ym of months) {
@@ -5927,15 +5929,17 @@ async function _openIncomingCalendar(target, mcode, plant, stateLabel){
         ? (dayLines[d] || []).map(l => `PO ${l.po_no || "—"} · ${l.origin || "—"}: ${fmtQty(l.qty)}`).join("\n")
         : "";
       const bg   = q > 0 ? "#dcfce7" : "#fff";
-      const col  = q > 0 ? "#166534" : "#94a3b8";
+      const col  = q > 0 ? "#166534" : "#cbd5e1";
       const bold = q > 0 ? "700"     : "400";
+      // Oct-28 user ask: ALWAYS show a number — "0" on empty days so
+      // the grid reads as a real calendar instead of a sparse one.
       grid.push(`
         <div title="${title.replace(/"/g, "&quot;")}"
              style="background:${bg};min-height:34px;padding:2px;text-align:center;
                     font-size:10px;color:${col};font-weight:${bold};
                     display:flex;flex-direction:column;justify-content:center;line-height:1.1">
           <div style="opacity:.65">${d}</div>
-          ${q > 0 ? `<div style="font-size:11px">${fmtQty(q)}</div>` : ""}
+          <div style="font-size:11px">${q > 0 ? fmtQty(q) : "0"}</div>
         </div>`);
     }
     cells.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:#e2e8f0">
@@ -7771,6 +7775,16 @@ async function hydrateSubmittedOrder(oid, editMode){
     window._customerPlant = _p;
     const _cpEl = document.getElementById("delivery_plant");
     if (_cpEl && !_cpEl.value) _cpEl.value = _p;
+    // Oct-28 user ask: the plant-column header stays amber on
+    // approved orders too.  Hydrate was setting window._customerPlant
+    // but NOT the table's data-highlight-plant attribute (which the
+    // CSS selectors look at), so the amber header never appeared
+    // after a form reload.  Mirror the attribute here, matching the
+    // write applyCustomer does on fresh entry.
+    try {
+      const _lt = document.getElementById("linesTable");
+      if (_lt) _lt.dataset.highlightPlant = String(_p || "").toUpperCase();
+    } catch (_e) {}
   } catch (_e) {}
   $$("#linesBody tr").forEach(tr => recalcRow(tr));
   updateTotals();
