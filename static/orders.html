@@ -663,19 +663,23 @@
   }
   /* Oct-28 user ask: when a line's Plant override picks a different
      plant from the customer's mapped one, that line is interstate.
-     Tint the chosen plant's stock cell in red/pink and give the input
-     text a red stroke so the reviewer notices it instantly. */
+     Tint the chosen plant's stock cell in red/pink and draw a 2 px
+     red border all the way around.  Earlier the input + span inside
+     carried the pink background too, which painted OVER the TD's
+     top inset shadow and the top edge appeared missing.  Make the
+     inner elements transparent so the TD's own background + inset
+     border show through unbroken on all four sides. */
   table.lines tbody td.stock-cell.interstate-pick{
     background:#fee2e2 !important;
-    box-shadow: inset 0 0 0 2px #dc2626;
+    box-shadow: inset 0 0 0 2px #dc2626 !important;
   }
   table.lines tbody td.stock-cell.interstate-pick input{
-    background:#fee2e2 !important;
+    background: transparent !important;
     color:#991b1b !important;
     font-weight:800;
   }
   table.lines tbody td.stock-cell.interstate-pick span.unr{
-    background:#fee2e2 !important;
+    background: transparent !important;
     color:#b91c1c !important;
   }
   /* Oct-28: Plant override cell — compact select. */
