@@ -612,6 +612,39 @@
     font-variant-numeric:tabular-nums;
   }
   table.lines tbody td.stock-cell.zero input{background:#fdecec;color:#a03030}
+  /* Oct-28 user ask: show ATP on the top line and (Unrestricted) on
+     the line below, so the two numbers read as a stacked pair instead
+     of "162/166" squashed into one cell.  The input holds just the
+     ATP number; the Unrestricted number is rendered by the TD's
+     ::after pseudo-element, driven by data-unr set on the cell when
+     the stock is written. */
+  table.lines tbody td.stock-cell{
+    padding:0;
+    vertical-align:top;
+    line-height:1.1;
+  }
+  table.lines tbody td.stock-cell input{
+    display:block;
+    width:100%;
+    box-sizing:border-box;
+    padding:1px 3px;
+    border:0;
+  }
+  table.lines tbody td.stock-cell::after{
+    content: attr(data-unr);
+    display:block;
+    text-align:right;
+    background:#eefaf1;
+    color:#4b6b5a;
+    font-weight:500;
+    font-size:10.5px;
+    padding:0 3px 1px;
+    font-variant-numeric:tabular-nums;
+  }
+  table.lines tbody td.stock-cell.zero::after{
+    background:#fdecec;
+    color:#a03030;
+  }
   /* Oct-23 user ask: highlight the Material-table stock column that
      matches the delivery plant.  The table carries data-highlight-
      plant='42R0' / '42R1' / '42R2' / '42R4' once a customer with a
@@ -3969,6 +4002,26 @@ function applyMaterial(rowEl, data){
   if (data.m_code) fillStockForRow(rowEl, data.m_code);
 }
 
+/* Oct-28 user ask: write a stock cell as two stacked lines — ATP on
+   top (the input value) and "(Unrestricted)" below (TD ::after via
+   data-unr).  Also serialises back to "ATP/Unrestricted" through
+   dataset.unrRaw so submit / re-save still round-trip the pair. */
+function _setStockCell(el, atpVal, unrVal){
+  if (!el) return;
+  const atp = +atpVal || 0;
+  const unr = +unrVal || 0;
+  const bothZero = (atp === 0 && unr === 0);
+  el.value = bothZero ? "0" : fmtQty(atp);
+  const td = el.closest("td");
+  if (td){
+    td.dataset.unr = bothZero ? "(0)" : `(${fmtQty(unr)})`;
+    // Keep the raw ATP/Unr pair on the cell for serializeOrder so
+    // the saved payload line keeps the "162/166" format.
+    td.dataset.unrRaw = bothZero ? "0" : `${fmtQty(atp)}/${fmtQty(unr)}`;
+    td.classList.toggle("zero", bothZero);
+  }
+}
+
 async function fillStockForRow(rowEl, mcode){
   const stockMap = {NSW:"stock_nsw", QLD:"stock_qld", VIC:"stock_vic", WA:"stock_wa"};
   // Oct-21 user ask: SPRF stock cells now read from stock_rt (ZMMR40430
@@ -4001,13 +4054,10 @@ async function fillStockForRow(rowEl, mcode){
     const b = perState[state] || {atp:0, unrestricted:0};
     const atp  = +b.atp          || 0;
     const unr  = +b.unrestricted || 0;
-    // Cell reads "ATP / Unrestricted".  Both zero → "0" (same red tint
-    // as before).  Any non-zero → "ATP/Unrestricted" (e.g., "75/100").
-    el.value = (atp === 0 && unr === 0)
-      ? "0"
-      : `${fmtQty(atp)}/${fmtQty(unr)}`;
-    const td = el.parentElement;
-    if (td) td.classList.toggle("zero", (atp === 0 && unr === 0));
+    // Oct-28 user ask: stacked ATP / (Unrestricted) rendering —
+    // _setStockCell writes the input + the TD's data-unr attribute
+    // that the ::after pseudo-element reads for the second line.
+    _setStockCell(el, atp, unr);
   }
 }
 
@@ -6896,7 +6946,17 @@ function serializeOrder(){
     const row = {};
     let hasAny = false;
     LINE_FIELDS.forEach(c => {
-      const v = tr.querySelector(`[data-col="${c}"]`)?.value || "";
+      const el = tr.querySelector(`[data-col="${c}"]`);
+      let v = el?.value || "";
+      // Oct-28 user ask: stock cells are rendered as two stacked
+      // lines (ATP on top, (Unrestricted) below).  Serialise them
+      // back to the compact "ATP/Unrestricted" string so the saved
+      // payload re-hydrates with both numbers intact.
+      if (c.startsWith("stock_") && el){
+        const td = el.closest("td");
+        const raw = (td && td.dataset && td.dataset.unrRaw) || "";
+        if (raw) v = raw;
+      }
       if (v && String(v).trim()) hasAny = true;
       row[c] = v;
     });
@@ -7427,7 +7487,24 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (_freezeStock) tr.dataset.frozenStock = "1";
     LINE_FIELDS.forEach(c => {
       const el = tr.querySelector(`[data-col="${c}"]`);
-      if (el) el.value = ln[c] ?? "";
+      if (!el) return;
+      // Oct-28 user ask: hydrate stacked stock cells.  The persisted
+      // line field is still the compact "ATP/Unrestricted" string so
+      // round-trips keep working; the renderer splits it on "/" and
+      // writes the two parts into the input + TD ::after.
+      if (c.startsWith("stock_")){
+        const raw = String(ln[c] ?? "").trim();
+        if (!raw){
+          _setStockCell(el, 0, 0);
+          return;
+        }
+        const parts = raw.split("/");
+        const a = +parts[0] || 0;
+        const u = parts.length > 1 ? (+parts[1] || 0) : a;
+        _setStockCell(el, a, u);
+        return;
+      }
+      el.value = ln[c] ?? "";
     });
     // Oct-27 user ask: Base DC saved on this line must stay exactly
     // as persisted.  Promo masters change over the SPRF's lifetime
@@ -7460,11 +7537,10 @@ async function hydrateSubmittedOrder(oid, editMode){
         const _atp = +(_b.atp || 0);
         const _un  = +(_b.unrestricted || 0);
         const el   = tr.querySelector(`[data-col="${col}"]`);
-        if (el) {
-          el.value = `${_atp}/${_un}`;
-          const _td = el.closest("td");
-          if (_td) _td.classList.toggle("zero", (_atp + _un) <= 0);
-        }
+        // Oct-28 user ask: stacked ATP / (Unrestricted) rendering —
+        // same two-line layout as the live path, driven by
+        // _setStockCell which writes the input + TD data-unr.
+        if (el) _setStockCell(el, _atp, _un);
       }
       try {
         tr.dataset.stockRt = JSON.stringify(_byState);
