@@ -733,7 +733,14 @@ function renderRows(){
      the headline badges track what's actually on screen.  Backend
      scope already restricts _rowsCache to what this caller is
      allowed to see (own rows + managed states + managed BDEs), so
-     the badges can never leak counts from outside their visibility. */
+     the badges can never leak counts from outside their visibility.
+
+     Oct-28 revision: "Approved · DO not entered" now also counts
+     Standard-pricing rows (!has_additional_dc).  Standard rows
+     never go through MD approval — they are implicitly cleared
+     the moment they're submitted — but they still need CS to key
+     the DO into SAP, so they belong in the same CS worklist as
+     explicitly-approved rows.  Rejected rows are excluded. */
   const _now  = new Date();
   const _ym   = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, "0")}`;
   const _isThisMonth = r => String(r.submitted_at || "").slice(0, 7) === _ym;
@@ -745,7 +752,9 @@ function renderRows(){
     r.has_additional_dc && !r.approved_by_name && !r.rejected_by_name
   );
   const _msApprovedNoDO = _msTotal.filter(r =>
-    r.approved_by_name && String(r.status_sap || "") !== "Y"
+    String(r.status_sap || "") !== "Y"
+    && !r.rejected_by_name
+    && (r.approved_by_name || !r.has_additional_dc)
   );
   $("#msTotal")         .textContent = _msTotal.length;
   $("#msPendingAppr")   .textContent = _msPendingAppr.length;
