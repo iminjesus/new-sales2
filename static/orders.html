@@ -613,11 +613,14 @@
   }
   table.lines tbody td.stock-cell.zero input{background:#fdecec;color:#a03030}
   /* Oct-28 user ask: show ATP on the top line and (Unrestricted) on
-     the line below, so the two numbers read as a stacked pair instead
-     of "162/166" squashed into one cell.  The input holds just the
-     ATP number; the Unrestricted number is rendered by the TD's
-     ::after pseudo-element, driven by data-unr set on the cell when
-     the stock is written. */
+     the line below INSIDE THE SAME CELL — the two numbers read as a
+     stacked pair instead of "162/166" squashed into one line.  The
+     input holds just the ATP number; a sibling <span class="unr">
+     renders the (Unrestricted) line underneath, inside the same TD,
+     so the TR grows to accommodate both lines and the next row stays
+     clear.  (An earlier try used ::after on the TD, but table-cell
+     ::after does not grow the row height, so the second line visually
+     overflowed onto the row below.) */
   table.lines tbody td.stock-cell{
     padding:0;
     vertical-align:top;
@@ -630,9 +633,10 @@
     padding:1px 3px;
     border:0;
   }
-  table.lines tbody td.stock-cell::after{
-    content: attr(data-unr);
+  table.lines tbody td.stock-cell span.unr{
     display:block;
+    width:100%;
+    box-sizing:border-box;
     text-align:right;
     background:#eefaf1;
     color:#4b6b5a;
@@ -641,7 +645,7 @@
     padding:0 3px 1px;
     font-variant-numeric:tabular-nums;
   }
-  table.lines tbody td.stock-cell.zero::after{
+  table.lines tbody td.stock-cell.zero span.unr{
     background:#fdecec;
     color:#a03030;
   }
@@ -4002,10 +4006,11 @@ function applyMaterial(rowEl, data){
   if (data.m_code) fillStockForRow(rowEl, data.m_code);
 }
 
-/* Oct-28 user ask: write a stock cell as two stacked lines — ATP on
-   top (the input value) and "(Unrestricted)" below (TD ::after via
-   data-unr).  Also serialises back to "ATP/Unrestricted" through
-   dataset.unrRaw so submit / re-save still round-trip the pair. */
+/* Oct-28 user ask: write a stock cell as two stacked lines inside
+   ONE TD — ATP on the top line (the input value) and "(Unrestricted)"
+   on the next line (a sibling <span class="unr"> created / updated
+   under the input).  Also stashes the raw "ATP/Unrestricted" pair on
+   data-unr-raw so serializeOrder can save the compact format. */
 function _setStockCell(el, atpVal, unrVal){
   if (!el) return;
   const atp = +atpVal || 0;
@@ -4013,13 +4018,20 @@ function _setStockCell(el, atpVal, unrVal){
   const bothZero = (atp === 0 && unr === 0);
   el.value = bothZero ? "0" : fmtQty(atp);
   const td = el.closest("td");
-  if (td){
-    td.dataset.unr = bothZero ? "(0)" : `(${fmtQty(unr)})`;
-    // Keep the raw ATP/Unr pair on the cell for serializeOrder so
-    // the saved payload line keeps the "162/166" format.
-    td.dataset.unrRaw = bothZero ? "0" : `${fmtQty(atp)}/${fmtQty(unr)}`;
-    td.classList.toggle("zero", bothZero);
+  if (!td) return;
+  td.dataset.unrRaw = bothZero ? "0" : `${fmtQty(atp)}/${fmtQty(unr)}`;
+  td.classList.toggle("zero", bothZero);
+  // Find or create the sibling span that renders the (Unrestricted)
+  // second line.  Appending inside the TD (not using ::after) makes
+  // the TR grow to accommodate both lines, so the next row stays
+  // where it belongs.
+  let unrEl = td.querySelector("span.unr");
+  if (!unrEl){
+    unrEl = document.createElement("span");
+    unrEl.className = "unr";
+    td.appendChild(unrEl);
   }
+  unrEl.textContent = bothZero ? "(0)" : `(${fmtQty(unr)})`;
 }
 
 async function fillStockForRow(rowEl, mcode){
