@@ -625,13 +625,25 @@
     padding:0;
     vertical-align:top;
     line-height:1.1;
+    /* Override the global td height:32px so the cell can expand to
+       hold both the input and the sibling span.  Setting height:auto
+       on the TD alone is not enough — need to clear min-height too
+       or the browser's intrinsic min-content wins. */
+    height:auto !important;
+    min-height:0;
   }
   table.lines tbody td.stock-cell input{
-    display:block;
-    width:100%;
-    box-sizing:border-box;
-    padding:1px 3px;
-    border:0;
+    /* Override the global "td input { height:100% }" so the input
+       claims only its own line height instead of absorbing the TD's
+       32 px.  Without this the input stays 32 px tall and the span
+       below it pushes the TD past the TR, visually landing on the
+       next row. */
+    display:block !important;
+    width:100% !important;
+    box-sizing:border-box !important;
+    height:auto !important;
+    padding:1px 3px !important;
+    border:0 !important;
   }
   table.lines tbody td.stock-cell span.unr{
     display:block;
@@ -7614,6 +7626,33 @@ async function hydrateSubmittedOrder(oid, editMode){
   } catch (_e) {}
   $$("#linesBody tr").forEach(tr => recalcRow(tr));
   updateTotals();
+  /* Oct-28 user ask: on hydrating an order whose saved Remark is
+     EMPTY of Tempe / JAX / Bob Jane chip info, re-fetch the chip so
+     the reader still sees the pricing reference the BDE should have
+     captured.  Common cause: the user clicked Submit before the
+     async Tempe lookup resolved, so the saved payload has an empty
+     Remark.  The lookup only runs when the chip is NOT frozen
+     (status_sap !== 'Y'); once a DO has been keyed into SAP, the
+     Remark is historical and never overwritten.  Fires in parallel
+     per row — no await blocks hydrate from returning. */
+  const _hasSapDoNow = (String(data.status_sap || "").toUpperCase() === "Y");
+  if (!_hasSapDoNow) {
+    $$("#linesBody tr").forEach(tr => {
+      const mc = tr.querySelector('[data-col="m_code"]')?.value?.trim();
+      if (!mc) return;
+      const full = (tr.dataset && tr.dataset.remarkFull) || "";
+      // Already carries a Tempe / JAX / Bob Jane chip?  Leave it alone.
+      if (/\(TempeConsumer\b|\(TempeDealer\b|\(JAX\b|\(Bob Jane\b/i.test(full)) return;
+      try {
+        applyTempeRefPriceToRow(tr, {
+          description: (tr.querySelector('[data-col="size"]')      ?.value || "").trim(),
+          pattern:     (tr.querySelector('[data-col="pattern"]')   ?.value || "").trim(),
+          load_speed:  (tr.querySelector('[data-col="load_speed"]')?.value || "").trim(),
+          brand:       (tr.querySelector('[data-col="brand"]')     ?.value || "").trim(),
+        });
+      } catch (_e) {}
+    });
+  }
   /* Oct-25 user ask: when stock is frozen (SAP=Y path), override the
      "Stock Info updated: …" label so it shows the data's interface
      time captured at Y-mark instead of the live batch_status value.
@@ -7735,15 +7774,16 @@ async function hydrateSubmittedOrder(oid, editMode){
        • Read-only viewer with no update rights → both dimmed. */
   const isApproved = !!data.approved_by_name;
   const isRejected = !!data.rejected_by_name;
-  // Oct-27: once an order has been Approved or Rejected the Remark
-  // cell's Tempe reference chip is FROZEN per the user's rule
-  // ("Approval/Reject 받은 이후는 Fix").  Setting this global flag
-  // tells applyTempeRefPriceToRow + the Qty-change / applyMaterial
-  // chainers to skip the lookup entirely; the Remark cell keeps
-  // whatever text was saved on the approved payload.  CS editing a
-  // post-approval row changes qty / material but the chip they
-  // signed off on stays intact.
-  window._tempeChipFrozen = (isApproved || isRejected);
+  // Oct-28 user ask: the freeze trigger moves from "Approved OR
+  // Rejected" to "SAP DO already created".  Previously an approved
+  // order whose Remark was saved before the Tempe lookup resolved
+  // would show an empty Remark forever, because applyTempeRefPrice-
+  // ToRow bailed on isApproved.  Now the chip can repopulate right
+  // up until CS keys the order into SAP; once status_sap flips to
+  // 'Y' the chip is frozen for good (SAP has already consumed the
+  // numbers; back-dating would be misleading).
+  const _hasSapDo = (String(data.status_sap || "").toUpperCase() === "Y");
+  window._tempeChipFrozen = _hasSapDo;
   const sBtn  = $("#btnSubmit");
   const dBtn  = $("#btnSaveTemp");
   const eBtn  = $("#btnEdit");
