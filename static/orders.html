@@ -5977,15 +5977,16 @@ async function _openIncomingCalendar(target, mcode, plant, stateLabel){
       const bg   = q > 0 ? "#dcfce7" : "#fff";
       const col  = q > 0 ? "#166534" : "#cbd5e1";
       const bold = q > 0 ? "700"     : "400";
-      // Oct-28 user ask: ALWAYS show a number — "0" on empty days so
-      // the grid reads as a real calendar instead of a sparse one.
+      // Oct-28 user ask (revision): drop the "0" on empty days — the
+      // zero adds visual noise.  Only show a qty when there's actual
+      // inbound; empty days just show the day number.
       grid.push(`
         <div title="${title.replace(/"/g, "&quot;")}"
              style="background:${bg};min-height:34px;padding:2px;text-align:center;
                     font-size:10px;color:${col};font-weight:${bold};
                     display:flex;flex-direction:column;justify-content:center;line-height:1.1">
           <div style="opacity:.65">${d}</div>
-          <div style="font-size:11px">${q > 0 ? fmtQty(q) : "0"}</div>
+          ${q > 0 ? `<div style="font-size:11px">${fmtQty(q)}</div>` : ""}
         </div>`);
     }
     cells.push(`<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:#e2e8f0">
