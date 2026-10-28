@@ -6276,8 +6276,16 @@ async function _openIncomingCalendar(target, mcode, plant, stateLabel){
     </div>`);
   }
   if (data.unscheduled_qty > 0) {
-    parts.push(`<div style="margin-top:6px;font-size:10.5px;color:#64748b">
-      ${fmtQty(data.unscheduled_qty)} unit(s) on file with no ETA date.
+    const _fac = +data.factory_qty || 0;
+    const _onwNoEta = data.unscheduled_qty - _fac;
+    const bits = [];
+    if (_fac > 0)       bits.push(`${fmtQty(_fac)} at Factory (no ETA yet)`);
+    if (_onwNoEta > 0)  bits.push(`${fmtQty(_onwNoEta)} on water without ETA`);
+    parts.push(`<div style="margin-top:6px;padding:6px 8px;background:#fff8e1;border-left:3px solid #f59e0b;color:#78350f;font-size:11px;line-height:1.5">
+      <b>${fmtQty(data.unscheduled_qty)} unit(s) with no ETA date</b> — ${bits.join(" + ") || "pending ship schedule"}.
+      <div style="color:#92400e;font-size:10px;margin-top:2px">
+        Factory POs appear here until they go on water, then move onto the calendar.
+      </div>
     </div>`);
   }
   target.innerHTML = parts.join("");

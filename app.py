@@ -4188,27 +4188,58 @@ def api_orders_incoming_schedule():
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
     try:
+        # Oct-28 user ask: the Pipeline Total on the stock popover
+        # includes AT DOCK + ON WATER + FACTORY, but this endpoint
+        # previously only queried the `incoming` table (which holds
+        # the ON-WATER slice).  The FACTORY slice (POs not yet on
+        # water — no ETA date set) lives on the `orders` table, filtered
+        # out of `incoming` by po_no.  UNION the two sources so the
+        # calendar's "Total" matches Pipeline Total; factory rows have
+        # no eta_date so they fall into unscheduled_qty.
+        rows = []
         try:
             cur.execute("SHOW TABLES LIKE 'incoming'")
-            if not cur.fetchone():
-                return jsonify({"by_date": [], "total_qty": 0,
-                                "unscheduled_qty": 0, "metric": metric})
-        except Exception:
-            return jsonify({"by_date": [], "total_qty": 0,
-                            "unscheduled_qty": 0, "metric": metric})
-        cur.execute(
-            f"SELECT eta_date, po_no, origin, "
-            f"       SUM(COALESCE({metric_col}, 0)) AS qty "
-            f"FROM incoming "
-            f"WHERE material = %s AND plant = %s "
-            f"GROUP BY eta_date, po_no, origin "
-            f"ORDER BY eta_date, po_no",
-            (code, plant),
-        )
-        rows = cur.fetchall() or []
+            if cur.fetchone():
+                cur.execute(
+                    f"SELECT eta_date, po_no, origin, "
+                    f"       SUM(COALESCE({metric_col}, 0)) AS qty "
+                    f"FROM incoming "
+                    f"WHERE material = %s AND plant = %s "
+                    f"GROUP BY eta_date, po_no, origin "
+                    f"ORDER BY eta_date, po_no",
+                    (code, plant),
+                )
+                rows = cur.fetchall() or []
+        except Exception as _e:
+            print(f"[incoming_schedule] on-water query failed: {_e}")
+        # Factory slice — POs on the `orders` table whose po_no is NOT
+        # yet in `incoming` (same gate the pipeline-map endpoint uses
+        # for Factory).  No eta_date here, so these are counted as
+        # unscheduled.
+        factory_rows = []
+        try:
+            cur.execute("SHOW TABLES LIKE 'orders'")
+            if cur.fetchone():
+                cur.execute(
+                    f"SELECT po_no, origin, "
+                    f"       SUM(COALESCE({metric_col}, 0)) AS qty "
+                    f"FROM orders "
+                    f"WHERE material = %s AND plant = %s "
+                    f"  AND (po_no IS NULL OR po_no NOT IN ("
+                    f"       SELECT DISTINCT po_no FROM incoming "
+                    f"       WHERE po_no IS NOT NULL AND TRIM(po_no) <> ''"
+                    f"  )) "
+                    f"GROUP BY po_no, origin "
+                    f"ORDER BY po_no",
+                    (code, plant),
+                )
+                factory_rows = cur.fetchall() or []
+        except Exception as _e:
+            print(f"[incoming_schedule] factory query failed: {_e}")
 
         by_date_map = {}
         unscheduled_qty = 0
+        unscheduled_lines = []
         total_qty = 0
         for r in rows:
             qty = int(float(r.get("qty") or 0))
@@ -4221,16 +4252,33 @@ def api_orders_incoming_schedule():
             og = (r.get("origin") or "").strip()
             if not ds:
                 unscheduled_qty += qty
+                unscheduled_lines.append({"po_no": po, "origin": og,
+                                          "qty": qty, "source": "on_water_no_eta"})
                 continue
             slot = by_date_map.setdefault(ds, {"eta_date": ds, "qty": 0, "lines": []})
             slot["qty"] += qty
             slot["lines"].append({"po_no": po, "origin": og, "qty": qty})
+        # Factory PO lines — no eta_date, roll into unscheduled.
+        factory_total = 0
+        for r in factory_rows:
+            qty = int(float(r.get("qty") or 0))
+            if qty <= 0:
+                continue
+            total_qty += qty
+            factory_total += qty
+            unscheduled_qty += qty
+            po = (r.get("po_no") or "").strip()
+            og = (r.get("origin") or "").strip()
+            unscheduled_lines.append({"po_no": po, "origin": og,
+                                      "qty": qty, "source": "factory"})
 
         by_date = sorted(by_date_map.values(), key=lambda s: s["eta_date"])
         return jsonify({
             "by_date": by_date,
             "total_qty": total_qty,
             "unscheduled_qty": unscheduled_qty,
+            "factory_qty": factory_total,
+            "unscheduled_lines": unscheduled_lines,
             "metric": metric,
         })
     except Exception as e:
