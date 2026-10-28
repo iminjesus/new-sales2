@@ -7790,6 +7790,9 @@ $("#btnSubmit").addEventListener("click", async () => {
     }
     btn.textContent = `Submitted #${j.id}`;
     setStatus(`Order <b>#${j.id}</b> submitted — Harry has been notified.`, "ok");
+    // Oct-28: upload any pending-local attachments the BDE staged
+    // before Submit (new SPRF has no order_id until now).
+    try { await _flushPendingAttachments(j.id); } catch (_e) {}
     // Bounce over to the list page after a beat so the BDE can see
     // their submission alongside everyone else's.
     setTimeout(() => { location.href = "/orders_list"; }, 1200);
@@ -7899,6 +7902,11 @@ $("#btnSaveTemp")?.addEventListener("click", async () => {
       setStatus(`Draft <b>${j.order_no || "#" + j.id}</b> saved — visible only to you until you Submit.`, "ok");
       setTimeout(() => { btn.disabled = false; btn.textContent = "💾 Save / Update"; }, 1500);
     }
+    // Oct-28: upload any pending-local attachments (works for both
+    // the Draft path AND the first Update-save on a submitted order
+    // that was opened without an id in the URL).
+    const _oidForUpload = (isEditingReal ? +submitBtn.dataset.oid : j.id);
+    try { await _flushPendingAttachments(_oidForUpload); } catch (_e) {}
     /* Oct-19 user ask: reveal the "Exit to Home" button the moment
        a Save succeeds, instead of waiting for the user to round-trip
        through /orders_list and reopen the order.  Previously Exit
@@ -8760,15 +8768,24 @@ function escapeHtmlSafe(s){
    <div class="sprf-attach-strip" data-source="…"> that lists already-
    uploaded files for this source and offers an "Attach file" button
    that opens a hidden file input. */
+// Oct-28: pending attachments the BDE picked BEFORE the SPRF has an
+// order_id (i.e. during initial Submit).  Keyed by source so the
+// Reason strip and the Approver-Feedback strip don't mix.  On Submit
+// success, _flushPendingAttachments(oid) uploads them all and clears
+// the queue.
+window._pendingAttachments = { reason: [], approver_feedback: [],
+                                approve: [], reject: [] };
+
 function renderAllAttachStrips(order, who){
-  const atts = Array.isArray(order.attachments) ? order.attachments : [];
-  const oid  = order.id;
+  const atts = Array.isArray((order || {}).attachments) ? order.attachments : [];
+  const oid  = (order || {}).id || null;
   const isApprover = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
   // Visible sources depend on viewer:
-  //   reason  — always visible on hydrated SPRF (BDE + viewers)
-  //   approver_feedback — only when the Feedback box is visible
-  //   approve / reject  — only when the matching modal is open
-  //                        (strip is inside the modal body itself)
+  //   reason  — ALWAYS visible on new OR hydrated SPRF (BDE attaches
+  //              support files to their Reason; a new SPRF stages the
+  //              files locally and uploads them on Submit).
+  //   approver_feedback — only when the Feedback box is visible.
+  //   approve / reject  — only when the matching modal is open.
   _renderAttachStrip("attachStrip-reason",            oid, atts, who, true);
   _renderAttachStrip("attachStrip-approver_feedback", oid, atts, who, isApprover);
   _renderAttachStrip("attachStrip-approve",           oid, atts, who, isApprover);
@@ -8778,7 +8795,7 @@ function renderAllAttachStrips(order, who){
 function _renderAttachStrip(stripId, oid, allAtts, who, visible){
   const el = document.getElementById(stripId);
   if (!el) return;
-  if (!oid || !visible) { el.hidden = true; el.innerHTML = ""; return; }
+  if (!visible) { el.hidden = true; el.innerHTML = ""; return; }
   const source = el.dataset.source || "reason";
   const mine = (allAtts || []).filter(a => (a.source || "reason") === source);
   const myEmail = String((who && who.email) || "").toLowerCase();
@@ -8793,7 +8810,19 @@ function _renderAttachStrip(stripId, oid, allAtts, who, visible){
       ? `<span class="del" title="Remove attachment" data-att-id="${a.id}">✕</span>` : "";
     return `<span class="attach-chip">${dl} ${meta} ${del}</span>`;
   }).join("");
-  el.innerHTML = chips
+  // Oct-28: pending-local chips (file not yet uploaded — waiting for
+  // Submit to assign an order_id).  Each shows a dashed amber border
+  // so the BDE sees at a glance "this file isn't on the server yet".
+  const pending = (window._pendingAttachments[source] || []);
+  const pendChips = pending.map((p, i) => {
+    const kb = Math.max(1, Math.round(p.file.size / 1024));
+    return `<span class="attach-chip" style="border-style:dashed;border-color:#f59e0b;background:#fff8e1">`
+      + `<span style="color:#78350f;font-weight:600">📎 ${escapeHtmlSafe(p.file.name)}</span>`
+      + ` <small style="color:#92400e">${kb} KB · pending Submit</small>`
+      + ` <span class="del" title="Remove pending attachment" data-pend-src="${escapeHtmlSafe(source)}" data-pend-idx="${i}">✕</span>`
+      + `</span>`;
+  }).join("");
+  el.innerHTML = chips + pendChips
     + `<button type="button" class="attach-add" data-add-source="${escapeHtmlSafe(source)}">`
     + `+ Attach file</button>`
     + `<small style="color:#94a3b8;margin-left:4px">up to 10 MB · pdf/image/xlsx/docx/csv/msg/zip</small>`;
@@ -8807,14 +8836,30 @@ function _renderAttachStrip(stripId, oid, allAtts, who, visible){
       inp.style.display = "none";
       inp.addEventListener("change", async () => {
         const f = inp.files && inp.files[0];
-        if (f) await _uploadAttachment(oid, source, f);
+        if (f) {
+          if (oid) {
+            // Hydrated order — upload immediately.
+            await _uploadAttachment(oid, source, f);
+          } else {
+            // New SPRF — stage locally; uploaded after Submit.
+            if (f.size > 10 * 1024 * 1024) {
+              setStatus(`File is ${Math.round(f.size/1024)} KB; the cap is 10 MB.`, "warn");
+            } else {
+              window._pendingAttachments[source] = window._pendingAttachments[source] || [];
+              window._pendingAttachments[source].push({file: f});
+              setStatus(`Staged ${f.name} — will upload on Submit.`, "ok");
+              renderAllAttachStrips({id: null, attachments: []},
+                                    window._whoamiCache || {});
+            }
+          }
+        }
         inp.remove();
       });
       document.body.appendChild(inp);
       inp.click();
     });
   }
-  // Wire delete chips.
+  // Wire delete chips (persisted side).
   el.querySelectorAll(".del[data-att-id]").forEach(x => {
     x.addEventListener("click", async () => {
       if (!confirm("Remove this attachment?")) return;
@@ -8832,6 +8877,36 @@ function _renderAttachStrip(stripId, oid, allAtts, who, visible){
       } catch (e) { setStatus("Delete failed: " + e, "warn"); }
     });
   });
+  // Wire delete chips (pending-local side).
+  el.querySelectorAll(".del[data-pend-idx]").forEach(x => {
+    x.addEventListener("click", () => {
+      const src = x.dataset.pendSrc || "reason";
+      const idx = +x.dataset.pendIdx;
+      if (window._pendingAttachments[src]) {
+        window._pendingAttachments[src].splice(idx, 1);
+        renderAllAttachStrips({id: null, attachments: []},
+                              window._whoamiCache || {});
+      }
+    });
+  });
+}
+
+/* Oct-28: after a NEW SPRF is submitted (or saved as draft) and the
+   server returns the fresh order_id, iterate every staged pending
+   file and POST it to /attach with its original source.  Clears
+   each queue as it goes.  Non-blocking — failures just log; the
+   Submit itself has already succeeded. */
+async function _flushPendingAttachments(oid){
+  if (!oid) return;
+  for (const src of Object.keys(window._pendingAttachments || {})) {
+    const queue = window._pendingAttachments[src] || [];
+    if (!queue.length) continue;
+    for (const p of queue.slice()) {
+      try { await _uploadAttachment(oid, src, p.file); }
+      catch (e) { console.warn("pending attach upload failed:", e); }
+    }
+    window._pendingAttachments[src] = [];
+  }
 }
 
 async function _uploadAttachment(oid, source, file){
@@ -10204,6 +10279,10 @@ async function seedRequester(){
   try {
     const r = await fetch("/api/orders/whoami", {credentials: "same-origin"});
     const j = await r.json();
+    // Oct-28: cache whoami here too (seedRequester runs for both new
+    // and hydrated SPRF paths) so renderAllAttachStrips has a 'who'
+    // before any later re-render.
+    window._whoamiCache = j;
     if      (j && j.email)      seeded = j.email;
     else if (j && j.name)       seeded = j.name;
     else if (j && j.local_user) seeded = j.local_user;
@@ -10237,6 +10316,12 @@ async function seedRequester(){
     // Fresh entry — seed 5 empty lines so the layout looks like the form.
     for(let i=0;i<5;i++) addRow();
     updateTotals();
+    // Oct-28: render the Reason attach strip on a new SPRF too so the
+    // BDE can stage files before Submit (pending-local upload).
+    try {
+      renderAllAttachStrips({id: null, attachments: []},
+                            window._whoamiCache || {});
+    } catch (_e) {}
   }
 })();
 </script>
