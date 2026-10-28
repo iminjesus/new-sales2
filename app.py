@@ -6610,6 +6610,12 @@ def api_orders_list():
         # only" pill on orders_list — a value of 0 means Hayden /
         # Kenny can approve even if avg_dc_pct is ≥ 64 %.
         md_deep_by_id     = {i: 0 for i in ids}
+        # Oct-28 user ask: an order with ANY line whose plant_override
+        # differs from the customer's mapped plant is "inter-state"
+        # and must be shown with an "Inter-state" tag on the list
+        # Approver column.  Mapped plant = header.delivery_plant, or
+        # the state→plant map for older rows that pre-date it.
+        interstate_by_id  = {i: False for i in ids}
         # Per-order Requester + mod_log surfaced from payload_json so
         # the list page shows the Requester column and the Remark
         # column (edit history) without a separate fetch.
@@ -6626,6 +6632,15 @@ def api_orders_list():
                     requester_by_id[pr["id"]] = str(_hdr.get("requester_email") or "").strip()
                     _ml = pj.get("mod_log") or []
                     mod_log_by_id[pr["id"]] = _ml if isinstance(_ml, list) else []
+                    # Resolve the order's mapped plant for inter-state
+                    # detection.  Prefer header.delivery_plant; fall
+                    # back to state→plant for pre-plant rows.
+                    _mapped_plant = str(_hdr.get("delivery_plant") or "").strip().upper()
+                    if not _mapped_plant:
+                        _state = str(_hdr.get("ship_to_state") or _hdr.get("state") or "").strip().upper()
+                        _mapped_plant = {"NSW":"42R1","QLD":"42R0","VIC":"42R2",
+                                         "WA":"42R4","SA":"42R2","TAS":"42R2",
+                                         "NT":"42R4","ACT":"42R1"}.get(_state, "")
                     for ln in (pj.get("lines") or []):
                         tag = str(ln.get("_line") or ln.get("line") or "").upper()
                         brand = str(ln.get("brand") or "").strip().upper()
@@ -6667,6 +6682,13 @@ def api_orders_list():
                         if (agg == 0 and (mth > 0 or vol > 0 or adx > 0)
                                 and rowDC >= 64.0):
                             md_deep_by_id[pr["id"]] = md_deep_by_id.get(pr["id"], 0) + 1
+                        # Oct-28: inter-state flag — any line whose
+                        # plant_override is set AND differs from the
+                        # order's mapped plant marks the order inter-
+                        # state for the Approver cell on orders_list.
+                        _ov = str(ln.get("plant_override") or "").strip().upper()
+                        if _ov and _mapped_plant and _ov != _mapped_plant:
+                            interstate_by_id[pr["id"]] = True
             except Exception:
                 pass
         for r in rows:
@@ -6693,6 +6715,9 @@ def api_orders_list():
             # no current_amount (empty payload, e.g.).
             r["add_dc_pct"] = round(100.0 * (1 - tot_amt / cur_amt), 2) if cur_amt > 0 else 0.0
             r["md_deep_line_count"] = int(md_deep_by_id.get(r["id"], 0))
+            # Oct-28: inter-state flag for the list page's Approver
+            # column (adds an "Inter-state" tag on a second line).
+            r["has_interstate"] = bool(interstate_by_id.get(r["id"], False))
             # Surface the last price-editor's name (kept for
             # backwards-compat with any client that still reads it;
             # the list page moved edit history to the Remark col).

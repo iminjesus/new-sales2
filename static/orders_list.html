@@ -425,9 +425,13 @@ function renderRows(){
     if (fApp === "draft")    return nma === "temp";
     if (fApp === "rejected") return !r.deleted_at && (!!r.rejected_by_name || nma === "r");
     if (fApp === "approved") return !r.deleted_at && !!r.approved_by_name;
-    if (fApp === "pending")  return !r.deleted_at && nma === "y"
+    if (fApp === "pending")  return !r.deleted_at
+                                     && (nma === "y" || r.has_interstate)
                                      && !r.approved_by_name && !r.rejected_by_name;
-    if (fApp === "standard") return !r.deleted_at && !r.has_additional_dc && nma !== "temp"
+    // Oct-28: Standard filter excludes inter-state orders — those
+    // need approval, so they belong in Pending, not Standard.
+    if (fApp === "standard") return !r.deleted_at && !r.has_additional_dc
+                                     && !r.has_interstate && nma !== "temp"
                                      && !r.approved_by_name && !r.rejected_by_name;
     return true;
   };
@@ -486,7 +490,7 @@ function renderRows(){
         apprCell = `<span style="background:#e5e7eb;color:#334155;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">🗑 Deleted</span>`
                  + (r.deleted_by_name ? `<br><b style="color:#475569">${escapeHtml(r.deleted_by_name)}</b>` : "")
                  + (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
-      } else if (!r.has_additional_dc){
+      } else if (!r.has_additional_dc && !r.has_interstate){
         apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard</span>`;
       } else if (r.rejected_by_name){
         /* Rejection trumps approved_by_name (approve is cleared on
@@ -508,13 +512,16 @@ function renderRows(){
            backend scopes it), open it back up by clicking the row
            and the form re-hydrates in edit mode. */
         apprCell = `<span style="background:#e0f2fe;color:#075985;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">📝 Draft</span>`;
-      } else if (r.needs_mgmt_approval === "Y"){
+      } else if (r.needs_mgmt_approval === "Y" || r.has_interstate){
         /* MD-only pill only flips on when the backend counted at least
            one MD-qualifying line (non-aged, non-Standard-on-line,
            Proposed DC ≥ 64 %).  An order whose ≥ 64 % avg comes
            purely from aged rows or from lines that are Standard on
            their own stays yellow "Pending" — Hayden or Kenny can
-           approve. */
+           approve.
+           Oct-28: interstate-only orders (Standard-priced but with
+           an inter-state line) also land here — treated as a plain
+           pending that any approver can sign off on. */
         const isMd = (+r.md_deep_line_count || 0) > 0;
         const bg   = isMd ? "#fee2e2" : "#fef3c7";
         const fg   = isMd ? "#991b1b" : "#92400e";
@@ -523,6 +530,13 @@ function renderRows(){
         /* Edit history lives in the Remark column at the far right
            now, so the Pending / MD-only pill reads cleanly on its
            own. */
+      }
+      // Oct-28 user ask: ALWAYS stamp an "Inter-state" badge on the
+      // second line of the Approver cell for inter-state orders, so
+      // a reviewer scanning the list sees the delivery flag at a
+      // glance regardless of what the primary pill shows.
+      if (r.has_interstate && !r.deleted_at){
+        apprCell += `<br><span style="background:#fee2e2;color:#b91c1c;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em">Inter-state</span>`;
       }
       const rebPill = r.rebateable === "Y"
         ? `<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Y</span>`
@@ -610,7 +624,10 @@ function renderRows(){
          approver AND no rejector AND needs_mgmt_approval != "temp"
          (not a draft) AND not deleted. */
       const _nmaRow = String(r.needs_mgmt_approval || "").toLowerCase();
-      const _isAwaitingApproval = r.has_additional_dc
+      // Oct-28: interstate-only orders (Standard-priced but with any
+      // inter-state line) also awaiting approval, so highlight them
+      // in the pending-queue tint along with has_additional_dc rows.
+      const _isAwaitingApproval = (r.has_additional_dc || r.has_interstate)
                                   && !r.approved_by_name
                                   && !r.rejected_by_name
                                   && _nmaRow !== "temp"
@@ -749,12 +766,19 @@ function renderRows(){
     String(r.needs_mgmt_approval || "").toLowerCase() !== "temp"
   );
   const _msPendingAppr = _msTotal.filter(r =>
-    r.has_additional_dc && !r.approved_by_name && !r.rejected_by_name
+    (r.has_additional_dc || r.has_interstate)
+    && !r.approved_by_name && !r.rejected_by_name
   );
   const _msApprovedNoDO = _msTotal.filter(r =>
     String(r.status_sap || "") !== "Y"
     && !r.rejected_by_name
-    && (r.approved_by_name || !r.has_additional_dc)
+    && (r.approved_by_name
+        /* Oct-28: Standard rows that aren't also inter-state belong
+           to CS as "approved by default" (no MD gate).  Standard +
+           inter-state orders DO need an approver, so until a name
+           is on file they stay in the awaiting-approval bucket, not
+           here. */
+        || (!r.has_additional_dc && !r.has_interstate))
   );
   $("#msTotal")         .textContent = _msTotal.length;
   $("#msPendingAppr")   .textContent = _msPendingAppr.length;
