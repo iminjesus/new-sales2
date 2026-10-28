@@ -5633,6 +5633,15 @@ def _ensure_submitted_orders_table():
             # the DO in SAP.  Y/N char kept parallel to the other
             # flag columns on this table.
             ("customer_pickup",     "CHAR(1) NOT NULL DEFAULT 'N'"),
+            # Oct-28 user ask: approvers can leave a feedback message
+            # BEFORE approving — the requester gets an email with the
+            # feedback as the body.  Separate from approval_note (which
+            # is captured AT approval time) so an approver can leave
+            # feedback, request a revision, and come back to approve
+            # later.  Overwritten on each new feedback round.
+            ("approver_feedback",         "TEXT NULL"),
+            ("approver_feedback_by_name", "VARCHAR(60) NULL"),
+            ("approver_feedback_at",      "DATETIME NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -5672,9 +5681,55 @@ def _ensure_submitted_orders_table():
                 )
         except Exception as _e:
             print(f"[submitted_orders] widen needs_mgmt_approval: {_e}")
+        # Oct-28 user ask: new sprf_attachment table for files attached
+        # to the Reason/Approver-Feedback/Approve-note/Reject-note
+        # textareas on any SPRF.  One row per uploaded file.  The
+        # actual file bytes live on disk under SPRF_ATTACH_DIR; this
+        # table stores only metadata + the relative path.
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sprf_attachment (
+                    id                 BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    order_id           BIGINT UNSIGNED NOT NULL,
+                    uploaded_by_email  VARCHAR(120)   NOT NULL DEFAULT '',
+                    uploaded_by_name   VARCHAR(60)    NOT NULL DEFAULT '',
+                    original_filename  VARCHAR(255)   NOT NULL DEFAULT '',
+                    stored_path        VARCHAR(500)   NOT NULL DEFAULT '',
+                    mime_type          VARCHAR(100)   NOT NULL DEFAULT '',
+                    size_bytes         INT UNSIGNED   NOT NULL DEFAULT 0,
+                    source             VARCHAR(20)    NOT NULL DEFAULT 'reason',
+                    uploaded_at        DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    deleted_at         DATETIME       NULL,
+                    INDEX idx_sa_order (order_id),
+                    INDEX idx_sa_src   (order_id, source, deleted_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+        except Exception as _e:
+            print(f"[sprf_attachment] schema init failed: {_e}")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         print(f"[submitted_orders] schema init failed: {e}")
+
+# Oct-28 user ask: SPRF attachment file-store location.  Lives under
+# the app's static/ tree so Flask can send_from_directory it directly
+# with viewer-level permission checks on the ID side.  One subdir per
+# order_id keeps a 10 k-order deployment manageable.
+SPRF_ATTACH_DIR = os.path.join(BASE_DIR, "static", "sprf_attachments")
+SPRF_ATTACH_MAX_BYTES = 10 * 1024 * 1024            # 10 MB per file cap
+SPRF_ATTACH_ALLOWED_EXT = {
+    "pdf", "jpg", "jpeg", "png", "gif", "webp",
+    "xlsx", "xls", "csv",
+    "docx", "doc", "txt",
+    "msg", "eml",
+    "zip",
+}
+SPRF_ATTACH_SOURCES = {"reason", "approver_feedback",
+                        "approve", "reject"}
+
+def _sprf_attach_order_dir(order_id: int) -> str:
+    d = os.path.join(SPRF_ATTACH_DIR, str(int(order_id)))
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 def _next_order_no(cur, rebateable_flag: str, temp: bool = False) -> str:
@@ -6817,6 +6872,7 @@ def api_orders_detail(oid):
             "       sd_no, cs_comment, "
             "       sap_lock_by_email, sap_lock_at, "
             "       customer_pickup, "
+            "       approver_feedback, approver_feedback_by_name, approver_feedback_at, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -6825,7 +6881,8 @@ def api_orders_detail(oid):
             return jsonify({"error": "not found"}), 404
         for k in ("submitted_at", "status_changed_at",
                   "approved_a_at", "approved_b_at", "approved_c_at",
-                  "approved_at", "rejected_at", "deleted_at"):
+                  "approved_at", "rejected_at", "deleted_at",
+                  "approver_feedback_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -6883,6 +6940,35 @@ def api_orders_detail(oid):
         # reading row.cc_number directly from the response.
         for _k in ("cc_number", "cc_expiry", "cc_ccv"):
             row.pop(_k, None)
+        # Oct-28 user ask: surface the SPRF attachments inline on the
+        # detail payload so the hydrator can render the paperclip
+        # strip under each textarea without a second fetch.
+        row["attachments"] = []
+        try:
+            conn_a = get_connection(); cur_a = conn_a.cursor(dictionary=True)
+            try:
+                cur_a.execute(
+                    "SELECT id, uploaded_by_email, uploaded_by_name, "
+                    "       original_filename, mime_type, size_bytes, source, "
+                    "       uploaded_at "
+                    "FROM sprf_attachment "
+                    "WHERE order_id = %s AND deleted_at IS NULL "
+                    "ORDER BY uploaded_at",
+                    (oid,))
+                for a in (cur_a.fetchall() or []):
+                    ua = a.get("uploaded_at")
+                    if ua is not None:
+                        try: a["uploaded_at"] = ua.strftime("%Y-%m-%d %H:%M")
+                        except Exception: a["uploaded_at"] = str(ua)
+                    a["download_url"] = f"/api/orders/attachment/{a['id']}"
+                    row["attachments"].append(a)
+            finally:
+                try: cur_a.close()
+                except Exception: pass
+                try: conn_a.close()
+                except Exception: pass
+        except Exception as _e:
+            print(f"[detail] attachments load failed: {_e}")
         return jsonify(row)
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -8031,6 +8117,271 @@ def _count_words(s: str) -> int:
     """Simple whitespace-split word counter used to validate the
     reject note (2 words minimum, mirroring the mgmt_reason rule)."""
     return len([w for w in str(s or "").strip().split() if w])
+
+
+@app.post("/api/orders/detail/<int:oid>/feedback")
+def api_orders_feedback(oid):
+    """Oct-28 user ask: approvers can leave a feedback message BEFORE
+    approving.  This endpoint saves the text to submitted_orders'
+    approver_feedback / approver_feedback_by_name / approver_feedback_at
+    columns and emails the requester (ONLY — not CS, not other
+    approvers, not read-only reviewers) with the feedback as the body
+    plus a link back to the SPRF.
+
+    Who can call it: the three named approvers (Hayden / JunJong /
+    Kenny).  Body: { "feedback": "<text>" }.  Empty/whitespace text
+    is rejected with 400 so a stray click can't zero out an earlier
+    round."""
+    who_raw = (_bde_from_request() or "").strip().lower()
+    allowed = {e.lower() for e in MGMT_APPROVER_EMAILS}
+    if who_raw not in allowed:
+        return jsonify({"error": "only named approvers can leave feedback"}), 403
+    # Resolve the approver's display name from MGMT_APPROVER_EMAILS
+    # position (Hayden=A, JJ=B, Kenny=C) so the email body + stored
+    # column match the Approve-flow naming.
+    approver_name = {
+        MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+        MGMT_APPROVER_EMAILS[1].lower(): "JJ",
+        MGMT_APPROVER_EMAILS[2].lower(): "Kenny",
+    }.get(who_raw, who_raw.split("@")[0])
+    try:
+        body = request.get_json(silent=True) or {}
+    except Exception:
+        body = {}
+    text = str(body.get("feedback") or "").strip()[:4000]
+    if not text:
+        return jsonify({"error": "feedback text is required"}), 400
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "UPDATE submitted_orders "
+            "SET approver_feedback         = %s, "
+            "    approver_feedback_by_name = %s, "
+            "    approver_feedback_at      = NOW() "
+            "WHERE id = %s",
+            (text, approver_name, oid),
+        )
+        if cur.rowcount == 0:
+            return jsonify({"error": "order not found"}), 404
+        conn.commit()
+        cur.execute(
+            "SELECT order_no, submitted_by_email, payload_json "
+            "FROM submitted_orders WHERE id = %s LIMIT 1", (oid,))
+        row = cur.fetchone() or {}
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    # Email ONLY the requester — no cc'd approvers or CS per the
+    # user's spec.  Requester = header.requester_email on the
+    # payload, falling back to submitted_by_email.
+    try:
+        import json as _json
+        pj = _json.loads(row.get("payload_json") or "{}")
+        hdr = pj.get("header") or {}
+        requester = (hdr.get("requester_email") or row.get("submitted_by_email") or "").strip()
+    except Exception:
+        requester = (row.get("submitted_by_email") or "").strip()
+    if requester:
+        order_no = str(row.get("order_no") or f"#{oid}")
+        subject  = f"[SPRF {order_no}] Feedback from {approver_name}"
+        link     = f"{PUBLIC_BASE_URL.rstrip('/')}/orders?open={oid}" \
+                   if "PUBLIC_BASE_URL" in globals() else f"/orders?open={oid}"
+        esc = lambda s: str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+        html = (
+            f"<p>Hi,</p>"
+            f"<p>You have received feedback from <b>{esc(approver_name)}</b> "
+            f"on SPRF <b>{esc(order_no)}</b> before approval:</p>"
+            f"<blockquote style='border-left:3px solid #0ea5e9;background:#f0f9ff;"
+            f"padding:10px 14px;color:#0c4a6e;white-space:pre-wrap;font-family:inherit'>"
+            f"{esc(text)}</blockquote>"
+            f"<p>Open the SPRF to review and respond: "
+            f"<a href='{esc(link)}'>{esc(order_no)}</a></p>"
+            f"<p style='color:#64748b;font-size:11px'>This message was sent only to you "
+            f"(the requester). The approver has NOT yet signed off — update the SPRF "
+            f"as needed and the approver will revisit.</p>"
+        )
+        try:
+            _send_mail_async([requester], [], subject, html)
+        except Exception as _e:
+            print(f"[feedback] mail send failed: {_e}")
+    return jsonify({
+        "ok": True,
+        "approver_feedback":         text,
+        "approver_feedback_by_name": approver_name,
+    })
+
+
+@app.post("/api/orders/detail/<int:oid>/attach")
+def api_orders_attach(oid):
+    """Multipart file upload for an SPRF attachment.  Field 'file' is
+    the uploaded blob; optional form field 'source' names the textarea
+    it belongs to ('reason' | 'approver_feedback' | 'approve' | 'reject').
+    Caller must be able to see this order (same scope as detail)."""
+    who = (_bde_from_request() or "").strip().lower()
+    if not who:
+        return jsonify({"error": "login required"}), 403
+    # Order existence check — reject early if the order is gone.
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT id FROM submitted_orders WHERE id = %s LIMIT 1", (oid,))
+        if not cur.fetchone():
+            return jsonify({"error": "order not found"}), 404
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    f = request.files.get("file")
+    if not f or not getattr(f, "filename", ""):
+        return jsonify({"error": "no file in request (expect multipart field 'file')"}), 400
+    source = str(request.form.get("source") or "reason").strip().lower()
+    if source not in SPRF_ATTACH_SOURCES:
+        source = "reason"
+    orig_name = os.path.basename(str(f.filename))
+    ext = (orig_name.rsplit(".", 1)[-1] if "." in orig_name else "").lower()
+    if ext not in SPRF_ATTACH_ALLOWED_EXT:
+        return jsonify({
+            "error": f"file type '.{ext}' not allowed. Allowed: "
+                     + ", ".join(sorted(SPRF_ATTACH_ALLOWED_EXT))
+        }), 400
+    # Sanitize filename to a safe form (strip anything but alnum . _ -).
+    safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in orig_name)[:120] or f"file.{ext}"
+    # Timestamp-prefix so two uploads of the same name on the same
+    # order don't collide; the original name is also stored in the DB
+    # so the UI shows it.
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+    stored_name = f"{stamp}_{safe}"
+    dest_dir  = _sprf_attach_order_dir(oid)
+    dest_full = os.path.join(dest_dir, stored_name)
+    # Save then size-check — reject (and delete) oversize so the DB
+    # never records a file that violates the cap.
+    try:
+        f.save(dest_full)
+    except Exception as e:
+        return jsonify({"error": f"save failed: {e}"}), 500
+    try:
+        size = os.path.getsize(dest_full)
+    except Exception:
+        size = 0
+    if size > SPRF_ATTACH_MAX_BYTES:
+        try: os.unlink(dest_full)
+        except Exception: pass
+        return jsonify({"error": f"file is {size // 1024} KB; cap is "
+                                 f"{SPRF_ATTACH_MAX_BYTES // 1024} KB"}), 400
+    mime = str(getattr(f, "mimetype", "") or "application/octet-stream")[:100]
+    # Resolve uploader display name — prefer the ID→name maps the
+    # app already uses; fall back to the local part of the email.
+    uploader_name = (
+        PRICE_EDITOR_EMAILS.get(who)
+        or {
+            MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+            MGMT_APPROVER_EMAILS[1].lower(): "JJ",
+            MGMT_APPROVER_EMAILS[2].lower(): "Kenny",
+        }.get(who)
+        or who.split("@")[0]
+    )
+    rel_path = os.path.relpath(dest_full, SPRF_ATTACH_DIR)
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO sprf_attachment "
+            "  (order_id, uploaded_by_email, uploaded_by_name, "
+            "   original_filename, stored_path, mime_type, size_bytes, source) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (oid, who, uploader_name, orig_name, rel_path, mime, size, source),
+        )
+        att_id = cur.lastrowid
+        conn.commit()
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    return jsonify({
+        "ok": True,
+        "attachment": {
+            "id":                att_id,
+            "original_filename": orig_name,
+            "mime_type":         mime,
+            "size_bytes":        size,
+            "source":            source,
+            "uploaded_by_name":  uploader_name,
+            "uploaded_at":       datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "download_url":      f"/api/orders/attachment/{att_id}",
+        },
+    })
+
+
+@app.get("/api/orders/attachment/<int:att_id>")
+def api_orders_attachment_download(att_id):
+    """Download an uploaded SPRF attachment.  Viewer gating mirrors
+    api_orders_detail (anyone who can see the order can see its
+    attachments).  Soft-deleted rows return 404."""
+    who = (_bde_from_request() or "").strip().lower()
+    if not who:
+        return jsonify({"error": "login required"}), 403
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT * FROM sprf_attachment WHERE id = %s AND deleted_at IS NULL LIMIT 1",
+            (att_id,))
+        att = cur.fetchone()
+        if not att:
+            return jsonify({"error": "attachment not found"}), 404
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    stored_path = str(att.get("stored_path") or "")
+    full = os.path.normpath(os.path.join(SPRF_ATTACH_DIR, stored_path))
+    # Harden against directory traversal — the resolved path must
+    # stay under SPRF_ATTACH_DIR.
+    if not full.startswith(os.path.normpath(SPRF_ATTACH_DIR) + os.sep):
+        return jsonify({"error": "invalid attachment path"}), 400
+    if not os.path.exists(full):
+        return jsonify({"error": "file missing on disk"}), 404
+    return send_file(
+        full,
+        mimetype=str(att.get("mime_type") or "application/octet-stream"),
+        as_attachment=True,
+        download_name=str(att.get("original_filename") or "download.bin"),
+    )
+
+
+@app.post("/api/orders/attachment/<int:att_id>/delete")
+def api_orders_attachment_delete(att_id):
+    """Soft-delete an attachment.  Only the uploader or an ALL-admin
+    can call this.  Leaves the file on disk so an audit can still
+    recover it; sets deleted_at so GET returns 404 and the detail
+    endpoint stops listing it."""
+    who = (_bde_from_request() or "").strip().lower()
+    if not who:
+        return jsonify({"error": "login required"}), 403
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT uploaded_by_email FROM sprf_attachment "
+            "WHERE id = %s AND deleted_at IS NULL LIMIT 1", (att_id,))
+        att = cur.fetchone()
+        if not att:
+            return jsonify({"error": "attachment not found"}), 404
+        uploader = str(att.get("uploaded_by_email") or "").lower()
+        is_admin = (who in DEV_ADMIN_EMAILS)
+        if who != uploader and not is_admin:
+            return jsonify({"error": "only the uploader or admin can delete"}), 403
+        cur.execute(
+            "UPDATE sprf_attachment SET deleted_at = NOW() WHERE id = %s",
+            (att_id,))
+        conn.commit()
+    finally:
+        try: cur.close()
+        except Exception: pass
+        try: conn.close()
+        except Exception: pass
+    return jsonify({"ok": True})
 
 
 @app.post("/api/orders/detail/<int:oid>/reject")
