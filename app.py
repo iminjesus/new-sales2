@@ -4843,14 +4843,20 @@ def api_orders_additional_dc():
         # matches this customer's group) works.
         #
         # Oct-28 user ask: for ATP customers the promo tag wasn't
-        # appearing on the Remark cell.  Root cause: this used
-        # LIMIT 1 which could land on a customer row whose
-        # sold_to_group is blank (one sold_to typically has several
-        # customer rows, one per ship_to; a stray ship-only row with
-        # a blank group would win and sink the whole lookup).
-        # Switch to MAX(NULLIF(TRIM(…))) — same pattern as
-        # dc_basic_customer's group resolver above — so a non-blank
-        # group always wins even when a sibling row carries ''.
+        # appearing on the Remark cell.  Fix is a two-stage group
+        # resolution so a blank / missing sold_to_group on the
+        # `customer` table doesn't sink the whole promo lookup:
+        #
+        #   stage 1 — customer.sold_to_group via MAX(NULLIF(TRIM(..)))
+        #             (skips rows that stored '' — one sold_to has
+        #             several customer rows, one per ship_to, and a
+        #             stray ship-only row sometimes carries '').
+        #   stage 2 — if stage 1 came back empty, pull customer_grp
+        #             from dc_basic_customer where bill_to_partner =
+        #             sold_to.  That table carries the group column
+        #             the Hankook feed populates for every active
+        #             customer, so it's a reliable backstop when the
+        #             customer master didn't ship the group.
         group_code = ""
         try:
             cur.execute(
@@ -4863,6 +4869,29 @@ def api_orders_additional_dc():
                 group_code = (gr.get("grp") or "").strip()
         except Exception:
             pass
+        if not group_code:
+            # Fallback: try the group column on dc_basic_customer.  The
+            # column name varies by deployment (customer_grp /
+            # customer_group / sold_to_group / …), so probe the first
+            # one that exists.
+            try:
+                bc_cols = _list_columns(cur, "dc_basic_customer")
+                for _grp_col in ("customer_grp", "customer_group",
+                                 "sold_to_group", "bill_to_group",
+                                 "cust_grp", "cust_group"):
+                    if _grp_col in bc_cols:
+                        cur.execute(
+                            f"SELECT MAX(NULLIF(TRIM({_grp_col}), '')) AS grp "
+                            f"FROM dc_basic_customer "
+                            f"WHERE bill_to_partner = %s",
+                            (sold_to,),
+                        )
+                        gr = cur.fetchone()
+                        if gr and (gr.get("grp") or "").strip():
+                            group_code = (gr.get("grp") or "").strip()
+                            break
+            except Exception:
+                pass
         if debug:
             out["_debug"]["group_code"] = group_code
 
