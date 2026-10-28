@@ -6729,6 +6729,16 @@ def api_orders_list():
                         _ov = str(ln.get("plant_override") or "").strip().upper()
                         if _ov and _mapped_plant and _ov != _mapped_plant:
                             interstate_by_id[pr["id"]] = True
+                        # Fallback for orders saved before plant_override
+                        # was persisted (or orders whose payload lost it
+                        # on a round-trip): the frontend writes
+                        # "Interstate delivery Requested" to the Remark
+                        # cell whenever a line is inter-state.  Scan the
+                        # saved remark text so an approved / older order
+                        # still shows the Inter-state tag on the list.
+                        _rem = str(ln.get("remark") or "")
+                        if "interstate delivery" in _rem.lower():
+                            interstate_by_id[pr["id"]] = True
             except Exception:
                 pass
         for r in rows:
