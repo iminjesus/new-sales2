@@ -7484,7 +7484,14 @@ function serializeOrder(){
     // screen when it was signed off, even though fillStockForRow is
     // frozen out on approved rows.
     if (tr.dataset.stockRt)      row._stock_rt      = tr.dataset.stockRt;
-    if (hasAny) lines.push(row);
+    // Oct-28 user ask: an empty-M-Code row — the placeholder "M-Code"
+    // stub rendered on an unused line — must NEVER be persisted,
+    // even if auto-populated cells like plant_override="42R1" or a
+    // stock "0" trip the hasAny check.  m_code is the row's primary
+    // key: no m_code = no line.  Keeps the saved payload clean so
+    // the submitted order carries only lines the BDE actually filled.
+    const _rowMCode = String(row.m_code || "").trim();
+    if (hasAny && _rowMCode) lines.push(row);
   });
 
   const totals = {
@@ -8086,6 +8093,17 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (agingVal > 0) {
       tr.classList.add("aged-row");
       lockAgedRow(tr);
+    }
+    // Oct-28 user ask: non-frozen hydrated rows showed stale "0"
+    // in the stock cells while the popover (dataset.stockRt) showed
+    // live values.  Cause: hydrate painted the saved stock_nsw/qld/
+    // vic/wa values (which could be "0" at save time) and never
+    // re-fetched live stock.  Fire a background refresh so the
+    // cells reflect what's actually orderable right now — but ONLY
+    // when the order is NOT frozen (SAP=Y orders must keep the
+    // snapshot the operator signed off on).
+    if (!_freezeStock && _mc) {
+      try { fillStockForRow(tr, _mc); } catch (_e) {}
     }
   });
   // 3. Totals — seed the persisted snapshot first so freight_flag /
