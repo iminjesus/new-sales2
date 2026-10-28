@@ -4841,15 +4841,26 @@ def api_orders_additional_dc():
 
         # Resolve customer group so tier-fallback (row.customer_grp
         # matches this customer's group) works.
+        #
+        # Oct-28 user ask: for ATP customers the promo tag wasn't
+        # appearing on the Remark cell.  Root cause: this used
+        # LIMIT 1 which could land on a customer row whose
+        # sold_to_group is blank (one sold_to typically has several
+        # customer rows, one per ship_to; a stray ship-only row with
+        # a blank group would win and sink the whole lookup).
+        # Switch to MAX(NULLIF(TRIM(…))) — same pattern as
+        # dc_basic_customer's group resolver above — so a non-blank
+        # group always wins even when a sibling row carries ''.
         group_code = ""
         try:
             cur.execute(
-                "SELECT sold_to_group FROM customer WHERE sold_to = %s LIMIT 1",
+                "SELECT MAX(NULLIF(TRIM(sold_to_group), '')) AS grp "
+                "FROM customer WHERE sold_to = %s",
                 (sold_to,),
             )
             gr = cur.fetchone()
             if gr:
-                group_code = (gr.get("sold_to_group") or "").strip()
+                group_code = (gr.get("grp") or "").strip()
         except Exception:
             pass
         if debug:
