@@ -8726,7 +8726,15 @@ function wireApprovalPanel(order, who){
 function wireToolbarApproveBtn(btn, order, who){
   if (!btn) return;
   const hide = () => { btn.hidden = true; };
-  if (order.needs_mgmt_approval !== "Y")  return hide();
+  // Oct-28 user ask: inter-state orders saved before the approval flow
+  // was wired carried needs_mgmt_approval='N' on disk, so the Approve
+  // button stayed hidden and Kenny could not click it.  Treat an
+  // inter-state row (from the live form OR the backend-computed
+  // has_interstate flag) as "needs approval" for button visibility.
+  const _anyInterstate = !!window._orderHasInterstate
+    || !!order.has_interstate
+    || $$("#linesBody tr").some(tr => typeof _isInterstateLine === "function" && _isInterstateLine(tr));
+  if (order.needs_mgmt_approval !== "Y" && !_anyInterstate) return hide();
   if (order.approved_by_name)             return hide();
   const myMissing = (who.is_approver_a && order.approved_a !== "Y")
                  || (who.is_approver_b && order.approved_b !== "Y")

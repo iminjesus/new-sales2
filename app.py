@@ -7902,6 +7902,36 @@ def api_orders_approve(oid):
                 "md_deep_line_count": md_lines,
                 "avg_dc_pct":         avg_dc,
             }), 403
+        # Oct-28 user ask: inter-state orders saved before the approval
+        # flow was wired carried needs_mgmt_approval='N' on disk, so
+        # the WHERE needs_mgmt_approval='Y' guard rejected Kenny's
+        # Approve POST with a 404 even though the UI showed the
+        # inter-state banner.  Detect inter-state from the payload
+        # (plant_override differs from mapped) and allow the approve
+        # when either gate is open.
+        _has_interstate_now = False
+        try:
+            _hdr = (pj or {}).get("header") or {}
+            _mapped_plant = str(_hdr.get("delivery_plant") or "").strip().upper()
+            if not _mapped_plant:
+                _state = str(_hdr.get("ship_to_state") or _hdr.get("state") or "").strip().upper()
+                _mapped_plant = {"NSW":"42R1","QLD":"42R0","VIC":"42R2",
+                                 "WA":"42R4","SA":"42R2","TAS":"42R2",
+                                 "NT":"42R4","ACT":"42R1"}.get(_state, "")
+            for ln in ((pj or {}).get("lines") or []):
+                _ov = str(ln.get("plant_override") or "").strip().upper()
+                if _ov and _mapped_plant and _ov != _mapped_plant:
+                    _has_interstate_now = True
+                    break
+                if "interstate delivery" in str(ln.get("remark") or "").lower():
+                    _has_interstate_now = True
+                    break
+        except Exception:
+            _has_interstate_now = False
+        # Also flip the stored needs_mgmt_approval to 'Y' in the same
+        # UPDATE for inter-state saved-N rows so follow-up reads see
+        # a consistent state.
+        _nma_set = ", needs_mgmt_approval = 'Y'" if _has_interstate_now else ""
         # Set the named slot AND, if no earlier approver has locked
         # the order yet, record this caller as the official
         # approved_by.  A COALESCE-guarded UPDATE means the SECOND
@@ -7913,8 +7943,10 @@ def api_orders_approve(oid):
             f"  approved_by_name  = COALESCE(approved_by_name,  %s), "
             f"  approved_at       = COALESCE(approved_at,       NOW()), "
             f"  approval_note     = COALESCE(approval_note,     %s) "
-            f"WHERE id = %s AND needs_mgmt_approval = 'Y'",
-            (who, approver_name, approval_note, oid),
+            f"  {_nma_set} "
+            f"WHERE id = %s "
+            f"  AND (needs_mgmt_approval = 'Y' OR %s = 1)",
+            (who, approver_name, approval_note, oid, 1 if _has_interstate_now else 0),
         )
         if cur.rowcount == 0:
             return jsonify({"error": "not found or doesn't need approval"}), 404
