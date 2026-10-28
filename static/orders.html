@@ -5811,6 +5811,21 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
       ${_row("At dock",           b.at_dock,  "")}
       ${_row("On water",          b.on_water, "")}
       ${_row("Factory",           b.factory,  "")}
+      <!-- Oct-28 user ask: show the sum of the three in-transit
+           lines at the top of the pipeline block, bolded, so the
+           reader sees the total coming through without having to
+           add it in their head.  Separate from the "Incoming
+           schedule Total" (which only counts rows with an ETA
+           date on file) — this one is the raw stock_rt rollup. -->
+      <div style="display:flex;justify-content:space-between;align-items:baseline;
+                  padding:4px 0 2px;border-top:1px solid #cbd5e1;margin-top:2px;">
+        <span style="color:#334155;font-weight:700">Pipeline Total
+          <small style="color:#94a3b8;font-weight:400">(at dock + on water + factory)</small>
+        </span>
+        <b style="font-variant-numeric:tabular-nums;color:#166534;font-size:13px">
+          ${fmtQty((+b.at_dock||0) + (+b.on_water||0) + (+b.factory||0))}
+        </b>
+      </div>
     </div>
     <div id="_stockRtCal"></div>
     <div style="margin-top:6px;font-size:10.5px;color:#94a3b8">
