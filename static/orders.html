@@ -3585,6 +3585,18 @@ function _applyRemarkFilterToAll(){
 function setRemark(rowEl, text){
   const el = rowEl?.querySelector('[data-col="remark"]');
   if (!el) return;
+  // Oct-28 diagnostic: log every setRemark call so a mysteriously
+  // cleared Remark is traceable to the exact caller.  Includes a
+  // short stack snippet so we know which function wrote this.
+  try {
+    const _mc = rowEl?.querySelector('[data-col="m_code"]')?.value || "?";
+    const _was = (rowEl?.dataset?.remarkFull || "").split("\n")[0];
+    const _st  = (new Error()).stack?.split("\n")[2]?.trim() || "";
+    console.log("[setRemark] " + _mc,
+      "was=" + JSON.stringify(_was),
+      "→   =" + JSON.stringify(String(text || "").split("\n")[0]),
+      _st);
+  } catch (_e) {}
   // Oct-27-pm user ask: preserving every piece of context on the
   // Remark cell — Aging status, promo tag, Tempe/JAX/BJ chips, etc.
   // Rule:
