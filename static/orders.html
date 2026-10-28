@@ -2806,8 +2806,23 @@ function applyCustomer(row, kind){
   // Oct-28: refresh interstate state on every existing row — the
   // customer's mapped plant may have just changed, so what counted
   // as "interstate" a moment ago might not any more (and vice versa).
+  // When a row's current plant selection is NOT inter-state and the
+  // mapped plant just shifted, update the select so it keeps showing
+  // the "home" plant.  Rows whose BDE explicitly picked a different
+  // plant (currently interstate against the OLD mapped) are left as
+  // the explicit value — re-evaluated here against the NEW mapped.
   try {
+    const _mapped = String(window._customerPlant || "").toUpperCase();
     $$("#linesBody tr").forEach(tr => {
+      const sel = tr.querySelector('[data-col="plant_override"]');
+      if (sel && _mapped && [...sel.options].some(o => o.value === _mapped)) {
+        // Did the row currently track the previous mapped (dataset
+        // flag) OR has it never been touched (no dataset flag)?
+        // Either way, snap to the new mapped plant.
+        if (!tr.dataset.interstate || tr.dataset.interstate !== "1") {
+          sel.value = _mapped;
+        }
+      }
       _applyInterstateHighlightToRow(tr);
       _syncInterstateRemarkOnRow(tr);
       const td = tr.querySelector('td[data-cell-col="plant_override"]');
@@ -5271,12 +5286,12 @@ function newRow(){
        price cells above). */
     {c:"proposed_dc",    cls:"pct-cell editable"},
     /* Oct-28: per-line Delivery Plant override.  Rendered as a <select>
-       so the BDE can pick a different plant from the customer's
-       mapped one.  _wireRowListeners picks it up and runs the
-       interstate flag + Remark write when it changes. */
+       pre-filled with the customer's mapped plant (addRow / applyCustomer
+       drops the value in).  Picking a different code marks the line as
+       interstate.  No "mapped" placeholder — the user wants the plant
+       code itself in the cell. */
     {c:"plant_override", cls:"plant-override-cell", kind:"select",
-      options:[["", "— mapped —"],
-               ["42R1","42R1 NSW"],
+      options:[["42R1","42R1 NSW"],
                ["42R0","42R0 QLD"],
                ["42R2","42R2 VIC"],
                ["42R4","42R4 WA"]]},
@@ -5797,22 +5812,21 @@ function newRow(){
     if (!col || col === "qty") return;
     ensureQtyDefault(tr);
   });
-  // Oct-28 user ask: Plant override triggers inter-state flag.  On
-  // change, mark the chosen stock cell red, add "Interstate delivery
-  // Requested" to Remark, and nudge the order-level banner.
+  // Oct-28 user ask: Plant override triggers inter-state flag.  Pre-
+  // fill the select with the customer's mapped plant so the cell is
+  // never blank, then let the BDE pick a different plant to flag the
+  // line as inter-state.
   const _plantSel = tr.querySelector('[data-col="plant_override"]');
   if (_plantSel) {
-    // Default to the customer's mapped plant on row-add.
+    // Pre-fill with mapped plant on row-add.
     const _mapped = String(window._customerPlant || "").toUpperCase();
-    if (_mapped && _STATE_PLANT_MAP /* implicit presence */ ) {
-      // leave empty so "mapped" is the default and no interstate
-      // flag fires until the user actively picks a different plant.
+    if (_mapped && [..._plantSel.options].some(o => o.value === _mapped)) {
+      _plantSel.value = _mapped;
     }
     _plantSel.addEventListener("change", () => {
       _applyInterstateHighlightToRow(tr);
       _syncInterstateRemarkOnRow(tr);
       _recomputeInterstateOrderFlag();
-      // visual "changed" badge on the select itself
       const td = _plantSel.closest("td");
       if (td) td.classList.toggle("changed", _isInterstateLine(tr));
     });
@@ -7292,8 +7306,12 @@ const _INTERSTATE_REMARK_TAG = "Interstate delivery Requested";
 function _isInterstateLine(tr){
   if (!tr) return false;
   const chosen = (tr.querySelector('[data-col="plant_override"]')?.value || "").trim().toUpperCase();
-  if (!chosen) return false;
   const mapped = String(window._customerPlant || "").toUpperCase();
+  // Can't tell what's interstate until we know the mapped plant.
+  if (!mapped) return false;
+  // Empty chosen (shouldn't happen now the select is pre-filled) =
+  // not interstate.
+  if (!chosen) return false;
   return chosen !== mapped;
 }
 
@@ -7937,6 +7955,18 @@ async function hydrateSubmittedOrder(oid, editMode){
         const a = +parts[0] || 0;
         const u = parts.length > 1 ? (+parts[1] || 0) : a;
         _setStockCell(el, a, u);
+        return;
+      }
+      // Oct-28: plant_override hydrates from saved value.  Rows
+      // saved before this column existed (ln.plant_override empty)
+      // default to the mapped plant so they still show a code.
+      if (c === "plant_override") {
+        const saved = String(ln[c] ?? "").trim().toUpperCase();
+        const mapped = String(window._customerPlant || "").toUpperCase();
+        const target = saved || mapped;
+        if (target && [...el.options].some(o => o.value === target)) {
+          el.value = target;
+        }
         return;
       }
       el.value = ln[c] ?? "";
