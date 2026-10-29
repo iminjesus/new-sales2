@@ -365,11 +365,12 @@ def scrape_rows(driver):
             # Remove brand prefix (case-insensitive)
             if brand and desc.lower().startswith(brand.lower()):
                 desc = desc[len(brand):].strip()
-            # Remove size prefix e.g. "175/65R14" or "185R14" — Oct-23:
-            # allow decimal rim diameters (265/70R19.5, 11R22.5, …) so
-            # the .5 isn't left dangling on the description.
-            desc = re.sub(r'^\d{3}/\d{2}[A-Za-z]\d{2}(?:\.\d)?\s*', '', desc).strip()
-            desc = re.sub(r'^\d{3}[A-Za-z]\d{2}(?:\.\d)?\s*', '', desc).strip()
+            # Oct-29: single source of truth for size-prefix stripping +
+            # trailing ^^^ cleanup lives in tempeweborder_shared.  Covers
+            # P-metric / LT-metric / flotation / NHS / 11R22.5 that the
+            # old inline regexes missed.
+            from tempeweborder_shared import clean_description as _cd
+            desc = _cd(desc)
 
             if not desc:
                 desc = full_desc  # fallback to full text if stripping removed everything
@@ -420,6 +421,16 @@ def main():
     try:
         wait_for_manual_login(driver)
 
+        # Oct-29 user ask: dedupe at WRITE time so the consolidate step
+        # doesn't have to collapse the same rows later.  Across different
+        # SEARCH_QUERIES the same SKU occasionally comes back (because
+        # the width/aspect/rim query is just a search hint, not a filter),
+        # and this guard drops the repeats inside a single crawl.  Across
+        # crawls (different files) consolidate_tempeweborder handles it.
+        from tempeweborder_shared import make_sku_key as _mkey
+        seen_keys: set[tuple[str, str, str]] = set()
+        dup_dropped = 0
+
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             # Oct-23 user ask: capture STOCK column (right of PRICE)
@@ -439,12 +450,20 @@ def main():
                 while True:
                     print(f"  -- Page {page} --")
                     rows = scrape_rows(driver)
+                    written_this_page = 0
                     for r in rows:
+                        key = _mkey(size, r["brand"], r["description"])
+                        if key in seen_keys:
+                            dup_dropped += 1
+                            continue
+                        seen_keys.add(key)
                         writer.writerow([size, r["brand"], r["description"],
                                          r["cost"], r["price"],
                                          r.get("stock", "")])
+                        written_this_page += 1
                     f.flush()
-                    print(f"  {len(rows)} rows written")
+                    print(f"  {written_this_page} rows written "
+                          f"({len(rows) - written_this_page} duplicate(s) skipped)")
 
                     if has_next_page(driver):
                         go_next_page(driver, wait)
@@ -454,6 +473,9 @@ def main():
                 prog.step(_si)
 
         prog.finish()
+        if dup_dropped:
+            print(f"\n[info] in-file dedup dropped {dup_dropped} duplicate "
+                  f"row(s) before writing to {OUTPUT_FILE}")
         print(f"\nDone. Saved to: {OUTPUT_FILE}")
 
     finally:

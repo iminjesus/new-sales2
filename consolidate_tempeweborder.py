@@ -28,9 +28,22 @@ import argparse
 import csv
 import os
 import re
+import shutil
 import sys
 from collections import defaultdict
 from datetime import date
+
+# Oct-29: shared helpers so this script, tempeweborder_crawling.py and
+# tempeweborder_crawling_extend.py all use the same SIZE regex +
+# description normalisation.  Replaces the duplicated inline logic that
+# used to live here and would drift from the crawlers over time.
+from tempeweborder_shared import (
+    extract_size_from_desc,
+    clean_description,
+    norm_desc_for_dedup,
+    make_sku_key,
+    recover_size_if_blank,
+)
 
 # Oct-29: Windows cp949/cp1252 chokes on any non-ASCII in print()
 # or argparse's --help output.  Reconfigure stdout/stderr to utf-8
@@ -75,45 +88,103 @@ def _norm_cell(v) -> str:
     return s
 
 
-# Oct-29 user ask: some rows in the source Tempeweborder CSVs ship with
-# the SIZE column blank and the actual tyre size embedded in the
-# DESCRIPTION text (e.g. "P235/60R15 98S RADIAL T/A RWL",
-# "35x12.50R17LT 121Q MUD TERRAIN T/A KM3", "28X10.00R14 NHS").
-# Extract whatever recognisable size we can find at or near the start
-# of the description so the consolidated workbook doesn't drop those
-# SKUs under a blank SIZE row.
-#
-# Patterns covered:
-#   * Metric:         235/60R15, 315/70R17, 275/55R20
-#   * P-metric:       P235/60R15 (passenger)
-#   * LT-metric:      LT285/75R16 (light truck)
-#   * Flotation:      35x12.50R17LT, 31X10.50R15, 35x12.5R17
-#   * NHS flotation:  28X10.00R14 NHS, 215/70R15 NHS
-_SIZE_FROM_DESC_RX = re.compile(
-    r"\b((?:LT|P)?\d{2,3}(?:/\d{2}R\d{1,2}|[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2})(?:LT)?)\b",
-    re.IGNORECASE,
-)
+# Oct-29: SIZE recovery + description normalisation moved to the shared
+# module (tempeweborder_shared) so the crawlers and this script always
+# agree on what a valid tyre-size shape is.  Local aliases keep this
+# file's existing call sites readable.
+_size_from_desc = extract_size_from_desc
+_norm_desc_for_key = norm_desc_for_dedup
 
 
-def _size_from_desc(desc: str) -> str:
-    """Return the first tyre-size token found in `desc` (upper-cased),
-    or "" when nothing matches.  Prefers the earliest match so a
-    description that happens to carry a second numeric token later
-    (e.g. "121Q MUD TERRAIN") doesn't win over the real size."""
-    m = _SIZE_FROM_DESC_RX.search(str(desc or ""))
-    return m.group(1).upper() if m else ""
+def repair_csv_in_place(path: str) -> dict:
+    """Oct-29 user ask: rewrite an existing Tempeweborder_*.csv file in
+    place so that:
 
+      (1) rows whose SIZE column is blank get a SIZE recovered from
+          the DESCRIPTION text when a recognisable tyre-size token
+          is present at the head (P-metric, LT-metric, flotation,
+          NHS, 11R22.5, plain metric).
+      (2) DESCRIPTION has its trailing '^^^' stripped and - when SIZE
+          now carries the token - the leading SIZE prefix is removed
+          so the two columns don't duplicate each other.
+      (3) rows that collapse to the same (SIZE_UP, BRAND_UP,
+          DESC_NORM) key within one file are deduped (first row wins).
 
-def _norm_desc_for_key(desc: str) -> str:
-    """Normalise a DESCRIPTION cell for de-duplication: collapse runs
-    of whitespace, strip trailing '^^^'-style marker, upper-case.
-    This is key-side only; the DISPLAY description keeps its original
-    casing + punctuation."""
-    s = str(desc or "").strip()
-    # Drop the stray "^^^" marker the source occasionally appends.
-    s = re.sub(r"\^+\s*$", "", s).strip()
-    s = re.sub(r"\s+", " ", s)
-    return s.upper()
+    The original file is copied to <path>.bak on the first repair.
+    Subsequent repairs do NOT clobber the backup - the first-ever
+    version stays recoverable.  Returns a stats dict for the caller
+    to print."""
+    stats = {"rows_in": 0, "rows_out": 0, "size_recovered": 0,
+             "duplicates_dropped": 0, "desc_cleaned": 0}
+    with open(path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    if not rows:
+        return stats
+    header = rows[0]
+    body   = rows[1:]
+    # Build a case-insensitive column lookup so a CSV whose header
+    # uses "Size" vs "SIZE" vs "size" still works.
+    hdr_lower = [h.strip().lower() for h in header]
+    def _idx(name_lower, fallback_names=()):
+        for cand in (name_lower,) + tuple(fallback_names):
+            if cand in hdr_lower:
+                return hdr_lower.index(cand)
+        return -1
+    i_size = _idx("size")
+    i_brand = _idx("brand")
+    i_desc = _idx("description")
+    if i_size < 0 or i_brand < 0 or i_desc < 0:
+        print(f"[repair:skip] {os.path.basename(path)} - missing SIZE / "
+              f"brand / DESCRIPTION header column", file=sys.stderr)
+        return stats
+    seen_keys: set[tuple[str, str, str]] = set()
+    kept_rows: list[list[str]] = []
+    for r in body:
+        if not r or all(not str(c or "").strip() for c in r):
+            continue
+        # Pad short rows so column indexing is safe.
+        while len(r) < len(header):
+            r.append("")
+        stats["rows_in"] += 1
+        size_raw  = str(r[i_size]  or "").strip()
+        brand_raw = str(r[i_brand] or "").strip()
+        desc_raw  = str(r[i_desc]  or "").strip()
+        # (1) Recover size when blank.
+        size, recovered = recover_size_if_blank(size_raw, desc_raw)
+        if recovered:
+            stats["size_recovered"] += 1
+        # (2) Clean description.  We strip the leading SIZE prefix
+        #     only when the row now has a non-empty SIZE - otherwise
+        #     the SIZE token is the only identifier the DESCRIPTION
+        #     carries and stripping it would lose information.
+        new_desc = clean_description(desc_raw, strip_leading_size=bool(size))
+        if new_desc != desc_raw:
+            stats["desc_cleaned"] += 1
+        # Fall back to the raw description if cleaning collapsed to
+        # nothing (shouldn't happen, but defensive).
+        if not new_desc:
+            new_desc = desc_raw
+        # (3) Dedup.
+        key = make_sku_key(size, brand_raw, new_desc)
+        if key in seen_keys:
+            stats["duplicates_dropped"] += 1
+            continue
+        seen_keys.add(key)
+        # Write back the cleaned columns in place; leave other
+        # columns (COST / PRICE / STOCK / ...) untouched.
+        r[i_size] = size
+        r[i_desc] = new_desc
+        kept_rows.append(r)
+    stats["rows_out"] = len(kept_rows)
+    bak = path + ".bak"
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(kept_rows)
+    return stats
 
 
 def _to_number(s: str):
@@ -158,7 +229,21 @@ def main():
                          "wide per-month layout.")
     ap.add_argument("--long-only", action="store_true",
                     help="Write ONLY the long format; skip the wide workbook.")
+    ap.add_argument("--repair", action="store_true",
+                    help="BEFORE building the rollup, rewrite every "
+                         "Tempeweborder_*.csv in --dir in place with: "
+                         "(1) missing SIZE recovered from DESCRIPTION, "
+                         "(2) trailing '^^^' and leading SIZE prefix "
+                         "stripped from DESCRIPTION, (3) within-file "
+                         "duplicates collapsed.  Each original file is "
+                         "backed up to <name>.bak the first time it is "
+                         "repaired - re-runs won't clobber the backup.")
+    ap.add_argument("--repair-only", action="store_true",
+                    help="Run the --repair pass and exit without "
+                         "building the rollup workbook.")
     args = ap.parse_args()
+    if args.repair_only:
+        args.repair = True
 
     # Walk directory and keep the LATEST file per month.
     source_dir = os.path.abspath(args.dir)
@@ -191,6 +276,43 @@ def main():
         print(f"[fatal] no Tempeweborder_*.csv files found under {source_dir}",
               file=sys.stderr)
         sys.exit(2)
+
+    # Oct-29 user ask: --repair rewrites EVERY Tempeweborder_*.csv in
+    # the scan tree in place (not just the latest-per-month) so historic
+    # files line up with the current normalisation rules before the
+    # rollup reads them.  Each file is backed up to <name>.bak on its
+    # first repair pass.
+    if args.repair:
+        all_csvs_abs: list[str] = []
+        for root, _dirs, files in (os.walk(source_dir) if args.include_recursive
+                                   else [(source_dir, [], os.listdir(source_dir))]):
+            for fn in files:
+                if _parse_filename(fn):
+                    all_csvs_abs.append(os.path.join(root, fn))
+        print(f"[repair] rewriting {len(all_csvs_abs)} CSV(s) in place "
+              f"(backups: <file>.bak on first repair) ...", file=sys.stderr)
+        tot = {"rows_in": 0, "rows_out": 0, "size_recovered": 0,
+               "duplicates_dropped": 0, "desc_cleaned": 0}
+        for path in sorted(all_csvs_abs):
+            st = repair_csv_in_place(path)
+            if (st["size_recovered"] or st["duplicates_dropped"]
+                    or st["desc_cleaned"]):
+                print(f"[repair] {os.path.basename(path):40}  "
+                      f"in={st['rows_in']:5d}  out={st['rows_out']:5d}  "
+                      f"size_recovered={st['size_recovered']:4d}  "
+                      f"dup_dropped={st['duplicates_dropped']:4d}  "
+                      f"desc_cleaned={st['desc_cleaned']:5d}",
+                      file=sys.stderr)
+            for k in tot: tot[k] += st[k]
+        print(f"[repair] TOTAL: in={tot['rows_in']}  out={tot['rows_out']}  "
+              f"size_recovered={tot['size_recovered']}  "
+              f"dup_dropped={tot['duplicates_dropped']}  "
+              f"desc_cleaned={tot['desc_cleaned']}",
+              file=sys.stderr)
+        if args.repair_only:
+            print("[info] --repair-only set, exiting without rollup",
+                  file=sys.stderr)
+            return
 
     print(f"[info] scanned {all_files_seen} CSV(s); keeping the latest "
           f"per month => {len(latest_per_month)} month(s):")

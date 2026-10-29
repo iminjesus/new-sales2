@@ -66,12 +66,17 @@ BRANDS = [
 
 OUTPUT_FILE = datetime.now().strftime("Tempeweborder_extend_%Y%m%d_%H%M.csv")
 
-# Size regex extracted from the DESCRIPTION column (we no longer
-# filter by size via the input).  Covers the usual passenger
-# <width>/<aspect>R<rim> plus commercial <w>R<rim> / C-rated.
-# Oct-23 user ask: accept decimal rim diameters (265/70R19.5, 11R22.5,
-# 295/80R22.5, …) so truck sizes aren't truncated to the integer.
-SIZE_RE = re.compile(r'\b(\d{3}(?:/\d{2})?R\d{2}(?:\.\d)?C?)\b', re.IGNORECASE)
+# Oct-29: all SIZE / DESCRIPTION normalisation lives in the shared
+# module so the three Tempeweborder scripts can't drift.  The old
+# local SIZE_RE was limited to \d{3}(?:/\d{2})?R\d{2}(?:\.\d)?C? and
+# dropped P-metric / LT-metric / flotation / NHS shapes - we now use
+# tempeweborder_shared.TYRE_SIZE_RX which covers all of them.
+from tempeweborder_shared import (
+    TYRE_SIZE_RX as SIZE_RE,     # kept name so this file's existing refs still work
+    extract_size_from_desc,
+    clean_description,
+    make_sku_key,
+)
 
 
 def clean(text):
@@ -369,18 +374,19 @@ def scrape_rows(driver):
 
             full_desc = other_texts[1] if len(other_texts) > 1 else other_texts[0] if other_texts else ""
 
-            # SIZE from full description (not from a search input any more).
-            size = ""
-            m = SIZE_RE.search(full_desc)
-            if m:
-                size = m.group(1).upper()
+            # Oct-29: SIZE now comes from the shared extractor which
+            # recognises P-metric / LT-metric / flotation (35x12.50R17LT)
+            # / NHS / 11R22.5 as well as plain metric.  The old local
+            # regex only matched \d{3}(?:/\d{2})?R\d{2}(?:\.\d)?C? and
+            # emitted empty SIZE rows for every other shape.
+            size = extract_size_from_desc(full_desc)
 
-            # Strip brand + size prefix from the saved description so
-            # the pattern-grouping on the dashboard side still works.
+            # Strip brand prefix first (the shared cleaner takes care
+            # of the trailing ^^^ marker + leading SIZE token).
             desc = full_desc
             if brand and desc.lower().startswith(brand.lower()):
                 desc = desc[len(brand):].strip()
-            desc = re.sub(r'^\d{3}(?:/\d{2})?R\d{2}(?:\.\d)?C?\s*', '', desc, flags=re.IGNORECASE).strip()
+            desc = clean_description(desc)
             if not desc:
                 desc = full_desc
             if not desc:
@@ -532,6 +538,15 @@ def main():
             # the "+" suffix verbatim ("8+", "2") so the dashboard can
             # distinguish "exactly N" from "N or more".
             writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
+            # Oct-29 user ask: dedupe at WRITE time so the consolidate
+            # step doesn't have to collapse the same rows later.  Key
+            # is (SIZE_UP, BRAND_UP, DESC_NORM) via make_sku_key - any
+            # row that repeats within THIS crawl is dropped silently.
+            # Across different crawls (different output files) the
+            # consolidate step still handles dedup; this block only
+            # protects a single file.
+            seen_keys: set[tuple[str, str, str]] = set()
+            dup_dropped = 0
 
             for _bi, brand in enumerate(BRANDS, 1):
                 print(f"\n=== {brand} ===")
@@ -551,6 +566,11 @@ def main():
                     print(f"  -- Page {page} --")
                     rows = scrape_rows(driver)
                     for r in rows:
+                        key = make_sku_key(r["size"], r["brand"], r["description"])
+                        if key in seen_keys:
+                            dup_dropped += 1
+                            continue
+                        seen_keys.add(key)
                         writer.writerow([
                             r["size"], r["brand"], r["description"],
                             r["cost"], r["price"], r.get("stock", ""),
@@ -567,6 +587,9 @@ def main():
                 prog.step(_bi)
 
         prog.finish()
+        if dup_dropped:
+            print(f"\n[info] in-file dedup dropped {dup_dropped} duplicate "
+                  f"row(s) before writing to {OUTPUT_FILE}")
         print(f"\n✓ 저장 완료: {OUTPUT_FILE}")
     finally:
         try:
