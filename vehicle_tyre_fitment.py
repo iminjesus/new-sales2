@@ -726,32 +726,48 @@ def main():
     args = ap.parse_args()
 
     if args.discover_au:
-        # Catalog-discovery mode — bootstrap or reuse the cached list,
+        # Catalog-discovery mode - bootstrap or reuse the cached list,
         # then feed it into the pipeline (skipping the BITRE CSV + the
         # --min-fleet gate since discovery has no fleet counts).
+        pairs = []
         if os.path.exists(args.discover_cache):
-            print(f"[discover] reusing cached catalog: {args.discover_cache}",
-                  file=sys.stderr)
             with open(args.discover_cache, newline="", encoding="utf-8") as f:
                 rr = csv.DictReader(f)
                 pairs = [(str(r.get("make") or "").upper().strip(),
                           str(r.get("model") or "").upper().strip())
                          for r in rr
                          if (r.get("make") or "").strip() and (r.get("model") or "").strip()]
-        else:
+            if pairs:
+                print(f"[discover] reusing cached catalog ({len(pairs)} pairs): "
+                      f"{args.discover_cache}", file=sys.stderr)
+            else:
+                print(f"[discover] cached catalog is EMPTY (0 pairs) at "
+                      f"{args.discover_cache} - re-running discovery",
+                      file=sys.stderr)
+        if not pairs:
             sess_disc = _http.Session() if _HAS_CURL_CFFI else _http.Session()
             pairs = discover_au_catalog(sess_disc, delay=max(2.0, args.delay),
                                          market=args.discover_market,
                                          makes_limit=args.discover_makes_limit)
             os.makedirs(os.path.dirname(os.path.abspath(args.discover_cache)),
                         exist_ok=True)
-            with open(args.discover_cache, "w", newline="", encoding="utf-8") as f:
-                w = csv.writer(f)
-                w.writerow(["make", "model"])
-                for mk, md in pairs:
-                    w.writerow([mk, md])
-            print(f"[discover] cached {len(pairs)} pairs → {args.discover_cache}",
-                  file=sys.stderr)
+            # Oct-29: only write the cache when discovery actually
+            # returned pairs so a bot-blocked first attempt doesn't
+            # poison the cache with an empty file that short-circuits
+            # every future run (which is what happened to the user).
+            if pairs:
+                with open(args.discover_cache, "w", newline="", encoding="utf-8") as f:
+                    w = csv.writer(f)
+                    w.writerow(["make", "model"])
+                    for mk, md in pairs:
+                        w.writerow([mk, md])
+                print(f"[discover] cached {len(pairs)} pairs -> {args.discover_cache}",
+                      file=sys.stderr)
+            else:
+                print(f"[discover] 0 pairs returned - NOT caching (likely "
+                      f"bot-blocked at /{args.discover_market}/).  Try again "
+                      f"in a few minutes.", file=sys.stderr)
+                sys.exit(2)
     else:
         if not os.path.exists(args.input):
             print(f"[fatal] input CSV not found: {args.input}", file=sys.stderr)
