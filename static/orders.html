@@ -4303,6 +4303,16 @@ function applyMaterial(rowEl, data){
   // /api/orders/material so the material link itself stays a single
   // fast row-lookup — the stock join can be slower under load.
   if (data.m_code) fillStockForRow(rowEl, data.m_code);
+  // Oct-29 user ask: if WhatVehicles is ticked, run the lookup for
+  // THIS row right after a fresh material pick so the chip appears
+  // without the BDE having to re-toggle the checkbox.
+  try {
+    const _chkWv = document.getElementById("chkWhatVehicles");
+    if (_chkWv && _chkWv.checked
+        && typeof _applyWhatVehiclesToRow === "function") {
+      _applyWhatVehiclesToRow(rowEl);
+    }
+  } catch (_e) {}
 }
 
 /* Oct-28 user ask: write a stock cell as two stacked lines inside
@@ -5465,18 +5475,29 @@ document.addEventListener("DOMContentLoaded", () => {
    existing Tempe / JAX / BobJane / Interstate chips.  Removed again
    when the checkbox is unticked. */
 async function _applyWhatVehiclesToAll(){
-  const chk = document.getElementById("chkWhatVehicles");
-  const want = !!(chk && chk.checked);
   const rows = $$("#linesBody tr");
   for (const tr of rows) {
+    await _applyWhatVehiclesToRow(tr);
+  }
+}
+
+async function _applyWhatVehiclesToRow(tr){
+  if (!tr) return;
+  const chk  = document.getElementById("chkWhatVehicles");
+  const want = !!(chk && chk.checked);
+  {
     const mc   = (tr.querySelector('[data-col="m_code"]')?.value || "").trim();
     const size = (tr.querySelector('[data-col="description"]')?.value || "").trim();
     const raw  = (tr.dataset && tr.dataset.remarkFull) || "";
     // Strip any existing WhatVehicles chip; we'll re-add if `want`.
     const linesKept = raw.split("\n").filter(l => !/^\(Vehicles\b/i.test(l));
+    try {
+      console.log("[WhatVehicles] row m_code=" + mc + " size=" + size
+                  + " want=" + want);
+    } catch (_e) {}
     if (!want || !mc || !size) {
       setRemark(tr, linesKept.join("\n") || "");
-      continue;
+      return;
     }
     try {
       const r = await fetch(`/api/orders/vehicles_by_size?size=${encodeURIComponent(size)}`,
