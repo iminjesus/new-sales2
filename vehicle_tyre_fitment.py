@@ -41,6 +41,19 @@ import sys
 import time
 from urllib.parse import quote
 
+# Oct-29: Python 3.13 on Windows defaults stdout/stderr to the box's
+# system codepage (cp949 on Korean installs, cp1252 elsewhere), which
+# chokes on any non-ASCII in print() or argparse's --help output.
+# Reconfigure both streams to utf-8 so Unicode progress text, box-
+# drawing chars, etc. no longer trigger UnicodeEncodeError and crash
+# the crawler mid-run.  errors='replace' turns any truly
+# unencodable glyph into '?' instead of a traceback.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # curl_cffi impersonates a real browser's TLS/HTTP2 fingerprint (JA3
 # hash), which Cloudflare's Bot Fight Mode checks BEFORE it even sees
 # our headers.  With bare `requests` the fingerprint reads as "Python
@@ -679,11 +692,11 @@ def main():
                     help="Skip (make, model) pairs whose total national fleet "
                          "count in the BITRE input is below this threshold "
                          "(default: %(default)s).  Pass 0 to crawl every "
-                         "pair regardless of fleet size — much slower with "
+                         "pair regardless of fleet size - much slower with "
                          "little additional coverage; the top ~500 models "
                          "already cover >95%% of Australian fleet.")
     ap.add_argument("--limit",  type=int, default=0,
-                    help="Stop after N pairs (0 = no limit — useful for a smoke test).")
+                    help="Stop after N pairs (0 = no limit; useful for a smoke test).")
     ap.add_argument("--dump-html", action="store_true",
                     help="Also save each fetched HTML as debug/<make>_<model>.html so "
                          "the parser can be inspected against the real page structure.")
@@ -705,7 +718,7 @@ def main():
                     default=os.path.join(REGO_DIR, "wheel_size_au_catalog.csv"),
                     help="Where to cache the discovered make/model list.")
     ap.add_argument("--discover-makes-limit", type=int, default=0,
-                    help="Smoke-test knob — only scan the first N makes "
+                    help="Smoke-test knob - only scan the first N makes "
                          "during discovery (0 = scan all).  Combine with "
                          "--limit N to also cap the model crawl, so "
                          "`--discover-au --discover-makes-limit 2 --limit 10` "
