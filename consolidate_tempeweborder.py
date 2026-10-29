@@ -104,6 +104,14 @@ def main():
                          "Sep 2025.")
     ap.add_argument("--include-recursive", action="store_true",
                     help="Also scan subdirectories under --dir.")
+    ap.add_argument("--long", action="store_true",
+                    help="Also write a long/unpivoted sibling workbook: one "
+                         "row per (SKU, month) with columns SIZE, brand, "
+                         "DESCRIPTION, year, month, cost, price, stock.  "
+                         "Easier for pivot tables / line charts than the "
+                         "wide per-month layout.")
+    ap.add_argument("--long-only", action="store_true",
+                    help="Write ONLY the long format; skip the wide workbook.")
     args = ap.parse_args()
 
     # Walk directory and keep the LATEST file per month.
@@ -260,8 +268,70 @@ def main():
         ws.column_dimensions[letter].width = min(max(maxlen + 2, 8), 40)
 
     out_abs = os.path.abspath(args.output)
-    wb.save(out_abs)
-    print(f"[done] wrote {ws.max_row - 1} rows x {len(headers)} cols -> {out_abs}")
+    if not args.long_only:
+        wb.save(out_abs)
+        print(f"[done] wide: wrote {ws.max_row - 1} rows x {len(headers)} cols -> {out_abs}")
+    else:
+        print(f"[info] --long-only set, skipping wide output")
+
+    # Oct-29 user ask: optional long/unpivoted sibling workbook.  One
+    # row per (SKU, month) with the four data columns laid flat so the
+    # file is trivially pivot-friendly.
+    if args.long or args.long_only:
+        long_wb = Workbook()
+        lws = long_wb.active
+        lws.title = "Long"
+        long_headers = ["SIZE", "brand", "DESCRIPTION",
+                         "year", "month", "cost", "price", "stock"]
+        lws.append(long_headers)
+        for col_idx, h in enumerate(long_headers, 1):
+            c = lws.cell(row=1, column=col_idx)
+            c.font = hdr_font
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            if h in ("SIZE", "brand", "DESCRIPTION"):
+                c.fill = idx_fill
+            elif h in ("year", "month"):
+                c.fill = PatternFill("solid", fgColor="1E3A8A")
+            elif h == "cost":
+                c.fill = cost_fill
+            elif h == "price":
+                c.fill = price_fill
+            elif h == "stock":
+                c.fill = stock_fill
+        lws.freeze_panes = "D2"
+        for key in sorted(rows.keys()):
+            size_up, brand_up, desc = key
+            display_desc = descriptions_seen.get((size_up, brand_up), desc)
+            slot = rows[key]
+            for mk in months_sorted:
+                yr, mo = mk.split("-")
+                cost  = slot.get(f"COST_{mk}", "")
+                price = slot.get(f"PRICE_{mk}", "")
+                stock = slot.get(f"STOCK_{mk}", "")
+                # Skip entirely-blank month rows so the long file
+                # isn't bloated with placeholders for SKUs that
+                # didn't exist in a given month.
+                if cost == "" and price == "" and stock == "":
+                    continue
+                lws.append([size_up, brand_up, display_desc,
+                            int(yr), int(mo), cost, price, stock])
+        for col_idx, _ in enumerate(long_headers, 1):
+            letter = get_column_letter(col_idx)
+            maxlen = max(
+                (len(str(lws.cell(row=r, column=col_idx).value or ""))
+                 for r in range(1, lws.max_row + 1)),
+                default=10,
+            )
+            lws.column_dimensions[letter].width = min(max(maxlen + 2, 7), 40)
+        # Default sibling path: <output>_long.xlsx (or the --output
+        # value itself when --long-only).
+        if args.long_only:
+            long_out = out_abs
+        else:
+            base, ext = os.path.splitext(out_abs)
+            long_out = base + "_long" + (ext or ".xlsx")
+        long_wb.save(long_out)
+        print(f"[done] long: wrote {lws.max_row - 1} rows x {len(long_headers)} cols -> {long_out}")
 
 
 if __name__ == "__main__":
