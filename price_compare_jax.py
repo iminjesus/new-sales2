@@ -196,8 +196,37 @@ def abbr_for(brand_name):
     return None
 
 def normalise_size(raw):
-    m = re.search(r'(\d{3}/\d{2}R\d{2}|\d{3}R\d{2})', raw, re.IGNORECASE)
-    return m.group(1).upper() if m else raw.strip().split()[0].upper() if raw.strip() else ""
+    """Oct-29: broaden size extraction to catch everything the Tempe
+    extend crawler emits.  The old regex only matched the plain-metric
+    \\d{3}/\\d{2}R\\d{2} and \\d{3}R\\d{2} shapes and silently dropped:
+      * 11R22.5, 11R22.5C                    (2-digit width, truck LT)
+      * P235/60R15                           (P-metric passenger)
+      * LT285/75R16                          (LT-metric light truck)
+      * 35x12.50R17LT, 31X10.50R15           (flotation)
+      * 265/70R19.5                          (decimal rim)
+    The dashboard's By-Brand view keys on this size string, so an
+    11R22.5 row in an old CSV would collapse under whatever the
+    description's first word was ("LT", "COMMERCIAL", etc.) and never
+    reach the 11R22.5 column on the chart.  Falls through to the
+    shared TYRE_SIZE_RX from tempeweborder_shared so every script in
+    the repo agrees on what a valid tyre-size shape is."""
+    try:
+        from tempeweborder_shared import TYRE_SIZE_RX as _rx
+    except Exception:
+        # Soft-fail: broaden the inline regex if the shared helper
+        # can't be imported (circular import, running stand-alone, …).
+        _rx = re.compile(
+            r"\b((?:LT|P)?\d{2,3}/\d{2}R\d{1,2}(?:\.\d)?C?(?:LT)?"
+            r"|\d{2,3}[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2}(?:LT)?"
+            r"|\d{2,3}R\d{1,2}(?:\.\d)?C?)\b",
+            re.IGNORECASE,
+        )
+    s = str(raw or "")
+    m = _rx.search(s)
+    if m:
+        return m.group(1).upper()
+    s2 = s.strip()
+    return s2.split()[0].upper() if s2 else ""
 
 def kw_match(desc, keywords):
     d = desc.lower()
@@ -223,14 +252,31 @@ def load_csv(path):
 
 # ── Chunk 2: Series extraction + lookup builders + matchers ─────────────────────────────────
 
+# Oct-29: broaden the leading-size matcher so a description that
+# starts with 11R22.5 / P235/60R15 / LT285/75R16 / 35x12.50R17LT /
+# 28X10.00R14 gets its size stripped before extract_series picks a
+# pattern word.  The old pattern only recognised the plain-metric
+# <width>/<aspect>R<rim> and the no-aspect <width>R<rim> shapes, so
+# an 11R22.5 description like "11R22.5 LT 149L COMMERCIAL R168 II"
+# left the leading "11R22.5" in place and extract_series returned it
+# as the series name - which broke pattern grouping on the dashboard.
 _LEAD_RE = re.compile(
     r'^(C\s+)?'
-    r'(\d{3}/\d{2}R\d{2,3}C?\s+)?'
-    r'(\d{3}R\d{2,3}\s+)?'
+    r'((?:LT|P)?\d{2,3}/\d{2}R\d{1,2}(?:\.\d)?C?(?:LT)?\s+)?'          # P235/60R15  LT285/75R16  265/70R19.5
+    r'(\d{2,3}[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2}(?:LT)?\s+)?'            # 35x12.50R17LT  31X10.50R15
+    r'(\d{2,3}R\d{1,2}(?:\.\d)?C?\s+)?'                                 # 185R14  11R22.5  11R22.5C
     r'(\d{2,3}(/\d{2,3})?[A-Za-z]{1,2}\s+)?'
     r'(XL\s+)?',
     re.IGNORECASE,
 )
+
+# Oct-29: tyre-size qualifiers that commonly follow a stripped truck
+# size (11R22.5 LT ... / 28X10.00R14 NHS ... / LT285/75R16 HD ...).
+# extract_series skips them so the model name reads as "DH16" / "KM3"
+# instead of "LT" / "NHS" / "HD".
+_SERIES_STOPWORDS = {"LT", "NHS", "HD", "XL", "M+S", "DOT",
+                     "RWL", "OWT", "OBL", "TL", "TT", "FR", "MFS"}
+
 
 def extract_series(desc):
     if not desc:
@@ -240,6 +286,8 @@ def extract_series(desc):
         if len(w) <= 1:
             continue
         if re.match(r'^[\d/]+[A-Za-z]{0,2}$', w):
+            continue
+        if w.upper() in _SERIES_STOPWORDS:
             continue
         return w.upper()
     return ""

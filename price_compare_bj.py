@@ -188,8 +188,24 @@ def abbr_for(brand_name):
     return None
 
 def normalise_size(raw):
-    m = re.search(r'(\d{3}/\d{2}R\d{2}|\d{3}R\d{2})', raw, re.IGNORECASE)
-    return m.group(1).upper() if m else raw.strip().split()[0].upper() if raw.strip() else ""
+    """Oct-29: delegate to the shared tyre-size regex so this file
+    agrees with price_compare_jax + consolidate on which shapes count
+    as a tyre size (11R22.5, P-metric, LT-metric, flotation, NHS)."""
+    try:
+        from tempeweborder_shared import TYRE_SIZE_RX as _rx
+    except Exception:
+        _rx = re.compile(
+            r"\b((?:LT|P)?\d{2,3}/\d{2}R\d{1,2}(?:\.\d)?C?(?:LT)?"
+            r"|\d{2,3}[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2}(?:LT)?"
+            r"|\d{2,3}R\d{1,2}(?:\.\d)?C?)\b",
+            re.IGNORECASE,
+        )
+    s = str(raw or "")
+    m = _rx.search(s)
+    if m:
+        return m.group(1).upper()
+    s2 = s.strip()
+    return s2.split()[0].upper() if s2 else ""
 
 def kw_match(desc, keywords):
     d = desc.lower()
@@ -200,14 +216,26 @@ def kw_match(desc, keywords):
 #   "265/70R16 112T AT52 ROAD VENTURE"  (description contains full size + load index)
 #   "98H TURANZA 6"                      (description starts with load index only)
 #   "C 106/104R AGILIS 3"                (commercial van prefix)
+# Oct-29: broaden the leading-size matcher so 11R22.5 / P-metric /
+# LT-metric / flotation descriptions get their size stripped before
+# extract_series picks a model-name word.  Previous version only
+# matched 3-digit-width metric + no-aspect <width>R<rim> shapes.
 _LEAD_RE = re.compile(
-    r'^(C\s+)?'                                   # optional "C " for commercial
-    r'(\d{3}/\d{2}R\d{2,3}C?\s+)?'               # optional "265/70R16 " or "185/65R15C " size
-    r'(\d{3}R\d{2,3}\s+)?'                        # optional "185R14 " old-format size
-    r'(\d{2,3}(/\d{2,3})?[A-Za-z]{1,2}\s+)?'     # optional "112T " or "102/100R " load+rating
-    r'(XL\s+)?',                                   # optional "XL " suffix
+    r'^(C\s+)?'                                                         # optional "C " for commercial
+    r'((?:LT|P)?\d{2,3}/\d{2}R\d{1,2}(?:\.\d)?C?(?:LT)?\s+)?'           # P235/60R15  LT285/75R16  265/70R19.5
+    r'(\d{2,3}[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2}(?:LT)?\s+)?'            # 35x12.50R17LT  31X10.50R15
+    r'(\d{2,3}R\d{1,2}(?:\.\d)?C?\s+)?'                                 # 185R14  11R22.5  11R22.5C
+    r'(\d{2,3}(/\d{2,3})?[A-Za-z]{1,2}\s+)?'                            # optional "112T " or "102/100R " load+rating
+    r'(XL\s+)?',                                                        # optional "XL " suffix
     re.IGNORECASE,
 )
+
+# Oct-29: tyre-size qualifiers that commonly follow a stripped truck
+# size.  Skipped so truck/commercial model names ("DH16", "KM3",
+# "R168") win over size-shape qualifiers ("LT", "NHS", "HD").
+_SERIES_STOPWORDS = {"LT", "NHS", "HD", "XL", "M+S", "DOT",
+                     "RWL", "OWT", "OBL", "TL", "TT", "FR", "MFS"}
+
 
 def extract_series(desc):
     """Return the main product series word from a tyre description.
@@ -217,6 +245,7 @@ def extract_series(desc):
       BJ     "Turanza 6 102V"         → "TURANZA"
       Tempe  "98H E PRIMACY"          → "PRIMACY"   (skips single-char "E")
       Tempe  "C 106/104R AGILIS 3"    → "AGILIS"
+      Tempe  "11R22.5 LT 149L COMMERCIAL R168 II" → "COMMERCIAL" (LT skipped)
     """
     if not desc:
         return ""
@@ -225,6 +254,8 @@ def extract_series(desc):
         if len(w) <= 1:          # skip "E", "C", "R"
             continue
         if re.match(r'^[\d/]+[A-Za-z]{0,2}$', w):   # skip "106/104R", "82T"
+            continue
+        if w.upper() in _SERIES_STOPWORDS:
             continue
         return w.upper()
     return ""

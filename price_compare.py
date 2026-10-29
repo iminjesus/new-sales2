@@ -174,6 +174,18 @@ def _pattern_key(desc, size, abbr):
     if not desc:
         return ""
     s = desc.strip()
+    # Oct-29: strip a leading tyre-size token first.  Old Tempe
+    # CSVs (pre-shared-cleaner) left the SIZE at the head of the
+    # description - "11R22.5 LT 149L COMMERCIAL R168 II",
+    # "P235/60R15 98S RADIAL T/A RWL", "35x12.50R17LT 121Q MUD
+    # TERRAIN T/A KM3".  Without this strip, _pattern_key keyed on
+    # the whole description and every row became its own legend line,
+    # which is what the user saw on the By-Brand chart for 11R22.5.
+    s = re.sub(
+        r'^\s*((?:LT|P)?\d{2,3}/\d{2}R\d{1,2}(?:\.\d)?C?(?:LT)?'
+        r'|\d{2,3}[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2}(?:LT)?'
+        r'|\d{2,3}R\d{1,2}(?:\.\d)?C?)\s+',
+        '', s, flags=re.IGNORECASE)
     # Strip trailing load rating: "91V" / "88Y XL" / "108T" / "94/92R"
     s = re.sub(r'\s+\d{2,3}(?:/\d{2,3})?[A-Za-z]{1,2}(?:\s+XL)?\s*$', '', s)
     # Oct-26: Tempe WebOrder descriptions put the load rating at the
@@ -182,6 +194,18 @@ def _pattern_key(desc, size, abbr):
     # stripping it, every load variant of the same pattern (84H / 86H /
     # 91H / 94H …) becomes its own legend line, so the chart shows a
     # cloud of near-duplicate labels instead of one line per pattern.
+    s = re.sub(r'^\s*\d{2,3}(?:/\d{2,3})?[A-Za-z]{1,2}\s+', '', s)
+    # Oct-29: also drop a leading commercial / LT / NHS size qualifier
+    # that commonly follows a stripped truck size (e.g. "11R22.5 LT"
+    # or "28X10.00R14 NHS").  Without this, every 11R22.5 row collapsed
+    # under "LT" (not the model name) because that was the first
+    # non-numeric token.
+    s = re.sub(r'^\s*(?:LT|NHS|HD|XL)\s+', '', s, flags=re.IGNORECASE)
+    # Oct-29: re-run the leading load-rating strip in case removing a
+    # LT / NHS stopword exposed one (truck descriptions commonly go
+    # "11R22.5 LT 149L COMMERCIAL ..." - size strip leaves "LT 149L",
+    # LT strip leaves "149L COMMERCIAL", and 149L is the load rating
+    # that still needs to come off before the model name).
     s = re.sub(r'^\s*\d{2,3}(?:/\d{2,3})?[A-Za-z]{1,2}\s+', '', s)
     # Strip any remaining trailing badge / spec suffix so "Primacy 5
     # XL" or "Grandtrek AT5 M+S" doesn't inflate the label.
