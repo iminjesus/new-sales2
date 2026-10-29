@@ -906,13 +906,35 @@
   table.lines tfoot tr.summary-row td.summary-lbl,
   table.lines tfoot tr.summary-row td.summary-amt,
   table.lines tfoot tr.summary-row td.summary-input{border:1px solid #cbd5e1}
-  /* Freight + Interstate flag inputs — small centred cells matching
-     the Excel workbook's look.  Both get the same yellow pill so
-     the two prompts read as a visual pair. */
+  /* Freight + Interstate flag inputs — small centred toggles.  Click
+     to flip Y / N (readonly stops keyboard editing).  Oct-29: Y gets
+     a green pill, N a muted grey pill, so the state is readable at a
+     glance without a tooltip. */
   table.lines tfoot tr.total-row td #freightFlag,
   table.lines tfoot tr.total-row td #interstateFlag{
-    width:36px;padding:3px;text-align:center;font-weight:700;
-    background:#fef3c7;border:1px solid #d1d5db;border-radius:2px;
+    width:36px;padding:3px;text-align:center;font-weight:800;
+    background:#e2e8f0;color:#334155;border:1px solid #94a3b8;
+    border-radius:12px;cursor:pointer;user-select:none;
+    font-size:12px;letter-spacing:0.5px;
+  }
+  table.lines tfoot tr.total-row td input.yn-toggle[value="Y"]{
+    background:#16a34a;color:#fff;border-color:#15803d;
+  }
+  /* Oct-29: amount input beside each flag.  Full width of the cell,
+     right-aligned, matches the previous .totalv look so visually
+     nothing changed - only now the BDE can click into it and type
+     a custom amount.  When it carries dataset.manual="1" we tint
+     the border so the BDE sees their override is sticky. */
+  table.lines tfoot tr.total-row td input.yn-amount{
+    width:100%;padding:3px 6px;text-align:right;font-weight:700;
+    background:#fff;border:1px solid #cbd5e1;border-radius:2px;
+    font:inherit;color:#111;
+  }
+  table.lines tfoot tr.total-row td input.yn-amount[data-manual="1"]{
+    background:#fef9c3;border-color:#eab308;color:#713f12;
+  }
+  table.lines tfoot tr.total-row td input.yn-amount:disabled{
+    background:#f3f4f6;color:#9ca3af;cursor:not-allowed;
   }
   /* Grand-total row gets a slightly stronger accent so it reads as
      the final line, matching the workbook's bottom-row emphasis. */
@@ -2126,12 +2148,23 @@
              so Customer-PDF rules target them individually. -->
         <tr class="total-row summary-row freight-row">
           <td colspan="12" class="summary-blank"></td>
-          <td class="label right-lbl summary-lbl freight-prompt-cell" colspan="3">Input "Y" for Freight Charge? &rarr;</td>
+          <td class="label right-lbl summary-lbl freight-prompt-cell" colspan="3">Click to toggle Freight Charge &rarr;</td>
           <td class="center summary-input freight-prompt-input">
-            <input type="text" id="freightFlag" maxlength="1" placeholder="N">
+            <!-- Oct-29: Y/N toggles - click the pill to flip, no typing. -->
+            <input type="text" id="freightFlag" maxlength="1"
+                   value="N" readonly class="yn-toggle"
+                   title="Click to toggle Y / N">
           </td>
-          <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10%) if any</td>
-          <td class="total-cell summary-amt"><div class="totalv" id="freightChg"></div></td>
+          <td class="label right-lbl summary-lbl" colspan="5">Freight Charge (10% default - override allowed)</td>
+          <td class="total-cell summary-amt">
+            <!-- Oct-29: amount is now an input so the BDE can override the
+                 computed 10 %.  dataset.manual flips to "1" the first time
+                 the BDE types; recalc then stops auto-syncing this cell
+                 until the flag is toggled back to N (which clears it). -->
+            <input type="text" id="freightChg" class="yn-amount"
+                   inputmode="decimal" placeholder=""
+                   title="Auto-populated to 10 % when Y - type over to override">
+          </td>
           <td colspan="6" class="summary-blank"></td>
         </tr>
         <!-- Interstate Delivery Fee (10% of subtotal when "Y").  Same
@@ -2142,12 +2175,18 @@
              drop just the prompt + input and keep the amount line. -->
         <tr class="total-row summary-row interstate-row">
           <td colspan="12" class="summary-blank"></td>
-          <td class="label right-lbl summary-lbl interstate-prompt-cell" colspan="3">Input "Y" for Interstate Delivery? &rarr;</td>
+          <td class="label right-lbl summary-lbl interstate-prompt-cell" colspan="3">Click to toggle Interstate Delivery &rarr;</td>
           <td class="center summary-input interstate-prompt-input">
-            <input type="text" id="interstateFlag" maxlength="1" placeholder="N">
+            <input type="text" id="interstateFlag" maxlength="1"
+                   value="N" readonly class="yn-toggle"
+                   title="Click to toggle Y / N">
           </td>
-          <td class="label right-lbl summary-lbl" colspan="5">Interstate Delivery Fee 10% (if any)</td>
-          <td class="total-cell summary-amt"><div class="totalv" id="interstateChg"></div></td>
+          <td class="label right-lbl summary-lbl" colspan="5">Interstate Delivery Fee (10% default - override allowed)</td>
+          <td class="total-cell summary-amt">
+            <input type="text" id="interstateChg" class="yn-amount"
+                   inputmode="decimal" placeholder=""
+                   title="Auto-populated to 10 % when Y - type over to override">
+          </td>
           <td colspan="6" class="summary-blank"></td>
         </tr>
         <!-- Final Total (Total inc GST + Freight + Interstate, if any). -->
@@ -4895,9 +4934,35 @@ function updateTotals(){
   const totalIncGst    = sumAmt * 1.10;
   const freightFlag    = ($("#freightFlag")?.value    || "").trim().toUpperCase();
   const interstateFlag = ($("#interstateFlag")?.value || "").trim().toUpperCase();
-  const freight        = freightFlag    === "Y" ? sumAmt * 0.10 : 0;
-  const interstate     = interstateFlag === "Y" ? sumAmt * 0.10 : 0;
-  const finalTotal     = totalIncGst + freight + interstate;
+  // Oct-29: amount cells are now editable inputs.  When the flag is
+  // Y and the BDE has NOT manually overridden the amount, we auto-sync
+  // to 10 % of the subtotal.  When they HAVE overridden
+  // (dataset.manual="1") we respect their number for the final total.
+  // When the flag flips to N the amount is cleared.
+  const _resolve = (flag, inputId) => {
+    const el = $("#" + inputId);
+    const auto = sumAmt * 0.10;
+    if (!el) return (flag === "Y") ? auto : 0;
+    if (flag !== "Y") {
+      // Flag off - clear both the amount cell and the manual-override
+      // flag so the next Y toggle re-starts at the auto value.
+      el.value = "";
+      delete el.dataset.manual;
+      return 0;
+    }
+    if (el.dataset.manual === "1") {
+      const n = parseFloat(String(el.value || "").replace(/,/g, ""));
+      return isFinite(n) ? n : 0;
+    }
+    // Auto mode - keep the cell in sync with 10 % of the current
+    // subtotal.  fmtMoney is used so the formatted number matches
+    // every other total on the row.
+    el.value = auto ? fmtMoney(auto) : "";
+    return auto;
+  };
+  const freight    = _resolve(freightFlag,    "freightChg");
+  const interstate = _resolve(interstateFlag, "interstateChg");
+  const finalTotal = totalIncGst + freight + interstate;
 
   $("#sovd_ttl").value                  = fmtQty(sovdQty);
   $("#ttlQty").textContent              = fmtQty(sumQty);
@@ -4908,8 +4973,8 @@ function updateTotals(){
   $("#grandAddSupport").textContent     = sumCurAmt > 0 ? avgAddDC.toFixed(2) + "%" : "";
   $("#avgDC").textContent               = sumAmt ? avgDC.toFixed(2) + "%" : "";
   $("#totalIncGst").textContent         = sumAmt ? fmtMoney(totalIncGst) : "0.00";
-  $("#freightChg").textContent          = freight    ? fmtMoney(freight)    : "";
-  $("#interstateChg").textContent       = interstate ? fmtMoney(interstate) : "";
+  // Oct-29: #freightChg / #interstateChg are inputs now, their value
+  // is already written by _resolve() above - don't touch textContent.
   $("#finalTotal").textContent          = sumAmt ? fmtMoney(finalTotal) : "0.00";
 
   // Cached for serializeOrder + wireApprovalPanel — front-end
@@ -4998,11 +5063,55 @@ function updateTotals(){
       + `  (Total DC ${avgDC.toFixed(2)}%, Additional DC ${avgAddDC.toFixed(2)}%)`;
   }
 }
-// Freight + Interstate flags drive the final-total chain — recompute
-// on every keystroke so the amount cells update live as the BDE types
-// "Y" or clears the box.
-document.getElementById("freightFlag")?.addEventListener("input", updateTotals);
-document.getElementById("interstateFlag")?.addEventListener("input", updateTotals);
+// Oct-29: Y/N toggles - click the flag pill to flip between Y and N
+// (readonly stops keyboard typing, so clicks are the only way in).
+// Any flip also recomputes the final total chain + repaints the pill
+// via updateTotals' _resolve path.
+for (const _id of ["freightFlag", "interstateFlag"]) {
+  const _el = document.getElementById(_id);
+  if (!_el) continue;
+  _el.addEventListener("click", () => {
+    const cur = (_el.value || "").trim().toUpperCase();
+    _el.value = (cur === "Y") ? "N" : "Y";
+    // When the flag flips to N, _resolve clears the matching amount
+    // cell + its manual override; when it flips back to Y the amount
+    // snaps to 10 % of the current subtotal (unless the user re-
+    // overrides it).  Both happen inside updateTotals.
+    updateTotals();
+  });
+}
+// Oct-29: amount cells are editable - mark the input as manual on
+// first keystroke so updateTotals stops auto-syncing it, and recompute
+// finalTotal live as the BDE types the override.
+for (const _id of ["freightChg", "interstateChg"]) {
+  const _el = document.getElementById(_id);
+  if (!_el) continue;
+  _el.addEventListener("input", () => {
+    // Only honour an override while the matching flag is Y - typing
+    // into a disabled cell shouldn't silently stamp a manual value.
+    const flagEl = document.getElementById(
+      _id === "freightChg" ? "freightFlag" : "interstateFlag");
+    const flag = (flagEl?.value || "").trim().toUpperCase();
+    if (flag === "Y") {
+      _el.dataset.manual = "1";
+    }
+    updateTotals();
+  });
+  // Normalise on blur: strip commas, round to 2 dp, re-apply fmtMoney
+  // so the override reads like every other total on the row.
+  _el.addEventListener("blur", () => {
+    if (_el.dataset.manual !== "1") return;
+    const n = parseFloat(String(_el.value || "").replace(/,/g, ""));
+    if (!isFinite(n) || n <= 0) {
+      // Empty / zero override -> fall back to auto.
+      delete _el.dataset.manual;
+      updateTotals();
+      return;
+    }
+    _el.value = fmtMoney(n);
+    updateTotals();
+  });
+}
 
 /* Oct-22 user ask: the Order Date drives the Additional DC lookup.
    When the BDE picks a future date, every priced row has to re-run
@@ -7827,8 +7936,12 @@ function serializeOrder(){
     sovd_qty:          $("#sovd_ttl")?.value             || "0",
     subtotal:          $("#grandTotal")?.textContent     || "0.00",
     total_inc_gst:     $("#totalIncGst")?.textContent    || "0.00",
-    freight_amount:    $("#freightChg")?.textContent     || "0.00",
-    interstate_amount: $("#interstateChg")?.textContent  || "0.00",
+    // Oct-29: freightChg / interstateChg are editable inputs now,
+    // so read .value instead of .textContent.  _resolve() keeps the
+    // value formatted + reconciled with the Y/N flag before this
+    // snapshot is taken.
+    freight_amount:    $("#freightChg")?.value            || "0.00",
+    interstate_amount: $("#interstateChg")?.value         || "0.00",
     grand_total:       $("#finalTotal")?.textContent     || "0.00",
     avg_dc_pct:        ($("#avgDC")?.textContent         || "0").replace("%",""),
     // Additional DC — the qty-weighted delta (Total DC − Current DC)
@@ -8458,6 +8571,32 @@ async function hydrateSubmittedOrder(oid, editMode){
   $("#sovd_ttl").value          = t.sovd_qty       || "0";
   if (t.freight_flag)    $("#freightFlag").value    = t.freight_flag;
   if (t.interstate_flag) $("#interstateFlag").value = t.interstate_flag;
+  // Oct-29: freight_amount / interstate_amount are the BDE's saved
+  // snapshot - might be the auto 10 % or a manual override.  Hydrate
+  // the amount inputs AND set dataset.manual="1" when the saved value
+  // visibly differs from the auto value, so updateTotals keeps it
+  // frozen on the next recalc instead of silently resyncing to 10 %
+  // of the current subtotal.  updateTotals runs a few lines further
+  // down and will reconcile these cells if the flag is actually N.
+  for (const [amtKey, flagKey, inpId] of [
+    ["freight_amount",    "freight_flag",    "freightChg"],
+    ["interstate_amount", "interstate_flag", "interstateChg"],
+  ]) {
+    const el   = document.getElementById(inpId);
+    const amt  = String(t[amtKey] || "").trim();
+    const flag = String(t[flagKey] || "N").trim().toUpperCase();
+    if (!el) continue;
+    if (flag !== "Y" || !amt || amt === "0" || amt === "0.00") {
+      el.value = ""; delete el.dataset.manual; continue;
+    }
+    el.value = amt;
+    // Mark as manual when the saved number diverges from the auto
+    // 10 % of the just-hydrated subtotal; updateTotals (below) is the
+    // single source of truth for what "auto" means, so we leave the
+    // final comparison to its _resolve() path.  Flag it manual up
+    // front so the first recalc doesn't blindly overwrite.
+    el.dataset.manual = "1";
+  }
   /* Re-establish the customer's SOVD eligibility BEFORE the recalc
      pass so applySOVDRatesToRows (called from updateTotals) can
      correctly count Trueblu TTL for hydrated rows.  Without this
