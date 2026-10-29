@@ -4149,35 +4149,52 @@ def api_orders_stock_rt_by_material():
 def api_orders_vehicles_by_size():
     """Oct-29 user ask: on the SPRF, a "WhatVehicles" checkbox pulls
     the list of car makes/models whose OE tyre size matches each
-    line.  Data source: out/rego/vehicle_tyre_fitment_manual.csv
-    (995 rows, columns make/model/gen_start_year/size).  The file
-    doesn't distinguish Front vs Rear positions, so this endpoint
-    labels each match 'both' when the vehicle has only ONE size on
-    file, or 'staggered' when it has multiple (true staggered
-    fitments like Q60 run different sizes front vs rear).
+    line.
+
+    Data source (first that exists wins):
+      1. out/rego/vehicle_tyre_fitment.csv — crawled from
+         wheel-size.com by vehicle_tyre_fitment.py.  Columns:
+         make, model, gen_start_year, size, position (optional).
+      2. out/rego/vehicle_tyre_fitment_manual.csv — manual seed
+         file.  Same columns minus position.
+
+    When the row carries an explicit `position` ('front' / 'rear'),
+    it's returned verbatim.  When position is blank the endpoint
+    infers 'both' (vehicle has only ONE OE size on file) or
+    'staggered' (vehicle has multiple sizes).
 
     Query: ?size=255/45R19
     Returns:
       {"size": "255/45R19",
        "vehicles": [{"make":"VW","model":"GOLF","year":2013,
                      "position":"both"}, ...],
-       "count": N,
-       "source": "out/rego/vehicle_tyre_fitment_manual.csv"}
+       "count": N, "source": "<file-used>"}
     Empty / no-match → vehicles:[] (not an error)."""
     import csv as _csv
     size = str(request.args.get("size") or "").strip().upper()
-    out = {"size": size, "vehicles": [], "count": 0,
-           "source": "out/rego/vehicle_tyre_fitment_manual.csv"}
+    out = {"size": size, "vehicles": [], "count": 0, "source": ""}
     if not size:
         return jsonify(out)
-    path = os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment_manual.csv")
-    if not os.path.exists(path):
-        out["error"] = f"fitment file not found at {path}"
+    # Pick the crawled file first, fall back to the manual seed.
+    candidates = [
+        os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment.csv"),
+        os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment_manual.csv"),
+    ]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if not path:
+        out["error"] = (
+            "No fitment file on disk.  Expected one of:\n  "
+            + "\n  ".join(candidates)
+            + "\nRun `python vehicle_tyre_fitment.py` to crawl wheel-size.com."
+        )
         return jsonify(out)
+    out["source"] = os.path.relpath(path, BASE_DIR)
     try:
-        # First pass: build (make, model, year) → {sizes} so we can
-        # label staggered vehicles correctly.
-        all_sizes = {}
+        # First pass: build (make, model, year) → {sizes} and track
+        # explicit position labels per (vehicle, size) when the file
+        # provides them.
+        all_sizes = {}   # key → set(size)
+        pos_map   = {}   # (key, size) → explicit position string
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             for r in _csv.DictReader(f):
                 k = (str(r.get("make") or "").strip().upper(),
@@ -4186,21 +4203,33 @@ def api_orders_vehicles_by_size():
                 s = str(r.get("size") or "").strip().upper()
                 if not s: continue
                 all_sizes.setdefault(k, set()).add(s)
+                _p = str(r.get("position") or "").strip().lower()
+                if _p in ("front", "rear", "both"):
+                    pos_map[(k, s)] = _p
         # Second pass: pull every (make, model, year) that includes
-        # the requested size.
+        # the requested size.  Inferred position falls back to 'both'
+        # (single-size vehicle) or 'staggered' (multi-size vehicle)
+        # when the row carried no explicit label.
         seen = set()
         for k, sizes in all_sizes.items():
-            if size in sizes:
-                if k in seen: continue
-                seen.add(k)
-                position = "both" if len(sizes) == 1 else "staggered"
-                out["vehicles"].append({
-                    "make":     k[0], "model": k[1],
-                    "year":     k[2],
-                    "position": position,
-                    "all_sizes": sorted(sizes),
-                })
-        # Sort: most common make first, then model, then year.
+            if size not in sizes:
+                continue
+            if k in seen:
+                continue
+            seen.add(k)
+            explicit = pos_map.get((k, size))
+            if explicit:
+                position = explicit
+            elif len(sizes) == 1:
+                position = "both"
+            else:
+                position = "staggered"
+            out["vehicles"].append({
+                "make":     k[0], "model": k[1],
+                "year":     k[2],
+                "position": position,
+                "all_sizes": sorted(sizes),
+            })
         out["vehicles"].sort(key=lambda v: (v["make"], v["model"], v["year"]))
         out["count"] = len(out["vehicles"])
     except Exception as e:

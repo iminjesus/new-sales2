@@ -191,7 +191,11 @@ MODEL_ALIASES = {
     ("VOLKSWAGEN", "TIGUAN"): "tiguan",
 }
 
-FIELD_NAMES = ["make", "model", "gen_start_year", "size"]
+# Oct-29: added `position` so a crawled row can carry Front / Rear /
+# "" (unknown).  The reader side (api_orders_vehicles_by_size) falls
+# back to "both" / "staggered" inference when the column is blank
+# or missing, so old files still work.
+FIELD_NAMES = ["make", "model", "gen_start_year", "size", "position"]
 
 
 def _slug_start_year(slug: str) -> int | None:
@@ -397,44 +401,67 @@ def parse_model_page(html: str) -> list[dict]:
         # Fitment tables typically carry "Wheel", "Tire", "Fitment", etc.
         if not any(k in " ".join(headers) for k in ("tire", "tyre", "wheel", "fitment")):
             continue
-        # Best-effort column indexing.
-        idx_year = idx_trim = idx_size = -1
+        # Best-effort column indexing.  Oct-29 user ask: wheel-size.com
+        # fitment tables sometimes carry separate "Front Tyre" and
+        # "Rear Tyre" columns (staggered fitments) OR a single "Tyre
+        # (front/rear)" column with the two sizes mashed into one cell.
+        # Capture BOTH when present so the output row names the axle.
+        idx_year = idx_trim = idx_size = idx_front = idx_rear = -1
         for i, h in enumerate(headers):
             if idx_year == -1 and "year" in h:  idx_year = i
             if idx_trim == -1 and any(k in h for k in ("trim", "generation", "modification")):
                 idx_trim = i
-            if idx_size == -1 and any(k in h for k in ("tire", "tyre", "fitment")):
+            if idx_front == -1 and "front" in h and any(k in h for k in ("tire", "tyre", "fitment")):
+                idx_front = i
+            if idx_rear == -1 and "rear" in h and any(k in h for k in ("tire", "tyre", "fitment")):
+                idx_rear = i
+            if idx_size == -1 and any(k in h for k in ("tire", "tyre", "fitment")) \
+                    and "front" not in h and "rear" not in h:
                 idx_size = i
-        if idx_size == -1:
+        if idx_size == -1 and idx_front == -1 and idx_rear == -1:
             continue
         for tr in table.select("tbody tr"):
             cells = tr.find_all(["td", "th"])
-            if not cells or idx_size >= len(cells):
+            if not cells:
                 continue
-            size_txt = cells[idx_size].get_text(" ", strip=True)
-            for m in TYRE_RX.finditer(size_txt):
-                sz = _norm_size(m.group(0))
-                if not sz:
-                    continue
-                year = cells[idx_year].get_text(strip=True) if 0 <= idx_year < len(cells) else ""
-                trim = cells[idx_trim].get_text(strip=True) if 0 <= idx_trim < len(cells) else ""
-                key = (year, trim, sz)
-                if key in seen:
-                    continue
-                seen.add(key)
-                rows.append({"year": year, "trim": trim, "size": sz})
+            year = cells[idx_year].get_text(strip=True) if 0 <= idx_year < len(cells) else ""
+            trim = cells[idx_trim].get_text(strip=True) if 0 <= idx_trim < len(cells) else ""
+            # Emit per-axle rows when the table has dedicated columns.
+            def _emit(cell_idx, position):
+                if cell_idx < 0 or cell_idx >= len(cells):
+                    return
+                size_txt = cells[cell_idx].get_text(" ", strip=True)
+                for m in TYRE_RX.finditer(size_txt):
+                    sz = _norm_size(m.group(0))
+                    if not sz:
+                        continue
+                    key = (year, trim, sz, position)
+                    if key in seen: continue
+                    seen.add(key)
+                    rows.append({"year": year, "trim": trim,
+                                 "size": sz, "position": position})
+            _emit(idx_front, "front")
+            _emit(idx_rear,  "rear")
+            # Mixed single column — if front/rear not present, fall
+            # back to the generic size column (position = blank; the
+            # downstream reader treats blank as "both" when the vehicle
+            # has only one size on file).
+            if idx_front < 0 and idx_rear < 0:
+                _emit(idx_size, "")
 
     # 2) Fallback — scan the RAW served HTML for size-shaped tokens.
     # wheel-size.com renders most of its fitment via JS off JSON in
     # script tags, so soup.get_text() skips the sizes; the regex has
-    # to walk the original bytes.  Coarse (no year/trim) but reliable.
+    # to walk the original bytes.  Coarse (no year/trim/position) but
+    # reliable.
     if not rows:
         seen_sz = set()
         for m in TYRE_RX.finditer(html):
             sz = _norm_size(m.group(0))
             if sz and sz not in seen_sz:
                 seen_sz.add(sz)
-                rows.append({"year": "", "trim": "", "size": sz})
+                rows.append({"year": "", "trim": "", "size": sz,
+                             "position": ""})
 
     return rows
 
@@ -709,12 +736,15 @@ def main():
         # fetch that one page — we don't need historic fitments here,
         # just the currently-produced sizes.  Output shrinks to
         # (make, model, size) with duplicates collapsed.
-        sizes: set[str] = set()
+        # Oct-29: keep (size, position) tuples so staggered fitments
+        # (two different sizes with Front vs Rear labels) round-trip
+        # cleanly to the output CSV.
+        sized_pairs: set[tuple[str, str]] = set()
         # A tiny "quick facts" block on the model landing sometimes
         # already carries the current-gen size(s).
         for r in (parse_model_page(model_html) if model_html else []):
             if r["size"]:
-                sizes.add(r["size"])
+                sized_pairs.add((r["size"], str(r.get("position") or "")))
 
         gen_slugs = parse_generation_links(model_html, m_slug, d_slug) if model_html else []
         picked   = _pick_latest_gen(gen_slugs) if gen_slugs else None
@@ -730,18 +760,23 @@ def main():
                 gen_html = None
             for r in (parse_model_page(gen_html) if gen_html else []):
                 if r["size"]:
-                    sizes.add(r["size"])
+                    # Oct-29: keep (size, position) so staggered
+                    # fitments round-trip to the output CSV instead
+                    # of being deduped to a bare size set.
+                    sized_pairs.add((r["size"], str(r.get("position") or "")))
 
         gy_out = str(gen_year) if gen_year else ""
-        if not sizes:
+        if not sized_pairs:
             empty_pairs += 1
             writer.writerow({"make": mk, "model": md,
-                             "gen_start_year": gy_out, "size": ""})
+                             "gen_start_year": gy_out, "size": "",
+                             "position": ""})
         else:
             ok_pairs += 1
-            for sz in sorted(sizes):
+            for sz, pos in sorted(sized_pairs):
                 writer.writerow({"make": mk, "model": md,
-                                 "gen_start_year": gy_out, "size": sz})
+                                 "gen_start_year": gy_out,
+                                 "size": sz, "position": pos})
         fh.flush()
     fh.close()
     print(f"[done] {ok_pairs} with fitment · {empty_pairs} empty · "
