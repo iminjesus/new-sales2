@@ -178,6 +178,41 @@ def _cf_warmup(sess) -> bool:
     return False
 
 
+def _wayback_latest(url: str, sess) -> str | None:
+    """Oct-29: when the direct fetch is CF-blocked at the IP level,
+    archive.org usually has a snapshot of the sitemap that was
+    captured months ago.  Hitting the Wayback Machine doesn't touch
+    wheel-size.com's servers, so CF has no visibility into it.
+    Returns the Wayback snapshot URL (which Serves the raw bytes), or
+    None when no snapshot exists."""
+    api = ("https://archive.org/wayback/available?"
+           + f"url={url}")
+    try:
+        kw = {"timeout": 20, "headers": {
+            "User-Agent": DEFAULT_UA,
+            "Accept": "application/json,*/*;q=0.5",
+        }}
+        if _HAS_CURL_CFFI:
+            kw["impersonate"] = _IMPERSONATE
+        r = sess.get(api, **kw)
+        if r.status_code != 200:
+            return None
+        import json as _json
+        data = _json.loads(r.text or "{}")
+        snap = (data.get("archived_snapshots") or {}).get("closest") or {}
+        if snap.get("available") and snap.get("url"):
+            # The default Wayback replay URL serves a wrapper HTML; add
+            # "if_" to the timestamp to get the raw original bytes.
+            u = snap["url"]
+            # https://web.archive.org/web/20240501000000/https://...
+            # -> https://web.archive.org/web/20240501000000if_/https://...
+            u = re.sub(r"(/web/\d{14})/", r"\1if_/", u)
+            return u
+    except Exception as _e:
+        print(f"[wayback] lookup failed: {_e}", file=sys.stderr)
+    return None
+
+
 def _candidate_sitemap_urls(sess, root_hint: str) -> list[str]:
     """Figure out which sitemap URL(s) wheel-size.com actually serves.
     Tries, in order:
@@ -397,13 +432,45 @@ def crawl_sitemap(root_sitemap: str, market: str, delay: float,
                       file=sys.stderr)
         body = None
     if body is None or chosen is None:
+        print(f"[sitemap] every DIRECT candidate URL failed", file=sys.stderr)
+        # Oct-29: when CF has fully blocked the user's outbound IP, try
+        # the Wayback Machine - it serves a snapshot of wheel-size.com's
+        # sitemap captured by archive.org without ever hitting the live
+        # site, so CF has no visibility and no way to block it.
+        print(f"[wayback] trying archive.org snapshots as fallback ...",
+              file=sys.stderr)
+        for cand in candidates:
+            wu = _wayback_latest(cand, sess)
+            if not wu:
+                continue
+            print(f"[wayback] GET {wu}", file=sys.stderr)
+            wbody = _fetch_xml(sess, wu, delay=delay)
+            if wbody is None:
+                continue
+            try:
+                _wc, _wp = _parse_sitemap(wbody)
+                if _wc or _wp:
+                    body = wbody
+                    chosen = wu
+                    print(f"[wayback] using archived snapshot of {cand}",
+                          file=sys.stderr)
+                    break
+            except Exception:
+                continue
+    if body is None or chosen is None:
         print(f"[sitemap] every candidate sitemap URL failed - aborting",
               file=sys.stderr)
         print(f"[hint] wheel-size.com's CF Bot Fight Mode is blocking "
-              f"this IP.  Options: wait a few hours and retry; run "
-              f"through a VPN / different outbound IP; or run the main "
-              f"crawler's --discover-au mode once it works (then this "
-              f"script becomes redundant).", file=sys.stderr)
+              f"this IP and archive.org has no usable snapshot.  Options:\n"
+              f"  1. Wait a few hours and retry - CF blocks usually "
+              f"clear within a day.\n"
+              f"  2. Switch outbound IP: VPN, mobile hotspot, or a "
+              f"different machine.\n"
+              f"  3. Save the sitemap manually from your browser (where "
+              f"you CAN view wheel-size.com interactively), then re-run "
+              f"this script with --local <saved_file.xml>.\n"
+              f"  4. Install Docker + FlareSolverr for a one-time CF "
+              f"challenge solve (headless Chromium).", file=sys.stderr)
         return []
     print(f"[sitemap] using {chosen}", file=sys.stderr)
     children, pages = _parse_sitemap(body)
@@ -492,6 +559,16 @@ def main():
                     help="Refuse to overwrite --output if it already "
                          "exists.  Default behaviour overwrites in "
                          "place (same as the main crawler's cache).")
+    ap.add_argument("--local", nargs="+", default=None, metavar="PATH",
+                    help="Parse one or more LOCAL sitemap XML files "
+                         "(no network fetch at all).  Use this when CF "
+                         "has fully blocked your IP from wheel-size.com: "
+                         "open the sitemap URL in your browser (where "
+                         "you can clear the CF challenge interactively), "
+                         "File > Save As > sitemap.xml, then pass that "
+                         "file here.  Both plain XML AND .xml.gz are "
+                         "supported.  Pass several files to merge their "
+                         "contents.")
     args = ap.parse_args()
 
     if args.no_overwrite and os.path.exists(args.output):
@@ -503,8 +580,64 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
 
     t0 = time.time()
-    pairs = crawl_sitemap(args.sitemap, args.market, args.delay,
-                           max_children=args.limit)
+    if args.local:
+        # Oct-29: local-file mode - zero network, user supplies the
+        # sitemap(s) they already have on disk.  Walk every file,
+        # recursively parse sitemapindex entries by converting their
+        # <loc> URLs to filenames in the SAME directory (standard
+        # wheel-size.com layout: sitemap.xml references sitemap-NNN
+        # .xml siblings).  Collect pairs into one deduped set.
+        all_pairs: dict[tuple[str, str], None] = {}
+        import pathlib as _pl
+        pending = [os.path.abspath(p) for p in args.local]
+        seen_files: set[str] = set()
+        while pending:
+            fp = pending.pop(0)
+            if fp in seen_files: continue
+            seen_files.add(fp)
+            if not os.path.exists(fp):
+                print(f"[local] missing: {fp}", file=sys.stderr); continue
+            try:
+                with open(fp, "rb") as f:
+                    body = f.read()
+                if body[:2] == _GZIP_MAGIC:
+                    body = gzip.decompress(body)
+            except Exception as _e:
+                print(f"[local] read failed for {fp}: {_e}", file=sys.stderr)
+                continue
+            print(f"[local] parsing {fp}  ({len(body)} bytes)",
+                  file=sys.stderr)
+            children, pages = _parse_sitemap(body)
+            before = len(all_pairs)
+            for pair in _extract_pairs_from_urls(pages):
+                all_pairs[pair] = None
+            print(f"[local]   +{len(all_pairs) - before} new pair(s) "
+                  f"from {len(pages)} URL(s); "
+                  f"{len(children)} nested sitemap(s)",
+                  file=sys.stderr)
+            # If this sitemap REFERENCES child sitemaps by URL, look
+            # for them as sibling files in the same directory - that's
+            # the layout wheel-size.com's full sitemap uses.
+            parent_dir = _pl.Path(fp).parent
+            for ch in children:
+                try:
+                    base = os.path.basename(urlparse(ch).path)
+                except Exception:
+                    continue
+                if not base: continue
+                sibling = str(parent_dir / base)
+                if os.path.exists(sibling) and sibling not in seen_files:
+                    pending.append(sibling)
+                else:
+                    print(f"[local]   skipping nested sitemap not on "
+                          f"disk: {base}  (save it next to {os.path.basename(fp)} "
+                          f"and re-run)", file=sys.stderr)
+        pairs = sorted(all_pairs.keys())
+        print(f"[local] TOTAL unique (make, model) pairs: {len(pairs)}",
+              file=sys.stderr)
+    else:
+        pairs = crawl_sitemap(args.sitemap, args.market, args.delay,
+                               max_children=args.limit)
     if not pairs:
         print(f"[fatal] 0 pairs collected - not writing the output "
               f"file.  Check the sitemap URL and that the HTTP fetches "
