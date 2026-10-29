@@ -1899,9 +1899,9 @@
         </div>
 
         <div class="val val-reason" style="grid-column: span 4;padding:0;align-self:stretch">
-          <textarea id="mgmt_reason" rows="2"
+          <textarea id="mgmt_reason" rows="3"
                     placeholder="Required at Submit — briefly explain the reason (e.g. 'aged stock', 'fleet retention', 'competitor match').  Two words or more so the approver has context."
-                    style="width:100%;height:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none"></textarea>
+                    style="width:100%;min-height:52px;height:100%;resize:vertical;border:none;background:#fff8d5;padding:6px 8px;font:inherit;outline:none;cursor:text"></textarea>
           <!-- Oct-28: attachment strip under the Reason textarea.
                Shown on a hydrated SPRF only (needs an order id to
                upload against). -->
@@ -8970,6 +8970,31 @@ async function hydrateSubmittedOrder(oid, editMode){
         one of the branches above accidentally undimmed a button,
         this last pass restores the frozen state. */
   if (isApproved) lockFormForApproval();
+  /* Oct-29 user ask: on an interstate SPRF with Pending approval
+     the Reason / Special Instruction fields MUST stay editable so
+     the requester (or an approver pushing back on the fly) can add
+     context before the final sign-off.  Several of the wire* calls
+     above can accidentally set readOnly on inputs they don't own
+     (bulk `$$("input, textarea").forEach(...)` loops), so when the
+     page is in canEdit mode AND the SPRF isn't yet approved we
+     explicitly re-open the two text comment boxes as a last pass.
+     Keeping it scoped to just these two fields avoids leaking edit
+     rights into cells the branches above legitimately locked
+     (DO No., CC digits for non-accounts viewers, etc.). */
+  if (canEdit && !isApproved){
+    for (const _id of ["mgmt_reason", "special_instruction"]){
+      const _el = document.getElementById(_id);
+      if (_el){
+        _el.readOnly = false;
+        _el.disabled = false;
+        _el.tabIndex = 0;
+        _el.style.pointerEvents = "auto";
+        _el.title = (_id === "mgmt_reason")
+          ? "Click to add / modify the reason the approver sees."
+          : "Click to add / modify the free-text note for CS.";
+      }
+    }
+  }
 }
 
 /* Oct-28 user ask: Approver's Feedback — show the textarea + Send
@@ -9352,10 +9377,10 @@ function wireApprovalPanel(order, who){
     _mgmtMain = (_mEditF[3] || "").trim();
   }
   const requesterReasonBlock = _mgmtText
-    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#fff8d5;border:1px solid #f59e0b;border-left-width:4px;border-radius:0 4px 4px 0;color:#7c2d12;font-size:12.5px;line-height:1.5;white-space:pre-wrap">`
-      + `📝 <b>Reason from requester:</b> ${esc(_mgmtMain || _mgmtText)}`
+    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#f1f5f9;border:1px solid #94a3b8;border-left-width:4px;border-radius:0 4px 4px 0;color:#334155;font-size:12.5px;line-height:1.5;white-space:pre-wrap;cursor:default" title="Read-only mirror of the Reason / Notes for Approver textarea above - click into the yellow box to edit.">`
+      + `👁 <b>Reason from requester (view):</b> ${esc(_mgmtMain || _mgmtText)}`
       + (_mgmtMain && _mgmtEdit
-          ? `<div style="margin-top:4px;font-size:11px;color:#92400e;font-style:italic">last edit by ${esc(_mgmtEdit)}</div>`
+          ? `<div style="margin-top:4px;font-size:11px;color:#64748b;font-style:italic">last edit by ${esc(_mgmtEdit)}</div>`
           : "")
       + `</div>`
     : "";
