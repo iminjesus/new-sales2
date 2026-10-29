@@ -1882,8 +1882,12 @@
         <!-- Oct-29: reverted label back to "Special Instruction" per
              user ask after one round with "Requesting Reason".  The
              fillable-looking dashed border + grey background styling
-             stays so an empty box still reads as an input. -->
-        <div class="lbl">Special Instruction</div>
+             stays so an empty box still reads as an input.
+             Oct-29: id="specialInstructionAuthor" is a muted sub-
+             label the hydrator fills with "by X · time" when the
+             backend has stamped a special_instruction_by_name. -->
+        <div class="lbl">Special Instruction<span id="specialInstructionAuthor"
+             style="color:#0369a1;font-weight:600;font-size:10.5px;margin-left:6px"></span></div>
         <div class="val" style="grid-column: span 3">
           <textarea id="special_instruction" rows="1"
                     placeholder="Optional free-text note from the requester (e.g. 'please ship together with PO 12345', 'customer wants delivery before Fri')."
@@ -8792,6 +8796,17 @@ async function hydrateSubmittedOrder(oid, editMode){
   wireApprovalPanel(data, who);
   // Oct-28: Approver Feedback box + attachment strips.
   try { wireApproverFeedback(data, who); } catch (_e) {}
+  // Oct-29: fill the "by X · time" sub-label beside Special Instruction.
+  try {
+    const _siLbl = document.getElementById("specialInstructionAuthor");
+    if (_siLbl) {
+      const _by = String(data.special_instruction_by_name || "").trim();
+      const _at = String(data.special_instruction_at || "").trim();
+      _siLbl.textContent = (_by || _at)
+        ? ` · by ${_by || "—"}${_at ? " · " + _at : ""}`
+        : "";
+    }
+  } catch (_e) {}
   try { renderAllAttachStrips(data, who); } catch (_e) {}
   /* 7. Belt-and-braces: an already-approved order stays LOCKED
         regardless of who's viewing and which URL flags they used

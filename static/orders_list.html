@@ -648,6 +648,24 @@ function renderRows(){
           `last edit by ${escapeHtml(_editStamp)}</div>`
         );
       }
+      // Oct-29 user ask: Special Instruction content on the Note
+      // column so the reader doesn't have to open the SPRF.  Shows
+      // "by X · time" when the backend has stamped the author.
+      const _specialInst = String(r.special_instruction || "").trim();
+      if (_specialInst) {
+        const _siBy = String(r.special_instruction_by_name || "").trim();
+        const _siAt = String(r.special_instruction_at || "").trim();
+        const _siStamp = (_siBy || _siAt)
+          ? `<div style="margin-top:3px;font-size:10px;color:#0369a1;font-style:italic">`
+            + `by ${escapeHtml(_siBy || "—")}${_siAt ? ` · ${escapeHtml(_siAt)}` : ""}</div>`
+          : "";
+        _blocks.push(
+          `<div style="font-size:11px;line-height:1.35;color:#0c4a6e;background:#e0f2fe;padding:4px 6px;border-radius:3px;white-space:pre-wrap;margin-top:3px">`
+          + `<b style="color:#0369a1">Special Instruction:</b> ${escapeHtml(_specialInst)}`
+          + _siStamp
+          + `</div>`
+        );
+      }
       if (_rejectNote) {
         _blocks.push(
           `<div style="font-size:11px;line-height:1.35;color:#7f1d1d;background:#fee2e2;padding:4px 6px;border-radius:3px;white-space:pre-wrap;margin-top:3px">` +

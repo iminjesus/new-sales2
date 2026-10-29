@@ -5642,6 +5642,12 @@ def _ensure_submitted_orders_table():
             ("approver_feedback",         "TEXT NULL"),
             ("approver_feedback_by_name", "VARCHAR(60) NULL"),
             ("approver_feedback_at",      "DATETIME NULL"),
+            # Oct-29 user ask: track who last typed into Special
+            # Instruction + when, so the list page can show the
+            # commenter and the SPRF form can label the field with
+            # "last by X · time".
+            ("special_instruction_by_name", "VARCHAR(60) NULL"),
+            ("special_instruction_at",      "DATETIME NULL"),
         ]
         for col, ddl in _add_cols:
             cur.execute(f"SHOW COLUMNS FROM submitted_orders LIKE '{col}'")
@@ -6119,6 +6125,65 @@ def _submitted_order_email_html(oid, order, base_url):
     """
 
 
+# Oct-29 user ask: Special Instruction field now carries an
+# author + timestamp.  Resolve the viewer's display name from the
+# existing identity maps (MD approvers → Hayden/JJ/Kenny; price
+# editors → Brian/Pamela; else email local part).  Used by the
+# save endpoints below when stamping special_instruction_by_name.
+def _display_name_for_email(email: str) -> str:
+    e = (email or "").strip().lower()
+    if not e: return ""
+    if e == MGMT_APPROVER_EMAILS[0].lower(): return "Hayden"
+    if e == MGMT_APPROVER_EMAILS[1].lower(): return "JJ"
+    if e == MGMT_APPROVER_EMAILS[2].lower(): return "Kenny"
+    pe = PRICE_EDITOR_EMAILS.get(e)
+    if pe: return pe
+    return e.split("@")[0]
+
+
+def _stamp_special_instruction(cur, oid: int, new_text: str, viewer_email: str,
+                                prev_text: str = None):
+    """Oct-29 user ask: when special_instruction changes (or lands
+    non-empty for the first time), stamp the viewer as the author
+    plus the timestamp.  When cleared, zero out the stamp.  Called
+    after the main INSERT/UPDATE from each save endpoint."""
+    new_t = (new_text or "").strip()
+    if prev_text is None:
+        # Caller didn't give us the prior value → look it up.
+        try:
+            cur.execute(
+                "SELECT JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.header.special_instruction')) AS si "
+                "FROM submitted_orders WHERE id = %s LIMIT 1", (oid,))
+            r = cur.fetchone()
+            if r:
+                prev_text = (r.get("si") if isinstance(r, dict) else r[0]) or ""
+        except Exception:
+            prev_text = ""
+    prev_t = (prev_text or "").strip()
+    if new_t == prev_t:
+        return  # no change — leave the existing stamp alone
+    if not new_t:
+        # cleared — zero out
+        try:
+            cur.execute(
+                "UPDATE submitted_orders "
+                "SET special_instruction_by_name = NULL, "
+                "    special_instruction_at      = NULL "
+                "WHERE id = %s", (oid,))
+        except Exception as _e:
+            print(f"[special_instruction] clear stamp failed: {_e}")
+        return
+    author = _display_name_for_email(viewer_email)
+    try:
+        cur.execute(
+            "UPDATE submitted_orders "
+            "SET special_instruction_by_name = %s, "
+            "    special_instruction_at      = NOW() "
+            "WHERE id = %s", (author, oid))
+    except Exception as _e:
+        print(f"[special_instruction] write stamp failed: {_e}")
+
+
 @app.post("/api/orders/submit")
 def api_orders_submit():
     """Persist a filled Special Price Request Form as a
@@ -6262,6 +6327,17 @@ def api_orders_submit():
             ),
         )
         oid = cur.lastrowid
+        # Oct-29 user ask: stamp Special Instruction author on first
+        # submit when the field is non-empty.
+        try:
+            _stamp_special_instruction(
+                cur, oid,
+                (header.get("special_instruction") or ""),
+                submitted_by_email,
+                prev_text="",
+            )
+        except Exception as _e:
+            print(f"[submit] special_instruction stamp failed: {_e}")
         # Secondary UPDATE for the Oct-9 new-fields block (Interstate
         # Delivery flag + amount, Payment Method + raw card details).
         # Kept out of the big INSERT above so the column list stays
@@ -6511,6 +6587,15 @@ def api_orders_save_temp():
                 row_values[:16] + (row_values[16], row_values[17], order_no, row_values[18], row_values[19]),
             )
             oid = cur.lastrowid
+        # Oct-29: stamp Special Instruction author for drafts too.
+        try:
+            _stamp_special_instruction(
+                cur, oid,
+                ((payload.get("header") or {}).get("special_instruction") or ""),
+                (submitted_by_email or ""),
+            )
+        except Exception as _e:
+            print(f"[save_temp] special_instruction stamp failed: {_e}")
         # Mirror the submit path's secondary UPDATE so drafts also
         # carry Interstate + Payment Method in dedicated columns —
         # otherwise reopening a saved draft loses the COD / Credit
@@ -6667,7 +6752,8 @@ def api_orders_list():
             f"       rebateable, mgmt_reason, "
             f"       interstate_flag, interstate_amount, "
             f"       payment_method, sd_no, cs_comment, "
-            f"       customer_pickup "
+            f"       customer_pickup, "
+            f"       special_instruction_by_name, special_instruction_at "
             f"FROM submitted_orders {where_sql} "
             f"ORDER BY submitted_at DESC LIMIT %s",
             tuple(p + [limit])
@@ -6716,6 +6802,10 @@ def api_orders_list():
         # column (edit history) without a separate fetch.
         requester_by_id   = {i: "" for i in ids}
         mod_log_by_id     = {i: [] for i in ids}
+        # Oct-29 user ask: surface Special Instruction text on list
+        # rows so the Note column can show the content, not just the
+        # mgmt_reason.
+        special_inst_by_id = {i: "" for i in ids}
         if ids:
             fmt = ",".join(["%s"] * len(ids))
             try:
@@ -6725,6 +6815,7 @@ def api_orders_list():
                     except Exception: pj = {}
                     _hdr = pj.get("header") or {}
                     requester_by_id[pr["id"]] = str(_hdr.get("requester_email") or "").strip()
+                    special_inst_by_id[pr["id"]] = str(_hdr.get("special_instruction") or "").strip()
                     _ml = pj.get("mod_log") or []
                     mod_log_by_id[pr["id"]] = _ml if isinstance(_ml, list) else []
                     # Resolve the order's mapped plant for inter-state
@@ -6797,11 +6888,15 @@ def api_orders_list():
             except Exception:
                 pass
         for r in rows:
-            for k in ("submitted_at", "status_changed_at", "approved_at", "rejected_at", "deleted_at"):
+            for k in ("submitted_at", "status_changed_at", "approved_at",
+                      "rejected_at", "deleted_at", "special_instruction_at"):
                 v = r.get(k)
                 if v is not None:
                     try: r[k] = v.strftime("%Y-%m-%d %H:%M")
                     except Exception: r[k] = str(v)
+            # Oct-29: expose Special Instruction text so the list Note
+            # column can render it alongside mgmt_reason.
+            r["special_instruction"] = special_inst_by_id.get(r["id"], "")
             try: r["grand_total"] = float(r.get("grand_total") or 0)
             except Exception: r["grand_total"] = 0
             r["grand_total_pclt"] = round(pclt_by_id.get(r["id"], 0.0), 2)
@@ -6873,6 +6968,7 @@ def api_orders_detail(oid):
             "       sap_lock_by_email, sap_lock_at, "
             "       customer_pickup, "
             "       approver_feedback, approver_feedback_by_name, approver_feedback_at, "
+            "       special_instruction_by_name, special_instruction_at, "
             "       payload_json "
             "FROM submitted_orders WHERE id = %s LIMIT 1",
             (oid,))
@@ -6882,7 +6978,7 @@ def api_orders_detail(oid):
         for k in ("submitted_at", "status_changed_at",
                   "approved_a_at", "approved_b_at", "approved_c_at",
                   "approved_at", "rejected_at", "deleted_at",
-                  "approver_feedback_at"):
+                  "approver_feedback_at", "special_instruction_at"):
             v = row.get(k)
             if v is not None:
                 try: row[k] = v.strftime("%Y-%m-%d %H:%M")
@@ -7756,6 +7852,15 @@ def api_orders_update(oid):
                     oid,
                 ),
             )
+            # Oct-29: stamp Special Instruction author on update.
+            try:
+                _stamp_special_instruction(
+                    cur, oid,
+                    (header.get("special_instruction") or ""),
+                    who,
+                )
+            except Exception as _e:
+                print(f"[update] special_instruction stamp failed: {_e}")
             # Secondary UPDATE for payment-method + card details — only
             # overwrites them when the edit actually carried a payment
             # block, so Harry editing a non-payment field doesn't blow
