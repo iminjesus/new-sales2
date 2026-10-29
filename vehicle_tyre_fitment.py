@@ -390,22 +390,40 @@ def discover_au_catalog(session, delay: float = 2.5,
     pass doesn't blow the Cloudflare budget before the main crawl
     starts.  Each stage is retried via the shared fetch() helper, so a
     single bot-block doesn't lose a whole make."""
-    base_catalog = f"{BASE_URL}/{market.strip('/')}/"
+    # Oct-29 fix: wheel-size.com has NO /au/ path prefix.  Fitment
+    # URLs are /size/<make>/<model>/<year>/ globally; AU-market
+    # filtering happens via a `market` cookie set from the country
+    # dropdown.  Discovery now uses /size/ as the catalog base and
+    # pins the market cookie so year/trim lists we fetch later reflect
+    # the AU filter.
+    mkt = (market or "").upper().strip() or "AU"
+    try:
+        session.cookies.set("market", mkt, domain="www.wheel-size.com")
+        session.cookies.set("market", mkt, domain=".wheel-size.com")
+    except Exception as _e:
+        print(f"[discover] couldn't set market cookie ({_e}) - "
+              f"continuing without market filter", file=sys.stderr)
+    base_catalog = f"{BASE_URL}/size/"
     pairs: list[tuple[str, str]] = []
     seen_makes: set[str] = set()
-    print(f"[discover] fetching make list from {base_catalog}", file=sys.stderr)
+    print(f"[discover] fetching make list from {base_catalog}  (market={mkt})",
+          file=sys.stderr)
     root_html = fetch(session, base_catalog, delay, ua_idx=0)
     if root_html is FETCH_BLOCKED or not root_html:
-        print(f"[discover] couldn't open {base_catalog} — aborting discovery",
+        print(f"[discover] /size/ unreachable - trying site root ...",
+              file=sys.stderr)
+        root_html = fetch(session, f"{BASE_URL}/", delay, ua_idx=0)
+    if root_html is FETCH_BLOCKED or not root_html:
+        print(f"[discover] couldn't open the catalog - aborting discovery",
               file=sys.stderr)
         return []
     soup = BeautifulSoup(root_html, "lxml")
     make_links: list[tuple[str, str]] = []  # (slug, display)
-    prefix = f"/{market.strip('/')}/"
+    prefix = "/size/"
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        # Make links look like /au/toyota/  (one path segment after
-        # the market prefix, no further slashes besides the trailing).
+        # Make links look like /size/toyota/  (exactly one path
+        # segment after /size/, no further slashes besides trailing).
         if not href.startswith(prefix):
             continue
         tail = href[len(prefix):].rstrip("/")
@@ -416,7 +434,7 @@ def discover_au_catalog(session, delay: float = 2.5,
             continue
         seen_makes.add(slug)
         make_links.append((slug, a.get_text(strip=True) or slug))
-    print(f"[discover] found {len(make_links)} makes under /{market}/",
+    print(f"[discover] found {len(make_links)} makes under /size/",
           file=sys.stderr)
     if makes_limit and makes_limit > 0 and len(make_links) > makes_limit:
         print(f"[discover] limiting to first {makes_limit} makes for a quick "
@@ -425,7 +443,7 @@ def discover_au_catalog(session, delay: float = 2.5,
         make_links = make_links[:makes_limit]
     for idx, (mk_slug, mk_name) in enumerate(make_links):
         make_url = f"{base_catalog}{mk_slug}/"
-        print(f"[discover] {idx + 1}/{len(make_links)}  {mk_name}  →  {make_url}",
+        print(f"[discover] {idx + 1}/{len(make_links)}  {mk_name}  ->  {make_url}",
               file=sys.stderr)
         page = fetch(session, make_url, delay, ua_idx=idx + 1)
         if page is FETCH_BLOCKED or not page:
@@ -445,7 +463,7 @@ def discover_au_catalog(session, delay: float = 2.5,
             if md_slug in seen_models:
                 continue
             seen_models.add(md_slug)
-            # Upper-case for the downstream pipeline (slug "golf" →
+            # Upper-case for the downstream pipeline (slug "golf" ->
             # "GOLF"; it already works with slugs because make_slug /
             # model_slug collapses "GOLF" back to "golf" for the URL).
             md_name = (a.get_text(strip=True) or md_slug).replace("  ", " ").strip()
