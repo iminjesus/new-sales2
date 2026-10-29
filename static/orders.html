@@ -1879,12 +1879,11 @@
              input row so Rebate-able on the left pane isn't dragged
              taller than the Phone No row.  Users can grab the
              resize handle to grow it when they need more space. -->
-        <!-- Oct-29 user ask: renamed "Special Instruction" → "Requesting Reason"
-             because that's what the BDE actually types into this box.
-             The field id and the server payload key stay as
-             `special_instruction` for backward compat with existing
-             saved orders. -->
-        <div class="lbl">Requesting Reason</div>
+        <!-- Oct-29: reverted label back to "Special Instruction" per
+             user ask after one round with "Requesting Reason".  The
+             fillable-looking dashed border + grey background styling
+             stays so an empty box still reads as an input. -->
+        <div class="lbl">Special Instruction</div>
         <div class="val" style="grid-column: span 3">
           <textarea id="special_instruction" rows="1"
                     placeholder="Optional free-text note from the requester (e.g. 'please ship together with PO 12345', 'customer wants delivery before Fri')."
@@ -1906,18 +1905,27 @@
         </div>
         <!-- Oct-28 user ask: Approver Feedback — a textarea the three
              MGMT approvers (Hayden/Kenny/JJ) can use to send a message
-             BACK to the requester before approving.  Hidden by default;
-             the hydrator unhides it when the viewer is an approver and
-             the order is in a Pending state (not yet approved / rejected
-             / drafted). -->
+             BACK to the requester before approving.  Oct-29 revision:
+             added a clear instructional banner above the textarea
+             spelling out when to use this flow vs. clicking Approve
+             outright, so an approver doesn't need to guess. -->
         <div class="lbl" id="approverFeedbackLbl" hidden
              style="grid-column: span 4;background:#dbeafe;color:#1e3a8a;justify-content:flex-start;font-weight:800;padding:2px 8px;min-height:0;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-          Approver's Feedback <span style="color:#64748b;font-weight:600">(sends only to the requester)</span>
+          Approver's Feedback / Request more info from the Requester
+          <span style="color:#64748b;font-weight:600">(emails ONLY the requester — approval is NOT required to send)</span>
         </div>
         <div class="val" id="approverFeedbackWrap" hidden
              style="grid-column: span 4;padding:0;align-self:stretch">
-          <textarea id="approver_feedback" rows="2"
-                    placeholder="Leave a message that will be emailed to the requester only (not CS, not other approvers).  Use this to request a revision or ask a clarifying question BEFORE signing off."
+          <div style="padding:6px 10px;background:#eff6ff;color:#1e40af;font-size:11.5px;line-height:1.5;border-bottom:1px dashed #bfdbfe">
+            💡 <b>Not ready to approve?</b> Type what you need from the
+            requester here (missing evidence, revised numbers, competitor
+            quote, …) and click <b>📧 Send Feedback to Requester</b>.
+            The message is emailed <b>only</b> to the requester; you do
+            <b>NOT</b> approve the SPRF by sending feedback.  Attach
+            supporting files below if useful.
+          </div>
+          <textarea id="approver_feedback" rows="3"
+                    placeholder="e.g. 'Please provide the Kumho quote PDF — proposed DC too deep without evidence.  Resubmit after attaching and I'll approve.'"
                     style="width:100%;resize:vertical;border:none;background:#eff6ff;padding:6px 8px;font:inherit;outline:none"></textarea>
           <div id="attachStrip-approver_feedback" class="sprf-attach-strip" data-source="approver_feedback" hidden></div>
           <div style="display:flex;justify-content:flex-end;gap:8px;padding:6px 8px;background:#eff6ff">
@@ -9162,8 +9170,24 @@ function wireApprovalPanel(order, who){
      text; show the SAME string here on the form itself for easy
      reference. */
   const _mgmtText = String(order.mgmt_reason || "").trim();
+  // Oct-29 user ask: split off the "<Name> updated · " editor audit
+  // stamp (prepended by the price-editor update flow) so the
+  // approver sees the actual requester-typed reason as the main
+  // text, with the editor stamp demoted to a small italic suffix.
+  let _mgmtMain  = _mgmtText;
+  let _mgmtEdit  = "";
+  const _mEditF = _mgmtText.match(/^([A-Za-z][\w .'-]{0,40}?)\s+(updated|corrected|edited)\s*·\s*(.*)$/s);
+  if (_mEditF) {
+    _mgmtEdit = `${_mEditF[1]} ${_mEditF[2]}`;
+    _mgmtMain = (_mEditF[3] || "").trim();
+  }
   const requesterReasonBlock = _mgmtText
-    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#fff8d5;border:1px solid #f59e0b;border-left-width:4px;border-radius:0 4px 4px 0;color:#7c2d12;font-size:12.5px;line-height:1.5;white-space:pre-wrap">📝 <b>Reason from requester:</b> ${esc(_mgmtText)}</div>`
+    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#fff8d5;border:1px solid #f59e0b;border-left-width:4px;border-radius:0 4px 4px 0;color:#7c2d12;font-size:12.5px;line-height:1.5;white-space:pre-wrap">`
+      + `📝 <b>Reason from requester:</b> ${esc(_mgmtMain || _mgmtText)}`
+      + (_mgmtMain && _mgmtEdit
+          ? `<div style="margin-top:4px;font-size:11px;color:#92400e;font-style:italic">last edit by ${esc(_mgmtEdit)}</div>`
+          : "")
+      + `</div>`
     : "";
   row.innerHTML = rejectBanner + recordBanner + requesterReasonBlock + [
     /* Display order (per review): Kenny → Hayden → JJ.  Slot

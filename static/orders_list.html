@@ -91,6 +91,13 @@
           <div style="padding:6px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;color:#1e3a8a;font-weight:700">
             This month requested: <span id="msTotal" style="font-size:14px;font-weight:900">0</span>
           </div>
+          <!-- Oct-29 user ask: new "This week requested" tile sitting
+               between the Month and the Awaiting-approval tiles.
+               Rolling 7-day window ending today (not calendar-week
+               boundaries), excludes drafts + deleted rows. -->
+          <div style="padding:6px 12px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:6px;color:#155e75;font-weight:700">
+            This week requested: <span id="msWeek" style="font-size:14px;font-weight:900">0</span>
+          </div>
           <div style="padding:6px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-weight:700">
             Awaiting approval: <span id="msPendingAppr" style="font-size:14px;font-weight:900">0</span>
           </div>
@@ -605,14 +612,40 @@ function renderRows(){
            2. The approver / rejector's note — green on approve,
               red on reject.  Required for reject (≥ 2 words);
               optional for approve.  */
-      const _reason   = String(r.mgmt_reason || "").trim();
+      const _reasonRaw    = String(r.mgmt_reason || "").trim();
       const _approvalNote = String(r.approval_note || "").trim();
       const _rejectNote   = String(r.reject_note  || "").trim();
+      // Oct-29 user ask: when a price editor touched the order, the
+      // backend prepends "<Name> updated · " (or "<Name> corrected · ")
+      // to mgmt_reason as an audit stamp.  Split it off so the LIST
+      // shows the actual requester-typed reason as the main text
+      // (which is what the reader cares about), and demotes the editor
+      // audit stamp to a small muted line below.  Rows that never
+      // went through an editor pass look exactly the same as before.
+      let _reason    = _reasonRaw;
+      let _editStamp = "";
+      const _mEdit = _reasonRaw.match(/^([A-Za-z][\w .'-]{0,40}?)\s+(updated|corrected|edited)\s*·\s*(.*)$/s);
+      if (_mEdit) {
+        _editStamp = `${_mEdit[1]} ${_mEdit[2]}`;
+        _reason    = (_mEdit[3] || "").trim();
+      }
       const _blocks = [];
       if (_reason) {
         _blocks.push(
           `<div style="font-size:11px;line-height:1.35;color:#78350f;background:#fef3c7;padding:4px 6px;border-radius:3px;white-space:pre-wrap">` +
-          `<b style="color:#7c2d12">Reason:</b> ${escapeHtml(_reason)}</div>`
+          `<b style="color:#7c2d12">Reason:</b> ${escapeHtml(_reason)}` +
+          (_editStamp
+            ? `<div style="margin-top:3px;font-size:10px;color:#92400e;font-style:italic">last edit by ${escapeHtml(_editStamp)}</div>`
+            : "") +
+          `</div>`
+        );
+      } else if (_editStamp) {
+        // Legacy row with ONLY the audit stamp (no original reason
+        // typed before the editor touched it).  Still show it muted
+        // so the reader sees the row was edited.
+        _blocks.push(
+          `<div style="font-size:11px;line-height:1.35;color:#92400e;background:#fef3c7;padding:4px 6px;border-radius:3px;font-style:italic">` +
+          `last edit by ${escapeHtml(_editStamp)}</div>`
         );
       }
       if (_rejectNote) {
@@ -777,6 +810,21 @@ function renderRows(){
   const _msTotal = _msRows.filter(r =>
     String(r.needs_mgmt_approval || "").toLowerCase() !== "temp"
   );
+  // Oct-29 user ask: "This week requested" — rolling 7-day window
+  // ending today (NOT calendar week), excludes drafts + deleted.
+  const _weekAgo = new Date(_now.getFullYear(), _now.getMonth(),
+                            _now.getDate() - 7);
+  const _isThisWeek = r => {
+    const t = String(r.submitted_at || "").slice(0, 10);
+    if (!t) return false;
+    const [yy, mm, dd] = t.split("-").map(n => +n);
+    if (!yy || !mm || !dd) return false;
+    const d = new Date(yy, mm - 1, dd);
+    return d >= _weekAgo && d <= _now;
+  };
+  const _msWeek = filtered.filter(r =>
+    _isThisWeek(r) && !r.deleted_at
+    && String(r.needs_mgmt_approval || "").toLowerCase() !== "temp");
   const _msPendingAppr = _msTotal.filter(r =>
     (r.has_additional_dc || r.has_interstate)
     && !r.approved_by_name && !r.rejected_by_name
@@ -793,6 +841,7 @@ function renderRows(){
         || (!r.has_additional_dc && !r.has_interstate))
   );
   $("#msTotal")         .textContent = _msTotal.length;
+  $("#msWeek")          .textContent = _msWeek.length;
   $("#msPendingAppr")   .textContent = _msPendingAppr.length;
   $("#msApprovedNoDO")  .textContent = _msApprovedNoDO.length;
   $("#sumTotal").textContent   = fmtMoney(sumAll);
