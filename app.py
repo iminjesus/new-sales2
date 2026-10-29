@@ -4251,19 +4251,28 @@ def api_orders_vehicles_by_size():
         out["debug"]["rows_with_size"]  = _rows_with_size
         out["debug"]["header_fields"]   = _header_fields
         # Second pass: pull every (make, model, year) that includes
-        # the requested CORE size.  Inferred position falls back to
-        # 'both' (single-size vehicle) or 'staggered' (multi-size).
+        # the requested CORE size.
+        #
+        # Oct-29 user ask (position fix): the previous logic labelled a
+        # multi-size vehicle as "staggered" whenever its OE file row
+        # carried more than one size.  But "multiple sizes" on a
+        # single vehicle usually means ALTERNATIVE fitments (16" wheel
+        # option vs 17" wheel option), NOT staggered front/rear.
+        # Real staggered fitments are only reliably known when the OE
+        # file carries an explicit position=front / position=rear per
+        # size.  So:
+        #   - position explicit (front / rear / both) in the CSV -> use it
+        #   - otherwise                                          -> "both"
+        # The "staggered: X+Y" label is reserved for the explicit case
+        # (so the SPRF chip no longer mis-labels Peugeot 307 /
+        # Alfa Romeo 147 / Audi 80 as staggered just because they
+        # offer two wheel-size options).
         raw_hits = []
         for k, sizes in all_sizes.items():
             if size_core not in sizes:
                 continue
             explicit = pos_map.get((k, size_core))
-            if explicit:
-                position = explicit
-            elif len(sizes) == 1:
-                position = "both"
-            else:
-                position = "staggered"
+            position = explicit if explicit else "both"
             raw_hits.append({
                 "make":     k[0], "model": k[1],
                 "year":     k[2],
@@ -4314,20 +4323,31 @@ def api_orders_vehicles_by_size():
             parts.extend(others)
             return ", ".join(parts)
         for slot in grouped.values():
+            # Oct-29 user ask: surface the LATEST year a vehicle
+            # carried this fitment, so the frontend can show the most
+            # recent models first in the Vehicles chip.  Numeric years
+            # keep their int value; non-numeric fall back to -1 so
+            # they sort to the bottom.
+            _nums = sorted(y for y in slot["years"] if isinstance(y, int))
+            slot["max_year"] = _nums[-1] if _nums else -1
             slot["years"] = _compact_years(slot["years"])
             slot["all_sizes"] = sorted(slot.pop("all_sizes_union"))
-            # Oct-29 user ask: for staggered rows surface the "front
-            # size + rear size" when the file carries both axles for
-            # this vehicle, so the SPRF chip can show e.g.
-            # "staggered: 245/40R20 + 265/40R20" instead of just
-            # "staggered".  Non-staggered rows get an empty string.
-            if slot["position"] == "staggered" and len(slot["all_sizes"]) > 1:
+            # Oct-29 user ask (staggered scope): keep staggered_detail
+            # ONLY when the file carries an EXPLICIT front/rear
+            # marker for this vehicle - otherwise multi-size vehicles
+            # are "alternative wheel options", not front/rear
+            # staggered, and the paired-sizes label would mislead.
+            if slot["position"] in ("front", "rear") and len(slot["all_sizes"]) > 1:
                 slot["staggered_detail"] = " + ".join(slot["all_sizes"])
             else:
                 slot["staggered_detail"] = ""
+        # Oct-29 user ask: sort by most-recent year first so popular /
+        # current models surface at the top of the chip - ties break
+        # on make + model so the ordering is stable between calls.
         out["vehicles"] = sorted(
             grouped.values(),
-            key=lambda v: (v["make"], v["model"], v["position"]),
+            key=lambda v: (-int(v.get("max_year") or -1),
+                            v["make"], v["model"], v["position"]),
         )
         out["count"] = len(out["vehicles"])
         out["size_normalized"] = size_core

@@ -3688,21 +3688,104 @@ function _buildColoredRemarkHTML(text){
     // so a reviewer sees it immediately.  Precedes the brand chips
     // in the chain so an interstate line's own tag paints red.
     if (/^Interstate delivery/i.test(line))                  return "#B91C1C"; // strong red
+    if (/^\(Vehicles\b/i.test(line))                         return "#5B21B6"; // deep purple (vehicles)
     if (/^\(Tempe/i.test(line))                              return "#C62828"; // red
     if (/^\(JAX\b/i.test(line))                              return "#558B2F"; // dark olive green
     if (/^\(Bob\s*Jane\b|^\(BobJane\b/i.test(line))          return "#5D4037"; // brown (고동색)
     return "#1565C0"; // dark blue (promo / pricing / status default)
   };
   const isInterstate = l => /^Interstate delivery/i.test(l);
+  // Oct-29 user ask: WhatVehicles chip is encoded on one line of
+  // dataset.remarkFull as "(Vehicles (N models): V1 | V2 | ... |
+  // <<MORE:k>>)" so the chip-filter / line-based logic keeps working;
+  // the RENDERER explodes it onto per-vehicle visual lines with <br>
+  // and turns "<<MORE:k>>" into a clickable "+k more" link that
+  // reveals the full list on click.
+  const _renderVehiclesLine = (line) => {
+    const c = colourFor(line);
+    // Strip the outer "(Vehicles (N models): ... )" shell so we can
+    // split the body on " | ".  Keep the header part for display.
+    const m = line.match(/^\(Vehicles\s*(\([^)]*\))?\s*:\s*([\s\S]*)\)\s*$/i);
+    if (!m) {
+      // Fallback: unexpected shape, render as plain line.
+      return `<div style="color:${c};font-weight:600">${esc(line)}</div>`;
+    }
+    const header = (m[1] || "").trim();  // "(13 models)"
+    const bodyRaw = (m[2] || "").trim();
+    const parts   = bodyRaw.split(/\s*\|\s*/).filter(Boolean);
+    const htmlParts = parts.map(p => {
+      const more = p.match(/^<<MORE:(\d+)>>$/);
+      if (more) {
+        return `<a href="#" class="whatvehicles-more" `
+             + `data-more="${more[1]}" `
+             + `style="color:${c};text-decoration:underline;cursor:pointer;font-weight:600">`
+             + `+${more[1]} more</a>`;
+      }
+      return `<div style="color:${c};font-weight:600;padding-left:14px">`
+           + esc(p) + `</div>`;
+    });
+    const headerHtml = `<div style="color:${c};font-weight:800">`
+      + esc(`Vehicles ${header}:`) + `</div>`;
+    // Non-link parts are already divs; the +N more link needs to be
+    // wrapped so it sits on its own visual line.
+    const bodyHtml = htmlParts.map(h => {
+      if (h.startsWith("<a ")) {
+        return `<div style="padding-left:14px">${h}</div>`;
+      }
+      return h;
+    }).join("");
+    return headerHtml + bodyHtml;
+  };
   const html = (text || "").split("\n").map(line => {
     const t = line.trim();
     if (!t) return "";
+    if (/^\(Vehicles\b/i.test(t)) {
+      return _renderVehiclesLine(t);
+    }
     const c = colourFor(t);
     const extra = isInterstate(t) ? ";font-weight:800;text-transform:uppercase;letter-spacing:.03em" : ";font-weight:600";
     return `<div style="color:${c}${extra}">${esc(t)}</div>`;
   }).join("");
   return html || "&nbsp;";
 }
+
+// Oct-29 user ask: "+N more" link in the Vehicles chip expands the
+// chip in place to show the full list.  Delegated handler so new
+// links added by _buildColoredRemarkHTML on later re-renders stay
+// wired without needing per-element binding.
+document.addEventListener("click", function (ev) {
+  const a = ev.target && ev.target.closest && ev.target.closest("a.whatvehicles-more");
+  if (!a) return;
+  ev.preventDefault();
+  const tr = a.closest("tr");
+  if (!tr) return;
+  let full = [];
+  try {
+    full = JSON.parse(tr.dataset.whatvehiclesFull || "[]");
+  } catch (_e) {}
+  if (!full.length) return;
+  // Replace the Vehicles chip in dataset.remarkFull with the FULL
+  // expansion (no "<<MORE:k>>" tail).  The subsequent re-render emits
+  // every vehicle on its own line, no clickable tail.
+  const raw   = tr.dataset.remarkFull || "";
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\(Vehicles\b/i.test(lines[i])) {
+      const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
+      const body   = full.join(" | ");
+      lines[i] = `${header} ${body})`;
+      break;
+    }
+  }
+  tr.dataset.remarkFull = lines.join("\n");
+  const remEl = tr.querySelector('[data-col="remark"]');
+  if (remEl && remEl.tagName === "DIV") {
+    remEl.innerHTML = _buildColoredRemarkHTML(tr.dataset.remarkFull);
+  }
+  if (typeof _applyRemarkFilterToRow === "function") {
+    _applyRemarkFilterToRow(tr);
+  }
+});
 
 /* Oct-27 user ask: per-source filter above the Remark column lets
    the user hide / show individual price chips (TempeConsumer,
@@ -5690,29 +5773,56 @@ async function _applyWhatVehiclesToRow(tr){
         // off entirely (freshKept was already stripped of any
         // previous Vehicles chip above).
       } else {
+        // Oct-29 user ask (chip format overhaul):
+        //   * Header line: "(Vehicles (N models):"
+        //   * Each vehicle on its OWN visual line  (encoded in the
+        //     chip string with " | " separators; the HTML renderer
+        //     explodes those on <br>s so lines 2+ don't need to live
+        //     as separate dataset.remarkFull lines, which would break
+        //     the chip-filter / Tempe-preservation logic).
+        //   * The "+N more" tail is clickable - click expands the
+        //     chip to show every vehicle (full list stashed on
+        //     tr.dataset).
+        //   * Sort: backend already returns most-recent-year-first,
+        //     so vs[0] is the newest model.  Keep that order.
+        //   * Staggered: only when the backend confirmed via explicit
+        //     front/rear markers (position in ('front','rear') AND
+        //     the paired-sizes string is populated).  Multi-size
+        //     vehicles with no explicit position are "both" (one of
+        //     several alternative wheel-size fitments), NOT
+        //     staggered.
         const _fmt = v => {
-          // Oct-29 user ask: the backend now returns a compact `years`
-          // string per (make, model, position) group:
-          //   consecutive -> "2004-2007"
-          //   discrete    -> "2004, 2007, 2010"
-          //   mixed       -> "2004-2007, 2010"
-          // Fall back to the single `year` field for older responses.
           const yrs = String(v.years || v.year || "").trim();
-          const pos = v.position === "front" ? "front"
-                    : v.position === "rear"  ? "rear"
-                    : v.position === "staggered" ? "staggered"
-                    : "both";
-          // Staggered: when the file carries both axles' sizes for
-          // this vehicle, surface them so the reader sees exactly
-          // what's on each axle instead of a bare "staggered" tag.
+          const posRaw = String(v.position || "").toLowerCase();
           const stag = (v.staggered_detail || "").trim();
-          const posTag = (pos === "staggered" && stag)
-            ? `staggered: ${stag}` : pos;
+          let posTag;
+          if ((posRaw === "front" || posRaw === "rear") && stag) {
+            posTag = `${posRaw}, staggered pair: ${stag}`;
+          } else if (posRaw === "front" || posRaw === "rear") {
+            posTag = posRaw;
+          } else {
+            posTag = "both";    // staggered-without-marker collapses here
+          }
           return `${v.make} ${v.model} ${yrs} [${posTag}]`;
         };
-        const first = vs.slice(0, 8).map(_fmt).join(", ");
-        const more  = vs.length > 8 ? ` +${vs.length - 8} more` : "";
-        freshKept.push(`(Vehicles: ${first}${more})`);
+        // Stash the full list on the row so the "+N more" link can
+        // reveal everything on click.
+        try {
+          tr.dataset.whatvehiclesFull = JSON.stringify(vs.map(_fmt));
+          tr.dataset.whatvehiclesCount = String(vs.length);
+        } catch (_e) {}
+        const SHOWN = 8;
+        const firstLines = vs.slice(0, SHOWN).map(_fmt);
+        const more       = vs.length > SHOWN ? vs.length - SHOWN : 0;
+        // Encode as ONE chip line in dataset.remarkFull: the renderer
+        // splits on " | " to emit per-vehicle <br> lines.  Tail token
+        // "<<MORE:n>>" is replaced by a clickable <a> in the HTML
+        // build; keeps the chip filter (which keys on the "(Vehicles"
+        // prefix) working unchanged.
+        const header = `(Vehicles (${vs.length} ${vs.length === 1 ? "model" : "models"}):`;
+        const body   = firstLines.join(" | ");
+        const tail   = more ? ` | <<MORE:${more}>>` : "";
+        freshKept.push(`${header} ${body}${tail})`);
       }
       // Oct-29 (chip-slot fix): setRemark's single-line path REPLACES
       // line 1 of the Remark cell and keeps lines 2+.  So if Vehicles
