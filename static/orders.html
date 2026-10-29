@@ -5504,7 +5504,21 @@ async function _applyWhatVehiclesToRow(tr){
                   + " want=" + want);
     } catch (_e) {}
     if (!want || !mc || !size) {
-      setRemark(tr, linesKept.join("\n") || "");
+      // Oct-29: write dataset.remarkFull directly then re-render,
+      // bypassing setRemark's single-line heuristic that would
+      // otherwise re-append whatever used to live on lines 2+ of
+      // the old remarkFull (including the no-match chip we are
+      // trying to strip).
+      tr.dataset.remarkFull = linesKept.join("\n");
+      const _el = tr.querySelector('[data-col="remark"]');
+      if (_el && _el.tagName === "DIV") {
+        _el.innerHTML = _buildColoredRemarkHTML(tr.dataset.remarkFull);
+      } else if (_el) {
+        _el.value = tr.dataset.remarkFull;
+      }
+      if (typeof _applyRemarkFilterToRow === "function") {
+        _applyRemarkFilterToRow(tr);
+      }
       return;
     }
     try {
@@ -5551,7 +5565,21 @@ async function _applyWhatVehiclesToRow(tr){
     } catch (_e) {
       linesKept.push(`(Vehicles: lookup failed)`);
     }
-    setRemark(tr, linesKept.join("\n"));
+    // Oct-29: same reason as the early-return branch above - write
+    // dataset.remarkFull directly so a no-match pass that leaves 0 or
+    // 1 line truly clears the stale (Vehicles: - no match ...) chip,
+    // instead of being re-glued back by setRemark's "update line 1
+    // ONLY" fast path.
+    tr.dataset.remarkFull = linesKept.join("\n");
+    const _el = tr.querySelector('[data-col="remark"]');
+    if (_el && _el.tagName === "DIV") {
+      _el.innerHTML = _buildColoredRemarkHTML(tr.dataset.remarkFull);
+    } else if (_el) {
+      _el.value = tr.dataset.remarkFull;
+    }
+    if (typeof _applyRemarkFilterToRow === "function") {
+      _applyRemarkFilterToRow(tr);
+    }
   }
 }
 
