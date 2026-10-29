@@ -4170,11 +4170,25 @@ def api_orders_vehicles_by_size():
                      "position":"both"}, ...],
        "count": N, "source": "<file-used>"}
     Empty / no-match → vehicles:[] (not an error)."""
-    import csv as _csv
+    import csv as _csv, re as _re
     size = str(request.args.get("size") or "").strip().upper()
     out = {"size": size, "vehicles": [], "count": 0, "source": ""}
     if not size:
         return jsonify(out)
+    # Oct-29 user ask: strip any trailing load/speed / XL / RF / C /
+    # etc. suffix so "235/50R19V" matches a stored "235/50R19".  The
+    # core shape is <width>/<aspect>R<rim> or <width>-<aspect>R<rim>;
+    # anything after the rim-diameter digits is noise for the fitment
+    # match.  Normalisation runs on BOTH the query and every stored
+    # size when the row's position gets probed.
+    # Core shape: width/aspect R rim, with an optional Z speed-rating
+    # prefix between aspect and R (e.g. 255/45ZR19 → 255/45R19).
+    _CORE_RX = _re.compile(r"^\s*(\d{3})\s*[/\-]?\s*(\d{2,3})\s*Z?\s*R\s*(\d{2})")
+    def _core(s: str) -> str:
+        m = _CORE_RX.match(str(s or "").upper())
+        if not m: return str(s or "").strip().upper()
+        return f"{m.group(1)}/{m.group(2)}R{m.group(3)}"
+    size_core = _core(size)
     # Pick the crawled file first, fall back to the manual seed.
     candidates = [
         os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment.csv"),
@@ -4190,34 +4204,36 @@ def api_orders_vehicles_by_size():
         return jsonify(out)
     out["source"] = os.path.relpath(path, BASE_DIR)
     try:
-        # First pass: build (make, model, year) → {sizes} and track
-        # explicit position labels per (vehicle, size) when the file
-        # provides them.
-        all_sizes = {}   # key → set(size)
-        pos_map   = {}   # (key, size) → explicit position string
+        # Oct-29: match on the CORE size (strip load/speed suffix) so
+        # a SPRF line's "235/50R19V" matches a stored "235/50R19".
+        # Both the request and the stored rows go through _core.
+        # First pass: build (make, model, year) → {core_size} and
+        # track explicit position per (vehicle, core_size).
+        all_sizes = {}
+        pos_map   = {}
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             for r in _csv.DictReader(f):
                 k = (str(r.get("make") or "").strip().upper(),
                      str(r.get("model") or "").strip().upper(),
                      str(r.get("gen_start_year") or "").strip())
-                s = str(r.get("size") or "").strip().upper()
-                if not s: continue
+                s_raw = str(r.get("size") or "").strip().upper()
+                if not s_raw: continue
+                s = _core(s_raw)
                 all_sizes.setdefault(k, set()).add(s)
                 _p = str(r.get("position") or "").strip().lower()
                 if _p in ("front", "rear", "both"):
                     pos_map[(k, s)] = _p
         # Second pass: pull every (make, model, year) that includes
-        # the requested size.  Inferred position falls back to 'both'
-        # (single-size vehicle) or 'staggered' (multi-size vehicle)
-        # when the row carried no explicit label.
+        # the requested CORE size.  Inferred position falls back to
+        # 'both' (single-size vehicle) or 'staggered' (multi-size).
         seen = set()
         for k, sizes in all_sizes.items():
-            if size not in sizes:
+            if size_core not in sizes:
                 continue
             if k in seen:
                 continue
             seen.add(k)
-            explicit = pos_map.get((k, size))
+            explicit = pos_map.get((k, size_core))
             if explicit:
                 position = explicit
             elif len(sizes) == 1:
@@ -4232,6 +4248,7 @@ def api_orders_vehicles_by_size():
             })
         out["vehicles"].sort(key=lambda v: (v["make"], v["model"], v["year"]))
         out["count"] = len(out["vehicles"])
+        out["size_normalized"] = size_core
     except Exception as e:
         import traceback; traceback.print_exc()
         out["error"] = str(e)
