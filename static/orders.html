@@ -218,6 +218,27 @@
     margin-right: 8px;
   }
   #mdNoticeOverlay .foot button.cancel:hover{ background: #f1f5f9; color: #0f172a; }
+  /* Oct-29 user ask: comment-input textareas (Requesting Reason,
+     Reason/Notes for Approver, Approver Feedback, Approve note,
+     Reject note) must give an unmistakable visual cue when focused
+     so the writer always knows WHERE their text is landing.  Strong
+     ring + warm pulse the first ~1.4 s after focus. */
+  #mgmt_reason:focus,
+  #special_instruction:focus,
+  #approver_feedback:focus,
+  #approveNoteText:focus,
+  #rejectNoteText:focus,
+  textarea.sprf-comment-focus-ring:focus {
+    outline: 3px solid #f59e0b !important;
+    outline-offset: -1px;
+    background: #fffbeb !important;
+    box-shadow: 0 0 0 6px rgba(245, 158, 11, 0.18);
+    animation: sprf-comment-pulse 1.4s ease-out 1;
+  }
+  @keyframes sprf-comment-pulse {
+    0%   { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0.35); }
+    100% { box-shadow: 0 0 0  6px rgba(245, 158, 11, 0.18); }
+  }
   /* Oct-28 user ask: attachment strip under the Reason / Approver
      Feedback textareas and inside the Approve / Reject modals.  Lists
      the already-uploaded files + offers an "Attach file" button.  Each
@@ -229,11 +250,21 @@
     font-size:11px;align-items:center;
   }
   .sprf-attach-strip .attach-add{
-    background:#eef2ff;color:#3730a3;border:1px dashed #a5b4fc;
-    padding:3px 8px;border-radius:3px;cursor:pointer;font-weight:700;
-    font-size:11px;
+    /* Oct-29 user ask: make the + Attach file button obviously
+       clickable on a fresh SPRF (users were missing it).  Solid
+       indigo pill with the paperclip icon, lifted-shadow hover. */
+    background:#4f46e5;color:#fff;border:1px solid #4338ca;
+    padding:4px 10px;border-radius:4px;cursor:pointer;font-weight:800;
+    font-size:11.5px;letter-spacing:.02em;
+    box-shadow:0 1px 2px rgba(79,70,229,.25);
   }
-  .sprf-attach-strip .attach-add:hover{ background:#dbeafe; }
+  .sprf-attach-strip .attach-add::before{
+    content:"📎 "; font-weight:400;
+  }
+  .sprf-attach-strip .attach-add:hover{
+    background:#3730a3;
+    box-shadow:0 2px 4px rgba(79,70,229,.4);
+  }
   .sprf-attach-strip .attach-chip{
     display:inline-flex;align-items:center;gap:4px;
     background:#fff;border:1px solid #cbd5e1;border-radius:3px;
@@ -1848,8 +1879,17 @@
              input row so Rebate-able on the left pane isn't dragged
              taller than the Phone No row.  Users can grab the
              resize handle to grow it when they need more space. -->
-        <div class="lbl">Special Instruction</div>
-        <div class="val" style="grid-column: span 3"><textarea id="special_instruction" rows="1" style="width:100%;height:100%;resize:vertical;border:1px solid transparent;background:transparent;padding:4px 6px;font:inherit;outline:none"></textarea></div>
+        <!-- Oct-29 user ask: renamed "Special Instruction" → "Requesting Reason"
+             because that's what the BDE actually types into this box.
+             The field id and the server payload key stay as
+             `special_instruction` for backward compat with existing
+             saved orders. -->
+        <div class="lbl">Requesting Reason</div>
+        <div class="val" style="grid-column: span 3">
+          <textarea id="special_instruction" rows="1"
+                    placeholder="Optional free-text note from the requester (e.g. 'please ship together with PO 12345', 'customer wants delivery before Fri')."
+                    style="width:100%;height:100%;resize:vertical;border:1px dashed #cbd5e1;background:#f8fafc;padding:4px 6px;font:inherit;outline:none"></textarea>
+        </div>
 
         <div class="lbl lbl-reason" style="grid-column: span 4;background:#fed7aa;color:#7c2d12;justify-content:flex-start;font-weight:800;padding:2px 8px;min-height:0;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
           Reason / Notes for Approver <span style="color:#dc2626">*</span>
@@ -3668,6 +3708,22 @@ function _applyRemarkFilterToAll(){
 function setRemark(rowEl, text){
   const el = rowEl?.querySelector('[data-col="remark"]');
   if (!el) return;
+  // Oct-29 user ask: hardening against races that flash a chip then
+  // wipe it.  If a promo chip was JUST written (promoLockedAt within
+  // the last 3 s) and this call is trying to clear line 1 with an
+  // empty string, no-op — the clear is almost certainly a stray
+  // handler running after the promo write.  The promo-lock stamp is
+  // set inside setRemarkFromPromo on every successful write.
+  try {
+    const _lockedAt = +((rowEl && rowEl.dataset && rowEl.dataset.promoLockedAt) || 0);
+    const _locked   = _lockedAt && (Date.now() - _lockedAt) < 3000;
+    const _isClear  = !String(text || "").trim();
+    if (_locked && _isClear) {
+      console.log("[setRemark] SKIP clear within promo lock window ("
+        + Math.round((Date.now()-_lockedAt)/1000) + "s)");
+      return;
+    }
+  } catch (_e) {}
   // Oct-28 diagnostic: log every setRemark call so a mysteriously
   // cleared Remark is traceable to the exact caller.  Includes a
   // short stack snippet so we know which function wrote this.
@@ -3762,6 +3818,25 @@ function setRemarkFromPromo(rowEl, promoRaw, dcPct){
       newPromoLine);
   } catch (_e) {}
   setRemark(rowEl, newPromoLine);
+  // Oct-29 user ask: harden the chip against async-handler races.  Stamp
+  // the moment of a successful promo write so any setRemark("")
+  // arriving in the next 3 seconds becomes a no-op (see setRemark's
+  // guard).  Also schedule a 500 ms safety re-check — if some other
+  // handler DID manage to wipe the chip in the meantime, re-write it.
+  if (rowEl) {
+    rowEl.dataset.promoLockedAt   = String(Date.now());
+    rowEl.dataset.promoLockedText = newPromoLine;
+    setTimeout(() => {
+      try {
+        const _cur = (rowEl.dataset && rowEl.dataset.remarkFull) || "";
+        const _firstLine = _cur.split("\n")[0] || "";
+        if (_firstLine !== newPromoLine) {
+          // Something wiped it — re-apply.
+          setRemark(rowEl, newPromoLine);
+        }
+      } catch (_e) {}
+    }, 500);
+  }
 }
 
 /* Oct-27-pm helper: pull every price-reference chip out of the
@@ -8844,8 +8919,8 @@ function _renderAttachStrip(stripId, oid, allAtts, who, visible){
   }).join("");
   el.innerHTML = chips + pendChips
     + `<button type="button" class="attach-add" data-add-source="${escapeHtmlSafe(source)}">`
-    + `+ Attach file</button>`
-    + `<small style="color:#94a3b8;margin-left:4px">up to 10 MB · pdf/image/xlsx/docx/csv/msg/zip</small>`;
+    + `Attach file</button>`
+    + `<small style="color:#64748b;margin-left:6px">or drag &amp; drop here · up to 10 MB · pdf/image/xlsx/docx/csv/msg/zip</small>`;
   el.hidden = false;
   // Wire the "+ Attach" button to open a hidden <input type="file">.
   const addBtn = el.querySelector(".attach-add");
