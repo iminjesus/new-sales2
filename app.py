@@ -4203,6 +4203,8 @@ def api_orders_vehicles_by_size():
         )
         return jsonify(out)
     out["source"] = os.path.relpath(path, BASE_DIR)
+    out["source_abspath"] = os.path.abspath(path)
+    out["debug"] = {}
     try:
         # Oct-29: match on the CORE size (strip load/speed suffix) so
         # a SPRF line's "235/50R19V" matches a stored "235/50R19".
@@ -4211,18 +4213,43 @@ def api_orders_vehicles_by_size():
         # track explicit position per (vehicle, core_size).
         all_sizes = {}
         pos_map   = {}
+        _rows_total = 0
+        _rows_with_size = 0
+        _header_fields = None
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
-            for r in _csv.DictReader(f):
+            reader = _csv.DictReader(f)
+            _header_fields = list(reader.fieldnames or [])
+            for r in reader:
+                _rows_total += 1
                 k = (str(r.get("make") or "").strip().upper(),
                      str(r.get("model") or "").strip().upper(),
                      str(r.get("gen_start_year") or "").strip())
                 s_raw = str(r.get("size") or "").strip().upper()
                 if not s_raw: continue
+                _rows_with_size += 1
                 s = _core(s_raw)
                 all_sizes.setdefault(k, set()).add(s)
                 _p = str(r.get("position") or "").strip().lower()
                 if _p in ("front", "rear", "both"):
                     pos_map[(k, s)] = _p
+        # Oct-29: diagnostic payload so when the SPRF chip comes back
+        # empty the user can see exactly what the backend saw.  Hits
+        # the Flask console on every call AND the JSON response under
+        # "debug" so a dev-tools inspector can read it without having
+        # to tail the server log.
+        try:
+            app.logger.info(
+                "[WhatVehicles] GET size=%r core=%r file=%s "
+                "rows_total=%d rows_with_size=%d header=%s",
+                size, size_core, out["source_abspath"],
+                _rows_total, _rows_with_size, _header_fields)
+        except Exception:
+            print(f"[WhatVehicles] size={size!r} core={size_core!r} "
+                  f"file={out['source_abspath']} rows={_rows_total} "
+                  f"with_size={_rows_with_size} header={_header_fields}")
+        out["debug"]["rows_total"]      = _rows_total
+        out["debug"]["rows_with_size"]  = _rows_with_size
+        out["debug"]["header_fields"]   = _header_fields
         # Second pass: pull every (make, model, year) that includes
         # the requested CORE size.  Inferred position falls back to
         # 'both' (single-size vehicle) or 'staggered' (multi-size).
@@ -4304,6 +4331,31 @@ def api_orders_vehicles_by_size():
         )
         out["count"] = len(out["vehicles"])
         out["size_normalized"] = size_core
+        # Oct-29: when the lookup finds nothing, surface the top-10
+        # stored sizes so the user can tell at a glance whether their
+        # file loaded (e.g. ["195/65R15", "245/40R18", ...] = file is
+        # fine, your size just isn't in it) vs failed to load (empty
+        # list = file is corrupt / column names wrong).  Also include
+        # a sample of stored sizes that LOOK similar to the query so a
+        # near-miss ("195/60R15" when the user asked "195/65R15") is
+        # obvious without manually grep-ing the CSV.
+        if not out["vehicles"]:
+            _all_sizes_seen = sorted({
+                s for sizes in all_sizes.values() for s in sizes
+            })
+            out["debug"]["sizes_in_file_sample"] = _all_sizes_seen[:15]
+            _needle_prefix = size_core.split("R")[0]  # "195/65"
+            out["debug"]["similar_sizes"] = [
+                s for s in _all_sizes_seen if s.startswith(_needle_prefix)
+            ][:20]
+            out["debug"]["note"] = (
+                "0 matches - compare `size_normalized` against "
+                "`similar_sizes` to see whether a near-miss stored "
+                "size (different rim diameter, different aspect) "
+                "exists.  If sizes_in_file_sample is empty, the CSV "
+                "loaded with 0 size rows - check header_fields "
+                "matches ['make','model','gen_start_year','size',...]."
+            )
     except Exception as e:
         import traceback; traceback.print_exc()
         out["error"] = str(e)
