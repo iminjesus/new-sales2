@@ -1,8 +1,10 @@
 """
-batch_orchestrator.py — hourly SAP crawl + MySQL load, Sydney business hours.
+batch_orchestrator.py — SAP crawl + MySQL load every 15 minutes, Sydney business hours.
 
 Oct-16 user spec:
   • Run every hour on the hour, 08:00 - 18:00 Sydney time
+    (Oct-29 revision: now every 15 minutes — 08:00, 08:15, 08:30,
+     08:45, …, 18:45.  See RUN_HOURS × RUN_MINUTES.)
   • Skip Saturdays, Sundays, and Australia-wide federal holidays
   • Each run:
       1. Attach to a logged-in SAP session (via batch_sap_logon).
@@ -72,10 +74,17 @@ LOG_FILE = os.path.join(BASE_DIR, "batch_orchestrator.log")
 
 # Business-hours window (Sydney local time, inclusive)
 RUN_HOURS = list(range(8, 19))   # 8, 9, 10, …, 18
+# Oct-29 user ask: fire every 15 minutes within business hours instead
+# of once per hour.  Minute slots inside each RUN_HOUR → 08:00, 08:15,
+# 08:30, 08:45, 09:00, …, 18:45.  Keeps the 08-18 business-hours gate.
+RUN_MINUTES = [0, 15, 30, 45]
 
 # Multi-logon retry cadence
 MULTI_LOGON_RETRY_MIN = 5
-MULTI_LOGON_MAX_RETRIES_PER_HOUR = 11   # 11 × 5 min = ~55 min, bail into next slot
+# 11 × 5 min = ~55 min; with 15-min slots a single hour fits 3 slot
+# windows, so the retry cap still clears the current slot plus the
+# next couple before bailing into the following hour.
+MULTI_LOGON_MAX_RETRIES_PER_HOUR = 11
 
 # Oct-23 user ask (watchdog + heartbeat + task scheduler):
 #   • Per-step timeout — each crawl step is given a hard wall-clock
@@ -176,21 +185,32 @@ def _is_business_day(d: date) -> bool:
 
 
 def _next_run_at(now):
-    """Return the next datetime (Sydney TZ) at which a batch should fire."""
+    """Return the next datetime (Sydney TZ) at which a batch should fire.
+
+    Oct-29 user ask: fire every 15 minutes within business hours.  Slots
+    are the cross product of RUN_HOURS × RUN_MINUTES (= 08:00, 08:15,
+    …, 18:45).  "Nothing left today" rolls to the first slot of the
+    next business day."""
     d = now.date()
-    h = now.hour
-    # Candidate hours TODAY that haven't passed yet
-    for cand_h in RUN_HOURS:
-        if cand_h > h or (cand_h == h and now.minute == 0 and now.second < 5):
-            cand = now.replace(hour=cand_h, minute=0, second=0, microsecond=0)
+    # Flatten RUN_HOURS × RUN_MINUTES into (h, m) tuples in order so we
+    # can scan them left-to-right for the first slot still ahead.
+    slots = [(h, m) for h in RUN_HOURS for m in RUN_MINUTES]
+    for (cand_h, cand_m) in slots:
+        # Slot still ahead?  Allow a 5-second grace so a tick that
+        # fires exactly on the slot boundary doesn't skip itself.
+        if (cand_h, cand_m) > (now.hour, now.minute) \
+           or ((cand_h, cand_m) == (now.hour, now.minute) and now.second < 5):
+            cand = now.replace(hour=cand_h, minute=cand_m,
+                               second=0, microsecond=0)
             if _is_business_day(cand.date()):
                 return cand
     # Nothing left today — jump to the first slot on the next business day
     nd = d + timedelta(days=1)
     while not _is_business_day(nd):
         nd += timedelta(days=1)
-    first_h = RUN_HOURS[0]
-    return (now.replace(hour=first_h, minute=0, second=0, microsecond=0)
+    first_h, first_m = RUN_HOURS[0], RUN_MINUTES[0]
+    return (now.replace(hour=first_h, minute=first_m,
+                        second=0, microsecond=0)
             + timedelta(days=(nd - d).days))
 
 
