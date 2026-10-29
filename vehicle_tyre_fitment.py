@@ -358,6 +358,86 @@ def _norm_size(raw: str) -> str:
     return f"{m.group(1)}/{m.group(2)}R{m.group(3)}"
 
 
+def discover_au_catalog(session, delay: float = 2.5,
+                         market: str = "au") -> list[tuple[str, str]]:
+    """Oct-29 user ask: scrape wheel-size.com's own AU market catalog
+    so the crawler can cover every make/model wheel-size.com knows
+    about for the Australian market, not just those on the BITRE
+    registration CSV.
+
+    Pipeline:
+      1. GET /<market>/   (defaults to /au/) → list of make slugs
+      2. For each make, GET /<market>/<make>/ → list of model slugs
+      3. Return [(MAKE_UP, MODEL_UP), ...] with slugs upper-cased so
+         the downstream pipeline (which keys on upper-case make/model)
+         consumes them unchanged.
+
+    Rate-limited at `delay` seconds between requests so this discovery
+    pass doesn't blow the Cloudflare budget before the main crawl
+    starts.  Each stage is retried via the shared fetch() helper, so a
+    single bot-block doesn't lose a whole make."""
+    base_catalog = f"{BASE_URL}/{market.strip('/')}/"
+    pairs: list[tuple[str, str]] = []
+    seen_makes: set[str] = set()
+    print(f"[discover] fetching make list from {base_catalog}", file=sys.stderr)
+    root_html = fetch(session, base_catalog, delay, ua_idx=0)
+    if root_html is FETCH_BLOCKED or not root_html:
+        print(f"[discover] couldn't open {base_catalog} — aborting discovery",
+              file=sys.stderr)
+        return []
+    soup = BeautifulSoup(root_html, "lxml")
+    make_links: list[tuple[str, str]] = []  # (slug, display)
+    prefix = f"/{market.strip('/')}/"
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        # Make links look like /au/toyota/  (one path segment after
+        # the market prefix, no further slashes besides the trailing).
+        if not href.startswith(prefix):
+            continue
+        tail = href[len(prefix):].rstrip("/")
+        if not tail or "/" in tail:
+            continue
+        slug = tail.lower()
+        if slug in seen_makes:
+            continue
+        seen_makes.add(slug)
+        make_links.append((slug, a.get_text(strip=True) or slug))
+    print(f"[discover] found {len(make_links)} makes under /{market}/",
+          file=sys.stderr)
+    for idx, (mk_slug, mk_name) in enumerate(make_links):
+        make_url = f"{base_catalog}{mk_slug}/"
+        print(f"[discover] {idx + 1}/{len(make_links)}  {mk_name}  →  {make_url}",
+              file=sys.stderr)
+        page = fetch(session, make_url, delay, ua_idx=idx + 1)
+        if page is FETCH_BLOCKED or not page:
+            print(f"[discover]   skipped (bot-blocked): {mk_name}", file=sys.stderr)
+            continue
+        soup2 = BeautifulSoup(page, "lxml")
+        seen_models: set[str] = set()
+        model_prefix = f"{prefix}{mk_slug}/"
+        for a in soup2.find_all("a", href=True):
+            href = a["href"]
+            if not href.startswith(model_prefix):
+                continue
+            tail = href[len(model_prefix):].rstrip("/")
+            if not tail or "/" in tail:
+                continue
+            md_slug = tail.lower()
+            if md_slug in seen_models:
+                continue
+            seen_models.add(md_slug)
+            # Upper-case for the downstream pipeline (slug "golf" →
+            # "GOLF"; it already works with slugs because make_slug /
+            # model_slug collapses "GOLF" back to "golf" for the URL).
+            md_name = (a.get_text(strip=True) or md_slug).replace("  ", " ").strip()
+            pairs.append((mk_name.upper(), md_name.upper()))
+        print(f"[discover]   {mk_name}: {len(seen_models)} models",
+              file=sys.stderr)
+    print(f"[discover] total unique make/model pairs: {len(pairs)}",
+          file=sys.stderr)
+    return pairs
+
+
 def parse_generation_links(html: str, m_slug: str, d_slug: str) -> list[str]:
     """Return the unique generation / year slugs that link out of the
     model landing page.  Slugs look like '2024', '2020-mk3', '2015',
@@ -601,13 +681,58 @@ def main():
     ap.add_argument("--dump-html", action="store_true",
                     help="Also save each fetched HTML as debug/<make>_<model>.html so "
                          "the parser can be inspected against the real page structure.")
+    # Oct-29 user ask: pull the full Australia-market catalog directly
+    # from wheel-size.com instead of relying on the BITRE registration
+    # CSV.  When set, --input is ignored; we hit /au/ for the make
+    # list, then /au/<make>/ for every model.
+    ap.add_argument("--discover-au", action="store_true",
+                    help="Discover the full make/model list from "
+                         "wheel-size.com's /au/ catalog instead of reading "
+                         "--input.  Writes the discovered list to "
+                         "--discover-cache (so a crash doesn't lose the "
+                         "catalog scrape) and feeds the main crawl from it.")
+    ap.add_argument("--discover-market", default="au",
+                    help="wheel-size.com market segment to discover from "
+                         "(default: 'au' = Australia).  Change to 'us' / "
+                         "'uk' / etc. only if you want non-AU data.")
+    ap.add_argument("--discover-cache",
+                    default=os.path.join(REGO_DIR, "wheel_size_au_catalog.csv"),
+                    help="Where to cache the discovered make/model list.")
     args = ap.parse_args()
 
-    if not os.path.exists(args.input):
-        print(f"[fatal] input CSV not found: {args.input}", file=sys.stderr)
-        sys.exit(1)
-
-    pairs = load_unique_make_model(args.input, min_fleet=args.min_fleet)
+    if args.discover_au:
+        # Catalog-discovery mode — bootstrap or reuse the cached list,
+        # then feed it into the pipeline (skipping the BITRE CSV + the
+        # --min-fleet gate since discovery has no fleet counts).
+        if os.path.exists(args.discover_cache):
+            print(f"[discover] reusing cached catalog: {args.discover_cache}",
+                  file=sys.stderr)
+            with open(args.discover_cache, newline="", encoding="utf-8") as f:
+                rr = csv.DictReader(f)
+                pairs = [(str(r.get("make") or "").upper().strip(),
+                          str(r.get("model") or "").upper().strip())
+                         for r in rr
+                         if (r.get("make") or "").strip() and (r.get("model") or "").strip()]
+        else:
+            sess_disc = _http.Session() if _HAS_CURL_CFFI else _http.Session()
+            pairs = discover_au_catalog(sess_disc, delay=max(2.0, args.delay),
+                                         market=args.discover_market)
+            os.makedirs(os.path.dirname(os.path.abspath(args.discover_cache)),
+                        exist_ok=True)
+            with open(args.discover_cache, "w", newline="", encoding="utf-8") as f:
+                w = csv.writer(f)
+                w.writerow(["make", "model"])
+                for mk, md in pairs:
+                    w.writerow([mk, md])
+            print(f"[discover] cached {len(pairs)} pairs → {args.discover_cache}",
+                  file=sys.stderr)
+    else:
+        if not os.path.exists(args.input):
+            print(f"[fatal] input CSV not found: {args.input}", file=sys.stderr)
+            print(f"[hint] run with --discover-au to pull the catalog from "
+                  f"wheel-size.com's /au/ pages instead", file=sys.stderr)
+            sys.exit(1)
+        pairs = load_unique_make_model(args.input, min_fleet=args.min_fleet)
     done  = (load_already_done(args.output, retry_empty=args.retry_empty)
              if args.resume else set())
     todo  = [(mk, md) for (mk, md) in pairs if (mk, md) not in done]

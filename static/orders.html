@@ -5483,6 +5483,11 @@ async function _applyWhatVehiclesToAll(){
                             {credentials: "same-origin"});
       const d = await r.json();
       const vs = (d && d.vehicles) || [];
+      try {
+        console.log("[WhatVehicles] " + mc + " size=" + size
+          + " normalized=" + (d && d.size_normalized) + " count=" + vs.length
+          + " source=" + (d && d.source));
+      } catch (_e) {}
       if (!vs.length) {
         linesKept.push(`(Vehicles: — no match in OE file for ${size})`);
       } else {
