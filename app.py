@@ -4253,31 +4253,100 @@ def api_orders_vehicles_by_size():
         # Second pass: pull every (make, model, year) that includes
         # the requested CORE size.
         #
-        # Oct-29 user ask (position fix): the previous logic labelled a
-        # multi-size vehicle as "staggered" whenever its OE file row
-        # carried more than one size.  But "multiple sizes" on a
-        # single vehicle usually means ALTERNATIVE fitments (16" wheel
-        # option vs 17" wheel option), NOT staggered front/rear.
-        # Real staggered fitments are only reliably known when the OE
-        # file carries an explicit position=front / position=rear per
-        # size.  So:
-        #   - position explicit (front / rear / both) in the CSV -> use it
-        #   - otherwise                                          -> "both"
-        # The "staggered: X+Y" label is reserved for the explicit case
-        # (so the SPRF chip no longer mis-labels Peugeot 307 /
-        # Alfa Romeo 147 / Audi 80 as staggered just because they
-        # offer two wheel-size options).
+        # Oct-29 user ask (position fix v2):
+        #   1. CSV has an explicit position=front/rear/both for the
+        #      queried size -> use it verbatim.
+        #   2. CSV has NO explicit position AND the vehicle has 2+
+        #      sizes at the SAME wheel DIAMETER (same R-number) -> infer
+        #      a staggered fitment: by automotive convention, the WIDER
+        #      size sits on the REAR axle, the NARROWER on the FRONT.
+        #      Return "front" / "rear" accordingly for the queried
+        #      size, and set staggered_pair to the paired "<front> +
+        #      <rear>" so the chip can label it.
+        #   3. Everything else -> "both" (single size on vehicle, OR
+        #      multi-size across DIFFERENT diameters which indicates
+        #      alternative wheel-size options rather than staggered).
+        _rim_rx = _re.compile(r"R(\d{1,2})(?:\.\d)?$")
+        _width_rx = _re.compile(r"^(?:LT|P)?(\d{2,3})")
+        def _parse_size(s):
+            """Return (width, rim) ints or (None, None) when the shape
+            can't be parsed - just lets _infer_pair key by diameter."""
+            try:
+                rm = _rim_rx.search(s)
+                wm = _width_rx.match(s)
+                r  = int(rm.group(1)) if rm else None
+                w  = int(wm.group(1)) if wm else None
+                return (w, r)
+            except Exception:
+                return (None, None)
+        def _infer_staggered(sizes_set, queried_core):
+            """Return (position, staggered_pair_str) for the queried
+            size, OR (None, None) when no inference applies.  Groups
+            every stored size by rim diameter and looks for a sister
+            size with the SAME R-number but different width/aspect -
+            that sister pair is the staggered front/rear.  Narrower
+            width wins "front", wider "rear"."""
+            if not sizes_set or len(sizes_set) < 2:
+                return (None, None)
+            qw, qr = _parse_size(queried_core)
+            if qw is None or qr is None:
+                return (None, None)
+            same_rim = [s for s in sizes_set
+                        if _parse_size(s) != (None, None)
+                        and _parse_size(s)[1] == qr]
+            if len(same_rim) < 2:
+                return (None, None)
+            # Among the same-rim set, pick the "pair" partner for
+            # queried_core: the OTHER size.  When 3+ sizes share the
+            # rim (rare) take the one with the largest width-delta
+            # from queried as the most likely sibling.
+            others = [s for s in same_rim if s != queried_core]
+            if not others:
+                return (None, None)
+            partner = max(
+                others,
+                key=lambda s: abs((_parse_size(s)[0] or 0) - qw),
+            )
+            pw, _pr = _parse_size(partner)
+            if pw is None:
+                return (None, None)
+            if qw < pw:
+                position = "front"
+                pair_str = f"{queried_core} + {partner}"
+            elif qw > pw:
+                position = "rear"
+                pair_str = f"{partner} + {queried_core}"
+            else:
+                # Same width, different aspect - rear convention is
+                # the shorter sidewall (lower aspect = rear).
+                qa = int(queried_core.split("/")[1].split("R")[0])
+                pa = int(partner.split("/")[1].split("R")[0])
+                if qa > pa:
+                    position = "front"
+                    pair_str = f"{queried_core} + {partner}"
+                elif qa < pa:
+                    position = "rear"
+                    pair_str = f"{partner} + {queried_core}"
+                else:
+                    return (None, None)   # identical, no inference
+            return (position, pair_str)
         raw_hits = []
         for k, sizes in all_sizes.items():
             if size_core not in sizes:
                 continue
             explicit = pos_map.get((k, size_core))
-            position = explicit if explicit else "both"
+            inferred_pair = ""
+            if explicit:
+                position = explicit
+            else:
+                inferred_pos, inferred_pair = _infer_staggered(sizes, size_core)
+                position = inferred_pos or "both"
             raw_hits.append({
                 "make":     k[0], "model": k[1],
                 "year":     k[2],
                 "position": position,
                 "all_sizes": sorted(sizes),
+                "inferred_pair": inferred_pair,
             })
         # Oct-29 user ask: group multi-year hits for the same vehicle
         # into ONE chip entry with a compact year string.  Consecutive
@@ -4294,7 +4363,13 @@ def api_orders_vehicles_by_size():
                 "position": h["position"],
                 "years":    set(),
                 "all_sizes_union": set(),
+                "inferred_pair": "",
             })
+            # Keep the first non-empty inferred pair for this group;
+            # all generations of the same (make, model, position) key
+            # share the same front/rear sister sizes, so one is enough.
+            if h.get("inferred_pair") and not slot["inferred_pair"]:
+                slot["inferred_pair"] = h["inferred_pair"]
             try:
                 yr = int(str(h["year"]).strip())
                 slot["years"].add(yr)
@@ -4332,15 +4407,25 @@ def api_orders_vehicles_by_size():
             slot["max_year"] = _nums[-1] if _nums else -1
             slot["years"] = _compact_years(slot["years"])
             slot["all_sizes"] = sorted(slot.pop("all_sizes_union"))
-            # Oct-29 user ask (staggered scope): keep staggered_detail
-            # ONLY when the file carries an EXPLICIT front/rear
-            # marker for this vehicle - otherwise multi-size vehicles
-            # are "alternative wheel options", not front/rear
-            # staggered, and the paired-sizes label would mislead.
-            if slot["position"] in ("front", "rear") and len(slot["all_sizes"]) > 1:
+            # Oct-29 user ask (staggered v2): staggered_detail fires in
+            # two cases now:
+            #   * CSV carries explicit front/rear markers (position in
+            #     ('front','rear') and the vehicle has >1 size on
+            #     file) - the authoritative case.
+            #   * NO explicit position but the inference layer above
+            #     flagged a same-diameter pair (slot['inferred_pair']
+            #     is populated).  Convention-based: narrower = front,
+            #     wider = rear.
+            if slot["position"] in ("front", "rear") and slot.get("inferred_pair"):
+                slot["staggered_detail"] = slot["inferred_pair"]
+                slot["staggered_source"] = "inferred"
+            elif slot["position"] in ("front", "rear") and len(slot["all_sizes"]) > 1:
                 slot["staggered_detail"] = " + ".join(slot["all_sizes"])
+                slot["staggered_source"] = "explicit"
             else:
                 slot["staggered_detail"] = ""
+                slot["staggered_source"] = ""
+            slot.pop("inferred_pair", None)
         # Oct-29 user ask: sort by most-recent year first so popular /
         # current models surface at the top of the chip - ties break
         # on make + model so the ordering is stable between calls.

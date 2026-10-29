@@ -5795,9 +5795,16 @@ async function _applyWhatVehiclesToRow(tr){
           const yrs = String(v.years || v.year || "").trim();
           const posRaw = String(v.position || "").toLowerCase();
           const stag = (v.staggered_detail || "").trim();
+          const stagSrc = String(v.staggered_source || "").toLowerCase();
           let posTag;
           if ((posRaw === "front" || posRaw === "rear") && stag) {
-            posTag = `${posRaw}, staggered pair: ${stag}`;
+            // Oct-29 user ask: when the staggered inference came from
+            // our same-diameter width heuristic (no explicit CSV
+            // marker), mark it with a trailing "?" so the reader
+            // knows it's a convention-based guess vs. the authoritative
+            // CSV-sourced tag.
+            const hint = stagSrc === "inferred" ? " (inferred)" : "";
+            posTag = `${posRaw}, staggered pair: ${stag}${hint}`;
           } else if (posRaw === "front" || posRaw === "rear") {
             posTag = posRaw;
           } else {
