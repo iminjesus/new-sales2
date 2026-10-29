@@ -5137,14 +5137,17 @@ function openCopyLinesModal(){
   const _copySelectedCols = async () => {
     if (!_selectedCols.size) return;
     const cols = Array.from(_selectedCols).sort((a, b) => a - b);
+    // Oct-29 user ask: column-click copy must EXCLUDE the header row
+    // so pasting into an existing Excel sheet appends data cleanly
+    // under the sheet's own headers.  "Copy ALL to clipboard" below
+    // still carries the header (that path is a full-table dump).
     const lines = [];
-    lines.push(cols.map(i => keptHdrs[i].label).join("\t"));
     filteredBodyRows.forEach(vals => {
       lines.push(cols.map(i => vals[i] == null ? "" : vals[i]).join("\t"));
     });
     try {
       await navigator.clipboard.writeText(lines.join("\n"));
-      _flashStatus(`${cols.length} column${cols.length > 1 ? "s" : ""} copied ✓`);
+      _flashStatus(`${cols.length} column${cols.length > 1 ? "s" : ""} copied (data only, no header) ✓`);
     } catch (_e) {
       _flashStatus("Clipboard blocked — Ctrl+C instead");
     }
