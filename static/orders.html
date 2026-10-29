@@ -4095,15 +4095,47 @@ function _renderTempeRefOnRow(rowEl, j){
                 ran earlier in applyAdditionalDCToRow.
        line 2 — dealer Tempe chip (TempeWebOrder sell-in + retail)
        line 3 — consumer Tempe chip (Tempe public retail)
-     Either Tempe line is omitted when its source had no match. */
-  const existing = (remEl.value || "").split("\n")[0].trim();
-  const promoLine = existing;   // promo tag (if any) is already line 1
+     Either Tempe line is omitted when its source had no match.
+     Oct-29 (chip-preservation fix): the Remark cell is a DIV now,
+     not a textarea, so remEl.value is undefined and every call to
+     this renderer used to drop whatever lived on the cell.  Read
+     from dataset.remarkFull instead, and PRESERVE any non-Tempe
+     chip (JAX, BobJane, Vehicles, Promo) that already lived on
+     lines 2+ so Tempe's rebuild doesn't trample them.  Only strip
+     chips whose kind we're ABOUT to re-emit (Tempe / JAX / BobJane
+     if we have fresh data for them) - everything else stays. */
+  const _fullRaw = (rowEl?.dataset?.remarkFull != null
+                     ? rowEl.dataset.remarkFull
+                     : (remEl.value || remEl.textContent || ""));
+  const _existingLines = String(_fullRaw).split("\n");
+  const promoLine = (_existingLines[0] || "").trim();
+  // Chip-source prefixes we're about to replace with fresh data; a
+  // "re-emit" is only triggered when we actually HAVE fresh data for
+  // that source.  Chips from sources we're not re-emitting pass
+  // through untouched.
+  const _willReplace = {
+    "(TempeDealer":   !!dealerChip,
+    "(TempeConsumer": !!consumerChip,
+    "(JAX":           !!jaxChip,
+    "(BobJane":       !!bobJaneChip,
+  };
+  const _preserveChips = _existingLines.slice(1).filter(l => {
+    const t = (l || "").trim();
+    if (!t) return false;
+    for (const prefix in _willReplace) {
+      if (_willReplace[prefix] && t.startsWith(prefix)) return false;
+    }
+    return true;   // non-matching chips (Vehicles, promo echo, …) stay
+  });
   const lines = [];
   if (promoLine) lines.push(promoLine);
   if (dealerChip)   lines.push(dealerChip);
   if (consumerChip) lines.push(consumerChip);
   if (jaxChip)      lines.push(jaxChip);
   if (bobJaneChip)  lines.push(bobJaneChip);
+  // Append any chip we preserved (Vehicles, etc.) at the end so the
+  // display order stays: promo | Tempe/JAX/BJ chips | Vehicles.
+  for (const l of _preserveChips) lines.push(l);
   setRemark(rowEl, lines.join("\n"));
   /* Hover tooltip — full match detail for both sources, with every
      label spelled out. */
@@ -5640,11 +5672,22 @@ async function _applyWhatVehiclesToRow(tr){
           + " normalized=" + (d && d.size_normalized) + " count=" + vs.length
           + " source=" + (d && d.source));
       } catch (_e) {}
+      // Oct-29 (race fix): re-read dataset.remarkFull HERE, AFTER the
+      // await.  While the fetch was in flight, other handlers (Tempe
+      // ref price, JAX lookup, BobJane, promo chip, etc.) can have
+      // written chips to the same cell.  The `raw` we captured before
+      // the await is stale - if we rebuild from it we'll trample those
+      // writes.  freshRaw / freshKept honour whatever chips landed in
+      // the meantime, strip ANY old (Vehicles ...) line, then layer
+      // ours on top.
+      const freshRaw  = (tr.dataset && tr.dataset.remarkFull) || "";
+      const freshKept = freshRaw.split("\n").filter(
+        l => !/^\(Vehicles\b/i.test(l));
       if (!vs.length) {
         // Oct-29 user ask: when the OE file has no match for this
         // size, DON'T stamp a "no match" chip on the Remark - the
         // noise outweighs the signal.  Just leave the Vehicles line
-        // off entirely (linesKept was already stripped of any
+        // off entirely (freshKept was already stripped of any
         // previous Vehicles chip above).
       } else {
         const _fmt = v => {
@@ -5669,8 +5712,24 @@ async function _applyWhatVehiclesToRow(tr){
         };
         const first = vs.slice(0, 8).map(_fmt).join(", ");
         const more  = vs.length > 8 ? ` +${vs.length - 8} more` : "";
-        linesKept.push(`(Vehicles: ${first}${more})`);
+        freshKept.push(`(Vehicles: ${first}${more})`);
       }
+      // Oct-29 (chip-slot fix): setRemark's single-line path REPLACES
+      // line 1 of the Remark cell and keeps lines 2+.  So if Vehicles
+      // ends up alone on line 1 (which happens when WhatVehicles fires
+      // on a fresh cell before Tempe/JAX have written anything yet),
+      // the very next single-line setRemark call from a Tempe / JAX /
+      // promo renderer wipes the Vehicles chip.  Reserve line 1 as
+      // empty so Vehicles always sits on line 2+ where it survives
+      // every subsequent line-1 replacement.
+      if (freshKept.length === 1
+          && /^\(Vehicles\b/i.test(freshKept[0] || "")) {
+        freshKept.unshift("");
+      }
+      // Reassign so the write path below sees the merged state.
+      // eslint-disable-next-line no-func-assign
+      linesKept.length = 0;
+      for (const l of freshKept) linesKept.push(l);
     } catch (_e) {
       linesKept.push(`(Vehicles: lookup failed)`);
     }
