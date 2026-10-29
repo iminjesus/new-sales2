@@ -359,7 +359,8 @@ def _norm_size(raw: str) -> str:
 
 
 def discover_au_catalog(session, delay: float = 2.5,
-                         market: str = "au") -> list[tuple[str, str]]:
+                         market: str = "au",
+                         makes_limit: int = 0) -> list[tuple[str, str]]:
     """Oct-29 user ask: scrape wheel-size.com's own AU market catalog
     so the crawler can cover every make/model wheel-size.com knows
     about for the Australian market, not just those on the BITRE
@@ -404,6 +405,11 @@ def discover_au_catalog(session, delay: float = 2.5,
         make_links.append((slug, a.get_text(strip=True) or slug))
     print(f"[discover] found {len(make_links)} makes under /{market}/",
           file=sys.stderr)
+    if makes_limit and makes_limit > 0 and len(make_links) > makes_limit:
+        print(f"[discover] limiting to first {makes_limit} makes for a quick "
+              f"smoke test (use --discover-makes-limit 0 to scan all)",
+              file=sys.stderr)
+        make_links = make_links[:makes_limit]
     for idx, (mk_slug, mk_name) in enumerate(make_links):
         make_url = f"{base_catalog}{mk_slug}/"
         print(f"[discover] {idx + 1}/{len(make_links)}  {mk_name}  →  {make_url}",
@@ -698,6 +704,12 @@ def main():
     ap.add_argument("--discover-cache",
                     default=os.path.join(REGO_DIR, "wheel_size_au_catalog.csv"),
                     help="Where to cache the discovered make/model list.")
+    ap.add_argument("--discover-makes-limit", type=int, default=0,
+                    help="Smoke-test knob — only scan the first N makes "
+                         "during discovery (0 = scan all).  Combine with "
+                         "--limit N to also cap the model crawl, so "
+                         "`--discover-au --discover-makes-limit 2 --limit 10` "
+                         "runs end-to-end in ~1 minute instead of 15.")
     args = ap.parse_args()
 
     if args.discover_au:
@@ -716,7 +728,8 @@ def main():
         else:
             sess_disc = _http.Session() if _HAS_CURL_CFFI else _http.Session()
             pairs = discover_au_catalog(sess_disc, delay=max(2.0, args.delay),
-                                         market=args.discover_market)
+                                         market=args.discover_market,
+                                         makes_limit=args.discover_makes_limit)
             os.makedirs(os.path.dirname(os.path.abspath(args.discover_cache)),
                         exist_ok=True)
             with open(args.discover_cache, "w", newline="", encoding="utf-8") as f:
