@@ -55,9 +55,19 @@ try:
 except Exception:
     pass
 
-# Filename pattern the crawler writes:  Tempeweborder_YYYYMMDD_HHMM.csv
+# Oct-29 user ask: BOTH crawler outputs are consumed by this script.
+#   * Tempeweborder_YYYYMMDD_HHMM.csv          <- search-by-size crawl
+#     (tempeweborder_crawling.py; 24 fixed size codes)
+#   * Tempeweborder_extend_YYYYMMDD_HHMM.csv   <- brand-sweep crawl
+#     (tempeweborder_crawling_extend.py; every SKU of ~10 brands)
+# Same column schema (SIZE, brand, DESCRIPTION, COST, PRICE, STOCK), so
+# rows from both sources merge cleanly through make_sku_key.  Keeping
+# the two sources TRACKED separately (latest_per_source_per_month) lets
+# both contribute to a single month's data pool instead of one silently
+# overwriting the other.
 FNAME_RX = re.compile(
-    r"^tempeweborder_(?P<y>\d{4})(?P<m>\d{2})(?P<d>\d{2})_(?P<hh>\d{2})(?P<mm>\d{2})\.csv$",
+    r"^tempeweborder_(?:(?P<src>extend)_)?"
+    r"(?P<y>\d{4})(?P<m>\d{2})(?P<d>\d{2})_(?P<hh>\d{2})(?P<mm>\d{2})\.csv$",
     re.IGNORECASE,
 )
 # STOCK capture started mid-2025; pre-Sep months stay blank unless
@@ -67,14 +77,17 @@ STOCK_AVAILABLE_FROM = date(2025, 9, 1)
 
 
 def _parse_filename(name: str):
-    """Return (date, hhmm) tuple or None if the file isn't a crawl output."""
+    """Return (date, hhmm, source) tuple or None if the file isn't a
+    crawl output.  `source` is "regular" for Tempeweborder_*.csv and
+    "extend" for Tempeweborder_extend_*.csv - both are consumed."""
     m = FNAME_RX.match(os.path.basename(name))
     if not m:
         return None
     try:
         d  = date(int(m["y"]), int(m["m"]), int(m["d"]))
         hm = int(m["hh"]) * 100 + int(m["mm"])
-        return d, hm
+        src = "extend" if (m["src"] or "").lower() == "extend" else "regular"
+        return d, hm, src
     except Exception:
         return None
 
@@ -254,8 +267,19 @@ def main():
     walker = os.walk(source_dir) if args.include_recursive \
              else [(source_dir, [], os.listdir(source_dir))]
 
-    # month_key -> (date, hhmm, abs_path) with the latest timestamp wins
-    latest_per_month: dict[str, tuple[date, int, str]] = {}
+    # Oct-29 user ask: track latest file per (month, source) so BOTH
+    # Tempeweborder_*.csv AND Tempeweborder_extend_*.csv contribute to
+    # a single month's data pool.  Without the per-source split, an
+    # extend file would silently overwrite the regular file for the
+    # same month (or vice versa) and the user would lose half their
+    # SKUs.  The downstream read loop iterates over months_sorted +
+    # per-source entries, so the ordering is deterministic (regular
+    # first, then extend) and dedupe keys handle any cross-source
+    # overlap.
+    #
+    # Key: (month_str, source)  Value: (date, hhmm, abs_path)
+    latest_per_mkey_src: dict[tuple[str, str],
+                              tuple[date, int, str]] = {}
     all_files_seen = 0
     for root, _dirs, files in walker:
         for fn in files:
@@ -263,18 +287,18 @@ def main():
             if not parsed:
                 continue
             all_files_seen += 1
-            d, hhmm = parsed
-            k = _month_key(d)
-            prev = latest_per_month.get(k)
+            d, hhmm, src = parsed
+            k = (_month_key(d), src)
+            prev = latest_per_mkey_src.get(k)
             # Prefer later day; on same day prefer later HHMM.
             if (prev is None
                     or d > prev[0]
                     or (d == prev[0] and hhmm > prev[1])):
-                latest_per_month[k] = (d, hhmm, os.path.join(root, fn))
+                latest_per_mkey_src[k] = (d, hhmm, os.path.join(root, fn))
 
-    if not latest_per_month:
-        print(f"[fatal] no Tempeweborder_*.csv files found under {source_dir}",
-              file=sys.stderr)
+    if not latest_per_mkey_src:
+        print(f"[fatal] no Tempeweborder_*.csv or Tempeweborder_extend_*.csv "
+              f"files found under {source_dir}", file=sys.stderr)
         sys.exit(2)
 
     # Oct-29 user ask: --repair rewrites EVERY Tempeweborder_*.csv in
@@ -314,13 +338,24 @@ def main():
                   file=sys.stderr)
             return
 
+    # Oct-29: iterate over (month_key, source) pairs - both the regular
+    # crawl output AND the extend sweep contribute to the same month.
+    # Readers downstream flatten this back to a single rows dict via
+    # the (SIZE, brand, DESCRIPTION) key, so a SKU present in both
+    # sources gets written exactly once.
+    months_sorted = sorted({mk for (mk, _src) in latest_per_mkey_src.keys()})
+    sources_sorted = ["regular", "extend"]   # deterministic read order
     print(f"[info] scanned {all_files_seen} CSV(s); keeping the latest "
-          f"per month => {len(latest_per_month)} month(s):")
-    months_sorted = sorted(latest_per_month.keys())
+          f"per (month, source) => {len(latest_per_mkey_src)} file(s) "
+          f"across {len(months_sorted)} month(s):")
     for mk in months_sorted:
-        d, hhmm, path = latest_per_month[mk]
-        print(f"       {mk}  <-  {os.path.basename(path)}  "
-              f"({d.isoformat()} {hhmm:04d})", file=sys.stdout)
+        for src in sources_sorted:
+            entry = latest_per_mkey_src.get((mk, src))
+            if entry is None:
+                continue
+            d, hhmm, path = entry
+            print(f"       {mk} [{src:7s}] <-  {os.path.basename(path)}  "
+                  f"({d.isoformat()} {hhmm:04d})", file=sys.stdout)
 
     # Per-product row: key -> slot dict with metadata + month data.
     # Oct-29: key is (SIZE_UP, BRAND_UP, DESC_NORM_UP) where DESC_NORM
@@ -336,7 +371,11 @@ def main():
     dedup_collapsed_total = 0
     _blank_pre_sep = bool(args.blank_pre_sep)
     for mk in months_sorted:
-        d, _hhmm, path = latest_per_month[mk]
+      for src in sources_sorted:
+        entry = latest_per_mkey_src.get((mk, src))
+        if entry is None:
+            continue
+        d, _hhmm, path = entry
         rows_in_file = 0
         size_recovered = 0
         dedup_in_file = 0
@@ -412,7 +451,7 @@ def main():
                     "stock": stock_val,
                 }
         if size_recovered or dedup_in_file:
-            print(f"[info] {mk}: {rows_in_file} rows read "
+            print(f"[info] {mk} [{src}]: {rows_in_file} rows read "
                   f"(SIZE recovered from description: {size_recovered}, "
                   f"duplicate rows collapsed: {dedup_in_file})",
                   file=sys.stderr)
