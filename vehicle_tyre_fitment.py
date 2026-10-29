@@ -883,6 +883,35 @@ def main():
     empty_pairs = 0
     blocked_pairs = 0
     tiny_streak = 0
+    # Oct-29 user ask: periodic progress heartbeat so a multi-hour
+    # crawl isn't a black box.  Every PROGRESS_INTERVAL_SEC seconds
+    # the loop prints elapsed time, how many of todo are done, the
+    # rolling rate, and an ETA.  Also runs once at startup so the
+    # user sees "starting at i/N" before the first per-model line.
+    PROGRESS_INTERVAL_SEC = 300   # 5 min
+    _crawl_start   = time.time()
+    _last_progress = _crawl_start
+    def _fmt_hms(seconds: float) -> str:
+        s = int(max(0, seconds))
+        h, s = divmod(s, 3600)
+        m, s = divmod(s, 60)
+        if h: return f"{h}h {m:02d}m {s:02d}s"
+        if m: return f"{m}m {s:02d}s"
+        return f"{s}s"
+    def _emit_progress(i_now: int, label: str = "progress"):
+        done = i_now
+        total = len(todo)
+        elapsed = time.time() - _crawl_start
+        rate = (done / elapsed * 60) if elapsed > 0 else 0.0  # pairs/min
+        remaining = max(0, total - done)
+        eta_sec = (remaining / (rate / 60.0)) if rate > 0 else 0
+        print(f"[{label}] {done}/{total} done  "
+              f"· ok={ok_pairs}  empty={empty_pairs}  blocked={blocked_pairs}  "
+              f"· elapsed {_fmt_hms(elapsed)}  "
+              f"· rate {rate:.1f} pairs/min  "
+              f"· ETA {_fmt_hms(eta_sec)}",
+              file=sys.stderr, flush=True)
+    _emit_progress(0, label="start")
     for i, (mk, md) in enumerate(todo, 1):
         m_slug = make_slug(mk)
         d_slug = model_slug(mk, md)
@@ -963,6 +992,17 @@ def main():
                                  "gen_start_year": gy_out,
                                  "size": sz, "position": pos})
         fh.flush()
+        # Oct-29 user ask: 5-minute heartbeat so a long crawl shows
+        # progress / rate / ETA while it runs.  Based on wall clock,
+        # not iteration count, so a stall at a bot-block cooldown
+        # still gets a tick on the next successful loop.
+        _now_t = time.time()
+        if _now_t - _last_progress >= PROGRESS_INTERVAL_SEC:
+            _emit_progress(i, label="progress")
+            _last_progress = _now_t
+    # Final progress line so the user sees the end-of-run summary
+    # even without waiting for the next 5-min boundary.
+    _emit_progress(len(todo), label="final")
     fh.close()
     print(f"[done] {ok_pairs} with fitment · {empty_pairs} empty · "
           f"{blocked_pairs} bot-blocked (not recorded — rerun with --resume) · "
