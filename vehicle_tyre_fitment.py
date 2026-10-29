@@ -135,6 +135,10 @@ TINY_BODY_BYTES = 5000
 # before recognising the WAF is active.
 TINY_STREAK_LIMIT = 2
 LONG_COOLDOWN_SECS = 180  # 3 min for the first cooldown
+# Oct-29: once a long cooldown has fired, SUBSEQUENT consecutive
+# blocks escalate the sleep so a cold Cloudflare WAF gets more time
+# to clear.  Caps so we don't block indefinitely.
+LONG_COOLDOWN_ESCALATE_SECS = [180, 300, 600, 900, 1800]
 
 # Some BITRE names use spellings wheel-size.com doesn't.  Map here once
 # and the crawler transparently rewrites the URL slug.
@@ -371,6 +375,29 @@ def _norm_size(raw: str) -> str:
     return f"{m.group(1)}/{m.group(2)}R{m.group(3)}"
 
 
+# Article slugs on wheel-size.com's catalog pages have a signature
+# shape of day-and-year ("...21-2026", "...oct-15-2024").  Real model
+# gen slugs instead carry year-year or year-present ranges.  Match
+# ONLY day-year or month-day-year, never a bare trailing year, so
+# legit gens like "cl-type-s2001-2003" or "mdx2001-present" pass.
+_ARTICLE_SLUG_RX = re.compile(
+    r"(^|-)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*-?\d{1,2}-20\d\d(-|$)"
+    r"|(^|-)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{1,2}-20\d\d(-|$)"
+    r"|(^|-)\d{1,2}-20\d\d$"
+)
+def _looks_like_article_slug(slug: str) -> bool:
+    """Oct-29: wheel-size.com's /size/<make>/ catalog pages carry
+    news/article links that match the same URL shape as real model
+    pages.  Real model slugs look like 'mdx', 'cl-type-s2001-2003',
+    'hilux', 'mdx2001-present'.  Article slugs look like
+    'acura-adxaug-21-2026', 'tesla-sales-oct-15-2024'.  Reject
+    anything with a month-day-year or day-year signature;
+    year-year or year-present markers are LEGIT model gens."""
+    s = str(slug or "").lower()
+    if not s: return True
+    return bool(_ARTICLE_SLUG_RX.search(s))
+
+
 def discover_au_catalog(session, delay: float = 2.5,
                          market: str = "au",
                          makes_limit: int = 0) -> list[tuple[str, str]]:
@@ -406,6 +433,20 @@ def discover_au_catalog(session, delay: float = 2.5,
     base_catalog = f"{BASE_URL}/size/"
     pairs: list[tuple[str, str]] = []
     seen_makes: set[str] = set()
+    # Oct-29: Cloudflare warmup.  Fetch the public homepage first so
+    # the session picks up the __cf_bm / cf_clearance cookies set by
+    # the initial challenge; without this, hitting /size/ cold often
+    # trips a 403 on the first request and burns the retry budget.
+    try:
+        print(f"[discover] warmup: {BASE_URL}/", file=sys.stderr)
+        _warm = fetch(session, f"{BASE_URL}/", min(2.5, max(1.0, delay)),
+                      ua_idx=0)
+        if _warm is FETCH_BLOCKED or not _warm:
+            print(f"[discover] warmup didn't land - proceeding anyway "
+                  f"(Cloudflare may 403 the first few requests)",
+                  file=sys.stderr)
+    except Exception as _e:
+        print(f"[discover] warmup error ({_e}) - proceeding", file=sys.stderr)
     print(f"[discover] fetching make list from {base_catalog}  (market={mkt})",
           file=sys.stderr)
     root_html = fetch(session, base_catalog, delay, ua_idx=0)
@@ -430,6 +471,12 @@ def discover_au_catalog(session, delay: float = 2.5,
         if not tail or "/" in tail:
             continue
         slug = tail.lower()
+        # Oct-29: reject news/article-shaped slugs that match the
+        # same /size/<x>/ URL pattern.  Real make slugs are short
+        # (toyota, bmw, mg) with no year numerals or multi-hyphen
+        # structure.  News slugs look like "my-new-car-aug-21-2026".
+        if _looks_like_article_slug(slug):
+            continue
         if slug in seen_makes:
             continue
         seen_makes.add(slug)
@@ -460,6 +507,14 @@ def discover_au_catalog(session, delay: float = 2.5,
             if not tail or "/" in tail:
                 continue
             md_slug = tail.lower()
+            # Oct-29: skip news/article slugs on make pages.  Real model
+            # slugs don't repeat the make name as a prefix (e.g.
+            # "/size/acura/acura-adxaug-21-2026/" is a news article,
+            # "/size/acura/mdx/" is the real model page).
+            if md_slug.startswith(f"{mk_slug}-"):
+                continue
+            if _looks_like_article_slug(md_slug):
+                continue
             if md_slug in seen_models:
                 continue
             seen_models.add(md_slug)
@@ -879,10 +934,19 @@ def main():
         writer.writeheader()
 
     session = _new_session()
+    # Oct-29: fresh crawl session also gets a CF cookie warmup so
+    # the first few /size/<make>/<model>/ requests don't 403 while
+    # the fingerprint lands.
+    try:
+        print(f"[warmup] priming CF cookies via {BASE_URL}/", file=sys.stderr)
+        fetch(session, f"{BASE_URL}/", min(2.5, max(1.0, args.delay)), ua_idx=0)
+    except Exception:
+        pass
     ok_pairs = 0
     empty_pairs = 0
     blocked_pairs = 0
     tiny_streak = 0
+    _long_cooldown_count = 0   # escalating-cooldown counter
     # Oct-29 user ask: periodic progress heartbeat so a multi-hour
     # crawl isn't a black box.  Every PROGRESS_INTERVAL_SEC seconds
     # the loop prints elapsed time, how many of todo are done, the
@@ -929,11 +993,29 @@ def main():
             print(f"  [blocked] {mk} · {md} — not recorded, will retry with --resume",
                   file=sys.stderr)
             if tiny_streak >= TINY_STREAK_LIMIT:
-                print(f"  [cooldown] {TINY_STREAK_LIMIT} consecutive blocks — "
-                      f"sleeping {LONG_COOLDOWN_SECS}s", file=sys.stderr)
-                time.sleep(LONG_COOLDOWN_SECS)
+                # Oct-29: escalating cooldown.  Each successive cold
+                # period is longer so a persistent Cloudflare WAF
+                # eventually clears (or we at least stop wasting
+                # requests fast).  Cap at the last entry's value.
+                _idx = min(_long_cooldown_count,
+                           len(LONG_COOLDOWN_ESCALATE_SECS) - 1)
+                _sleep = LONG_COOLDOWN_ESCALATE_SECS[_idx]
+                print(f"  [cooldown #{_long_cooldown_count + 1}] "
+                      f"{TINY_STREAK_LIMIT} consecutive blocks — "
+                      f"sleeping {_sleep}s + warming up a fresh session",
+                      file=sys.stderr)
+                time.sleep(_sleep)
                 session = _new_session()   # fresh cookies / TLS session
+                # Warmup: hit the homepage so CF plants its cookies on
+                # the new session BEFORE the next /size/<make>/<model>/
+                # call, same trick as the discovery warmup above.
+                try:
+                    fetch(session, f"{BASE_URL}/", min(2.5, max(1.0, args.delay)),
+                          ua_idx=0)
+                except Exception:
+                    pass
                 tiny_streak = 0
+                _long_cooldown_count += 1
             continue
         # Real response (or None) — reset the streak.
         tiny_streak = 0
