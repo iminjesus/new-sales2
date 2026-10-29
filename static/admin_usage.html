@@ -192,19 +192,34 @@ function setStatus(msg, cls){
   $("#body").style.display = "none";
 }
 
+// Oct-29 user ask: the To field must default to TODAY (local-time).
+// Previously used Date.toISOString() which returns the UTC date -
+// evenings in Sydney (UTC+10/+11) and Seoul (UTC+9) land AFTER UTC
+// midnight so "today" rendered as tomorrow (or yesterday for a
+// browser earlier in the day).  _ymdLocal() reads the browser's
+// LOCAL year/month/day fields so the picker shows the calendar day
+// the user is actually looking at.  Date is still fully editable -
+// this only sets the INITIAL value.
+function _ymdLocal(d){
+  const y  = d.getFullYear();
+  const m  = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
 function initDates(){
   const to = new Date();
   const from = new Date(); from.setDate(from.getDate() - 29);
-  $("#dFrom").value = from.toISOString().slice(0,10);
-  $("#dTo").value   = to.toISOString().slice(0,10);
+  $("#dFrom").value = _ymdLocal(from);
+  $("#dTo").value   = _ymdLocal(to);
 }
 
 $("#quickWin").addEventListener("change", (e) => {
   const n = parseInt(e.target.value, 10) || 30;
   const to = new Date();
   const from = new Date(); from.setDate(from.getDate() - (n - 1));
-  $("#dFrom").value = from.toISOString().slice(0,10);
-  $("#dTo").value   = to.toISOString().slice(0,10);
+  $("#dFrom").value = _ymdLocal(from);
+  $("#dTo").value   = _ymdLocal(to);
 });
 
 $("#btnApply").addEventListener("click", load);
