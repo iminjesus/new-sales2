@@ -3713,28 +3713,57 @@ function _buildColoredRemarkHTML(text){
     const header = (m[1] || "").trim();  // "(13 models)"
     const bodyRaw = (m[2] || "").trim();
     const parts   = bodyRaw.split(/\s*\|\s*/).filter(Boolean);
-    const htmlParts = parts.map(p => {
-      const more = p.match(/^<<MORE:(\d+)>>$/);
-      if (more) {
-        return `<a href="#" class="whatvehicles-more" `
-             + `data-more="${more[1]}" `
-             + `style="color:${c};text-decoration:underline;cursor:pointer;font-weight:600">`
-             + `+${more[1]} more</a>`;
-      }
-      return `<div style="color:${c};font-weight:600;padding-left:14px">`
-           + esc(p) + `</div>`;
-    });
+    // Oct-29 user ask: lay out each vehicle in a CSS Grid so the
+    // YEAR column lines up vertically across every row.  Column 1 =
+    // "MAKE MODEL" (auto-widened to longest), column 2 = YEAR, column
+    // 3 = optional [tag].  The grid wraps ALL vehicle rows so the
+    // columns are shared.  The "+N more" link gets its own full-
+    // width row at the bottom.
     const headerHtml = `<div style="color:${c};font-weight:800">`
       + esc(`Vehicles ${header}:`) + `</div>`;
-    // Non-link parts are already divs; the +N more link needs to be
-    // wrapped so it sits on its own visual line.
-    const bodyHtml = htmlParts.map(h => {
-      if (h.startsWith("<a ")) {
-        return `<div style="padding-left:14px">${h}</div>`;
+    const gridRows = [];
+    let moreHtml = "";
+    for (const p of parts) {
+      const moreM = p.match(/^<<MORE:(\d+)>>$/);
+      if (moreM) {
+        moreHtml = `<div style="padding-left:14px;grid-column:1 / -1">`
+                 + `<a href="#" class="whatvehicles-more" `
+                 + `data-more="${moreM[1]}" `
+                 + `style="color:${c};text-decoration:underline;cursor:pointer;font-weight:600">`
+                 + `+${moreM[1]} more</a></div>`;
+        continue;
       }
-      return h;
-    }).join("");
-    return headerHtml + bodyHtml;
+      // Parse "MAKE MODEL YEAR [TAG]" from the right - optional
+      // trailing [...] tag, then a year token (possibly a range or
+      // comma-list), everything else is the name.
+      const stagRx = /\s*\[([^\]]+)\]\s*$/;
+      const stagM  = p.match(stagRx);
+      let withoutStag = p;
+      let tag = "";
+      if (stagM) {
+        tag = stagM[1];
+        withoutStag = p.slice(0, stagM.index).trimEnd();
+      }
+      const yearRx = /\s+(\d{4}(?:[-,]\s*(?:\d{4}|present))*(?:,\s*\d{4}(?:[-,]\s*(?:\d{4}|present))?)*)\s*$/i;
+      const yearM  = withoutStag.match(yearRx);
+      let name = withoutStag.trim();
+      let year = "";
+      if (yearM) {
+        year = yearM[1].trim();
+        name = withoutStag.slice(0, yearM.index).trim();
+      }
+      gridRows.push(
+        `<span style="color:${c};font-weight:600">${esc(name)}</span>` +
+        `<span style="color:${c};font-weight:600">${esc(year)}</span>` +
+        `<span style="color:${c};font-weight:600;font-style:italic;opacity:0.9">${tag ? esc("[" + tag + "]") : ""}</span>`
+      );
+    }
+    const gridHtml = gridRows.length
+      ? `<div style="display:grid;grid-template-columns:max-content max-content 1fr;`
+        + `column-gap:14px;row-gap:1px;padding-left:14px;align-items:baseline">`
+        + gridRows.join("") + `</div>`
+      : "";
+    return headerHtml + gridHtml + moreHtml;
   };
   const html = (text || "").split("\n").map(line => {
     const t = line.trim();
@@ -5792,25 +5821,28 @@ async function _applyWhatVehiclesToRow(tr){
         //     several alternative wheel-size fitments), NOT
         //     staggered.
         const _fmt = v => {
+          // Oct-29 user ask (chip format v3):
+          //   * drop the "[both]" tag entirely - that's the default,
+          //     adds noise.
+          //   * shorten "rear, staggered pair:" -> "staggered-rear:".
+          //   * The renderer below will column-align MAKE+MODEL, YEAR
+          //     and [tag] so the year lives at the same visual X
+          //     position across every row of the chip.
           const yrs = String(v.years || v.year || "").trim();
           const posRaw = String(v.position || "").toLowerCase();
           const stag = (v.staggered_detail || "").trim();
           const stagSrc = String(v.staggered_source || "").toLowerCase();
-          let posTag;
+          let posTag = "";
           if ((posRaw === "front" || posRaw === "rear") && stag) {
-            // Oct-29 user ask: when the staggered inference came from
-            // our same-diameter width heuristic (no explicit CSV
-            // marker), mark it with a trailing "?" so the reader
-            // knows it's a convention-based guess vs. the authoritative
-            // CSV-sourced tag.
             const hint = stagSrc === "inferred" ? " (inferred)" : "";
-            posTag = `${posRaw}, staggered pair: ${stag}${hint}`;
+            posTag = `[staggered-${posRaw}: ${stag}${hint}]`;
           } else if (posRaw === "front" || posRaw === "rear") {
-            posTag = posRaw;
+            posTag = `[${posRaw}]`;
           } else {
-            posTag = "both";    // staggered-without-marker collapses here
+            posTag = "";       // 'both' -> no tag
           }
-          return `${v.make} ${v.model} ${yrs} [${posTag}]`;
+          const tail = posTag ? ` ${posTag}` : "";
+          return `${v.make} ${v.model} ${yrs}${tail}`.trimEnd();
         };
         // Stash the full list on the row so the "+N more" link can
         // reveal everything on click.
