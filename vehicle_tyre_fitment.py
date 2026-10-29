@@ -385,17 +385,112 @@ _ARTICLE_SLUG_RX = re.compile(
     r"|(^|-)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)-\d{1,2}-20\d\d(-|$)"
     r"|(^|-)\d{1,2}-20\d\d$"
 )
+
+# Oct-29: model root slugs that have a year range CONCATENATED onto
+# the model (e.g. "mdx2001-present", "cl1997-2003", "zdx2009-present")
+# were observed in the user's cached catalog and all 404 on
+# wheel-size.com.  Real model root pages carry just the model slug
+# ("mdx", "cl", "zdx"); year ranges live under /size/<make>/<model>/
+# <year-range>/ (a separate path segment).  The slugs that mash the
+# year onto the model are stale/alias URLs that don't resolve, so
+# reject them during both discovery and cache load.
+_MODEL_WITH_YEAR_RX = re.compile(
+    r"(^|[a-z])(19|20)\d{2}-((19|20)\d{2}|present)$", re.IGNORECASE)
+
 def _looks_like_article_slug(slug: str) -> bool:
     """Oct-29: wheel-size.com's /size/<make>/ catalog pages carry
     news/article links that match the same URL shape as real model
-    pages.  Real model slugs look like 'mdx', 'cl-type-s2001-2003',
-    'hilux', 'mdx2001-present'.  Article slugs look like
-    'acura-adxaug-21-2026', 'tesla-sales-oct-15-2024'.  Reject
-    anything with a month-day-year or day-year signature;
-    year-year or year-present markers are LEGIT model gens."""
+    pages.  Real model slugs look like 'mdx', 'cl-type-s', 'hilux'.
+    Article slugs look like 'acura-adxaug-21-2026',
+    'tesla-sales-oct-15-2024'.  Reject anything with a month-day-year
+    or day-year signature."""
     s = str(slug or "").lower()
     if not s: return True
     return bool(_ARTICLE_SLUG_RX.search(s))
+
+
+def _slug_has_model_with_year(slug: str) -> bool:
+    """Reject slugs that mash a year range onto the model root (see
+    _MODEL_WITH_YEAR_RX)."""
+    s = str(slug or "").lower()
+    if not s: return False
+    return bool(_MODEL_WITH_YEAR_RX.search(s))
+
+
+# Oct-29: display-name cleanup for the (make, model) pairs that come
+# back from discovery.  The anchor text on wheel-size.com's /size/
+# pages sometimes carries the year range immediately after the model
+# name with no separator or with a thin unicode space -> "MDX2001
+# -PRESENT", "CL1997 - 2003", "INTEGRA TYPE-SAUG. 21, 2026".  Strip
+# trailing year-year / year-present ranges AND trailing month-day-year
+# fragments so the downstream pipeline keys on a clean model name.
+_NAME_TRAILING_YEAR_RX = re.compile(
+    r"\s*(19|20)\d{2}\s*[-–—]\s*((19|20)\d{2}|present)\s*$",
+    re.IGNORECASE)
+_NAME_TRAILING_ARTICLE_RX = re.compile(
+    r"\s*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s*"
+    r"\d{1,2},?\s*20\d{2}\s*$", re.IGNORECASE)
+
+def _clean_model_name(name: str, make: str = "") -> str:
+    s = str(name or "").strip()
+    # Strip up to two trailing year/article fragments (handles cases
+    # where both show up back-to-back, which does happen in the data).
+    for _ in range(2):
+        s2 = _NAME_TRAILING_ARTICLE_RX.sub("", s).strip()
+        s2 = _NAME_TRAILING_YEAR_RX.sub("", s2).strip()
+        if s2 == s:
+            break
+        s = s2
+    s = s.strip(" -–—,.")
+    # Oct-29: when the display text starts with the make name, strip
+    # it off - "ACURA ADX" -> "ADX", "ACURA INTEGRA TYPE-S" -> "INTEGRA
+    # TYPE-S".  wheel-size.com slugs don't repeat the make name, so
+    # keeping it in the model name produces URLs like /size/acura/
+    # acura-adx/ that reliably 404.  Only strip when there's content
+    # left after removal.
+    if make:
+        mk_up = str(make).strip().upper()
+        if mk_up and s.upper().startswith(mk_up + " "):
+            tail = s[len(mk_up):].strip(" -–—,.")
+            if tail:
+                s = tail
+    return s
+
+
+def _slugify(name: str) -> str:
+    """Collapse display name -> lower-case slug (letters/digits/dashes),
+    de-duping consecutive dashes.  Used only for shape-detection in
+    the validator - the pipeline's own slugifier is separate."""
+    s = re.sub(r"[^a-z0-9-]+", "-", str(name or "").lower())
+    s = re.sub(r"-+", "-", s)
+    return s.strip("-")
+
+
+def _pair_looks_valid(mk: str, md: str) -> bool:
+    """Oct-29: validate a (make, model) pair before adding it to the
+    discovery output or trusting it from the cached catalog.  Rejects
+    article-shaped slugs, year-mashed model slugs, and empty names.
+    Runs the display-name cleaner first so a caller that forgot to
+    clean the name still gets a consistent answer."""
+    mk = str(mk or "").strip()
+    md = _clean_model_name(md)
+    if not mk or not md:
+        return False
+    md_slug = _slugify(md)
+    mk_slug = _slugify(mk)
+    if not md_slug or not mk_slug:
+        return False
+    if _looks_like_article_slug(md_slug):
+        return False
+    if _looks_like_article_slug(mk_slug):
+        return False
+    if _slug_has_model_with_year(md_slug):
+        return False
+    # News titles tend to produce model names ending in a year or a
+    # month-day stamp - treat those as suspect too.
+    if _NAME_TRAILING_ARTICLE_RX.search(md):
+        return False
+    return True
 
 
 def discover_au_catalog(session, delay: float = 2.5,
@@ -515,13 +610,29 @@ def discover_au_catalog(session, delay: float = 2.5,
                 continue
             if _looks_like_article_slug(md_slug):
                 continue
+            # Oct-29: reject model slugs that mash a year range onto
+            # the model root ("mdx2001-present", "cl1997-2003", ...).
+            # These are stale/alias URLs that 404 on wheel-size.com -
+            # the real model root sits at /size/<make>/<model>/ with
+            # the year range in its own path segment.
+            if _slug_has_model_with_year(md_slug):
+                continue
             if md_slug in seen_models:
                 continue
             seen_models.add(md_slug)
             # Upper-case for the downstream pipeline (slug "golf" ->
             # "GOLF"; it already works with slugs because make_slug /
             # model_slug collapses "GOLF" back to "golf" for the URL).
-            md_name = (a.get_text(strip=True) or md_slug).replace("  ", " ").strip()
+            md_name_raw = (a.get_text(strip=True) or md_slug).replace("  ", " ").strip()
+            # Strip trailing year ranges / article date fragments that
+            # the anchor text picks up on wheel-size.com's grid cards,
+            # plus the make-name prefix when it's duplicated into the
+            # display text (ACURA ADX -> ADX etc.).
+            md_name = _clean_model_name(md_name_raw, make=mk_name) or md_slug
+            # Final guard - the pair-validator is the single place that
+            # decides what qualifies as a real (make, model) entry.
+            if not _pair_looks_valid(mk_name, md_name):
+                continue
             pairs.append((mk_name.upper(), md_name.upper()))
         print(f"[discover]   {mk_name}: {len(seen_models)} models",
               file=sys.stderr)
@@ -806,14 +917,40 @@ def main():
         if os.path.exists(args.discover_cache):
             with open(args.discover_cache, newline="", encoding="utf-8") as f:
                 rr = csv.DictReader(f)
-                pairs = [(str(r.get("make") or "").upper().strip(),
-                          str(r.get("model") or "").upper().strip())
-                         for r in rr
-                         if (r.get("make") or "").strip() and (r.get("model") or "").strip()]
+                raw_pairs = [(str(r.get("make") or "").upper().strip(),
+                              str(r.get("model") or "").upper().strip())
+                             for r in rr
+                             if (r.get("make") or "").strip()
+                             and (r.get("model") or "").strip()]
+            # Oct-29: run cached pairs through the sanity-check so a
+            # cache written BEFORE the article/year-mash filters were
+            # added doesn't keep poisoning every subsequent run.  If
+            # the surviving fraction is tiny the whole cache is likely
+            # corrupt - throw it away and re-discover.
+            raw_n = len(raw_pairs)
+            clean_pairs = []
+            for (mk, md) in raw_pairs:
+                md_clean = _clean_model_name(md, make=mk).upper()
+                if _pair_looks_valid(mk, md_clean):
+                    clean_pairs.append((mk, md_clean))
+            dropped = raw_n - len(clean_pairs)
+            if raw_n > 0 and (len(clean_pairs) == 0 or
+                              len(clean_pairs) < 0.5 * raw_n):
+                print(f"[discover] cached catalog looks poisoned "
+                      f"({dropped}/{raw_n} entries dropped by sanity "
+                      f"check) - discarding and re-discovering",
+                      file=sys.stderr)
+                pairs = []
+            else:
+                if dropped > 0:
+                    print(f"[discover] cleaned {dropped}/{raw_n} stale "
+                          f"entries out of cached catalog "
+                          f"({args.discover_cache})", file=sys.stderr)
+                pairs = clean_pairs
             if pairs:
                 print(f"[discover] reusing cached catalog ({len(pairs)} pairs): "
                       f"{args.discover_cache}", file=sys.stderr)
-            else:
+            elif raw_n == 0:
                 print(f"[discover] cached catalog is EMPTY (0 pairs) at "
                       f"{args.discover_cache} - re-running discovery",
                       file=sys.stderr)
