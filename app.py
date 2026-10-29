@@ -5247,11 +5247,34 @@ def api_orders_additional_dc():
         # group_code).  gc falls back to sold_to when no group resolves
         # so the second sub-clause becomes a no-op instead of an
         # accidental wildcard.
+        #
+        # Oct-29 user ask (promo scope fix):
+        #   Reported: sold_to=739199 is in group AEU, and dc_additional_
+        #   customer has NO Black Friday row for customer_grp=AEU, yet
+        #   the SPRF stamped "BLACK FRIDAY (30.00%)".  Root cause: the
+        #   previous customer_gate matched ANY ac row with sold_to=
+        #   739199 regardless of what ac.customer_grp carried on that
+        #   row.  So a residual row with sold_to=739199 under a
+        #   DIFFERENT customer_grp (e.g. legacy data, migration slip)
+        #   would silently win.
+        #   Fix: when the AC row has a NON-blank customer_grp AND the
+        #   customer's resolved group_code is known, they must match.
+        #   AC rows with blank customer_grp still pass (unscoped
+        #   per-customer promos), and the group-level sub-clause
+        #   stays as-is.  The guard only activates when BOTH sides
+        #   have a group value.
         gc = group_code or sold_to
         customer_gate = (
-            " (TRIM(ac.sold_to) = %s"
-            "  OR ((ac.sold_to IS NULL OR TRIM(ac.sold_to) = '')"
-            "      AND UPPER(TRIM(ac.customer_grp)) = UPPER(%s)))"
+            " (("
+            "  TRIM(ac.sold_to) = %s"
+            "  AND ("
+            "    ac.customer_grp IS NULL"
+            "    OR TRIM(ac.customer_grp) = ''"
+            "    OR UPPER(TRIM(ac.customer_grp)) = UPPER(%s)"
+            "  )"
+            " )"
+            " OR ((ac.sold_to IS NULL OR TRIM(ac.sold_to) = '')"
+            "     AND UPPER(TRIM(ac.customer_grp)) = UPPER(%s)))"
         )
         common_gate = (
             " AND UPPER(TRIM(ac.brand)) = UPPER(%s)"
@@ -5274,10 +5297,13 @@ def api_orders_additional_dc():
             " LIMIT 1"
         )
         # base_params order mirrors the SQL binding order of
-        # customer_gate + common_gate.  When has_dates is true, the
+        # customer_gate + common_gate.  customer_gate now has THREE
+        # placeholders: (sold_to for the exact-match arm,
+        # group_code for the consistency check inside the sold_to arm,
+        # gc for the group-only arm).  When has_dates is true, the
         # common gate carries two extra %s for valid_from / valid_to;
         # add them here so every _tier(...) call stays aligned.
-        base_params = [sold_to, gc, brand, qty]
+        base_params = [sold_to, gc, gc, brand, qty]
         if has_dates:
             base_params += [on_date_iso, on_date_iso]
 
@@ -5401,7 +5427,11 @@ def api_orders_additional_dc():
         if has_promo_col:
             try:
                 scope_where_bits = []
-                scope_params = [sold_to, gc, brand, "%SOVD%"]
+                # Oct-29: customer_gate now carries THREE placeholders
+                # (sold_to, gc for the consistency check inside the
+                # sold_to arm, gc for the group-only arm) - add the
+                # extra gc so this scope query's binding matches.
+                scope_params = [sold_to, gc, gc, brand, "%SOVD%"]
                 if has_material and material:
                     scope_where_bits.append(
                         "(ac.material IS NOT NULL AND TRIM(ac.material) <> ''"
@@ -5433,9 +5463,12 @@ def api_orders_additional_dc():
                             "  AND (ac.valid_from IS NULL OR ac.valid_from <= %s) "
                             "  AND (ac.valid_to   IS NULL OR ac.valid_to   >= %s) "
                         )
-                        scope_params = (scope_params[:4]
+                        # Oct-29: scope_params is now [sold_to, gc, gc,
+                        # brand, '%SOVD%', ...], so the date-insertion
+                        # splice point moves from index 4 to 5.
+                        scope_params = (scope_params[:5]
                                         + [on_date_iso, on_date_iso]
-                                        + scope_params[4:])
+                                        + scope_params[5:])
                     scope_sql = (
                         f"SELECT 1 FROM {ac_table} ac "
                         "WHERE " + customer_gate +
