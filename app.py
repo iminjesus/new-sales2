@@ -5880,6 +5880,8 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
     order_no = order.get("order_no") or f"#{oid}"
     sold_to_name = order.get("sold_to_name") or ""
     sold_to = order.get("sold_to") or ""
+    ship_to_name = order.get("ship_to_name") or ""
+    ship_to      = order.get("ship_to") or ""
     bde   = order.get("submitted_by_bde") or ""
     grand = order.get("grand_total") or ""
     avg_dc = order.get("avg_dc_pct") or ""
@@ -5893,6 +5895,10 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
                 f'<span style="color:#6b7280;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;margin-right:4px">{_esc_html(label)}</span>'
                 f'<b style="color:{colour};font-size:12.5px">{_esc_html(value)}</b>'
                 f'</span>')
+    # Oct-29: Ship-to chip (only when distinct from Sold-to) so an
+    # Approved mail names the actual store, not just the bill-to.
+    _ship_chip = (_chip("Ship-to", f"{ship_to_name} ({ship_to})", "#7c2d12")
+                  if ship_to and ship_to != sold_to else "")
     return f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:900px">
       <div style="background:#16a34a;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
@@ -5904,6 +5910,7 @@ def _approval_email_html(oid, order, approver_name, approver_email, base_url):
           {_chip("Approver",  approver_name, "#166534")}
           {_chip("BDE",       bde)}
           {_chip("Customer",  f"{sold_to_name} ({sold_to})")}
+          {_ship_chip}
           {_chip("Reb",       reb, "#065f46" if reb == "Y" else "#991b1b")}
           {_chip("Grand",     grand, "#0b3d91")}
           {_chip("Avg DC",    (str(avg_dc) + "%") if avg_dc != "" else "—", "#b45309")}
@@ -5929,6 +5936,8 @@ def _reject_email_html(oid, order, rejector_name, rejector_email, note, base_url
     order_no = order.get("order_no") or f"#{oid}"
     sold_to_name = order.get("sold_to_name") or ""
     sold_to = order.get("sold_to") or ""
+    ship_to_name = order.get("ship_to_name") or ""
+    ship_to      = order.get("ship_to") or ""
     bde   = order.get("submitted_by_bde") or ""
     grand = order.get("grand_total") or ""
     link  = f"{base_url}/orders_list#o={oid}" if base_url else ""
@@ -5938,6 +5947,8 @@ def _reject_email_html(oid, order, rejector_name, rejector_email, note, base_url
                 f'<span style="color:#6b7280;font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;margin-right:4px">{_esc_html(label)}</span>'
                 f'<b style="color:{colour};font-size:12.5px">{_esc_html(value)}</b>'
                 f'</span>')
+    _ship_chip = (_chip("Ship-to", f"{ship_to_name} ({ship_to})", "#7c2d12")
+                  if ship_to and ship_to != sold_to else "")
     return f"""
     <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Arial,sans-serif;color:#111;max-width:900px">
       <div style="background:#dc2626;padding:8px 12px;font-weight:800;color:#fff;font-size:13.5px">
@@ -5949,6 +5960,7 @@ def _reject_email_html(oid, order, rejector_name, rejector_email, note, base_url
           {_chip("Rejected by", rejector_name, "#991b1b")}
           {_chip("BDE",       bde)}
           {_chip("Customer",  f"{sold_to_name} ({sold_to})")}
+          {_ship_chip}
           {_chip("Grand",     grand, "#0b3d91")}
         </div>
         <div style="margin-top:8px;padding:8px 10px;background:#fee2e2;
@@ -5983,6 +5995,7 @@ def _cancel_email_html(oid, row, actor_email, base_url):
         <div><b>Cancelled by:</b> {_esc_html(actor_email or '—')} · {ts}</div>
         <div><b>BDE:</b> {_esc_html(bde)}</div>
         <div><b>Customer:</b> {_esc_html(sold_to_name)} ({_esc_html(sold_to)})</div>
+        {_ship_to_html_block(snap)}
         <div style="margin-top:6px;color:#475569">No approval or SAP action is required — the SPRF has been removed from the queue.</div>
       </div>
     </div>
@@ -6008,6 +6021,7 @@ def _revive_email_html(oid, snap, actor_email, base_url):
         <div><b>Revived by:</b> {_esc_html(actor_email or '—')} · {ts}</div>
         <div><b>BDE:</b> {_esc_html(bde)}</div>
         <div><b>Customer:</b> {_esc_html(sold_to_name)} ({_esc_html(sold_to)})</div>
+        {_ship_to_html_block(snap)}
         {('<div style="margin-top:6px;color:#334155"><b>Original reason:</b> ' + _esc_html(reason) + '</div>') if reason else ''}
         <div style="margin-top:8px">
           {('<a href="' + link + '" style="background:#2563eb;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none;font-weight:700">Open SPRF</a>') if link else ''}
@@ -6038,6 +6052,7 @@ def _sap_marked_email_html(oid, snap, actor_email, base_url):
         <div><b>CS user:</b> {_esc_html(actor_email or '—')} · {ts}</div>
         <div><b>BDE:</b> {_esc_html(bde)}</div>
         <div><b>Customer:</b> {_esc_html(sold_to_name)} ({_esc_html(sold_to)})</div>
+        {_ship_to_html_block(snap)}
         <div><b>SAP DO No.:</b> {_esc_html(sd_no)}</div>
         {('<div><b>Approved by:</b> ' + _esc_html(approver) + '</div>') if approver else ''}
         <div style="margin-top:8px">
@@ -6527,7 +6542,8 @@ def api_orders_submit():
     # and the email body's coloured banner spells out the approval
     # route in one line.
     subject = (f"[SPRF {order_no}] {submitted_by_bde or 'BDE'} → "
-               f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
+               f"{header.get('sold_to_name','')} ({header.get('sold_to','')})"
+               f"{_ship_to_subject_tag(header)}")
     payload_for_mail = dict(payload)
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload_for_mail["needs_mgmt_approval"] = needs_approval
@@ -7375,7 +7391,8 @@ def api_orders_status(oid):
             to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
             subject = (f"[SPRF SAP-ENTERED {order_no}] DO {_snap_for_mail.get('sd_no') or '—'} · "
                        f"{_snap_for_mail.get('sold_to_name','')} "
-                       f"({_snap_for_mail.get('sold_to','')})")
+                       f"({_snap_for_mail.get('sold_to','')})"
+                       f"{_ship_to_subject_tag(_snap_for_mail)}")
             try:
                 _send_mail_async(
                     to_list, cc, subject,
@@ -8041,7 +8058,8 @@ def api_orders_update(oid):
     row_order_no = (row.get("order_no") or "").strip()
     _order_label = row_order_no or f"#{oid}"
     subject = (f"[SPRF UPDATE {_order_label}] {submitted_by_bde or 'BDE'} → "
-               f"{header.get('sold_to_name','')} ({header.get('sold_to','')})")
+               f"{header.get('sold_to_name','')} ({header.get('sold_to','')})"
+               f"{_ship_to_subject_tag(header)}")
     payload_for_mail = dict(payload)
     payload_for_mail["submitted_at"]        = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload_for_mail["needs_mgmt_approval"] = needs_approval
@@ -8309,7 +8327,8 @@ def api_orders_approve(oid):
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF APPROVED {order_no}] {approver_name} · "
                    f"{order_snapshot.get('sold_to_name','')} "
-                   f"({order_snapshot.get('sold_to','')})")
+                   f"({order_snapshot.get('sold_to','')})"
+                   f"{_ship_to_subject_tag(order_snapshot)}")
         try:
             _send_mail_async(
                 to_list, cc, subject,
@@ -8718,7 +8737,8 @@ def api_orders_reject(oid):
         # Oct-22 user ask: reject is a non-submit event.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF REJECTED {order_no}] {rejector_name} · "
-                   f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
+                   f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})"
+                   f"{_ship_to_subject_tag(snap)}")
         try:
             _send_mail_async(
                 to_list, cc, subject,
@@ -8828,7 +8848,8 @@ def api_orders_cancel(oid):
         # Oct-22 user ask: cancel is a non-submit event.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF DELETED {order_no}] by {who or 'requester'} · "
-                   f"{row.get('sold_to_name','')} ({row.get('sold_to','')})")
+                   f"{row.get('sold_to_name','')} ({row.get('sold_to','')})"
+                   f"{_ship_to_subject_tag(row)}")
         body_html = _cancel_email_html(oid, row, who, base_url)
         try:
             _send_mail_async(to_list, cc, subject, body_html)
@@ -8919,7 +8940,8 @@ def api_orders_revive(oid):
         # Oct-22 user ask: revive is a non-submit event.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF REVIVED {order_no}] by {who or 'requester'} · "
-                   f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})")
+                   f"{snap.get('sold_to_name','')} ({snap.get('sold_to','')})"
+                   f"{_ship_to_subject_tag(snap)}")
         body_html = _revive_email_html(oid, snap, who, base_url)
         try:
             _send_mail_async(to_list, cc, subject, body_html)
@@ -19619,6 +19641,43 @@ def _esc_html(s):
     return (str(s or "")
             .replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
             .replace("\n","<br>"))
+
+
+# Oct-29 user ask: every SPRF notification email should carry the
+# SHIP-TO (store) alongside the SOLD-TO (bill-to parent) so a
+# recipient like Brian sees the actual destination store, not just
+# the Tyrepower Marketing parent account.
+#
+# _ship_to_subject_tag — returns a short " / Ship-to: NAME (CODE)"
+# tag for the end of an email subject.  Returns "" when ship_to is
+# blank or identical to sold_to (single-site customer), so a
+# ship-to-only account doesn't double up in the subject.
+#
+# _ship_to_html_block — returns a "<div><b>Ship-to:</b> NAME (CODE)
+# </div>" line, or "" when ship_to is blank / same as sold_to.
+# Dropped into every email body immediately after the Customer line.
+def _ship_to_subject_tag(snap: dict) -> str:
+    try:
+        _s  = str((snap or {}).get("ship_to") or "").strip()
+        _nm = str((snap or {}).get("ship_to_name") or "").strip()
+        _st = str((snap or {}).get("sold_to") or "").strip()
+    except Exception:
+        return ""
+    if not _s or _s == _st:
+        return ""
+    return f" / Ship-to: {_nm} ({_s})"
+
+
+def _ship_to_html_block(snap: dict) -> str:
+    try:
+        _s  = str((snap or {}).get("ship_to") or "").strip()
+        _nm = str((snap or {}).get("ship_to_name") or "").strip()
+        _st = str((snap or {}).get("sold_to") or "").strip()
+    except Exception:
+        return ""
+    if not _s or _s == _st:
+        return ""
+    return f'<div><b>Ship-to:</b> {_esc_html(_nm)} ({_esc_html(_s)})</div>'
 
 def _email_log_html(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action, feedback,
