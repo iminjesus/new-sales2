@@ -75,6 +75,47 @@ def _norm_cell(v) -> str:
     return s
 
 
+# Oct-29 user ask: some rows in the source Tempeweborder CSVs ship with
+# the SIZE column blank and the actual tyre size embedded in the
+# DESCRIPTION text (e.g. "P235/60R15 98S RADIAL T/A RWL",
+# "35x12.50R17LT 121Q MUD TERRAIN T/A KM3", "28X10.00R14 NHS").
+# Extract whatever recognisable size we can find at or near the start
+# of the description so the consolidated workbook doesn't drop those
+# SKUs under a blank SIZE row.
+#
+# Patterns covered:
+#   * Metric:         235/60R15, 315/70R17, 275/55R20
+#   * P-metric:       P235/60R15 (passenger)
+#   * LT-metric:      LT285/75R16 (light truck)
+#   * Flotation:      35x12.50R17LT, 31X10.50R15, 35x12.5R17
+#   * NHS flotation:  28X10.00R14 NHS, 215/70R15 NHS
+_SIZE_FROM_DESC_RX = re.compile(
+    r"\b((?:LT|P)?\d{2,3}(?:/\d{2}R\d{1,2}|[Xx]\d{1,2}(?:\.\d{1,2})?R\d{1,2})(?:LT)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _size_from_desc(desc: str) -> str:
+    """Return the first tyre-size token found in `desc` (upper-cased),
+    or "" when nothing matches.  Prefers the earliest match so a
+    description that happens to carry a second numeric token later
+    (e.g. "121Q MUD TERRAIN") doesn't win over the real size."""
+    m = _SIZE_FROM_DESC_RX.search(str(desc or ""))
+    return m.group(1).upper() if m else ""
+
+
+def _norm_desc_for_key(desc: str) -> str:
+    """Normalise a DESCRIPTION cell for de-duplication: collapse runs
+    of whitespace, strip trailing '^^^'-style marker, upper-case.
+    This is key-side only; the DISPLAY description keeps its original
+    casing + punctuation."""
+    s = str(desc or "").strip()
+    # Drop the stray "^^^" marker the source occasionally appends.
+    s = re.sub(r"\^+\s*$", "", s).strip()
+    s = re.sub(r"\s+", " ", s)
+    return s.upper()
+
+
 def _to_number(s: str):
     """Return a float when s parses as a number (ignores $ , spaces,
     trailing %); else return the raw stripped string so a text value
@@ -97,11 +138,16 @@ def main():
                          "(default: current directory).")
     ap.add_argument("--output", default="tempeweborder_consolidated.xlsx",
                     help="Output .xlsx path (default: ./tempeweborder_consolidated.xlsx).")
-    ap.add_argument("--no-stock-blank", action="store_true",
-                    help="Keep STOCK values for pre-Sep-2025 months instead "
-                         "of leaving the cell blank.  Default blanks them "
-                         "because the crawler didn't record stock before "
-                         "Sep 2025.")
+    ap.add_argument("--no-stock-blank", action="store_true", default=True,
+                    help="(default True) Keep whatever STOCK value the "
+                         "source CSV carries, no matter what month the file "
+                         "is from.  Pass --blank-pre-sep to force blanking "
+                         "pre-Sep-2025 months instead.")
+    ap.add_argument("--blank-pre-sep", action="store_true",
+                    help="Blank out the STOCK column for months before "
+                         f"{STOCK_AVAILABLE_FROM.isoformat()}.  Default is "
+                         "to preserve whatever value the source file "
+                         "carries (per Oct-29 user ask).")
     ap.add_argument("--include-recursive", action="store_true",
                     help="Also scan subdirectories under --dir.")
     ap.add_argument("--long", action="store_true",
@@ -154,12 +200,24 @@ def main():
         print(f"       {mk}  <-  {os.path.basename(path)}  "
               f"({d.isoformat()} {hhmm:04d})", file=sys.stdout)
 
-    # Per-product row: key -> {col -> value}
-    # key = (SIZE_UP, BRAND_UP, DESCRIPTION_RAW)
+    # Per-product row: key -> slot dict with metadata + month data.
+    # Oct-29: key is (SIZE_UP, BRAND_UP, DESC_NORM_UP) where DESC_NORM
+    # is the whitespace-collapsed / ^^^-stripped / upper-cased
+    # description.  This dedupes rows that differ ONLY in trailing
+    # whitespace, stray '^^^' markers or case - which the source
+    # occasionally emits as separate rows for the same SKU.  Each slot
+    # stores its OWN original-casing description so the output always
+    # shows the row's actual description text, not a longest-wins
+    # shared one across a (size, brand) group.
     rows: dict[tuple[str, str, str], dict[str, object]] = {}
-    descriptions_seen: dict[tuple[str, str], str] = {}
+    size_recovered_total = 0
+    dedup_collapsed_total = 0
+    _blank_pre_sep = bool(args.blank_pre_sep)
     for mk in months_sorted:
         d, _hhmm, path = latest_per_month[mk]
+        rows_in_file = 0
+        size_recovered = 0
+        dedup_in_file = 0
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
             if not reader.fieldnames:
@@ -172,33 +230,76 @@ def main():
             lut = {h.lower(): h for h in reader.fieldnames}
             def _col(name_lower):
                 return lut.get(name_lower)
+            # Oct-29: track which keys we've already written in THIS
+            # file so same-key duplicates inside a single CSV count as
+            # "collapsed" rather than silently re-overwriting (so the
+            # per-month info line below can report them to the user).
+            seen_this_file: set[tuple[str, str, str]] = set()
             for r in reader:
                 size = _norm_cell(r.get(_col("size") or "size"))
                 brand = _norm_cell(r.get(_col("brand") or "brand"))
                 desc = _norm_cell(r.get(_col("description") or "DESCRIPTION"))
                 if not size and not brand and not desc:
                     continue
-                key = (size.upper(), brand.upper(), desc)
-                slot = rows.setdefault(key, {})
+                # Oct-29 user ask: recover a missing SIZE from the
+                # DESCRIPTION so flotation / P-metric / NHS SKUs with
+                # the size baked into the description text don't ship
+                # with a blank SIZE column.
+                if not size:
+                    recovered = _size_from_desc(desc)
+                    if recovered:
+                        size = recovered
+                        size_recovered += 1
+                rows_in_file += 1
+                desc_norm = _norm_desc_for_key(desc)
+                key = (size.upper(), brand.upper(), desc_norm)
+                if key in seen_this_file:
+                    dedup_in_file += 1
+                else:
+                    seen_this_file.add(key)
+                slot = rows.get(key)
+                if slot is None:
+                    # First time we see this SKU - stamp its own
+                    # display metadata on the slot.  Later rows for the
+                    # same key (across months) only refresh the display
+                    # fields when the current row carries a LONGER
+                    # description (handles source rows that progres-
+                    # sively flesh out the description text).
+                    slot = {
+                        "size":  size.upper(),
+                        "brand": brand,            # keep original casing
+                        "desc":  desc,             # keep original casing
+                        "months": {},
+                    }
+                    rows[key] = slot
+                elif desc and len(desc) > len(str(slot.get("desc") or "")):
+                    slot["desc"] = desc
                 cost = _norm_cell(r.get(_col("cost")  or "COST"))
                 price = _norm_cell(r.get(_col("price") or "PRICE"))
                 stock = _norm_cell(r.get(_col("stock") or "STOCK"))
-                slot[f"COST_{mk}"]  = _to_number(cost)
-                slot[f"PRICE_{mk}"] = _to_number(price)
-                # Oct-29 user ask: stock column exists for every month
-                # but values for pre-Sep-2025 months stay blank unless
-                # --no-stock-blank is passed.
-                if d >= STOCK_AVAILABLE_FROM or args.no_stock_blank:
-                    slot[f"STOCK_{mk}"] = _to_number(stock) if stock != "" else ""
+                # Oct-29: STOCK column is preserved as-is by default.
+                # Only --blank-pre-sep (opt-in) forces blanks for
+                # months before STOCK_AVAILABLE_FROM.
+                if _blank_pre_sep and d < STOCK_AVAILABLE_FROM:
+                    stock_val = ""
                 else:
-                    slot[f"STOCK_{mk}"] = ""
-                # Keep the longest / latest description for display
-                desc_key = (size.upper(), brand.upper())
-                if desc and (desc_key not in descriptions_seen
-                             or len(desc) > len(descriptions_seen[desc_key])):
-                    descriptions_seen[desc_key] = desc
+                    stock_val = _to_number(stock) if stock != "" else ""
+                slot["months"][mk] = {
+                    "cost":  _to_number(cost),
+                    "price": _to_number(price),
+                    "stock": stock_val,
+                }
+        if size_recovered or dedup_in_file:
+            print(f"[info] {mk}: {rows_in_file} rows read "
+                  f"(SIZE recovered from description: {size_recovered}, "
+                  f"duplicate rows collapsed: {dedup_in_file})",
+                  file=sys.stderr)
+        size_recovered_total  += size_recovered
+        dedup_collapsed_total += dedup_in_file
 
-    print(f"[info] built {len(rows)} unique (SIZE, brand, DESCRIPTION) rows",
+    print(f"[info] built {len(rows)} unique (SIZE, brand, DESCRIPTION) rows "
+          f"(SIZE recovered: {size_recovered_total}; "
+          f"duplicates collapsed: {dedup_collapsed_total})",
           file=sys.stderr)
 
     # Column order: SIZE, brand, DESCRIPTION, then per-month triplets
@@ -244,16 +345,19 @@ def main():
     ws.freeze_panes = "D2"   # pin SIZE / brand / DESCRIPTION on scroll
 
     # Sort rows by SIZE then brand then description for a predictable
-    # Excel layout.
+    # Excel layout.  Each slot carries its OWN display description so
+    # rows that share (size, brand) but differ in description render
+    # distinctly - no longest-wins collapse.
     for key in sorted(rows.keys()):
-        size_up, brand_up, desc = key
-        display_desc = descriptions_seen.get((size_up, brand_up), desc)
         slot = rows[key]
-        row_vals = [size_up, brand_up, display_desc]
+        row_vals = [slot["size"], slot["brand"], slot["desc"]]
+        months_data = slot["months"]
         for mk in months_sorted:
-            row_vals.append(slot.get(f"COST_{mk}", ""))
-            row_vals.append(slot.get(f"PRICE_{mk}", ""))
-            row_vals.append(slot.get(f"STOCK_{mk}", ""))
+            md = months_data.get(mk)
+            if md is None:
+                row_vals.extend(["", "", ""])
+            else:
+                row_vals.extend([md["cost"], md["price"], md["stock"]])
         ws.append(row_vals)
 
     # Simple column auto-sizing (take max cell width per column, cap
@@ -300,20 +404,21 @@ def main():
                 c.fill = stock_fill
         lws.freeze_panes = "D2"
         for key in sorted(rows.keys()):
-            size_up, brand_up, desc = key
-            display_desc = descriptions_seen.get((size_up, brand_up), desc)
             slot = rows[key]
+            months_data = slot["months"]
             for mk in months_sorted:
                 yr, mo = mk.split("-")
-                cost  = slot.get(f"COST_{mk}", "")
-                price = slot.get(f"PRICE_{mk}", "")
-                stock = slot.get(f"STOCK_{mk}", "")
-                # Skip entirely-blank month rows so the long file
-                # isn't bloated with placeholders for SKUs that
-                # didn't exist in a given month.
-                if cost == "" and price == "" and stock == "":
+                md = months_data.get(mk)
+                if md is None:
+                    # SKU wasn't in this month's source file at all -
+                    # skip the (SKU, month) long row so the long file
+                    # isn't bloated with placeholders for SKUs that
+                    # never had any data in a given month.
                     continue
-                lws.append([size_up, brand_up, display_desc,
+                cost  = md["cost"]
+                price = md["price"]
+                stock = md["stock"]
+                lws.append([slot["size"], slot["brand"], slot["desc"],
                             int(yr), int(mo), cost, price, stock])
         for col_idx, _ in enumerate(long_headers, 1):
             letter = get_column_letter(col_idx)
