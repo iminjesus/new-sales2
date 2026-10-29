@@ -4381,7 +4381,13 @@ def api_orders_vehicles_by_size():
         def _compact_years(years):
             """Collapse consecutive numeric years into dash ranges and
             comma-separate the rest.  Non-numeric years sort to the
-            end as plain strings."""
+            end as plain strings.
+
+            Oct-29 user ask: when the start + end of a range share the
+            SAME century + decade century (first 2 digits), shorten the
+            end-year to its last 2 digits so "2025-2026" renders as
+            "2025-26".  Ranges that cross centuries ("1998-2003") stay
+            spelt out in full since "1998-03" would read ambiguously."""
             nums = sorted(y for y in years if isinstance(y, int))
             others = sorted(str(y) for y in years if not isinstance(y, int))
             parts = []
@@ -4393,7 +4399,12 @@ def api_orders_vehicles_by_size():
                 if j == i:
                     parts.append(str(nums[i]))
                 else:
-                    parts.append(f"{nums[i]}-{nums[j]}")
+                    start, end = nums[i], nums[j]
+                    # Same century (first 2 digits) -> 2-digit tail.
+                    if start // 100 == end // 100:
+                        parts.append(f"{start}-{end % 100:02d}")
+                    else:
+                        parts.append(f"{start}-{end}")
                 i = j + 1
             parts.extend(others)
             return ", ".join(parts)

@@ -3744,7 +3744,10 @@ function _buildColoredRemarkHTML(text){
         tag = stagM[1];
         withoutStag = p.slice(0, stagM.index).trimEnd();
       }
-      const yearRx = /\s+(\d{4}(?:[-,]\s*(?:\d{4}|present))*(?:,\s*\d{4}(?:[-,]\s*(?:\d{4}|present))?)*)\s*$/i;
+      // Oct-29: year token can now be either "2025-2026" (full) or
+      // "2025-26" (shortened same-century tail) or "2025-present" or
+      // a comma list of any of those.
+      const yearRx = /\s+(\d{4}(?:-(?:\d{2}|\d{4}|present))?(?:,\s*\d{4}(?:-(?:\d{2}|\d{4}|present))?)*)\s*$/i;
       const yearM  = withoutStag.match(yearRx);
       let name = withoutStag.trim();
       let year = "";
@@ -5821,23 +5824,24 @@ async function _applyWhatVehiclesToRow(tr){
         //     several alternative wheel-size fitments), NOT
         //     staggered.
         const _fmt = v => {
-          // Oct-29 user ask (chip format v3):
-          //   * drop the "[both]" tag entirely - that's the default,
-          //     adds noise.
-          //   * shorten "rear, staggered pair:" -> "staggered-rear:".
-          //   * The renderer below will column-align MAKE+MODEL, YEAR
-          //     and [tag] so the year lives at the same visual X
-          //     position across every row of the chip.
+          // Oct-29 user ask (chip format v4):
+          //   * front -> "F", rear -> "R" (one-letter axle code).
+          //   * staggered pair tag abbreviated the same way:
+          //     "[stg-F: 245/40R20 + 265/40R20]".
+          //   * "both" still prints no tag (default).
           const yrs = String(v.years || v.year || "").trim();
           const posRaw = String(v.position || "").toLowerCase();
           const stag = (v.staggered_detail || "").trim();
           const stagSrc = String(v.staggered_source || "").toLowerCase();
+          const axleShort = posRaw === "front" ? "F"
+                          : posRaw === "rear"  ? "R"
+                          : "";
           let posTag = "";
-          if ((posRaw === "front" || posRaw === "rear") && stag) {
+          if (axleShort && stag) {
             const hint = stagSrc === "inferred" ? " (inferred)" : "";
-            posTag = `[staggered-${posRaw}: ${stag}${hint}]`;
-          } else if (posRaw === "front" || posRaw === "rear") {
-            posTag = `[${posRaw}]`;
+            posTag = `[stg-${axleShort}: ${stag}${hint}]`;
+          } else if (axleShort) {
+            posTag = `[${axleShort}]`;
           } else {
             posTag = "";       // 'both' -> no tag
           }
