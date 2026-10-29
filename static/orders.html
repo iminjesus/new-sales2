@@ -5464,8 +5464,16 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (_e) {}
       _applyWhatVehiclesToAll();
     });
-    // On initial load, if the box is already ticked, apply.
-    if (chkWv.checked) setTimeout(_applyWhatVehiclesToAll, 400);
+    // On initial load, ALWAYS run the pass once.  When the box is
+    // ticked the pass stamps the Vehicles chips as before; when it
+    // is UN-ticked the pass strips any `(Vehicles: ...)` chip that
+    // was previously saved onto the Remark text (which otherwise
+    // sticks around because no `change` event ever fires at page
+    // load to trigger the strip).  Oct-29: user reported the
+    // "no match" chip persisting after unticking — the chip had been
+    // written into saved Remark during a prior session and the load
+    // path never cleared it.
+    setTimeout(_applyWhatVehiclesToAll, 400);
   }
 });
 
@@ -5510,7 +5518,11 @@ async function _applyWhatVehiclesToRow(tr){
           + " source=" + (d && d.source));
       } catch (_e) {}
       if (!vs.length) {
-        linesKept.push(`(Vehicles: — no match in OE file for ${size})`);
+        // Oct-29 user ask: when the OE file has no match for this
+        // size, DON'T stamp a "no match" chip on the Remark - the
+        // noise outweighs the signal.  Just leave the Vehicles line
+        // off entirely (linesKept was already stripped of any
+        // previous Vehicles chip above).
       } else {
         const _fmt = v => {
           // Oct-29 user ask: the backend now returns a compact `years`
