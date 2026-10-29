@@ -135,6 +135,96 @@ def _mk_session(market: str) -> "_http.Session":
     return sess
 
 
+def _cf_warmup(sess) -> bool:
+    """Oct-29: wheel-size.com's /sitemap.xml sits behind the same CF
+    Bot Fight Mode as /size/ pages.  Fetching the public homepage
+    FIRST lets CF stamp the session with __cf_bm / cf_clearance cookies
+    on the clean-first-request path; subsequent sitemap requests then
+    carry those cookies and usually sail through.  Also sends Accept:
+    text/html so CF's content-type sniffer treats the warmup as a
+    browser visit instead of a scraper probe.
+
+    Returns True when the warmup succeeded (we got a non-blocked body),
+    False when CF rejected the homepage too (which usually means the
+    whole IP is blocklisted and no amount of retries will recover)."""
+    url = f"{BASE_URL}/"
+    print(f"[warmup] priming CF cookies via {url}", file=sys.stderr)
+    for attempt in range(2):
+        try:
+            kw = {
+                "timeout": 20,
+                "headers": {
+                    "User-Agent": DEFAULT_UA,
+                    "Accept": ("text/html,application/xhtml+xml,"
+                               "application/xml;q=0.9,*/*;q=0.8"),
+                    "Accept-Language": "en-AU,en;q=0.9",
+                    "Upgrade-Insecure-Requests": "1",
+                },
+            }
+            if _HAS_CURL_CFFI:
+                kw["impersonate"] = _IMPERSONATE
+            r = sess.get(url, **kw)
+            if r.status_code == 200 and len(r.content) > 1000:
+                print(f"[warmup] OK ({r.status_code}, {len(r.content)} bytes)",
+                      file=sys.stderr)
+                return True
+            print(f"[warmup] attempt {attempt + 1}: {r.status_code} "
+                  f"({len(r.content) if r.content else 0} bytes)",
+                  file=sys.stderr)
+        except Exception as _e:
+            print(f"[warmup] attempt {attempt + 1} error: {_e}",
+                  file=sys.stderr)
+        time.sleep(5 + attempt * 10)
+    return False
+
+
+def _candidate_sitemap_urls(sess, root_hint: str) -> list[str]:
+    """Figure out which sitemap URL(s) wheel-size.com actually serves.
+    Tries, in order:
+      1. The hint URL the caller passed (--sitemap).
+      2. Every URL listed under "Sitemap:" in /robots.txt (which is
+         usually NOT CF-protected and is the authoritative source).
+      3. A short list of conventional fallbacks (/sitemap_index.xml,
+         /sitemap/sitemap.xml, /sitemaps.xml).
+    Returns the de-duped list in try-order so the caller can walk it
+    until one answers 200."""
+    out = [root_hint]
+    # robots.txt first - the standard says this file lists every
+    # sitemap URL the site exposes, and it almost never carries the
+    # same Bot-Fight-Mode protection as content pages.
+    try:
+        kw = {"timeout": 15, "headers": {
+            "User-Agent": DEFAULT_UA,
+            "Accept": "text/plain,*/*;q=0.5",
+        }}
+        if _HAS_CURL_CFFI:
+            kw["impersonate"] = _IMPERSONATE
+        r = sess.get(f"{BASE_URL}/robots.txt", **kw)
+        if r.status_code == 200:
+            for line in (r.text or "").splitlines():
+                s = line.strip()
+                if s.lower().startswith("sitemap:"):
+                    u = s.split(":", 1)[1].strip()
+                    if u and u not in out:
+                        out.append(u)
+            print(f"[robots] /robots.txt returned {r.status_code}; "
+                  f"found {sum(1 for x in out if x != root_hint)} "
+                  f"sitemap URL(s)", file=sys.stderr)
+        else:
+            print(f"[robots] /robots.txt returned {r.status_code} - "
+                  f"skipping", file=sys.stderr)
+    except Exception as _e:
+        print(f"[robots] fetch failed: {_e}", file=sys.stderr)
+    # Conventional fallbacks for sites that forget to list sitemap in
+    # robots.txt - cheap to try, we stop at the first 200.
+    for p in ("/sitemap_index.xml", "/sitemap/sitemap.xml",
+              "/sitemaps.xml", "/sitemap-index.xml"):
+        u = f"{BASE_URL}{p}"
+        if u not in out:
+            out.append(u)
+    return out
+
+
 def _fetch_xml(session, url: str, delay: float = 1.5,
                max_retries: int = 3) -> bytes | None:
     """Download a sitemap URL with simple exponential backoff.  Returns
@@ -273,12 +363,49 @@ def crawl_sitemap(root_sitemap: str, market: str, delay: float,
     max_children caps the number of child sitemaps fetched (0 =
     unlimited) for a quick smoke-test."""
     sess = _mk_session(market)
-    print(f"[sitemap] GET {root_sitemap}", file=sys.stderr)
-    body = _fetch_xml(sess, root_sitemap, delay=delay)
-    if body is None:
-        print(f"[sitemap] root sitemap unreachable - aborting",
+    # Oct-29: CF Bot Fight Mode gates the sitemap endpoint too.  Warm
+    # the session with a homepage fetch so it picks up __cf_bm /
+    # cf_clearance cookies BEFORE the first sitemap request lands.
+    _cf_warmup(sess)
+    # Oct-29: the --sitemap hint may be blocked even after warmup.
+    # Try the hint first, then every URL listed in /robots.txt (the
+    # authoritative source), then conventional fallbacks.  First one
+    # that returns 200 and parses as valid XML wins.
+    candidates = _candidate_sitemap_urls(sess, root_sitemap)
+    print(f"[sitemap] candidate URLs to try (in order):",
+          file=sys.stderr)
+    for u in candidates:
+        print(f"           - {u}", file=sys.stderr)
+    body = None
+    chosen = None
+    for cand in candidates:
+        print(f"[sitemap] GET {cand}", file=sys.stderr)
+        body = _fetch_xml(sess, cand, delay=delay)
+        if body is not None:
+            # Also require it parses as valid sitemap XML (urlset or
+            # sitemapindex) before accepting - a 200 that returns HTML
+            # or a bare XML parse error isn't actually useful.
+            try:
+                _probe_c, _probe_p = _parse_sitemap(body)
+                if _probe_c or _probe_p:
+                    chosen = cand
+                    break
+                print(f"[sitemap]   returned 200 but no <sitemap>/<url> "
+                      f"entries - trying next candidate", file=sys.stderr)
+            except Exception as _e:
+                print(f"[sitemap]   parse failed ({_e}) - trying next",
+                      file=sys.stderr)
+        body = None
+    if body is None or chosen is None:
+        print(f"[sitemap] every candidate sitemap URL failed - aborting",
               file=sys.stderr)
+        print(f"[hint] wheel-size.com's CF Bot Fight Mode is blocking "
+              f"this IP.  Options: wait a few hours and retry; run "
+              f"through a VPN / different outbound IP; or run the main "
+              f"crawler's --discover-au mode once it works (then this "
+              f"script becomes redundant).", file=sys.stderr)
         return []
+    print(f"[sitemap] using {chosen}", file=sys.stderr)
     children, pages = _parse_sitemap(body)
     all_pairs: dict[tuple[str, str], None] = {}
     # Pages at the root level (rare for wheel-size.com but handle it).
