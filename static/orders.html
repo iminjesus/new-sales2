@@ -2046,6 +2046,18 @@
               <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap">
                 <input type="checkbox" data-rfilter="bobjane" style="margin:0;cursor:pointer"> Bob Jane
               </label>
+              <!-- Oct-29 user ask: WhatVehicles — on tick, each line's
+                   Remark gets a chip listing the car makes/models that
+                   use that OE tyre size.  Data from
+                   out/rego/vehicle_tyre_fitment_manual.csv (not every
+                   fitment is on file; AUS passenger car list only).
+                   Front/Rear can't be distinguished for most entries;
+                   a vehicle with only one OE size shows "both", a
+                   vehicle with multiple sizes shows "staggered". -->
+              <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;color:#1e40af;font-weight:700"
+                     title="Append a chip listing the cars whose OE tyre size matches each line.">
+                <input type="checkbox" id="chkWhatVehicles" style="margin:0;cursor:pointer"> 🚗 WhatVehicles
+              </label>
             </div>
           </th>
         </tr>
@@ -5426,7 +5438,69 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
   }
+  // Oct-29 user ask: WhatVehicles checkbox.  On tick, scan every
+  // line's size and append a "(Vehicles: Make Model 'yr, …)" chip to
+  // the Remark cell.  On untick, strip the chips.  Choice is
+  // persisted so the next SPRF opens with the same state.
+  const chkWv = document.getElementById("chkWhatVehicles");
+  if (chkWv) {
+    try {
+      chkWv.checked = localStorage.getItem("sprf_whatvehicles") === "1";
+    } catch (_e) {}
+    chkWv.addEventListener("change", () => {
+      try {
+        localStorage.setItem("sprf_whatvehicles",
+                             chkWv.checked ? "1" : "0");
+      } catch (_e) {}
+      _applyWhatVehiclesToAll();
+    });
+    // On initial load, if the box is already ticked, apply.
+    if (chkWv.checked) setTimeout(_applyWhatVehiclesToAll, 400);
+  }
 });
+
+/* Oct-29 user ask: WhatVehicles — look up each line's size in the
+   OE fitment file and append a Vehicles chip to the Remark cell.
+   The chip starts with "(Vehicles:" so it survives alongside the
+   existing Tempe / JAX / BobJane / Interstate chips.  Removed again
+   when the checkbox is unticked. */
+async function _applyWhatVehiclesToAll(){
+  const chk = document.getElementById("chkWhatVehicles");
+  const want = !!(chk && chk.checked);
+  const rows = $$("#linesBody tr");
+  for (const tr of rows) {
+    const mc   = (tr.querySelector('[data-col="m_code"]')?.value || "").trim();
+    const size = (tr.querySelector('[data-col="description"]')?.value || "").trim();
+    const raw  = (tr.dataset && tr.dataset.remarkFull) || "";
+    // Strip any existing WhatVehicles chip; we'll re-add if `want`.
+    const linesKept = raw.split("\n").filter(l => !/^\(Vehicles\b/i.test(l));
+    if (!want || !mc || !size) {
+      setRemark(tr, linesKept.join("\n") || "");
+      continue;
+    }
+    try {
+      const r = await fetch(`/api/orders/vehicles_by_size?size=${encodeURIComponent(size)}`,
+                            {credentials: "same-origin"});
+      const d = await r.json();
+      const vs = (d && d.vehicles) || [];
+      if (!vs.length) {
+        linesKept.push(`(Vehicles: — no match in OE file for ${size})`);
+      } else {
+        const _fmt = v => {
+          const yr = String(v.year || "").slice(-2);
+          const pos = v.position === "staggered" ? "*staggered" : "both";
+          return `${v.make} ${v.model} '${yr} [${pos}]`;
+        };
+        const first = vs.slice(0, 8).map(_fmt).join(", ");
+        const more  = vs.length > 8 ? ` +${vs.length - 8} more` : "";
+        linesKept.push(`(Vehicles: ${first}${more})`);
+      }
+    } catch (_e) {
+      linesKept.push(`(Vehicles: lookup failed)`);
+    }
+    setRemark(tr, linesKept.join("\n"));
+  }
+}
 
 /* ────────────────────────── row template ────────────────────────── */
 function newRow(){

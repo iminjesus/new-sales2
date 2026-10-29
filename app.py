@@ -4145,6 +4145,70 @@ def api_orders_stock_rt_by_material():
         except: pass
 
 
+@app.get("/api/orders/vehicles_by_size")
+def api_orders_vehicles_by_size():
+    """Oct-29 user ask: on the SPRF, a "WhatVehicles" checkbox pulls
+    the list of car makes/models whose OE tyre size matches each
+    line.  Data source: out/rego/vehicle_tyre_fitment_manual.csv
+    (995 rows, columns make/model/gen_start_year/size).  The file
+    doesn't distinguish Front vs Rear positions, so this endpoint
+    labels each match 'both' when the vehicle has only ONE size on
+    file, or 'staggered' when it has multiple (true staggered
+    fitments like Q60 run different sizes front vs rear).
+
+    Query: ?size=255/45R19
+    Returns:
+      {"size": "255/45R19",
+       "vehicles": [{"make":"VW","model":"GOLF","year":2013,
+                     "position":"both"}, ...],
+       "count": N,
+       "source": "out/rego/vehicle_tyre_fitment_manual.csv"}
+    Empty / no-match → vehicles:[] (not an error)."""
+    import csv as _csv
+    size = str(request.args.get("size") or "").strip().upper()
+    out = {"size": size, "vehicles": [], "count": 0,
+           "source": "out/rego/vehicle_tyre_fitment_manual.csv"}
+    if not size:
+        return jsonify(out)
+    path = os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment_manual.csv")
+    if not os.path.exists(path):
+        out["error"] = f"fitment file not found at {path}"
+        return jsonify(out)
+    try:
+        # First pass: build (make, model, year) → {sizes} so we can
+        # label staggered vehicles correctly.
+        all_sizes = {}
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            for r in _csv.DictReader(f):
+                k = (str(r.get("make") or "").strip().upper(),
+                     str(r.get("model") or "").strip().upper(),
+                     str(r.get("gen_start_year") or "").strip())
+                s = str(r.get("size") or "").strip().upper()
+                if not s: continue
+                all_sizes.setdefault(k, set()).add(s)
+        # Second pass: pull every (make, model, year) that includes
+        # the requested size.
+        seen = set()
+        for k, sizes in all_sizes.items():
+            if size in sizes:
+                if k in seen: continue
+                seen.add(k)
+                position = "both" if len(sizes) == 1 else "staggered"
+                out["vehicles"].append({
+                    "make":     k[0], "model": k[1],
+                    "year":     k[2],
+                    "position": position,
+                    "all_sizes": sorted(sizes),
+                })
+        # Sort: most common make first, then model, then year.
+        out["vehicles"].sort(key=lambda v: (v["make"], v["model"], v["year"]))
+        out["count"] = len(out["vehicles"])
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        out["error"] = str(e)
+    return jsonify(out)
+
+
 @app.get("/api/orders/incoming_schedule")
 def api_orders_incoming_schedule():
     """Oct-28 user ask: double-clicking the In-transit pipeline rows
