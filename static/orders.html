@@ -5492,14 +5492,24 @@ async function _applyWhatVehiclesToAll(){
         linesKept.push(`(Vehicles: — no match in OE file for ${size})`);
       } else {
         const _fmt = v => {
-          const yr = String(v.year || "").slice(-2);
-          // Position labels from the backend: 'front' / 'rear' /
-          // 'both' / 'staggered'.  Show as a short bracket tag.
+          // Oct-29 user ask: the backend now returns a compact `years`
+          // string per (make, model, position) group:
+          //   consecutive -> "2004-2007"
+          //   discrete    -> "2004, 2007, 2010"
+          //   mixed       -> "2004-2007, 2010"
+          // Fall back to the single `year` field for older responses.
+          const yrs = String(v.years || v.year || "").trim();
           const pos = v.position === "front" ? "front"
                     : v.position === "rear"  ? "rear"
                     : v.position === "staggered" ? "staggered"
                     : "both";
-          return `${v.make} ${v.model} '${yr} [${pos}]`;
+          // Staggered: when the file carries both axles' sizes for
+          // this vehicle, surface them so the reader sees exactly
+          // what's on each axle instead of a bare "staggered" tag.
+          const stag = (v.staggered_detail || "").trim();
+          const posTag = (pos === "staggered" && stag)
+            ? `staggered: ${stag}` : pos;
+          return `${v.make} ${v.model} ${yrs} [${posTag}]`;
         };
         const first = vs.slice(0, 8).map(_fmt).join(", ");
         const more  = vs.length > 8 ? ` +${vs.length - 8} more` : "";

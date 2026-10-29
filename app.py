@@ -4207,7 +4207,7 @@ def api_orders_vehicles_by_size():
         # Oct-29: match on the CORE size (strip load/speed suffix) so
         # a SPRF line's "235/50R19V" matches a stored "235/50R19".
         # Both the request and the stored rows go through _core.
-        # First pass: build (make, model, year) → {core_size} and
+        # First pass: build (make, model, year) -> {core_size} and
         # track explicit position per (vehicle, core_size).
         all_sizes = {}
         pos_map   = {}
@@ -4226,13 +4226,10 @@ def api_orders_vehicles_by_size():
         # Second pass: pull every (make, model, year) that includes
         # the requested CORE size.  Inferred position falls back to
         # 'both' (single-size vehicle) or 'staggered' (multi-size).
-        seen = set()
+        raw_hits = []
         for k, sizes in all_sizes.items():
             if size_core not in sizes:
                 continue
-            if k in seen:
-                continue
-            seen.add(k)
             explicit = pos_map.get((k, size_core))
             if explicit:
                 position = explicit
@@ -4240,13 +4237,71 @@ def api_orders_vehicles_by_size():
                 position = "both"
             else:
                 position = "staggered"
-            out["vehicles"].append({
+            raw_hits.append({
                 "make":     k[0], "model": k[1],
                 "year":     k[2],
                 "position": position,
                 "all_sizes": sorted(sizes),
             })
-        out["vehicles"].sort(key=lambda v: (v["make"], v["model"], v["year"]))
+        # Oct-29 user ask: group multi-year hits for the same vehicle
+        # into ONE chip entry with a compact year string.  Consecutive
+        # years collapse to "2004-2007", discrete years comma-separate
+        # as "2004, 2007, 2010".  Keyed by (make, model, position) so
+        # a "both" row and a "staggered" row for the same model stay
+        # separate (they describe different fitment setups).
+        grouped = {}
+        for h in raw_hits:
+            key = (h["make"], h["model"], h["position"])
+            slot = grouped.setdefault(key, {
+                "make":     h["make"],
+                "model":    h["model"],
+                "position": h["position"],
+                "years":    set(),
+                "all_sizes_union": set(),
+            })
+            try:
+                yr = int(str(h["year"]).strip())
+                slot["years"].add(yr)
+            except Exception:
+                # year wasn't numeric; keep as-is in a separate slot
+                slot["years"].add(str(h["year"]).strip())
+            for s in (h.get("all_sizes") or []):
+                slot["all_sizes_union"].add(s)
+        def _compact_years(years):
+            """Collapse consecutive numeric years into dash ranges and
+            comma-separate the rest.  Non-numeric years sort to the
+            end as plain strings."""
+            nums = sorted(y for y in years if isinstance(y, int))
+            others = sorted(str(y) for y in years if not isinstance(y, int))
+            parts = []
+            i = 0
+            while i < len(nums):
+                j = i
+                while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+                    j += 1
+                if j == i:
+                    parts.append(str(nums[i]))
+                else:
+                    parts.append(f"{nums[i]}-{nums[j]}")
+                i = j + 1
+            parts.extend(others)
+            return ", ".join(parts)
+        for slot in grouped.values():
+            slot["years"] = _compact_years(slot["years"])
+            slot["all_sizes"] = sorted(slot.pop("all_sizes_union"))
+            # Oct-29 user ask: for staggered rows surface the "front
+            # size + rear size" when the file carries both axles for
+            # this vehicle, so the SPRF chip can show e.g.
+            # "staggered: 245/40R20 + 265/40R20" instead of just
+            # "staggered".  Non-staggered rows get an empty string.
+            if slot["position"] == "staggered" and len(slot["all_sizes"]) > 1:
+                slot["staggered_detail"] = " + ".join(slot["all_sizes"])
+            else:
+                slot["staggered_detail"] = ""
+        out["vehicles"] = sorted(
+            grouped.values(),
+            key=lambda v: (v["make"], v["model"], v["position"]),
+        )
         out["count"] = len(out["vehicles"])
         out["size_normalized"] = size_core
     except Exception as e:
