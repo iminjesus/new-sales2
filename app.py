@@ -4276,7 +4276,12 @@ def api_orders_vehicles_by_size():
     # size when the row's position gets probed.
     # Core shape: width/aspect R rim, with an optional Z speed-rating
     # prefix between aspect and R (e.g. 255/45ZR19 → 255/45R19).
-    _CORE_RX = _re.compile(r"^\s*(\d{3})\s*[/\-]?\s*(\d{2,3})\s*Z?\s*R\s*(\d{2})")
+    # Oct-30 user ask: ALSO strip a leading "LT" or "P" tyre-type
+    # prefix - SPRF stock cells often carry "LT245/70R16" while the
+    # OE fitment CSV stores the same tyre as "245/70R16".  Without
+    # stripping the LT, _core returns the raw string unchanged, the
+    # query/stored sizes don't match and WhatVehicles shows nothing.
+    _CORE_RX = _re.compile(r"^\s*(?:LT|P)?\s*(\d{2,3})\s*[/\-]?\s*(\d{2,3})\s*Z?\s*R\s*(\d{1,2})(?:\.\d)?", _re.IGNORECASE)
     def _core(s: str) -> str:
         m = _CORE_RX.match(str(s or "").upper())
         if not m: return str(s or "").strip().upper()
