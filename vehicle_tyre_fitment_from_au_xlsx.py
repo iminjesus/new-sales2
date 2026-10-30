@@ -366,6 +366,131 @@ def read_existing_for_year_ge(path, year_min):
     return kept
 
 
+# ─── Common-prefix collapser (Oct-30 user ask) ───────────────────────────
+def _lcp(strings):
+    """Return the longest common character-level prefix of a list of
+    strings.  Empty-list / single-element inputs return the whole
+    first string (or "")."""
+    if not strings:
+        return ""
+    if len(strings) == 1:
+        return strings[0]
+    shortest = min(strings, key=len)
+    for i, ch in enumerate(shortest):
+        for other in strings:
+            if other[i] != ch:
+                return shortest[:i]
+    return shortest
+
+
+def _trim_prefix_to_word_boundary(prefix, divergent_chars=None):
+    """Smarter trim of a char-level common prefix.
+    Rules:
+      1. Drop any trailing ' ' / '-' separators from the LCP.
+      2. If `divergent_chars` is given (the first char of each sibling
+         string RIGHT AFTER the LCP) AND that char class matches the
+         LCP's last char class, we're cutting mid-token - trim back to
+         the previous ' ' / '-' separator.  Otherwise keep as-is.
+
+    Examples (letters=A, digits=D):
+      LCP="JUKE-SUV-1.6 DIG-T" + divergent=['4','1']
+          last_c='T' (A), div=D,D -> different classes -> KEEP as-is
+      LCP="TOYOTA CAMRY-SALOON-2.5 1" + divergent=['3','2']
+          last_c='1' (D), div=D,D -> SAME class -> TRIM back
+          -> "TOYOTA CAMRY-SALOON-2.5"
+      LCP="BMW X5 M4" + divergent=['0','5']  (M40, M45)
+          last_c='4' (D), div=D,D -> TRIM back -> "BMW X5"
+    """
+    # Trim trailing separator-like chars (space / hyphen / dot) so
+    # we never leave an orphan "2." / "MPV-" at the end.
+    s = str(prefix or "").rstrip(" -.")
+    if not s:
+        return s, False
+    def _cls(c):
+        if not c: return "x"
+        if c.isdigit():  return "D"
+        if c.isalpha():  return "A"
+        return "x"
+    if divergent_chars:
+        last_cls  = _cls(s[-1])
+        div_cls   = {_cls(c) for c in divergent_chars if c}
+        # Cut mid-token when last char AND every divergent first char
+        # are the same class (both letters OR both digits).  ONE trim
+        # at the last ' ' / '-' / '.' separator - the trailing
+        # rstrip has already removed any obvious junk (e.g. "2."
+        # already collapsed to "2" before this check runs).
+        if last_cls in ("A", "D") and div_cls == {last_cls}:
+            last_sep = max(s.rfind(" "), s.rfind("-"), s.rfind("."))
+            if last_sep >= 0:
+                s = s[:last_sep].rstrip(" -.")
+    return s, bool(s)
+
+
+def _common_prefix_collapse(rows_by_key):
+    """Oct-30 user ask: scan the deduped rows and, for each (make,
+    year, size, position) sibling-group with 2+ entries whose model
+    names share a non-trivial word-boundary prefix, collapse those
+    entries under the shared prefix.
+
+    Shared is_oe = OR across the sibling-group (OE wins).
+    Returns a NEW dict keyed on (make, model_collapsed, year, size,
+    position) with the collapsed rows."""
+    sibling_groups = defaultdict(list)
+    for r in rows_by_key.values():
+        sibling_key = (r["make"], r["gen_start_year"],
+                       r["size"], r["position"])
+        sibling_groups[sibling_key].append(r)
+    out = {}
+    collapsed_count = 0
+    for (make, year, size, pos), members in sibling_groups.items():
+        if len(members) < 2:
+            # Nothing to collapse - just carry through.
+            r = members[0]
+            k = (r["make"], r["model"], r["gen_start_year"],
+                 r["size"], r["position"])
+            out[k] = r
+            continue
+        # Compute common prefix of the member model names, plus the
+        # char AFTER the LCP in each name - the trimmer uses the char
+        # class of those divergent chars to decide whether we'd be
+        # cutting mid-token.
+        model_names = [m["model"] for m in members]
+        lcp_raw = _lcp(model_names)
+        divergent = []
+        for n in model_names:
+            if len(n) > len(lcp_raw):
+                divergent.append(n[len(lcp_raw)])
+        lcp, is_meaningful = _trim_prefix_to_word_boundary(lcp_raw, divergent)
+        # Minimum: 2 chars so a short real model name like "X5" / "A4"
+        # still collapses under the brand context.  Zero / 1 chars are
+        # too ambiguous (a single letter rarely identifies a model).
+        if not lcp or not is_meaningful or len(lcp) < 2:
+            # Can't collapse - emit members individually.
+            for r in members:
+                k = (r["make"], r["model"], r["gen_start_year"],
+                     r["size"], r["position"])
+                out[k] = r
+            continue
+        # Collapse: OR is_oe across members.
+        collapsed_oe = max(int(m.get("is_oe") or 0) for m in members)
+        collapsed_row = {
+            "make":           make,
+            "model":          lcp,
+            "gen_start_year": year,
+            "size":           size,
+            "position":       pos,
+            "is_oe":          collapsed_oe,
+        }
+        k = (make, lcp, year, size, pos)
+        out[k] = collapsed_row
+        collapsed_count += (len(members) - 1)
+    if collapsed_count:
+        print(f"[prefix-collapse] merged {collapsed_count} sibling "
+              f"rows under their common prefix",
+              file=sys.stderr)
+    return out
+
+
 # ─── Main ────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser()
@@ -441,6 +566,19 @@ def main():
             if r_oe and not int(existing.get("is_oe") or 0):
                 existing["is_oe"] = 1
                 merged_oe_count += 1
+
+    # 4. Common-prefix collapse (Oct-30 user ask):
+    #    NISSAN JUKE-SUV-1.6 DIG-T4X4140KW + NISSAN JUKE-SUV-1.6
+    #    DIG-T140KW share the same (year, size, position) and differ
+    #    only in the trailing engine/drivetrain qualifier.  Collapse
+    #    them to the common word-boundary prefix "NISSAN JUKE-SUV-
+    #    1.6 DIG-T" so the SPRF chip reads cleanly.
+    #    Scope: group by (make, year, size, position); if 2+ model
+    #    names share a non-trivial common prefix (longer than just
+    #    the make and ending at a space/hyphen word boundary) they
+    #    all collapse under that prefix.
+    out_rows_by_key = _common_prefix_collapse(out_rows_by_key)
+
     out_rows = sorted(out_rows_by_key.values(),
                        key=lambda r: (r["make"], r["model"],
                                       r["gen_start_year"],
