@@ -1621,6 +1621,19 @@
             <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0;width:70px">Axle</th>
             <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0;width:50px">OE</th>
           </tr>
+          <!-- Oct-30 user ask: per-column filter row.  Each input
+               narrows the visible rows client-side (AND across
+               columns).  Substring match on every column except OE,
+               which honours "y"/"1"/"✓" for OE-only and
+               "n"/"0" for non-OE. -->
+          <tr style="background:#eff6ff">
+            <th style="padding:4px 6px;border-bottom:1px solid #cbd5e1"><input type="search" class="oeSearchColFilter" data-col="0" placeholder="filter" style="width:100%;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font:inherit;font-size:11.5px"></th>
+            <th style="padding:4px 6px;border-bottom:1px solid #cbd5e1"><input type="search" class="oeSearchColFilter" data-col="1" placeholder="filter" style="width:100%;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font:inherit;font-size:11.5px"></th>
+            <th style="padding:4px 6px;border-bottom:1px solid #cbd5e1"><input type="search" class="oeSearchColFilter" data-col="2" placeholder="e.g. 2020" style="width:100%;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font:inherit;font-size:11.5px"></th>
+            <th style="padding:4px 6px;border-bottom:1px solid #cbd5e1"><input type="search" class="oeSearchColFilter" data-col="3" placeholder="e.g. 225" style="width:100%;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font:inherit;font-size:11.5px"></th>
+            <th style="padding:4px 6px;border-bottom:1px solid #cbd5e1"><input type="search" class="oeSearchColFilter" data-col="4" placeholder="F/R/both" style="width:100%;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font:inherit;font-size:11.5px"></th>
+            <th style="padding:4px 6px;border-bottom:1px solid #cbd5e1"><input type="search" class="oeSearchColFilter" data-col="5" placeholder="y/n" style="width:100%;padding:3px 6px;border:1px solid #cbd5e1;border-radius:3px;font:inherit;font-size:11.5px"></th>
+          </tr>
         </thead>
         <tbody id="oeSearchBody"></tbody>
       </table>
@@ -5971,6 +5984,11 @@ function _wireOeSearchModal(){
     ov.style.display = "none";
     inp.value = "";
     body.innerHTML = "";
+    // Oct-30: clear per-column filters so the next modal open
+    // starts clean rather than inheriting stale filter text.
+    document.querySelectorAll(".oeSearchColFilter").forEach(f => {
+      f.value = "";
+    });
   };
   btn.addEventListener("click", _open);
   close.addEventListener("click", _close);
@@ -5996,6 +6014,58 @@ function _wireOeSearchModal(){
     }
     stat.textContent = "Searching…";
     _debounceT = setTimeout(() => _runOeSearch(q), 250);
+  });
+
+  // Oct-30 user ask: per-column filter inputs in the results table.
+  // All filters AND together; each input substring-matches its own
+  // column.  OE column accepts y/yes/1/t for OE-only and n/no/0/f
+  // for non-OE.  Applied purely client-side on already-loaded rows,
+  // so no extra backend load.
+  const _applyColFilters = () => {
+    const filterInputs = document.querySelectorAll(".oeSearchColFilter");
+    const filters = {};
+    filterInputs.forEach(inp => {
+      const col = parseInt(inp.dataset.col, 10);
+      const v   = (inp.value || "").trim().toLowerCase();
+      if (v) filters[col] = v;
+    });
+    const bodyRows = body.querySelectorAll("tr");
+    let visible = 0;
+    bodyRows.forEach(tr => {
+      const cells = tr.querySelectorAll("td");
+      let match = true;
+      for (const colStr in filters) {
+        const col = parseInt(colStr, 10);
+        const cell = cells[col];
+        if (!cell) { match = false; break; }
+        const txt = (cell.textContent || "").toLowerCase();
+        const needle = filters[col];
+        if (col === 5) {
+          // OE column - "y/1/t/yes/true/✓/oe" matches OE row (has ✓),
+          // "n/0/f/no/false" matches non-OE row (empty).
+          const isOe = txt.includes("✓");
+          const wantsOe   = ["y", "1", "t", "yes", "true", "✓", "oe"].includes(needle);
+          const wantsNoOe = ["n", "0", "f", "no", "false"].includes(needle);
+          if (wantsOe   && !isOe) { match = false; break; }
+          if (wantsNoOe &&  isOe) { match = false; break; }
+          if (!wantsOe && !wantsNoOe && !txt.includes(needle)) { match = false; break; }
+        } else {
+          if (!txt.includes(needle)) { match = false; break; }
+        }
+      }
+      tr.style.display = match ? "" : "none";
+      if (match) visible++;
+    });
+    // Update the status line to reflect the filtered count when a
+    // filter is active; otherwise leave the status line alone so the
+    // backend's "N results for Q" message stays.
+    if (Object.keys(filters).length) {
+      const total = bodyRows.length;
+      stat.textContent = `${visible} of ${total} rows after column filters.`;
+    }
+  };
+  document.querySelectorAll(".oeSearchColFilter").forEach(inp => {
+    inp.addEventListener("input", _applyColFilters);
   });
 
   async function _runOeSearch(q){
@@ -6047,6 +6117,10 @@ function _wireOeSearchModal(){
              + `<td style="padding:5px 10px;color:#16a34a;font-weight:800">${oe}</td>`
              + `</tr>`;
       }).join("");
+      // Oct-30: re-apply any existing column filters to the newly-
+      // loaded rows so the user doesn't have to re-type them when
+      // the main search query changes.
+      _applyColFilters();
     } catch (e) {
       body.innerHTML = "";
       stat.textContent = "Search failed: " + e;
