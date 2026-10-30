@@ -126,3 +126,114 @@ def recover_size_if_blank(size: str, desc: str) -> tuple[str, bool]:
     if recovered:
         return recovered, True
     return "", False
+
+
+# ─── Historical size collector (Oct-30) ──────────────────────────────────
+def size_to_search_digits(size: str) -> str:
+    """Convert a canonical tyre-size string into the digits-only form
+    the Tempe-style WebOrder search box accepts.
+
+    Examples:
+      '175/65R14'  -> '1756514'
+      '225/50R17'  -> '2255017'
+      '185R14'     -> '18514'      (no aspect)
+      '11R22.5'    -> '11225'      (dot stripped; truck sizes often
+                                     search as digits-only)
+      'LT245/70R16'-> '2457016'    (LT prefix stripped so the digit
+                                     string matches the normal-metric
+                                     search box format)
+      '35x12.50R17LT' -> '351250'  (flotation shapes - best-effort;
+                                     some sites don't support them)
+    """
+    import re as _re
+    s = str(size or "").upper()
+    # Strip "LT"/"P" prefix (they're tyre-type markers, not part of the
+    # dimensional query the search box expects).
+    s = _re.sub(r"^(?:LT|P)", "", s.strip())
+    # Keep only digits.
+    digits = _re.sub(r"\D", "", s)
+    return digits
+
+
+def collect_historical_sizes(directory: str,
+                              days_back: int = 365,
+                              fname_rx: Optional[str] = None,
+                              min_count: int = 1) -> list[tuple[str, int]]:
+    """Scan a directory for Tempeweborder-style CSVs modified in the
+    last `days_back` days, aggregate every SIZE value seen, and return
+    a list of (size, occurrence_count) tuples sorted by count DESC
+    then size ASC.
+
+    Args:
+      directory  : path to scan (non-recursive by default)
+      days_back  : only consider files whose mtime is within this many
+                   days of now.  0 or negative -> no time cutoff.
+      fname_rx   : optional regex to filter which CSV filenames count
+                   (default: Tempeweborder_*.csv AND NewbeeWeborder_*.csv).
+      min_count  : drop sizes seen fewer than this many times across
+                   the scanned files (default 1 -> keep everything).
+
+    The caller usually feeds the returned sizes into a crawler's search
+    loop so no size we've ever operated on gets missed on the next
+    pass."""
+    import csv as _csv
+    import os as _os
+    import re as _re
+    import time as _time
+    cutoff = 0.0
+    if days_back and days_back > 0:
+        cutoff = _time.time() - days_back * 86400
+    if fname_rx is None:
+        # Default: all Tempeweborder_* and NewbeeWeborder_* csvs,
+        # whether they live in project root or any subfolder the
+        # caller walked.  Case-insensitive.
+        name_rx = _re.compile(
+            r"^(?:tempeweborder|newbeeweborder)(?:_extend)?_"
+            r"\d{8}_\d{4}\.csv$",
+            _re.IGNORECASE,
+        )
+    else:
+        name_rx = _re.compile(fname_rx, _re.IGNORECASE)
+    counts: dict[str, int] = {}
+    files_seen = 0
+    try:
+        entries = _os.listdir(directory)
+    except OSError:
+        return []
+    for name in entries:
+        if not name_rx.match(name):
+            continue
+        full = _os.path.join(directory, name)
+        try:
+            mt = _os.path.getmtime(full)
+        except OSError:
+            continue
+        if cutoff and mt < cutoff:
+            continue
+        files_seen += 1
+        try:
+            with open(full, "r", encoding="utf-8-sig", newline="") as f:
+                r = _csv.DictReader(f)
+                # Case-insensitive SIZE column lookup.
+                size_col = None
+                for h in (r.fieldnames or []):
+                    if (h or "").strip().lower() == "size":
+                        size_col = h; break
+                if not size_col:
+                    continue
+                for row in r:
+                    sz = str(row.get(size_col) or "").strip().upper()
+                    # Recover size from description when SIZE blank.
+                    if not sz:
+                        _desc = str(row.get("DESCRIPTION")
+                                    or row.get("description") or "")
+                        sz = extract_size_from_desc(_desc)
+                    if sz:
+                        counts[sz] = counts.get(sz, 0) + 1
+        except Exception:
+            continue
+    if min_count > 1:
+        counts = {k: v for k, v in counts.items() if v >= min_count}
+    # Sort by count DESC, then size ASC so the most common sizes
+    # crawl first (useful when the budget is capped).
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))

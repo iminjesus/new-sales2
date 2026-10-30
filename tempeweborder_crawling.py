@@ -42,6 +42,52 @@ SEARCH_QUERIES = [
 OUTPUT_FILE = datetime.now().strftime("Tempeweborder_%Y%m%d_%H%M.csv")
 
 
+# Oct-30 user ask: on top of the base 24 sizes above, scan every
+# past Tempeweborder_* / NewbeeWeborder_* CSV in the project root
+# and MERGE every historical SIZE we've ever operated on into the
+# query list.  Prevents a brand-sweep gap where a one-off size
+# shipped in the past gets missed on the next crawl.  Keeps the
+# base-24 untouched; the extra sizes land at the end so first-24
+# priority stays the same.
+def _merged_search_queries():
+    try:
+        import os as _os
+        from tempeweborder_shared import (
+            collect_historical_sizes, size_to_search_digits,
+        )
+        here = _os.path.dirname(_os.path.abspath(__file__))
+        pairs = collect_historical_sizes(here, days_back=365)
+    except Exception as _e:
+        print(f"[merge-sizes] historical scan failed ({_e}) - "
+              f"using base 24 queries only", file=__import__("sys").stderr)
+        return SEARCH_QUERIES[:]
+    base_sizes = {sz.upper() for _digits, sz in SEARCH_QUERIES}
+    extras = []
+    for sz, count in pairs:
+        sz_up = sz.upper()
+        if sz_up in base_sizes:
+            continue
+        digits = size_to_search_digits(sz_up)
+        # The Tempe search box needs at least 4-5 digits to disambiguate
+        # a shape - a 1-2 digit "size" is almost certainly a parse
+        # artifact.  Drop them.
+        if len(digits) < 4:
+            continue
+        extras.append((digits, sz_up, count))
+        base_sizes.add(sz_up)
+    if extras:
+        print(f"[merge-sizes] merging {len(extras)} historical size(s) "
+              f"beyond the base {len(SEARCH_QUERIES)} - most seen first",
+              file=__import__("sys").stderr)
+        for digits, sz, count in extras[:10]:
+            print(f"  + {sz} (digits={digits!r}, seen x{count})",
+                  file=__import__("sys").stderr)
+        if len(extras) > 10:
+            print(f"  ... and {len(extras) - 10} more",
+                  file=__import__("sys").stderr)
+    return SEARCH_QUERIES + [(d, s) for d, s, _c in extras]
+
+
 def clean(text):
     return text.strip() if text else ""
 
@@ -415,7 +461,11 @@ def main():
     from crawler_progress import Progress
     driver = init_driver()
     wait   = WebDriverWait(driver, 25)
-    prog = Progress("tempeweborder_crawling", total_steps=len(SEARCH_QUERIES),
+    # Oct-30: resolve the full search list (base 24 + historical merge)
+    # ONCE before the main loop so Progress sizing matches what the
+    # loop actually iterates.
+    _query_list = _merged_search_queries()
+    prog = Progress("tempeweborder_crawling", total_steps=len(_query_list),
                     label="tempeweborder_crawling (size sweep)")
 
     try:
@@ -437,7 +487,7 @@ def main():
             # so the Price dashboard can show it on hover later.
             writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
 
-            for _si, (query, size) in enumerate(SEARCH_QUERIES, 1):
+            for _si, (query, size) in enumerate(_query_list, 1):
                 print(f"\n=== Searching: {query}  ({size}) ===")
                 try:
                     search_tyres(driver, wait, query)
