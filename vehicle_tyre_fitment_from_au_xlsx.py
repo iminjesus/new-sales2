@@ -418,22 +418,37 @@ def main():
     carryover = read_existing_for_year_ge(args.existing_csv,
                                            args.carryover_year_min)
 
-    # 3. Merge + dedup on (make, model, year, size, position, is_oe)
-    #    is_oe is in the key so an OE and a non-OE row for the same
-    #    (vehicle, size) stay as two distinct output rows.
+    # 3. Merge + dedup on (make, model, year, size, position).
+    #    is_oe is NOT part of the key - instead we OR the is_oe flag
+    #    across every input row that matches the same (vehicle, size,
+    #    position).  Rationale: when a vehicle offers the same size as
+    #    BOTH an OE fitment AND an aftermarket/optional fitment, the
+    #    user doesn't want to see the SKU listed twice - it IS an OE
+    #    size (that happens to also be sold aftermarket), so OE wins
+    #    and the output row carries is_oe=1.
     out_rows_by_key = {}
+    merged_oe_count = 0
     for r in collapsed + carryover:
         k = (r["make"], r["model"], r["gen_start_year"],
-             r["size"], r["position"], r.get("is_oe", 1))
-        out_rows_by_key.setdefault(k, r)   # first write wins
+             r["size"], r["position"])
+        existing = out_rows_by_key.get(k)
+        if existing is None:
+            out_rows_by_key[k] = dict(r)   # copy so we can mutate
+        else:
+            # OR semantics on is_oe: if ANY input row flagged this
+            # (vehicle, size) as OE, the merged output row is OE.
+            r_oe = int(r.get("is_oe") or 0)
+            if r_oe and not int(existing.get("is_oe") or 0):
+                existing["is_oe"] = 1
+                merged_oe_count += 1
     out_rows = sorted(out_rows_by_key.values(),
                        key=lambda r: (r["make"], r["model"],
                                       r["gen_start_year"],
-                                      r["size"], r["position"],
-                                      -int(r.get("is_oe") or 0)))
+                                      r["size"], r["position"]))
     print(f"[merge] final: {len(out_rows)} unique rows "
           f"(carryover year>={args.carryover_year_min}: {len(carryover)}; "
-          f"xlsx: {len(collapsed)})", file=sys.stderr)
+          f"xlsx: {len(collapsed)}; "
+          f"OE-promoted on merge: {merged_oe_count})", file=sys.stderr)
 
     if args.dry_run:
         print("[dry-run] not writing anything.  First 10 output rows:",
