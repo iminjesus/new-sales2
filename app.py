@@ -4664,9 +4664,6 @@ def api_orders_sizes_by_vehicle():
                     continue
                 if len(_makes_sample) < 30:
                     _makes_sample.add(mk)
-                hay = (mk + " " + md).lower()
-                if not all(t in hay for t in tokens):
-                    continue
                 try:
                     yr = int(float(str(r.get("gen_start_year") or "").strip()))
                 except Exception:
@@ -4681,6 +4678,39 @@ def api_orders_sizes_by_vehicle():
                     _oe = 0
                 else:
                     _oe = 1
+                # Oct-30 user ask: build the search haystack from EVERY
+                # searchable field so the user can mix make/model with
+                # year ("mercedes 2012"), size ("camry 245/40R17"),
+                # axle ("c-class rear"), or OE flag ("camry oe") in a
+                # single query.  Each token must appear SOMEWHERE in
+                # the haystack (AND semantics).
+                #
+                # Axle: expose BOTH long form (front/rear/both) and
+                # one-letter codes (F/R) so "rear", "r", "R" all work -
+                # but " f " / " r " are padded with spaces to avoid
+                # matching inside words (CAMRY would otherwise match
+                # "r").
+                _axle_tokens = pos
+                if   pos == "front": _axle_tokens += " f"
+                elif pos == "rear":  _axle_tokens += " r"
+                hay_parts = [
+                    mk, md,
+                    "" if yr is None else str(yr),
+                    sz,
+                    _axle_tokens,
+                    "oe" if _oe else "",
+                ]
+                hay = (" " + " ".join(hay_parts) + " ").lower()
+                # Each token must be found in hay.  Short tokens like
+                # "r" / "f" get space-padding so they only match the
+                # dedicated axle markers, never substrings of other
+                # fields.
+                def _tok_in_hay(t):
+                    if len(t) == 1 and t in ("f", "r"):
+                        return (" " + t + " ") in hay
+                    return t in hay
+                if not all(_tok_in_hay(t) for t in tokens):
+                    continue
                 key = (mk, md, yr, sz, pos, _oe)
                 if key in seen:
                     continue
