@@ -4272,7 +4272,19 @@ function _renderTempeRefOnRow(rowEl, j){
                      ? rowEl.dataset.remarkFull
                      : (remEl.value || remEl.textContent || ""));
   const _existingLines = String(_fullRaw).split("\n");
-  const promoLine = (_existingLines[0] || "").trim();
+  // Oct-30 user ask (dup fix): only treat line 1 as the "promo tag"
+  // when it ACTUALLY is one.  Promo tags look like "Trueblu (18.00%)"
+  // / "443 (25.00%)" / "SPECIAL (34.67%)" and never start with "(".
+  // Chip lines ALWAYS start with "(" (e.g. "(JAX: 229) [...]",
+  // "(TempeDealer: ...)", "(Vehicles (N models): ...)").  Previous
+  // code captured whatever lived on line 1 as the promo tag - so if a
+  // chip had wandered to line 1 (which happens on fresh rows that got
+  // their JAX chip written before any promo tag), the renderer would
+  // preserve it as line-1 AND re-emit a fresh copy of the same chip
+  // from jaxChip/bobJaneChip below -> duplicate on the Remark cell.
+  const _l1raw = (_existingLines[0] || "").trim();
+  const _l1IsChip = /^\(/.test(_l1raw);
+  const promoLine = _l1IsChip ? "" : _l1raw;
   // Chip-source prefixes we're about to replace with fresh data; a
   // "re-emit" is only triggered when we actually HAVE fresh data for
   // that source.  Chips from sources we're not re-emitting pass
@@ -4283,7 +4295,13 @@ function _renderTempeRefOnRow(rowEl, j){
     "(JAX":           !!jaxChip,
     "(BobJane":       !!bobJaneChip,
   };
-  const _preserveChips = _existingLines.slice(1).filter(l => {
+  // Oct-30: when line 1 was itself a chip (not a promo tag), fold it
+  // into the chip-preservation scan so it gets the same willReplace /
+  // keep logic as every other chip line.  Prevents orphaned line-1
+  // chips from either (a) being lost, OR (b) being duplicated when
+  // the renderer re-emits a fresh copy.
+  const _chipStartIdx = _l1IsChip ? 0 : 1;
+  const _preserveChips = _existingLines.slice(_chipStartIdx).filter(l => {
     const t = (l || "").trim();
     if (!t) return false;
     for (const prefix in _willReplace) {
