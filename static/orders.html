@@ -3743,17 +3743,22 @@ function _buildColoredRemarkHTML(text){
                  + `- show less</a></div>`;
         continue;
       }
-      // Parse "MAKE MODEL YEAR [TAG]" from the right - optional
-      // trailing [...] tag, then a year token (possibly a range or
-      // comma-list), everything else is the name.
-      const stagRx = /\s*\[([^\]]+)\]\s*$/;
-      const stagM  = p.match(stagRx);
+      // Parse "MAKE MODEL YEAR [TAG1] [TAG2] ..." from the right.
+      // Oct-30: multiple trailing [...] tags supported now that OE
+      // chips add their own [OE] badge alongside any stg-F / stg-R
+      // label.  Peel them off one at a time, join with " " for the
+      // combined display tag.
       let withoutStag = p;
-      let tag = "";
-      if (stagM) {
-        tag = stagM[1];
-        withoutStag = p.slice(0, stagM.index).trimEnd();
+      const tagParts = [];
+      // Loop while the string ends with a bracketed token.
+      // Non-greedy inner ([^\]]+) so adjacent brackets peel one at a time.
+      while (true) {
+        const m = withoutStag.match(/\s*\[([^\]]+)\]\s*$/);
+        if (!m) break;
+        tagParts.unshift(m[1]);
+        withoutStag = withoutStag.slice(0, m.index).trimEnd();
       }
+      const tag = tagParts.join("] [");
       // Oct-29: year token can now be either "2025-2026" (full) or
       // "2025-26" (shortened same-century tail) or "2025-present" or
       // a comma list of any of those.
@@ -5891,11 +5896,12 @@ async function _applyWhatVehiclesToRow(tr){
         //     several alternative wheel-size fitments), NOT
         //     staggered.
         const _fmt = v => {
-          // Oct-29 user ask (chip format v4):
-          //   * front -> "F", rear -> "R" (one-letter axle code).
-          //   * staggered pair tag abbreviated the same way:
-          //     "[stg-F: 245/40R20 + 265/40R20]".
-          //   * "both" still prints no tag (default).
+          // Oct-30 user ask: OE rows get a "[OE]" badge on the chip
+          // so the reader can tell OE (factory) fitments apart from
+          // optional / aftermarket ones.  Rendered as the FIRST tag
+          // (before any staggered label) so it reads prominently.
+          // Fields: v.is_oe = 0/1 (default 1 when missing for
+          // backwards compat with pre-Oct-30 CSVs).
           const yrs = String(v.years || v.year || "").trim();
           const posRaw = String(v.position || "").toLowerCase();
           const stag = (v.staggered_detail || "").trim();
@@ -5903,16 +5909,23 @@ async function _applyWhatVehiclesToRow(tr){
           const axleShort = posRaw === "front" ? "F"
                           : posRaw === "rear"  ? "R"
                           : "";
-          let posTag = "";
+          const tags = [];
+          if (v.is_oe === 1 || v.is_oe === "1" || v.is_oe === undefined
+              || v.is_oe === null) {
+            // undefined/null handled as OE for legacy response
+            // compatibility; non-OE is only skipped when the backend
+            // EXPLICITLY sends is_oe=0.
+            if (v.is_oe !== 0 && v.is_oe !== "0") {
+              tags.push("[OE]");
+            }
+          }
           if (axleShort && stag) {
             const hint = stagSrc === "inferred" ? " (inferred)" : "";
-            posTag = `[stg-${axleShort}: ${stag}${hint}]`;
+            tags.push(`[stg-${axleShort}: ${stag}${hint}]`);
           } else if (axleShort) {
-            posTag = `[${axleShort}]`;
-          } else {
-            posTag = "";       // 'both' -> no tag
+            tags.push(`[${axleShort}]`);
           }
-          const tail = posTag ? ` ${posTag}` : "";
+          const tail = tags.length ? ` ${tags.join(" ")}` : "";
           return `${v.make} ${v.model} ${yrs}${tail}`.trimEnd();
         };
         // Stash the full list on the row so the "+N more" link can

@@ -14,12 +14,18 @@ Output:
     out/rego/vehicle_tyre_fitment.csv              (overwritten; backed up)
     out/rego/vehicle_tyre_fitment.csv.bak_YYYYMMDD_HHMM
 
-CSV schema (unchanged - app.py and the SPRF already consume this):
-    make, model, gen_start_year, size, position
+CSV schema (NEW - Oct-30: added `is_oe` column so the SPRF can tag
+OE fitments with a [OE] badge and non-OE optional/aftermarket rows
+pass through without one):
+    make, model, gen_start_year, size, position, is_oe
+Values: is_oe = 1  (Original Equipment, factory-fitted)
+        is_oe = 0  (optional / aftermarket / dealer-level fitment)
 
 Design decisions (all confirmed by the user Oct-30):
     * Country = 'Australia' only
-    * Original (OE) = 1 only  (skips aftermarket / optional fitments)
+    * Original (OE) flag: DEFAULT keeps BOTH OE and non-OE rows and
+      tags them via the `is_oe` column; --oe-only reverts to the
+      earlier "OE rows only" behaviour when you want a smaller file.
     * 2026 rows: ALL carried over from the existing CSV verbatim
     * Model-name collapse: scoped per (make, model, year)
           - all trims+versions share the same (size, position) set
@@ -75,7 +81,7 @@ DEFAULT_XLSX     = os.path.join(REGO_DIR, "AustraliaFormat1_2025.xlsx")
 DEFAULT_EXISTING = os.path.join(REGO_DIR, "vehicle_tyre_fitment.csv")
 DEFAULT_OUTPUT   = os.path.join(REGO_DIR, "vehicle_tyre_fitment.csv")
 
-CARRYOVER_YEAR = 2026       # borrow 2026 rows from the existing CSV
+CARRYOVER_YEAR_MIN = 2026    # borrow year >= this from the existing CSV
 
 
 # ─── Column resolver ─────────────────────────────────────────────────────
@@ -163,71 +169,71 @@ def _norm_size(raw) -> str:
 # ─── Model-name collapser ────────────────────────────────────────────────
 def _collapse_model_name(groups):
     """`groups` is a dict keyed by (make, model, year) with value a list
-    of {trim, version, size, position} dicts.  Return a list of
-    collapsed rows ready for CSV emission:
-        {make, model_resolved, year, size, position}
+    of {trim, version, size, position, is_oe} dicts.  Return a list of
+    collapsed rows:
+        {make, model_resolved, year, size, position, is_oe}
 
     Collapse policy (per the user's spec):
-        * All (trim, version) share the SAME (size, position) set
+        * All (trim, version) share the SAME (size, position, is_oe) set
                                     -> model
         * All versions within each trim converge
                                     -> model-trim
         * Otherwise                 -> model-trim-version
-    Each resolved group then emits one row per (size, position) it
-    carries.  Resolution runs INDEPENDENTLY for each (make, model,
-    year) so the same model-year can collapse differently in another
-    year without affecting this one.
+
+    Oct-30: `is_oe` is part of the collapse key tuple so an OE
+    [205/40R17] and an alternative/aftermarket [215/40R17] for the
+    same vehicle stay as two separate rows in the output - a BDE
+    doing a vehicle lookup sees BOTH fitments with the OE badge
+    distinguishing them.
     """
     out_rows = []
     for (make, model, year), items in groups.items():
-        # Build size-set per (trim, version)
+        # Build (size, position, is_oe) set per (trim, version)
         sz_by_tv = defaultdict(set)
         for it in items:
             tv = (it["trim"], it["version"])
-            sz_by_tv[tv].add((it["size"], it["position"]))
+            sz_by_tv[tv].add((it["size"], it["position"], it["is_oe"]))
 
-        # Does every (trim, version) share the SAME size set?
         unique_sz_sets = {frozenset(v) for v in sz_by_tv.values()}
         if len(unique_sz_sets) == 1:
             resolved = model
             shared = next(iter(unique_sz_sets))
-            for (sz, pos) in shared:
+            for (sz, pos, oe) in shared:
                 out_rows.append({"make": make, "model": resolved,
                                   "gen_start_year": year,
-                                  "size": sz, "position": pos})
+                                  "size": sz, "position": pos,
+                                  "is_oe": oe})
             continue
 
-        # Does every version within each trim converge?
         sz_by_trim = defaultdict(set)
         for (t, v), sz_set in sz_by_tv.items():
             sz_by_trim[t].add(frozenset(sz_set))
         if all(len(s) == 1 for s in sz_by_trim.values()):
             for t, sz_set_wrap in sz_by_trim.items():
-                # unpack single-element set-of-frozensets to the inner
-                # frozenset of (size, pos) tuples
                 sz_set = next(iter(sz_set_wrap))
                 resolved = f"{model}-{t}" if str(t).strip() else model
-                for (sz, pos) in sz_set:
+                for (sz, pos, oe) in sz_set:
                     out_rows.append({"make": make, "model": resolved,
                                       "gen_start_year": year,
-                                      "size": sz, "position": pos})
+                                      "size": sz, "position": pos,
+                                      "is_oe": oe})
             continue
 
-        # Versions differentiate - need full model-trim-version
         for (t, v), sz_set in sz_by_tv.items():
             parts = [model]
             if str(t).strip(): parts.append(str(t).strip())
             if str(v).strip(): parts.append(str(v).strip())
             resolved = "-".join(parts)
-            for (sz, pos) in sz_set:
+            for (sz, pos, oe) in sz_set:
                 out_rows.append({"make": make, "model": resolved,
                                   "gen_start_year": year,
-                                  "size": sz, "position": pos})
+                                  "size": sz, "position": pos,
+                                  "is_oe": oe})
     return out_rows
 
 
 # ─── xlsx reader ─────────────────────────────────────────────────────────
-def read_xlsx(path, country_only="AUSTRALIA", oe_only=True):
+def read_xlsx(path, country_only="AUSTRALIA", oe_only=False):
     try:
         from openpyxl import load_workbook
     except ImportError:
@@ -263,18 +269,24 @@ def read_xlsx(path, country_only="AUSTRALIA", oe_only=True):
         if country_only and country and country != country_only:
             rows_dropped_country += 1
             continue
-        if oe_only and cols["original"] >= 0:
+        # Oct-30: compute the Original / OE flag per row regardless of
+        # whether we're filtering - the `is_oe` column rides on every
+        # kept row so the chip renderer can tag OE fitments with [OE].
+        is_oe = 0
+        if cols["original"] >= 0:
             orig = _g("original")
-            # Accept 1 / '1' / 'Y' / 'YES' / True; drop everything else.
             orig_s = str(orig or "").strip().lower()
-            if orig_s not in ("1", "y", "yes", "true", "t"):
+            if orig_s in ("1", "y", "yes", "true", "t"):
+                is_oe = 1
+            else:
                 try:
-                    if int(float(orig_s or "0")) != 1:
-                        rows_dropped_oe += 1
-                        continue
+                    if int(float(orig_s or "0")) == 1:
+                        is_oe = 1
                 except Exception:
-                    rows_dropped_oe += 1
-                    continue
+                    pass
+        if oe_only and cols["original"] >= 0 and not is_oe:
+            rows_dropped_oe += 1
+            continue
         make  = str(_g("manufacturer") or "").strip().upper()
         model = str(_g("model") or "").strip().upper()
         trim  = str(_g("trim") or "").strip().upper()
@@ -294,7 +306,8 @@ def read_xlsx(path, country_only="AUSTRALIA", oe_only=True):
         kept.append({"make": make, "model": model,
                       "trim": trim, "version": ver,
                       "year": year_i,
-                      "size": size, "position": pos})
+                      "size": size, "position": pos,
+                      "is_oe": is_oe})
     print(f"[xlsx] rows_read={rows_read} "
           f"dropped(country={rows_dropped_country}, "
           f"oe={rows_dropped_oe}, "
@@ -304,7 +317,11 @@ def read_xlsx(path, country_only="AUSTRALIA", oe_only=True):
 
 
 # ─── Existing CSV reader (for 2026 carryover) ─────────────────────────────
-def read_existing_for_year(path, year):
+def read_existing_for_year_ge(path, year_min):
+    """Oct-30 user ask: carry over EVERY row with year >= year_min from
+    the existing CSV (not just a single year).  The xlsx dataset only
+    covers up through 2025, so 2026+ data must come from whatever
+    source populated the existing file (crawler, manual edits, etc.)."""
     if not os.path.exists(path):
         print(f"[existing] {path} not found - skipping carryover",
               file=sys.stderr)
@@ -317,8 +334,18 @@ def read_existing_for_year(path, year):
                 yr = int(float(str(r.get("gen_start_year") or "").strip()))
             except Exception:
                 continue
-            if yr != year:
+            if yr < year_min:
                 continue
+            # is_oe column may not exist on legacy rows - default to 1
+            # (treat historical / crawled rows as OE unless flagged).
+            _oe_raw = str(r.get("is_oe") or "").strip().lower()
+            if _oe_raw in ("", "null", "none"):
+                _oe = 1
+            else:
+                try:
+                    _oe = 1 if int(float(_oe_raw)) else 0
+                except Exception:
+                    _oe = 1 if _oe_raw in ("y", "yes", "true", "t") else 0
             kept.append({
                 "make":           str(r.get("make") or "").strip().upper(),
                 "model":          str(r.get("model") or "").strip().upper(),
@@ -326,8 +353,15 @@ def read_existing_for_year(path, year):
                 "size":           _norm_size(r.get("size")),
                 "position":       (str(r.get("position") or "both")
                                    .strip().lower() or "both"),
+                "is_oe":          _oe,
             })
-    print(f"[existing] carrying over {len(kept)} rows for year={year}",
+    # Per-year summary makes it obvious at a glance what's being
+    # carried over.
+    yrs = defaultdict(int)
+    for r in kept:
+        yrs[r["gen_start_year"]] += 1
+    print(f"[existing] carrying over {len(kept)} rows for year>={year_min}: "
+          + ", ".join(f"{y}={n}" for y, n in sorted(yrs.items())),
           file=sys.stderr)
     return kept
 
@@ -342,15 +376,19 @@ def main():
                          f"(default: {DEFAULT_EXISTING})")
     ap.add_argument("--output",       default=DEFAULT_OUTPUT,
                     help=f"Output CSV path (default: {DEFAULT_OUTPUT})")
-    ap.add_argument("--carryover-year", type=int, default=CARRYOVER_YEAR,
-                    help=f"Year to carry over from the existing CSV "
-                         f"(default: {CARRYOVER_YEAR})")
+    ap.add_argument("--carryover-year-min", type=int, default=CARRYOVER_YEAR_MIN,
+                    help=f"Carry over every row with gen_start_year >= "
+                         f"this value from the existing CSV "
+                         f"(default: {CARRYOVER_YEAR_MIN}).  The xlsx "
+                         f"source only covers up to 2025.")
     ap.add_argument("--no-country-filter", action="store_true",
                     help="Keep rows from every Country (default: "
                          "Australia only)")
-    ap.add_argument("--include-non-oe", action="store_true",
-                    help="Keep aftermarket/optional fitments too "
-                         "(default: OE-only / Original=1)")
+    ap.add_argument("--oe-only", action="store_true",
+                    help="DROP non-OE fitments (default behaviour "
+                         "keeps BOTH OE and non-OE rows and marks OE "
+                         "rows with is_oe=1 so the SPRF chip can "
+                         "render a [OE] badge).")
     ap.add_argument("--dry-run", action="store_true",
                     help="Compute and print stats but DON'T touch the "
                          "output CSV or create a backup.")
@@ -364,7 +402,7 @@ def main():
     xlsx_rows = read_xlsx(
         args.xlsx,
         country_only="" if args.no_country_filter else "AUSTRALIA",
-        oe_only=not args.include_non_oe,
+        oe_only=args.oe_only,
     )
     # Group by (make, model, year) so the collapse policy applies.
     groups = defaultdict(list)
@@ -376,21 +414,25 @@ def main():
           f"across {len(groups)} (make,model,year) groups",
           file=sys.stderr)
 
-    # 2. Carry over 2026 rows from existing CSV
-    carryover = read_existing_for_year(args.existing_csv, args.carryover_year)
+    # 2. Carry over year>=carryover-year-min rows from existing CSV
+    carryover = read_existing_for_year_ge(args.existing_csv,
+                                           args.carryover_year_min)
 
-    # 3. Merge + dedup on (make, model, year, size, position)
+    # 3. Merge + dedup on (make, model, year, size, position, is_oe)
+    #    is_oe is in the key so an OE and a non-OE row for the same
+    #    (vehicle, size) stay as two distinct output rows.
     out_rows_by_key = {}
     for r in collapsed + carryover:
         k = (r["make"], r["model"], r["gen_start_year"],
-             r["size"], r["position"])
-        out_rows_by_key.setdefault(k, r)   # first write wins; both are canonical
+             r["size"], r["position"], r.get("is_oe", 1))
+        out_rows_by_key.setdefault(k, r)   # first write wins
     out_rows = sorted(out_rows_by_key.values(),
                        key=lambda r: (r["make"], r["model"],
                                       r["gen_start_year"],
-                                      r["size"], r["position"]))
+                                      r["size"], r["position"],
+                                      -int(r.get("is_oe") or 0)))
     print(f"[merge] final: {len(out_rows)} unique rows "
-          f"(carryover {args.carryover_year}: {len(carryover)}; "
+          f"(carryover year>={args.carryover_year_min}: {len(carryover)}; "
           f"xlsx: {len(collapsed)})", file=sys.stderr)
 
     if args.dry_run:
@@ -412,10 +454,10 @@ def main():
     if out_dir: os.makedirs(out_dir, exist_ok=True)
     with open(args.output, "w", encoding="utf-8", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["make", "model", "gen_start_year", "size", "position"])
+        w.writerow(["make", "model", "gen_start_year", "size", "position", "is_oe"])
         for r in out_rows:
             w.writerow([r["make"], r["model"], r["gen_start_year"],
-                        r["size"], r["position"]])
+                        r["size"], r["position"], r.get("is_oe", 1)])
     print(f"[done] wrote {len(out_rows)} rows -> {args.output}")
 
 

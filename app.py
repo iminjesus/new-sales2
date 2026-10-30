@@ -4309,6 +4309,11 @@ def api_orders_vehicles_by_size():
         _rows_total = 0
         _rows_with_size = 0
         _header_fields = None
+        # Oct-30: per-(vehicle, core_size) OE flag.  When the CSV
+        # carries is_oe, we remember the MAX (treat the size as OE if
+        # ANY row for that (vehicle, size) marks it OE - more
+        # permissive than requiring every row to agree).
+        oe_map = {}
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             reader = _csv.DictReader(f)
             _header_fields = list(reader.fieldnames or [])
@@ -4325,6 +4330,17 @@ def api_orders_vehicles_by_size():
                 _p = str(r.get("position") or "").strip().lower()
                 if _p in ("front", "rear", "both"):
                     pos_map[(k, s)] = _p
+                # is_oe column is OPTIONAL - legacy CSVs don't carry it,
+                # so default to 1 (treat as OE if the column is missing
+                # or empty).  Only accept the row as non-OE when the
+                # column is EXPLICITLY '0' / 'false' / 'n' / 'no'.
+                _oe_raw = str(r.get("is_oe") or "").strip().lower()
+                if _oe_raw in ("0", "false", "f", "n", "no"):
+                    _oe = 0
+                else:
+                    _oe = 1
+                prev_oe = oe_map.get((k, s))
+                oe_map[(k, s)] = 1 if (prev_oe == 1 or _oe == 1) else 0
         # Oct-29: diagnostic payload so when the SPRF chip comes back
         # empty the user can see exactly what the backend saw.  Hits
         # the Flask console on every call AND the JSON response under
@@ -4440,6 +4456,10 @@ def api_orders_vehicles_by_size():
                 "position": position,
                 "all_sizes": sorted(sizes),
                 "inferred_pair": inferred_pair,
+                # Oct-30: carry the OE flag per hit so the chip
+                # renderer can tag OE fitments with [OE].  Default 1
+                # when the CSV didn't ship an is_oe column (legacy).
+                "is_oe":    oe_map.get((k, size_core), 1),
             })
         # Oct-29 user ask: group multi-year hits for the same vehicle
         # into ONE chip entry with a compact year string.  Consecutive
@@ -4457,12 +4477,18 @@ def api_orders_vehicles_by_size():
                 "years":    set(),
                 "all_sizes_union": set(),
                 "inferred_pair": "",
+                "is_oe":    0,
             })
             # Keep the first non-empty inferred pair for this group;
             # all generations of the same (make, model, position) key
             # share the same front/rear sister sizes, so one is enough.
             if h.get("inferred_pair") and not slot["inferred_pair"]:
                 slot["inferred_pair"] = h["inferred_pair"]
+            # Oct-30: treat the chip as OE when ANY generation of the
+            # grouped (make, model, position) was OE - permissive so
+            # a single-year OE confirmation surfaces the [OE] badge.
+            if h.get("is_oe"):
+                slot["is_oe"] = 1
             try:
                 yr = int(str(h["year"]).strip())
                 slot["years"].add(yr)
