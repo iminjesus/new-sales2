@@ -4597,6 +4597,102 @@ def api_orders_vehicles_by_size():
     return jsonify(out)
 
 
+@app.get("/api/orders/sizes_by_vehicle")
+def api_orders_sizes_by_vehicle():
+    """Oct-30 user ask: reverse of /api/orders/vehicles_by_size.
+    User types a vehicle name (make, model, or any substring); backend
+    returns every (year, size, position, is_oe) tuple that matches.
+
+    Query:
+      ?q=camry              fuzzy substring match on make + model
+      ?limit=100            cap results (default 150, max 500)
+
+    Returns:
+      {
+        "query": "camry",
+        "count": N,
+        "rows": [
+          {"make":"TOYOTA","model":"CAMRY-SALOON-2.5","year":2016,
+           "size":"215/55R17","position":"both","is_oe":1}, ...
+        ],
+        "source": "<file-used>"
+      }
+
+    Sort order (same as vehicles_by_size): most-recent year DESC,
+    then make, model, size.  Deduped on
+    (make, model, year, size, position, is_oe).
+    """
+    import csv as _csv
+    q = str(request.args.get("q") or "").strip()
+    try:
+        limit = max(1, min(int(request.args.get("limit", 150) or 150), 500))
+    except ValueError:
+        limit = 150
+    out = {"query": q, "count": 0, "rows": [], "source": ""}
+    if not q:
+        return jsonify(out)
+    # Same source file as vehicles_by_size.
+    candidates = [
+        os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment.csv"),
+        os.path.join(BASE_DIR, "out", "rego", "vehicle_tyre_fitment_manual.csv"),
+    ]
+    path = next((p for p in candidates if os.path.exists(p)), None)
+    if not path:
+        out["error"] = "No fitment file on disk."
+        return jsonify(out)
+    out["source"] = os.path.relpath(path, BASE_DIR)
+    # Tokenise query so "toyota camry" matches both "TOYOTA" and
+    # "CAMRY" within the (make + " " + model) haystack - each token
+    # must appear SOMEWHERE in the haystack (AND semantics).
+    tokens = [t.lower() for t in q.split() if t.strip()]
+    if not tokens:
+        return jsonify(out)
+    seen = {}
+    try:
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = _csv.DictReader(f)
+            for r in reader:
+                mk = str(r.get("make") or "").strip().upper()
+                md = str(r.get("model") or "").strip().upper()
+                if not mk or not md:
+                    continue
+                hay = (mk + " " + md).lower()
+                if not all(t in hay for t in tokens):
+                    continue
+                try:
+                    yr = int(float(str(r.get("gen_start_year") or "").strip()))
+                except Exception:
+                    yr = None
+                sz = str(r.get("size") or "").strip().upper()
+                if not sz:
+                    continue
+                pos = (str(r.get("position") or "both").strip().lower()
+                       or "both")
+                _oe_raw = str(r.get("is_oe") or "").strip().lower()
+                if _oe_raw in ("0", "false", "f", "n", "no"):
+                    _oe = 0
+                else:
+                    _oe = 1
+                key = (mk, md, yr, sz, pos, _oe)
+                if key in seen:
+                    continue
+                seen[key] = {
+                    "make": mk, "model": md, "year": yr,
+                    "size": sz, "position": pos, "is_oe": _oe,
+                }
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        out["error"] = str(e)
+        return jsonify(out)
+    rows = list(seen.values())
+    # Sort by year DESC (newest first), then alphabetical for ties.
+    rows.sort(key=lambda r: (-int(r.get("year") or -1),
+                              r["make"], r["model"], r["size"]))
+    out["rows"]  = rows[:limit]
+    out["count"] = len(rows)        # total matches BEFORE limit
+    return jsonify(out)
+
+
 @app.get("/api/orders/incoming_schedule")
 def api_orders_incoming_schedule():
     """Oct-28 user ask: double-clicking the In-transit pipeline rows

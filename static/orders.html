@@ -1580,6 +1580,60 @@
     </div>
   </div>
 </div>
+
+<!-- Oct-30 user ask: OE Search modal.  Type a vehicle name -> list of
+     OE sizes.  Double-click a row to drop the size into a line's
+     Size cell. -->
+<div id="oeSearchOverlay" role="dialog" aria-modal="true"
+     aria-labelledby="oeSearchTitle"
+     style="position:fixed;inset:0;background:rgba(15,23,42,0.55);display:none;
+            align-items:center;justify-content:center;z-index:1200;padding:20px;">
+  <div class="modal" style="background:#fff;border:1px solid #991b1b;border-radius:8px;
+                            width:min(760px,100%);max-height:88vh;overflow:hidden;
+                            box-shadow:0 20px 40px rgba(15,23,42,0.25);display:flex;
+                            flex-direction:column;">
+    <div class="hdr" id="oeSearchTitle"
+         style="background:#dc2626;color:#fff;padding:10px 14px;font-weight:800;
+                font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <span>🔍 OE Search - vehicle → tyre sizes</span>
+      <button type="button" id="oeSearchClose"
+              style="background:transparent;color:#fff;border:0;font-size:18px;
+                     cursor:pointer;padding:0 4px;line-height:1" aria-label="Close">✕</button>
+    </div>
+    <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0">
+      <input type="search" id="oeSearchInput"
+             placeholder="Type a vehicle - e.g. toyota camry, i30, bmw x5, hilux…"
+             autocomplete="off"
+             style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;
+                    border-radius:4px;font:inherit;outline:none;font-size:13.5px">
+      <div id="oeSearchStatus"
+           style="margin-top:5px;font-size:11.5px;color:#64748b;min-height:14px"></div>
+    </div>
+    <div style="flex:1;overflow:auto;padding:0 2px 10px">
+      <table id="oeSearchResults"
+             style="width:100%;border-collapse:collapse;font-size:12.5px;color:#0f172a">
+        <thead style="position:sticky;top:0;background:#f8fafc;z-index:1">
+          <tr>
+            <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0">Make</th>
+            <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0">Model</th>
+            <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0;width:90px">Year</th>
+            <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0;width:110px">Size</th>
+            <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0;width:70px">Axle</th>
+            <th style="text-align:left;padding:6px 10px;border-bottom:1px solid #e2e8f0;width:50px">OE</th>
+          </tr>
+        </thead>
+        <tbody id="oeSearchBody"></tbody>
+      </table>
+    </div>
+    <div class="foot"
+         style="padding:8px 14px;background:#f8fafc;font-size:11.5px;color:#64748b;
+                border-top:1px solid #e2e8f0">
+      💡 Double-click any row to drop its size into the SPRF line that currently
+      has focus (or the first empty line).  ESC to close.
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
 
   <!-- ═══════════════ Page nav (jump to other views) ═══════════════ -->
@@ -2080,6 +2134,18 @@
                      title="Append a chip listing the cars whose OE tyre size matches each line.">
                 <input type="checkbox" id="chkWhatVehicles" style="margin:0;cursor:pointer"> 🚗 WhatVehicles
               </label>
+              <!-- Oct-30 user ask: OE Search - reverse of WhatVehicles.
+                   Click to open a modal where the user types a vehicle
+                   name; results show every (year, size) that vehicle
+                   is fitted with.  Double-click a row to drop the
+                   size into a line's Size cell. -->
+              <button type="button" id="btnOeSearch"
+                      style="margin-left:8px;padding:3px 10px;background:#dc2626;color:#fff;
+                             border:1px solid #991b1b;border-radius:3px;cursor:pointer;
+                             font-weight:700;font-size:11.5px;white-space:nowrap"
+                      title="Reverse lookup: type a vehicle, see every OE tyre size that fits it. Double-click a result to copy the size into a line.">
+                🔍 OE Search
+              </button>
             </div>
           </th>
         </tr>
@@ -3724,10 +3790,12 @@ function _buildColoredRemarkHTML(text){
     const gridRows = [];
     let moreHtml = "";
     for (const p of parts) {
-      // Oct-30: "<<MORE:n>>" or "<<MORE:n|ALPHA>>" - the ALPHA flag
+      // Oct-30: "<<MORE:n>>" or "<<MORE:n_ALPHA>>" - the ALPHA flag
       // tacks "(alphabetical)" onto the link label so the user knows
-      // what they'll see when they expand.
-      const moreM = p.match(/^<<MORE:(\d+)(?:\|([A-Z]+))?>>$/);
+      // what they'll see when they expand.  Internal separator must
+      // NOT be "|" because that's the chip-parts delimiter outside
+      // and would be split before this regex ever sees it.
+      const moreM = p.match(/^<<MORE:(\d+)(?:_([A-Z]+))?>>$/);
       if (moreM) {
         const nMore = moreM[1];
         const flag  = (moreM[2] || "").toUpperCase();
@@ -3888,7 +3956,7 @@ document.addEventListener("click", function (ev) {
   const remaining  = full.length - topLines.length;
   const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
   const body   = topLines.join(" | ");
-  const tail   = remaining > 0 ? ` | <<MORE:${remaining}|ALPHA>>` : "";
+  const tail   = remaining > 0 ? ` | <<MORE:${remaining}_ALPHA>>` : "";
   const raw   = tr.dataset.remarkFull || "";
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -5862,7 +5930,159 @@ document.addEventListener("DOMContentLoaded", () => {
     // path never cleared it.
     setTimeout(_applyWhatVehiclesToAll, 400);
   }
+
+  // Oct-30 user ask: OE Search modal.
+  _wireOeSearchModal();
 });
+
+/* Oct-30 user ask: OE Search - reverse WhatVehicles.  Opens a modal,
+   user types vehicle text, backend returns every (year, size) that
+   matches, user double-clicks a result to drop the size into a line's
+   Size cell.  Delegated handler + debounced fetch so a long typing
+   session doesn't flood the backend. */
+function _wireOeSearchModal(){
+  const ov    = document.getElementById("oeSearchOverlay");
+  const inp   = document.getElementById("oeSearchInput");
+  const body  = document.getElementById("oeSearchBody");
+  const stat  = document.getElementById("oeSearchStatus");
+  const btn   = document.getElementById("btnOeSearch");
+  const close = document.getElementById("oeSearchClose");
+  if (!ov || !inp || !body || !btn) return;
+
+  // Remember the SPRF row (tr) that was focused BEFORE the modal
+  // opened - that's where double-clicked sizes get dropped.  Track
+  // focus on every linesBody input so the "most-recent focused row"
+  // is up to date when the modal opens.
+  window._oeSearchLastRow = null;
+  document.addEventListener("focusin", (ev) => {
+    const tr = ev.target && ev.target.closest && ev.target.closest("#linesBody tr");
+    if (tr) window._oeSearchLastRow = tr;
+  });
+
+  const _open = () => {
+    ov.style.display = "flex";
+    body.innerHTML   = "";
+    stat.textContent = "Type a vehicle - matching results appear as you type.";
+    setTimeout(() => inp.focus(), 30);
+  };
+  const _close = () => {
+    ov.style.display = "none";
+    inp.value = "";
+    body.innerHTML = "";
+  };
+  btn.addEventListener("click", _open);
+  close.addEventListener("click", _close);
+  ov.addEventListener("click", (ev) => {
+    if (ev.target === ov) _close();   // click outside modal to dismiss
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && ov.style.display === "flex") _close();
+  });
+
+  // Debounced search.
+  let _debounceT = 0;
+  let _lastQuery = "";
+  inp.addEventListener("input", () => {
+    const q = (inp.value || "").trim();
+    if (q === _lastQuery) return;
+    _lastQuery = q;
+    clearTimeout(_debounceT);
+    if (!q) {
+      body.innerHTML = "";
+      stat.textContent = "Type a vehicle - matching results appear as you type.";
+      return;
+    }
+    stat.textContent = "Searching…";
+    _debounceT = setTimeout(() => _runOeSearch(q), 250);
+  });
+
+  async function _runOeSearch(q){
+    try {
+      const r = await fetch(`/api/orders/sizes_by_vehicle?q=${encodeURIComponent(q)}&limit=200`,
+                            {credentials: "same-origin"});
+      const d = await r.json();
+      const rows = (d && d.rows) || [];
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b">No vehicles match "${_esc(q)}" in the OE fitment file.</td></tr>`;
+        stat.textContent = `0 results for "${q}".`;
+        return;
+      }
+      const cap = d.count || rows.length;
+      const shown = rows.length;
+      stat.textContent = (cap > shown)
+        ? `Showing first ${shown} of ${cap} matches - refine the query to narrow down.`
+        : `${shown} result${shown===1?"":"s"} for "${q}".`;
+      body.innerHTML = rows.map((v, i) => {
+        const yr  = v.year == null ? "" : String(v.year);
+        const pos = v.position === "front" ? "F"
+                  : v.position === "rear"  ? "R" : "both";
+        const oe  = (Number(v.is_oe) === 1) ? "✓" : "";
+        const bg  = i % 2 ? "#f8fafc" : "#fff";
+        return `<tr data-size="${_esc(v.size)}" `
+             + `style="background:${bg};cursor:pointer" `
+             + `title="Double-click to copy ${_esc(v.size)} into a line">`
+             + `<td style="padding:5px 10px">${_esc(v.make)}</td>`
+             + `<td style="padding:5px 10px">${_esc(v.model)}</td>`
+             + `<td style="padding:5px 10px">${_esc(yr)}</td>`
+             + `<td style="padding:5px 10px;font-weight:700">${_esc(v.size)}</td>`
+             + `<td style="padding:5px 10px">${_esc(pos)}</td>`
+             + `<td style="padding:5px 10px;color:#16a34a;font-weight:800">${oe}</td>`
+             + `</tr>`;
+      }).join("");
+    } catch (e) {
+      body.innerHTML = "";
+      stat.textContent = "Search failed: " + e;
+    }
+  }
+  // Double-click a result row to drop its size into a line.
+  body.addEventListener("dblclick", (ev) => {
+    const tr = ev.target && ev.target.closest && ev.target.closest("tr[data-size]");
+    if (!tr) return;
+    const sz = tr.getAttribute("data-size") || "";
+    if (!sz) return;
+    _applyOeSize(sz);
+    _close();
+  });
+
+  function _esc(s){
+    return String(s == null ? "" : s).replace(/[&<>"']/g,
+      c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  }
+
+  function _applyOeSize(sz){
+    // Target: last-focused SPRF row, else the first empty row, else
+    // add a new row and use that.
+    let tr = window._oeSearchLastRow;
+    const rows = Array.from(document.querySelectorAll("#linesBody tr"));
+    if (!tr || !tr.isConnected) {
+      // Fall back to first empty row (empty M-Code AND empty size).
+      tr = rows.find(r => {
+        const mc = (r.querySelector('[data-col="m_code"]')?.value || "").trim();
+        const sz = (r.querySelector('[data-col="description"]')?.value || "").trim();
+        return !mc && !sz;
+      }) || null;
+    }
+    if (!tr) {
+      // No empty row - add a new one.
+      try { if (typeof addRow === "function") addRow(); } catch (_e) {}
+      const after = document.querySelectorAll("#linesBody tr");
+      tr = after[after.length - 1];
+    }
+    if (!tr) {
+      setStatus("Couldn't find a line to drop the size into.", "warn");
+      return;
+    }
+    const sizeInp = tr.querySelector('[data-col="description"]');
+    if (!sizeInp) return;
+    sizeInp.value = sz;
+    sizeInp.focus();
+    // Fire input + change events so autocomplete / material_suggest
+    // picks it up and offers matching SKUs for that size.
+    sizeInp.dispatchEvent(new Event("input",  {bubbles: true}));
+    sizeInp.dispatchEvent(new Event("change", {bubbles: true}));
+    try { setStatus(`Dropped ${sz} into row - pick an SKU from the dropdown.`, "ok"); } catch (_e) {}
+  }
+}
 
 /* Oct-29 user ask: WhatVehicles — look up each line's size in the
    OE fitment file and append a Vehicles chip to the Remark cell.
@@ -6013,9 +6233,12 @@ async function _applyWhatVehiclesToRow(tr){
         const remaining = restAlpha.length;
         const header = `(Vehicles (${vs.length} ${vs.length === 1 ? "model" : "models"}):`;
         const body   = bodyLines.join(" | ");
-        // "<<MORE:n|ALPHA>>" variant - the renderer picks up the
+        // "<<MORE:n_ALPHA>>" variant - the renderer picks up the
         // "ALPHA" flag and tags the link "+N more (alphabetical)".
-        const tail   = remaining > 0 ? ` | <<MORE:${remaining}|ALPHA>>` : "";
+        // Internal separator "_" rather than "|" because "|" is the
+        // chip-parts delimiter outside the sentinel and would get
+        // split first.
+        const tail   = remaining > 0 ? ` | <<MORE:${remaining}_ALPHA>>` : "";
         freshKept.push(`${header} ${body}${tail})`);
       }
       // Oct-29 (chip-slot fix): setRemark's single-line path REPLACES
