@@ -3724,13 +3724,19 @@ function _buildColoredRemarkHTML(text){
     const gridRows = [];
     let moreHtml = "";
     for (const p of parts) {
-      const moreM = p.match(/^<<MORE:(\d+)>>$/);
+      // Oct-30: "<<MORE:n>>" or "<<MORE:n|ALPHA>>" - the ALPHA flag
+      // tacks "(alphabetical)" onto the link label so the user knows
+      // what they'll see when they expand.
+      const moreM = p.match(/^<<MORE:(\d+)(?:\|([A-Z]+))?>>$/);
       if (moreM) {
+        const nMore = moreM[1];
+        const flag  = (moreM[2] || "").toUpperCase();
+        const suffix = flag === "ALPHA" ? " (alphabetical)" : "";
         moreHtml = `<div style="padding-left:14px;grid-column:1 / -1">`
                  + `<a href="#" class="whatvehicles-more" `
-                 + `data-more="${moreM[1]}" `
+                 + `data-more="${nMore}" `
                  + `style="color:${c};text-decoration:underline;cursor:pointer;font-weight:600">`
-                 + `+${moreM[1]} more</a></div>`;
+                 + `+${nMore} more${suffix}</a></div>`;
         continue;
       }
       // Oct-30 user ask: when the chip was expanded via "+N more",
@@ -3873,24 +3879,16 @@ document.addEventListener("click", function (ev) {
     full = JSON.parse(tr.dataset.whatvehiclesFull || "[]");
   } catch (_e) {}
   if (!full.length) return;
-  // Oct-30 user ask: mirror the two-section collapsed layout from the
-  // initial render - top-N recent on top, separator, first few of the
-  // alphabetical section, then "+N more" for the rest.
+  // Oct-30: mirror the compact collapsed layout - top-N recent only +
+  // "+N more (alphabetical)" link.  No separator and no alphabetical
+  // preview in the collapsed view, matching the initial render.
   const topN = parseInt(tr.dataset.whatvehiclesTopN || "0", 10) || 0;
   const TOP_N = topN > 0 ? topN : 5;
-  const COLLAPSED_ALPHA = 3;
   const topLines   = full.slice(0, TOP_N);
-  const alphaRest  = full.slice(TOP_N);
-  const alphaShown = alphaRest.slice(0, COLLAPSED_ALPHA);
-  const remaining  = alphaRest.length - alphaShown.length;
-  const bodyParts  = topLines.slice();
-  if (alphaRest.length) {
-    bodyParts.push("<<SEP>>");
-    bodyParts.push(...alphaShown);
-  }
+  const remaining  = full.length - topLines.length;
   const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
-  const body   = bodyParts.join(" | ");
-  const tail   = remaining > 0 ? ` | <<MORE:${remaining}>>` : "";
+  const body   = topLines.join(" | ");
+  const tail   = remaining > 0 ? ` | <<MORE:${remaining}|ALPHA>>` : "";
   const raw   = tr.dataset.remarkFull || "";
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -5987,16 +5985,17 @@ async function _applyWhatVehiclesToRow(tr){
           const tail = tags.length ? ` ${tags.join(" ")}` : "";
           return `${v.make} ${v.model} ${yrs}${tail}`.trimEnd();
         };
-        // Oct-30 user ask: two-part layout for the vehicle chip.
-        //   Section A: top 5 by most-recent year (backend already
-        //              returned vs sorted year DESC)
-        //   Section B: everything else sorted ALPHABETICALLY by
-        //              make+model (makes a huge list browseable).
-        //   A visible "---" separator sits between the two sections.
-        // Collapsed shows: Section A (5) + separator + first 3 of
-        // Section B + "+N more" link.
-        // Expanded shows: Section A (5) + separator + ALL of
-        // Section B.
+        // Oct-30 user ask (chip layout v3):
+        //   Collapsed shows: top-5 by recent year + "+N more
+        //                    (alphabetical)" link.  No alphabetical
+        //                    preview and no separator in the
+        //                    collapsed view - keeps the chip compact.
+        //   Expanded shows:  top-5 recent + "- recent above /
+        //                    alphabetical below -" separator + ALL
+        //                    alphabetical + "- show less" link.
+        // (Clicking the expand link is what reveals the alphabetical
+        // section; the link's own label advertises the sort so the
+        // user knows what they'll get.)
         const TOP_N = 5;
         const topRecent = vs.slice(0, TOP_N);
         const restAlpha = vs.slice(TOP_N).slice().sort((a, b) => {
@@ -6005,27 +6004,18 @@ async function _applyWhatVehiclesToRow(tr){
           return an < bn ? -1 : an > bn ? 1 : 0;
         });
         const orderedFull = topRecent.concat(restAlpha);
-        // Stash the full ordered list on the row so the "+N more"
-        // link can reveal everything on click (reuses the same order
-        // the collapsed view started from, so the UI is stable).
         try {
           tr.dataset.whatvehiclesFull = JSON.stringify(orderedFull.map(_fmt));
           tr.dataset.whatvehiclesTopN = String(topRecent.length);
           tr.dataset.whatvehiclesCount = String(vs.length);
         } catch (_e) {}
-        // Collapsed body: top-5 recent + <<SEP>> + first 3 alpha +
-        // tail link.
-        const COLLAPSED_ALPHA = 3;
-        const collapsedAlpha = restAlpha.slice(0, COLLAPSED_ALPHA);
         const bodyLines = topRecent.map(_fmt);
-        if (restAlpha.length) {
-          bodyLines.push("<<SEP>>");
-          for (const v of collapsedAlpha) bodyLines.push(_fmt(v));
-        }
-        const remaining = restAlpha.length - collapsedAlpha.length;
+        const remaining = restAlpha.length;
         const header = `(Vehicles (${vs.length} ${vs.length === 1 ? "model" : "models"}):`;
         const body   = bodyLines.join(" | ");
-        const tail   = remaining > 0 ? ` | <<MORE:${remaining}>>` : "";
+        // "<<MORE:n|ALPHA>>" variant - the renderer picks up the
+        // "ALPHA" flag and tags the link "+N more (alphabetical)".
+        const tail   = remaining > 0 ? ` | <<MORE:${remaining}|ALPHA>>` : "";
         freshKept.push(`${header} ${body}${tail})`);
       }
       // Oct-29 (chip-slot fix): setRemark's single-line path REPLACES
