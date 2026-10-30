@@ -516,7 +516,36 @@ def main():
     from crawler_progress import Progress
     driver = init_driver()
     wait = WebDriverWait(driver, 25)
-    prog = Progress("tempeweborder_extend", total_steps=len(BRANDS),
+    # Oct-30 user ask: the brand-sweep approach misses one-off sizes
+    # that no brand page happens to surface, so default behaviour
+    # switches to SIZE-sweep using the base 24 queries + every
+    # historical size we've ever operated on (same logic as
+    # tempeweborder_crawling.py).  Pass --brand-sweep on the CLI
+    # (or set env BRAND_SWEEP=1) to opt back into the legacy
+    # brand-sweep behaviour.
+    import sys as _sys, os as _os
+    _by_brand = ("--brand-sweep" in _sys.argv) or (_os.environ.get("BRAND_SWEEP") == "1")
+    if _by_brand:
+        _sweep_items = [("BRAND", b) for b in BRANDS]
+        print(f"[sweep] mode: BRAND ({len(BRANDS)} brands)", flush=True)
+    else:
+        try:
+            from tempeweborder_crawling import _merged_search_queries
+            _query_list = _merged_search_queries()
+        except Exception as _e:
+            print(f"[sweep] failed to load merged size list ({_e}) - "
+                  f"falling back to brand sweep", flush=True)
+            _query_list = []
+        if _query_list:
+            _sweep_items = [("SIZE", pair) for pair in _query_list]
+            print(f"[sweep] mode: SIZE ({len(_query_list)} sizes: "
+                  f"base 24 + historical merge)", flush=True)
+        else:
+            _sweep_items = [("BRAND", b) for b in BRANDS]
+            print(f"[sweep] mode: BRAND fallback "
+                  f"({len(BRANDS)} brands) - no historical sizes found",
+                  flush=True)
+    prog = Progress("tempeweborder_extend", total_steps=len(_sweep_items),
                     label="tempeweborder_extend (dealer web)")
     try:
         wait_for_manual_login(driver)
@@ -548,10 +577,21 @@ def main():
             seen_keys: set[tuple[str, str, str]] = set()
             dup_dropped = 0
 
-            for _bi, brand in enumerate(BRANDS, 1):
-                print(f"\n=== {brand} ===")
+            for _bi, (_mode, _item) in enumerate(_sweep_items, 1):
+                # Oct-30: _item is either a brand string (legacy
+                # --brand-sweep mode) or a (digits, size_label) pair
+                # from the merged size list.  The search box accepts
+                # both brand names and digit size codes - search_brand
+                # just types whatever text we hand it.
+                if _mode == "BRAND":
+                    _label = _item
+                    _query = _item
+                else:   # SIZE
+                    _query = _item[0]
+                    _label = f"{_item[1]} ({_item[0]})"
+                print(f"\n=== [{_mode}] {_label} ===")
                 try:
-                    search_brand(driver, wait, brand)
+                    search_brand(driver, wait, _query)
                 except Exception as e:
                     print(f"  [ERROR] search 설정 실패: {e} — skip")
                     prog.step(_bi)

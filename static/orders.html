@@ -3771,6 +3771,7 @@ function _buildColoredRemarkHTML(text){
     if (/^Interstate delivery/i.test(line))                  return "#B91C1C"; // strong red
     if (/^\(Vehicles\b/i.test(line))                         return "#5B21B6"; // deep purple (vehicles)
     if (/^\(Tempe/i.test(line))                              return "#C62828"; // red
+    if (/^\(NewB(?:Dealer)?\b/i.test(line))                  return "#1D4ED8"; // bright blue (NewB dealer)
     if (/^\(JAX\b/i.test(line))                              return "#558B2F"; // dark olive green
     if (/^\(Bob\s*Jane\b|^\(BobJane\b/i.test(line))          return "#5D4037"; // brown (고동색)
     return "#1565C0"; // dark blue (promo / pricing / status default)
@@ -4025,12 +4026,14 @@ const _REMARK_FILTER_DEFAULT = {
   tempe_dealer:   true,
   jax:            false,
   bobjane:        false,
+  newbdealer:     true,
 };
 const _REMARK_SOURCE_PATTERNS = {
   tempe_consumer: /^\(TempeConsumer\b/i,
   tempe_dealer:   /^\(TempeDealer\b/i,
   jax:            /^\(JAX\b/i,
   bobjane:        /^\(Bob\s*Jane\b|^\(BobJane\b/i,
+  newbdealer:     /^\(NewB(?:Dealer)?\b/i,
 };
 function _loadRemarkFilter(){
   try {
@@ -4235,7 +4238,8 @@ function _extractTempeChipLines(rowEl){
   const out = [];
   const _isSrcChip = (t) => /^\(Tempe/i.test(t)
                          || /^\(JAX\b/i.test(t)
-                         || /^\(Bob\s*Jane\b|^\(BobJane\b/i.test(t);
+                         || /^\(Bob\s*Jane\b|^\(BobJane\b/i.test(t)
+                         || /^\(NewB(?:Dealer)?\b/i.test(t);
   // Multi-line layout: pick every non-first line that is a known
   // source chip — the first line is the promo tag we're about to
   // rewrite, so skip it.
@@ -4399,7 +4403,11 @@ function _renderTempeRefOnRow(rowEl, j){
   // text column appended in {curly braces}.
   const jaxChip      = _buildSourceChip(j.jax,     "JAX",     "P");
   const bobJaneChip  = _buildSourceChip(j.bobjane, "BobJane", "P");
-  if (!dealerChip && !consumerChip && !jaxChip && !bobJaneChip) return;
+  // Oct-30: NewBDealer - second dealer feed from newbeetyre.com.au,
+  // same (COST/PRICE/STOCK) shape as TempeDealer so the "D" kind
+  // chip format applies verbatim.
+  const newbDealerChip = _buildSourceChip(j.newbdealer, "NewBDealer", "D");
+  if (!dealerChip && !consumerChip && !jaxChip && !bobJaneChip && !newbDealerChip) return;
   /* Compose the final Remark text:
        line 1 — existing promo tag (Trueblu / 443 / Aging / Manual
                 / Special).  Comes from setRemarkFromPromo which
@@ -4441,6 +4449,7 @@ function _renderTempeRefOnRow(rowEl, j){
     "(TempeConsumer": !!consumerChip,
     "(JAX":           !!jaxChip,
     "(BobJane":       !!bobJaneChip,
+    "(NewBDealer":    !!newbDealerChip,
   };
   // Oct-30: when line 1 was itself a chip (not a promo tag), fold it
   // into the chip-preservation scan so it gets the same willReplace /
@@ -4458,12 +4467,13 @@ function _renderTempeRefOnRow(rowEl, j){
   });
   const lines = [];
   if (promoLine) lines.push(promoLine);
-  if (dealerChip)   lines.push(dealerChip);
-  if (consumerChip) lines.push(consumerChip);
-  if (jaxChip)      lines.push(jaxChip);
-  if (bobJaneChip)  lines.push(bobJaneChip);
+  if (dealerChip)      lines.push(dealerChip);
+  if (consumerChip)    lines.push(consumerChip);
+  if (jaxChip)         lines.push(jaxChip);
+  if (bobJaneChip)     lines.push(bobJaneChip);
+  if (newbDealerChip)  lines.push(newbDealerChip);
   // Append any chip we preserved (Vehicles, etc.) at the end so the
-  // display order stays: promo | Tempe/JAX/BJ chips | Vehicles.
+  // display order stays: promo | Tempe/JAX/BJ/NewB chips | Vehicles.
   for (const l of _preserveChips) lines.push(l);
   setRemark(rowEl, lines.join("\n"));
   /* Hover tooltip — full match detail for both sources, with every

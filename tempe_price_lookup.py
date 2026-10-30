@@ -515,6 +515,11 @@ def lookup_tempe_prices(size: str, pattern: str = "",
     # columns — same shape _best_match already understands.
     jax_months      = _files_by_month("Jax")
     bobjane_months  = _files_by_month("Bobjane")
+    # Oct-30 user ask: Newbee Tyre wholesale feed - NewbeeWeborder_
+    # YYYYMMDD_HHMM.csv files produced by NewbeeWeborder_crawling.py.
+    # Same schema as the Tempe dealer feed (SIZE/brand/DESCRIPTION/
+    # COST/PRICE/STOCK), so _best_match consumes it identically.
+    newbdealer_months = _files_by_month("NewbeeWeborder")
     def _match_in_months(months, scope_brand, *, kind):
         """Walk months newest-first; return (entry, yyyymm, path) when
         a row matches, else (None, "", "").  kind: "dealer" / "consumer"
@@ -543,6 +548,13 @@ def lookup_tempe_prices(size: str, pattern: str = "",
             cost_cols  = ("DISC_PRICE", "disc_price")
             stock_col  = None
             label      = "bobjane"
+        elif kind == "newbdealer":
+            # Oct-30: Newbee is a dealer feed just like Tempe dealer,
+            # so cost/price/stock columns are identical.
+            price_cols = ("PRICE", "price")
+            cost_cols  = ("COST", "cost")
+            stock_col  = "STOCK"
+            label      = "newbdealer"
         else:
             return None, "", ""
         for yyyymm, fp in months:
@@ -560,15 +572,16 @@ def lookup_tempe_prices(size: str, pattern: str = "",
         return None, "", ""
 
     def _run_scoped(scope_brand):
-        d, dm, df = _match_in_months(dealer_months,   scope_brand, kind="dealer")
-        c, cm, cf = _match_in_months(consumer_months, scope_brand, kind="consumer")
-        j, jm, jf = _match_in_months(jax_months,      scope_brand, kind="jax")
-        b, bm, bf = _match_in_months(bobjane_months,  scope_brand, kind="bobjane")
-        return d, dm, df, c, cm, cf, j, jm, jf, b, bm, bf
-    dealer, dm, df, consumer, cm, cf, jax, jm, jf, bobjane, bm, bf = _run_scoped(_scope)
-    if _scope and not dealer and not consumer and not jax and not bobjane:
+        d, dm, df = _match_in_months(dealer_months,     scope_brand, kind="dealer")
+        c, cm, cf = _match_in_months(consumer_months,   scope_brand, kind="consumer")
+        j, jm, jf = _match_in_months(jax_months,        scope_brand, kind="jax")
+        b, bm, bf = _match_in_months(bobjane_months,    scope_brand, kind="bobjane")
+        n, nm, nf = _match_in_months(newbdealer_months, scope_brand, kind="newbdealer")
+        return d, dm, df, c, cm, cf, j, jm, jf, b, bm, bf, n, nm, nf
+    dealer, dm, df, consumer, cm, cf, jax, jm, jf, bobjane, bm, bf, newbdealer, nm, nf = _run_scoped(_scope)
+    if _scope and not dealer and not consumer and not jax and not bobjane and not newbdealer:
         # Brand-scoped walk missed everywhere — any-brand fallback.
-        dealer, dm, df, consumer, cm, cf, jax, jm, jf, bobjane, bm, bf = _run_scoped("")
+        dealer, dm, df, consumer, cm, cf, jax, jm, jf, bobjane, bm, bf, newbdealer, nm, nf = _run_scoped("")
 
     # Oct-23 user ask: "current" is TODAY's calendar month (not
     # whatever the latest file on disk happens to be).  So if today
@@ -578,10 +591,11 @@ def lookup_tempe_prices(size: str, pattern: str = "",
     from datetime import datetime as _dt
     _today = _dt.now()
     _cur_month = f"{_today.year:04d}{_today.month:02d}"
-    latest_dealer_month   = dealer_months[0][0]   if dealer_months   else ""
-    latest_consumer_month = consumer_months[0][0] if consumer_months else ""
-    latest_jax_month      = jax_months[0][0]     if jax_months     else ""
-    latest_bobjane_month  = bobjane_months[0][0] if bobjane_months else ""
+    latest_dealer_month     = dealer_months[0][0]     if dealer_months     else ""
+    latest_consumer_month   = consumer_months[0][0]   if consumer_months   else ""
+    latest_jax_month        = jax_months[0][0]        if jax_months        else ""
+    latest_bobjane_month    = bobjane_months[0][0]    if bobjane_months    else ""
+    latest_newbdealer_month = newbdealer_months[0][0] if newbdealer_months else ""
     if dealer:
         dealer["month"]       = dm
         dealer["is_current"]  = (dm == _cur_month)
@@ -598,20 +612,27 @@ def lookup_tempe_prices(size: str, pattern: str = "",
         bobjane["month"]       = bm
         bobjane["is_current"]  = (bm == _cur_month)
         bobjane["month_label"] = month_label(bm)
+    if newbdealer:
+        newbdealer["month"]       = nm
+        newbdealer["is_current"]  = (nm == _cur_month)
+        newbdealer["month_label"] = month_label(nm)
     return {
-        "dealer":   dealer,
-        "consumer": consumer,
-        "jax":      jax,
-        "bobjane":  bobjane,
+        "dealer":     dealer,
+        "consumer":   consumer,
+        "jax":        jax,
+        "bobjane":    bobjane,
+        "newbdealer": newbdealer,
         "sources": {
-            "dealer_file":           os.path.basename(df or ""),
-            "consumer_file":         os.path.basename(cf or ""),
-            "jax_file":              os.path.basename(jf or ""),
-            "bobjane_file":          os.path.basename(bf or ""),
-            "latest_dealer_month":   latest_dealer_month,
-            "latest_consumer_month": latest_consumer_month,
-            "latest_jax_month":      latest_jax_month,
-            "latest_bobjane_month":  latest_bobjane_month,
+            "dealer_file":             os.path.basename(df or ""),
+            "consumer_file":           os.path.basename(cf or ""),
+            "jax_file":                os.path.basename(jf or ""),
+            "bobjane_file":            os.path.basename(bf or ""),
+            "newbdealer_file":         os.path.basename(nf or ""),
+            "latest_dealer_month":     latest_dealer_month,
+            "latest_consumer_month":   latest_consumer_month,
+            "latest_jax_month":        latest_jax_month,
+            "latest_bobjane_month":    latest_bobjane_month,
+            "latest_newbdealer_month": latest_newbdealer_month,
         },
     }
 
