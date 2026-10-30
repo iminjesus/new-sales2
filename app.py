@@ -5175,54 +5175,89 @@ def api_orders_additional_dc():
         # Resolve customer group so tier-fallback (row.customer_grp
         # matches this customer's group) works.
         #
-        # Oct-28 user ask: for ATP customers the promo tag wasn't
-        # appearing on the Remark cell.  Fix is a two-stage group
-        # resolution so a blank / missing sold_to_group on the
-        # `customer` table doesn't sink the whole promo lookup:
+        # Oct-29 user ask (resolver fix): sold_to=739199 (TYRE NATION)
+        # is in group AEU per the Hankook feed, and dc_additional_
+        # customer has 11 AEU rows for it (SOVD + Everyday 443).  Yet
+        # the SPRF stamped "BLACK FRIDAY (30.00%)" from a customer_grp=
+        # 'ACD' row.  Debug showed group_code was resolved as 'AKD'.
+        # Root cause: the OLD stage-1 resolver used
+        # `MAX(sold_to_group) FROM customer WHERE sold_to=...`.  The
+        # `customer` table has one row per ship-to, and 739199 has at
+        # least one ship-to with sold_to_group='AKD' (likely a typo for
+        # 'AEU' - K and E on adjacent keys).  MAX picked the alphabe-
+        # tically-highest ('AKD' > 'AEU' > 'ACD'), diverging from both
+        # the Hankook feed (dc_basic_customer) and the promo master
+        # (dc_additional_customer).
         #
-        #   stage 1 — customer.sold_to_group via MAX(NULLIF(TRIM(..)))
-        #             (skips rows that stored '' — one sold_to has
-        #             several customer rows, one per ship_to, and a
-        #             stray ship-only row sometimes carries '').
-        #   stage 2 — if stage 1 came back empty, pull customer_grp
-        #             from dc_basic_customer where bill_to_partner =
-        #             sold_to.  That table carries the group column
-        #             the Hankook feed populates for every active
-        #             customer, so it's a reliable backstop when the
-        #             customer master didn't ship the group.
+        # NEW resolution order (stage 1 is now dc_basic_customer):
+        #   stage 1 - dc_basic_customer.<group_col> for bill_to_partner.
+        #             This table is the Hankook feed - the AUTHORITATIVE
+        #             source every other table should agree with.  If
+        #             the Hankook feed says 739199 is 'AEU', that IS
+        #             the group.
+        #   stage 2 - dc_additional_customer most-common customer_grp
+        #             for sold_to.  Catches the case where a customer
+        #             has no dc_basic_customer row but has promo rules
+        #             keyed on a group.  MODE (most-common) beats MAX
+        #             because promo rules are usually consistent.
+        #   stage 3 - customer.sold_to_group via MAX(NULLIF).  Legacy
+        #             fallback; only reached when stages 1 and 2 both
+        #             came back empty.  Known to carry stale / typo'd
+        #             groups per the bug above, so demoted.
         group_code = ""
+        # Stage 1: dc_basic_customer (Hankook feed, authoritative).
         try:
-            cur.execute(
-                "SELECT MAX(NULLIF(TRIM(sold_to_group), '')) AS grp "
-                "FROM customer WHERE sold_to = %s",
-                (sold_to,),
-            )
-            gr = cur.fetchone()
-            if gr:
-                group_code = (gr.get("grp") or "").strip()
+            bc_cols = _list_columns(cur, "dc_basic_customer")
+            for _grp_col in ("customer_grp", "customer_group",
+                             "sold_to_group", "bill_to_group",
+                             "cust_grp", "cust_group"):
+                if _grp_col in bc_cols:
+                    cur.execute(
+                        f"SELECT MAX(NULLIF(TRIM({_grp_col}), '')) AS grp "
+                        f"FROM dc_basic_customer "
+                        f"WHERE bill_to_partner = %s",
+                        (sold_to,),
+                    )
+                    gr = cur.fetchone()
+                    if gr and (gr.get("grp") or "").strip():
+                        group_code = (gr.get("grp") or "").strip()
+                        break
         except Exception:
             pass
+        # Stage 2: dc_additional_customer most-common customer_grp for
+        # this sold_to.  The promo-rules table almost always has rows
+        # consistent with the real group; using MODE (highest-count)
+        # avoids being confused by a lone typo'd row.
         if not group_code:
-            # Fallback: try the group column on dc_basic_customer.  The
-            # column name varies by deployment (customer_grp /
-            # customer_group / sold_to_group / …), so probe the first
-            # one that exists.
             try:
-                bc_cols = _list_columns(cur, "dc_basic_customer")
-                for _grp_col in ("customer_grp", "customer_group",
-                                 "sold_to_group", "bill_to_group",
-                                 "cust_grp", "cust_group"):
-                    if _grp_col in bc_cols:
-                        cur.execute(
-                            f"SELECT MAX(NULLIF(TRIM({_grp_col}), '')) AS grp "
-                            f"FROM dc_basic_customer "
-                            f"WHERE bill_to_partner = %s",
-                            (sold_to,),
-                        )
-                        gr = cur.fetchone()
-                        if gr and (gr.get("grp") or "").strip():
-                            group_code = (gr.get("grp") or "").strip()
-                            break
+                cur.execute(
+                    "SELECT customer_grp, COUNT(*) AS n "
+                    "FROM dc_additional_customer "
+                    "WHERE TRIM(sold_to) = %s "
+                    "  AND customer_grp IS NOT NULL "
+                    "  AND TRIM(customer_grp) <> '' "
+                    "GROUP BY customer_grp "
+                    "ORDER BY n DESC, customer_grp ASC "
+                    "LIMIT 1",
+                    (sold_to,),
+                )
+                gr = cur.fetchone()
+                if gr and (gr.get("customer_grp") or "").strip():
+                    group_code = (gr.get("customer_grp") or "").strip()
+            except Exception:
+                pass
+        # Stage 3: customer.sold_to_group (legacy, demoted - may carry
+        # typo'd group values per the Oct-29 bug).
+        if not group_code:
+            try:
+                cur.execute(
+                    "SELECT MAX(NULLIF(TRIM(sold_to_group), '')) AS grp "
+                    "FROM customer WHERE sold_to = %s",
+                    (sold_to,),
+                )
+                gr = cur.fetchone()
+                if gr:
+                    group_code = (gr.get("grp") or "").strip()
             except Exception:
                 pass
         if debug:
