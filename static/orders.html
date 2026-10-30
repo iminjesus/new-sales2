@@ -3733,6 +3733,16 @@ function _buildColoredRemarkHTML(text){
                  + `+${moreM[1]} more</a></div>`;
         continue;
       }
+      // Oct-30 user ask: when the chip was expanded via "+N more",
+      // tag the end with "<<LESS>>" so we can render a "- show less"
+      // link that collapses back to the first 8 rows.
+      if (p === "<<LESS>>") {
+        moreHtml = `<div style="padding-left:14px;grid-column:1 / -1">`
+                 + `<a href="#" class="whatvehicles-less" `
+                 + `style="color:${c};text-decoration:underline;cursor:pointer;font-weight:600">`
+                 + `- show less</a></div>`;
+        continue;
+      }
       // Parse "MAKE MODEL YEAR [TAG]" from the right - optional
       // trailing [...] tag, then a year token (possibly a range or
       // comma-list), everything else is the name.
@@ -3796,16 +3806,55 @@ document.addEventListener("click", function (ev) {
     full = JSON.parse(tr.dataset.whatvehiclesFull || "[]");
   } catch (_e) {}
   if (!full.length) return;
-  // Replace the Vehicles chip in dataset.remarkFull with the FULL
-  // expansion (no "<<MORE:k>>" tail).  The subsequent re-render emits
-  // every vehicle on its own line, no clickable tail.
+  // Oct-30 user ask: expand to the FULL list AND append "<<LESS>>" so
+  // the renderer emits a "- show less" link; clicking that link
+  // (handler below) collapses back to the first 8 rows + "+N more".
   const raw   = tr.dataset.remarkFull || "";
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
     if (/^\(Vehicles\b/i.test(lines[i])) {
       const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
       const body   = full.join(" | ");
-      lines[i] = `${header} ${body})`;
+      lines[i] = `${header} ${body} | <<LESS>>)`;
+      break;
+    }
+  }
+  tr.dataset.remarkFull = lines.join("\n");
+  const remEl = tr.querySelector('[data-col="remark"]');
+  if (remEl && remEl.tagName === "DIV") {
+    remEl.innerHTML = _buildColoredRemarkHTML(tr.dataset.remarkFull);
+  }
+  if (typeof _applyRemarkFilterToRow === "function") {
+    _applyRemarkFilterToRow(tr);
+  }
+});
+
+// Oct-30 user ask: "- show less" link in the expanded Vehicles chip
+// collapses the chip back to the first 8 rows + "+N more" link.  Same
+// delegation pattern as the expand handler above - fires on any
+// click of a.whatvehicles-less anywhere in the document.
+document.addEventListener("click", function (ev) {
+  const a = ev.target && ev.target.closest && ev.target.closest("a.whatvehicles-less");
+  if (!a) return;
+  ev.preventDefault();
+  const tr = a.closest("tr");
+  if (!tr) return;
+  let full = [];
+  try {
+    full = JSON.parse(tr.dataset.whatvehiclesFull || "[]");
+  } catch (_e) {}
+  if (!full.length) return;
+  const SHOWN = 8;
+  const firstLines = full.slice(0, SHOWN);
+  const more       = full.length > SHOWN ? full.length - SHOWN : 0;
+  const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
+  const body   = firstLines.join(" | ");
+  const tail   = more ? ` | <<MORE:${more}>>` : "";
+  const raw   = tr.dataset.remarkFull || "";
+  const lines = raw.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\(Vehicles\b/i.test(lines[i])) {
+      lines[i] = `${header} ${body}${tail})`;
       break;
     }
   }
