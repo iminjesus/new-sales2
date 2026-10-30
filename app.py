@@ -4624,10 +4624,16 @@ def api_orders_sizes_by_vehicle():
     """
     import csv as _csv
     q = str(request.args.get("q") or "").strip()
+    # Oct-30: default limit 1000, max 5000.  Was 150/500 but with a
+    # year-DESC primary sort, broad queries like "mercedes" (23k+
+    # matches) filled the quota entirely with 2025 rows - older years
+    # never surfaced and the per-column Year filter had nothing to
+    # work with.  A 1000-2000 row payload is still ~1 MB JSON which
+    # is fine for the modal, and gives the column filters room.
     try:
-        limit = max(1, min(int(request.args.get("limit", 150) or 150), 500))
+        limit = max(1, min(int(request.args.get("limit", 1000) or 1000), 5000))
     except ValueError:
-        limit = 150
+        limit = 1000
     out = {"query": q, "count": 0, "rows": [], "source": "", "debug": {}}
     if not q:
         return jsonify(out)
@@ -4723,9 +4729,16 @@ def api_orders_sizes_by_vehicle():
         out["error"] = str(e)
         return jsonify(out)
     rows = list(seen.values())
-    # Sort by year DESC (newest first), then alphabetical for ties.
-    rows.sort(key=lambda r: (-int(r.get("year") or -1),
-                              r["make"], r["model"], r["size"]))
+    # Oct-30 (sort revised): primary sort is alphabetical by make +
+    # model, THEN year DESC within each model.  Rationale: for broad
+    # queries like "mercedes" (23k matches) the previous year-DESC
+    # primary sort filled the entire limit with 2025 rows - older
+    # generations never appeared, and the Year column filter had
+    # nothing to work with.  Alphabetical sort gives a diverse model
+    # set; the per-column Year / Size filters narrow further client-
+    # side.
+    rows.sort(key=lambda r: (r["make"], r["model"],
+                              -int(r.get("year") or -1), r["size"]))
     out["rows"]  = rows[:limit]
     out["count"] = len(rows)        # total matches BEFORE limit
     out["debug"]["rows_in_file"]   = _rows_total

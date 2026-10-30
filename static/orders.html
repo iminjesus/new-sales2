@@ -6070,7 +6070,11 @@ function _wireOeSearchModal(){
 
   async function _runOeSearch(q){
     try {
-      const r = await fetch(`/api/orders/sizes_by_vehicle?q=${encodeURIComponent(q)}&limit=200`,
+      // Oct-30: limit=2000 so broad queries like "mercedes" (23k+
+      // matches) return rows across every year, not just the latest.
+      // The column-filter row above the table then narrows further
+      // without a server round-trip.
+      const r = await fetch(`/api/orders/sizes_by_vehicle?q=${encodeURIComponent(q)}&limit=2000`,
                             {credentials: "same-origin"});
       const d = await r.json();
       const rows = (d && d.rows) || [];
