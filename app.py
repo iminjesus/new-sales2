@@ -4628,7 +4628,7 @@ def api_orders_sizes_by_vehicle():
         limit = max(1, min(int(request.args.get("limit", 150) or 150), 500))
     except ValueError:
         limit = 150
-    out = {"query": q, "count": 0, "rows": [], "source": ""}
+    out = {"query": q, "count": 0, "rows": [], "source": "", "debug": {}}
     if not q:
         return jsonify(out)
     # Same source file as vehicles_by_size.
@@ -4641,6 +4641,7 @@ def api_orders_sizes_by_vehicle():
         out["error"] = "No fitment file on disk."
         return jsonify(out)
     out["source"] = os.path.relpath(path, BASE_DIR)
+    out["debug"]["source_abspath"] = os.path.abspath(path)
     # Tokenise query so "toyota camry" matches both "TOYOTA" and
     # "CAMRY" within the (make + " " + model) haystack - each token
     # must appear SOMEWHERE in the haystack (AND semantics).
@@ -4648,14 +4649,21 @@ def api_orders_sizes_by_vehicle():
     if not tokens:
         return jsonify(out)
     seen = {}
+    _rows_total = 0
+    _makes_sample = set()
+    _header_fields = None
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as f:
             reader = _csv.DictReader(f)
+            _header_fields = list(reader.fieldnames or [])
             for r in reader:
+                _rows_total += 1
                 mk = str(r.get("make") or "").strip().upper()
                 md = str(r.get("model") or "").strip().upper()
                 if not mk or not md:
                     continue
+                if len(_makes_sample) < 30:
+                    _makes_sample.add(mk)
                 hay = (mk + " " + md).lower()
                 if not all(t in hay for t in tokens):
                     continue
@@ -4690,6 +4698,9 @@ def api_orders_sizes_by_vehicle():
                               r["make"], r["model"], r["size"]))
     out["rows"]  = rows[:limit]
     out["count"] = len(rows)        # total matches BEFORE limit
+    out["debug"]["rows_in_file"]   = _rows_total
+    out["debug"]["header_fields"]  = _header_fields
+    out["debug"]["makes_sample"]   = sorted(_makes_sample)
     return jsonify(out)
 
 

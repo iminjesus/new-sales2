@@ -6003,7 +6003,23 @@ function _wireOeSearchModal(){
       const d = await r.json();
       const rows = (d && d.rows) || [];
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="6" style="padding:14px;text-align:center;color:#64748b">No vehicles match "${_esc(q)}" in the OE fitment file.</td></tr>`;
+        // Oct-30: when 0 results, surface the backend diagnostics so
+        // we can see at a glance whether the CSV was loaded at all
+        // (rows_in_file), what the header is (header_fields), and
+        // what makes DO exist in the file (makes_sample).
+        const dbg = d && d.debug || {};
+        const diagParts = [];
+        if (dbg.source_abspath) diagParts.push(`file: ${dbg.source_abspath}`);
+        if (dbg.rows_in_file != null) diagParts.push(`${dbg.rows_in_file} rows in file`);
+        if (Array.isArray(dbg.header_fields)) diagParts.push(`header: [${dbg.header_fields.join(", ")}]`);
+        const makesHint = Array.isArray(dbg.makes_sample) && dbg.makes_sample.length
+          ? `Makes seen in file (sample): ${dbg.makes_sample.slice(0, 20).join(", ")}`
+          : "";
+        body.innerHTML = `<tr><td colspan="6" style="padding:14px;color:#64748b">`
+          + `<div style="margin-bottom:8px;font-weight:600">No vehicles match "${_esc(q)}" in the OE fitment file.</div>`
+          + (makesHint ? `<div style="font-size:11px;line-height:1.5;color:#475569">${_esc(makesHint)}</div>` : "")
+          + (diagParts.length ? `<div style="margin-top:8px;font-size:10.5px;line-height:1.4;color:#94a3b8">${_esc(diagParts.join(" · "))}</div>` : "")
+          + `</td></tr>`;
         stat.textContent = `0 results for "${q}".`;
         return;
       }
