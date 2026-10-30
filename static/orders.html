@@ -8042,7 +8042,13 @@ document.getElementById("btnCustomerPdf")?.addEventListener("click", () => {
 
 $("#btnClear").addEventListener("click", () => {
   if(!confirm("Clear the whole form?")) return;
-  $$("input, textarea").forEach(el => { if(!el.closest("thead")) el.value = ""; });
+  // Oct-30: skip modal inputs - Clear Form shouldn't blank the OE
+  // Search modal's input if it happens to be open.
+  $$("input, textarea").forEach(el => {
+    if (el.closest("thead")) return;
+    if (el.closest('[role="dialog"]')) return;
+    el.value = "";
+  });
   $("#linesBody").innerHTML = "";
   for(let i=0;i<5;i++) addRow();
   updateTotals();
@@ -9576,6 +9582,10 @@ async function hydrateSubmittedOrder(oid, editMode){
     $("#btnClear").disabled  = false;
     $$("input, textarea").forEach(el => {
       if (el.closest(".cs-panel")) return;
+      // Oct-30: skip any modal / dialog (OE Search, approve, reject,
+      // etc.) - these aren't part of the SPRF form itself and need to
+      // stay interactive regardless of the form's edit state.
+      if (el.closest('[role="dialog"]')) return;
       el.readOnly = false;
       el.tabIndex = 0;
     });
@@ -9653,6 +9663,9 @@ async function hydrateSubmittedOrder(oid, editMode){
     // wireStatusPanel below.
     $$("input, textarea").forEach(el => {
       if (el.closest(".cs-panel")) return;
+      // Oct-30: skip modals / dialogs - OE Search needs to work
+      // even on read-only SPRF views.
+      if (el.closest('[role="dialog"]')) return;
       el.readOnly = true;
       el.tabIndex = -1;
     });
@@ -10610,9 +10623,12 @@ function lockFormForApproval(){
   if (eBtn) eBtn.hidden = true;
   /* Re-lock every input on the form so a stray keystroke can't
      silently modify a locked SPRF.  Skips the CS panel (Harry's
-     SAP toggle) since that flag is a separate audit trail. */
+     SAP toggle) since that flag is a separate audit trail.
+     Oct-30: also skip modals / dialogs - OE Search / approve-note /
+     reject-note inputs aren't part of the SPRF edit state. */
   $$("input, textarea").forEach(el => {
     if (el.closest(".cs-panel")) return;
+    if (el.closest('[role="dialog"]')) return;
     el.readOnly = true;
     el.tabIndex = -1;
   });
