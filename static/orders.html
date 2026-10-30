@@ -3743,6 +3743,18 @@ function _buildColoredRemarkHTML(text){
                  + `- show less</a></div>`;
         continue;
       }
+      // Oct-30 user ask: visible separator between the top-N recent
+      // section and the rest (alphabetical).  Spans the full grid
+      // width so the dashes form a continuous line.
+      if (p === "<<SEP>>") {
+        gridRows.push(
+          `<span style="grid-column:1 / -1;color:${c};opacity:0.5;`
+          + `font-weight:600;padding:1px 0 1px 14px;letter-spacing:1px">`
+          + "- recent models above / alphabetical below -"
+          + `</span>`
+        );
+        continue;
+      }
       // Parse "MAKE MODEL YEAR [TAG1] [TAG2] ..." from the right.
       // Oct-30: multiple trailing [...] tags supported now that OE
       // chips add their own [OE] badge alongside any stg-F / stg-R
@@ -3814,12 +3826,24 @@ document.addEventListener("click", function (ev) {
   // Oct-30 user ask: expand to the FULL list AND append "<<LESS>>" so
   // the renderer emits a "- show less" link; clicking that link
   // (handler below) collapses back to the first 8 rows + "+N more".
+  // Preserve the two-section layout: top-N recent on top, separator,
+  // then everything else (which is already alphabetical in `full`
+  // because the collapser stored it in that order).
+  const topN = parseInt(tr.dataset.whatvehiclesTopN || "0", 10) || 0;
   const raw   = tr.dataset.remarkFull || "";
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
     if (/^\(Vehicles\b/i.test(lines[i])) {
       const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
-      const body   = full.join(" | ");
+      // Rebuild body with the separator at position topN (if there
+      // IS a split point; otherwise just emit everything).
+      let bodyParts;
+      if (topN > 0 && full.length > topN) {
+        bodyParts = full.slice(0, topN).concat(["<<SEP>>"], full.slice(topN));
+      } else {
+        bodyParts = full.slice();
+      }
+      const body   = bodyParts.join(" | ");
       lines[i] = `${header} ${body} | <<LESS>>)`;
       break;
     }
@@ -3849,12 +3873,24 @@ document.addEventListener("click", function (ev) {
     full = JSON.parse(tr.dataset.whatvehiclesFull || "[]");
   } catch (_e) {}
   if (!full.length) return;
-  const SHOWN = 8;
-  const firstLines = full.slice(0, SHOWN);
-  const more       = full.length > SHOWN ? full.length - SHOWN : 0;
+  // Oct-30 user ask: mirror the two-section collapsed layout from the
+  // initial render - top-N recent on top, separator, first few of the
+  // alphabetical section, then "+N more" for the rest.
+  const topN = parseInt(tr.dataset.whatvehiclesTopN || "0", 10) || 0;
+  const TOP_N = topN > 0 ? topN : 5;
+  const COLLAPSED_ALPHA = 3;
+  const topLines   = full.slice(0, TOP_N);
+  const alphaRest  = full.slice(TOP_N);
+  const alphaShown = alphaRest.slice(0, COLLAPSED_ALPHA);
+  const remaining  = alphaRest.length - alphaShown.length;
+  const bodyParts  = topLines.slice();
+  if (alphaRest.length) {
+    bodyParts.push("<<SEP>>");
+    bodyParts.push(...alphaShown);
+  }
   const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
-  const body   = firstLines.join(" | ");
-  const tail   = more ? ` | <<MORE:${more}>>` : "";
+  const body   = bodyParts.join(" | ");
+  const tail   = remaining > 0 ? ` | <<MORE:${remaining}>>` : "";
   const raw   = tr.dataset.remarkFull || "";
   const lines = raw.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -5951,23 +5987,45 @@ async function _applyWhatVehiclesToRow(tr){
           const tail = tags.length ? ` ${tags.join(" ")}` : "";
           return `${v.make} ${v.model} ${yrs}${tail}`.trimEnd();
         };
-        // Stash the full list on the row so the "+N more" link can
-        // reveal everything on click.
+        // Oct-30 user ask: two-part layout for the vehicle chip.
+        //   Section A: top 5 by most-recent year (backend already
+        //              returned vs sorted year DESC)
+        //   Section B: everything else sorted ALPHABETICALLY by
+        //              make+model (makes a huge list browseable).
+        //   A visible "---" separator sits between the two sections.
+        // Collapsed shows: Section A (5) + separator + first 3 of
+        // Section B + "+N more" link.
+        // Expanded shows: Section A (5) + separator + ALL of
+        // Section B.
+        const TOP_N = 5;
+        const topRecent = vs.slice(0, TOP_N);
+        const restAlpha = vs.slice(TOP_N).slice().sort((a, b) => {
+          const an = (a.make + " " + a.model).toUpperCase();
+          const bn = (b.make + " " + b.model).toUpperCase();
+          return an < bn ? -1 : an > bn ? 1 : 0;
+        });
+        const orderedFull = topRecent.concat(restAlpha);
+        // Stash the full ordered list on the row so the "+N more"
+        // link can reveal everything on click (reuses the same order
+        // the collapsed view started from, so the UI is stable).
         try {
-          tr.dataset.whatvehiclesFull = JSON.stringify(vs.map(_fmt));
+          tr.dataset.whatvehiclesFull = JSON.stringify(orderedFull.map(_fmt));
+          tr.dataset.whatvehiclesTopN = String(topRecent.length);
           tr.dataset.whatvehiclesCount = String(vs.length);
         } catch (_e) {}
-        const SHOWN = 8;
-        const firstLines = vs.slice(0, SHOWN).map(_fmt);
-        const more       = vs.length > SHOWN ? vs.length - SHOWN : 0;
-        // Encode as ONE chip line in dataset.remarkFull: the renderer
-        // splits on " | " to emit per-vehicle <br> lines.  Tail token
-        // "<<MORE:n>>" is replaced by a clickable <a> in the HTML
-        // build; keeps the chip filter (which keys on the "(Vehicles"
-        // prefix) working unchanged.
+        // Collapsed body: top-5 recent + <<SEP>> + first 3 alpha +
+        // tail link.
+        const COLLAPSED_ALPHA = 3;
+        const collapsedAlpha = restAlpha.slice(0, COLLAPSED_ALPHA);
+        const bodyLines = topRecent.map(_fmt);
+        if (restAlpha.length) {
+          bodyLines.push("<<SEP>>");
+          for (const v of collapsedAlpha) bodyLines.push(_fmt(v));
+        }
+        const remaining = restAlpha.length - collapsedAlpha.length;
         const header = `(Vehicles (${vs.length} ${vs.length === 1 ? "model" : "models"}):`;
-        const body   = firstLines.join(" | ");
-        const tail   = more ? ` | <<MORE:${more}>>` : "";
+        const body   = bodyLines.join(" | ");
+        const tail   = remaining > 0 ? ` | <<MORE:${remaining}>>` : "";
         freshKept.push(`${header} ${body}${tail})`);
       }
       // Oct-29 (chip-slot fix): setRemark's single-line path REPLACES
