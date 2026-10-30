@@ -3326,6 +3326,93 @@ def _stock_report_rows_for_suggest():
     return result
 
 
+# Oct-30 user ask: suggest dropdown's per-state stock was showing the
+# physical-stock number from the .xlsm (sometimes 0) while the SPRF
+# row's NSW cell showed ATP (sometimes 379).  Overlay ATP from
+# stock_rt at REQUEST time so SAP updates reflect in minutes, not when
+# the .xlsm happens to be re-saved.  Kept separate from
+# _STOCK_SUGGEST_CACHE so the Excel cache can live for hours while
+# this one refreshes every ATP_OVERLAY_TTL seconds.
+_ATP_OVERLAY_CACHE = {"ts": 0.0, "atp": {}}
+_ATP_OVERLAY_TTL   = 180.0    # seconds - matches typical SAP crawl cadence
+
+
+def _atp_overlay_dict() -> dict:
+    """Return a {(m_code, state): atp_int} dict for every row in
+    stock_rt, cached for ATP_OVERLAY_TTL seconds.  Silently returns {}
+    when stock_rt doesn't exist yet (fresh deployment)."""
+    import time as _time
+    now = _time.time()
+    cached = _ATP_OVERLAY_CACHE.get("atp") or {}
+    if cached and (now - (_ATP_OVERLAY_CACHE.get("ts") or 0)) < _ATP_OVERLAY_TTL:
+        return cached
+    out = {}
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
+        try:
+            cur.execute("SHOW TABLES LIKE 'stock_rt'")
+            if not cur.fetchone():
+                _ATP_OVERLAY_CACHE["ts"]  = now
+                _ATP_OVERLAY_CACHE["atp"] = {}
+                return {}
+            plants = list(_ORDER_PLANT_STATE.keys())
+            plant_ph = ",".join(["%s"] * len(plants))
+            cur.execute(
+                f"SELECT material, plant, "
+                f"       SUM(COALESCE(atp_qt, 0)) AS atp "
+                f"FROM stock_rt "
+                f"WHERE plant IN ({plant_ph}) "
+                f"GROUP BY material, plant",
+                tuple(plants),
+            )
+            for rr in cur.fetchall() or []:
+                m  = str(rr.get("material") or "").strip()
+                pl = rr.get("plant")
+                st = _ORDER_PLANT_STATE.get(pl)
+                if m and st:
+                    try:
+                        out[(m, st)] = int(float(rr.get("atp") or 0))
+                    except Exception:
+                        out[(m, st)] = 0
+        finally:
+            try: cur.close()
+            except: pass
+            try: conn.close()
+            except: pass
+    except Exception:
+        import traceback; traceback.print_exc()
+        # On DB error keep the stale cache rather than erasing it.
+        return cached
+    _ATP_OVERLAY_CACHE["ts"]  = now
+    _ATP_OVERLAY_CACHE["atp"] = out
+    return out
+
+
+def _overlay_atp_onto_suggest_rows(rows):
+    """Apply the ATP overlay to a list of suggest rows IN PLACE.
+    Called by api_orders_material_suggest on the FILTERED subset so
+    the per-request cost is tiny (10-150 rows typical)."""
+    try:
+        atp = _atp_overlay_dict()
+        if not atp:
+            return rows
+        for row in rows:
+            mc_ = row.get("m_code")
+            if not mc_: continue
+            ss  = row.get("state_stock") or {}
+            if not isinstance(ss, dict):
+                ss = {}
+                row["state_stock"] = ss
+            for st_ in ("NSW", "QLD", "VIC", "WA"):
+                k = (mc_, st_)
+                if k in atp:
+                    ss[st_] = atp[k]
+    except Exception:
+        import traceback; traceback.print_exc()
+    return rows
+
+
 _RE_NOISE  = re.compile(r"[\s/,.\-'&+()]+")
 _RE_DIGITS = re.compile(r"[^0-9]+")
 def _re_sub_noise(s):
@@ -3402,6 +3489,12 @@ def api_orders_material_suggest():
         # the JSON payload stays lean on the wire.
         slim = [{k: v for k, v in r.items() if not k.startswith("_")}
                 for r in out[:limit]]
+        # Oct-30 user ask: overlay ATP from stock_rt onto each row's
+        # state_stock so the dropdown shows the SAME orderable number
+        # as the SPRF row's NSW/QLD/VIC/WA cells (which already read
+        # stock_rt).  Applied to the filtered subset only - typical
+        # cost is ~10-150 row dict touches.
+        _overlay_atp_onto_suggest_rows(slim)
         return jsonify(slim)
 
     # --- Fallback path: original carrying_26 query when the stock
