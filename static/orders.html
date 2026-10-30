@@ -3882,6 +3882,26 @@ document.addEventListener("click", function (ev) {
    Default: TempeConsumer + TempeDealer checked; JAX / Bob Jane
    off (no backend lookup for those yet — the toggles are reserved
    for when the lookups arrive). */
+// Oct-30 user ask: the "(Vehicles ...)" chip must ALWAYS sit at the
+// very bottom of the Remark cell, regardless of which renderer wrote
+// what in which order.  A single helper reorders a multi-line Remark
+// string so every line matching /^\(Vehicles/ is moved to the end,
+// preserving the order of everything else.  Called by setRemark + the
+// WhatVehicles direct writer so chip ordering is consistent no matter
+// which code path landed last.
+function _moveVehiclesToBottom(text){
+  const s = String(text == null ? "" : text);
+  if (!s.includes("\n") || !/\(Vehicles\b/i.test(s)) return s;
+  const lines = s.split("\n");
+  const nonVeh = [];
+  const vehicles = [];
+  for (const l of lines) {
+    if (/^\s*\(Vehicles\b/i.test(l)) vehicles.push(l);
+    else                              nonVeh.push(l);
+  }
+  return [...nonVeh, ...vehicles].join("\n");
+}
+
 const _REMARK_FILTER_KEY = "sprf_remark_filter_v1";
 const _REMARK_FILTER_DEFAULT = {
   tempe_consumer: true,
@@ -3995,6 +4015,11 @@ function setRemark(rowEl, text){
     rest.forEach(l => lines.push(l));
     finalText = lines.join("\n");
   }
+  // Oct-30 user ask: whatever the caller sent, enforce the display
+  // rule that any "(Vehicles ...)" chip lines sit at the very bottom
+  // of the Remark cell.  Applied as a single post-step so every
+  // writer path through setRemark honours the rule.
+  finalText = _moveVehiclesToBottom(finalText);
   if (rowEl) rowEl.dataset.remarkFull = finalText;
   // Oct-27-pm: Remark is now a <div> for colour-coded lines.  Build
   // the HTML through _buildColoredRemarkHTML so each chip renders in
@@ -5837,7 +5862,8 @@ async function _applyWhatVehiclesToRow(tr){
       // otherwise re-append whatever used to live on lines 2+ of
       // the old remarkFull (including the no-match chip we are
       // trying to strip).
-      tr.dataset.remarkFull = linesKept.join("\n");
+      // Oct-30: Vehicles chip always lives at the bottom.
+      tr.dataset.remarkFull = _moveVehiclesToBottom(linesKept.join("\n"));
       const _el = tr.querySelector('[data-col="remark"]');
       if (_el && _el.tagName === "DIV") {
         _el.innerHTML = _buildColoredRemarkHTML(tr.dataset.remarkFull);
@@ -5900,8 +5926,10 @@ async function _applyWhatVehiclesToRow(tr){
           // so the reader can tell OE (factory) fitments apart from
           // optional / aftermarket ones.  Rendered as the FIRST tag
           // (before any staggered label) so it reads prominently.
-          // Fields: v.is_oe = 0/1 (default 1 when missing for
-          // backwards compat with pre-Oct-30 CSVs).
+          // Fields: v.is_oe = 0/1 (default 1 when missing - treat as
+          // OE for legacy / pre-Oct-30 responses).  Normalise through
+          // Number() so string "1" / number 1 / null / undefined all
+          // reduce to the same two-state check.
           const yrs = String(v.years || v.year || "").trim();
           const posRaw = String(v.position || "").toLowerCase();
           const stag = (v.staggered_detail || "").trim();
@@ -5910,14 +5938,9 @@ async function _applyWhatVehiclesToRow(tr){
                           : posRaw === "rear"  ? "R"
                           : "";
           const tags = [];
-          if (v.is_oe === 1 || v.is_oe === "1" || v.is_oe === undefined
-              || v.is_oe === null) {
-            // undefined/null handled as OE for legacy response
-            // compatibility; non-OE is only skipped when the backend
-            // EXPLICITLY sends is_oe=0.
-            if (v.is_oe !== 0 && v.is_oe !== "0") {
-              tags.push("[OE]");
-            }
+          const _oe = (v.is_oe == null) ? 1 : (Number(v.is_oe) === 1 ? 1 : 0);
+          if (_oe === 1) {
+            tags.push("[OE]");
           }
           if (axleShort && stag) {
             const hint = stagSrc === "inferred" ? " (inferred)" : "";
@@ -5971,7 +5994,8 @@ async function _applyWhatVehiclesToRow(tr){
     // 1 line truly clears the stale (Vehicles: - no match ...) chip,
     // instead of being re-glued back by setRemark's "update line 1
     // ONLY" fast path.
-    tr.dataset.remarkFull = linesKept.join("\n");
+    // Oct-30: Vehicles chip always lives at the bottom.
+    tr.dataset.remarkFull = _moveVehiclesToBottom(linesKept.join("\n"));
     const _el = tr.querySelector('[data-col="remark"]');
     if (_el && _el.tagName === "DIV") {
       _el.innerHTML = _buildColoredRemarkHTML(tr.dataset.remarkFull);
