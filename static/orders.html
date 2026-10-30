@@ -6070,11 +6070,12 @@ function _wireOeSearchModal(){
 
   async function _runOeSearch(q){
     try {
-      // Oct-30: limit=2000 so broad queries like "mercedes" (23k+
-      // matches) return rows across every year, not just the latest.
-      // The column-filter row above the table then narrows further
-      // without a server round-trip.
-      const r = await fetch(`/api/orders/sizes_by_vehicle?q=${encodeURIComponent(q)}&limit=2000`,
+      // Oct-30 (v3): no explicit limit - backend defaults to 100k
+      // which covers every realistic query.  The column filters +
+      // DOM scroll handle the result size.  Broad queries like
+      // "bmw" (~2-3k rows) now return the full set so Year / Size
+      // / Axle column filters work against everything, not a slice.
+      const r = await fetch(`/api/orders/sizes_by_vehicle?q=${encodeURIComponent(q)}`,
                             {credentials: "same-origin"});
       const d = await r.json();
       const rows = (d && d.rows) || [];

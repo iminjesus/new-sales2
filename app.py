@@ -4624,16 +4624,16 @@ def api_orders_sizes_by_vehicle():
     """
     import csv as _csv
     q = str(request.args.get("q") or "").strip()
-    # Oct-30: default limit 1000, max 5000.  Was 150/500 but with a
-    # year-DESC primary sort, broad queries like "mercedes" (23k+
-    # matches) filled the quota entirely with 2025 rows - older years
-    # never surfaced and the per-column Year filter had nothing to
-    # work with.  A 1000-2000 row payload is still ~1 MB JSON which
-    # is fine for the modal, and gives the column filters room.
+    # Oct-30 (v3): effectively no cap - broad queries like "bmw" or
+    # "mercedes" have tens of thousands of OE fitment rows and the
+    # column filters are only useful against the FULL set.  Default
+    # 100k is higher than any realistic CSV; max 500k is a hard safety
+    # ceiling.  JSON size at 100 bytes/row stays well under 10 MB
+    # which the browser handles fine.
     try:
-        limit = max(1, min(int(request.args.get("limit", 1000) or 1000), 5000))
+        limit = max(1, min(int(request.args.get("limit", 100000) or 100000), 500000))
     except ValueError:
-        limit = 1000
+        limit = 100000
     out = {"query": q, "count": 0, "rows": [], "source": "", "debug": {}}
     if not q:
         return jsonify(out)
