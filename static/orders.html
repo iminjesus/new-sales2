@@ -3805,6 +3805,26 @@ function _buildColoredRemarkHTML(text){
       + esc(`Vehicles ${header}:`) + `</div>`;
     const gridRows = [];
     let moreHtml = "";
+    // Nov-01 user ask: when the brand changes from the previous row,
+    // paint that row in dark orange + bolder weight so the eye can
+    // scan brand boundaries at a glance.  Reset the tracker at the
+    // SEP marker so the alphabetical section also highlights its
+    // first-of-brand rows.  Two-word brands (ALFA ROMEO, LAND ROVER,
+    // etc.) are detected via a small prefix list; everything else
+    // uses the first whitespace-split token.
+    const MULTIWORD_BRANDS = [
+      "ALFA ROMEO", "LAND ROVER", "ASTON MARTIN", "ROLLS ROYCE",
+      "ROLLS-ROYCE", "GREAT WALL", "SSANG YONG",
+    ];
+    const brandOf = (nm) => {
+      const up = (nm || "").toUpperCase().trim();
+      for (const mb of MULTIWORD_BRANDS) {
+        if (up === mb || up.startsWith(mb + " ")) return mb;
+      }
+      return (up.split(/\s+/)[0] || "");
+    };
+    const BRAND_HILITE_COLOR = "#C2410C"; // dark orange (tailwind orange-700)
+    let prevBrand = null;
     for (const p of parts) {
       // Oct-30: "<<MORE:n>>" or "<<MORE:n_ALPHA>>" - the ALPHA flag
       // tacks "(alphabetical)" onto the link label so the user knows
@@ -3843,6 +3863,9 @@ function _buildColoredRemarkHTML(text){
           + "- recent models above / alphabetical below -"
           + `</span>`
         );
+        // Reset so the first row of the alphabetical section is
+        // treated as a brand boundary too.
+        prevBrand = null;
         continue;
       }
       // Parse "MAKE MODEL YEAR [TAG1] [TAG2] ..." from the right.
@@ -3872,10 +3895,16 @@ function _buildColoredRemarkHTML(text){
         year = yearM[1].trim();
         name = withoutStag.slice(0, yearM.index).trim();
       }
+      // Nov-01: brand-boundary row -> dark orange + weight 800.
+      const brand = brandOf(name);
+      const isBrandBoundary = brand && brand !== prevBrand;
+      prevBrand = brand;
+      const rowColor = isBrandBoundary ? BRAND_HILITE_COLOR : c;
+      const rowWeight = isBrandBoundary ? "800" : "600";
       gridRows.push(
-        `<span style="color:${c};font-weight:600">${esc(name)}</span>` +
-        `<span style="color:${c};font-weight:600">${esc(year)}</span>` +
-        `<span style="color:${c};font-weight:600;font-style:italic;opacity:0.9">${tag ? esc("[" + tag + "]") : ""}</span>`
+        `<span style="color:${rowColor};font-weight:${rowWeight}">${esc(name)}</span>` +
+        `<span style="color:${rowColor};font-weight:${rowWeight}">${esc(year)}</span>` +
+        `<span style="color:${rowColor};font-weight:${rowWeight};font-style:italic;opacity:0.9">${tag ? esc("[" + tag + "]") : ""}</span>`
       );
     }
     const gridHtml = gridRows.length
