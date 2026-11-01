@@ -3956,11 +3956,18 @@ document.addEventListener("click", function (ev) {
       const header = `(Vehicles (${full.length} ${full.length === 1 ? "model" : "models"}):`;
       // Rebuild body with the separator at position topN (if there
       // IS a split point; otherwise just emit everything).
+      // Nov-01 user ask: the alphabetical section must contain ALL
+      // vehicles sorted A-Z, even those already shown in the top-N
+      // recent block above - the top-N preview is a convenience, not
+      // a filter.  The collapsed "+949 more (alphabetical)" count
+      // label is intentionally left pointing at (full.length - topN)
+      // = 949 as that is what the user expects "more" to mean.
       let bodyParts;
       if (topN > 0 && full.length > topN) {
-        bodyParts = full.slice(0, topN).concat(["<<SEP>>"], full.slice(topN));
+        const alphaAll = full.slice().sort((a, b) => a.localeCompare(b));
+        bodyParts = full.slice(0, topN).concat(["<<SEP>>"], alphaAll);
       } else {
-        bodyParts = full.slice();
+        bodyParts = full.slice().sort((a, b) => a.localeCompare(b));
       }
       const body   = bodyParts.join(" | ");
       lines[i] = `${header} ${body} | <<LESS>>)`;
@@ -4496,13 +4503,18 @@ function _renderTempeRefOnRow(rowEl, j){
   });
   const lines = [];
   if (promoLine) lines.push(promoLine);
-  if (dealerChip)      lines.push(dealerChip);
-  if (consumerChip)    lines.push(consumerChip);
-  if (jaxChip)         lines.push(jaxChip);
-  if (bobJaneChip)     lines.push(bobJaneChip);
-  if (newbDealerChip)  lines.push(newbDealerChip);
+  // Nov-01 user ask: fixed chip order on the Remark cell:
+  //   monthly promo -> TempeDealer -> NewBDealer -> TempeConsumer
+  //   -> JAX -> BobJane -> Vehicles (preserved).
+  // Dealer feeds (both wholesale) stay grouped at the top, then the
+  // consumer / retail-side feeds, then vehicle fitment at the bottom.
+  if (dealerChip)      lines.push(dealerChip);      // TempeDealer
+  if (newbDealerChip)  lines.push(newbDealerChip);  // NewBDealer
+  if (consumerChip)    lines.push(consumerChip);    // TempeConsumer
+  if (jaxChip)         lines.push(jaxChip);         // JAX
+  if (bobJaneChip)     lines.push(bobJaneChip);     // BobJane
   // Append any chip we preserved (Vehicles, etc.) at the end so the
-  // display order stays: promo | Tempe/JAX/BJ/NewB chips | Vehicles.
+  // display order stays: promo | dealer chips | consumer chips | Vehicles.
   for (const l of _preserveChips) lines.push(l);
   setRemark(rowEl, lines.join("\n"));
   /* Hover tooltip — full match detail for both sources, with every
