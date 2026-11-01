@@ -76,7 +76,61 @@ SAP_USER = os.environ.get("SAP_USER", "42S00030B2")
 # Nov-01: rotated from "Ksmpyj1234!" -> "Ksmpyj1234!!" (added one '!').
 # If the account is rotated again, update this default AND the first
 # entry of SAP_NEW_PWD_CANDIDATES below.
-SAP_PWD  = os.environ.get("SAP_PWD",  "Ksmpyj1234!!")
+_SAP_PWD_DEFAULT = "Ksmpyj1234!!"
+# Nov-01 user ask (part 2): persist a successful password change to a
+# local sidecar file so the NEXT batch run picks up the new password
+# automatically — no manual file edit required.  Sidecar lives next
+# to this .py (same directory used by the log file).  It is git-
+# ignored (see .gitignore entry ".sap_pwd_current").  Resolution
+# priority on each run:
+#   1. env var SAP_PWD           (explicit operator override)
+#   2. sidecar file               (last known good from auto-rotation)
+#   3. _SAP_PWD_DEFAULT constant  (the version baked into this file)
+_SAP_PWD_SIDECAR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".sap_pwd_current",
+)
+def _load_persisted_pwd():
+    """Read the sidecar file if present and return the stored
+    password string, or None if the file does not exist / is empty /
+    is unreadable.  Logs are deferred — _slog is not yet defined at
+    module-load time on first import, so we only print() errors."""
+    try:
+        if not os.path.isfile(_SAP_PWD_SIDECAR):
+            return None
+        with open(_SAP_PWD_SIDECAR, "r", encoding="utf-8") as f:
+            pwd = f.read().strip()
+        return pwd or None
+    except Exception as e:
+        print(f"[sap_pwd] WARNING: could not read sidecar "
+              f"{_SAP_PWD_SIDECAR}: {e}", flush=True)
+        return None
+def _save_persisted_pwd(pwd):
+    """Atomically write the new password to the sidecar file.  Uses
+    tmp+rename so a mid-write crash cannot leave a half-written file.
+    Called only from _handle_password_change on a successful rotation."""
+    try:
+        tmp = _SAP_PWD_SIDECAR + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(pwd)
+        os.replace(tmp, _SAP_PWD_SIDECAR)
+        try:
+            # Tighten permissions on POSIX so the sidecar is readable
+            # only by the owner.  No-op on Windows (chmod bits are
+            # mostly ignored there) but harmless.
+            os.chmod(_SAP_PWD_SIDECAR, 0o600)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        print(f"[sap_pwd] WARNING: could not write sidecar "
+              f"{_SAP_PWD_SIDECAR}: {e}", flush=True)
+        return False
+SAP_PWD = (
+    os.environ.get("SAP_PWD")
+    or _load_persisted_pwd()
+    or _SAP_PWD_DEFAULT
+)
 SAP_CONN = os.environ.get("SAP_CONN", "G.ERP")
 # Nov-01 user ask: when SAP's "please change your password" dialog
 # appears at login, propose these candidates IN ORDER as the NEW
@@ -852,15 +906,31 @@ def _handle_password_change(session):
             still_present = False  # window gone -> accepted
         if not still_present:
             _slog(f"[pwd_change] *** SUCCESS *** candidate {cand_i} accepted")
-            _slog("[pwd_change] " + "*" * 60)
-            _slog(f"[pwd_change] *** OPERATOR ACTION REQUIRED ***")
-            _slog(f"[pwd_change] *** SAP password was rotated to a NEW value. ***")
-            _slog(f"[pwd_change] *** Update SAP_PWD default in batch_sap_logon.py ***")
-            _slog(f"[pwd_change] *** BEFORE the next scheduled run so the file + ***")
-            _slog(f"[pwd_change] *** SAP account stay in sync.  (The in-process  ***")
-            _slog(f"[pwd_change] *** SAP_PWD global is updated for THIS run.)    ***")
-            _slog("[pwd_change] " + "*" * 60)
+            # Update in-process global so any immediate re-login uses
+            # the new password, THEN persist to the sidecar so the
+            # next batch run picks it up automatically (no manual
+            # file edit).  Sidecar write is best-effort — if it fails
+            # we still log the loud banner so an operator can rescue
+            # the situation manually.
             SAP_PWD = cand
+            saved = _save_persisted_pwd(cand)
+            _slog("[pwd_change] " + "*" * 60)
+            if saved:
+                _slog(f"[pwd_change] *** SAP password rotated and PERSISTED to ***")
+                _slog(f"[pwd_change] *** {_SAP_PWD_SIDECAR}")
+                _slog(f"[pwd_change] *** Next batch run will read it automatically. ***")
+                _slog(f"[pwd_change] *** (Optional: update _SAP_PWD_DEFAULT in     ***")
+                _slog(f"[pwd_change] ***  batch_sap_logon.py line ~71 if you want  ***")
+                _slog(f"[pwd_change] ***  the git-tracked baseline in sync too.)   ***")
+            else:
+                _slog(f"[pwd_change] *** OPERATOR ACTION REQUIRED ***")
+                _slog(f"[pwd_change] *** SAP password was rotated to a NEW value   ***")
+                _slog(f"[pwd_change] *** but the sidecar write FAILED — the next   ***")
+                _slog(f"[pwd_change] *** scheduled run will try the OLD password   ***")
+                _slog(f"[pwd_change] *** and risk a lockout.  Update SAP_PWD env   ***")
+                _slog(f"[pwd_change] *** var OR _SAP_PWD_DEFAULT in                ***")
+                _slog(f"[pwd_change] *** batch_sap_logon.py BEFORE the next run.   ***")
+            _slog("[pwd_change] " + "*" * 60)
             return True
         _slog(f"[pwd_change] candidate {cand_i} REJECTED by SAP (dialog "
               f"redrawn) — trying next…")

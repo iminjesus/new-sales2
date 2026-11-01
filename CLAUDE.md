@@ -31,13 +31,30 @@ Flask + MySQL web app serving an internal sales/ops dashboard.
 
 **Never commit secrets.** Credentials live in:
 - `.env` (git-ignored) — see `.env.example` for the schema
-- Windows Credential Manager via `keyring` — the SAP password is stored
-  there, set once with `python sap_login.py --set-password`
+- Windows Credential Manager via `keyring` — the SAP password used by
+  the standalone `sap_login.py` is stored there, set once with
+  `python sap_login.py --set-password`
 - OS env vars for the crawler site logins (`Tempe_username`, `Tempe_password`,
   equivalents for Newbee/JAX/BobJane)
+- `.sap_pwd_current` (git-ignored) — the **batch pipeline's** SAP
+  password sidecar.  `batch_sap_logon.py` writes to it automatically
+  whenever its `_handle_password_change` handler accepts a new password
+  during a forced rotation at login, so the next scheduled run picks
+  up the new value without any manual file edit.  Resolution order on
+  each run: env `SAP_PWD` → sidecar → `_SAP_PWD_DEFAULT` constant
+  baked into `batch_sap_logon.py` (currently `Ksmpyj1234!!`).
 
-SAP connection fields (user, client, connection name) are low-sensitivity
-and can live in `.env`; the SAP password is **always** in keyring.
+### Password-rotation handler
+
+`batch_sap_logon.py :: _handle_password_change(session)` fires between
+the multi-logon check and the generic post-login popup-dismisser.
+When SAP demands a rotation at login, it tries the entries in
+`SAP_NEW_PWD_CANDIDATES` IN ORDER as the proposed new password,
+submits NEW+CONFIRM, waits for SAP to accept or redraw with an error,
+and persists the accepted value to the sidecar.  **Login itself is
+never retried from here** — three wrong LOGIN attempts lock the SAP
+account; the candidate chain only drives the already-open change
+dialog, which does not consume the lockout counter.
 
 ### Sensitive data display rules (SPRF / orders.html)
 

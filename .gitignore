@@ -15,6 +15,13 @@ BobJane_*.csv
 *.log
 .env
 
+# SAP password rotation sidecar (batch_sap_logon.py writes the
+# newly-accepted password here after a successful change-password
+# dialog so the next batch run picks it up automatically).  Local
+# only — must never land in git.
+.sap_pwd_current
+.sap_pwd_current.tmp
+
 # User-uploaded photos from /meeting (kept on disk, not tracked)
 static/meeting_photos/
 
