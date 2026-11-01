@@ -16,7 +16,12 @@ Design notes:
   • Uses pywin32 (win32com.client) + SAP GUI Scripting.  Scripting must
     be enabled in SAP Logon → Options → Accessibility & Scripting.
   • Credentials come from env SAP_USER / SAP_PWD; the orchestrator sets
-    sensible defaults from the Oct-16 user ask (42S00030B2 / Ksmpyj1234!).
+    sensible defaults — Oct-16: 42S00030B2 / Ksmpyj1234! ; Nov-01 user
+    rotated the password to Ksmpyj1234!! (added one trailing '!').  If
+    SAP demands a change at login, _handle_password_change tries the
+    SAP_NEW_PWD_CANDIDATES chain in order (Ksmpyj1234!!! then
+    Ksmpyj1234!) — three BAD login attempts lock the SAP account so
+    the chain is never applied on login, only inside the change popup.
   • Connection name defaults to "G.ERP" per the user's SAP Logon
     screenshot — override with env SAP_CONN.
   • Multi-logon dialog is detected by the "already logged on" wording
@@ -68,8 +73,24 @@ def _slog(msg):
         pass
 
 SAP_USER = os.environ.get("SAP_USER", "42S00030B2")
-SAP_PWD  = os.environ.get("SAP_PWD",  "Ksmpyj1234!")
+# Nov-01: rotated from "Ksmpyj1234!" -> "Ksmpyj1234!!" (added one '!').
+# If the account is rotated again, update this default AND the first
+# entry of SAP_NEW_PWD_CANDIDATES below.
+SAP_PWD  = os.environ.get("SAP_PWD",  "Ksmpyj1234!!")
 SAP_CONN = os.environ.get("SAP_CONN", "G.ERP")
+# Nov-01 user ask: when SAP's "please change your password" dialog
+# appears at login, propose these candidates IN ORDER as the NEW
+# password.  SAP's password-history policy may reject a candidate
+# that was recently used, so we fall through to the next one.
+# Keep this list SHORT (<=3) because every candidate still submits
+# inside the change-password dialog, not at the login prompt -
+# which is safe because the change dialog does NOT count toward the
+# "3 wrong logins -> account locked" counter.  Even so, the fewer
+# submits the better.
+SAP_NEW_PWD_CANDIDATES = [
+    "Ksmpyj1234!!!",   # +1 trailing '!' past the current active pwd
+    "Ksmpyj1234!",      # wrap back to the single '!' original
+]
 SAP_CLIENT = os.environ.get("SAP_CLIENT", "100")
 SAP_LANG   = os.environ.get("SAP_LANG",   "EN")
 SAP_LOGON_PATH = os.environ.get(
@@ -667,6 +688,192 @@ def _handle_multi_logon(session):
     return False
 
 
+def _handle_password_change(session):
+    """Nov-01 user ask: when SAP shows the "please choose a new
+    password" dialog at login (password expired / policy change / forced
+    rotation), feed it the candidates from SAP_NEW_PWD_CANDIDATES in
+    order until one is accepted.  The change-password popup requires
+    the NEW password to be typed TWICE (new + confirm).
+
+    Login itself is NEVER retried from here -- three wrong LOGIN
+    attempts lock the SAP account.  This handler only drives the
+    change-password dialog, which does not consume failed-login
+    attempts; SAP just redraws the dialog on each policy rejection
+    (e.g. "password used recently") and we try the next candidate.
+
+    On success:
+      - module global SAP_PWD is updated so the rest of this session
+        (and any immediate re-login this process does) uses the new one;
+      - a loud WARN line is written to the log asking the operator to
+        update the SAP_PWD default in batch_sap_logon.py BEFORE the
+        next scheduled run so file + account stay in sync.
+
+    Returns True when the dialog was present and successfully handled
+    (new password accepted), False when no change dialog was found.
+    Raises RuntimeError if the dialog is present but every candidate
+    is rejected -- the orchestrator should stop and alert in that case.
+    """
+    global SAP_PWD
+    # Scan wnd[1..3] for a password-change popup.  Detect by title /
+    # body keywords because SAP's text varies by release / language
+    # (English "SAP Password Change" or "Change Password", German
+    # "Kennwort aendern", etc.).
+    target_wi = None
+    for wi in (1, 2, 3):
+        try:
+            dlg = session.findById(f"wnd[{wi}]")
+        except Exception:
+            continue
+        try:
+            txt = str(dlg.Text or "") + " " + str(getattr(dlg, "PopupTitle", "") or "")
+        except Exception:
+            txt = ""
+        try:
+            for i in range(dlg.Children.Count):
+                try: txt += " " + str(dlg.Children(i).Text or "")
+                except Exception: pass
+        except Exception:
+            pass
+        _tl = txt.lower()
+        # Keyword set covers English + a couple of German fallbacks.
+        # "neues kennwort" = "new password" in German; some SAP installs
+        # of this user's region surface the dialog in English only, but
+        # keeping both is cheap insurance.
+        has_pwd_word    = ("password" in _tl) or ("kennwort" in _tl)
+        has_change_word = ("change" in _tl) or ("new" in _tl)  \
+                       or ("expired" in _tl) or ("aendern" in _tl) \
+                       or ("neues" in _tl)
+        if has_pwd_word and has_change_word:
+            target_wi = wi
+            break
+    if target_wi is None:
+        return False  # no change dialog present
+    _slog(f"[pwd_change] change-password dialog detected on wnd[{target_wi}]")
+
+    # SAP's standard field IDs for the change-password dialog.  Try
+    # them in order; if none match, fall back to a tree walk that
+    # picks the first two GuiPasswordField controls under /usr.
+    STD_NEW_IDS = [
+        f"wnd[{target_wi}]/usr/pwdRSYST-NCODE",
+        f"wnd[{target_wi}]/usr/pwdV01-BCODE",
+        f"wnd[{target_wi}]/usr/pwdRSYST-NEWC",
+    ]
+    STD_CONF_IDS = [
+        f"wnd[{target_wi}]/usr/pwdRSYST-NCOD2",
+        f"wnd[{target_wi}]/usr/pwdV02-BCODE",
+        f"wnd[{target_wi}]/usr/pwdRSYST-NEWC2",
+    ]
+
+    def _find_field(id_list):
+        for fid in id_list:
+            try:
+                return session.findById(fid)
+            except Exception:
+                continue
+        return None
+
+    def _find_pwd_fields_walk():
+        """Fallback: walk the dialog's children and return the first
+        two GuiPasswordField controls under /usr."""
+        found = []
+        try:
+            usr = session.findById(f"wnd[{target_wi}]/usr")
+        except Exception:
+            return (None, None)
+        def _walk(ctrl):
+            try:
+                if str(getattr(ctrl, "Type", "")).lower() == "guipasswordfield":
+                    found.append(ctrl)
+                    if len(found) >= 2:
+                        return
+                for ci in range(ctrl.Children.Count):
+                    _walk(ctrl.Children(ci))
+                    if len(found) >= 2:
+                        return
+            except Exception:
+                pass
+        _walk(usr)
+        if len(found) >= 2:
+            return (found[0], found[1])
+        return (None, None)
+
+    for cand_i, cand in enumerate(SAP_NEW_PWD_CANDIDATES, 1):
+        _slog(f"[pwd_change] trying candidate {cand_i}/{len(SAP_NEW_PWD_CANDIDATES)} "
+              f"(len={len(cand)})")
+        new_f  = _find_field(STD_NEW_IDS)
+        conf_f = _find_field(STD_CONF_IDS)
+        if new_f is None or conf_f is None:
+            _slog("[pwd_change] standard field IDs not found, walking tree…")
+            new_f, conf_f = _find_pwd_fields_walk()
+        if new_f is None or conf_f is None:
+            _slog("[pwd_change] ERROR: could not locate NEW / CONFIRM "
+                  "password fields on the change dialog")
+            raise RuntimeError("SAP password-change dialog present but "
+                               "NEW/CONFIRM password fields could not be located")
+        try:
+            new_f.Text  = cand
+            conf_f.Text = cand
+        except Exception as e:
+            _slog(f"[pwd_change] filling fields failed: {e}")
+            raise
+        # Press the ✓ (green tick) button to submit.  Fall back to Enter
+        # if the toolbar button is not addressable.
+        try:
+            session.findById(f"wnd[{target_wi}]/tbar[0]/btn[0]").press()
+        except Exception:
+            try:
+                session.findById(f"wnd[{target_wi}]").sendVKey(0)
+            except Exception as e:
+                _slog(f"[pwd_change] submit failed: {e}")
+                raise
+        # Give SAP a beat to react (accept or redraw with an error).
+        time.sleep(1.2)
+        # Did the dialog go away?  If yes, the candidate was accepted.
+        still_present = False
+        try:
+            session.findById(f"wnd[{target_wi}]")
+            # Window still exists — check if it's STILL a password dialog
+            # (SAP sometimes keeps the window and redraws with an error
+            # message like "password matches an earlier one").
+            try:
+                dlg2 = session.findById(f"wnd[{target_wi}]")
+                txt2 = str(dlg2.Text or "")
+                try:
+                    for i in range(dlg2.Children.Count):
+                        try: txt2 += " " + str(dlg2.Children(i).Text or "")
+                        except Exception: pass
+                except Exception:
+                    pass
+                if ("password" in txt2.lower()) or ("kennwort" in txt2.lower()):
+                    still_present = True
+            except Exception:
+                pass
+        except Exception:
+            still_present = False  # window gone -> accepted
+        if not still_present:
+            _slog(f"[pwd_change] *** SUCCESS *** candidate {cand_i} accepted")
+            _slog("[pwd_change] " + "*" * 60)
+            _slog(f"[pwd_change] *** OPERATOR ACTION REQUIRED ***")
+            _slog(f"[pwd_change] *** SAP password was rotated to a NEW value. ***")
+            _slog(f"[pwd_change] *** Update SAP_PWD default in batch_sap_logon.py ***")
+            _slog(f"[pwd_change] *** BEFORE the next scheduled run so the file + ***")
+            _slog(f"[pwd_change] *** SAP account stay in sync.  (The in-process  ***")
+            _slog(f"[pwd_change] *** SAP_PWD global is updated for THIS run.)    ***")
+            _slog("[pwd_change] " + "*" * 60)
+            SAP_PWD = cand
+            return True
+        _slog(f"[pwd_change] candidate {cand_i} REJECTED by SAP (dialog "
+              f"redrawn) — trying next…")
+    # Every candidate rejected — bail out so the orchestrator can alert.
+    _slog("[pwd_change] all candidates rejected; stopping")
+    raise RuntimeError(
+        f"SAP demanded a password change but every candidate in "
+        f"SAP_NEW_PWD_CANDIDATES ({len(SAP_NEW_PWD_CANDIDATES)} tried) "
+        f"was rejected.  Rotate the password manually and update "
+        f"batch_sap_logon.py."
+    )
+
+
 def _check_backend_closed(session):
     """Oct-23 user ask: detect the "HKP: SAP System Message / Back-end
     session closed by system" popup that appears when another desktop's
@@ -1037,6 +1244,20 @@ def _ensure_sap_session_once(attempt):
         _slog("multi-logon dialog handled — THIS seat kept, other "
               "logon(s) terminated.  Proceeding as fresh_login.")
         time.sleep(1.5)  # let SAP settle after the ✓
+
+    # 4b. Password-change dialog check — if SAP demands a rotation at
+    # login, feed it the SAP_NEW_PWD_CANDIDATES chain BEFORE the
+    # generic Enter-dismisser loop below (which would blindly submit
+    # the dialog with empty NEW/CONFIRM fields and trigger an error).
+    _slog("checking for password-change dialog…")
+    try:
+        if _handle_password_change(session):
+            _slog("password-change dialog handled — new password set; "
+                  "operator must update batch_sap_logon.py default.")
+            time.sleep(1.5)
+    except RuntimeError as _pce:
+        _slog(f"password-change handling FAILED: {_pce}")
+        raise
 
     # 5. Dismiss any licence / disclaimer popup.
     _slog("dismissing any post-login popup (licence / disclaimer / password)…")
