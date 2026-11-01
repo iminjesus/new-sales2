@@ -133,18 +133,34 @@ SAP_PWD = (
 )
 SAP_CONN = os.environ.get("SAP_CONN", "G.ERP")
 # Nov-01 user ask: when SAP's "please change your password" dialog
-# appears at login, propose these candidates IN ORDER as the NEW
-# password.  SAP's password-history policy may reject a candidate
-# that was recently used, so we fall through to the next one.
-# Keep this list SHORT (<=3) because every candidate still submits
-# inside the change-password dialog, not at the login prompt -
-# which is safe because the change dialog does NOT count toward the
-# "3 wrong logins -> account locked" counter.  Even so, the fewer
-# submits the better.
-SAP_NEW_PWD_CANDIDATES = [
-    "Ksmpyj1234!!!",   # +1 trailing '!' past the current active pwd
-    "Ksmpyj1234!",      # wrap back to the single '!' original
+# appears at login, rotate THROUGH a known universe of 3 passwords
+# that only differ in the trailing '!' count.  The currently-active
+# password is excluded from the proposal (SAP would reject it as
+# "same as current"), and the remaining two are tried in ring order
+# starting from "the next one after current".  Example:
+#   current = "Ksmpyj1234!!"   -> try ["Ksmpyj1234!!!", "Ksmpyj1234!"]
+#   current = "Ksmpyj1234!!!"  -> try ["Ksmpyj1234!",  "Ksmpyj1234!!"]
+#   current = "Ksmpyj1234!"    -> try ["Ksmpyj1234!!", "Ksmpyj1234!!!"]
+# Submitting a candidate inside the already-open change dialog does
+# NOT count against SAP's "3 wrong logins -> account locked"
+# counter, so cycling through 2 candidates is safe.  LOGIN itself is
+# still a one-shot (no retry) elsewhere in this module.
+SAP_PWD_UNIVERSE = [
+    "Ksmpyj1234!",
+    "Ksmpyj1234!!",
+    "Ksmpyj1234!!!",
 ]
+def _sap_pwd_candidates(current):
+    """Return the UNIVERSE minus the currently-active password, in
+    ring order starting from (current index + 1).  If `current` is
+    not in the universe (e.g. a surprise manual rotation), return the
+    whole universe untouched so every known variant still gets tried."""
+    try:
+        i = SAP_PWD_UNIVERSE.index(current)
+    except ValueError:
+        return list(SAP_PWD_UNIVERSE)
+    n = len(SAP_PWD_UNIVERSE)
+    return [SAP_PWD_UNIVERSE[(i + k) % n] for k in range(1, n)]
 SAP_CLIENT = os.environ.get("SAP_CLIENT", "100")
 SAP_LANG   = os.environ.get("SAP_LANG",   "EN")
 SAP_LOGON_PATH = os.environ.get(
@@ -789,14 +805,28 @@ def _handle_password_change(session):
         except Exception:
             pass
         _tl = txt.lower()
-        # Keyword set covers English + a couple of German fallbacks.
-        # "neues kennwort" = "new password" in German; some SAP installs
-        # of this user's region surface the dialog in English only, but
-        # keeping both is cheap insurance.
-        has_pwd_word    = ("password" in _tl) or ("kennwort" in _tl)
-        has_change_word = ("change" in _tl) or ("new" in _tl)  \
-                       or ("expired" in _tl) or ("aendern" in _tl) \
-                       or ("neues" in _tl)
+        # Keyword set covers English + German + Korean fallbacks.
+        # "neues kennwort" = German "new password"; the Korean set
+        # covers both the SAP-translated "비밀번호" and the loanword
+        # "패스워드" plus the native "암호", with change / expired /
+        # new / reset verbs ("변경"/"만료"/"신규"/"새"/"재설정").
+        # The user's SAP is normally English (SAP_LANG=EN) but the
+        # change dialog sometimes falls back to the user profile's
+        # language setting, so keeping all three is cheap insurance.
+        has_pwd_word    = (
+            ("password" in _tl)
+            or ("kennwort" in _tl)
+            or ("비밀번호" in txt)
+            or ("패스워드" in txt)
+            or ("암호" in txt)
+        )
+        has_change_word = (
+            ("change" in _tl) or ("new" in _tl)
+            or ("expired" in _tl) or ("aendern" in _tl)
+            or ("neues" in _tl)
+            or ("변경" in txt) or ("만료" in txt) or ("신규" in txt)
+            or ("새" in txt)   or ("재설정" in txt) or ("지난" in txt)
+        )
         if has_pwd_word and has_change_word:
             target_wi = wi
             break
@@ -851,8 +881,15 @@ def _handle_password_change(session):
             return (found[0], found[1])
         return (None, None)
 
-    for cand_i, cand in enumerate(SAP_NEW_PWD_CANDIDATES, 1):
-        _slog(f"[pwd_change] trying candidate {cand_i}/{len(SAP_NEW_PWD_CANDIDATES)} "
+    # Nov-01: dynamic ring rotation — compute candidates from the
+    # currently-active SAP_PWD so we never propose the one SAP would
+    # reject as "same as current".  See _sap_pwd_candidates docstring.
+    _candidates = _sap_pwd_candidates(SAP_PWD)
+    _slog(f"[pwd_change] ring rotation candidates "
+          f"(current pwd len={len(SAP_PWD)}): "
+          f"{len(_candidates)} to try")
+    for cand_i, cand in enumerate(_candidates, 1):
+        _slog(f"[pwd_change] trying candidate {cand_i}/{len(_candidates)} "
               f"(len={len(cand)})")
         new_f  = _find_field(STD_NEW_IDS)
         conf_f = _find_field(STD_CONF_IDS)
@@ -938,9 +975,11 @@ def _handle_password_change(session):
     _slog("[pwd_change] all candidates rejected; stopping")
     raise RuntimeError(
         f"SAP demanded a password change but every candidate in "
-        f"SAP_NEW_PWD_CANDIDATES ({len(SAP_NEW_PWD_CANDIDATES)} tried) "
-        f"was rejected.  Rotate the password manually and update "
-        f"batch_sap_logon.py."
+        f"SAP_PWD_UNIVERSE ({len(_candidates)} tried) was rejected.  "
+        f"The ring may have cycled past SAP's password-history window — "
+        f"rotate the password manually in SAP GUI, then update "
+        f"_SAP_PWD_DEFAULT in batch_sap_logon.py (and SAP_PWD_UNIVERSE "
+        f"if the rotation scheme itself changed)."
     )
 
 
@@ -1164,6 +1203,112 @@ def _is_session_alive(sess) -> bool:
         return True
     except Exception:
         return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Nov-01 user ask: SAP session keep-alive.
+#
+# SAP's server-side idle timeout drops a session when no activity is
+# seen for N minutes (typically 10-30).  During off-hours (nights,
+# weekends, AU holidays) the orchestrator's pipeline is dormant, so a
+# session the operator left logged in in the morning will quietly die
+# by midnight and the first scheduled run next morning fails.
+#
+# The keep-alive thread, started by batch_orchestrator.py, pings the
+# SAP session every KEEPALIVE_INTERVAL_SEC seconds (default 10 min,
+# override via env SAP_KEEPALIVE_SEC).  Each tick:
+#   1. try-acquires sap_lock non-blocking  (if a pipeline step holds
+#      the lock, skip this tick — the step's own SAP activity resets
+#      the idle timer anyway).
+#   2. attach to a live session; if attach fails, call
+#      ensure_sap_session() which handles launch + auto-login +
+#      auto-rotate-on-password-change — so Windows updates / reboots
+#      / SAP server restarts recover without operator intervention.
+#   3. send a benign "/N" command (reset to home transaction) which
+#      SAP's idle timer counts as activity.
+#
+# sap_lock is an RLock so a single thread can re-enter it (ensure_sap
+# -> _enter_credentials -> …) safely.  Pipeline code acquires the
+# lock in batch_orchestrator.run_pipeline (and release on exit) so a
+# keep-alive tick that lands mid-pipeline is skipped cleanly rather
+# than racing on the SAP COM object.
+# ──────────────────────────────────────────────────────────────────────
+sap_lock = threading.RLock()
+
+KEEPALIVE_INTERVAL_SEC = int(os.environ.get("SAP_KEEPALIVE_SEC", "600"))
+_keepalive_stop   = threading.Event()
+_keepalive_thread = None
+
+
+def _keepalive_tick():
+    """One keep-alive tick.  Non-blocking on sap_lock; silent no-op
+    when a pipeline step is active."""
+    if not sap_lock.acquire(blocking=False):
+        _slog("[keepalive] skip tick — pipeline in use")
+        return
+    try:
+        session = _try_attach()
+        if session is not None:
+            try:
+                # /N is the softest SAP no-op: resets the current
+                # window to the SESSION_MANAGER easy-access screen
+                # from any transaction (and does nothing when
+                # already there).  Counts as activity server-side
+                # and so resets the idle timer.
+                session.sendCommand("/N")
+                _slog("[keepalive] /N sent — session kept alive")
+                return
+            except Exception as e:
+                _slog(f"[keepalive] ping failed: {e} — session likely dead; "
+                      f"will try to re-login")
+                session = None
+        # No live session.  Try a full attach-or-login dance.  This
+        # also handles the Windows-reboot / SAP-server-restart case:
+        # ensure_sap_session() launches saplogon.exe if needed,
+        # OpenConnection on G.ERP, enters credentials, and runs
+        # _handle_password_change if SAP demands a rotation.
+        _slog("[keepalive] no live session — calling ensure_sap_session()")
+        try:
+            ensure_sap_session()
+            _slog("[keepalive] session restored")
+        except Exception as e:
+            _slog(f"[keepalive] restore failed: {e} — will retry next tick")
+    finally:
+        sap_lock.release()
+
+
+def _keepalive_loop():
+    _slog(f"[keepalive] thread started "
+          f"(interval={KEEPALIVE_INTERVAL_SEC}s)")
+    while not _keepalive_stop.wait(KEEPALIVE_INTERVAL_SEC):
+        try:
+            _keepalive_tick()
+        except Exception as e:
+            # NEVER let the loop die — swallow and log every error so
+            # a transient COM glitch at 3am doesn't leave the session
+            # unmaintained until morning.
+            _slog(f"[keepalive] tick raised {e!r} — continuing")
+    _slog("[keepalive] thread exiting")
+
+
+def start_keepalive_thread():
+    """Idempotent: safe to call multiple times from the orchestrator
+    (e.g. if the orchestrator re-initialises after an error)."""
+    global _keepalive_thread
+    if _keepalive_thread is not None and _keepalive_thread.is_alive():
+        return
+    _keepalive_stop.clear()
+    _keepalive_thread = threading.Thread(
+        target=_keepalive_loop,
+        daemon=True,
+        name="sap_keepalive",
+    )
+    _keepalive_thread.start()
+
+
+def stop_keepalive_thread():
+    """Signal the keep-alive thread to exit on its next wake-up."""
+    _keepalive_stop.set()
 
 
 def ensure_sap_session():

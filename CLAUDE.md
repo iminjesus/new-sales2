@@ -48,13 +48,52 @@ Flask + MySQL web app serving an internal sales/ops dashboard.
 
 `batch_sap_logon.py :: _handle_password_change(session)` fires between
 the multi-logon check and the generic post-login popup-dismisser.
-When SAP demands a rotation at login, it tries the entries in
-`SAP_NEW_PWD_CANDIDATES` IN ORDER as the proposed new password,
-submits NEW+CONFIRM, waits for SAP to accept or redraw with an error,
-and persists the accepted value to the sidecar.  **Login itself is
-never retried from here** — three wrong LOGIN attempts lock the SAP
-account; the candidate chain only drives the already-open change
-dialog, which does not consume the lockout counter.
+The handler detects the SAP change-password dialog by title/body
+keyword match in English (`password`+`change/new/expired`), German
+(`kennwort`/`aendern`/`neues`) **and Korean** (`비밀번호`/`패스워드`/
+`암호` combined with `변경`/`만료`/`신규`/`재설정`).
+
+When the dialog appears, the handler computes candidates dynamically
+from `SAP_PWD_UNIVERSE` (3 known passwords differing only in trailing
+`!` count: `Ksmpyj1234!`, `Ksmpyj1234!!`, `Ksmpyj1234!!!`) in ring
+order starting from (current+1), excluding the currently-active
+password.  Example: `current="Ksmpyj1234!!"` →
+`candidates=["Ksmpyj1234!!!", "Ksmpyj1234!"]`.  The accepted
+candidate is written to the sidecar + the module global for
+immediate re-use.
+
+**Login itself is never retried from here** — three wrong LOGIN
+attempts lock the SAP account; the candidate chain only drives the
+already-open change dialog, which does not consume the lockout
+counter.
+
+### SAP session keep-alive
+
+`batch_sap_logon.py :: start_keepalive_thread()` is started by the
+orchestrator's `main()` right after the heartbeat thread.  The
+thread wakes every `KEEPALIVE_INTERVAL_SEC` (default 600 = 10 min,
+override via env `SAP_KEEPALIVE_SEC`) and:
+
+- try-acquires `sap_lock` non-blocking (if a pipeline step holds
+  the lock the tick is skipped — the step's own SAP activity resets
+  the idle timer anyway)
+- attaches to the current SAP session via `_try_attach()`
+- sends `/N` (reset to home transaction, SAP's softest no-op) which
+  SAP counts as activity server-side
+- if attach fails or ping fails, calls `ensure_sap_session()` to
+  re-launch SAP Logon and re-login — this is the recovery path for
+  Windows updates, PC reboots, SAP server restarts, and any other
+  event that killed the session during off-hours
+
+`sap_lock` is an `RLock` shared between `run_pipeline` (which wraps
+its entire body in `with sap_lock:`) and the keep-alive thread, so
+a tick that lands mid-pipeline is cleanly skipped instead of racing
+on the SAP COM object.
+
+Windows reboot / update recovery is handled end-to-end by the
+existing `install_batch_scheduler.bat` entries (`SPRF-Batch-Startup`
+at system boot + `SPRF-Batch-Watchdog` every 10 min) combined with
+the keep-alive thread above.  No extra scheduler entry is needed.
 
 ### Sensitive data display rules (SPRF / orders.html)
 

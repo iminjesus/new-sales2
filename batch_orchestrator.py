@@ -432,15 +432,26 @@ def _run_step(label, fn, *, timeout_min=None):
 def run_pipeline():
     """Attach to SAP + run stock crawl + sales crawl + MySQL load.
     Raises batch_sap_logon.MultiLogonError if the user is already on
-    another desktop so the caller can wait + retry."""
-    from batch_sap_logon import ensure_sap_session, MultiLogonError, NoSapError, _reset_to_home
-    try:
-        sess, status = ensure_sap_session()
-    except MultiLogonError:
-        raise
-    except NoSapError as e:
-        raise RuntimeError(f"SAP not reachable: {e}")
-    log(f"SAP session {status}.")
+    another desktop so the caller can wait + retry.
+
+    Nov-01: holds batch_sap_logon.sap_lock for the whole pipeline so
+    a keep-alive tick that lands mid-run skips rather than racing
+    on the SAP COM object.  sap_lock is an RLock, so nested
+    acquisition from within ensure_sap_session (which also wraps
+    SAP work in the lock) is safe."""
+    from batch_sap_logon import ensure_sap_session, MultiLogonError, NoSapError, _reset_to_home, sap_lock
+    with sap_lock:
+        try:
+            sess, status = ensure_sap_session()
+        except MultiLogonError:
+            raise
+        except NoSapError as e:
+            raise RuntimeError(f"SAP not reachable: {e}")
+        log(f"SAP session {status}.")
+        return _run_pipeline_locked(sess, status, _reset_to_home)
+
+
+def _run_pipeline_locked(sess, status, _reset_to_home):
 
     # Stock + DOT: sapcrawling_batch.main writes rawdata/unlock/dot_stock.csv
     # (plus per-plant xlsx) and raises on failure.  We let the first
@@ -600,6 +611,21 @@ def main():
     # dashboard sees the orchestrator alive even if the first kickoff
     # run takes a while to finish.
     _start_heartbeat_thread()
+
+    # Nov-01 user ask: SAP session keep-alive thread.  Pings the SAP
+    # GUI session every ~10 min (env SAP_KEEPALIVE_SEC overrides) to
+    # defeat the server-side idle timeout, so a session the operator
+    # left logged in survives nights / weekends / AU holidays without
+    # the first scheduled run next morning failing on a dead session.
+    # The thread also triggers ensure_sap_session() when the session
+    # is already dead at tick time, which covers the Windows-reboot
+    # / SAP-server-restart recovery path end-to-end.
+    try:
+        from batch_sap_logon import start_keepalive_thread, KEEPALIVE_INTERVAL_SEC
+        start_keepalive_thread()
+        log(f"SAP keep-alive thread started (interval={KEEPALIVE_INTERVAL_SEC}s).")
+    except Exception as _ke:
+        log(f"[warn] SAP keep-alive thread failed to start: {_ke}")
 
     # Oct-16 user ask: run the full pipeline IMMEDIATELY on startup
     # (via start_batch.bat or a manual launch), regardless of hour /
