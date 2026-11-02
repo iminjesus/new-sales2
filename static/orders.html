@@ -8598,15 +8598,47 @@ const _PLANT_STATE_MAP = { "42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA" };
 const _STATE_PLANT_MAP = { "NSW":"42R1","QLD":"42R0","VIC":"42R2","WA":"42R4" };
 const _INTERSTATE_REMARK_TAG = "Interstate delivery Requested";
 
+// Nov-02 user ask: ACT is a federal territory enclosed inside NSW
+// with no border-crossing freight implication, so a NSW plant
+// shipping to an ACT customer is NOT interstate.  Other states that
+// have no Hankook plant (SA / TAS / NT) are still "interstate" when
+// shipped from any plant because the delivery crosses a real state
+// border.  Keep this helper close to _isInterstateLine so the
+// equivalence table is easy to find and extend.
+function _normStateForInterstate(s){
+  const up = String(s || "").toUpperCase();
+  return up === "ACT" ? "NSW" : up;
+}
+
 function _isInterstateLine(tr){
   if (!tr) return false;
   const chosen = (tr.querySelector('[data-col="plant_override"]')?.value || "").trim().toUpperCase();
-  const mapped = String(window._customerPlant || "").toUpperCase();
-  // Can't tell what's interstate until we know the mapped plant.
-  if (!mapped) return false;
   // Empty chosen (shouldn't happen now the select is pre-filled) =
   // not interstate.
   if (!chosen) return false;
+  // Nov-02 user ask (fix): the old implementation compared the
+  // chosen plant to the customer's "mapped" plant.  But SA / TAS /
+  // NT customers have no state-local Hankook plant, so the state→
+  // plant mapper assigns them the CLOSEST plant (SA → VIC, TAS →
+  // VIC, NT → WA) by proximity.  Under the old logic, an SA order
+  // shipping from the VIC plant (chosen 42R2 = mapped 42R2) was
+  // flagged as NOT interstate even though the parcel physically
+  // crosses the VIC → SA border.  Correct logic: compare the
+  // chosen PLANT'S STATE against the customer's ACTUAL ship-to
+  // STATE; any state mismatch is interstate (with ACT treated as
+  // NSW per _normStateForInterstate above).
+  const chosenState = _PLANT_STATE_MAP[chosen];
+  if (!chosenState) return false;   // unknown plant code
+  const custState = _normStateForInterstate(window._customerState || "");
+  if (custState) {
+    return _normStateForInterstate(chosenState) !== custState;
+  }
+  // Fallback (no ship-to state loaded): compare against the mapped
+  // plant like the pre-Nov-02 implementation.  Keeps the legacy
+  // behaviour for any session that hasn't resolved the customer
+  // state yet.
+  const mapped = String(window._customerPlant || "").toUpperCase();
+  if (!mapped) return false;
   return chosen !== mapped;
 }
 
