@@ -404,6 +404,9 @@ def scrape_rows(driver):
             #      first integer-text inside.
             #   3. Any element with a stock-ish class name.
             stock = ""
+            # Step 1 - short badge whose text IS just the number
+            # ("8+", "1", "12").  Local green on-hand pill is the
+            # usual case.
             try:
                 _bs = row.find_elements(
                     By.XPATH,
@@ -425,6 +428,74 @@ def scrape_rows(driver):
                         break
             except Exception:
                 pass
+            # Nov-02 bug fix: stock buttons / badges that bundle the
+            # count with a longer label and so get dropped to stock=0
+            # by step 1's string-length filter + fullmatch regex.
+            # Tempe uses several variants:
+            #   "8+ More Available"       (green, local stock)
+            #   "8+ At Other Locations"   (yellow/amber, sister branch)
+            #   "1 At Other Locations"
+            #   "N+ In Stock" / "N Available" (occasional)
+            # Catch all of them by searching row.text for the leading
+            # count anchored by a stock-ish keyword.  The keyword is
+            # what disambiguates these numbers from load/speed indices
+            # ("104W"), rim sizes ("19"), prices ("$330.00"), SKU
+            # digits ("1032937"), etc.  The "+" suffix is preserved
+            # so downstream sees "8+" exactly as the dealer does.
+            if not stock:
+                try:
+                    _full = clean(row.text or "")
+                    _m = re.search(
+                        r"(\d{1,5}\+?)\s+(?:"
+                        r"more\s+avail(?:able)?"
+                        r"|at\s+(?:other\s+)?location"
+                        r"|other\s+location"
+                        r"|in\s+stock"
+                        r"|available"
+                        r"|on\s+hand"
+                        r"|locations?"
+                        r")",
+                        _full, re.IGNORECASE,
+                    )
+                    if _m:
+                        stock = _m.group(1)
+                except Exception:
+                    pass
+            # Step 1c - longer badge whose text STARTS with a number
+            # ("8+ At Other Locations" rendered as a single span, or
+            # "12 In Stock").  Loosened filter + re.match left-anchored
+            # pattern.  Also widen the class filter to include common
+            # warning / amber / orange / "other" naming for the away-
+            # stock badge.
+            if not stock:
+                try:
+                    _bs2 = row.find_elements(
+                        By.XPATH,
+                        ".//*[self::span or self::div][normalize-space()!='']"
+                        "[string-length(normalize-space()) <= 50]"
+                        "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'warning')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'amber')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'yellow')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'orange')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'other')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'success')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'info')"
+                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'available')"
+                        "]"
+                    )
+                    for _b in _bs2:
+                        _t = clean(_b.text or "")
+                        _m = re.match(r"\s*(\d{1,5}\+?)\b", _t)
+                        if _m:
+                            stock = _m.group(1)
+                            break
+                except Exception:
+                    pass
             if not stock:
                 try:
                     _nx = row.find_element(
