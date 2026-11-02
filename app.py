@@ -7488,6 +7488,15 @@ def api_orders_list():
         # Approver column.  Mapped plant = header.delivery_plant, or
         # the state→plant map for older rows that pre-date it.
         interstate_by_id  = {i: False for i in ids}
+        # Nov-03 user ask: per-order stock-out flag + counts.  "Stock-
+        # out" = any line whose requested qty exceeds the ATP of the
+        # order's mapped plant (header.delivery_plant, with state->
+        # plant fallback for old rows).  Shown on the list Approver
+        # column as a "stock-out (N/M materials)" tag and forces
+        # needs_mgmt_approval on even Standard-priced orders.
+        stockout_by_id    = {i: False for i in ids}
+        stockout_n_by_id  = {i: 0     for i in ids}
+        stockout_m_by_id  = {i: 0     for i in ids}
         # Per-order Requester + mod_log surfaced from payload_json so
         # the list page shows the Requester column and the Remark
         # column (edit history) without a separate fetch.
@@ -7576,6 +7585,39 @@ def api_orders_list():
                         _rem = str(ln.get("remark") or "")
                         if "interstate delivery" in _rem.lower():
                             interstate_by_id[pr["id"]] = True
+                        # Nov-03: stock-out flag.  "Stock-out at mapped
+                        # plant" fires when the line has material + qty
+                        # > 0 AND the mapped plant's ATP < requested
+                        # qty.  Stock cells are serialised as
+                        # "ATP/Unrestricted" (or just "0" when both
+                        # branches zero), so the first slash segment is
+                        # the ATP.  Fallback to the Remark text scan
+                        # (same pattern as inter-state) for orders
+                        # saved before the counter was wired up.
+                        _mcode = str(ln.get("m_code") or "").strip()
+                        if _mcode and qty > 0:
+                            stockout_m_by_id[pr["id"]] = stockout_m_by_id.get(pr["id"], 0) + 1
+                            _state_for_mapped = {
+                                "42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA",
+                            }.get(_mapped_plant, "")
+                            _stock_col = {
+                                "NSW":"stock_nsw","QLD":"stock_qld",
+                                "VIC":"stock_vic","WA":"stock_wa",
+                            }.get(_state_for_mapped, "")
+                            _atp = float("nan")
+                            if _stock_col:
+                                _sraw = str(ln.get(_stock_col) or "").strip()
+                                # Parse first slash-segment: "223/228" -> 223.
+                                _head = _sraw.split("/")[0].replace(",", "").strip()
+                                try:
+                                    _atp = float(_head) if _head else float("nan")
+                                except Exception:
+                                    _atp = float("nan")
+                            if _atp == _atp and qty > _atp:   # not NaN AND over ATP
+                                stockout_by_id[pr["id"]] = True
+                                stockout_n_by_id[pr["id"]] = stockout_n_by_id.get(pr["id"], 0) + 1
+                        if "stock-out" in _rem.lower() or "stock out" in _rem.lower():
+                            stockout_by_id[pr["id"]] = True
             except Exception:
                 pass
         for r in rows:
@@ -7609,6 +7651,11 @@ def api_orders_list():
             # Oct-28: inter-state flag for the list page's Approver
             # column (adds an "Inter-state" tag on a second line).
             r["has_interstate"] = bool(interstate_by_id.get(r["id"], False))
+            # Nov-03 user ask: stock-out flag + line counts for the
+            # list Approver column's "stock-out (N/M materials)" tag.
+            r["has_stockout"]       = bool(stockout_by_id.get(r["id"], False))
+            r["stockout_count"]     = int(stockout_n_by_id.get(r["id"], 0))
+            r["stockout_total"]     = int(stockout_m_by_id.get(r["id"], 0))
             # Surface the last price-editor's name (kept for
             # backwards-compat with any client that still reads it;
             # the list page moved edit history to the Remark col).
@@ -8822,10 +8869,56 @@ def api_orders_approve(oid):
                     break
         except Exception:
             _has_interstate_now = False
+        # Nov-03 user ask: stock-out side (same approval-gate rescue).
+        # Scan every line for qty > mapped-plant ATP; if so, the order
+        # needs approval even though its needs_mgmt_approval might be
+        # saved as 'N'.
+        _has_stockout_now = False
+        try:
+            _hdr = (pj or {}).get("header") or {}
+            _mapped_plant = str(_hdr.get("delivery_plant") or "").strip().upper()
+            if not _mapped_plant:
+                _state = str(_hdr.get("ship_to_state") or _hdr.get("state") or "").strip().upper()
+                _mapped_plant = {"NSW":"42R1","QLD":"42R0","VIC":"42R2",
+                                 "WA":"42R4","SA":"42R2","TAS":"42R2",
+                                 "NT":"42R4","ACT":"42R1"}.get(_state, "")
+            _state_for_mapped = {
+                "42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA",
+            }.get(_mapped_plant, "")
+            _stock_col = {
+                "NSW":"stock_nsw","QLD":"stock_qld",
+                "VIC":"stock_vic","WA":"stock_wa",
+            }.get(_state_for_mapped, "")
+            for ln in ((pj or {}).get("lines") or []):
+                if not str(ln.get("m_code") or "").strip():
+                    continue
+                try:
+                    _qty = float(str(ln.get("qty") or "0").replace(",", ""))
+                except Exception:
+                    _qty = 0.0
+                if _qty <= 0:
+                    continue
+                if not _stock_col:
+                    continue
+                _sraw = str(ln.get(_stock_col) or "").strip()
+                _head = _sraw.split("/")[0].replace(",", "").strip()
+                try:
+                    _atp = float(_head) if _head else float("nan")
+                except Exception:
+                    _atp = float("nan")
+                if _atp == _atp and _qty > _atp:
+                    _has_stockout_now = True
+                    break
+                if "stock-out" in str(ln.get("remark") or "").lower():
+                    _has_stockout_now = True
+                    break
+        except Exception:
+            _has_stockout_now = False
         # Also flip the stored needs_mgmt_approval to 'Y' in the same
-        # UPDATE for inter-state saved-N rows so follow-up reads see
-        # a consistent state.
-        _nma_set = ", needs_mgmt_approval = 'Y'" if _has_interstate_now else ""
+        # UPDATE for inter-state / stock-out saved-N rows so follow-up
+        # reads see a consistent state.
+        _needs_now = _has_interstate_now or _has_stockout_now
+        _nma_set = ", needs_mgmt_approval = 'Y'" if _needs_now else ""
         # Set the named slot AND, if no earlier approver has locked
         # the order yet, record this caller as the official
         # approved_by.  A COALESCE-guarded UPDATE means the SECOND
@@ -8840,7 +8933,7 @@ def api_orders_approve(oid):
             f"  {_nma_set} "
             f"WHERE id = %s "
             f"  AND (needs_mgmt_approval = 'Y' OR %s = 1)",
-            (who, approver_name, approval_note, oid, 1 if _has_interstate_now else 0),
+            (who, approver_name, approval_note, oid, 1 if _needs_now else 0),
         )
         if cur.rowcount == 0:
             return jsonify({"error": "not found or doesn't need approval"}), 404

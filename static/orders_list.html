@@ -435,12 +435,15 @@ function renderRows(){
     if (fApp === "rejected") return !r.deleted_at && (!!r.rejected_by_name || nma === "r");
     if (fApp === "approved") return !r.deleted_at && !!r.approved_by_name;
     if (fApp === "pending")  return !r.deleted_at
-                                     && (nma === "y" || r.has_interstate)
+                                     && (nma === "y" || r.has_interstate || r.has_stockout)
                                      && !r.approved_by_name && !r.rejected_by_name;
     // Oct-28: Standard filter excludes inter-state orders — those
     // need approval, so they belong in Pending, not Standard.
+    // Nov-03: same policy for stock-out — Standard-priced orders
+    // with any stock-out line move to Pending.
     if (fApp === "standard") return !r.deleted_at && !r.has_additional_dc
-                                     && !r.has_interstate && nma !== "temp"
+                                     && !r.has_interstate && !r.has_stockout
+                                     && nma !== "temp"
                                      && !r.approved_by_name && !r.rejected_by_name;
     return true;
   };
@@ -499,7 +502,7 @@ function renderRows(){
         apprCell = `<span style="background:#e5e7eb;color:#334155;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">🗑 Deleted</span>`
                  + (r.deleted_by_name ? `<br><b style="color:#475569">${escapeHtml(r.deleted_by_name)}</b>` : "")
                  + (at ? `<br><small style="color:#64748b">${escapeHtml(at)}</small>` : "");
-      } else if (!r.has_additional_dc && !r.has_interstate){
+      } else if (!r.has_additional_dc && !r.has_interstate && !r.has_stockout){
         apprCell = `<span style="background:#dbeafe;color:#1e40af;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">Standard</span>`;
       } else if (r.rejected_by_name){
         /* Rejection trumps approved_by_name (approve is cleared on
@@ -521,7 +524,7 @@ function renderRows(){
            backend scopes it), open it back up by clicking the row
            and the form re-hydrates in edit mode. */
         apprCell = `<span style="background:#e0f2fe;color:#075985;padding:2px 6px;border-radius:3px;font-size:11px;font-weight:700">📝 Draft</span>`;
-      } else if (r.needs_mgmt_approval === "Y" || r.has_interstate){
+      } else if (r.needs_mgmt_approval === "Y" || r.has_interstate || r.has_stockout){
         /* MD-only pill only flips on when the backend counted at least
            one MD-qualifying line (non-aged, non-Standard-on-line,
            Proposed DC ≥ 64 %).  An order whose ≥ 64 % avg comes
@@ -556,6 +559,23 @@ function renderRows(){
           apprCell += `<br><span style="background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em;display:inline-block;text-align:center;line-height:1.15">STANDARD<br>(inter-state)</span>`;
         } else {
           apprCell += `<br><span style="background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em;display:inline-block">⚑ Inter-state</span>`;
+        }
+      }
+      // Nov-03 user ask: stock-out tag — any order with a line whose
+      // requested qty exceeds the mapped plant's ATP gets a
+      // "stock-out (N/M materials)" badge.  Standard-priced + stock-
+      // out (no inter-state, no additional DC) earns the full two-
+      // line amber badge mirroring the SPRF banner; every other
+      // tier gets a compact "⚑ Stock-out N/M" tag so the primary
+      // pill keeps its prominence.
+      if (r.has_stockout && !r.deleted_at){
+        const sN = +r.stockout_count || 0;
+        const sM = +r.stockout_total || 0;
+        const _standardStockout = !r.has_additional_dc && !r.has_interstate;
+        if (_standardStockout){
+          apprCell += `<br><span style="background:#d97706;color:#fff;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em;display:inline-block;text-align:center;line-height:1.15">STANDARD<br>(stock-out ${sN}/${sM})</span>`;
+        } else {
+          apprCell += `<br><span style="background:#d97706;color:#fff;padding:1px 6px;border-radius:3px;font-size:10.5px;font-weight:800;letter-spacing:.02em;display:inline-block">⚑ Stock-out ${sN}/${sM}</span>`;
         }
       }
       const rebPill = r.rebateable === "Y"
@@ -691,7 +711,8 @@ function renderRows(){
       // Oct-28: interstate-only orders (Standard-priced but with any
       // inter-state line) also awaiting approval, so highlight them
       // in the pending-queue tint along with has_additional_dc rows.
-      const _isAwaitingApproval = (r.has_additional_dc || r.has_interstate)
+      // Nov-03: stock-out orders follow the same rule.
+      const _isAwaitingApproval = (r.has_additional_dc || r.has_interstate || r.has_stockout)
                                   && !r.approved_by_name
                                   && !r.rejected_by_name
                                   && _nmaRow !== "temp"

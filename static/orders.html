@@ -761,6 +761,25 @@
     background: transparent !important;
     color:#b91c1c !important;
   }
+  /* Nov-03 user ask: when a line's requested qty exceeds the mapped
+     plant's ATP, tint that plant's stock cell in amber/orange and
+     draw a 2 px orange border.  Distinct from the red interstate
+     highlight so the two conditions can coexist visually on the same
+     row (e.g. a line that is both stock-out at the mapped plant AND
+     routed to a different plant). */
+  table.lines tbody td.stock-cell.stockout-pick{
+    background:#fef3c7 !important;
+    box-shadow: inset 0 0 0 2px #d97706 !important;
+  }
+  table.lines tbody td.stock-cell.stockout-pick input{
+    background: transparent !important;
+    color:#92400e !important;
+    font-weight:800;
+  }
+  table.lines tbody td.stock-cell.stockout-pick span.unr{
+    background: transparent !important;
+    color:#b45309 !important;
+  }
   /* Oct-28: Plant override cell — compact select. */
   table.lines tbody td.plant-override-cell{
     padding:0 !important;
@@ -3099,10 +3118,14 @@ function applyCustomer(row, kind){
       }
       _applyInterstateHighlightToRow(tr);
       _syncInterstateRemarkOnRow(tr);
+      // Nov-03: mapped plant just shifted, so the ATP column that
+      // stock-out compares against is different now — refresh.
+      _refreshStockOutForRow(tr);
       const td = tr.querySelector('td[data-cell-col="plant_override"]');
       if (td) td.classList.toggle("changed", _isInterstateLine(tr));
     });
     _recomputeInterstateOrderFlag();
+    _recomputeStockOutOrderFlag();
   } catch (_e) {}
   // Programmatic .value assignments above don't fire `input`, so
   // refresh the ✕ clear buttons on the four customer inputs.
@@ -3772,6 +3795,9 @@ function _buildColoredRemarkHTML(text){
     // so a reviewer sees it immediately.  Precedes the brand chips
     // in the chain so an interstate line's own tag paints red.
     if (/^Interstate delivery/i.test(line))                  return "#B91C1C"; // strong red
+    // Nov-03: stock-out tag renders in strong amber/orange — same
+    // highlight family as the mapped-plant stock cell when qty > ATP.
+    if (/^Stock-out\b/i.test(line))                          return "#B45309"; // amber-700
     if (/^\(Vehicles\b/i.test(line))                         return "#5B21B6"; // deep purple (vehicles)
     if (/^\(Tempe/i.test(line))                              return "#C62828"; // red
     if (/^\(NewB(?:Dealer)?\b/i.test(line))                  return "#1D4ED8"; // bright blue (NewB dealer)
@@ -3779,7 +3805,7 @@ function _buildColoredRemarkHTML(text){
     if (/^\(Bob\s*Jane\b|^\(BobJane\b/i.test(line))          return "#5D4037"; // brown (고동색)
     return "#1565C0"; // dark blue (promo / pricing / status default)
   };
-  const isInterstate = l => /^Interstate delivery/i.test(l);
+  const isInterstate = l => /^Interstate delivery/i.test(l) || /^Stock-out\b/i.test(l);
   // Oct-29 user ask: WhatVehicles chip is encoded on one line of
   // dataset.remarkFull as "(Vehicles (N models): V1 | V2 | ... |
   // <<MORE:k>>)" so the chip-filter / line-based logic keeps working;
@@ -4895,6 +4921,13 @@ async function fillStockForRow(rowEl, mcode){
     // that the ::after pseudo-element reads for the second line.
     _setStockCell(el, atp, unr);
   }
+  // Nov-03: fresh ATP numbers just landed — re-evaluate stock-out
+  // for this row + the whole order.  Guards against "…" placeholders
+  // being treated as 0 and tripping stock-out early.
+  try {
+    _refreshStockOutForRow(rowEl);
+    _recomputeStockOutOrderFlag();
+  } catch (_e) {}
 }
 
 /* ────────────────────────── Qty auto-default ──────────────────────
@@ -5492,6 +5525,15 @@ function updateTotals(){
     // lines and require approval from any approver (Hayden / Kenny
     // / JJ).  needs_mgmt_approval auto-flips below in serializeOrder.
     const anyInterstate = !!window._orderHasInterstate;
+    // Nov-03 user ask: a Standard-priced order with ANY stock-out
+    // line (requested qty > mapped plant ATP) ALSO needs approval
+    // and gets its own amber "stock-out (N/M materials)" badge.
+    // Can coexist with inter-state (both tags show), can show on
+    // any tier (Standard / MD / Kenny-or-Hayden).
+    const anyStockOut   = !!window._orderHasStockOut;
+    const stockOutN     = +window._orderStockOutCount || 0;
+    const stockOutM     = +window._orderStockOutTotal || 0;
+    const _stockOutText = `stock-out (${stockOutN}/${stockOutM} materials)`;
     // Shared tag appended after the primary approval banner on ANY
     // route (MD-only, Hayden/Kenny, Standard) when an inter-state
     // line is present.  Standard already gets the full red
@@ -5502,12 +5544,28 @@ function updateTotals(){
       ` <span style="background:#b91c1c;color:#fff;padding:1px 6px;border-radius:3px;`
       + `font-weight:800;font-size:11px;margin-left:6px;letter-spacing:.02em">`
       + `⚑ INTER-STATE</span>`;
+    const _stockOutTag =
+      ` <span style="background:#d97706;color:#fff;padding:1px 6px;border-radius:3px;`
+      + `font-weight:800;font-size:11px;margin-left:6px;letter-spacing:.02em">`
+      + `⚑ STOCK-OUT ${stockOutN}/${stockOutM}</span>`;
+    // Standard-priced + stock-out (no interstate): dedicated amber
+    // "STANDARD (stock-out N/M)" badge mirroring the interstate
+    // treatment, so the reviewer sees why approval is needed on
+    // what would otherwise be a Standard pass-through.
     if (!hasAdditional && anyInterstate){
       el.innerHTML =
         `<span style="color:#fff;background:#b91c1c;padding:1px 6px;border-radius:3px;font-weight:800">`
         + `STANDARD<br>(inter-state)</span>`
+        + ` — <b>Hayden / Kenny / JJ</b> can approve (any one).`
+        + (anyStockOut ? _stockOutTag : "");
+      fullText = `STANDARD (inter-state) — any approver can sign off.`
+        + (anyStockOut ? `  (⚑ ${_stockOutText})` : "");
+    } else if (!hasAdditional && anyStockOut){
+      el.innerHTML =
+        `<span style="color:#fff;background:#d97706;padding:1px 6px;border-radius:3px;font-weight:800">`
+        + `STANDARD<br>(${_stockOutText})</span>`
         + ` — <b>Hayden / Kenny / JJ</b> can approve (any one).`;
-      fullText = `STANDARD (inter-state) — any approver can sign off.`;
+      fullText = `STANDARD (${_stockOutText}) — any approver can sign off.`;
     } else if (!hasAdditional){
       el.innerHTML =
         `<span style="color:#065f46;font-weight:800">STANDARD PRICING</span> — no approval required.`;
@@ -5518,16 +5576,20 @@ function updateTotals(){
         `<span style="color:#fff;background:#7f1d1d;padding:1px 6px;border-radius:3px;font-weight:800">⚑ MANAGING DIRECTOR APPROVAL REQUIRED</span> `
         + `— <b>${mdDeepLineCount}</b> non-aged, non-Standard line${s} with Proposed DC ≥ 64 %. `
         + `Only <b>JJ (MD)</b> can approve.`
-        + (anyInterstate ? _interstateTag : "");
+        + (anyInterstate ? _interstateTag : "")
+        + (anyStockOut   ? _stockOutTag   : "");
       fullText =
         `MANAGING DIRECTOR APPROVAL REQUIRED — ${mdDeepLineCount} non-aged, `
         + `non-Standard line${s} with Proposed DC ≥ 64 %. Only JJ (MD) can approve.`
-        + (anyInterstate ? "  (⚑ Inter-state)" : "");
+        + (anyInterstate ? "  (⚑ Inter-state)" : "")
+        + (anyStockOut   ? `  (⚑ ${_stockOutText})` : "");
     } else {
       el.innerHTML = `<b>Kenny or Hayden</b> can approve.`
-        + (anyInterstate ? _interstateTag : "");
+        + (anyInterstate ? _interstateTag : "")
+        + (anyStockOut   ? _stockOutTag   : "");
       fullText = `Kenny or Hayden can approve.`
-        + (anyInterstate ? "  (⚑ Inter-state)" : "");
+        + (anyInterstate ? "  (⚑ Inter-state)" : "")
+        + (anyStockOut   ? `  (⚑ ${_stockOutText})` : "");
     }
     const badgesEl = document.getElementById("approvalPathBadges");
     if (badgesEl) badgesEl.innerHTML = dcBadge;
@@ -6914,6 +6976,12 @@ function newRow(){
     };
     if (_p && typeof _p.finally === "function") _p.finally(_runRef);
     else _runRef();
+    // Nov-03: qty just changed, so the stock-out verdict for this
+    // row (qty > mapped ATP) might have flipped — refresh.
+    try {
+      _refreshStockOutForRow(tr);
+      _recomputeStockOutOrderFlag();
+    } catch (_e) {}
   });
   /* sp_dc handler pair.
        • input  — track user's typing.  When an auto-fill original is
@@ -8610,6 +8678,149 @@ function _isInterstateLine(tr){
   return chosen !== mapped;
 }
 
+// Nov-03 user ask: when a line's requested qty exceeds the mapped
+// plant's ATP, mark the line (and the order) as "stock-out" so the
+// Standard-priced approval route escalates to an approver instead of
+// going through unapproved.  Order banner reads
+// "stock-out (N/M materials)" with N = stock-out line count and
+// M = total line count with material + qty > 0.
+const _STOCKOUT_REMARK_TAG = "Stock-out at mapped plant";
+const _STOCKCOL_FOR_STATE = {
+  NSW:"stock_nsw", QLD:"stock_qld", VIC:"stock_vic", WA:"stock_wa",
+};
+
+function _mappedPlantStockCol(){
+  const plant = String(window._customerPlant || "").toUpperCase();
+  const state = _PLANT_STATE_MAP[plant];
+  return state ? _STOCKCOL_FOR_STATE[state] : null;
+}
+
+function _parseNumCell(v){
+  // Stock cells render ATP on top with "(Unrestricted)" below; the
+  // input's .value holds the ATP as a plain integer (plus commas on
+  // thousands).  Qty cells hold a plain integer too.  "0" is a valid
+  // zero; empty / whitespace / "—" / "…" (the loading placeholder)
+  // all count as unknown.
+  const s = String(v || "").trim().replace(/,/g, "");
+  if (!s || s === "—" || s === "…" || s === "-") return NaN;
+  const n = parseFloat(s);
+  return isFinite(n) ? n : NaN;
+}
+
+function _mappedPlantAtp(tr){
+  const col = _mappedPlantStockCol();
+  if (!col) return NaN;
+  const el = tr.querySelector(`[data-col="${col}"]`);
+  if (!el) return NaN;
+  return _parseNumCell(el.value);
+}
+
+function _requestedQty(tr){
+  const el = tr.querySelector('[data-col="qty"]');
+  if (!el) return 0;
+  const n = _parseNumCell(el.value);
+  return isFinite(n) ? n : 0;
+}
+
+function _hasMaterialOnRow(tr){
+  const el = tr.querySelector('[data-col="m_code"]');
+  return !!(el && String(el.value || "").trim());
+}
+
+function _isLineStockOut(tr){
+  if (!tr) return false;
+  // Stock-out only meaningful for lines that actually have a material
+  // and a positive requested qty.
+  if (!_hasMaterialOnRow(tr)) return false;
+  const qty = _requestedQty(tr);
+  if (qty <= 0) return false;
+  const atp = _mappedPlantAtp(tr);
+  // ATP cell hasn't resolved yet ("…" placeholder, or stock_rt not
+  // loaded) -> don't flag; a later refresh will revisit.
+  if (!isFinite(atp)) return false;
+  return qty > atp;
+}
+
+function _applyStockOutHighlightToRow(tr){
+  if (!tr) return;
+  // Clear any previous stock-out tint on the four stock cells.
+  ["stock_nsw","stock_qld","stock_vic","stock_wa"].forEach(c => {
+    const td = tr.querySelector(`td[data-cell-col="${c}"]`);
+    if (td) td.classList.remove("stockout-pick");
+  });
+  if (!_isLineStockOut(tr)){
+    tr.dataset.stockout = "";
+    return;
+  }
+  tr.dataset.stockout = "1";
+  const col = _mappedPlantStockCol();
+  if (col){
+    const td = tr.querySelector(`td[data-cell-col="${col}"]`);
+    if (td) td.classList.add("stockout-pick");
+  }
+}
+
+function _syncStockOutRemarkOnRow(tr){
+  if (!tr) return;
+  const remEl = tr.querySelector('[data-col="remark"]');
+  if (!remEl) return;
+  const raw = (tr.dataset && tr.dataset.remarkFull != null)
+                ? tr.dataset.remarkFull
+                : (remEl.value || "");
+  const lines = raw.split("\n").filter(l => l !== _STOCKOUT_REMARK_TAG);
+  if (_isLineStockOut(tr)){
+    // Place the stock-out tag at the TOP of the Remark so a reviewer
+    // sees it immediately.  If interstate also fires, both tags sit
+    // on top (interstate was unshifted earlier so stock-out is above
+    // it on this re-run; the order of the two is cosmetic).
+    lines.unshift(_STOCKOUT_REMARK_TAG);
+  }
+  const next = lines.join("\n");
+  if (typeof setRemark === "function"){
+    setRemark(tr, next);
+  } else {
+    tr.dataset.remarkFull = next;
+    remEl.value = next;
+  }
+}
+
+function _recomputeStockOutOrderFlag(){
+  let stockoutCount = 0;
+  let totalLines   = 0;
+  $$("#linesBody tr").forEach(tr => {
+    if (!_hasMaterialOnRow(tr)) return;
+    const qty = _requestedQty(tr);
+    if (qty <= 0) return;
+    totalLines += 1;
+    if (_isLineStockOut(tr)) stockoutCount += 1;
+  });
+  window._orderHasStockOut   = stockoutCount > 0;
+  window._orderStockOutCount = stockoutCount;
+  window._orderStockOutTotal = totalLines;
+  // Re-render the approval banner so it picks up the new flag.
+  try { if (typeof updateTotals === "function") updateTotals(); } catch (_e) {}
+  // Standard-priced order with stock-out now needs approval; make
+  // sure the panel is visible so an approver can click Approve.
+  try {
+    const panel = document.getElementById("approvalPanel");
+    if (panel && stockoutCount > 0) panel.hidden = false;
+  } catch (_e) {}
+}
+
+// Convenience: refresh all three (highlight + remark + order flag)
+// for a single row.  Call this wherever an existing interstate hook
+// already runs — the two markers stay in sync for row-level AND
+// order-level recomputes.
+function _refreshStockOutForRow(tr){
+  _applyStockOutHighlightToRow(tr);
+  _syncStockOutRemarkOnRow(tr);
+}
+
+function _refreshStockOutForAllRows(){
+  $$("#linesBody tr").forEach(tr => _refreshStockOutForRow(tr));
+  _recomputeStockOutOrderFlag();
+}
+
 function _applyInterstateHighlightToRow(tr){
   if (!tr) return;
   // Clear any previous red tint on the four stock cells.
@@ -8680,8 +8891,17 @@ function serializeOrder(){
   // Oct-28 user ask: a Standard-priced order carrying an inter-state
   // line also needs approval (any approver), so flip the flag when
   // _orderHasInterstate is true.
+  // Nov-03 user ask: same for stock-out — any line whose requested
+  // qty exceeds the mapped plant's ATP flips the flag so a Standard
+  // route is forced through approval.
   header.needs_mgmt_approval =
-    (window._orderHasAdditional || window._orderHasInterstate) ? "Y" : "N";
+    (window._orderHasAdditional
+     || window._orderHasInterstate
+     || window._orderHasStockOut) ? "Y" : "N";
+  // Nov-03: persist the stock-out counts so the list page / replay
+  // can render the badge without re-scanning every row.
+  header.stockout_count = String(+window._orderStockOutCount || 0);
+  header.stockout_total = String(+window._orderStockOutTotal || 0);
   // Alias state / order_date to a friendlier name for the list page.
   header.state      = header.ship_to_state || "";
   header.order_date = header.doc_date      || "";
@@ -9449,6 +9669,8 @@ async function hydrateSubmittedOrder(oid, editMode){
     $$("#linesBody tr").forEach(tr => _applyInterstateHighlightToRow(tr));
     _recomputeInterstateOrderFlag();
   } catch (_e) {}
+  // Nov-03: same drill for stock-out.
+  try { _refreshStockOutForAllRows(); } catch (_e) {}
   updateTotals();
   /* Oct-28 user ask: on hydrating an order whose saved Remark is
      EMPTY of Tempe / JAX / Bob Jane chip info, re-fetch the chip so
