@@ -23,6 +23,14 @@
     --tbl-thead:#3c3c3c;
   }
   *{box-sizing:border-box}
+  /* Nov-02 user ask: staggered-fitment tags (stg-F / stg-R with
+     multiple sizes) were pushing each Vehicles row 4+ visual lines
+     tall.  Move them visually below the main vehicle name/year/
+     primary-tag row via a ::before pseudo-element that renders a
+     line break.  Pseudo-element content is NOT included in copy/
+     paste, so the stag text still lands at the right end of the
+     main line when a user selects+copies the chip. */
+  .veh-stag-break::before{ content:'\A'; white-space:pre; }
   html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#222;background:var(--bg);}
   /* Use the full viewport width — the SPRF's tail columns (per-state
      stock + Remark) don't need a centred narrow container.  A modest
@@ -3886,7 +3894,22 @@ function _buildColoredRemarkHTML(text){
         tagParts.unshift(m[1]);
         withoutStag = withoutStag.slice(0, m.index).trimEnd();
       }
-      const tag = tagParts.join("] [");
+      // Nov-02 user ask: separate stag tags ([stg-F: ...] / [stg-R: ...]
+      // which can carry 2-4 sizes each) from primary tags ([OE] and
+      // friends) so stag tags can be visually dropped to a muted
+      // second line via the .veh-stag-break ::before pseudo-element.
+      // DOM order stays [OE] -> stag tags, so copy/paste keeps the
+      // stag text at the right end of the vehicle line.
+      const _primaryTagParts = [];
+      const _stagTagParts    = [];
+      for (const _t of tagParts) {
+        if (/^stg-/i.test(_t)) _stagTagParts.push(_t);
+        else                   _primaryTagParts.push(_t);
+      }
+      const primaryTag = _primaryTagParts.length
+        ? "[" + _primaryTagParts.join("] [") + "]" : "";
+      const stagTag    = _stagTagParts.length
+        ? "[" + _stagTagParts.join("] [") + "]"    : "";
       // Oct-29: year token can now be either "2025-2026" (full) or
       // "2025-26" (shortened same-century tail) or "2025-present" or
       // a comma list of any of those.
@@ -3904,10 +3927,28 @@ function _buildColoredRemarkHTML(text){
       prevBrand = brand;
       const rowColor = isBrandBoundary ? BRAND_HILITE_COLOR : c;
       const rowWeight = isBrandBoundary ? "800" : "600";
+      // Nov-02: compose the right-column tag cell as
+      //   [primary]{optional-space}<span.veh-stag-break>[stag]</span>
+      // so the stag text visually drops to a muted second line while
+      // staying inline in copy order.
+      let _tagCell = `<span style="color:${rowColor};font-weight:${rowWeight};font-style:italic;opacity:0.9">`;
+      if (primaryTag) _tagCell += esc(primaryTag);
+      if (primaryTag && stagTag) _tagCell += " ";
+      if (stagTag) {
+        // Dark grey + lighter weight so the stag line reads as
+        // secondary info.  Font-size slightly smaller (11px) to pack
+        // the three-size payloads onto one line more often.
+        _tagCell += `<span class="veh-stag-break" style="`
+                 +  `color:#4b5563;font-weight:500;font-style:italic;`
+                 +  `font-size:11px;opacity:0.95">`
+                 +  esc(stagTag)
+                 +  `</span>`;
+      }
+      _tagCell += `</span>`;
       gridRows.push(
         `<span style="color:${rowColor};font-weight:${rowWeight}">${esc(name)}</span>` +
         `<span style="color:${rowColor};font-weight:${rowWeight}">${esc(year)}</span>` +
-        `<span style="color:${rowColor};font-weight:${rowWeight};font-style:italic;opacity:0.9">${tag ? esc("[" + tag + "]") : ""}</span>`
+        _tagCell
       );
     }
     const gridHtml = gridRows.length
