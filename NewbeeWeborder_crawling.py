@@ -8,6 +8,28 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# Nov-02 user ask: per-warehouse (Sydney / Melbourne) stock capture.
+from tempeweborder_shared import extract_warehouse_stock
+
+# Nov-02: picked up from CLI (--no-modal) by main().  When False, the
+# "More Available" rows record the label N on both warehouses instead
+# of clicking the modal — useful for a dry-run that doesn't want to
+# pay the per-click latency.
+_ALLOW_MODAL = True
+
+
+def _combine_stock_counts(a, b):
+    """Return the LARGER of two qty strings as the legacy STOCK
+    column value.  Treats "N+" as N for comparison but preserves the
+    suffix on the winner.  "0" / "" are treated as 0."""
+    def _n(s):
+        s = (s or "").strip()
+        if not s or s == "0":
+            return 0
+        m = re.fullmatch(r"(\d{1,5})\+?", s)
+        return int(m.group(1)) if m else 0
+    return a if _n(a) >= _n(b) else b
+
 #!/usr/bin/env python3
 # NewbeeWeborder_crawling.py - Newbee Tyre wholesale crawler (clone of
 # tempeweborder_crawling.py).  Same Angular layout as Tempe, so the
@@ -365,113 +387,27 @@ def scrape_rows(driver):
             #   3. Positional fallback — walk every col-xs in DOM
             #      order, find the one holding the price, grab the
             #      first integer-text that comes AFTER it.
-            stock = ""
+            # Nov-02 user ask: per-warehouse stock capture.  Newbee
+            # uses the same Angular layout as Tempe but its two
+            # branches are Sydney (local) + Melbourne (sister).  The
+            # extract_warehouse_stock helper does variant detection
+            # ("More Available" / "At Other Locations" / plain number /
+            # "Call for Availability") + modal-click interaction and
+            # returns the two per-branch counts verbatim ("8+", "1",
+            # "0").  _ALLOW_MODAL (module global, set by main from
+            # --no-modal) controls whether the modal click fires.
             try:
-                _bs = row.find_elements(
-                    By.XPATH,
-                    ".//*[self::span or self::div][normalize-space()!='']"
-                    "[string-length(normalize-space()) <= 4]"
-                    "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'green')"
-                    "]"
+                stock_syd, stock_mel = extract_warehouse_stock(
+                    driver, row, "Sydney", "Melbourne",
+                    allow_modal=_ALLOW_MODAL,
                 )
-                for _b in _bs:
-                    _t = clean(_b.text or "")
-                    _m = re.fullmatch(r"(\d{1,5})\+?", _t)
-                    if _m:
-                        stock = _t
-                        break
-            except Exception:
-                pass
-            # Nov-02 bug fix: stock buttons that bundle the count with
-            # a longer label and so get dropped by step 1's
-            # string-length filter + fullmatch regex.  Site uses the
-            # same Angular layout as Tempe so the same variants show
-            # up here: "N+ More Available" (green), "N+ At Other
-            # Locations" (yellow), "N In Stock" / "N Available".
-            if not stock:
-                try:
-                    _full = clean(row.text or "")
-                    _m = re.search(
-                        r"(\d{1,5}\+?)\s+(?:"
-                        r"more\s+avail(?:able)?"
-                        r"|at\s+(?:other\s+)?location"
-                        r"|other\s+location"
-                        r"|in\s+stock"
-                        r"|available"
-                        r"|on\s+hand"
-                        r"|locations?"
-                        r")",
-                        _full, re.IGNORECASE,
-                    )
-                    if _m:
-                        stock = _m.group(1)
-                except Exception:
-                    pass
-            # Step 1c - longer badge whose text STARTS with a number;
-            # loosened filter + left-anchored re.match.  Widen class
-            # filter to cover warning / amber / yellow / orange /
-            # other / success / info / available button variants.
-            if not stock:
-                try:
-                    _bs2 = row.find_elements(
-                        By.XPATH,
-                        ".//*[self::span or self::div][normalize-space()!='']"
-                        "[string-length(normalize-space()) <= 50]"
-                        "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'warning')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'amber')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'yellow')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'orange')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'other')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'success')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'info')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'available')"
-                        "]"
-                    )
-                    for _b in _bs2:
-                        _t = clean(_b.text or "")
-                        _m = re.match(r"\s*(\d{1,5}\+?)\b", _t)
-                        if _m:
-                            stock = _m.group(1)
-                            break
-                except Exception:
-                    pass
-            if not stock:
-                try:
-                    _nx = row.find_element(
-                        By.XPATH,
-                        ".//div[contains(@class,'col-xs-9')]"
-                        "/following-sibling::div[contains(@class,'col-xs')][1]")
-                    _s = clean(_nx.text or "")
-                    _m = re.search(r"(\d{1,5})\+?", _s)
-                    if _m: stock = _m.group(0)
-                except Exception:
-                    pass
-            if not stock:
-                try:
-                    _cols = row.find_elements(By.CSS_SELECTOR, "div[class*='col-xs']")
-                    _texts = [clean(c.text or "") for c in _cols]
-                    _price_idx = -1
-                    for i, t in enumerate(_texts):
-                        if price and price in t:
-                            _price_idx = i; break
-                    if _price_idx != -1:
-                        for t in _texts[_price_idx + 1:]:
-                            _m = re.fullmatch(r"\$?\s*(\d{1,5})\+?", (t or "").strip())
-                            if _m:
-                                stock = _m.group(0).replace("$", "").strip()
-                                break
-                except Exception:
-                    pass
+            except Exception as _se:
+                print(f"  [WARN] stock extract failed: {_se}")
+                stock_syd, stock_mel = "0", "0"
+            # Legacy single-STOCK column: pick the LARGER of the two
+            # so downstream dashboards still render "in stock" when
+            # either branch has units.
+            stock = _combine_stock_counts(stock_syd, stock_mel)
 
             # Full description is other_texts[1] (other_texts[0] is the brand name)
             # Strip leading brand and size to keep only load rating + model name
@@ -493,9 +429,20 @@ def scrape_rows(driver):
             if not desc:
                 continue
 
-            results.append({"brand": brand, "description": desc,
-                            "cost": cost, "price": price, "stock": stock})
-            print(f"  {brand:<15} | {desc[:50]} | cost={cost} | price={price} | stock={stock or '—'}")
+            results.append({
+                "brand": brand, "description": desc,
+                "cost": cost, "price": price,
+                "stock": stock,
+                "stock_syd": stock_syd,
+                "stock_mel": stock_mel,
+            })
+            # Nov-02: unify row-progress formatting across Tempe + Newbee
+            # ("S:<syd>/M:<mel>" for Newbee, "B:<bri>/S:<syd>" for Tempe)
+            # so both crawlers' terminal output reads the same shape.
+            _stk = f"S:{stock_syd or '-'}/M:{stock_mel or '-'}"
+            print(f"  {brand:<15} | {desc[:50]} | "
+                  f"cost={cost or '-'} | price={price or '-'} | "
+                  f"stock={_stk}")
 
         except Exception as e:
             print(f"  [WARN] {e}")
@@ -530,6 +477,19 @@ def main():
     from crawler_progress import Progress
     driver = init_driver()
     wait   = WebDriverWait(driver, 25)
+    # Nov-02: --no-modal (or env NO_MODAL=1) disables the per-row
+    # "More Available" modal click so a dry-run can finish quickly.
+    # The CSV then records the label N on BOTH warehouses for every
+    # "More Available" row (an upper bound rather than a precise
+    # per-branch split).
+    import sys as _sys, os as _os
+    global _ALLOW_MODAL
+    _ALLOW_MODAL = not (("--no-modal" in _sys.argv)
+                        or (_os.environ.get("NO_MODAL") == "1"))
+    if not _ALLOW_MODAL:
+        print("[info] --no-modal set — 'More Available' rows will NOT "
+              "be drilled into; per-warehouse qty = label-N on both.",
+              flush=True)
     # Oct-30: resolve the full search list (base 24 + historical merge)
     # ONCE before the main loop so Progress sizing matches what the
     # loop actually iterates.
@@ -554,7 +514,15 @@ def main():
             writer = csv.writer(f)
             # Oct-23 user ask: capture STOCK column (right of PRICE)
             # so the Price dashboard can show it on hover later.
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
+            # Nov-02 user ask: per-warehouse stock capture.  Legacy
+            # STOCK column kept (= max of the two branches) for
+            # backward compat; new STOCK_SYDNEY / STOCK_MELBOURNE
+            # carry the precise per-branch qty from the "Location
+            # Availability" modal.
+            writer.writerow([
+                "SIZE", "brand", "DESCRIPTION", "COST", "PRICE",
+                "STOCK", "STOCK_SYDNEY", "STOCK_MELBOURNE",
+            ])
 
             for _si, (query, size) in enumerate(_query_list, 1):
                 print(f"\n=== Searching: {query}  ({size}) ===")
@@ -578,7 +546,9 @@ def main():
                         seen_keys.add(key)
                         writer.writerow([size, r["brand"], r["description"],
                                          r["cost"], r["price"],
-                                         r.get("stock", "")])
+                                         r.get("stock", ""),
+                                         r.get("stock_syd", ""),
+                                         r.get("stock_mel", "")])
                         written_this_page += 1
                     f.flush()
                     print(f"  {written_this_page} rows written "

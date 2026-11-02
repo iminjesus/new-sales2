@@ -237,3 +237,275 @@ def collect_historical_sizes(directory: str,
     # Sort by count DESC, then size ASC so the most common sizes
     # crawl first (useful when the budget is capped).
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Nov-02 user ask: per-warehouse stock extraction.
+#
+# Tempe (Brisbane + Sydney) and Newbee (Sydney + Melbourne) use the
+# same Angular layout with four stock-badge variants:
+#
+#   "N+ More Available"      (green pill)   -> local + other BOTH have
+#                                              stock; a click opens a
+#                                              modal with per-warehouse
+#                                              qty, which we scrape and
+#                                              return verbatim.
+#   "N+ At Other Locations"  (yellow pill)  -> ONLY the sister branch
+#                                              has stock, labelled qty
+#                                              N; local = 0.
+#   plain number ("8+" / "2") (dark green)  -> ONLY the local branch
+#                                              has stock, qty N;
+#                                              sister = 0.
+#   "Call for Availability"  (red pill)     -> both branches 0.
+#
+# The caller passes (wh_local, wh_other) names so the same helper
+# works for Tempe ("Brisbane", "Sydney") and Newbee ("Sydney",
+# "Melbourne").  Returns (qty_local, qty_other) as strings - "N+"
+# suffix preserved verbatim so the dashboard can render "exactly N"
+# vs "N or more".
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _clean(s):
+    return (s or "").strip()
+
+
+def _close_tempe_modal(driver, pause=0.3):
+    """Best-effort close of the per-product details modal.  Try the
+    close button first; fall back to the ESC key.  Short pause after
+    so the next row interaction sees a settled DOM."""
+    import time
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.common.action_chains import ActionChains
+    for xp in [
+        "//button[contains(@class,'close') and (normalize-space()='x'"
+        " or normalize-space()='X' or normalize-space()='×'"
+        " or @aria-label='Close')]",
+        "//button[@aria-label='Close']",
+        "//*[self::button or self::a][contains(@class,'close')]"
+        "[not(ancestor::*[contains(@style,'display: none')])]",
+        "//i[contains(@class,'glyphicon-remove') or contains(@class,'fa-times')]",
+        "//button[normalize-space()='×']",
+    ]:
+        try:
+            btns = driver.find_elements(By.XPATH, xp)
+            for b in btns:
+                try:
+                    if b.is_displayed():
+                        try:
+                            driver.execute_script("arguments[0].click();", b)
+                        except Exception:
+                            b.click()
+                        time.sleep(pause)
+                        return True
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    # Fallback: send ESC on the page body
+    try:
+        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        time.sleep(pause)
+        return True
+    except Exception:
+        pass
+    return False
+
+
+def _read_modal_warehouse_qty(driver, wh_names, timeout=5.0):
+    """Wait for the per-product details modal to render, then read qty
+    for each name in `wh_names`.  Qty is kept verbatim with the "+"
+    suffix.  "Call" (seen when one branch is 0 but the other has
+    stock) maps to "0".  Returns a dict {name: qty_str}; missing
+    names map to "".
+
+    Scoped to text matches that start with "Tempe Tyres <name>:" (the
+    Angular modal's wording) so the digit buttons in the modal's
+    number pad do NOT get mistaken for warehouse qty.
+    """
+    import re
+    import time
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    out = {w: "" for w in wh_names}
+    deadline = time.monotonic() + float(timeout)
+    first_name = wh_names[0]
+    try:
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((
+                By.XPATH,
+                "//*[contains(normalize-space(.),'Location Availability')"
+                f" or contains(normalize-space(.),'{first_name}')]"
+            ))
+        )
+    except Exception:
+        return out
+    # Walk rows anchored on "<name>:" so we skip the modal's digit
+    # keypad (0-9 buttons) and left-side On Hand / Ordered boxes.
+    for w in wh_names:
+        qty = ""
+        for xp in [
+            # Table-row layout: <tr> contains "<wh>" and a <td> qty
+            f"//tr[contains(normalize-space(.),'{w}:') or contains("
+            f"normalize-space(.),'{w} ')]/td[last()]",
+            # Flex-row layout: find anything containing "<wh>:", get its
+            # following sibling with qty-like text
+            f"//*[contains(normalize-space(.),'{w}:')]/following-sibling::*[1]",
+            # Grandparent → nearest text child that is qty-like
+            f"//*[contains(normalize-space(.),'{w}:')]/..",
+        ]:
+            if time.monotonic() > deadline:
+                break
+            try:
+                els = driver.find_elements(By.XPATH, xp)
+            except Exception:
+                continue
+            for el in els:
+                try:
+                    t = _clean(el.text or "")
+                except Exception:
+                    continue
+                if not t:
+                    continue
+                # Pure qty cell
+                m = re.fullmatch(r"\d{1,5}\+?", t)
+                if m:
+                    qty = t
+                    break
+                if re.fullmatch(r"call", t, re.IGNORECASE):
+                    qty = "0"
+                    break
+                # "<wh>: N+" or "<wh>: Call" blob
+                m2 = re.search(
+                    rf"{re.escape(w)}\s*:?\s*(\d{{1,5}}\+?|call)\b",
+                    t, re.IGNORECASE,
+                )
+                if m2:
+                    g = m2.group(1)
+                    qty = "0" if g.lower() == "call" else g
+                    break
+            if qty:
+                break
+        out[w] = qty
+    return out
+
+
+def extract_warehouse_stock(driver, row, wh_local, wh_other, allow_modal=True):
+    """Return (qty_local, qty_other) for a single search-result `row`.
+
+    The caller passes the warehouse names in site-local order:
+      Tempe  -> wh_local = "Brisbane", wh_other = "Sydney"
+      Newbee -> wh_local = "Sydney",   wh_other = "Melbourne"
+
+    Button-to-mapping rules (user ask Nov-02):
+      "Call for Availability"       -> ("0",  "0")
+      "N+ At Other Locations"       -> ("0",  N )
+      "N+ More Available"           -> click modal -> read both
+      plain "N+" / "N" badge        -> ( N ,  "0")
+      no badge found                -> ("0",  "0")
+
+    `allow_modal=False` disables the click fallback -- useful for a
+    fast dry-run; "More Available" rows then record qty as the label
+    N on BOTH warehouses (best guess without the modal).
+    """
+    import re
+    from selenium.webdriver.common.by import By
+    try:
+        full = _clean(row.text or "")
+    except Exception:
+        full = ""
+    full_lower = full.lower()
+
+    # 1. OOS -> both 0
+    if re.search(r"\bcall\s+for\s+avail(?:ability)?\b", full_lower):
+        return ("0", "0")
+
+    # 2. At Other Locations -> local = 0, other = N (from label)
+    m_other = re.search(
+        r"(\d{1,5}\+?)\s+(?:at\s+)?other\s+location", full, re.IGNORECASE,
+    )
+    if m_other:
+        return ("0", m_other.group(1))
+
+    # 3. More Available -> click modal if allowed
+    m_more = re.search(
+        r"(\d{1,5}\+?)\s+more\s+avail(?:able)?", full, re.IGNORECASE,
+    )
+    if m_more:
+        label_n = m_more.group(1)
+        if not allow_modal:
+            # Fast-path fallback when modal is disabled: assume both
+            # branches have `label_n` (which is what the button says
+            # anyway).
+            return (label_n, label_n)
+        # Find the clickable badge element.  Prefer the deepest
+        # element whose text contains "More Available" so we click
+        # the actual pill not a wrapper div.
+        btn = None
+        for xp in [
+            ".//*[contains(normalize-space(.),'More Available')]"
+            "[not(descendant::*[contains(normalize-space(.),'More Available')])]",
+            ".//button[contains(normalize-space(.),'More Available')]",
+            ".//a[contains(normalize-space(.),'More Available')]",
+        ]:
+            try:
+                cands = row.find_elements(By.XPATH, xp)
+                for c in cands:
+                    try:
+                        if c.is_displayed():
+                            btn = c
+                            break
+                    except Exception:
+                        continue
+                if btn is not None:
+                    break
+            except Exception:
+                continue
+        if btn is None:
+            # Click target not found; fall back to label-only.
+            return (label_n, label_n)
+        try:
+            driver.execute_script("arguments[0].click();", btn)
+        except Exception:
+            try:
+                btn.click()
+            except Exception:
+                return (label_n, label_n)
+        qmap = _read_modal_warehouse_qty(driver, [wh_local, wh_other])
+        _close_tempe_modal(driver)
+        q_local = qmap.get(wh_local) or ""
+        q_other = qmap.get(wh_other) or ""
+        # Normalise "" to "0" so the CSV is unambiguous.
+        return (q_local or "0", q_other or "0")
+
+    # 4. Plain number badge (local only) — look inside the row for a
+    #    SHORT badge/pill element whose text is pure "N" or "N+".
+    for xp in [
+        ".//*[self::span or self::div or self::button]"
+        "[normalize-space()!=''][string-length(normalize-space())<=4]"
+        "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
+        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
+        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
+        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
+        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
+        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'green')"
+        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'success')"
+        "]",
+    ]:
+        try:
+            els = row.find_elements(By.XPATH, xp)
+        except Exception:
+            continue
+        for el in els:
+            try:
+                t = _clean(el.text or "")
+            except Exception:
+                continue
+            m = re.fullmatch(r"\d{1,5}\+?", t)
+            if m:
+                return (t, "0")
+
+    # 5. Nothing matched — treat as unknown / 0.
+    return ("0", "0")
