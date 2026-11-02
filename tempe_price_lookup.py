@@ -303,6 +303,7 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
                 caller_brand: str, *,
                 price_cols: tuple, cost_cols: tuple = (),
                 stock_col: str | None,
+                stock_cols_wh: tuple | None = None,
                 source_label: str, source_file: str | None):
     """Walk `rows` once, picking the FIRST row that satisfies each
     tier of the match hierarchy.  Returns the best-tier hit as a
@@ -398,6 +399,17 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
             elif len(_nums) == 1 and not price:
                 price = _nums[0][1]
         stock = _pick_col(r, stock_col) if stock_col else ""
+        # Nov-02 user ask: per-warehouse stock capture.  stock_cols_wh
+        # is a 2-tuple of column names ("STOCK_BRISBANE","STOCK_SYDNEY")
+        # for Tempe, ("STOCK_SYDNEY","STOCK_MELBOURNE") for Newbee.
+        # When present, the row's stock_w1 / stock_w2 values are
+        # surfaced in the entry dict alongside the legacy single
+        # STOCK column so the SPRF chip can show the branch split.
+        stock_w1 = ""
+        stock_w2 = ""
+        if stock_cols_wh:
+            stock_w1 = _pick_col(r, stock_cols_wh[0]) if stock_cols_wh[0] else ""
+            stock_w2 = _pick_col(r, stock_cols_wh[1]) if stock_cols_wh[1] else ""
         # Oct-27-pm user ask: JAX / Bob Jane rows carry a PROMO text
         # column (e.g. "SAVE $20", "Trade price") beside the DISC
         # price.  Expose it on the entry dict so the SPRF chip can
@@ -433,6 +445,8 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
             "price":            price,
             "cost":             cost,
             "stock":            stock,
+            "stock_w1":         stock_w1,
+            "stock_w2":         stock_w2,
             "promo_text":       promo_text,
             "description":      desc,
             "brand":            brand,
@@ -524,10 +538,16 @@ def lookup_tempe_prices(size: str, pattern: str = "",
         """Walk months newest-first; return (entry, yyyymm, path) when
         a row matches, else (None, "", "").  kind: "dealer" / "consumer"
         / "jax" / "bobjane"."""
+        stock_cols_wh = None
         if kind == "dealer":
             price_cols = ("PRICE", "price")
             cost_cols  = ("COST", "cost")
             stock_col  = "STOCK"
+            # Nov-02: per-warehouse columns written by both Tempe
+            # crawlers (base + extend).  Older CSVs without these
+            # columns return "" via _pick_col, so the chip renderer
+            # just falls back to the legacy single STOCK display.
+            stock_cols_wh = ("STOCK_BRISBANE", "STOCK_SYDNEY")
             label      = "dealer"
         elif kind == "consumer":
             # Oct-27: the consumer (retail-site) CSV now carries a
@@ -554,6 +574,9 @@ def lookup_tempe_prices(size: str, pattern: str = "",
             price_cols = ("PRICE", "price")
             cost_cols  = ("COST", "cost")
             stock_col  = "STOCK"
+            # Nov-02: Newbee's two branches are Sydney (local) +
+            # Melbourne (sister).
+            stock_cols_wh = ("STOCK_SYDNEY", "STOCK_MELBOURNE")
             label      = "newbdealer"
         else:
             return None, "", ""
@@ -564,6 +587,7 @@ def lookup_tempe_prices(size: str, pattern: str = "",
                 price_cols=price_cols,
                 cost_cols=cost_cols,
                 stock_col=stock_col,
+                stock_cols_wh=stock_cols_wh,
                 source_label=label,
                 source_file=fp,
             )

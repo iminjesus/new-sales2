@@ -8,6 +8,26 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# Nov-02 user ask: per-warehouse (Brisbane / Sydney) stock capture
+# shared with tempeweborder_crawling_extend.py and NewbeeWeborder_crawling.py.
+from tempeweborder_shared import extract_warehouse_stock
+
+# --no-modal / env NO_MODAL=1 disables the per-row "More Available"
+# modal click (useful for a fast dry-run).  Set by main().
+_ALLOW_MODAL = True
+
+
+def _combine_stock_counts(a, b):
+    """Return the LARGER of two qty strings as the legacy STOCK
+    column value.  Preserves "+" suffix on the winner."""
+    def _n(s):
+        s = (s or "").strip()
+        if not s or s == "0":
+            return 0
+        m = re.fullmatch(r"(\d{1,5})\+?", s)
+        return int(m.group(1)) if m else 0
+    return a if _n(a) >= _n(b) else b
+
 SEARCH_URL = "https://orders.tempetyreswholesale.com.au/WebOrder/Product/Search"
 
 # Format: width + aspect + rim (digits only), e.g. 175/65R14 → 1756514
@@ -341,130 +361,19 @@ def scrape_rows(driver):
             except Exception:
                 price = re.sub(r"[^\d.]", "", dollar_texts[1]) if len(dollar_texts) >= 2 else ""
 
-            # Oct-26 user clarification: stock sits in the "ON HAND"
-            # column, rendered as a small green badge whose text is a
-            # bare integer like "2" or an "N+" ("8+") when the stock
-            # is 8 or more.  Three-step hunt — keeps the "+" suffix
-            # verbatim so SPRF can show "~Qty 8+" vs an exact count.
-            #   1. Badge by class name — any <span>/<div> whose class
-            #      contains badge / pill / stock / onhand / green,
-            #      with short integer-looking text inside.
-            #   2. XPath from the price col-xs: next sibling col-xs
-            #      → first integer-text inside.
-            #   3. Positional fallback — walk every col-xs in DOM
-            #      order, find the one holding the price, grab the
-            #      first integer-text that comes AFTER it.
-            stock = ""
+            # Nov-02 user ask: per-warehouse stock capture via the
+            # shared extract_warehouse_stock helper.  Variant
+            # detection + modal interaction + close all encapsulated
+            # there; see tempeweborder_shared for the full policy.
             try:
-                _bs = row.find_elements(
-                    By.XPATH,
-                    ".//*[self::span or self::div][normalize-space()!='']"
-                    "[string-length(normalize-space()) <= 4]"
-                    "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
-                    " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'green')"
-                    "]"
+                stock_bri, stock_syd = extract_warehouse_stock(
+                    driver, row, "Brisbane", "Sydney",
+                    allow_modal=_ALLOW_MODAL,
                 )
-                for _b in _bs:
-                    _t = clean(_b.text or "")
-                    _m = re.fullmatch(r"(\d{1,5})\+?", _t)
-                    if _m:
-                        stock = _t
-                        break
-            except Exception:
-                pass
-            # Nov-02 bug fix: stock buttons that bundle the count with
-            # a longer label and so get dropped by step 1's
-            # string-length filter + fullmatch regex.  Tempe variants:
-            #   "8+ More Available"       (green, local stock)
-            #   "8+ At Other Locations"   (yellow/amber, sister branch)
-            #   "N+ In Stock" / "N Available"
-            # Catch all of them via row.text + leading count anchored
-            # by a stock-ish keyword.  The keyword disambiguates these
-            # numbers from load/speed indices ("104W"), rim sizes
-            # ("19"), prices ("$330.00") and SKU digits.
-            if not stock:
-                try:
-                    _full = clean(row.text or "")
-                    _m = re.search(
-                        r"(\d{1,5}\+?)\s+(?:"
-                        r"more\s+avail(?:able)?"
-                        r"|at\s+(?:other\s+)?location"
-                        r"|other\s+location"
-                        r"|in\s+stock"
-                        r"|available"
-                        r"|on\s+hand"
-                        r"|locations?"
-                        r")",
-                        _full, re.IGNORECASE,
-                    )
-                    if _m:
-                        stock = _m.group(1)
-                except Exception:
-                    pass
-            # Step 1c - longer badge whose text STARTS with a number;
-            # loosened filter + left-anchored re.match.  Widen the
-            # class filter to cover warning / amber / yellow / orange /
-            # "other" naming for the away-stock badge.
-            if not stock:
-                try:
-                    _bs2 = row.find_elements(
-                        By.XPATH,
-                        ".//*[self::span or self::div][normalize-space()!='']"
-                        "[string-length(normalize-space()) <= 50]"
-                        "[contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'badge')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'pill')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'stock')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'onhand')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'on-hand')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'warning')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'amber')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'yellow')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'orange')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'other')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'success')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'info')"
-                        " or contains(translate(@class,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'available')"
-                        "]"
-                    )
-                    for _b in _bs2:
-                        _t = clean(_b.text or "")
-                        _m = re.match(r"\s*(\d{1,5}\+?)\b", _t)
-                        if _m:
-                            stock = _m.group(1)
-                            break
-                except Exception:
-                    pass
-            if not stock:
-                try:
-                    _nx = row.find_element(
-                        By.XPATH,
-                        ".//div[contains(@class,'col-xs-9')]"
-                        "/following-sibling::div[contains(@class,'col-xs')][1]")
-                    _s = clean(_nx.text or "")
-                    _m = re.search(r"(\d{1,5})\+?", _s)
-                    if _m: stock = _m.group(0)
-                except Exception:
-                    pass
-            if not stock:
-                try:
-                    _cols = row.find_elements(By.CSS_SELECTOR, "div[class*='col-xs']")
-                    _texts = [clean(c.text or "") for c in _cols]
-                    _price_idx = -1
-                    for i, t in enumerate(_texts):
-                        if price and price in t:
-                            _price_idx = i; break
-                    if _price_idx != -1:
-                        for t in _texts[_price_idx + 1:]:
-                            _m = re.fullmatch(r"\$?\s*(\d{1,5})\+?", (t or "").strip())
-                            if _m:
-                                stock = _m.group(0).replace("$", "").strip()
-                                break
-                except Exception:
-                    pass
+            except Exception as _se:
+                print(f"  [WARN] stock extract failed: {_se}")
+                stock_bri, stock_syd = "0", "0"
+            stock = _combine_stock_counts(stock_bri, stock_syd)
 
             # Full description is other_texts[1] (other_texts[0] is the brand name)
             # Strip leading brand and size to keep only load rating + model name
@@ -486,9 +395,17 @@ def scrape_rows(driver):
             if not desc:
                 continue
 
-            results.append({"brand": brand, "description": desc,
-                            "cost": cost, "price": price, "stock": stock})
-            print(f"  {brand:<15} | {desc[:50]} | cost={cost} | price={price} | stock={stock or '—'}")
+            results.append({
+                "brand": brand, "description": desc,
+                "cost": cost, "price": price,
+                "stock": stock,
+                "stock_bri": stock_bri,
+                "stock_syd": stock_syd,
+            })
+            _stk = f"B:{stock_bri or '-'}/S:{stock_syd or '-'}"
+            print(f"  {brand:<15} | {desc[:50]} | "
+                  f"cost={cost or '-'} | price={price or '-'} | "
+                  f"stock={_stk}")
 
         except Exception as e:
             print(f"  [WARN] {e}")
@@ -523,6 +440,16 @@ def main():
     from crawler_progress import Progress
     driver = init_driver()
     wait   = WebDriverWait(driver, 25)
+    # Nov-02: --no-modal (or env NO_MODAL=1) disables the per-row
+    # "More Available" modal click for a fast dry-run.
+    import sys as _sys, os as _os
+    global _ALLOW_MODAL
+    _ALLOW_MODAL = not (("--no-modal" in _sys.argv)
+                        or (_os.environ.get("NO_MODAL") == "1"))
+    if not _ALLOW_MODAL:
+        print("[info] --no-modal set — 'More Available' rows will NOT "
+              "be drilled into; per-warehouse qty = label-N on both.",
+              flush=True)
     # Oct-30: resolve the full search list (base 24 + historical merge)
     # ONCE before the main loop so Progress sizing matches what the
     # loop actually iterates.
@@ -547,7 +474,12 @@ def main():
             writer = csv.writer(f)
             # Oct-23 user ask: capture STOCK column (right of PRICE)
             # so the Price dashboard can show it on hover later.
-            writer.writerow(["SIZE", "brand", "DESCRIPTION", "COST", "PRICE", "STOCK"])
+            # Nov-02: per-warehouse stock columns.  Legacy STOCK
+            # kept (= max of the two branches) for backward compat.
+            writer.writerow([
+                "SIZE", "brand", "DESCRIPTION", "COST", "PRICE",
+                "STOCK", "STOCK_BRISBANE", "STOCK_SYDNEY",
+            ])
 
             for _si, (query, size) in enumerate(_query_list, 1):
                 print(f"\n=== Searching: {query}  ({size}) ===")
@@ -571,7 +503,9 @@ def main():
                         seen_keys.add(key)
                         writer.writerow([size, r["brand"], r["description"],
                                          r["cost"], r["price"],
-                                         r.get("stock", "")])
+                                         r.get("stock", ""),
+                                         r.get("stock_bri", ""),
+                                         r.get("stock_syd", "")])
                         written_this_page += 1
                     f.flush()
                     print(f"  {written_this_page} rows written "

@@ -151,14 +151,24 @@ def _read_source_csv(path: str) -> list[dict]:
             if key in seen:
                 continue
             seen.add(key)
+            # Nov-02: per-warehouse stock columns.  Tempe files
+            # carry STOCK_BRISBANE / STOCK_SYDNEY; Newbee files
+            # carry STOCK_SYDNEY / STOCK_MELBOURNE.  Read whichever
+            # pair is present (missing columns return "" via .get).
+            _bri = _norm_cell(r.get(_c("stock_brisbane")  or "STOCK_BRISBANE"))
+            _syd = _norm_cell(r.get(_c("stock_sydney")    or "STOCK_SYDNEY"))
+            _mel = _norm_cell(r.get(_c("stock_melbourne") or "STOCK_MELBOURNE"))
             out.append({
-                "size":      size.upper(),
-                "brand":     brand,
-                "desc":      desc,
-                "desc_norm": desc_norm,
-                "cost":      _to_number(_norm_cell(r.get(_c("cost")  or "COST"))),
-                "price":     _to_number(_norm_cell(r.get(_c("price") or "PRICE"))),
-                "stock":     _to_number(_norm_cell(r.get(_c("stock") or "STOCK"))),
+                "size":        size.upper(),
+                "brand":       brand,
+                "desc":        desc,
+                "desc_norm":   desc_norm,
+                "cost":        _to_number(_norm_cell(r.get(_c("cost")  or "COST"))),
+                "price":       _to_number(_norm_cell(r.get(_c("price") or "PRICE"))),
+                "stock":       _to_number(_norm_cell(r.get(_c("stock") or "STOCK"))),
+                "stock_bri":   _to_number(_bri) if _bri != "" else "",
+                "stock_syd":   _to_number(_syd) if _syd != "" else "",
+                "stock_mel":   _to_number(_mel) if _mel != "" else "",
             })
     return out
 
@@ -240,9 +250,18 @@ def main():
               "    pip install openpyxl", file=sys.stderr)
         sys.exit(3)
 
+    # Nov-02: per-warehouse stock columns.  Both source files write
+    # their branch-split qty into their own named columns; the Excel
+    # sheet mirrors both so the rows read naturally per source:
+    #   Tempe row -> STOCK_BRISBANE + STOCK_SYDNEY populated,
+    #                STOCK_MELBOURNE blank.
+    #   Newbee row -> STOCK_SYDNEY + STOCK_MELBOURNE populated,
+    #                STOCK_BRISBANE blank.
+    # STOCK stays as the legacy max-of-branches for backward compat.
     headers = [
         "Source", "SIZE", "brand", "DESCRIPTION", "Shared_Description",
         "COST", "PRICE", "STOCK",
+        "STOCK_BRISBANE", "STOCK_SYDNEY", "STOCK_MELBOURNE",
     ]
 
     wb = Workbook()
@@ -265,12 +284,12 @@ def main():
         c.font = hdr_font
         c.alignment = Alignment(horizontal="center", vertical="center",
                                  wrap_text=True)
-        if   h == "Source":            c.fill = src_fill
+        if   h == "Source":             c.fill = src_fill
         elif h == "Shared_Description": c.fill = shared_fill
-        elif h == "COST":              c.fill = cost_fill
-        elif h == "PRICE":             c.fill = price_fill
-        elif h == "STOCK":             c.fill = stock_fill
-        else:                          c.fill = idx_fill
+        elif h == "COST":               c.fill = cost_fill
+        elif h == "PRICE":              c.fill = price_fill
+        elif h.startswith("STOCK"):     c.fill = stock_fill
+        else:                           c.fill = idx_fill
     ws.row_dimensions[1].height = 32
     ws.freeze_panes = "B2"   # pin the Source column on scroll
 
@@ -282,6 +301,8 @@ def main():
             row_vals = [
                 source_label, r["size"], r["brand"], r["desc"], sdesc,
                 r["cost"], r["price"], r["stock"],
+                r.get("stock_bri", ""), r.get("stock_syd", ""),
+                r.get("stock_mel", ""),
             ]
             ws.append(row_vals)
             r_idx = ws.max_row
@@ -289,9 +310,7 @@ def main():
                 cell = ws.cell(row=r_idx, column=col_idx)
                 # Light row banding per source so Tempe and Newbee
                 # blocks are visually distinct even without a filter.
-                if cell.fill is None or not getattr(cell.fill, "fgColor",
-                                                     None) or True:
-                    cell.fill = row_fill
+                cell.fill = row_fill
                 # Shared_Description cell gets its own tint when
                 # populated so matched pairs pop even in a long sheet.
                 if col_idx == 5 and sdesc:

@@ -4457,9 +4457,31 @@ function _renderTempeRefOnRow(rowEl, j){
     const monthTag = (!src.is_current && src.month_label)
                    ? ` ${src.month_label}` : "";
     let s = `(${label}${monthTag}: ${parts.join("/")}`;
-    const stk = _normStock(src.stock);
-    if (_isZero(stk))      s += " ~OOS";
-    else if (stk)          s += ` ~Qty ${stk}`;
+    // Nov-02 user ask: per-warehouse stock display.  The lookup
+    // backend sets src.stock_w1 + src.stock_w2 when the CSV carries
+    // the branch columns (STOCK_BRISBANE / STOCK_SYDNEY for Tempe,
+    // STOCK_SYDNEY / STOCK_MELBOURNE for Newbee).  Older CSVs
+    // without those columns fall back to the single-stock format so
+    // the chip still reads correctly.
+    const w1 = _normStock(src.stock_w1);
+    const w2 = _normStock(src.stock_w2);
+    const hasWh = (w1 !== "" || w2 !== "");
+    if (hasWh) {
+      // Label letters per source: dealer / consumer -> "B/S"
+      // (Brisbane/Sydney); newbdealer -> "S/M" (Sydney/Melbourne).
+      // Fall back to generic "W1/W2" for anything else so a future
+      // source doesn't break display.
+      let L1 = "W1", L2 = "W2";
+      if (/^NewB/i.test(label))        { L1 = "S"; L2 = "M"; }
+      else if (/^Tempe/i.test(label))  { L1 = "B"; L2 = "S"; }
+      const z1 = _isZero(w1), z2 = _isZero(w2);
+      if (z1 && z2)   s += " ~OOS";
+      else            s += ` ~${L1}:${w1 || "0"} ${L2}:${w2 || "0"}`;
+    } else {
+      const stk = _normStock(src.stock);
+      if (_isZero(stk))      s += " ~OOS";
+      else if (stk)          s += ` ~Qty ${stk}`;
+    }
     s += ")";
     const d = (src.description || "").trim();
     if (d) s += ` [${d}]`;
@@ -4580,7 +4602,9 @@ function _renderTempeRefOnRow(rowEl, j){
   _lines.push("");
   _lines.push("Legend: EC = end consumer (Tempe retail),  SI = dealer sell-in,  DR = dealer retail");
   _lines.push("         * = load/speed differs,  ? = pattern differs,"
-            + "  ~Qty N(+) = stock on hand,  ~OOS = out of stock");
+            + "  ~Qty N(+) = stock on hand,  ~OOS = out of stock,"
+            + "  ~B:N S:N = per-branch stock (Brisbane/Sydney for Tempe,"
+            + " Sydney/Melbourne for Newbee)");
   remEl.title = _lines.join("\n");
 }
 
