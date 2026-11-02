@@ -12,9 +12,10 @@ from selenium.webdriver.support import expected_conditions as EC
 # shared with tempeweborder_crawling_extend.py and NewbeeWeborder_crawling.py.
 from tempeweborder_shared import extract_warehouse_stock
 
-# --no-modal / env NO_MODAL=1 disables the per-row "More Available"
-# modal click (useful for a fast dry-run).  Set by main().
-_ALLOW_MODAL = True
+# Nov-02 (second fix): modal interaction is OFF by default — see
+# tempeweborder_crawling_extend.py comment for the full story.  Opt
+# back in with --modal (or env ALLOW_MODAL=1).
+_ALLOW_MODAL = False
 
 
 def _combine_stock_counts(a, b):
@@ -440,16 +441,24 @@ def main():
     from crawler_progress import Progress
     driver = init_driver()
     wait   = WebDriverWait(driver, 25)
-    # Nov-02: --no-modal (or env NO_MODAL=1) disables the per-row
-    # "More Available" modal click for a fast dry-run.
+    # Nov-02 (second fix): modal interaction is OFF by default (see
+    # tempeweborder_crawling_extend.py comment).  Opt back in with
+    # --modal (or env ALLOW_MODAL=1).
     import sys as _sys, os as _os
     global _ALLOW_MODAL
-    _ALLOW_MODAL = not (("--no-modal" in _sys.argv)
-                        or (_os.environ.get("NO_MODAL") == "1"))
-    if not _ALLOW_MODAL:
-        print("[info] --no-modal set — 'More Available' rows will NOT "
-              "be drilled into; per-warehouse qty = label-N on both.",
+    _ALLOW_MODAL = (("--modal" in _sys.argv)
+                    or (_os.environ.get("ALLOW_MODAL") == "1"))
+    if _ALLOW_MODAL:
+        print("[info] --modal ON — per-row 'More Available' modal "
+              "clicks enabled; may truncate per-size row counts on "
+              "live data if the modal mutates the search DOM.",
               flush=True)
+    else:
+        print("[info] modal clicks DISABLED (default).  Per-warehouse "
+              "qty is label-only; 'More Available' rows record "
+              "label-N on BOTH branches (upper bound).  Pass --modal "
+              "or set ALLOW_MODAL=1 to drill into the per-branch "
+              "modal when needed.", flush=True)
     # Oct-30: resolve the full search list (base 24 + historical merge)
     # ONCE before the main loop so Progress sizing matches what the
     # loop actually iterates.

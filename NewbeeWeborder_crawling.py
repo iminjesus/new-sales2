@@ -11,11 +11,12 @@ from selenium.webdriver.support import expected_conditions as EC
 # Nov-02 user ask: per-warehouse (Sydney / Melbourne) stock capture.
 from tempeweborder_shared import extract_warehouse_stock
 
-# Nov-02: picked up from CLI (--no-modal) by main().  When False, the
-# "More Available" rows record the label N on both warehouses instead
-# of clicking the modal — useful for a dry-run that doesn't want to
-# pay the per-click latency.
-_ALLOW_MODAL = True
+# Nov-02 (second fix): default to NO modal interaction — see the
+# tempeweborder_crawling_extend.py twin comment for the full story.
+# Short version: per-row modal clicks mutated the search DOM on live
+# data and truncated the per-size row counts; label-only is safer
+# and still gives correct per-branch qty for 3 of the 4 variants.
+_ALLOW_MODAL = False
 
 
 def _combine_stock_counts(a, b):
@@ -477,19 +478,24 @@ def main():
     from crawler_progress import Progress
     driver = init_driver()
     wait   = WebDriverWait(driver, 25)
-    # Nov-02: --no-modal (or env NO_MODAL=1) disables the per-row
-    # "More Available" modal click so a dry-run can finish quickly.
-    # The CSV then records the label N on BOTH warehouses for every
-    # "More Available" row (an upper bound rather than a precise
-    # per-branch split).
+    # Nov-02 (second fix): modal interaction is OFF by default (see
+    # tempeweborder_crawling_extend.py comment for the full story).
+    # Opt back in with --modal (or env ALLOW_MODAL=1).
     import sys as _sys, os as _os
     global _ALLOW_MODAL
-    _ALLOW_MODAL = not (("--no-modal" in _sys.argv)
-                        or (_os.environ.get("NO_MODAL") == "1"))
-    if not _ALLOW_MODAL:
-        print("[info] --no-modal set — 'More Available' rows will NOT "
-              "be drilled into; per-warehouse qty = label-N on both.",
+    _ALLOW_MODAL = (("--modal" in _sys.argv)
+                    or (_os.environ.get("ALLOW_MODAL") == "1"))
+    if _ALLOW_MODAL:
+        print("[info] --modal ON — per-row 'More Available' modal "
+              "clicks enabled; may truncate per-size row counts on "
+              "live data if the modal mutates the search DOM.",
               flush=True)
+    else:
+        print("[info] modal clicks DISABLED (default).  Per-warehouse "
+              "qty is label-only; 'More Available' rows record "
+              "label-N on BOTH branches (upper bound).  Pass --modal "
+              "or set ALLOW_MODAL=1 to drill into the per-branch "
+              "modal when needed.", flush=True)
     # Oct-30: resolve the full search list (base 24 + historical merge)
     # ONCE before the main loop so Progress sizing matches what the
     # loop actually iterates.

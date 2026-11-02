@@ -440,11 +440,18 @@ def scrape_rows(driver):
     return results
 
 
-# Nov-02: picked up from CLI (--no-modal) by main().  When False, the
-# "More Available" rows record the label N on both warehouses instead
-# of clicking the modal — useful for a dry-run that doesn't want to
-# pay the per-click latency.
-_ALLOW_MODAL = True
+# Nov-02 (second fix): default to NO modal interaction.  First rollout
+# clicked the "More Available" button to drill per-branch qty from
+# the "Location Availability" modal, but the click + close caused
+# subsequent row element references to go stale, so the per-size row
+# count dropped to a fraction of what the pre-modal crawler had
+# captured.  Flip the default to safer: label-only extraction (no
+# DOM mutation), which still gives correct per-branch qty for 3 of
+# the 4 variants.  "More Available" rows now record label-N on BOTH
+# warehouses as an upper bound.  Opt back in with --modal (or env
+# ALLOW_MODAL=1) once the modal interaction has been proven
+# non-destructive on live data.
+_ALLOW_MODAL = False
 
 
 def _combine_stock_counts(a, b):
@@ -500,18 +507,24 @@ def main():
     # brand-sweep behaviour.
     import sys as _sys, os as _os
     _by_brand = ("--brand-sweep" in _sys.argv) or (_os.environ.get("BRAND_SWEEP") == "1")
-    # Nov-02: --no-modal (or env NO_MODAL=1) disables the per-row
-    # "More Available" modal click so a dry-run can finish quickly.
-    # The CSV then records the label N on BOTH warehouses for every
-    # "More Available" row (an upper bound rather than a precise
-    # per-branch split).
+    # Nov-02 (second fix): modal interaction is OFF by default because
+    # the per-click DOM churn truncated the per-size row count on live
+    # data.  Opt back in with --modal (or env ALLOW_MODAL=1) once the
+    # modal flow has been verified not to invalidate the row list.
     global _ALLOW_MODAL
-    _ALLOW_MODAL = not (("--no-modal" in _sys.argv)
-                        or (_os.environ.get("NO_MODAL") == "1"))
-    if not _ALLOW_MODAL:
-        print("[info] --no-modal set — 'More Available' rows will NOT "
-              "be drilled into; per-warehouse qty = label-N on both.",
+    _ALLOW_MODAL = (("--modal" in _sys.argv)
+                    or (_os.environ.get("ALLOW_MODAL") == "1"))
+    if _ALLOW_MODAL:
+        print("[info] --modal ON — per-row 'More Available' modal "
+              "clicks enabled; may truncate per-size row counts on "
+              "live data if the modal mutates the search DOM.",
               flush=True)
+    else:
+        print("[info] modal clicks DISABLED (default).  Per-warehouse "
+              "qty is label-only; 'More Available' rows record "
+              "label-N on BOTH branches (upper bound).  Pass --modal "
+              "or set ALLOW_MODAL=1 to drill into the per-branch "
+              "modal when needed.", flush=True)
     if _by_brand:
         _sweep_items = [("BRAND", b) for b in BRANDS]
         print(f"[sweep] mode: BRAND ({len(BRANDS)} brands)", flush=True)
