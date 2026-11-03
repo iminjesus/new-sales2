@@ -339,7 +339,14 @@ def build_data(monthly):
                 # GT for HK/K135) show up side-by-side.
                 "jax_series": {}, "bj_series": {},
                 "tw_series":  {}, "twi_series": {},
-                "nwb_series": {}, "nwbi_series": {}}
+                "nwb_series": {}, "nwbi_series": {},
+                # Nov-03: Tempe (retail/consumer) per-pattern series
+                # so the By-Channel legend can render "Tempe —
+                # <pattern>" instead of a bare "Tempe".  Same shape
+                # as the other per-pattern dicts; populated by
+                # _accumulate_series below with price_idx=2 (the
+                # tempe tuple is (desc, cost, price, stock)).
+                "tempe_series": {}}
     size_data = {s: {a: _mk_slots() for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
@@ -507,6 +514,14 @@ def build_data(monthly):
                                    size, abbr,
                                    size_data[size][abbr]["bj_series"],
                                    mk_idx, price_idx=1, promo_idx=2)
+                # Nov-03: Tempe retail/consumer per-pattern series.
+                # Tuple shape (desc, cost, price, stock) => price_idx=2.
+                # Fixes the By-Channel legend reading just "Tempe"
+                # with no description.
+                _accumulate_series("tempe", t_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["tempe_series"],
+                                   mk_idx, price_idx=2)
                 # Oct-26 ask: same per-pattern breakdown for TempeWOS
                 # Sell Out (tw) and Sell In (twi).  tw_lk tuples are
                 # (desc, sell_in_price, sell_out_price), so Sell Out
@@ -1501,6 +1516,41 @@ let _activeModeBtn  = null;
 let _activeSubBtn   = null;
 let _activePricingBtn = null;
 
+/* Nov-03 user ask: show per-store stock at the end of each legend
+   label (e.g. "Tempe — K135 VENTUS · S:8+") so the reader can see
+   at a glance which products are actually buyable right now.
+   Returns "" when there is no recent stock to show (BJ / JAX have
+   no STOCK column) or when the latest value is unknown (null).
+   The warehouse letter mirrors the SPRF chip convention:
+     tempe (retail) -> S (Sydney only — Tempe consumer site)
+     tw / twi       -> B/S (TempeWOS Brisbane + Sydney, max shown here)
+     nwb / nwbi     -> S/M (NewBWOS Sydney + Melbourne, max shown here)
+   The dashboard's per-store stocks array currently carries the
+   single legacy STOCK column (max of both branches), so one number
+   is the honest answer for the tail; the per-branch split lives in
+   the SPRF chip. */
+function _stockTailLabel(store, stocks) {
+    if (!stocks || !stocks.length) return '';
+    // Latest non-null value wins; "+" suffix preserved.
+    let latest = null;
+    for (let i = stocks.length - 1; i >= 0; i--) {
+        if (stocks[i] !== null && stocks[i] !== undefined) {
+            latest = stocks[i]; break;
+        }
+    }
+    if (latest === null) return '';
+    const letter = (store === 'tempe')
+        ? 'S'
+        : (/^(tw|twi)$/.test(store) ? 'B/S'
+         : (/^(nwb|nwbi)$/.test(store) ? 'S/M'
+         : ''));
+    if (!letter) return '';
+    // Render as "0" when the CSV said explicit OOS (stock=0); the
+    // chart already draws the hollow-dot treatment for that case.
+    const txt = (String(latest) === '0') ? '0' : String(latest);
+    return ' · ' + letter + ':' + txt;
+}
+
 /* Which backend key holds the price array for a store under the
    current pricingMode.  Only BJ and JAX have a separate promo array;
    Tempe / TempeWOS fall through so the toggle is a no-op for them. */
@@ -1805,7 +1855,9 @@ function _renderStore() {
                     primaryPattern = list.join(' / ');
                 }
             }
-            const label = SL[s] + (primaryPattern ? ' — ' + primaryPattern : '');
+            const label = SL[s]
+                        + (primaryPattern ? ' — ' + primaryPattern : '')
+                        + _stockTailLabel(s, stks);
             arr.push({ label: label, data: prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
                        spanGaps:true, tension:.3, fill:false,
@@ -1883,7 +1935,8 @@ function _renderBrand() {
         const primaryPattern = _seriesPattern(abbr, selectedSize, store)
                             || _guessPatternFromDescs(descs);
         const primaryLabel = abbr + ' ' + (BRANDS[abbr]||'')
-                           + (primaryPattern ? ' — ' + primaryPattern : '');
+                           + (primaryPattern ? ' — ' + primaryPattern : '')
+                           + _stockTailLabel(store, stks);
         ds.push({ label: primaryLabel, data: prices,
                   borderColor:c, backgroundColor:c+'33',
                   borderDash: solid ? [] : [6,4],

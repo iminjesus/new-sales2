@@ -4512,8 +4512,17 @@ function _renderTempeRefOnRow(rowEl, j){
       else            s += ` ~${L1}:${w1 || "0"} ${L2}:${w2 || "0"}`;
     } else {
       const stk = _normStock(src.stock);
+      // Nov-03 user ask: Tempe retail/consumer feed scrapes stock
+      // from the Sydney-only consumer site, so when its chip falls
+      // through to the single-stock path, label the branch
+      // explicitly as S (Sydney) so the reader knows what city.
+      // Other sources (TempeDealer / NewBDealer) keep the generic
+      // "~Qty N" shape when the backend did not expose per-branch
+      // columns, so pre-existing CSVs still render without
+      // mislabelling the branch.
+      const isTempeConsumer = /^TempeConsumer\b/i.test(label);
       if (_isZero(stk))      s += " ~OOS";
-      else if (stk)          s += ` ~Qty ${stk}`;
+      else if (stk)          s += (isTempeConsumer ? ` ~S:${stk}` : ` ~Qty ${stk}`);
     }
     s += ")";
     const d = (src.description || "").trim();
