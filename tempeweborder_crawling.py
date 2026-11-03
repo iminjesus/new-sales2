@@ -241,17 +241,20 @@ def search_tyres(driver, wait, query):
     time.sleep(1)
 
     # Wait for results — detect by "Get Cost" text in any element.
-    # Longer timeout here (45 s) because the results table can be slow
-    # on the first search of a session when auth / inventory warm up.
-    long_wait = WebDriverWait(driver, 45)
+    # Nov-03 user ask: cap the wait at 15 s (was 45 s) so a size
+    # with zero inventory skips to the next size quickly instead of
+    # stalling the sweep.  Real "page slow to render" cases finish
+    # well under 15 s; anything longer almost always means the
+    # search really did return nothing.
+    long_wait = WebDriverWait(driver, 15)
     try:
         long_wait.until(EC.presence_of_element_located(
             (By.XPATH, "//*[contains(text(),'Get Cost')]")
         ))
     except Exception:
-        # No "Get Cost" after 45 s likely means the search returned
+        # No "Get Cost" after 15 s likely means the search returned
         # zero results for this size.  Not an error — just no rows.
-        print(f"  [INFO] no 'Get Cost' seen for {query} within 45s "
+        print(f"  [INFO] no 'Get Cost' seen for {query} within 15s "
               f"(URL={driver.current_url}) — treating as 0 results")
         return
     time.sleep(1)

@@ -257,10 +257,16 @@ def search_brand(driver, wait, brand):
         pass
 
 
-def wait_results(driver, max_total_s=120):
+def wait_results(driver, max_total_s=15):
     """Poll div.product-data-list every 5 s up to max_total_s.
     Returns True once rows appear, False after the full timeout.
-    Prints progress every chunk so the retry is visible."""
+    Prints progress every chunk so the retry is visible.
+
+    Nov-03 user ask: cap total wait at 15 s (was 120 s) so a size
+    with zero inventory skips to the next size quickly instead of
+    stalling the whole sweep.  3 attempts at 5-s intervals cover
+    the real "page is slow to render" cases; anything longer than
+    15 s almost always means the search really did return nothing."""
     waited = 0
     chunk  = 5
     while waited < max_total_s:
