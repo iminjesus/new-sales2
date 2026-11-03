@@ -115,9 +115,11 @@ the keep-alive thread above.  No extra scheduler entry is needed.
 - **Price editors** (allowed to edit the price tables): Brian Park, Pamela Lau
 - **CS team** (first-line customer service): Harry Jallis, HKCustomerService,
   Andy Niki, Hayden Lee
-  - ⚠️ `Hayden Lee` (CS) is a different person from the former MGMT
-    approver `Hayden Begbie` (who was replaced by `Justin Harding` in
-    Nov-03).  Don't collapse them.
+  - ⚠️ `Hayden Lee` (CS) is a genuinely separate employee from the
+    former MGMT approver `Hayden Begbie` (who was the Sales head,
+    left Hankook and was replaced by `Justin Harding` in Nov-03).
+    They share the first name "Hayden" but are different people.
+    Don't collapse them.
 
 ## Dashboard terminology
 
