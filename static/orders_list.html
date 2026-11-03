@@ -39,6 +39,8 @@
   }
   .status-chip.n{background:#dc2626}
   .status-chip.y{background:#16a34a}
+  /* Nov-03 user ask: cancelled chip (SAP flag = C) in orange. */
+  .status-chip.c{background:#d97706}
   table.list{
     width:100%;border-collapse:collapse;font-size:12.5px;background:#fff;
   }
@@ -126,10 +128,11 @@
     </div>
     <div class="filters">
       <span class="lbl">SAP:</span>
-      <select id="fStatus" title="SAP-entered flag.  Pending = SAP hasn't keyed it; SAP entered = Harry flipped the flag.">
+      <select id="fStatus" title="SAP-entered flag.  Pending = SAP hasn't keyed it; SAP entered = Harry flipped the flag; Cancelled = order did not go through to SAP.">
         <option value="">All</option>
         <option value="N">Pending (N)</option>
         <option value="Y">SAP entered (Y)</option>
+        <option value="C">Cancelled (C)</option>
       </select>
       <span class="lbl">Appr:</span>
       <select id="fApproval" title="Approval state — client-side filter over everything already loaded.">
@@ -434,9 +437,12 @@ function renderRows(){
     if (fApp === "draft")    return nma === "temp";
     if (fApp === "rejected") return !r.deleted_at && (!!r.rejected_by_name || nma === "r");
     if (fApp === "approved") return !r.deleted_at && !!r.approved_by_name;
+    // Nov-03: cancelled orders (status_sap=C) drop out of the Pending
+    // approval queue — they are terminal, no further sign-off needed.
     if (fApp === "pending")  return !r.deleted_at
                                      && (nma === "y" || r.has_interstate || r.has_stockout)
-                                     && !r.approved_by_name && !r.rejected_by_name;
+                                     && !r.approved_by_name && !r.rejected_by_name
+                                     && String(r.status_sap || "") !== "C";
     // Oct-28: Standard filter excludes inter-state orders — those
     // need approval, so they belong in Pending, not Standard.
     // Nov-03: same policy for stock-out — Standard-priced orders
@@ -711,12 +717,15 @@ function renderRows(){
       // Oct-28: interstate-only orders (Standard-priced but with any
       // inter-state line) also awaiting approval, so highlight them
       // in the pending-queue tint along with has_additional_dc rows.
-      // Nov-03: stock-out orders follow the same rule.
+      // Nov-03: stock-out orders follow the same rule.  Cancelled
+      // orders (status_sap=C) are terminal and drop out of the
+      // awaiting-approval tint.
       const _isAwaitingApproval = (r.has_additional_dc || r.has_interstate || r.has_stockout)
                                   && !r.approved_by_name
                                   && !r.rejected_by_name
                                   && _nmaRow !== "temp"
-                                  && !_isDeleted;
+                                  && !_isDeleted
+                                  && String(r.status_sap || "") !== "C";
       /* Deleted rows read as "retained for reference" — grey wash
          + line-through so they're visually distinct from active
          SPRFs without actually hiding the row.  Highlighted takes
@@ -772,7 +781,10 @@ function renderRows(){
         <td class="num">${fmtMoney(r.grand_total)}</td>
         <td class="num" style="${totDcStyle}">${totDC ? totDC.toFixed(2) + "%" : "—"}</td>
         <td class="center">${rebPill}</td>
-        <td class="center"><span class="status-chip ${r.status_sap === 'Y' ? 'y' : 'n'}">${r.status_sap || 'N'}</span></td>
+        <td class="center"><span class="status-chip ${
+            r.status_sap === 'Y' ? 'y' :
+            r.status_sap === 'C' ? 'c' : 'n'
+          }">${r.status_sap || 'N'}</span></td>
         ${(() => {
           /* Oct-27: Submitted column now sits in the timeline strip
              BEFORE Approver.  Date on line 1, time on line 2 so the

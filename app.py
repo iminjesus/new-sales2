@@ -7390,7 +7390,7 @@ def api_orders_list():
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         wh, p = [], []
-        if status in ("Y", "N"):
+        if status in ("Y", "N", "C"):
             wh.append("status_sap = %s"); p.append(status)
         if date_from:
             wh.append("DATE(submitted_at) >= %s"); p.append(date_from)
@@ -7817,11 +7817,13 @@ def api_orders_detail(oid):
 @app.post("/api/orders/detail/<int:oid>/status")
 def api_orders_status(oid):
     """Toggle status_sap.  Only Harry (or an admin ALL-role user) can
-    write.  Body: {status: 'Y' | 'N'}."""
+    write.  Body: {status: 'Y' | 'N' | 'C'}.  Nov-03: 'C' = cancelled,
+    a terminal state for orders that were approved but ultimately did
+    not go through to SAP; shown as an orange chip on the orders list."""
     payload  = request.get_json(silent=True) or {}
     new_stat = (payload.get("status") or "").strip().upper()
-    if new_stat not in ("Y", "N"):
-        return jsonify({"error": "status must be Y or N"}), 400
+    if new_stat not in ("Y", "N", "C"):
+        return jsonify({"error": "status must be Y, N or C"}), 400
     who = (_bde_from_request() or "").strip().lower()
     # Only the CS team (Harry OR HKCustomerService) can flip the
     # SAP-entered flag.  Leadership / ALL-role users can view the
@@ -7849,6 +7851,9 @@ def api_orders_status(oid):
         # Flipping to Y requires approval.  Flipping back to N is a
         # correction path (unflag a mistaken Y) and stays allowed
         # even on a non-approved order so the CS can undo themselves.
+        # Nov-03: flipping to C (cancelled) is also allowed at any
+        # approval state — a pending-but-cancelled order needs the
+        # marker so the list page shows the order isn't going through.
         if new_stat == "Y" and not _is_approved:
             return jsonify({
                 "error": "Order has not been approved yet — DO No. and "
@@ -9715,7 +9720,7 @@ def api_orders_list_excel():
     conn = get_connection(); cur = conn.cursor(dictionary=True)
     try:
         wh, p = [], []
-        if status in ("Y", "N"):
+        if status in ("Y", "N", "C"):
             wh.append("status_sap = %s"); p.append(status)
         if date_from:
             wh.append("DATE(submitted_at) >= %s"); p.append(date_from)

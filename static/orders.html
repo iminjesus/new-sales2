@@ -1011,11 +1011,14 @@
     font-family:monospace;font-size:14px;min-width:24px;text-align:center;
   }
   .cs-panel .cs-flag.ok{background:#16a34a}
+  /* Nov-03 user ask: cancelled state — orange chip. */
+  .cs-panel .cs-flag.cancelled{background:#d97706}
   .cs-panel .cs-meta{color:#78350f;font-size:11px;font-style:italic}
   .cs-panel button{padding:5px 12px;background:#059669;color:#fff;
                    border:1px solid #047857;border-radius:4px;cursor:pointer;font-weight:600}
   .cs-panel button:hover{filter:brightness(0.95)}
   .cs-panel button.mark-n{background:#dc2626;border-color:#991b1b}
+  .cs-panel button.mark-c{background:#d97706;border-color:#b45309}
 
   /* Top page-nav strip (mirrors other pages like /highlights, /claims) */
   .pagenav{
@@ -2407,6 +2410,10 @@
     <span class="cs-lbl">SAP order entered?</span>
     <span class="cs-flag" id="csFlag">N</span>
     <button id="btnFlipStatus" class="primary">Mark as Y</button>
+    <!-- Nov-03 user ask: Mark-as-Cancelled option — orange chip,
+         bypasses the "DO No. required" gate because a cancelled
+         order has no DO.  Toggles between N and C. -->
+    <button id="btnCancelOrder" class="primary mark-c" title="Flip the SAP flag to C (Cancelled) for orders that were approved but ultimately did not go through to SAP.">Mark as Cancelled</button>
     <span class="cs-lbl" style="margin-left:16px">DO No.</span>
     <input id="sdNo" placeholder="SAP DO #" maxlength="40"
            style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace;width:140px">
@@ -11214,14 +11221,30 @@ async function wireStatusPanel(order){
   const panel = $("#csPanel");
   const flag  = $("#csFlag");
   const btn   = $("#btnFlipStatus");
+  const btnC  = document.getElementById("btnCancelOrder");
   const meta  = $("#csMeta");
   const sd    = document.getElementById("sdNo");
   const sdBtn = document.getElementById("btnSaveSdNo");
   const paint = (st, byLine) => {
     flag.textContent   = st;
     flag.classList.toggle("ok", st === "Y");
+    // Nov-03: cancelled chip (orange) coexists with ok (green) class
+    // mutually — paint picks the right CSS state.  When Y, the ok
+    // (green) class wins; when C, the cancelled (orange) class wins;
+    // when N, neither is present and the default red shows.
+    flag.classList.toggle("cancelled", st === "C");
+    // Primary toggle button cycles N <-> Y (the main CS flow).
+    // When status is C, the primary button labels "Mark as Y" so the
+    // CS can revive an accidentally cancelled order.
     btn.textContent    = st === "Y" ? "Mark as N" : "Mark as Y";
     btn.classList.toggle("mark-n", st === "Y");
+    // Secondary Cancel button: toggles N <-> C.  When status is Y,
+    // the Cancel button is still available (CS can cancel a wrongly-
+    // flipped Y).  When already C, the button labels "Un-cancel"
+    // which flips back to N.
+    if (btnC){
+      btnC.textContent = st === "C" ? "Un-cancel (back to N)" : "Mark as Cancelled";
+    }
     meta.textContent   = byLine || "";
   };
   paint(order.status_sap,
@@ -11297,6 +11320,14 @@ async function wireStatusPanel(order){
     btn.title    = _lockMsg;
     btn.style.opacity = "0.5";
     btn.style.cursor  = "not-allowed";
+    // Nov-03: Cancel button follows the same lock policy — only CS
+    // on an approved order can flip to/from C.
+    if (btnC){
+      btnC.disabled = true;
+      btnC.title    = _lockMsg;
+      btnC.style.opacity = "0.5";
+      btnC.style.cursor  = "not-allowed";
+    }
   }
   panel.hidden = false;
   // Non-CS viewers see the panel as read-only — don't wire the
@@ -11369,6 +11400,42 @@ async function wireStatusPanel(order){
       setStatus("Status change failed: "+e, "warn");
     } finally { btn.disabled = false; }
   });
+  // Nov-03 user ask: Mark-as-Cancelled handler.  Flips N/Y -> C (or
+  // C -> N on an "Un-cancel" click).  Unlike Mark-as-Y, this does
+  // NOT require a saved DO No. — a cancelled order has no DO.  A
+  // confirm() guards the destructive direction.
+  if (btnC){
+    btnC.addEventListener("click", async () => {
+      const cur  = flag.textContent;
+      const next = cur === "C" ? "N" : "C";
+      if (next === "C"){
+        const ok = window.confirm(
+          "Mark this order as CANCELLED (C)?\n\n" +
+          "The SAP flag will show an orange C on the orders list and " +
+          "no SAP DO entry is expected.  Use 'Un-cancel' to revert."
+        );
+        if (!ok) return;
+      }
+      btnC.disabled = true;
+      try {
+        const r = await fetch(`/api/orders/detail/${order.id}/status`, {
+          method: "POST", credentials: "same-origin",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({status: next}),
+        });
+        const j = await r.json();
+        if (!r.ok || !j.ok){
+          setStatus(`Status change failed: ${j.error || r.statusText}`, "warn");
+          btnC.disabled = false; return;
+        }
+        const now = new Date().toISOString().slice(0,16).replace("T"," ");
+        paint(next, `Last changed ${now} by ${j.by || "you"}`);
+        setStatus(`SAP order flag set to <b>${next}</b>.`, "ok");
+      } catch(e){
+        setStatus("Status change failed: "+e, "warn");
+      } finally { btnC.disabled = false; }
+    });
+  }
 }
 
 /* ────────────── Payment Method wiring ──────────────
