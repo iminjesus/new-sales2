@@ -103,6 +103,11 @@ def load_all_months():
     bj_f = _ci_glob("BobJane")
     jx_f = _ci_glob("JAX")
     tw_f = _ci_glob("Tempeweborder")
+    # Nov-03 user ask: NewBee wholesale feed (NewbeeWeborder_*.csv)
+    # dashboard parity with Tempeweborder — same SIZE/brand/
+    # DESCRIPTION/COST/PRICE/STOCK schema so build_tw_lookup +
+    # best_tw / best_twi work on it unchanged.
+    nwb_f = _ci_glob("NewbeeWeborder")
     # Oct-12 diagnostic: Tempeweborder_20261007_1739.csv was on disk
     # but the dashboard still showed no '26.10 data.  Likely causes:
     # another Tempeweborder file with the same month-key sorted later
@@ -110,20 +115,23 @@ def load_all_months():
     # the FULL list of candidate files per prefix so we can tell what
     # the picker actually saw.
     print(f"[price_compare] _BASE = {_BASE}")
-    for _prefix, _dict in (("Tempe",         t_f),
-                           ("BobJane",       bj_f),
-                           ("JAX",           jx_f),
-                           ("Tempeweborder", tw_f)):
+    for _prefix, _dict in (("Tempe",          t_f),
+                           ("BobJane",        bj_f),
+                           ("JAX",            jx_f),
+                           ("Tempeweborder",  tw_f),
+                           ("NewbeeWeborder", nwb_f)):
         print(f"[price_compare] {_prefix:>14}: {len(_dict)} month(s) → "
               + ", ".join(f"{mk}={os.path.basename(_dict[mk])}"
                           for mk in sorted(_dict.keys())))
-    all_months = sorted(set(list(t_f) + list(bj_f) + list(jx_f) + list(tw_f)))
+    all_months = sorted(set(list(t_f) + list(bj_f) + list(jx_f)
+                            + list(tw_f) + list(nwb_f)))
     return {
         mk: {
-            "t_rows":  load_csv(t_f[mk])  if mk in t_f  else [],
-            "bj_rows": load_csv(bj_f[mk]) if mk in bj_f else [],
-            "jx_rows": load_csv(jx_f[mk]) if mk in jx_f else [],
-            "tw_rows": load_csv(tw_f[mk]) if mk in tw_f else [],
+            "t_rows":   load_csv(t_f[mk])   if mk in t_f   else [],
+            "bj_rows":  load_csv(bj_f[mk])  if mk in bj_f  else [],
+            "jx_rows":  load_csv(jx_f[mk])  if mk in jx_f  else [],
+            "tw_rows":  load_csv(tw_f[mk])  if mk in tw_f  else [],
+            "nwb_rows": load_csv(nwb_f[mk]) if mk in nwb_f else [],
         }
         for mk in all_months
     }
@@ -275,7 +283,9 @@ def build_data(monthly):
     sizes = _curated + sorted(_extra_sizes)
     abbrs = list(BRANDS.keys())
 
-    store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": []}
+    store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
+                 # Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi).
+                 "nwb":  [], "nwbi": []}
     # size_data[size][abbr][store]     = [price_per_month, ...]
     # size_data[size][abbr]["<st>_d"]  = [desc_per_month,  ...]   (jax / bj / tempe)
     # size_data[size][abbr]["<st>_f"]  = [flag_per_month,  ...]   ("" / cat_fb / chg)
@@ -292,6 +302,10 @@ def build_data(monthly):
         # the full desc (e.g. "84H K435 KINERGY ECO2" or "107/103S
         # ALL-TERRAIN T/A KO3") — we just weren't exposing it before.
         return {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
+                # Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi) —
+                # same shape as tw/twi, sourced from NewbeeWeborder
+                # CSV via the shared build_tw_lookup helper.
+                "nwb":  [], "nwbi": [],
                 # Promo-price arrays — Bob Jane and JAX publish both a
                 # regular PRICE and a promotional DISC_PRICE in their
                 # CSVs; the toggle at the top of the Price Comparison
@@ -299,19 +313,22 @@ def build_data(monthly):
                 # Fallback: when a month has no DISC_PRICE, we store
                 # the normal PRICE so the promo line stays continuous
                 # and the chart still reads "the effective customer
-                # price for that month".  Tempe / TempeWOS have no
-                # promo concept — the toggle is a no-op for them.
+                # price for that month".  Tempe / TempeWOS / NewBWOS
+                # have no promo concept — the toggle is a no-op.
                 "bj_promo":  [], "jax_promo": [],
                 # Oct-27: per-month stock arrays for the stores whose
                 # CSVs now carry a STOCK column (tempe retail, tw/twi
-                # TempeWebOrder).  Value per month: None (unknown /
-                # pre-STOCK CSV), 0 (listed-but-OOS), N (available).
-                # Front-end turns 0 into a hollow point on the chart
-                # and parentheses around the price in the left tables.
-                # BJ / JAX stock info not yet scraped so no array yet.
+                # TempeWebOrder, nwb/nwbi NewbeeWebOrder).  Value per
+                # month: None (unknown / pre-STOCK CSV), 0 (listed-
+                # but-OOS), N (available).  Front-end turns 0 into a
+                # hollow point on the chart and parentheses around
+                # the price in the left tables.  BJ / JAX stock info
+                # not yet scraped so no array yet.
                 "tempe_stk": [], "tw_stk": [], "twi_stk": [],
+                "nwb_stk":   [], "nwbi_stk": [],
                 "tempe_d": [], "bj_d": [], "jax_d": [],
                 "tw_d":    [], "twi_d":  [],
+                "nwb_d":   [], "nwbi_d": [],
                 "bj_f":    [], "jax_f":  [],
                 # Per-pattern series: pattern_label → {prices, descs,
                 # promos}.  Promos array parallel to prices; the
@@ -321,7 +338,8 @@ def build_data(monthly):
                 # chart so competing series (Kinergy Eco 2 vs Kinergy
                 # GT for HK/K135) show up side-by-side.
                 "jax_series": {}, "bj_series": {},
-                "tw_series":  {}, "twi_series": {}}
+                "tw_series":  {}, "twi_series": {},
+                "nwb_series": {}, "nwbi_series": {}}
     size_data = {s: {a: _mk_slots() for a in abbrs} for s in sizes}
 
     latest       = months[-1] if months else None
@@ -399,7 +417,13 @@ def build_data(monthly):
         bj_lk  = build_bj_lookup(md["bj_rows"])
         jx_lk  = build_jax_lookup(md["jx_rows"])
         tw_lk  = build_tw_lookup(md["tw_rows"])
+        # Nov-03: NewBee wholesale lookup — reuse build_tw_lookup
+        # since the CSV schema is identical (SIZE/brand/DESCRIPTION/
+        # COST/PRICE/STOCK).
+        nwb_lk = build_tw_lookup(md["nwb_rows"])
         tp, bp, jp, twp, twip2 = [], [], [], [], []
+        # Nov-03: NewBee Sell Out / Sell In per-month averages.
+        nwbp, nwbip = [], []
 
         for size in sizes:
             for abbr in abbrs:
@@ -413,6 +437,9 @@ def build_data(monthly):
                 jx_desc, jx_price, jx_disc, _, _, jx_flag = best_jax(size, abbr, jx_lk, t_desc)
                 _tw_desc, _tw_cost, tw_price, tw_stock      = best_tw(size, abbr, tw_lk)
                 _twi_desc, _, twi_price, twi_stock          = best_twi(size, abbr, tw_lk)
+                # Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi).
+                _nwb_desc, _, nwb_price, nwb_stock          = best_tw(size, abbr, nwb_lk)
+                _nwbi_desc, _, nwbi_price, nwbi_stock       = best_twi(size, abbr, nwb_lk)
                 # Void the meaningless sentinels (0 / 999) so the chart and
                 # tables treat them as missing instead of plotting them.
                 t_price  = _norm(t_price)
@@ -420,6 +447,8 @@ def build_data(monthly):
                 jx_price = _norm(jx_price)
                 tw_price = _norm(tw_price)
                 twi_price = _norm(twi_price)
+                nwb_price  = _norm(nwb_price)
+                nwbi_price = _norm(nwbi_price)
                 bj_disc  = _norm(bj_disc)
                 jx_disc  = _norm(jx_disc)
 
@@ -428,9 +457,13 @@ def build_data(monthly):
                 size_data[size][abbr]["jax"].append(jx_price)
                 size_data[size][abbr]["tw"].append(tw_price)
                 size_data[size][abbr]["twi"].append(twi_price)
+                size_data[size][abbr]["nwb"].append(nwb_price)
+                size_data[size][abbr]["nwbi"].append(nwbi_price)
                 size_data[size][abbr]["tempe_stk"].append(t_stock)
                 size_data[size][abbr]["tw_stk"].append(tw_stock)
                 size_data[size][abbr]["twi_stk"].append(twi_stock)
+                size_data[size][abbr]["nwb_stk"].append(nwb_stock)
+                size_data[size][abbr]["nwbi_stk"].append(nwbi_stock)
                 # Promo arrays: effective customer price per month.
                 # Fallback = normal price when DISC_PRICE is absent, so
                 # the Promo view's line stays unbroken.  Null-when-null
@@ -450,6 +483,8 @@ def build_data(monthly):
                 size_data[size][abbr]["jax_d"].append(jx_desc     or "")
                 size_data[size][abbr]["tw_d"].append(_tw_desc     or "")
                 size_data[size][abbr]["twi_d"].append(_twi_desc   or "")
+                size_data[size][abbr]["nwb_d"].append(_nwb_desc   or "")
+                size_data[size][abbr]["nwbi_d"].append(_nwbi_desc or "")
 
                 # Flag: "cat_fb" when the row came from the
                 # COMPETITOR_PATTERNS fallback (Tempe had no reference),
@@ -489,12 +524,25 @@ def build_data(monthly):
                                    size, abbr,
                                    size_data[size][abbr]["twi_series"],
                                    mk_idx, price_idx=1)
+                # Nov-03: same per-pattern breakdown for NewBee Sell
+                # Out (nwb) and Sell In (nwbi).  nwb_lk tuple shape
+                # matches tw_lk (desc, sell_in, sell_out, stock).
+                _accumulate_series("nwb", nwb_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["nwb_series"],
+                                   mk_idx, price_idx=2)
+                _accumulate_series("nwbi", nwb_lk.get((size, abbr), []),
+                                   size, abbr,
+                                   size_data[size][abbr]["nwbi_series"],
+                                   mk_idx, price_idx=1)
 
                 if t_price:   tp.append(t_price)
                 if bj_price:  bp.append(bj_price)
                 if jx_price:  jp.append(jx_price)
                 if tw_price:  twp.append(tw_price)
                 if twi_price: twip2.append(twi_price)
+                if nwb_price:  nwbp.append(nwb_price)
+                if nwbi_price: nwbip.append(nwbi_price)
 
                 if mk == latest and (t_price or bj_price or jx_price):
                     cat = SIZE_CATEGORY.get(size, ("?", "?", "?"))
@@ -513,6 +561,8 @@ def build_data(monthly):
         store_avg["jax"].append(round(sum(jp)/len(jp),    2) if jp  else None)
         store_avg["tw"].append(round(sum(twp)/len(twp),   2) if twp   else None)
         store_avg["twi"].append(round(sum(twip2)/len(twip2), 2) if twip2 else None)
+        store_avg["nwb"].append(round(sum(nwbp)/len(nwbp), 2) if nwbp else None)
+        store_avg["nwbi"].append(round(sum(nwbip)/len(nwbip), 2) if nwbip else None)
 
     # ── Month-over-month "product changed" flag ──────────────────────
     # Compare each month's picked description with the previous month's
@@ -1032,9 +1082,19 @@ const POPULAR = {{ popular_json | safe }};
 const POPULAR_SET = new Set(POPULAR);
 const months  = D.months;
 
-const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800', tw:'#9C27B0', twi:'#E040FB' };
-const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX',   tw:'TempeWOS Sell Out', twi:'TempeWOS Sell In' };
-const SD = { tempe:[], bj:[5,5], jax:[2,3], tw:[8,3], twi:[3,3] };
+// Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi) added alongside
+// TempeWOS tw/twi.  Colour family picked to mirror the SPRF Remark
+// chip (NewBDealer = #1D4ED8) so the two surfaces read the same —
+// deeper blue for Sell Out, lighter blue for Sell In.
+const SC = { tempe:'#2196F3', bj:'#4CAF50', jax:'#FF9800',
+             tw:'#9C27B0',   twi:'#E040FB',
+             nwb:'#0D47A1',  nwbi:'#42A5F5' };
+const SL = { tempe:'Tempe',   bj:'Bob Jane', jax:'JAX',
+             tw:'TempeWOS Sell Out', twi:'TempeWOS Sell In',
+             nwb:'NewBWOS Sell Out', nwbi:'NewBWOS Sell In' };
+const SD = { tempe:[], bj:[5,5], jax:[2,3],
+             tw:[8,3], twi:[3,3],
+             nwb:[8,3], nwbi:[3,3] };
 const PALETTE = ['#C8102E','#E31837','#FFA500','#003087','#00539B',
                  '#E8001A','#FF6600','#E4002B','#003DA5','#555555'];
 
@@ -1241,6 +1301,10 @@ function _renderStoreTable(wrap) {
         { key:'jax',   label:'JAX',                c: SC.jax  },
         { key:'tw',    label:'TempeWOS Sell Out',   c: SC.tw   },
         { key:'twi',   label:'TempeWOS Sell In',    c: SC.twi  },
+        // Nov-03: NewBWOS rows added alongside TempeWOS so the
+        // Store comparison table carries both dealer feeds.
+        { key:'nwb',   label:'NewBWOS Sell Out',    c: SC.nwb  },
+        { key:'nwbi',  label:'NewBWOS Sell In',     c: SC.nwbi },
     ];
     const storePrices = stores.map(function(s) {
         if (abbr === 'ALL') return _avgAllBrands(selectedSize, s.key);
@@ -1698,7 +1762,7 @@ function _renderStore() {
     const abbr = selectedSubKey;
     const sizeLabel  = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
     const brandLabel = abbr === 'ALL' ? 'All Brands (avg)' : (BRANDS[abbr] || abbr);
-    const ds = ['tempe','bj','jax','tw','twi'].reduce((arr, s) => {
+    const ds = ['tempe','bj','jax','tw','twi','nwb','nwbi'].reduce((arr, s) => {
         let prices;
         if (abbr === 'ALL') {
             prices = _avgAllBrands(selectedSize, s);
@@ -2329,7 +2393,10 @@ function onModeBrand(btn) {
      {key:'bj',    label:'Bob Jane',          c:'#4CAF50'},
      {key:'jax',   label:'JAX',               c:'#FF9800'},
      {key:'tw',    label:'TempeWOS Sell Out',  c:'#9C27B0'},
-     {key:'twi',   label:'TempeWOS Sell In',   c:'#E040FB'}].forEach(function(s) {
+     {key:'twi',   label:'TempeWOS Sell In',   c:'#E040FB'},
+     // Nov-03: NewBWOS sub-brand buttons for the By Channel view.
+     {key:'nwb',   label:'NewBWOS Sell Out',   c:'#0D47A1'},
+     {key:'nwbi',  label:'NewBWOS Sell In',    c:'#42A5F5'}].forEach(function(s) {
         const b = document.createElement('button');
         b.className = 'btn';
         b.textContent = s.label;
