@@ -468,7 +468,25 @@ def build_tw_lookup(rows):
                      and (not price_val or price_val <= 0))
         if both_zero and stock is None:
             continue
-        lk.setdefault((size, abbr), []).append((desc, cost_val, price_val, stock))
+        # Nov-03 user ask: carry per-branch stock as a pre-formatted
+        # label string so the dashboard legend can render
+        # "· B:8+/S:1" (Tempe = Brisbane+Sydney) or "· S:12/M:3"
+        # (Newbee = Sydney+Melbourne) instead of the single max-of-
+        # branches value.  Which letters show up is CSV-driven: an
+        # empty cell for a branch means that CSV doesn't carry it,
+        # so Tempe files emit B/S + blank M, and Newbee files emit
+        # S/M + blank B.  Letters sort consistently (B, S, M) so the
+        # order is stable regardless of row order.
+        _parts = []
+        for _letter, _col in (("B", "STOCK_BRISBANE"),
+                              ("S", "STOCK_SYDNEY"),
+                              ("M", "STOCK_MELBOURNE")):
+            _v = str(r.get(_col, "") or "").strip()
+            if _v != "":
+                _parts.append(f"{_letter}:{_v}")
+        stk_lbl = "/".join(_parts)
+        lk.setdefault((size, abbr), []).append(
+            (desc, cost_val, price_val, stock, stk_lbl))
     return lk
 
 def best_tw(size, abbr, tw_lk):
@@ -485,6 +503,19 @@ def best_twi(size, abbr, tw_lk):
     cost_val = first[1]
     stock   = first[3] if len(first) > 3 else None
     return desc, None, cost_val, stock
+
+
+def best_tw_stk_lbl(size, abbr, tw_lk):
+    """Return the per-branch stock label of the PRIMARY (cheapest-
+    price) row for (size, abbr).  Mirrors best_tempe's selection so
+    the label on the dashboard's primary legend line matches the
+    primary price the chart plots.  Returns '' when no row matched
+    or no per-branch columns were present in the source CSV."""
+    cands = tw_lk.get((size, abbr), [])
+    if not cands:
+        return ""
+    best = sorted(cands, key=lambda x: (x[2] is None, x[2] or 0))[0]
+    return best[4] if len(best) > 4 else ""
 
 # ── Chunk 3: Sheet 1 — Summary (9 cols/brand) ───────────────────────────────────────────────────
 

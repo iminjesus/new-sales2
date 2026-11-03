@@ -20,6 +20,10 @@ from price_compare_jax import (
     load_csv,
     build_tempe_lookup, build_bj_lookup, build_jax_lookup, build_tw_lookup,
     best_tempe, best_bj, best_jax, best_tw, best_twi,
+    # Nov-03: per-branch (B/S for Tempe, S/M for Newbee) stock label
+    # for the dashboard legend tail.  Returns pre-formatted strings
+    # like "B:8+/S:1" so the frontend can append verbatim.
+    best_tw_stk_lbl,
     BRANDS, SIZE_CATEGORY, BRAND_COLOURS, ROW_FILLS,
     COMPETITOR_PATTERNS,
 )
@@ -326,6 +330,12 @@ def build_data(monthly):
                 # not yet scraped so no array yet.
                 "tempe_stk": [], "tw_stk": [], "twi_stk": [],
                 "nwb_stk":   [], "nwbi_stk": [],
+                # Nov-03: per-month per-branch stock label.  Pre-
+                # formatted "B:8+/S:1" (Tempe) / "S:12/M:3" (Newbee)
+                # at CSV read time so the dashboard legend tail can
+                # append verbatim without parsing on every render.
+                "tw_stk_lbl":   [], "twi_stk_lbl":  [],
+                "nwb_stk_lbl":  [], "nwbi_stk_lbl": [],
                 "tempe_d": [], "bj_d": [], "jax_d": [],
                 "tw_d":    [], "twi_d":  [],
                 "nwb_d":   [], "nwbi_d": [],
@@ -471,6 +481,15 @@ def build_data(monthly):
                 size_data[size][abbr]["twi_stk"].append(twi_stock)
                 size_data[size][abbr]["nwb_stk"].append(nwb_stock)
                 size_data[size][abbr]["nwbi_stk"].append(nwbi_stock)
+                # Nov-03: per-branch label lookup, same primary-row
+                # selection as best_tw / best_twi so the label lines
+                # up with the price on the primary legend entry.
+                _tw_lbl  = best_tw_stk_lbl(size, abbr, tw_lk)
+                _nwb_lbl = best_tw_stk_lbl(size, abbr, nwb_lk)
+                size_data[size][abbr]["tw_stk_lbl"].append(_tw_lbl)
+                size_data[size][abbr]["twi_stk_lbl"].append(_tw_lbl)
+                size_data[size][abbr]["nwb_stk_lbl"].append(_nwb_lbl)
+                size_data[size][abbr]["nwbi_stk_lbl"].append(_nwb_lbl)
                 # Promo arrays: effective customer price per month.
                 # Fallback = normal price when DISC_PRICE is absent, so
                 # the Promo view's line stays unbroken.  Null-when-null
@@ -1521,17 +1540,24 @@ let _activePricingBtn = null;
    at a glance which products are actually buyable right now.
    Returns "" when there is no recent stock to show (BJ / JAX have
    no STOCK column) or when the latest value is unknown (null).
-   The warehouse letter mirrors the SPRF chip convention:
-     tempe (retail) -> S (Sydney only — Tempe consumer site)
-     tw / twi       -> B/S (TempeWOS Brisbane + Sydney, max shown here)
-     nwb / nwbi     -> S/M (NewBWOS Sydney + Melbourne, max shown here)
-   The dashboard's per-store stocks array currently carries the
-   single legacy STOCK column (max of both branches), so one number
-   is the honest answer for the tail; the per-branch split lives in
-   the SPRF chip. */
-function _stockTailLabel(store, stocks) {
+
+   Two input sources, preferring the richer one:
+     1. stkLabels: per-month pre-formatted strings like "B:8+/S:1"
+        (Tempe wholesale) or "S:12/M:3" (Newbee wholesale), built
+        at CSV read time from the STOCK_BRISBANE / STOCK_SYDNEY /
+        STOCK_MELBOURNE columns.  Picks the latest non-empty string.
+     2. stocks (fallback): the single legacy max-of-branches value;
+        rendered with a store-specific letter mirroring the SPRF
+        chip convention (tempe→S, tw/twi→B/S, nwb/nwbi→S/M). */
+function _stockTailLabel(store, stocks, stkLabels) {
+    // Prefer per-branch label when the CSV carried them.
+    if (stkLabels && stkLabels.length) {
+        for (let i = stkLabels.length - 1; i >= 0; i--) {
+            const t = stkLabels[i];
+            if (t) return ' · ' + t;
+        }
+    }
     if (!stocks || !stocks.length) return '';
-    // Latest non-null value wins; "+" suffix preserved.
     let latest = null;
     for (let i = stocks.length - 1; i >= 0; i--) {
         if (stocks[i] !== null && stocks[i] !== undefined) {
@@ -1545,10 +1571,21 @@ function _stockTailLabel(store, stocks) {
          : (/^(nwb|nwbi)$/.test(store) ? 'S/M'
          : ''));
     if (!letter) return '';
-    // Render as "0" when the CSV said explicit OOS (stock=0); the
-    // chart already draws the hollow-dot treatment for that case.
     const txt = (String(latest) === '0') ? '0' : String(latest);
     return ' · ' + letter + ':' + txt;
+}
+
+/* Per-store per-month stock-label array (parallel to _stocksFor).
+   Reads the <store>_stk_lbl array populated by build_data at CSV
+   read time; returns an all-empty array when the store is one of
+   the single-stock / no-stock sources (tempe retail, bj, jax). */
+function _stockLabelsFor(abbr, size, store) {
+    if (!store) return months.map(() => '');
+    if (abbr === 'ALL' || size === 'ALL') return months.map(() => '');
+    const bsd = (D.brand_size_data[abbr] || {})[size];
+    if (!bsd) return months.map(() => '');
+    const key = store + '_stk_lbl';
+    return bsd[key] || months.map(() => '');
 }
 
 /* Which backend key holds the price array for a store under the
@@ -1855,9 +1892,10 @@ function _renderStore() {
                     primaryPattern = list.join(' / ');
                 }
             }
+            const stkLabels = _stockLabelsFor(abbr, selectedSize, s);
             const label = SL[s]
                         + (primaryPattern ? ' — ' + primaryPattern : '')
-                        + _stockTailLabel(s, stks);
+                        + _stockTailLabel(s, stks, stkLabels);
             arr.push({ label: label, data: prices, borderColor:SC[s],
                        backgroundColor:SC[s]+'33', borderDash:SD[s],
                        spanGaps:true, tension:.3, fill:false,
@@ -1934,9 +1972,10 @@ function _renderBrand() {
         // "HK Hankook — Kinergy Eco 2" instead of just "HK Hankook".
         const primaryPattern = _seriesPattern(abbr, selectedSize, store)
                             || _guessPatternFromDescs(descs);
+        const stkLabels = _stockLabelsFor(abbr, selectedSize, store);
         const primaryLabel = abbr + ' ' + (BRANDS[abbr]||'')
                            + (primaryPattern ? ' — ' + primaryPattern : '')
-                           + _stockTailLabel(store, stks);
+                           + _stockTailLabel(store, stks, stkLabels);
         ds.push({ label: primaryLabel, data: prices,
                   borderColor:c, backgroundColor:c+'33',
                   borderDash: solid ? [] : [6,4],
