@@ -189,11 +189,58 @@ def autofit(ws):
         w = max((len(str(c.value)) for c in col if c.value), default=8)
         ws.column_dimensions[get_column_letter(col[0].column)].width = min(w + 3, 55)
 
+## Nov-03 user ask: surface non-major brands in the dashboard too.
+## abbr_for used to return None for anything outside BRANDS, which
+## caused every build_*_lookup to drop those rows entirely.  Now
+## unknown brands get a stable dynamic abbr (first 2 alphanumeric
+## chars of the first word, uppercased; extended on collision) and
+## are recorded in EXTRA_BRANDS_SEEN so the UI can render them on
+## a second row sorted by frequency.  Majors still map to their
+## canonical short abbr (MC/BS/CT/...) via the BRANDS dict.
+EXTRA_BRANDS_SEEN: dict[str, str] = {}
+
+def _dynamic_abbr(name):
+    import re as _re
+    tokens = _re.sub(r"[^A-Za-z0-9]+", " ", name).strip().split()
+    if not tokens:
+        return None
+    first = tokens[0]
+    base = first[:2].upper() if len(first) >= 2 else (first + "X").upper()[:2]
+    # Avoid collision with canonical BRANDS abbrs.
+    if base in BRANDS:
+        if len(first) >= 3:
+            base = (first[0] + first[2]).upper()
+        else:
+            base = (first[0] + "X").upper()
+    # Avoid collision with an already-seen extra that resolves to a
+    # DIFFERENT name.  Keep extending with later chars until unique.
+    j = 2
+    while base in EXTRA_BRANDS_SEEN and EXTRA_BRANDS_SEEN[base].lower() != name.strip().lower():
+        if len(first) > j:
+            base = (first[0] + first[j]).upper()
+            j += 1
+        else:
+            # Exhausted characters; append digit suffix.
+            k = 2
+            while (base + str(k)) in EXTRA_BRANDS_SEEN:
+                k += 1
+            base = base + str(k)
+            break
+    return base
+
 def abbr_for(brand_name):
+    if not brand_name:
+        return None
+    nm = brand_name.strip()
+    nm_lower = nm.lower()
     for abbr, name in BRANDS.items():
-        if name.lower() == brand_name.strip().lower():
+        if name.lower() == nm_lower:
             return abbr
-    return None
+    # Not a major — dynamically generate + remember.
+    abbr = _dynamic_abbr(nm)
+    if abbr:
+        EXTRA_BRANDS_SEEN.setdefault(abbr, nm)
+    return abbr
 
 def normalise_size(raw):
     """Oct-29: broaden size extraction to catch everything the Tempe

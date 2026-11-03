@@ -279,13 +279,41 @@ def build_data(monthly):
     _curated_set = set(_curated)
     _extra_sizes = set()
     for _mk, _md in monthly.items():
-        for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows"):
+        for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows", "nwb_rows"):
             for _r in _md.get(_bucket, []):
                 _sz = (_r.get("SIZE","") or "").strip()
                 if _sz and _sz not in _curated_set:
                     _extra_sizes.add(_sz)
     sizes = _curated + sorted(_extra_sizes)
-    abbrs = list(BRANDS.keys())
+    # Nov-03 user ask: surface non-major brands too.  Walk every row
+    # of every source CSV to discover the full set of (abbr, name,
+    # freq) triples, then build `abbrs` as majors-first followed by
+    # extras sorted by frequency (most common first).  abbr_for now
+    # generates a stable dynamic abbr for unknown brands and records
+    # them in EXTRA_BRANDS_SEEN, so this walk also populates that
+    # registry as a side-effect.
+    from price_compare_jax import abbr_for as _abbr_for, EXTRA_BRANDS_SEEN as _EXTRAS
+    _brand_counts: dict[str, int] = {}
+    for _md in monthly.values():
+        for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows", "nwb_rows"):
+            for _r in _md.get(_bucket, []):
+                _b = (_r.get("BRAND") or _r.get("brand") or "").strip()
+                if not _b:
+                    continue
+                _a = _abbr_for(_b)
+                if not _a:
+                    continue
+                _brand_counts[_a] = _brand_counts.get(_a, 0) + 1
+    _major_abbrs = list(BRANDS.keys())
+    _extra_sorted = sorted(
+        (a for a in _brand_counts.keys() if a not in BRANDS),
+        key=lambda a: (-_brand_counts.get(a, 0), a),
+    )
+    abbrs = _major_abbrs + _extra_sorted
+    # Expose the discovered extras (abbr -> display name) + freq
+    # counts so the template renderer can hand them to the frontend.
+    _extras_for_ui = {a: _EXTRAS[a] for a in _extra_sorted if a in _EXTRAS}
+    _brand_freq_for_ui = dict(_brand_counts)
 
     store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
                  # Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi).
@@ -666,6 +694,12 @@ def build_data(monthly):
         # a highlight pill style AND filter down to just these when
         # the user ticks the "Reserved" checkbox.
         "popular_sizes":   [s for s in _sizes_with_data if s in _curated_set],
+        # Nov-03: non-major brands discovered across the four source
+        # CSVs.  `extra_brands` maps abbr -> display name (used for
+        # the second-row buttons); `brand_freq` carries per-brand
+        # row counts so the frontend can sort extras by frequency.
+        "extra_brands":    _extras_for_ui,
+        "brand_freq":      _brand_freq_for_ui,
     }
 
 
@@ -1110,6 +1144,13 @@ body.left-hidden .show-tables-chip { display: inline-block; }
 <script>
 const D       = {{ chart_json | safe }};
 const BRANDS  = {{ brands_json | safe }};
+// Nov-03: extras + per-brand row frequency for the second-row
+// buttons.  EXTRA_BRANDS maps dynamic abbr -> display name for
+// brands the CSVs carry but that weren't in the curated BRANDS
+// list.  BRAND_FREQ is the row count per abbr (majors + extras),
+// used to sort extras most-common-first.
+const EXTRA_BRANDS = {{ extra_brands_json | safe }};
+const BRAND_FREQ   = {{ brand_freq_json  | safe }};
 const BCOLORS = {{ bcolors_json | safe }};
 const SIZES   = {{ sizes_json | safe }};
 const POPULAR = {{ popular_json | safe }};
@@ -2452,8 +2493,11 @@ function onModeStore(btn) {
         subBtns.appendChild(b);
     }());
 
-    // one button per brand that has data in any size
-    Object.keys(D.brand_size_data).forEach(function(abbr) {
+    // Nov-03 user ask: render majors first (fixed BRANDS order),
+    // then extras sorted by row-count frequency (most common first).
+    // Extras overflow past EXTRA_INLINE_LIMIT fold into a "▾ More"
+    // collapsible so the row doesn't stretch across the chart.
+    const _makeBrandBtn = function(abbr) {
         const c = '#' + (BCOLORS[abbr] || '555555');
         const b = document.createElement('button');
         b.className = 'btn';
@@ -2464,8 +2508,50 @@ function onModeStore(btn) {
             _activeSubBtn = b; b.classList.add('active');
             selectedSubKey = abbr; _tryRender();
         };
-        subBtns.appendChild(b);
+        return b;
+    };
+    // Majors — fixed order from the BRANDS dict, skip any that
+    // have no data (same guard the old loop implicitly applied
+    // via D.brand_size_data).
+    Object.keys(BRANDS).forEach(function(abbr) {
+        if (EXTRA_BRANDS[abbr]) return;   // avoid dupes
+        if (!(abbr in D.brand_size_data)) return;
+        subBtns.appendChild(_makeBrandBtn(abbr));
     });
+    // Extras — sort by BRAND_FREQ desc, then alpha.
+    const _extraAbbrs = Object.keys(EXTRA_BRANDS).filter(function(a) {
+        return a in D.brand_size_data;
+    }).sort(function(a, b) {
+        const fa = BRAND_FREQ[a] || 0, fb = BRAND_FREQ[b] || 0;
+        if (fa !== fb) return fb - fa;
+        return a.localeCompare(b);
+    });
+    const EXTRA_INLINE_LIMIT = 10;
+    const _inlineExtras = _extraAbbrs.slice(0, EXTRA_INLINE_LIMIT);
+    const _overflow     = _extraAbbrs.slice(EXTRA_INLINE_LIMIT);
+    _inlineExtras.forEach(function(abbr) {
+        subBtns.appendChild(_makeBrandBtn(abbr));
+    });
+    if (_overflow.length) {
+        // <details> collapsible that holds the overflow buttons;
+        // reuses the same .btns layout inside so the hidden row
+        // reads identically to the inline ones when expanded.
+        const det = document.createElement('details');
+        det.style.cssText = 'display:inline-block;margin-left:4px';
+        const sum = document.createElement('summary');
+        sum.textContent = '▾ More (' + _overflow.length + ')';
+        sum.style.cssText = 'cursor:pointer;padding:4px 8px;border:1px solid #cbd5e1;'
+                          + 'border-radius:4px;font-size:12px;color:#334155;list-style:none;';
+        det.appendChild(sum);
+        const box = document.createElement('div');
+        box.className = 'btns';
+        box.style.cssText = 'margin-top:6px';
+        _overflow.forEach(function(abbr) {
+            box.appendChild(_makeBrandBtn(abbr));
+        });
+        det.appendChild(box);
+        subBtns.appendChild(det);
+    }
     document.getElementById('sub-row').style.display = 'flex';
     if (subBtns.firstChild) subBtns.firstChild.click();
 }
@@ -2637,15 +2723,25 @@ def price_dashboard():
     }, default=str)
 
     base_rows = load_compare_base()
+    # Nov-03: merge majors + discovered extras so the frontend's
+    # BRANDS dict covers EVERY brand seen in the CSVs, not just the
+    # curated 10 majors.  Majors keep their short canonical abbrs
+    # (MC/BS/CT/...); extras appear under their dynamic 2-char abbrs
+    # recorded by abbr_for.  extra_brands_json + brand_freq_json
+    # drive the new second-row layout + frequency sort.
+    _all_brands = dict(BRANDS)
+    _all_brands.update(data.get("extra_brands", {}))
     return render_template_string(
         _HTML,
-        month_count    = len(data["months"]),
-        chart_json     = chart_json,
-        brands_json    = json.dumps(BRANDS),
-        bcolors_json   = json.dumps(BRAND_COLOURS),
-        sizes_json     = json.dumps(data["sizes_with_data"]),
-        popular_json   = json.dumps(data["popular_sizes"]),
-        base_rows      = base_rows,
+        month_count         = len(data["months"]),
+        chart_json          = chart_json,
+        brands_json         = json.dumps(_all_brands),
+        bcolors_json        = json.dumps(BRAND_COLOURS),
+        sizes_json          = json.dumps(data["sizes_with_data"]),
+        popular_json        = json.dumps(data["popular_sizes"]),
+        extra_brands_json   = json.dumps(data.get("extra_brands", {})),
+        brand_freq_json     = json.dumps(data.get("brand_freq", {})),
+        base_rows           = base_rows,
     )
 
 
