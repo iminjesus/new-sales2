@@ -5947,7 +5947,7 @@ HKCUSTOMERSERVICE_EMAIL = "HKCustomerService@hankooktyre.com.au"
 # same access rights as Harry (receive every submit email, flip
 # the SAP flag, stamp the SD #, edit material lines before Mark-Y,
 # save CS comments).  Note: hayden.lee is distinct from
-# hayden.begbie (the MGMT approver) — the match is by exact email.
+# hayden.harding (the MGMT approver) — the match is by exact email.
 ANDY_NIKI_EMAIL          = "andy.niki@hankooktyre.com.au"
 HAYDEN_LEE_EMAIL         = "hayden.lee@hankooktyre.com.au"
 # Everyone on the CS team.  Add new CS addresses here and both the
@@ -5984,7 +5984,7 @@ def _display_name_for(email) -> str:
     holding the order open ("JJ is editing this order" rather than
     "junjong.cho@... is editing").  Resolution order:
       1. CS team (Harry / HKCustomerService / Andy / Hayden Lee)
-      2. MGMT approvers (Hayden / JJ / Kenny)
+      2. MGMT approvers (Justin / JJ / Kenny)
       3. Price editors (Brian / Pamela)
       4. BDE directory (full name from _EMAIL_TO_DIR)
       5. Mailbox local-part fallback
@@ -5996,7 +5996,7 @@ def _display_name_for(email) -> str:
     if _cs:
         return _cs
     try:
-        _ap = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+        _ap = {MGMT_APPROVER_EMAILS[0].lower(): "Justin",
                MGMT_APPROVER_EMAILS[1].lower(): "JJ",
                MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(e)
         if _ap:
@@ -6034,7 +6034,7 @@ def _is_cs_user(email) -> bool:
 # column on submitted_orders + a mapping in api_orders_approve +
 # a flag in api_orders_whoami.
 MGMT_APPROVER_EMAILS = [
-    "hayden.begbie@hankooktyre.com.au",
+    "justin.harding@hankooktyre.com.au",
     "junjong.cho@hankooktyre.com.au",
     "kenny.kim@hankooktyre.com.au",
 ]
@@ -6060,7 +6060,7 @@ SPRF_READONLY_CC = [
 NOTIFY_SUBMIT_ONLY = {
     e.lower() for e in [
         "junjong.cho@hankooktyre.com.au",
-        "hayden.begbie@hankooktyre.com.au",
+        "justin.harding@hankooktyre.com.au",
         "kenny.kim@hankooktyre.com.au",
         "brian.park@hankooktyre.com.au",
         "pamela.lau@hankooktyre.com.au",
@@ -6106,26 +6106,31 @@ def _filter_notify_recipients(to_list, cc_list, requester_email=None):
 #   • Non-MD request:
 #       - Kenny  → recorded as Kenny
 #       - JJ     → recorded as JJ
-#       - Hayden → recorded as Hayden
+#       - Justin → recorded as Justin
 # So the MD gate drives the identity on MD-required rows, and the
 # actor's own identity drives it on everything else.
 def _effective_approver_identity(who, md_required: bool = False):
     e = (who or "").strip().lower()
     kenny  = MGMT_APPROVER_EMAILS[2].lower()
     jj     = MGMT_APPROVER_EMAILS[1].lower()
-    hayden = MGMT_APPROVER_EMAILS[0].lower()
+    # Nov-03: Justin Harding took over the approver_a slot from Hayden
+    # Begbie.  The slot id stays "approved_a" in the DB so historical
+    # rows keep their timestamps; only the resolved display name
+    # changed ("Hayden" -> "Justin") and the email the slot matches on
+    # (MGMT_APPROVER_EMAILS[0] now points at justin.harding@...).
+    justin = MGMT_APPROVER_EMAILS[0].lower()
     # MD-only — the record always reads as JJ regardless of who
-    # actually clicked.  Kenny / Hayden get the stand-in treatment;
+    # actually clicked.  Kenny / Justin get the stand-in treatment;
     # JJ himself passes through as JJ (same destination).
-    if md_required and e in (kenny, jj, hayden):
+    if md_required and e in (kenny, jj, justin):
         return jj, "JJ", "approved_b"
     # Non-MD — credit whoever clicked, by their real identity.
     if e == kenny:
         return kenny, "Kenny", "approved_c"
     if e == jj:
         return jj, "JJ", "approved_b"
-    if e == hayden:
-        return hayden, "Hayden", "approved_a"
+    if e == justin:
+        return justin, "Justin", "approved_a"
     return e, "", ""
 # Price editors — only these people can PATCH an already-submitted
 # order's prices via /api/orders/detail/<oid>/update.  An edit by
@@ -6200,7 +6205,7 @@ def _ensure_submitted_orders_table():
         # older deployments upgrade without a separate migration.
         # needs_mgmt_approval = 'Y' when the BDE ticked the box on the
         # form.  approved_a / approved_b / approved_c track the three
-        # named approvers independently (Hayden = A, JunJong = B,
+        # named approvers independently (Justin = A, JunJong = B,
         # Kenny = C).  Adding a new approver here needs a matching
         # entry in MGMT_APPROVER_EMAILS + api_orders_approve slot
         # mapping + api_orders_whoami flag.
@@ -6720,7 +6725,7 @@ def _submitted_order_email_html(oid, order, base_url):
     if order.get("needs_mgmt_approval") != "Y":
         # Standard-pricing (no negotiated concession on any line) — no
         # approver needs to act.  Say so at the top of the email so a
-        # recipient doesn't wait around for a Kenny/Hayden nudge that
+        # recipient doesn't wait around for a Kenny/Justin nudge that
         # will never come.
         approval_block = (
             '<div style="background:#f0fdf4;border:1px solid #16a34a;padding:6px 10px;'
@@ -6748,7 +6753,7 @@ def _submitted_order_email_html(oid, order, base_url):
         route = (f"<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JJ only</b> "
                  f"({_md_lines} non-aged, non-Standard line{_s} at Proposed DC ≥ 64%)"
                  if _md_required
-                 else "Kenny or Hayden can approve")
+                 else "Kenny or Justin can approve")
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
         approval_block = (
             '<div style="background:#fef3c7;border:1px solid #f59e0b;padding:6px 10px;'
@@ -6817,13 +6822,13 @@ def _submitted_order_email_html(oid, order, base_url):
 
 # Oct-29 user ask: Special Instruction field now carries an
 # author + timestamp.  Resolve the viewer's display name from the
-# existing identity maps (MD approvers → Hayden/JJ/Kenny; price
+# existing identity maps (MD approvers → Justin/JJ/Kenny; price
 # editors → Brian/Pamela; else email local part).  Used by the
 # save endpoints below when stamping special_instruction_by_name.
 def _display_name_for_email(email: str) -> str:
     e = (email or "").strip().lower()
     if not e: return ""
-    if e == MGMT_APPROVER_EMAILS[0].lower(): return "Hayden"
+    if e == MGMT_APPROVER_EMAILS[0].lower(): return "Justin"
     if e == MGMT_APPROVER_EMAILS[1].lower(): return "JJ"
     if e == MGMT_APPROVER_EMAILS[2].lower(): return "Kenny"
     pe = PRICE_EDITOR_EMAILS.get(e)
@@ -7349,7 +7354,7 @@ def api_orders_list():
     except Exception:
         limit = 200
     # Role-based scope:
-    #   • MGMT_APPROVER_EMAILS (Kenny, Hayden, JJ)      → all rows
+    #   • MGMT_APPROVER_EMAILS (Kenny, Justin, JJ)      → all rows
     #   • SPRF_READONLY_CC     (Brian, Minku, Pamela)   → all rows
     #   • CS_TEAM_EMAILS (Harry + HKCustomerService)    → all rows
     #   • DEV_ADMIN_EMAILS     (desktop-dashboard admin)→ all rows
@@ -7479,7 +7484,7 @@ def api_orders_list():
         total_amt_by_id   = {i: 0.0 for i in ids}
         # Per-order count of MD-qualifying lines (non-aged, non-
         # Standard-on-line, Proposed DC ≥ 64 %).  Drives the "⚑ MD
-        # only" pill on orders_list — a value of 0 means Hayden /
+        # only" pill on orders_list — a value of 0 means Justin /
         # Kenny can approve even if avg_dc_pct is ≥ 64 %.
         md_deep_by_id     = {i: 0 for i in ids}
         # Oct-28 user ask: an order with ANY line whose plant_override
@@ -7974,7 +7979,7 @@ def api_orders_status(oid):
         # Oct-22 user ask: when CS flips the SAP flag to Y (DO entered),
         # notify the salesmen on the order so BDE / requester / regional
         # manager know the order is now live in SAP.  Submit-only cohort
-        # (JJ / Hayden / Kenny / Brian / Pamela / Russell) is excluded
+        # (JJ / Justin / Kenny / Brian / Pamela / Russell) is excluded
         # from this mail unless they themselves requested the SPRF.
         _snap_for_mail = None
         if new_stat == "Y":
@@ -8404,7 +8409,7 @@ def api_orders_update(oid):
         #   • the ORIGINAL SUBMITTER (their own request, self-service)
         #   • an ALL-role admin (rare, for stuck-BDE recovery)
         #   • a PRICE EDITOR   (Brian / Pamela)  — price corrections
-        #   • an APPROVER      (Hayden / JJ / Kenny)                — MD / senior override
+        #   • an APPROVER      (Justin / JJ / Kenny)                — MD / senior override
         #   • Harry (CS)                                            — SAP-side prep
         # Every path resets the approval slots below, so an updated
         # order ALWAYS goes back through re-approval regardless of
@@ -8474,7 +8479,7 @@ def api_orders_update(oid):
             elif is_harry:
                 _who_label = _cs_display_name(who)
             else:
-                _who_label = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+                _who_label = {MGMT_APPROVER_EMAILS[0].lower(): "Justin",
                               MGMT_APPROVER_EMAILS[1].lower(): "JJ",
                               MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(who, who)
             remark_tag = f"{_who_label} updated"
@@ -8495,13 +8500,13 @@ def api_orders_update(oid):
         _now = datetime.now().strftime("%Y-%m-%d %H:%M")
         # Prefer a friendly display name when we can resolve one:
         # PRICE_EDITOR nickname (Brian / Pamela) → CS (Harry) →
-        # Approver (Hayden / JJ / Kenny) → the raw mail id.
+        # Approver (Justin / JJ / Kenny) → the raw mail id.
         if is_editor:
             _label = editor_name
         elif is_harry:
             _label = _cs_display_name(who)
         elif is_approver:
-            _label = {MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+            _label = {MGMT_APPROVER_EMAILS[0].lower(): "Justin",
                       MGMT_APPROVER_EMAILS[1].lower(): "JJ",
                       MGMT_APPROVER_EMAILS[2].lower(): "Kenny"}.get(who, who)
         else:
@@ -8639,7 +8644,7 @@ def api_orders_update(oid):
             # NB: previously we auto-stamped Brian/Pamela's edit as
             # an implicit approval — that was wrong (an edit is not
             # an approval).  The order stays Pending after an editor
-            # touches it; only Hayden / JJ / Kenny actually approving
+            # touches it; only Justin / JJ / Kenny actually approving
             # in api_orders_approve flips it to Approved.
             conn.commit()
         finally:
@@ -8690,7 +8695,7 @@ def api_orders_update(oid):
     _mgr = _bde_manager_email(submitted_by_bde)
     if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
         cc.append(_mgr)
-    # Oct-22 user ask: the submit-only cohort (JJ / Hayden / Kenny /
+    # Oct-22 user ask: the submit-only cohort (JJ / Justin / Kenny /
     # Brian / Pamela / Russell) gets stripped from every non-submit
     # mail unless they themselves are the requester.  update() is a
     # non-submit event, so apply the filter here.
@@ -8708,7 +8713,7 @@ def api_orders_update(oid):
 
 @app.post("/api/orders/detail/<int:oid>/approve")
 def api_orders_approve(oid):
-    """Mark this order approved by the caller (Hayden, JunJong or Kenny).
+    """Mark this order approved by the caller (Justin, JunJong or Kenny).
     Parallel approval — the FIRST approver to click Approve
     finalises the order.  We still write the individual
     approved_<slot> column so the detail UI can show which named
@@ -8729,9 +8734,9 @@ def api_orders_approve(oid):
       • Per-line Standard (no MTH / Vol / Add on the line)
         — the deep DC came purely from the customer's contract
         (Base + 443/promo), not a negotiated concession.
-    Hayden / JunJong / Kenny all sign off when no line qualifies
+    Justin / JunJong / Kenny all sign off when no line qualifies
     (first-approver-wins); when at least one does, only JunJong
-    (MD) can act — Hayden and Kenny get a 403 telling the front-
+    (MD) can act — Justin and Kenny get a 403 telling the front-
     end to escalate."""
     import json as _json_md
     who_raw = (_bde_from_request() or "").strip().lower()
@@ -9025,7 +9030,7 @@ def api_orders_feedback(oid):
     approvers, not read-only reviewers) with the feedback as the body
     plus a link back to the SPRF.
 
-    Who can call it: the three named approvers (Hayden / JunJong /
+    Who can call it: the three named approvers (Justin / JunJong /
     Kenny).  Body: { "feedback": "<text>" }.  Empty/whitespace text
     is rejected with 400 so a stray click can't zero out an earlier
     round."""
@@ -9034,10 +9039,10 @@ def api_orders_feedback(oid):
     if who_raw not in allowed:
         return jsonify({"error": "only named approvers can leave feedback"}), 403
     # Resolve the approver's display name from MGMT_APPROVER_EMAILS
-    # position (Hayden=A, JJ=B, Kenny=C) so the email body + stored
+    # position (Justin=A, JJ=B, Kenny=C) so the email body + stored
     # column match the Approve-flow naming.
     approver_name = {
-        MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+        MGMT_APPROVER_EMAILS[0].lower(): "Justin",
         MGMT_APPROVER_EMAILS[1].lower(): "JJ",
         MGMT_APPROVER_EMAILS[2].lower(): "Kenny",
     }.get(who_raw, who_raw.split("@")[0])
@@ -9173,7 +9178,7 @@ def api_orders_attach(oid):
     uploader_name = (
         PRICE_EDITOR_EMAILS.get(who)
         or {
-            MGMT_APPROVER_EMAILS[0].lower(): "Hayden",
+            MGMT_APPROVER_EMAILS[0].lower(): "Justin",
             MGMT_APPROVER_EMAILS[1].lower(): "JJ",
             MGMT_APPROVER_EMAILS[2].lower(): "Kenny",
         }.get(who)
@@ -9283,7 +9288,7 @@ def api_orders_attachment_delete(att_id):
 
 @app.post("/api/orders/detail/<int:oid>/reject")
 def api_orders_reject(oid):
-    """Reject this order.  Any MGMT_APPROVER (Hayden / JJ / Kenny)
+    """Reject this order.  Any MGMT_APPROVER (Justin / JJ / Kenny)
     may call this.  Body: { "note": "<at least 2 words>" }.  The note
     is required (2 words minimum, same bar the submitter's
     mgmt_reason uses).  The row flips to needs_mgmt_approval='R'
@@ -9678,7 +9683,7 @@ def api_orders_whoami():
         # only because the frontend reads both independently.
         "is_cs":         _is_cs_user(who),
         "is_harry":      _is_cs_user(who),
-        "is_approver_a": who == MGMT_APPROVER_EMAILS[0],   # Hayden
+        "is_approver_a": who == MGMT_APPROVER_EMAILS[0],   # Justin
         "is_approver_b": who == MGMT_APPROVER_EMAILS[1],   # JunJong
         "is_approver_c": who == MGMT_APPROVER_EMAILS[2],   # Kenny
         # Price-editor gate — only these people can PATCH an already-
@@ -20155,7 +20160,7 @@ _BDE_DIRECTORY = [
     ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA",  "SM"),
     ("DAIS Jim",         "jim.dais@hankooktyre.com.au",         "WA",  "BDE"),
     # Leadership / dashboard ops — full scope
-    ("Begbie Hayden",    "hayden.begbie@hankooktyre.com.au",    "NSW", "ALL"),
+    ("Harding Justin",    "justin.harding@hankooktyre.com.au",    "NSW", "ALL"),
     ("Cho JunJong",      "junjong.cho@hankooktyre.com.au",      "NSW", "ALL"),
     ("Park Brian",       "brian.park@hankooktyre.com.au",       "NSW", "ALL"),
 ]
@@ -20167,7 +20172,7 @@ STATE_MANAGER_EMAIL = {
     "TAS": "calvin.hobkirk@hankooktyre.com.au",
     "WA":  "asim.qureshi@hankooktyre.com.au",
 }
-ALWAYS_TO = ["hayden.begbie@hankooktyre.com.au",
+ALWAYS_TO = ["justin.harding@hankooktyre.com.au",
              "junjong.cho@hankooktyre.com.au"]
 
 def _bde_name_keys(full_name):
@@ -20471,7 +20476,7 @@ def _fetch_prep_history(ship_to, exclude_id=None):
 def _notify_new_log(rid, bde_name, sold_to_name, ship_to, ship_to_name,
                     visit_date, met_person, notes, next_action,
                     visit_purpose="", plan_bde_email="", prep_notes=""):
-    """Email Hayden + JJ + Jayden + the State Manager of the BDE's
+    """Email Justin + JJ + Jayden + the State Manager of the BDE's
     state.  CC the BDE author so they have a record of what was sent
     on their behalf.  Also CC the original scheduling BDE (plan_bde_email)
     if the log was created from someone else's calendar plan."""
@@ -20504,7 +20509,7 @@ def _notify_feedback_thread(rid, log_row, thread, current_author_email=""):
     """Email everyone in the feedback thread when a new comment lands.
 
     Recipients = original BDE + every prior commenter's email +
-    Hayden/JJ + State Manager — minus the person who just typed
+    Justin/JJ + State Manager — minus the person who just typed
     (no point mailing yourself back).  Each thread participant sees
     the entire conversation chronologically in the message body.
     """
@@ -20768,7 +20773,7 @@ def whoami():
     BDE  → lock_salesman = own name (own territory + amber overlay
            markers for shops visited outside it on the map).
     SM   → lock_region   = own state.
-    ALL  → no locks (leadership / Hayden / JJ / dashboard ops).
+    ALL  → no locks (leadership / Justin / JJ / dashboard ops).
 
     No CF header (Tailscale / local dev) or unknown email → no locks
     so internal access from the office network keeps working."""
@@ -20854,7 +20859,7 @@ def mail_test():
 
 @app.get("/api/people")
 def people_directory():
-    """Names that can leave feedback — BDEs + State Managers + Hayden + JJ.
+    """Names that can leave feedback — BDEs + State Managers + Justin + JJ.
     Sourced from the hardcoded _BDE_DIRECTORY so it works without DB."""
     out = []
     seen = set()
@@ -21188,7 +21193,7 @@ def meeting_post():
         conn.commit()
         cur.close(); conn.close()
 
-        # Fire-and-forget notification: Hayden + JJ + State Manager,
+        # Fire-and-forget notification: Justin + JJ + State Manager,
         # CC the BDE author.  Runs in a background thread so the form
         # POST returns immediately.
         try:
@@ -21288,7 +21293,7 @@ def meeting_feedback():
         cur.close(); conn.close()
 
         # Notify everyone touching this thread (original BDE +
-        # everyone who has commented before + Hayden/JJ + State Manager)
+        # everyone who has commented before + Justin/JJ + State Manager)
         # except the person who just typed this comment.
         try:
             _notify_feedback_thread(rid, log_row, thread,
@@ -21309,7 +21314,7 @@ def meeting_plan_list():
     the rest of the dashboard:
       • BDE → only their own plans.
       • SM  → plans by any BDE who belongs to their state.
-      • ALL → everyone (Hayden / JJ / Jayden / unknown emails).
+      • ALL → everyone (Justin / JJ / Jayden / unknown emails).
     """
     try:
         year  = int(request.args.get("year")  or datetime.now().year)
@@ -22209,7 +22214,7 @@ def shop_briefing_data(ship_to):
 # ─── Admin: dashboard usage analytics ────────────────────────────────
 # Read-only view onto request_log so we can quantify who's using the
 # dashboard and which views matter.  Restricted to ALL-role users (the
-# small admin set in _BDE_DIRECTORY — Hayden / JJ / Jayden).
+# small admin set in _BDE_DIRECTORY — Justin / JJ / Jayden).
 def _is_admin_request():
     # Temporarily OPEN to every caller while the operator confirms the
     # pipeline works.  Flip back to the role-gated version below once
@@ -22470,7 +22475,7 @@ def _derive_name_from_email(email):
     uses on the SPRF list ("junjong.cho" → "Cho JunJong") where the
     directory does carry a row — so a derived label reads the same
     way.  Reverses "first.last" so the surname comes first, which
-    matches the "Begbie Hayden" / "Park Brian" entries in the current
+    matches the "Harding Justin" / "Park Brian" entries in the current
     directory."""
     s = (email or "").split("@", 1)[0]
     if not s:

@@ -1510,7 +1510,7 @@
         This order requires <b>Managing Director approval</b>.
         <b id="mdNoticeShare">—</b> on this order carry a Proposed DC of
         <b>64&#8239;%</b> or more with a negotiated concession — outside
-        the level Kenny or Hayden can approve.
+        the level Kenny or Justin can approve.
       </div>
       <div class="exempt">
         <b>Exempt</b> from this requirement (per line):
@@ -1932,7 +1932,7 @@
              sign off (or that no approval is needed) before hitting
              Submit.  Rules:
                • no additional DC on any line  → Standard Pricing
-               • avg total DC < 64 %           → Hayden or Kenny
+               • avg total DC < 64 %           → Justin or Kenny
                • avg total DC ≥ 64 %           → JunJong (MD) only -->
         <!-- Approval route — Oct-13 revised schema:
              Spans TWO subgrid rows (grid-row: span 2) so the long
@@ -2021,7 +2021,7 @@
           <div id="attachStrip-reason" class="sprf-attach-strip" data-source="reason" hidden></div>
         </div>
         <!-- Oct-28 user ask: Approver Feedback — a textarea the three
-             MGMT approvers (Hayden/Kenny/JJ) can use to send a message
+             MGMT approvers (Justin/Kenny/JJ) can use to send a message
              BACK to the requester before approving.  Oct-29 revision:
              added a clear instructional banner above the textarea
              spelling out when to use this flow vs. clicking Approve
@@ -2383,7 +2383,7 @@
     </button>
     <!-- Approve — sits at the far right of the toolbar so it's the
          last thing the reader sees.  Only actionable to the named
-         approvers (Hayden / JJ / Kenny); dimmed for everybody else,
+         approvers (Justin / JJ / Kenny); dimmed for everybody else,
          hidden entirely on already-approved / Standard-pricing
          orders. -->
     <button class="primary" id="btnToolbarApprove" hidden
@@ -2436,7 +2436,7 @@
   </div>
   <!-- Bottom-of-page Approve bar.
        Appears ONLY when the current viewer is a named approver
-       (Hayden / JJ / Kenny) AND the order is still Pending AND
+       (Justin / JJ / Kenny) AND the order is still Pending AND
        they haven't already flipped their own slot.  Sits at the
        very tail of the SPRF so the approver reads the entire
        order top-to-bottom before deciding — no accidental clicks
@@ -5502,7 +5502,7 @@ function updateTotals(){
 
   // ── Approval-route banner ──
   //   • no extra DC on any line       → Standard Pricing (no approval)
-  //   • extra DC + Total DC <  64 %   → Hayden or Kenny can approve
+  //   • extra DC + Total DC <  64 %   → Justin or Kenny can approve
   //   • extra DC + Total DC >= 64 %   → JunJong (MD) only — mandatory
   //  Both Total DC and Additional DC are shown so the BDE can watch
   //  the chained calc live as they key values into MTH / SP / Vol /
@@ -5529,20 +5529,20 @@ function updateTotals(){
     let fullText = "";
     // Oct-28 user ask: Standard-priced orders carrying ANY inter-state
     // line change their label to "Standard (inter-state)" on two
-    // lines and require approval from any approver (Hayden / Kenny
+    // lines and require approval from any approver (Justin / Kenny
     // / JJ).  needs_mgmt_approval auto-flips below in serializeOrder.
     const anyInterstate = !!window._orderHasInterstate;
     // Nov-03 user ask: a Standard-priced order with ANY stock-out
     // line (requested qty > mapped plant ATP) ALSO needs approval
     // and gets its own amber "stock-out (N/M materials)" badge.
     // Can coexist with inter-state (both tags show), can show on
-    // any tier (Standard / MD / Kenny-or-Hayden).
+    // any tier (Standard / MD / Kenny-or-Justin).
     const anyStockOut   = !!window._orderHasStockOut;
     const stockOutN     = +window._orderStockOutCount || 0;
     const stockOutM     = +window._orderStockOutTotal || 0;
     const _stockOutText = `stock-out (${stockOutN}/${stockOutM} materials)`;
     // Shared tag appended after the primary approval banner on ANY
-    // route (MD-only, Hayden/Kenny, Standard) when an inter-state
+    // route (MD-only, Justin/Kenny, Standard) when an inter-state
     // line is present.  Standard already gets the full red
     // "STANDARD (inter-state)" badge in place; the other branches
     // tack this smaller tag on so the reader sees the inter-state
@@ -5563,7 +5563,7 @@ function updateTotals(){
       el.innerHTML =
         `<span style="color:#fff;background:#b91c1c;padding:1px 6px;border-radius:3px;font-weight:800">`
         + `STANDARD<br>(inter-state)</span>`
-        + ` — <b>Hayden / Kenny / JJ</b> can approve (any one).`
+        + ` — <b>Justin / Kenny / JJ</b> can approve (any one).`
         + (anyStockOut ? _stockOutTag : "");
       fullText = `STANDARD (inter-state) — any approver can sign off.`
         + (anyStockOut ? `  (⚑ ${_stockOutText})` : "");
@@ -5571,7 +5571,7 @@ function updateTotals(){
       el.innerHTML =
         `<span style="color:#fff;background:#d97706;padding:1px 6px;border-radius:3px;font-weight:800">`
         + `STANDARD<br>(${_stockOutText})</span>`
-        + ` — <b>Hayden / Kenny / JJ</b> can approve (any one).`;
+        + ` — <b>Justin / Kenny / JJ</b> can approve (any one).`;
       fullText = `STANDARD (${_stockOutText}) — any approver can sign off.`;
     } else if (!hasAdditional){
       el.innerHTML =
@@ -5591,10 +5591,10 @@ function updateTotals(){
         + (anyInterstate ? "  (⚑ Inter-state)" : "")
         + (anyStockOut   ? `  (⚑ ${_stockOutText})` : "");
     } else {
-      el.innerHTML = `<b>Kenny or Hayden</b> can approve.`
+      el.innerHTML = `<b>Kenny or Justin</b> can approve.`
         + (anyInterstate ? _interstateTag : "")
         + (anyStockOut   ? _stockOutTag   : "");
-      fullText = `Kenny or Hayden can approve.`
+      fullText = `Kenny or Justin can approve.`
         + (anyInterstate ? "  (⚑ Inter-state)" : "")
         + (anyStockOut   ? `  (⚑ ${_stockOutText})` : "");
     }
@@ -9774,11 +9774,11 @@ async function hydrateSubmittedOrder(oid, editMode){
        • the original submitter                     (self-service BDE)
        • an ALL-role admin                          (rare, stuck-BDE)
        • a price editor (Brian / Pamela)            (price corrections)
-       • an approver   (Hayden / JJ / Kenny)        (MD / senior override)
+       • an approver   (Justin / JJ / Kenny)        (MD / senior override)
        • Harry (CS)                                 (SAP-side prep)
      Every path re-routes through the approval flow — backend clears
      the slots on save, and the top / bottom approval bars refresh
-     to Pending until Kenny / Hayden / JJ click Approve again. */
+     to Pending until Kenny / Justin / JJ click Approve again. */
   /* Submitter-match — the standard rule: whoami email equals the
      row's submitted_by_email.  Also accept a match against
      whoami.local_user (getpass fallback / X-Requester-Email header)
@@ -10503,7 +10503,7 @@ function wireApprovalPanel(order, who){
     if (el) el.innerHTML =
       `<span style="color:#fff;background:#b91c1c;padding:1px 6px;border-radius:3px;font-weight:800">`
       + `STANDARD<br>(inter-state)</span>`
-      + ` — <b>Hayden / Kenny / JJ</b> can approve (any one).`;
+      + ` — <b>Justin / Kenny / JJ</b> can approve (any one).`;
   }
   panel.hidden = false;
   const esc = s => String(s || "").replace(/[&<>"']/g,
@@ -10515,7 +10515,7 @@ function wireApprovalPanel(order, who){
   };
   // "Approver of record" banner — first-approver-wins, so once
   // approved_by_name is set we highlight it so downstream readers
-  // know who signed off (Hayden / JunJong / Kenny — or an editor
+  // know who signed off (Justin / JunJong / Kenny — or an editor
   // if Pamela / Brian corrected the order after submission).  When
   // the approver left a comment during sign-off it hangs off the
   // banner as a second block so the reader sees the record and the
@@ -10539,7 +10539,7 @@ function wireApprovalPanel(order, who){
     ? `<div style="width:100%;background:#fee2e2;border:1px solid #dc2626;color:#991b1b;padding:6px 12px;border-radius:4px;font-weight:700;font-size:12.5px;margin-bottom:8px">✕ Rejected by ${esc(order.rejected_by_name)}${order.rejected_at ? " · " + esc(order.rejected_at) : ""}</div>` + rejectBlock
     : "";
   /* Requester's "Reason / Notes for Approver" — mirror it into the
-     approval panel so Kenny / Hayden / JJ don't have to scroll back
+     approval panel so Kenny / Justin / JJ don't have to scroll back
      up to the yellow textarea when deciding whether to sign off.
      Oct-14 user ask: the email notification already carries this
      text; show the SAME string here on the form itself for easy
@@ -10565,12 +10565,12 @@ function wireApprovalPanel(order, who){
       + `</div>`
     : "";
   row.innerHTML = rejectBanner + recordBanner + requesterReasonBlock + [
-    /* Display order (per review): Kenny → Hayden → JJ.  Slot
-       columns in the DB are approved_a=Hayden, approved_b=JunJong,
+    /* Display order (per review): Kenny → Justin → JJ.  Slot
+       columns in the DB are approved_a=Justin, approved_b=JunJong,
        approved_c=Kenny — that assignment stays; only the render
        order changes, and JunJong is now displayed as "JJ". */
     chip("Kenny",   order.approved_c, order.approved_c_at),
-    chip("Hayden",  order.approved_a, order.approved_a_at),
+    chip("Justin",  order.approved_a, order.approved_a_at),
     chip("JJ",      order.approved_b, order.approved_b_at),
   ].join("");
 
@@ -10588,7 +10588,7 @@ function wireApprovalPanel(order, who){
      • hidden on Standard-Pricing (nothing to approve) and on
        already-approved orders (the top approval panel + bottom
        status ribbon show the record instead).
-     • enabled for the eligible named approver (Hayden / JJ /
+     • enabled for the eligible named approver (Justin / JJ /
        Kenny) whose own slot is still Pending.
      • dimmed for every other viewer on a Pending SPRF — button
        visible so the affordance is discoverable, tooltip says
@@ -10617,7 +10617,7 @@ function wireToolbarApproveBtn(btn, order, who){
     fresh.disabled = true;
     fresh.style.opacity = "0.45";
     fresh.style.cursor  = "not-allowed";
-    fresh.title = "Only Hayden, JJ or Kenny can approve this SPRF.";
+    fresh.title = "Only Justin, JJ or Kenny can approve this SPRF.";
     return;
   }
   fresh.disabled = false;
@@ -10793,7 +10793,7 @@ function wireRejectBtns(order, who){
       fresh.disabled = true;
       fresh.style.opacity = "0.45";
       fresh.style.cursor  = "not-allowed";
-      fresh.title = "Only Hayden, JJ or Kenny can reject this SPRF.";
+      fresh.title = "Only Justin, JJ or Kenny can reject this SPRF.";
       return;
     }
     fresh.disabled = false;
@@ -11155,7 +11155,7 @@ function wireBottomApproveBar(order, who){
 
 // Update an existing submitted order — reuses serializeOrder().  The
 // backend accepts saves from the original submitter, an ALL admin, a
-// price editor (Brian / Pamela), an approver (Hayden / JJ / Kenny),
+// price editor (Brian / Pamela), an approver (Justin / JJ / Kenny),
 // or Harry; any other identity gets a 403 that bubbles up as a
 // friendly status message.  Every update resets the approval slots
 // server-side so the modified order goes back through approval.
