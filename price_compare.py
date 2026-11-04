@@ -277,6 +277,27 @@ def build_data(monthly):
     # sorted so the extras aren't a random dump.
     _curated     = list(SIZE_CATEGORY.keys())
     _curated_set = set(_curated)
+    # Nov-04 user ask: 245/35ZR18 and 245/35R18 are the same tyre
+    # spec for every workable purpose (ZR is a speed-rating marker,
+    # not a distinct size), but dealers list them inconsistently
+    # across the four source feeds.  Canonicalise the string ONCE
+    # at ingestion — mutate the raw row so every downstream lookup
+    # (build_tempe_lookup / build_tw_lookup / build_jax_lookup /
+    # build_bj_lookup) buckets them together.  Also uppercase + trim
+    # so "245/35r18" == "245/35R18".
+    _ZR_RE = re.compile(r'(\d)ZR(\d)', re.IGNORECASE)
+    def _canon_size(s):
+        s = (s or "").strip().upper()
+        if not s:
+            return s
+        return _ZR_RE.sub(r'\1R\2', s)
+    for _mk, _md in monthly.items():
+        for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows", "nwb_rows"):
+            for _r in _md.get(_bucket, []):
+                _sz_raw = _r.get("SIZE") or ""
+                _sz_canon = _canon_size(_sz_raw)
+                if _sz_canon != _sz_raw:
+                    _r["SIZE"] = _sz_canon
     _extra_sizes = set()
     for _mk, _md in monthly.items():
         for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows", "nwb_rows"):
@@ -284,7 +305,16 @@ def build_data(monthly):
                 _sz = (_r.get("SIZE","") or "").strip()
                 if _sz and _sz not in _curated_set:
                     _extra_sizes.add(_sz)
-    sizes = _curated + sorted(_extra_sizes)
+    # Numeric sort: parse (width, aspect, rim) so "195/55R15" lands
+    # before "205/65R16" instead of lexicographic chaos where
+    # "19555R15" (missing slash) scrambles against "195/55R15".
+    _SIZE_NUM_RE = re.compile(r'^\s*(\d+)[\s/]*(\d+)[A-Z/]*?(\d+)')
+    def _size_sort_key(s):
+        m = _SIZE_NUM_RE.match(s)
+        if not m:
+            return (999, 999, 999, s)
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)), s)
+    sizes = _curated + sorted(_extra_sizes, key=_size_sort_key)
     # Nov-03 user ask: surface non-major brands too.  Walk every row
     # of every source CSV to discover the full set of (abbr, name,
     # freq) triples, then build `abbrs` as majors-first followed by
@@ -2027,6 +2057,11 @@ function _tryRender() {
     if (!selectedSize || !selectedMode || !selectedSubKey) return;
     if (selectedMode === 'store') _renderStore();
     else                          _renderBrand();
+    // Nov-04: the dim marker on the SIZE dropdown is scope-aware;
+    // re-apply it whenever the chart redraws so a store / brand /
+    // mode switch leaves the dim state in sync with what the chart
+    // would actually plot.
+    try { _refreshSizeDropdownDim(); } catch (e) { /* defensive */ }
 }
 
 /* ── By Store: selected brand → 3 store lines ───────── */
@@ -3053,27 +3088,54 @@ function onPricingPromo(btn) {
    <select> itself as the "active" element — _setSize only reads
    its textContent for the chart title, which the <select>'s
    .value gives us too. */
-// Nov-04 user ask: dim sizes with no non-null price data so the
-// operator sees at a glance which sizes will actually chart.  A
-// size is "empty" when no brand × price-key array holds a single
-// non-null entry (we skip description/flag/stock/promo/series
-// side-channels — only real price arrays count).  Cached per size
-// since SIZES can be long (hundreds of entries after a few months
-// of crawling).
+// Nov-04 user ask: dim sizes with no non-null price data IN THE
+// CURRENT SCOPE (selected mode + selected sub-key + selected brand
+// set) so the operator sees at a glance which sizes will actually
+// chart.  Cache is scoped by that key — every store / brand /
+// mode change blows the cache and the dropdown re-styles.
+let _sizeHasData_cacheKey = "";
 const _sizeHasData_cache = {};
+function _priceOnlyKey(k) {
+    return !(k.endsWith('_d') || k.endsWith('_f') ||
+             k.endsWith('_stk') || k.endsWith('_stk_lbl') ||
+             k.endsWith('_promo') || k.endsWith('_series'));
+}
+function _currentScopeKey() {
+    // Use the live chart filters so the dropdown dim matches the
+    // chart the operator will see when they pick a size.
+    const brands = (typeof selectedBrandSet !== 'undefined' && selectedBrandSet)
+        ? Array.from(selectedBrandSet).sort().join(",") : "";
+    return (selectedMode || "") + "|" + (selectedSubKey || "") + "|" + brands;
+}
 function _sizeHasAnyData(size) {
+    const key = _currentScopeKey();
+    if (key !== _sizeHasData_cacheKey) {
+        _sizeHasData_cacheKey = key;
+        for (const k in _sizeHasData_cache) delete _sizeHasData_cache[k];
+    }
     if (_sizeHasData_cache[size] !== undefined) return _sizeHasData_cache[size];
     const sd = (D.size_data || {})[size];
     if (!sd) { _sizeHasData_cache[size] = false; return false; }
+    // In By-Brand mode selectedSubKey is a store ('tempe'/'bj'/'jax'/
+    // 'tw'/'twi'/'nwb'/'nwbi' or 'ALL'); the brand filter is the
+    // checkbox set.  In By-Channel mode selectedSubKey is a brand
+    // abbr; the store is implicit (all shown).
+    const brandFilter = (selectedMode === 'brand' && selectedSubKey && selectedSubKey !== 'ALL')
+        ? new Set([selectedSubKey])
+        : (typeof selectedBrandSet !== 'undefined' && selectedBrandSet && selectedBrandSet.size
+            ? selectedBrandSet : null);
+    const storeFilter = (selectedMode === 'store' && selectedSubKey && selectedSubKey !== 'ALL')
+        ? _priceKey(selectedSubKey)
+        : null;
     const brands = Object.keys(sd);
     for (let i = 0; i < brands.length; i++) {
+        if (brandFilter && !brandFilter.has(brands[i])) continue;
         const stores = sd[brands[i]] || {};
         const keys = Object.keys(stores);
         for (let j = 0; j < keys.length; j++) {
             const k = keys[j];
-            if (k.endsWith('_d') || k.endsWith('_f') ||
-                k.endsWith('_stk') || k.endsWith('_stk_lbl') ||
-                k.endsWith('_promo') || k.endsWith('_series')) continue;
+            if (!_priceOnlyKey(k)) continue;
+            if (storeFilter && k !== storeFilter) continue;
             const arr = stores[k] || [];
             for (let m = 0; m < arr.length; m++) {
                 if (arr[m] != null) { _sizeHasData_cache[size] = true; return true; }
@@ -3084,13 +3146,31 @@ function _sizeHasAnyData(size) {
     return false;
 }
 function _styleEmptySizeOption(opt, size) {
-    if (_sizeHasAnyData(size)) return;
+    // Strip any previous dim marker so re-styling doesn't stack "·"s.
+    opt.textContent = String(opt.value);
+    if (_sizeHasAnyData(size)) {
+        opt.style.color = '';
+        opt.style.fontStyle = '';
+        return;
+    }
     // Pale grey + italic + "·" prefix makes the empty rows obvious
     // without hiding them (operator may still want to pick one to
     // confirm there is truly nothing recent).
     opt.style.color = '#9ca3af';
     opt.style.fontStyle = 'italic';
     opt.textContent = '· ' + opt.textContent;
+}
+// Re-apply dim styling to every existing <option> WITHOUT rebuilding
+// the dropdown (so the user's current selection is preserved).  Call
+// this whenever the filter scope changes.
+function _refreshSizeDropdownDim() {
+    const sel = document.getElementById('size-select');
+    if (!sel) return;
+    for (let i = 0; i < sel.options.length; i++) {
+        const v = sel.options[i].value;
+        if (!v || v === 'ALL') continue;
+        _styleEmptySizeOption(sel.options[i], v);
+    }
 }
 
 function _buildSizeDropdown() {
@@ -3154,16 +3234,25 @@ function _normaliseSizeDigits(s) {
 function _findSizeByDigits(digits) {
     if (!digits) return [];
     const sel = document.getElementById('size-select');
-    const matches = [];
+    const exact  = [];   // digit-string identical
+    const starts = [];   // option digits begin with query
+    const subs   = [];   // option digits contain query anywhere
     // Walk the live <option> list so the search respects whatever
     // the "Reserved only" checkbox is currently filtering to.
     for (let i = 0; i < sel.options.length; i++) {
         const v = sel.options[i].value;
         if (!v || v === "ALL") continue;
         const norm = _normaliseSizeDigits(v);
-        if (norm.indexOf(digits) === 0) matches.push(v);
+        if (norm === digits)              exact.push(v);
+        else if (norm.indexOf(digits) === 0)   starts.push(v);
+        else if (norm.indexOf(digits) !== -1)  subs.push(v);
     }
-    return matches;
+    // Tiered return so "1956515" (full) picks the exact hit over
+    // "19565R15C" / "1956515LT" partials, but a short prefix like
+    // "19565" still returns the family.
+    if (exact.length)  return exact;
+    if (starts.length) return starts;
+    return subs;
 }
 function _wireSizeSearch() {
     const inp  = document.getElementById('size-search');
@@ -3283,7 +3372,7 @@ def _price_cache_key():
 #         size_data + lookups now key those two under their new
 #         canonical major abbrs so v3 pickles with them under their
 #         dynamic abbrs would double-register them.
-_PRICE_CACHE_VERSION = 4
+_PRICE_CACHE_VERSION = 5
 
 def save_price_cache_to_disk(key, data):
     """Serialise (key, data) to the on-disk cache pickle so a Flask
