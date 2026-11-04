@@ -45,6 +45,25 @@ BRANDS = {
     "HK":  ("Hankook",      "hankook"),
     "LF":  ("Laufenn",      "laufenn"),
     "DL":  ("Dunlop",       "dunlop"),
+    # Nov-04 user ask: JAX dashboard rows were missing every brand
+    # outside the original 8.  Add every brand JAX currently
+    # retails so the price_compare dashboard sees the whole JAX
+    # catalogue.  Verify each slug against the live URL before
+    # relying on it: https://www.jaxtyres.com.au/tyres/<slug> --
+    # a 404 or empty page usually means the slug needs a hyphen
+    # (e.g. "bf-goodrich") or has been retired.  A brand that 404s
+    # is logged but does not fail the crawl, so safe to keep in
+    # the dict.
+    "KH":  ("Kumho",        "kumho"),
+    "YO":  ("Yokohama",     "yokohama"),
+    "PR":  ("Pirelli",      "pirelli"),
+    "NX":  ("Nexen",        "nexen"),
+    "TY":  ("Toyo",         "toyo"),
+    "NT":  ("Nitto",        "nitto"),
+    "MX":  ("Maxxis",       "maxxis"),
+    "CO":  ("Cooper",       "cooper"),
+    "BF":  ("BFGoodrich",   "bfgoodrich"),
+    "GE":  ("General",      "general-tire"),
 }
 
 
@@ -316,7 +335,12 @@ return (function() {
     var seen = {};
 
     var JUNK_RE = /\d+\s*day\s+satisfaction\s+guarantee|compare\s+fuel\s+saving|\bfuel\s+saving\b|\bcompare\b|run\s*flat|EV\s+tyre|select\s+a\s+store|add\s+to\s+booking|view\s+product|qty/gi;
-    var BRAND_NAMES_RE = /^(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama)\s*/i;
+    // Nov-04: BRAND_NAMES_RE strips the brand prefix from the
+    // product title ("Michelin Pilot Sport 4" -> "Pilot Sport 4").
+    // Keep this in sync with the BRANDS dict at the top of the
+    // module so new brand pages get their prefixes stripped the
+    // same way the original 8 do.
+    var BRAND_NAMES_RE = /^(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama|pirelli|nexen|toyo|nitto|maxxis|cooper|bf\s*goodrich|bfgoodrich|general(?:\s+tire)?)\s*/i;
 
     /* ── Shared card-extraction helper ─────────────────────────────────── */
     function extractCard(card) {
