@@ -2570,7 +2570,7 @@ function _setSize(size, btn) {
     selectedSize = size;
     // Nov-04: refresh brand rows so each extra's (N) label +
     // background gradient reflects the newly-selected size scope.
-    try { _refreshBrandRowsForSize(); } catch (_e) {}
+    try { _refreshBrandRowsForScope(); } catch (_e) {}
     _tryRender();
     // Oct-27-pm user ask: when either pane in split-view changes
     // its size, the other pane should pick it up.  Publish through
@@ -2666,7 +2666,43 @@ function _renderBrandCheckboxRow(container) {
     _ensureBrandSetInitialised();
     container.innerHTML = '';
 
+    // Nov-04 bug fix: (N) label must reflect what the chart will
+    // actually DRAW for the current mode, otherwise the operator
+    // sees "(2)" and ticks the extra only to find the chart stays
+    // blank.
+    //   By-Channel (sub = brand, chart shows all stores for ONE
+    //                brand across months):
+    //       -> N = per-brand row count across all stores
+    //          (the existing BRAND_FREQ_LATEST / per-size variant).
+    //   By-Brand   (sub = store, chart shows all brands for ONE
+    //                store across months):
+    //       -> N = number of months the (size, brand, STORE) tuple
+    //          has a non-null price.  Computed on the fly from
+    //          D.size_data so a brand absent from the selected
+    //          store shows "(0)" even if it's lively elsewhere.
     const _brandCountForLabel = function(abbr) {
+        if (selectedMode === 'brand' && selectedSubKey) {
+            const store = selectedSubKey;
+            const storeKey = _priceKey(store);
+            if (selectedSize && selectedSize !== 'ALL') {
+                const arr = ((D.size_data[selectedSize] || {})[abbr] || {})[storeKey] || [];
+                let n = 0;
+                for (let i = 0; i < arr.length; i++) {
+                    if (arr[i] !== null && arr[i] !== undefined) n++;
+                }
+                return n;
+            }
+            // Size = ALL: sum non-null months across every size.
+            let total = 0;
+            const sizes = Object.keys(D.size_data);
+            for (let si = 0; si < sizes.length; si++) {
+                const arr = ((D.size_data[sizes[si]] || {})[abbr] || {})[storeKey] || [];
+                for (let i = 0; i < arr.length; i++) {
+                    if (arr[i] !== null && arr[i] !== undefined) total++;
+                }
+            }
+            return total;
+        }
         if (selectedSize && selectedSize !== 'ALL') {
             const perSize = BRAND_SIZE_FREQ_LATEST[abbr] || {};
             return +perSize[selectedSize] || 0;
@@ -2793,11 +2829,12 @@ function _renderBrandCheckboxRow(container) {
     }
 }
 
-// Nov-04: re-render both brand rows whenever the size filter
-// changes, so the (N) labels + gradient stay in sync with the
-// currently-selected size.  Safe to call even when a row is
-// hidden -- _renderBrandCheckboxRow just clears + repopulates.
-function _refreshBrandRowsForSize() {
+// Nov-04: re-render both brand rows whenever the current scope
+// (size + By-Brand store) changes, so the (N) labels + gradient
+// stay in sync with whatever the chart is actually filtering on.
+// Safe to call even when a row is hidden -- _renderBrandCheckboxRow
+// just clears + repopulates.
+function _refreshBrandRowsForScope() {
     const sub = document.getElementById('sub-btns');
     if (sub && selectedMode === 'store') {
         _renderBrandCheckboxRow(sub);
@@ -2873,7 +2910,14 @@ function onModeBrand(btn) {
         b.onclick = function() {
             if (_activeSubBtn) _activeSubBtn.classList.remove('active');
             _activeSubBtn = b; b.classList.add('active');
-            selectedSubKey = s.key; _tryRender();
+            selectedSubKey = s.key;
+            // Nov-04: refresh the brand row's (N) labels + gradient
+            // against the newly-selected store so a brand that has
+            // no data for this store reads "(0)" and fades out of
+            // the gradient instead of advertising a misleading
+            // across-channel count.
+            try { _refreshBrandRowsForScope(); } catch (_e) {}
+            _tryRender();
         };
         subBtns.appendChild(b);
     });
