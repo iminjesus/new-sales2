@@ -2823,8 +2823,16 @@ function _ensureBrandSetInitialised() {
 // keep working unchanged.  Single brand selected => that abbr; 0
 // or 2+ selected => 'ALL' (the aggregator path).  _avgAllBrands
 // then honours selectedBrandSet when selectedSubKey === 'ALL'.
+//
+// Nov-04 bug fix: ONLY touch selectedSubKey in By-Channel mode
+// (selectedMode === 'store').  In By-Brand mode selectedSubKey
+// holds the STORE identifier ('tempe', 'bj', ...), not a brand
+// abbr -- overwriting it with a brand abbr there used to make the
+// chart title read "undefined - ...: no data" because SL[abbr] is
+// undefined for every extra brand.
 function _updateSubKeyFromSet() {
     _ensureBrandSetInitialised();
+    if (selectedMode !== 'store') return;
     if (selectedBrandSet.size === 1) {
         selectedSubKey = Array.from(selectedBrandSet)[0];
     } else {
@@ -3021,7 +3029,11 @@ def _price_cache_key():
 #   v1 -> initial 3-tier cache (pre brand_freq_latest)
 #   v2 -> added brand_freq_latest for the ▾ More (N) dropdown
 #   v3 -> added brand_size_freq_latest for size-aware (N) labels
-_PRICE_CACHE_VERSION = 3
+#   v4 -> promoted Pirelli (PR) + Nexen (NX) to majors; the
+#         size_data + lookups now key those two under their new
+#         canonical major abbrs so v3 pickles with them under their
+#         dynamic abbrs would double-register them.
+_PRICE_CACHE_VERSION = 4
 
 def save_price_cache_to_disk(key, data):
     """Serialise (key, data) to the on-disk cache pickle so a Flask

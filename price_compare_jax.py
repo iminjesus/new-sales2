@@ -22,6 +22,11 @@ BRANDS = {
     "GY": "Goodyear",   "KH": "Kumho",       "FK": "Falken",
     "HK": "Hankook",    "LF": "Laufenn",     "DL": "Dunlop",
     "YO": "Yokohama",
+    # Nov-04 user ask: Pirelli + Nexen promoted to majors (they
+    # consistently carry the highest extras-row counts, so always
+    # keeping them in the primary row is cheaper than making the
+    # operator open ▾ More every time).
+    "PR": "Pirelli",    "NX": "Nexen",
 }
 
 COMPETITOR_PATTERNS = {
@@ -154,6 +159,10 @@ BRAND_COLOURS = {
     "LF":"2E7D32",   # forest green   (solid line)
     "DL":"6D4C41",   # brown
     "YO":"7B1FA2",   # purple
+    # Nov-04: Pirelli (yellow-gold, matches brand livery) +
+    # Nexen (slate, matches logo).
+    "PR":"FFC107",
+    "NX":"455A64",
 }
 ROW_FILLS = {
     "MC":"FADADD","BS":"FFE0E0","CT":"FFF3CD","GY":"D6EAF8",
