@@ -5,12 +5,18 @@ Scrapes all tyre prices from https://www.jaxtyres.com.au
 for the brands in the Tempe price-comparison list.
 
 Strategy: URL-based pagination, pagesize=45 (maximum per page).
-Page URL template (Nov-04: isrunflat left OFF so the result set
-INCLUDES Run Flat tyres; previously isrunflat=False excluded them
-and the dashboard was missing ~90 Michelin SKUs per brand):
+Nov-04 (second round): two separate passes per brand -- one with
+isrunflat=False (standard tyres) and one with isrunflat=True
+(Run Flat tyres).  Each row carries a RUN_FLAT Y/N flag in the
+CSV so downstream can tell the two subsets apart.  Running them
+as two explicit passes, rather than relying on JAX's "include
+both" default, guarantees neither subset is silently dropped if
+JAX changes how the combined view paginates.
   https://www.jaxtyres.com.au/tyres/{brand}
-    ?searchqrytype=Brand&searchtype=All
+    ?searchqrytype=Brand&{isrunflat}&searchtype=All
     &sorttype=PriceAsc&pagesize=45&pagenumber={N}
+   isrunflat=False -> standard tyres (RUN_FLAT=N in CSV)
+   isrunflat=True  -> run flat tyres (RUN_FLAT=Y in CSV)
 
 Output: JAX_YYYYMMDD_HHMM.csv
 Columns: SIZE | brand | DESCRIPTION | PRICE | DISC_PRICE | PROMO
@@ -29,14 +35,22 @@ from datetime import datetime
 from selenium import webdriver
 
 PAGE_URL = (
-    # Nov-04: dropped the "isrunflat=False" param so Run Flat tyres
-    # are included in the sweep.  JAX's catalogue page defaults the
-    # Run Flat filter to BOTH (= "Yes" + "No") when the param is
-    # omitted entirely, which is what the user wants captured.
+    # Nov-04 (second round): isrunflat is a per-pass placeholder
+    # ("isrunflat=False" for standard, "isrunflat=True" for Run
+    # Flat).  Two passes per brand, one each, so Run Flat tyres
+    # are explicitly captured instead of relying on JAX's default
+    # combined view (which previously had the Run Flat subset hidden
+    # behind the "Run Flat" filter button on the brand page).
     "https://www.jaxtyres.com.au/tyres/{brand}"
-    "?searchqrytype=Brand&searchtype=All"
+    "?searchqrytype=Brand&{isrunflat}&searchtype=All"
     "&sorttype=PriceAsc&pagesize=45&pagenumber={page}"
 )
+
+# Nov-04: two explicit passes per brand -- (URL param, RUN_FLAT flag).
+RUNFLAT_PASSES = [
+    ("isrunflat=False", "N"),
+    ("isrunflat=True",  "Y"),
+]
 OUTPUT_FILE = datetime.now().strftime("JAX_%Y%m%d_%H%M.csv")
 PAGE_SIZE   = 45
 
@@ -595,23 +609,36 @@ def process_raw(raw_items, brand_name):
     return rows
 
 
-def write_rows(writer, rows):
+def write_rows(writer, rows, rf_flag="N"):
+    """Append scraped rows with a RUN_FLAT Y/N column tagged by the
+    caller (Nov-04: two-pass crawl marks its Run Flat pass with
+    rf_flag='Y')."""
     for r in rows:
         writer.writerow([r["size"], r["brand"], r["desc"],
-                         r["price"], r["disc"], r["promo"]])
+                         r["price"], r["disc"], r["promo"], rf_flag])
         line = f"  {r['brand']:<14} | {r['size']:<12} | {r['desc'][:38]:<38} | ${r['price']}"
         if r["disc"]:
             line += f"  → ${r['disc']}"
+        if rf_flag == "Y":
+            line += "  [RF]"
         print(line)
 
 
-def scrape_brand(driver, abbr, brand_name, slug, writer, f_out):
+def scrape_brand(driver, abbr, brand_name, slug, writer, f_out,
+                 isrunflat_param, rf_flag):
+    """One pass over a brand's catalogue for a specific Run Flat
+    filter.  Called twice per brand -- once with isrunflat=False
+    + rf_flag='N', once with isrunflat=True + rf_flag='Y'.  Each
+    emitted row carries the RUN_FLAT flag so downstream can tell
+    the two subsets apart."""
     print(f"\n{'='*65}")
-    print(f"  {abbr}  {brand_name}  (slug: {slug})")
+    print(f"  {abbr}  {brand_name}  (slug: {slug})  RUN_FLAT={rf_flag}")
     print(f"{'='*65}")
 
-    url1 = PAGE_URL.format(brand=slug, page=1)
-    driver.get(url1)
+    def _url(page):
+        return PAGE_URL.format(brand=slug, isrunflat=isrunflat_param, page=page)
+
+    driver.get(_url(1))
     time.sleep(4)
 
     total = get_total(driver)
@@ -624,13 +651,13 @@ def scrape_brand(driver, abbr, brand_name, slug, writer, f_out):
     brand_total = 0
     for page in range(1, total_pages + 1):
         if page > 1:
-            driver.get(PAGE_URL.format(brand=slug, page=page))
+            driver.get(_url(page))
             time.sleep(3)
 
         # Run diagnostic only on page 1 of the first brand (page=1, brand_total=0)
         raw  = extract_page(driver, run_diag=(page == 1 and brand_total == 0))
         rows = process_raw(raw, brand_name)
-        write_rows(writer, rows)
+        write_rows(writer, rows, rf_flag)
         f_out.flush()
         brand_total += len(rows)
         print(f"  ── page {page}/{total_pages}: {len(rows)} products  (subtotal: {brand_total})")
@@ -647,23 +674,34 @@ def main():
     print("JAX Tyres crawler — brand-by-brand, URL pagination (pagesize=45)\n")
 
     grand_total = 0
-    prog = Progress("jax_crawling", total_steps=len(BRANDS),
-                    label="jax_crawling (brand sweep)")
+    # Nov-04: progress counts per (brand, pass) so the ETA is
+    # correct now that every brand runs twice (standard + Run Flat).
+    _total_steps = len(BRANDS) * len(RUNFLAT_PASSES)
+    prog = Progress("jax_crawling", total_steps=_total_steps,
+                    label="jax_crawling (brand sweep × runflat passes)")
 
     try:
         with open(OUTPUT_FILE, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
+            # Nov-04: RUN_FLAT Y/N column appended so downstream can
+            # separate the two subsets without re-scraping.
             writer.writerow(["SIZE", "brand", "DESCRIPTION",
-                             "PRICE", "DISC_PRICE", "PROMO"])
+                             "PRICE", "DISC_PRICE", "PROMO", "RUN_FLAT"])
 
-            for _i, (abbr, (brand_name, slug)) in enumerate(BRANDS.items(), 1):
-                try:
-                    count = scrape_brand(driver, abbr, brand_name, slug, writer, f)
-                    grand_total += count
-                    print(f"\n  ✓ {brand_name}: {count} products saved")
-                except Exception as e:
-                    print(f"\n  ✗ {brand_name}: ERROR — {e}")
-                prog.step(_i)
+            _step = 0
+            for abbr, (brand_name, slug) in BRANDS.items():
+                for _isrunflat_param, _rf_flag in RUNFLAT_PASSES:
+                    _step += 1
+                    try:
+                        count = scrape_brand(driver, abbr, brand_name, slug,
+                                             writer, f,
+                                             _isrunflat_param, _rf_flag)
+                        grand_total += count
+                        print(f"\n  ✓ {brand_name} RUN_FLAT={_rf_flag}: "
+                              f"{count} products saved")
+                    except Exception as e:
+                        print(f"\n  ✗ {brand_name} RUN_FLAT={_rf_flag}: ERROR — {e}")
+                    prog.step(_step)
 
         prog.finish()
         print(f"\n{'='*65}")
