@@ -470,8 +470,35 @@ def build_data(monthly):
         # Nov-03: NewBee Sell Out / Sell In per-month averages.
         nwbp, nwbip = [], []
 
+        # Nov-04 perf: skip (size, abbr) combos that have zero source
+        # candidates in every lookup — the inner loop ran
+        # len(sizes) * len(abbrs) == ~300 * ~60 times after the extras
+        # expansion, and the vast majority of combos were no-ops.
+        # Pre-compute the set of (size, abbr) that are actually
+        # populated and iterate only those.
+        _populated = set()
+        for _lk in (t_lk, bj_lk, jx_lk, tw_lk, nwb_lk):
+            _populated.update(_lk.keys())
         for size in sizes:
             for abbr in abbrs:
+                if (size, abbr) not in _populated:
+                    # Still need the per-month slot to stay aligned
+                    # with the month index, so append None/"" to the
+                    # arrays this row would have touched.
+                    _slot = size_data[size][abbr]
+                    for _k in ("tempe", "bj", "jax", "tw", "twi",
+                               "nwb", "nwbi", "bj_promo", "jax_promo"):
+                        _slot[_k].append(None)
+                    for _k in ("tempe_stk", "tw_stk", "twi_stk",
+                               "nwb_stk", "nwbi_stk"):
+                        _slot[_k].append(None)
+                    for _k in ("tempe_d", "bj_d", "jax_d",
+                               "tw_d", "twi_d", "nwb_d", "nwbi_d",
+                               "bj_f", "jax_f",
+                               "tw_stk_lbl", "twi_stk_lbl",
+                               "nwb_stk_lbl", "nwbi_stk_lbl"):
+                        _slot[_k].append("")
+                    continue
                 # Oct-27: best_tempe / best_tw / best_twi now return
                 # a 4-tuple ending in stock (int or None).  Capture it
                 # into size_data[size][abbr]["<store>_stk"] so the
@@ -2693,28 +2720,72 @@ function _buildSizeDropdown() {
 
 # ── Flask route ───────────────────────────────────────────────────────────────
 
+# Nov-04 user ask: /price got slow after the Nov-03 brand-row
+# expansion (extras pushed the build_data inner loop from ~10 to
+# ~60 abbrs per month).  Add a filesystem-mtime cache so repeat
+# requests to the same data skip the full CSV reload + build_data
+# rebuild entirely.  Cache is invalidated the moment ANY source
+# CSV changes on disk (new crawl, operator edit, etc.), so stale
+# data is impossible by construction.
+_PRICE_CACHE = {"key": None, "monthly": None, "data": None}
+
+def _price_cache_key():
+    """Build a cheap fingerprint of every source CSV's (path, mtime).
+    Any crawler drop / edit / delete flips the fingerprint and the
+    cache is rebuilt."""
+    import glob as _glob
+    key_parts = []
+    for _pat in ("Tempe_*.csv", "Tempeweborder*.csv",
+                 "BobJane_*.csv", "Bobjane_*.csv",
+                 "JAX_*.csv", "Jax_*.csv",
+                 "NewbeeWeborder_*.csv", "Newbeeweborder_*.csv"):
+        for _p in _glob.glob(os.path.join(_BASE, _pat)):
+            try:
+                key_parts.append((os.path.basename(_p), int(os.path.getmtime(_p))))
+            except OSError:
+                pass
+    # Sort so file-system enumeration order doesn't matter.
+    return tuple(sorted(key_parts))
+
+
 @app.route('/price')
 def price_dashboard():
-    monthly = load_all_months()
-    if not monthly:
-        return ("<h2 style='padding:40px;font-family:sans-serif;color:#c00'>"
-                "No data files found. Need Tempe_*.csv, BobJane_*.csv, JAX_*.csv.</h2>")
+    import time as _time
+    _t0 = _time.monotonic()
+    _key = _price_cache_key()
+    if _PRICE_CACHE["key"] == _key and _PRICE_CACHE["data"] is not None:
+        monthly = _PRICE_CACHE["monthly"]
+        data    = _PRICE_CACHE["data"]
+        print(f"[price_compare] cache HIT ({len(_key)} csv fingerprints) — "
+              f"skipping load_all_months + build_data")
+    else:
+        monthly = load_all_months()
+        if not monthly:
+            return ("<h2 style='padding:40px;font-family:sans-serif;color:#c00'>"
+                    "No data files found. Need Tempe_*.csv, BobJane_*.csv, JAX_*.csv.</h2>")
 
-    # Diagnostic: Oct-12 user flagged that Tempeweborder_20261007_1739.csv
-    # (and newer month downloads) didn't show up on the dashboard.  Log
-    # per-month row counts for every store bucket so if a month's file
-    # exists on disk but goes through with zero rows, it's visible in
-    # the server log without needing a debugger.
-    print("[price_compare] load_all_months → month-key : t_rows / bj_rows / jx_rows / tw_rows")
-    for _mk in sorted(monthly.keys()):
-        _md = monthly[_mk]
-        print(f"[price_compare]   {_mk}: "
-              f"t={len(_md.get('t_rows',  []))} "
-              f"bj={len(_md.get('bj_rows', []))} "
-              f"jx={len(_md.get('jx_rows', []))} "
-              f"tw={len(_md.get('tw_rows', []))}")
+        # Diagnostic: Oct-12 user flagged that Tempeweborder_20261007_1739.csv
+        # (and newer month downloads) didn't show up on the dashboard.  Log
+        # per-month row counts for every store bucket so if a month's file
+        # exists on disk but goes through with zero rows, it's visible in
+        # the server log without needing a debugger.
+        print("[price_compare] load_all_months → month-key : t_rows / bj_rows / jx_rows / tw_rows")
+        for _mk in sorted(monthly.keys()):
+            _md = monthly[_mk]
+            print(f"[price_compare]   {_mk}: "
+                  f"t={len(_md.get('t_rows',  []))} "
+                  f"bj={len(_md.get('bj_rows', []))} "
+                  f"jx={len(_md.get('jx_rows', []))} "
+                  f"tw={len(_md.get('tw_rows', []))} "
+                  f"nwb={len(_md.get('nwb_rows', []))}")
 
-    data = build_data(monthly)
+        data = build_data(monthly)
+        _PRICE_CACHE["key"]     = _key
+        _PRICE_CACHE["monthly"] = monthly
+        _PRICE_CACHE["data"]    = data
+        print(f"[price_compare] cache MISS -> built in "
+              f"{_time.monotonic() - _t0:.1f}s ({len(_key)} csv fingerprints)")
+    _t_build = _time.monotonic() - _t0
     chart_json = json.dumps({
         "months":          data["months"],
         "store_avg":       data["store_avg"],
