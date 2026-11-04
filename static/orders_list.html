@@ -809,7 +809,18 @@ function renderRows(){
                + `</div></td>`;
         })()}
         <td>${apprCell}</td>
-        <td class="center"><small style="color:#0f172a;font-family:monospace">${escapeHtml(r.sd_no || "—")}</small></td>
+        <td class="center">${(() => {
+          // Nov-04: sd_no may hold two DOs pipe-joined ("DO1|DO2")
+          // after a Rebateable split; render each on its own line
+          // so the operator spots the pair without eyeballing a
+          // vertical bar in monospace text.
+          const _parts = String(r.sd_no || "").split("|")
+                           .map(s => s.trim()).filter(Boolean);
+          if (!_parts.length) return '<small style="color:#0f172a;font-family:monospace">—</small>';
+          return _parts.map(p =>
+            `<div style="color:#0f172a;font-family:monospace;font-size:11.5px;line-height:1.3">${escapeHtml(p)}</div>`
+          ).join("");
+        })()}</td>
         <td>${noteCell}</td>
         <td>${(() => {
           const _c = String(r.cs_comment || "").trim();

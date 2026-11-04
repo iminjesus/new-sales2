@@ -6290,7 +6290,11 @@ def _ensure_submitted_orders_table():
             # SAP sales-doc number stamped by the CS after they
             # key the order into SAP.  Shown on orders_list for
             # cross-reference.
-            ("sd_no",               "VARCHAR(50) NULL"),
+            # Nov-04: bumped to VARCHAR(110) so two pipe-joined DOs
+            # (ZWH1 for rebateable + ZWH2 for non-rebateable, up to
+            # 50 chars each + "|") fit.  The auto-migrator in
+            # ensure_schema widens the live column too.
+            ("sd_no",               "VARCHAR(110) NULL"),
             # Oct-21 user ask: free-form comment the CS types when
             # they key the order into SAP ("changed to RA18 per
             # customer request", "back-order split into 2 SDs",
@@ -6367,6 +6371,28 @@ def _ensure_submitted_orders_table():
                 )
         except Exception as _e:
             print(f"[submitted_orders] widen needs_mgmt_approval: {_e}")
+        # Nov-04: widen sd_no so two pipe-joined DOs fit (ZWH1 + ZWH2
+        # split).  Idempotent — the IF guard skips the ALTER when the
+        # column is already >= 110 chars.
+        try:
+            cur.execute(
+                "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH "
+                "FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() "
+                "  AND table_name = 'submitted_orders' "
+                "  AND column_name = 'sd_no' "
+                "LIMIT 1"
+            )
+            _row = cur.fetchone() or (None, None)
+            _dt  = (str(_row[0] or "")).lower()
+            _len = int(_row[1] or 0)
+            if _dt in ("char", "varchar") and _len < 110:
+                cur.execute(
+                    "ALTER TABLE submitted_orders "
+                    "MODIFY COLUMN sd_no VARCHAR(110) NULL"
+                )
+        except Exception as _e:
+            print(f"[submitted_orders] widen sd_no: {_e}")
         # Oct-28 user ask: new sprf_attachment table for files attached
         # to the Reason/Approver-Feedback/Approve-note/Reject-note
         # textareas on any SPRF.  One row per uploaded file.  The
@@ -6609,7 +6635,12 @@ def _sap_marked_email_html(oid, snap, actor_email, base_url):
     sold_to_name = snap.get("sold_to_name") or ""
     sold_to = snap.get("sold_to") or ""
     bde = snap.get("submitted_by_bde") or ""
-    sd_no = snap.get("sd_no") or "—"
+    # Nov-04: sd_no can be "DO1|DO2" after the Rebateable split
+    # (ZWH1 + ZWH2 → 2 SOs → 2 DOs).  Render as "DO1 / DO2" in prose
+    # so the recipient sees both numbers at a glance.
+    _sd_raw = snap.get("sd_no") or ""
+    sd_no = (" / ".join(p.strip() for p in _sd_raw.split("|") if p.strip())
+             or "—")
     approver = snap.get("approved_by_name") or ""
     link = f"{base_url}/order?id={oid}" if base_url else ""
     ts  = datetime.now().strftime("%d/%m/%Y %H:%M")
@@ -8108,7 +8139,10 @@ def api_orders_status(oid):
             if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
                 cc.append(_mgr)
             to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
-            subject = (f"[SPRF SAP-ENTERED {order_no}] DO {_snap_for_mail.get('sd_no') or '—'} · "
+            _subj_sd_raw = _snap_for_mail.get('sd_no') or ''
+            _subj_sd = (" / ".join(p.strip() for p in _subj_sd_raw.split("|")
+                                   if p.strip()) or '—')
+            subject = (f"[SPRF SAP-ENTERED {order_no}] DO {_subj_sd} · "
                        f"{_snap_for_mail.get('sold_to_name','')} "
                        f"({_snap_for_mail.get('sold_to','')})"
                        f"{_ship_to_subject_tag(_snap_for_mail)}")
@@ -8139,7 +8173,19 @@ def api_orders_set_sd_no(oid):
     as the Mark-as-Y flag just above), but every other viewer sees
     the saved value on the orders_list page."""
     payload = request.get_json(silent=True) or {}
-    val     = (str(payload.get("sd_no") or "")).strip()[:50]
+    # Nov-04: an order can split into TWO SAP SOs by Rebateable Y/N
+    # (ZWH1 vs ZWH2); the UI sends them pipe-joined as "DO1|DO2".
+    # Accept the single combined string here; trim each half and drop
+    # empty halves so "DO1|" and "|DO2" normalise cleanly.  Bumped
+    # the cap from 50 to 110 so two 40-char DOs + the "|" still fit.
+    _raw = (str(payload.get("sd_no") or "")).strip()
+    if "|" in _raw:
+        _p1, _, _p2 = _raw.partition("|")
+        _p1 = _p1.strip()[:50]
+        _p2 = _p2.strip()[:50]
+        val = (_p1 + "|" + _p2) if (_p1 and _p2) else (_p1 or _p2)
+    else:
+        val = _raw[:50]
     who     = (_bde_from_request() or "").strip().lower()
     if not _is_cs_user(who):
         return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can stamp an DO No."}), 403
