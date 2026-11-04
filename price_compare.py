@@ -2924,6 +2924,17 @@ function _renderBrandCheckboxRow(container) {
                 if (!_hasCurrent[i] && _hasEver[i]) selectedBrandSet.add(abbr);
             });
         }, '#b45309'));
+        // Nov-04 (fourth round): un-tick every extra at once.  After
+        // picking the "⚡ current" or "✨ ever-seen" buckets the
+        // operator wants a cheap way to back out without hand-unticking
+        // dozens of boxes.  Only touches EXTRAS — the majors row is
+        // left alone so the main view stays intact.
+        const _extrasOn = _extraAbbrs.filter(function(a) {
+            return selectedBrandSet.has(a);
+        }).length;
+        bar.appendChild(mkQuick('×', 'Clear extras (' + _extrasOn + ')', function() {
+            _extraAbbrs.forEach(function(abbr) { selectedBrandSet.delete(abbr); });
+        }, '#991b1b'));
         det.appendChild(bar);
 
         const box = document.createElement('div');
