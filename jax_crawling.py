@@ -5,9 +5,11 @@ Scrapes all tyre prices from https://www.jaxtyres.com.au
 for the brands in the Tempe price-comparison list.
 
 Strategy: URL-based pagination, pagesize=45 (maximum per page).
-Page URL template:
+Page URL template (Nov-04: isrunflat left OFF so the result set
+INCLUDES Run Flat tyres; previously isrunflat=False excluded them
+and the dashboard was missing ~90 Michelin SKUs per brand):
   https://www.jaxtyres.com.au/tyres/{brand}
-    ?searchqrytype=Brand&isrunflat=False&searchtype=All
+    ?searchqrytype=Brand&searchtype=All
     &sorttype=PriceAsc&pagesize=45&pagenumber={N}
 
 Output: JAX_YYYYMMDD_HHMM.csv
@@ -27,8 +29,12 @@ from datetime import datetime
 from selenium import webdriver
 
 PAGE_URL = (
+    # Nov-04: dropped the "isrunflat=False" param so Run Flat tyres
+    # are included in the sweep.  JAX's catalogue page defaults the
+    # Run Flat filter to BOTH (= "Yes" + "No") when the param is
+    # omitted entirely, which is what the user wants captured.
     "https://www.jaxtyres.com.au/tyres/{brand}"
-    "?searchqrytype=Brand&isrunflat=False&searchtype=All"
+    "?searchqrytype=Brand&searchtype=All"
     "&sorttype=PriceAsc&pagesize=45&pagenumber={page}"
 )
 OUTPUT_FILE = datetime.now().strftime("JAX_%Y%m%d_%H%M.csv")
