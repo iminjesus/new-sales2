@@ -1193,6 +1193,17 @@ body.left-hidden .show-tables-chip { display: inline-block; }
         <div class="btns" id="sub-btns"></div>
       </div>
 
+      <!-- Nov-04 user ask: BRAND multi-select row also visible in
+           By Brand mode so the operator can scope which brands get
+           drawn as lines, not just which store the page is drilling
+           into.  Populated by onModeBrand() when active; hidden in
+           By Channel mode (sub-row already carries the brand row
+           there). -->
+      <div class="btn-row" id="brand-row" style="display:none">
+        <span class="row-label">Brand</span>
+        <div class="btns" id="brand-btns"></div>
+      </div>
+
     </div>
 
     <!-- Chart -->
@@ -2600,13 +2611,27 @@ function onModeStore(btn) {
         subBtns.appendChild(b);
     }());
 
-    // Nov-04 user ask: multi-select checkboxes replace the single-
-    // button radio behaviour.  Majors start checked by default (the
-    // original ALL aggregate), extras in the ▾ More dropdown stay
-    // unchecked -- the operator opts them in one at a time.  The
-    // chart then averages over whatever is checked.  Clicking the
-    // "ALL" button resets the set to just the majors.
+    // Nov-04: brand row in By-Channel mode goes into the sub-btns
+    // container (the sub-row is the brand row here because the
+    // channels are already the top-level view).
+    _renderBrandCheckboxRow(subBtns);
+    document.getElementById('sub-row').style.display = 'flex';
+    // Nov-04: the dedicated #brand-row only shows up in By-Brand
+    // mode (the brand row is secondary there, under the Store row).
+    document.getElementById('brand-row').style.display = 'none';
+    _updateSubKeyFromSet();
+    _tryRender();
+}
+
+// Nov-04 user ask: reusable brand-checkbox row builder.  Used by
+// both By-Channel (as the primary sub-row) and By-Brand (as a
+// secondary row under the Store row) so the operator can filter
+// which brands get drawn as lines in either mode.  Clears the
+// container first so re-invocation after a mode switch doesn't
+// stack duplicate buttons.
+function _renderBrandCheckboxRow(container) {
     _ensureBrandSetInitialised();
+    container.innerHTML = '';
 
     const _makeBrandCheckbox = function(abbr, labelText) {
         const c = '#' + (BCOLORS[abbr] || '555555');
@@ -2633,7 +2658,7 @@ function onModeStore(btn) {
         return wrap;
     };
 
-    // ALL = reset to majors-with-data (quick way back to the default).
+    // ALL majors shortcut — reset the selection to the curated 10.
     (function() {
         const b = document.createElement('button');
         b.className = 'btn';
@@ -2643,21 +2668,24 @@ function onModeStore(btn) {
                 + '(unchecks every extra in ▾ More).';
         b.onclick = function() {
             selectedBrandSet = _defaultBrandSet();
-            onModeStore(_activeModeBtn || b);   // re-render the whole row
+            // Re-render whichever row we are rendering into + the
+            // chart.  The caller picks the container so we just
+            // re-run ourselves on the same node.
+            _renderBrandCheckboxRow(container);
+            _updateSubKeyFromSet(); _tryRender();
         };
-        subBtns.appendChild(b);
+        container.appendChild(b);
     }());
 
     // Majors — fixed BRANDS order, skip any that have no data.
     Object.keys(BRANDS).forEach(function(abbr) {
         if (EXTRA_BRANDS[abbr]) return;
         if (!(abbr in D.brand_size_data)) return;
-        subBtns.appendChild(_makeBrandCheckbox(abbr));
+        container.appendChild(_makeBrandCheckbox(abbr));
     });
 
-    // Extras — in ▾ More dropdown, sorted ALPHABETICALLY (user's
-    // Nov-04 ask: not by frequency), each label suffixed with the
-    // latest month's row count, e.g. "Pirelli (34)".
+    // Extras — ▾ More dropdown, alphabetical, labelled with the
+    // latest month's row count "(N)".
     const _extraAbbrs = Object.keys(EXTRA_BRANDS).filter(function(a) {
         return a in D.brand_size_data;
     }).sort(function(a, b) {
@@ -2682,11 +2710,8 @@ function onModeStore(btn) {
             box.appendChild(_makeBrandCheckbox(abbr, label));
         });
         det.appendChild(box);
-        subBtns.appendChild(det);
+        container.appendChild(det);
     }
-    document.getElementById('sub-row').style.display = 'flex';
-    _updateSubKeyFromSet();
-    _tryRender();
 }
 
 // Default brand set = all MAJORS that have at least one data point.
@@ -2751,6 +2776,12 @@ function onModeBrand(btn) {
         subBtns.appendChild(b);
     });
     document.getElementById('sub-row').style.display = 'flex';
+    // Nov-04 user ask: BRAND multi-select row visible in By-Brand
+    // mode too, so the operator can scope which brand lines are
+    // drawn alongside the picked store.
+    const brandBtns = document.getElementById('brand-btns');
+    _renderBrandCheckboxRow(brandBtns);
+    document.getElementById('brand-row').style.display = 'flex';
     if (subBtns.firstChild) subBtns.firstChild.click();
 }
 
@@ -2897,6 +2928,13 @@ def _price_cache_key():
     # Sort so file-system enumeration order doesn't matter.
     return tuple(sorted(key_parts))
 
+# Bump whenever the build_data return dict adds / drops / renames a
+# field so old pickles on disk get rejected instead of silently
+# serving a stale shape missing the newer keys.  Nov-04 history:
+#   v1 -> initial 3-tier cache (pre brand_freq_latest)
+#   v2 -> added brand_freq_latest for the ▾ More (N) dropdown
+_PRICE_CACHE_VERSION = 2
+
 def save_price_cache_to_disk(key, data):
     """Serialise (key, data) to the on-disk cache pickle so a Flask
     restart (or a fresh crawl) can skip the full rebuild on the next
@@ -2906,14 +2944,14 @@ def save_price_cache_to_disk(key, data):
         import pickle as _pk, gzip as _gz
         tmp = _PRICE_CACHE_FILE + ".tmp"
         with _gz.open(tmp, "wb", compresslevel=5) as _f:
-            _pk.dump({"version": 1, "key": key, "data": data},
+            _pk.dump({"version": _PRICE_CACHE_VERSION, "key": key, "data": data},
                      _f, protocol=_pk.HIGHEST_PROTOCOL)
         os.replace(tmp, _PRICE_CACHE_FILE)
         try:
             _sz = os.path.getsize(_PRICE_CACHE_FILE)
         except OSError:
             _sz = -1
-        print(f"[price_compare] wrote disk cache -> "
+        print(f"[price_compare] wrote disk cache v{_PRICE_CACHE_VERSION} -> "
               f"{_PRICE_CACHE_FILE} ({_sz} bytes)", flush=True)
         return True
     except Exception as _e:
@@ -2922,8 +2960,8 @@ def save_price_cache_to_disk(key, data):
 
 def load_price_cache_from_disk():
     """Return (key, data) from the on-disk cache, or (None, None) if
-    the file is missing / unreadable / an older version.  Caller is
-    expected to compare key against the fresh _price_cache_key()
+    the file is missing / unreadable / version mismatched.  Caller
+    is expected to compare key against the fresh _price_cache_key()
     before trusting the data."""
     try:
         if not os.path.exists(_PRICE_CACHE_FILE):
@@ -2931,7 +2969,13 @@ def load_price_cache_from_disk():
         import pickle as _pk, gzip as _gz
         with _gz.open(_PRICE_CACHE_FILE, "rb") as _f:
             blob = _pk.load(_f)
-        if not isinstance(blob, dict) or blob.get("version") != 1:
+        if not isinstance(blob, dict):
+            return None, None
+        _v = blob.get("version")
+        if _v != _PRICE_CACHE_VERSION:
+            print(f"[price_compare] disk cache version mismatch "
+                  f"(have v{_v}, expect v{_PRICE_CACHE_VERSION}) — "
+                  f"will rebuild", flush=True)
             return None, None
         return blob.get("key"), blob.get("data")
     except Exception as _e:
