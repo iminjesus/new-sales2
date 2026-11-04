@@ -2714,19 +2714,26 @@ function _renderBrandCheckboxRow(container) {
         return wrap;
     };
 
-    // ALL majors shortcut — reset the selection to the curated 10.
+    // "+ ALL majors" shortcut — ADDITIVE: ensure every major with
+    // data is checked, but leave any extras the operator already
+    // picked from ▾ More untouched.  Nov-04 user ask: unchecking a
+    // major should narrow the view; clicking this button only ever
+    // pads the selection back out to include the majors it is
+    // missing.  To clear extras, the operator unchecks them one by
+    // one (or refreshes the page).
     (function() {
         const b = document.createElement('button');
         b.className = 'btn';
-        b.textContent = 'ALL majors';
+        b.textContent = '+ ALL majors';
         b.style.fontWeight = '700';
-        b.title = 'Reset selection to the 10 curated major brands '
-                + '(unchecks every extra in ▾ More).';
+        b.title = 'Re-check every major brand with data without '
+                + 'touching the extras you already picked from ▾ More. '
+                + 'Click a major’s checkbox to uncheck it again '
+                + 'if you want to narrow the view.';
         b.onclick = function() {
-            selectedBrandSet = _defaultBrandSet();
-            // Re-render whichever row we are rendering into + the
-            // chart.  The caller picks the container so we just
-            // re-run ourselves on the same node.
+            _defaultBrandSet().forEach(function(a) {
+                selectedBrandSet.add(a);
+            });
             _renderBrandCheckboxRow(container);
             _updateSubKeyFromSet(); _tryRender();
         };
