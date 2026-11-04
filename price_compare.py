@@ -2733,9 +2733,13 @@ function _renderBrandCheckboxRow(container) {
         const c = '#' + (BCOLORS[abbr] || '555555');
         // Background: if an extra carries a gradient alpha (0..1
         // of max), use that; otherwise the plain checked / unchecked
-        // treatment from before.
+        // treatment from before.  Nov-04: yellow override flags an
+        // extra that has NO current data but appeared historically,
+        // so the operator spots dropped brands at a glance.
         let bgOff = '#fff';
-        if (opts.gradAlpha && opts.gradAlpha > 0) {
+        if (opts.yellow) {
+            bgOff = '#fef3c7';   // amber-100 (soft yellow)
+        } else if (opts.gradAlpha && opts.gradAlpha > 0) {
             bgOff = c + _alphaHex(opts.gradAlpha);
         }
         const bgOn  = c + '33';   // stronger when checked
@@ -2823,36 +2827,93 @@ function _renderBrandCheckboxRow(container) {
         return na.localeCompare(nb);
     });
     if (_extraAbbrs.length) {
+        // Nov-04 third round: distinguish "available right now" from
+        // "ever appeared" so the operator can tell a dropped brand
+        // (yellow / historical) from a live one (coloured / current).
+        //   current = _brandCountForLabel honours the active scope
+        //             (size + By-Brand store), so "current" reflects
+        //             what the chart will actually plot.
+        //   ever    = BRAND_FREQ[abbr] > 0  (lifetime, size-agnostic).
+        const _extraCounts    = _extraAbbrs.map(_brandCountForLabel);
+        const _hasCurrent     = _extraAbbrs.map(function(a, i) { return _extraCounts[i] > 0; });
+        const _hasEver        = _extraAbbrs.map(function(a) { return (+BRAND_FREQ[a] || 0) > 0; });
+        const _currentCount   = _hasCurrent.filter(Boolean).length;
+        const _yellowCount    = _extraAbbrs.filter(function(a, i) {
+            return !_hasCurrent[i] && _hasEver[i];
+        }).length;
+        const _maxN = _extraCounts.reduce(function(a, b) { return a > b ? a : b; }, 0);
+
         const det = document.createElement('details');
         det.style.cssText = 'display:inline-block;margin-left:4px';
         const sum = document.createElement('summary');
-        sum.textContent = '▾ More (' + _extraAbbrs.length + ')';
+        sum.textContent = '▾ More (' + _currentCount + ' brands available)';
         sum.style.cssText = 'cursor:pointer;padding:4px 8px;border:1px solid #cbd5e1;'
                           + 'border-radius:4px;font-size:12px;color:#334155;list-style:none;';
+        sum.title = _currentCount + ' extras have data in the current '
+                  + 'scope · ' + _yellowCount + ' more appeared historically '
+                  + '(yellow background)';
         det.appendChild(sum);
+
+        // Quick-select icons row above the extras grid.  Two
+        // buttons: ⚡ Current = check every extra with current data;
+        // ✨ Yellow (ever) = check every extra that appeared in the
+        // past but is empty now.  Both are additive so the operator
+        // can stack them with majors and stay in control.
+        const bar = document.createElement('div');
+        bar.style.cssText = 'margin-top:6px;display:flex;gap:6px;align-items:center;'
+                          + 'font-size:11px;color:#475569';
+        const mkQuick = function(icon, text, pickFn, tint) {
+            const q = document.createElement('button');
+            q.className = 'btn';
+            q.textContent = icon + ' ' + text;
+            q.style.cssText = 'padding:3px 8px;font-size:11px;font-weight:600;'
+                            + 'border:1px solid ' + (tint || '#cbd5e1') + ';'
+                            + 'color:' + (tint || '#334155') + ';background:#fff;';
+            q.title = text + ' — additive: the current selection is '
+                    + 'kept, only these new ones are toggled on.';
+            q.addEventListener('click', function(ev) {
+                ev.preventDefault();
+                pickFn();
+                _renderBrandCheckboxRow(container);
+                _updateSubKeyFromSet(); _tryRender();
+            });
+            return q;
+        };
+        bar.appendChild(mkQuick('⚡', 'Pick all ' + _currentCount + ' current', function() {
+            _extraAbbrs.forEach(function(abbr, i) {
+                if (_hasCurrent[i]) selectedBrandSet.add(abbr);
+            });
+        }, '#065f46'));
+        bar.appendChild(mkQuick('✨', 'Pick all ' + _yellowCount + ' ever-seen', function() {
+            _extraAbbrs.forEach(function(abbr, i) {
+                if (!_hasCurrent[i] && _hasEver[i]) selectedBrandSet.add(abbr);
+            });
+        }, '#b45309'));
+        det.appendChild(bar);
+
         const box = document.createElement('div');
         box.className = 'btns';
         box.style.cssText = 'margin-top:6px';
-        // Nov-04 second round: compute the max count across the
-        // extras currently displayed so the gradient is relative
-        // to THIS dataset (size-scoped if size != ALL).  Max=0
-        // means every extra is empty; skip the gradient to avoid
-        // divide-by-zero.
-        const _extraCounts = _extraAbbrs.map(_brandCountForLabel);
-        const _maxN = _extraCounts.reduce(function(a, b) { return a > b ? a : b; }, 0);
         _extraAbbrs.forEach(function(abbr, i) {
             const n = _extraCounts[i];
             const label = (BRANDS[abbr] || abbr) + ' (' + n + ')';
-            // Gradient alpha 0..0.42 (keeps label readable against
-            // the tinted background even on saturated brand
-            // colours).  sqrt() makes small-but-nonzero counts
-            // visible without the top end dominating.
+            // Gradient alpha 0..0.42 for extras that have CURRENT
+            // data; sqrt() makes small-but-nonzero counts visible
+            // without the top end dominating.  Yellow override for
+            // extras that only ever appeared historically (no
+            // current data) so the operator can spot "dropped from
+            // the catalogue this month" at a glance.
             let gradAlpha = 0;
-            if (_maxN > 0 && n > 0) {
+            let yellow = false;
+            if (_hasCurrent[i] && _maxN > 0 && n > 0) {
                 gradAlpha = 0.42 * Math.sqrt(n / _maxN);
+            } else if (_hasEver[i]) {
+                yellow = true;
             }
-            box.appendChild(_makeBrandCheckbox(abbr, label,
-                                               { gradAlpha: gradAlpha }));
+            box.appendChild(_makeBrandCheckbox(abbr, label, {
+                gradAlpha: gradAlpha,
+                yellow:    yellow,
+            }));
         });
         det.appendChild(box);
         container.appendChild(det);
