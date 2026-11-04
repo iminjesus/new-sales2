@@ -385,7 +385,30 @@ def build_data(monthly):
                 # _accumulate_series below with price_idx=2 (the
                 # tempe tuple is (desc, cost, price, stock)).
                 "tempe_series": {}}
-    size_data = {s: {a: _mk_slots() for a in abbrs} for s in sizes}
+    # Nov-04 perf: don't preallocate the full len(sizes) * len(abbrs)
+    # matrix (~18,000 slots after the Nov-03 extras expansion) — it
+    # was dominating wall time on /price's first request even though
+    # most slots stayed empty forever.  Lazy-init only the slots
+    # that appear in at least one monthly lookup.  Also cache every
+    # per-month lookup upfront so the main loop doesn't rebuild them
+    # a second time.
+    _monthly_lookups = []
+    _ever_populated = set()
+    for mk in months:
+        md = monthly[mk]
+        _lks = {
+            "t":   build_tempe_lookup(md["t_rows"]),
+            "bj":  build_bj_lookup(md["bj_rows"]),
+            "jx":  build_jax_lookup(md["jx_rows"]),
+            "tw":  build_tw_lookup(md["tw_rows"]),
+            "nwb": build_tw_lookup(md["nwb_rows"]),
+        }
+        for _lk in _lks.values():
+            _ever_populated.update(_lk.keys())
+        _monthly_lookups.append(_lks)
+    size_data = {}
+    for (_sz, _ab) in _ever_populated:
+        size_data.setdefault(_sz, {})[_ab] = _mk_slots()
 
     latest       = months[-1] if months else None
     summary_rows = []
@@ -457,48 +480,48 @@ def build_data(monthly):
                 }
 
     for mk_idx, mk in enumerate(months):
-        md     = monthly[mk]
-        t_lk   = build_tempe_lookup(md["t_rows"])
-        bj_lk  = build_bj_lookup(md["bj_rows"])
-        jx_lk  = build_jax_lookup(md["jx_rows"])
-        tw_lk  = build_tw_lookup(md["tw_rows"])
-        # Nov-03: NewBee wholesale lookup — reuse build_tw_lookup
-        # since the CSV schema is identical (SIZE/brand/DESCRIPTION/
-        # COST/PRICE/STOCK).
-        nwb_lk = build_tw_lookup(md["nwb_rows"])
+        _lks   = _monthly_lookups[mk_idx]
+        t_lk   = _lks["t"]
+        bj_lk  = _lks["bj"]
+        jx_lk  = _lks["jx"]
+        tw_lk  = _lks["tw"]
+        nwb_lk = _lks["nwb"]
         tp, bp, jp, twp, twip2 = [], [], [], [], []
         # Nov-03: NewBee Sell Out / Sell In per-month averages.
         nwbp, nwbip = [], []
 
-        # Nov-04 perf: skip (size, abbr) combos that have zero source
-        # candidates in every lookup — the inner loop ran
-        # len(sizes) * len(abbrs) == ~300 * ~60 times after the extras
-        # expansion, and the vast majority of combos were no-ops.
-        # Pre-compute the set of (size, abbr) that are actually
-        # populated and iterate only those.
+        # Nov-04 perf: iterate only (size, abbr) combos that appear
+        # in at least one monthly lookup across the dataset -- vs the
+        # len(sizes) * len(abbrs) full matrix (~18,000 slots after
+        # the Nov-03 extras expansion).  Shrinks the inner loop by
+        # 10-30x on real data.  For combos in _ever_populated but
+        # absent from THIS month, append None/"" placeholders so the
+        # per-month array lengths stay aligned with the months list.
         _populated = set()
         for _lk in (t_lk, bj_lk, jx_lk, tw_lk, nwb_lk):
             _populated.update(_lk.keys())
-        for size in sizes:
-            for abbr in abbrs:
-                if (size, abbr) not in _populated:
-                    # Still need the per-month slot to stay aligned
-                    # with the month index, so append None/"" to the
-                    # arrays this row would have touched.
-                    _slot = size_data[size][abbr]
-                    for _k in ("tempe", "bj", "jax", "tw", "twi",
-                               "nwb", "nwbi", "bj_promo", "jax_promo"):
-                        _slot[_k].append(None)
-                    for _k in ("tempe_stk", "tw_stk", "twi_stk",
-                               "nwb_stk", "nwbi_stk"):
-                        _slot[_k].append(None)
-                    for _k in ("tempe_d", "bj_d", "jax_d",
-                               "tw_d", "twi_d", "nwb_d", "nwbi_d",
-                               "bj_f", "jax_f",
-                               "tw_stk_lbl", "twi_stk_lbl",
-                               "nwb_stk_lbl", "nwbi_stk_lbl"):
-                        _slot[_k].append("")
-                    continue
+        for (size, abbr) in _ever_populated:
+            if (size, abbr) not in _populated:
+                # Still need the per-month slot to stay aligned
+                # with the month index, so append None/"" to the
+                # arrays this row would have touched.
+                _slot = size_data[size][abbr]
+                for _k in ("tempe", "bj", "jax", "tw", "twi",
+                           "nwb", "nwbi", "bj_promo", "jax_promo"):
+                    _slot[_k].append(None)
+                for _k in ("tempe_stk", "tw_stk", "twi_stk",
+                           "nwb_stk", "nwbi_stk"):
+                    _slot[_k].append(None)
+                for _k in ("tempe_d", "bj_d", "jax_d",
+                           "tw_d", "twi_d", "nwb_d", "nwbi_d",
+                           "bj_f", "jax_f",
+                           "tw_stk_lbl", "twi_stk_lbl",
+                           "nwb_stk_lbl", "nwbi_stk_lbl"):
+                    _slot[_k].append("")
+                continue
+            # Re-flow of original body — see "for abbr in abbrs" loop
+            # below.  The size/abbr names are the outer loop vars now.
+            if True:
                 # Oct-27: best_tempe / best_tw / best_twi now return
                 # a 4-tuple ending in stock (int or None).  Capture it
                 # into size_data[size][abbr]["<store>_stk"] so the
