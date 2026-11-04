@@ -3053,6 +3053,46 @@ function onPricingPromo(btn) {
    <select> itself as the "active" element — _setSize only reads
    its textContent for the chart title, which the <select>'s
    .value gives us too. */
+// Nov-04 user ask: dim sizes with no non-null price data so the
+// operator sees at a glance which sizes will actually chart.  A
+// size is "empty" when no brand × price-key array holds a single
+// non-null entry (we skip description/flag/stock/promo/series
+// side-channels — only real price arrays count).  Cached per size
+// since SIZES can be long (hundreds of entries after a few months
+// of crawling).
+const _sizeHasData_cache = {};
+function _sizeHasAnyData(size) {
+    if (_sizeHasData_cache[size] !== undefined) return _sizeHasData_cache[size];
+    const sd = (D.size_data || {})[size];
+    if (!sd) { _sizeHasData_cache[size] = false; return false; }
+    const brands = Object.keys(sd);
+    for (let i = 0; i < brands.length; i++) {
+        const stores = sd[brands[i]] || {};
+        const keys = Object.keys(stores);
+        for (let j = 0; j < keys.length; j++) {
+            const k = keys[j];
+            if (k.endsWith('_d') || k.endsWith('_f') ||
+                k.endsWith('_stk') || k.endsWith('_stk_lbl') ||
+                k.endsWith('_promo') || k.endsWith('_series')) continue;
+            const arr = stores[k] || [];
+            for (let m = 0; m < arr.length; m++) {
+                if (arr[m] != null) { _sizeHasData_cache[size] = true; return true; }
+            }
+        }
+    }
+    _sizeHasData_cache[size] = false;
+    return false;
+}
+function _styleEmptySizeOption(opt, size) {
+    if (_sizeHasAnyData(size)) return;
+    // Pale grey + italic + "·" prefix makes the empty rows obvious
+    // without hiding them (operator may still want to pick one to
+    // confirm there is truly nothing recent).
+    opt.style.color = '#9ca3af';
+    opt.style.fontStyle = 'italic';
+    opt.textContent = '· ' + opt.textContent;
+}
+
 function _buildSizeDropdown() {
     const sel = document.getElementById('size-select');
     const reservedOnly = document.getElementById('size-reserved-only').checked;
@@ -3072,6 +3112,7 @@ function _buildSizeDropdown() {
             const o = document.createElement('option');
             o.value = size;
             o.textContent = size;
+            _styleEmptySizeOption(o, size);
             g1.appendChild(o);
         });
         sel.appendChild(g1);
@@ -3087,6 +3128,7 @@ function _buildSizeDropdown() {
                 const o = document.createElement('option');
                 o.value = size;
                 o.textContent = size;
+                _styleEmptySizeOption(o, size);
                 g2.appendChild(o);
             });
             sel.appendChild(g2);
