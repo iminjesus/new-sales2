@@ -36,34 +36,38 @@ PAGE_SIZE   = 45
 
 # abbr → (display name, JAX URL slug)
 # Verify slugs at: https://www.jaxtyres.com.au/tyres/<slug>
+# Nov-04 user ask (final): BRAND list reflects the JAX "Buy Tyres
+# by Brand" page verbatim — JAX does NOT retail Kumho / Yokohama /
+# Nexen / Toyo / Nitto / Maxxis / Cooper (those were in my earlier
+# commit by mistake; verified against the JAX catalogue page they
+# simply do not appear).  Replace with the actual JAX catalogue
+# below.  Slugs follow the pattern https://www.jaxtyres.com.au/
+# tyres/<slug>; multi-word brands use a hyphen.  A 404 is logged
+# but does not fail the crawl, so a slug change on JAX's end stays
+# soft-recoverable.
 BRANDS = {
-    "MC":  ("Michelin",     "michelin"),
-    "BS":  ("Bridgestone",  "bridgestone"),
-    "CT":  ("Continental",  "continental"),
-    "GY":  ("Goodyear",     "goodyear"),
-    "FK":  ("Falken",       "falken"),
-    "HK":  ("Hankook",      "hankook"),
-    "LF":  ("Laufenn",      "laufenn"),
-    "DL":  ("Dunlop",       "dunlop"),
-    # Nov-04 user ask: JAX dashboard rows were missing every brand
-    # outside the original 8.  Add every brand JAX currently
-    # retails so the price_compare dashboard sees the whole JAX
-    # catalogue.  Verify each slug against the live URL before
-    # relying on it: https://www.jaxtyres.com.au/tyres/<slug> --
-    # a 404 or empty page usually means the slug needs a hyphen
-    # (e.g. "bf-goodrich") or has been retired.  A brand that 404s
-    # is logged but does not fail the crawl, so safe to keep in
-    # the dict.
-    "KH":  ("Kumho",        "kumho"),
-    "YO":  ("Yokohama",     "yokohama"),
-    "PR":  ("Pirelli",      "pirelli"),
-    "NX":  ("Nexen",        "nexen"),
-    "TY":  ("Toyo",         "toyo"),
-    "NT":  ("Nitto",        "nitto"),
-    "MX":  ("Maxxis",       "maxxis"),
-    "CO":  ("Cooper",       "cooper"),
-    "BF":  ("BFGoodrich",   "bfgoodrich"),
-    "GE":  ("General",      "general-tire"),
+    # Original 8 majors (unchanged).
+    "MC":  ("Michelin",       "michelin"),
+    "BS":  ("Bridgestone",    "bridgestone"),
+    "CT":  ("Continental",    "continental"),
+    "GY":  ("Goodyear",       "goodyear"),
+    "FK":  ("Falken",         "falken"),
+    "HK":  ("Hankook",        "hankook"),
+    "LF":  ("Laufenn",        "laufenn"),
+    "DL":  ("Dunlop",         "dunlop"),
+    # Brands confirmed in the JAX "Buy Tyres by Brand" page.
+    "PR":  ("Pirelli",        "pirelli"),
+    "BF":  ("BFGoodrich",     "bfgoodrich"),
+    "GE":  ("General Tire",   "general-tire"),
+    "DC":  ("Double Coin",    "double-coin"),
+    "DY":  ("Dynamo",         "dynamo"),
+    "GI":  ("Giti",           "giti"),
+    "MT":  ("Mickey Thompson","mickey-thompson"),
+    "RD":  ("Radar",          "radar"),
+    "RV":  ("Rovelo",         "rovelo"),
+    "TM":  ("Tracmax",        "tracmax"),
+    "TS":  ("Transmate",      "transmate"),
+    "WN":  ("Wanli",          "wanli"),
 }
 
 
@@ -339,8 +343,10 @@ return (function() {
     // product title ("Michelin Pilot Sport 4" -> "Pilot Sport 4").
     // Keep this in sync with the BRANDS dict at the top of the
     // module so new brand pages get their prefixes stripped the
-    // same way the original 8 do.
-    var BRAND_NAMES_RE = /^(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|kumho|yokohama|pirelli|nexen|toyo|nitto|maxxis|cooper|bf\s*goodrich|bfgoodrich|general(?:\s+tire)?)\s*/i;
+    // same way the original 8 do.  Multi-word brands matched
+    // flexibly ("mickey thompson" OR "mickeythompson"; "double
+    // coin" OR "doublecoin"; "bf goodrich" OR "bfgoodrich").
+    var BRAND_NAMES_RE = /^(?:michelin|bridgestone|continental|goodyear|falken|hankook|laufenn|dunlop|pirelli|bf\s*goodrich|bfgoodrich|general\s*tire|general|double\s*coin|dynamo|giti|mickey\s*thompson|mickeyt(?:hompson)?|m\/t|mt|radar|rovelo|tracmax|transmate|wanli)\s*/i;
 
     /* ── Shared card-extraction helper ─────────────────────────────────── */
     function extractCard(card) {
