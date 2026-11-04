@@ -1555,7 +1555,7 @@ _DEMO_PAGES = {
 }
 
 
-_DEMO_FETCH_PATCH = """
+_DEMO_FETCH_PATCH = r"""
 <script>
 /* Demo mode client-side patches:
     1. Wrap fetch / XHR so every same-origin API call carries ?demo=1
