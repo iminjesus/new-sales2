@@ -299,6 +299,13 @@ def build_data(monthly):
     # "Pirelli (34)" style labels indicating current activity rather
     # than lifetime frequency.
     _brand_counts_latest: dict[str, int] = {}
+    # Nov-04 user ask (second round): per-(brand, size) counts in the
+    # latest month too, so the dropdown label can switch to
+    # "Pirelli (12)" when the operator narrows to a specific size.
+    # Size key = CSV's SIZE column (or extracted from DESCRIPTION
+    # when SIZE is blank) so lookup matches the sizes dropdown.
+    _brand_size_counts_latest: dict[str, dict[str, int]] = {}
+    from price_compare_jax import normalise_size as _nsz
     _all_month_keys = sorted(monthly.keys())
     _latest_mk = _all_month_keys[-1] if _all_month_keys else None
     for _mk, _md in monthly.items():
@@ -314,6 +321,12 @@ def build_data(monthly):
                 _brand_counts[_a] = _brand_counts.get(_a, 0) + 1
                 if _is_latest:
                     _brand_counts_latest[_a] = _brand_counts_latest.get(_a, 0) + 1
+                    _sz = (_r.get("SIZE", "") or "").strip()
+                    if not _sz:
+                        _sz = _nsz(_r.get("DESCRIPTION", "") or "")
+                    if _sz:
+                        _bs = _brand_size_counts_latest.setdefault(_a, {})
+                        _bs[_sz] = _bs.get(_sz, 0) + 1
     _major_abbrs = list(BRANDS.keys())
     _extra_sorted = sorted(
         (a for a in _brand_counts.keys() if a not in BRANDS),
@@ -325,6 +338,9 @@ def build_data(monthly):
     _extras_for_ui = {a: _EXTRAS[a] for a in _extra_sorted if a in _EXTRAS}
     _brand_freq_for_ui = dict(_brand_counts)
     _brand_freq_latest_for_ui = dict(_brand_counts_latest)
+    _brand_size_freq_latest_for_ui = {
+        k: dict(v) for k, v in _brand_size_counts_latest.items()
+    }
 
     store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
                  # Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi).
@@ -764,7 +780,11 @@ def build_data(monthly):
         "brand_freq":        _brand_freq_for_ui,
         # Nov-04: per-brand row count in the LATEST month only, for
         # the "(N)" suffix on the ▾ More dropdown labels.
-        "brand_freq_latest": _brand_freq_latest_for_ui,
+        "brand_freq_latest":      _brand_freq_latest_for_ui,
+        # Nov-04 (second round): per-(brand, size) row count in the
+        # latest month, so the "(N)" label can refresh when the
+        # operator picks a specific size.
+        "brand_size_freq_latest": _brand_size_freq_latest_for_ui,
     }
 
 
@@ -1225,9 +1245,10 @@ const BRANDS  = {{ brands_json | safe }};
 // brands the CSVs carry but that weren't in the curated BRANDS
 // list.  BRAND_FREQ is the row count per abbr (majors + extras),
 // used to sort extras most-common-first.
-const EXTRA_BRANDS      = {{ extra_brands_json | safe }};
-const BRAND_FREQ        = {{ brand_freq_json  | safe }};
-const BRAND_FREQ_LATEST = {{ brand_freq_latest_json | safe }};
+const EXTRA_BRANDS           = {{ extra_brands_json | safe }};
+const BRAND_FREQ             = {{ brand_freq_json  | safe }};
+const BRAND_FREQ_LATEST      = {{ brand_freq_latest_json | safe }};
+const BRAND_SIZE_FREQ_LATEST = {{ brand_size_freq_latest_json | safe }};
 const BCOLORS = {{ bcolors_json | safe }};
 const SIZES   = {{ sizes_json | safe }};
 const POPULAR = {{ popular_json | safe }};
@@ -2547,6 +2568,9 @@ function _setSize(size, btn) {
     if (_activeSizeBtn) _activeSizeBtn.classList.remove('active');
     _activeSizeBtn = btn; btn.classList.add('active');
     selectedSize = size;
+    // Nov-04: refresh brand rows so each extra's (N) label +
+    // background gradient reflects the newly-selected size scope.
+    try { _refreshBrandRowsForSize(); } catch (_e) {}
     _tryRender();
     // Oct-27-pm user ask: when either pane in split-view changes
     // its size, the other pane should pick it up.  Publish through
@@ -2629,26 +2653,58 @@ function onModeStore(btn) {
 // which brands get drawn as lines in either mode.  Clears the
 // container first so re-invocation after a mode switch doesn't
 // stack duplicate buttons.
+//
+// Nov-04 (second round):
+//   - Count in each "(N)" label follows the current selectedSize:
+//     'ALL' => use BRAND_FREQ_LATEST[abbr] (sum across sizes),
+//     specific size => BRAND_SIZE_FREQ_LATEST[abbr][size] || 0.
+//   - Extras get a background opacity gradient from pale to
+//     saturated based on how large their N is relative to the max
+//     N among currently-displayed extras.  Zero-count extras read
+//     plain white so they fade into the dropdown.
 function _renderBrandCheckboxRow(container) {
     _ensureBrandSetInitialised();
     container.innerHTML = '';
 
-    const _makeBrandCheckbox = function(abbr, labelText) {
+    const _brandCountForLabel = function(abbr) {
+        if (selectedSize && selectedSize !== 'ALL') {
+            const perSize = BRAND_SIZE_FREQ_LATEST[abbr] || {};
+            return +perSize[selectedSize] || 0;
+        }
+        return +BRAND_FREQ_LATEST[abbr] || 0;
+    };
+
+    // Two-hex-digit alpha from 0..1 for CSS "#RRGGBBAA" literals.
+    const _alphaHex = function(a01) {
+        const n = Math.max(0, Math.min(255, Math.round(a01 * 255)));
+        return n.toString(16).padStart(2, '0');
+    };
+
+    const _makeBrandCheckbox = function(abbr, labelText, opts) {
+        opts = opts || {};
         const c = '#' + (BCOLORS[abbr] || '555555');
+        // Background: if an extra carries a gradient alpha (0..1
+        // of max), use that; otherwise the plain checked / unchecked
+        // treatment from before.
+        let bgOff = '#fff';
+        if (opts.gradAlpha && opts.gradAlpha > 0) {
+            bgOff = c + _alphaHex(opts.gradAlpha);
+        }
+        const bgOn  = c + '33';   // stronger when checked
         const wrap = document.createElement('label');
         wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;'
                            + 'padding:3px 7px;border:1px solid ' + c + ';'
                            + 'border-radius:4px;font-size:11.5px;'
-                           + 'cursor:pointer;background:#fff;color:' + c + ';';
+                           + 'cursor:pointer;background:' + bgOff + ';color:' + c + ';';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
         cb.style.cssText = 'margin:0;cursor:pointer;accent-color:' + c + ';';
         cb.checked = selectedBrandSet.has(abbr);
-        if (cb.checked) wrap.style.background = c + '18';
+        if (cb.checked) wrap.style.background = bgOn;
         cb.addEventListener('change', function() {
             if (cb.checked) selectedBrandSet.add(abbr);
             else            selectedBrandSet.delete(abbr);
-            wrap.style.background = cb.checked ? (c + '18') : '#fff';
+            wrap.style.background = cb.checked ? bgOn : bgOff;
             _updateSubKeyFromSet(); _tryRender();
         });
         const span = document.createElement('span');
@@ -2704,13 +2760,44 @@ function _renderBrandCheckboxRow(container) {
         const box = document.createElement('div');
         box.className = 'btns';
         box.style.cssText = 'margin-top:6px';
-        _extraAbbrs.forEach(function(abbr) {
-            const n = BRAND_FREQ_LATEST[abbr] || 0;
+        // Nov-04 second round: compute the max count across the
+        // extras currently displayed so the gradient is relative
+        // to THIS dataset (size-scoped if size != ALL).  Max=0
+        // means every extra is empty; skip the gradient to avoid
+        // divide-by-zero.
+        const _extraCounts = _extraAbbrs.map(_brandCountForLabel);
+        const _maxN = _extraCounts.reduce(function(a, b) { return a > b ? a : b; }, 0);
+        _extraAbbrs.forEach(function(abbr, i) {
+            const n = _extraCounts[i];
             const label = (BRANDS[abbr] || abbr) + ' (' + n + ')';
-            box.appendChild(_makeBrandCheckbox(abbr, label));
+            // Gradient alpha 0..0.42 (keeps label readable against
+            // the tinted background even on saturated brand
+            // colours).  sqrt() makes small-but-nonzero counts
+            // visible without the top end dominating.
+            let gradAlpha = 0;
+            if (_maxN > 0 && n > 0) {
+                gradAlpha = 0.42 * Math.sqrt(n / _maxN);
+            }
+            box.appendChild(_makeBrandCheckbox(abbr, label,
+                                               { gradAlpha: gradAlpha }));
         });
         det.appendChild(box);
         container.appendChild(det);
+    }
+}
+
+// Nov-04: re-render both brand rows whenever the size filter
+// changes, so the (N) labels + gradient stay in sync with the
+// currently-selected size.  Safe to call even when a row is
+// hidden -- _renderBrandCheckboxRow just clears + repopulates.
+function _refreshBrandRowsForSize() {
+    const sub = document.getElementById('sub-btns');
+    if (sub && selectedMode === 'store') {
+        _renderBrandCheckboxRow(sub);
+    }
+    const br = document.getElementById('brand-btns');
+    if (br && document.getElementById('brand-row').style.display !== 'none') {
+        _renderBrandCheckboxRow(br);
     }
 }
 
@@ -2933,7 +3020,8 @@ def _price_cache_key():
 # serving a stale shape missing the newer keys.  Nov-04 history:
 #   v1 -> initial 3-tier cache (pre brand_freq_latest)
 #   v2 -> added brand_freq_latest for the ▾ More (N) dropdown
-_PRICE_CACHE_VERSION = 2
+#   v3 -> added brand_size_freq_latest for size-aware (N) labels
+_PRICE_CACHE_VERSION = 3
 
 def save_price_cache_to_disk(key, data):
     """Serialise (key, data) to the on-disk cache pickle so a Flask
@@ -3058,10 +3146,11 @@ def price_dashboard():
         bcolors_json        = json.dumps(BRAND_COLOURS),
         sizes_json          = json.dumps(data["sizes_with_data"]),
         popular_json        = json.dumps(data["popular_sizes"]),
-        extra_brands_json       = json.dumps(data.get("extra_brands", {})),
-        brand_freq_json         = json.dumps(data.get("brand_freq", {})),
-        brand_freq_latest_json  = json.dumps(data.get("brand_freq_latest", {})),
-        base_rows               = base_rows,
+        extra_brands_json           = json.dumps(data.get("extra_brands", {})),
+        brand_freq_json             = json.dumps(data.get("brand_freq", {})),
+        brand_freq_latest_json      = json.dumps(data.get("brand_freq_latest", {})),
+        brand_size_freq_latest_json = json.dumps(data.get("brand_size_freq_latest", {})),
+        base_rows                   = base_rows,
     )
 
 
