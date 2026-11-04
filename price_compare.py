@@ -294,7 +294,15 @@ def build_data(monthly):
     # registry as a side-effect.
     from price_compare_jax import abbr_for as _abbr_for, EXTRA_BRANDS_SEEN as _EXTRAS
     _brand_counts: dict[str, int] = {}
-    for _md in monthly.values():
+    # Nov-04 user ask: ALSO track per-brand row count in just the
+    # MOST RECENT month so the "▾ More" dropdown can show
+    # "Pirelli (34)" style labels indicating current activity rather
+    # than lifetime frequency.
+    _brand_counts_latest: dict[str, int] = {}
+    _all_month_keys = sorted(monthly.keys())
+    _latest_mk = _all_month_keys[-1] if _all_month_keys else None
+    for _mk, _md in monthly.items():
+        _is_latest = (_mk == _latest_mk)
         for _bucket in ("t_rows", "bj_rows", "jx_rows", "tw_rows", "nwb_rows"):
             for _r in _md.get(_bucket, []):
                 _b = (_r.get("BRAND") or _r.get("brand") or "").strip()
@@ -304,6 +312,8 @@ def build_data(monthly):
                 if not _a:
                     continue
                 _brand_counts[_a] = _brand_counts.get(_a, 0) + 1
+                if _is_latest:
+                    _brand_counts_latest[_a] = _brand_counts_latest.get(_a, 0) + 1
     _major_abbrs = list(BRANDS.keys())
     _extra_sorted = sorted(
         (a for a in _brand_counts.keys() if a not in BRANDS),
@@ -314,6 +324,7 @@ def build_data(monthly):
     # counts so the template renderer can hand them to the frontend.
     _extras_for_ui = {a: _EXTRAS[a] for a in _extra_sorted if a in _EXTRAS}
     _brand_freq_for_ui = dict(_brand_counts)
+    _brand_freq_latest_for_ui = dict(_brand_counts_latest)
 
     store_avg = {"tempe": [], "bj": [], "jax": [], "tw": [], "twi": [],
                  # Nov-03: NewBee Sell Out (nwb) + Sell In (nwbi).
@@ -749,8 +760,11 @@ def build_data(monthly):
         # CSVs.  `extra_brands` maps abbr -> display name (used for
         # the second-row buttons); `brand_freq` carries per-brand
         # row counts so the frontend can sort extras by frequency.
-        "extra_brands":    _extras_for_ui,
-        "brand_freq":      _brand_freq_for_ui,
+        "extra_brands":      _extras_for_ui,
+        "brand_freq":        _brand_freq_for_ui,
+        # Nov-04: per-brand row count in the LATEST month only, for
+        # the "(N)" suffix on the ▾ More dropdown labels.
+        "brand_freq_latest": _brand_freq_latest_for_ui,
     }
 
 
@@ -1200,8 +1214,9 @@ const BRANDS  = {{ brands_json | safe }};
 // brands the CSVs carry but that weren't in the curated BRANDS
 // list.  BRAND_FREQ is the row count per abbr (majors + extras),
 // used to sort extras most-common-first.
-const EXTRA_BRANDS = {{ extra_brands_json | safe }};
-const BRAND_FREQ   = {{ brand_freq_json  | safe }};
+const EXTRA_BRANDS      = {{ extra_brands_json | safe }};
+const BRAND_FREQ        = {{ brand_freq_json  | safe }};
+const BRAND_FREQ_LATEST = {{ brand_freq_latest_json | safe }};
 const BCOLORS = {{ bcolors_json | safe }};
 const SIZES   = {{ sizes_json | safe }};
 const POPULAR = {{ popular_json | safe }};
@@ -1620,6 +1635,12 @@ function _renderBrandTable(wrap) {
 let selectedSize    = null;
 let selectedMode    = null;   // 'store' | 'brand'
 let selectedSubKey  = null;   // abbr (store mode) | 'tempe'/'bj'/'jax' (brand mode)
+// Nov-04: multi-select brand set.  Default = all majors with data;
+// user can toggle any brand (major or extra) on/off via the checkbox
+// row.  _avgAllBrands / _renderBrand both honour this set when the
+// aggregator path runs, so the chart only averages / draws the
+// checked brands.
+let selectedBrandSet = null;
 let pricingMode     = 'normal';   // 'normal' | 'promo'  (toggle at top)
 let _chart          = null;
 let _activeSizeBtn  = null;
@@ -1917,11 +1938,39 @@ function _avgAllBrands(size, store) {
     // would need its own aggregate; keeping Normal here avoids a
     // misleading number.  Users can still see the per-size Promo
     // numbers by picking a specific size.
-    if (size === 'ALL') return D.store_avg[store] || [];
+    // Nov-04: when the operator has narrowed the brand set via the
+    // checkbox row, honour it here so the "ALL brands" average on
+    // the chart only aggregates the checked brands.  The pre-
+    // computed store_avg (which averages across ALL brands and
+    // doesn't know about selection) is only safe when the set is
+    // the full default (or unset).
+    if (size === 'ALL') {
+        if (!(selectedBrandSet instanceof Set) || selectedBrandSet.size === 0
+                || selectedBrandSet.size === _defaultBrandSet().size) {
+            return D.store_avg[store] || [];
+        }
+        // Narrow set + size=ALL: fall through to the per-brand walk
+        // below, iterating over size_data so every size gets a crack.
+        const nM2 = months.length;
+        const sums2 = new Array(nM2).fill(0), counts2 = new Array(nM2).fill(0);
+        const storeKey2 = _priceKey(store);
+        Object.keys(D.size_data).forEach(function(_sz) {
+            selectedBrandSet.forEach(function(abbr) {
+                const prices = ((D.size_data[_sz] || {})[abbr] || {})[storeKey2] || [];
+                prices.forEach(function(p, i) {
+                    if (p !== null && p !== undefined) { sums2[i] += p; counts2[i]++; }
+                });
+            });
+        });
+        return sums2.map(function(s, i) { return counts2[i] > 0 ? Math.round(s / counts2[i]) : null; });
+    }
     const nM = months.length;
     const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
     const storeKey = _priceKey(store);
-    Object.keys(BRANDS).forEach(function(abbr) {
+    const _iter = (selectedBrandSet instanceof Set && selectedBrandSet.size > 0)
+                  ? selectedBrandSet
+                  : new Set(Object.keys(BRANDS));
+    _iter.forEach(function(abbr) {
         const prices = ((D.size_data[size] || {})[abbr] || {})[storeKey] || [];
         prices.forEach(function(p, i) {
             if (p !== null && p !== undefined) { sums[i] += p; counts[i]++; }
@@ -2043,7 +2092,14 @@ function _renderBrand() {
     const sizeLabel = selectedSize === 'ALL' ? 'All Sizes (avg)' : selectedSize;
     const ds = [];
     let ci = 0;
-    Object.keys(BRANDS).forEach(function(abbr) {
+    // Nov-04: honour selectedBrandSet when it is non-trivial so the
+    // By-Brand chart only draws the brands the operator checked.
+    // Empty / missing set => fall back to ALL brands (same as the
+    // pre-multi-select default).
+    const _brandIter = (selectedBrandSet instanceof Set && selectedBrandSet.size > 0)
+                       ? Array.from(selectedBrandSet)
+                       : Object.keys(BRANDS);
+    _brandIter.forEach(function(abbr) {
         const prices = selectedSize === 'ALL'
             ? _avgAllSizes(abbr, store)
             : ((D.size_data[selectedSize] || {})[abbr] || {})[_priceKey(store)];
@@ -2544,67 +2600,124 @@ function onModeStore(btn) {
         subBtns.appendChild(b);
     }());
 
-    // Nov-03 user ask: render majors first (fixed BRANDS order),
-    // then extras sorted by row-count frequency (most common first).
-    // Extras overflow past EXTRA_INLINE_LIMIT fold into a "▾ More"
-    // collapsible so the row doesn't stretch across the chart.
-    const _makeBrandBtn = function(abbr) {
+    // Nov-04 user ask: multi-select checkboxes replace the single-
+    // button radio behaviour.  Majors start checked by default (the
+    // original ALL aggregate), extras in the ▾ More dropdown stay
+    // unchecked -- the operator opts them in one at a time.  The
+    // chart then averages over whatever is checked.  Clicking the
+    // "ALL" button resets the set to just the majors.
+    _ensureBrandSetInitialised();
+
+    const _makeBrandCheckbox = function(abbr, labelText) {
         const c = '#' + (BCOLORS[abbr] || '555555');
+        const wrap = document.createElement('label');
+        wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;'
+                           + 'padding:3px 7px;border:1px solid ' + c + ';'
+                           + 'border-radius:4px;font-size:11.5px;'
+                           + 'cursor:pointer;background:#fff;color:' + c + ';';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.style.cssText = 'margin:0;cursor:pointer;accent-color:' + c + ';';
+        cb.checked = selectedBrandSet.has(abbr);
+        if (cb.checked) wrap.style.background = c + '18';
+        cb.addEventListener('change', function() {
+            if (cb.checked) selectedBrandSet.add(abbr);
+            else            selectedBrandSet.delete(abbr);
+            wrap.style.background = cb.checked ? (c + '18') : '#fff';
+            _updateSubKeyFromSet(); _tryRender();
+        });
+        const span = document.createElement('span');
+        span.textContent = labelText || (BRANDS[abbr] || abbr);
+        wrap.appendChild(cb);
+        wrap.appendChild(span);
+        return wrap;
+    };
+
+    // ALL = reset to majors-with-data (quick way back to the default).
+    (function() {
         const b = document.createElement('button');
         b.className = 'btn';
-        b.textContent = BRANDS[abbr] || abbr;
-        b.style.borderColor = c; b.style.color = c;
+        b.textContent = 'ALL majors';
+        b.style.fontWeight = '700';
+        b.title = 'Reset selection to the 10 curated major brands '
+                + '(unchecks every extra in ▾ More).';
         b.onclick = function() {
-            if (_activeSubBtn) _activeSubBtn.classList.remove('active');
-            _activeSubBtn = b; b.classList.add('active');
-            selectedSubKey = abbr; _tryRender();
+            selectedBrandSet = _defaultBrandSet();
+            onModeStore(_activeModeBtn || b);   // re-render the whole row
         };
-        return b;
-    };
-    // Majors — fixed order from the BRANDS dict, skip any that
-    // have no data (same guard the old loop implicitly applied
-    // via D.brand_size_data).
+        subBtns.appendChild(b);
+    }());
+
+    // Majors — fixed BRANDS order, skip any that have no data.
     Object.keys(BRANDS).forEach(function(abbr) {
-        if (EXTRA_BRANDS[abbr]) return;   // avoid dupes
+        if (EXTRA_BRANDS[abbr]) return;
         if (!(abbr in D.brand_size_data)) return;
-        subBtns.appendChild(_makeBrandBtn(abbr));
+        subBtns.appendChild(_makeBrandCheckbox(abbr));
     });
-    // Extras — sort by BRAND_FREQ desc, then alpha.
+
+    // Extras — in ▾ More dropdown, sorted ALPHABETICALLY (user's
+    // Nov-04 ask: not by frequency), each label suffixed with the
+    // latest month's row count, e.g. "Pirelli (34)".
     const _extraAbbrs = Object.keys(EXTRA_BRANDS).filter(function(a) {
         return a in D.brand_size_data;
     }).sort(function(a, b) {
-        const fa = BRAND_FREQ[a] || 0, fb = BRAND_FREQ[b] || 0;
-        if (fa !== fb) return fb - fa;
-        return a.localeCompare(b);
+        const na = (EXTRA_BRANDS[a] || a).toLowerCase();
+        const nb = (EXTRA_BRANDS[b] || b).toLowerCase();
+        return na.localeCompare(nb);
     });
-    const EXTRA_INLINE_LIMIT = 10;
-    const _inlineExtras = _extraAbbrs.slice(0, EXTRA_INLINE_LIMIT);
-    const _overflow     = _extraAbbrs.slice(EXTRA_INLINE_LIMIT);
-    _inlineExtras.forEach(function(abbr) {
-        subBtns.appendChild(_makeBrandBtn(abbr));
-    });
-    if (_overflow.length) {
-        // <details> collapsible that holds the overflow buttons;
-        // reuses the same .btns layout inside so the hidden row
-        // reads identically to the inline ones when expanded.
+    if (_extraAbbrs.length) {
         const det = document.createElement('details');
         det.style.cssText = 'display:inline-block;margin-left:4px';
         const sum = document.createElement('summary');
-        sum.textContent = '▾ More (' + _overflow.length + ')';
+        sum.textContent = '▾ More (' + _extraAbbrs.length + ')';
         sum.style.cssText = 'cursor:pointer;padding:4px 8px;border:1px solid #cbd5e1;'
                           + 'border-radius:4px;font-size:12px;color:#334155;list-style:none;';
         det.appendChild(sum);
         const box = document.createElement('div');
         box.className = 'btns';
         box.style.cssText = 'margin-top:6px';
-        _overflow.forEach(function(abbr) {
-            box.appendChild(_makeBrandBtn(abbr));
+        _extraAbbrs.forEach(function(abbr) {
+            const n = BRAND_FREQ_LATEST[abbr] || 0;
+            const label = (BRANDS[abbr] || abbr) + ' (' + n + ')';
+            box.appendChild(_makeBrandCheckbox(abbr, label));
         });
         det.appendChild(box);
         subBtns.appendChild(det);
     }
     document.getElementById('sub-row').style.display = 'flex';
-    if (subBtns.firstChild) subBtns.firstChild.click();
+    _updateSubKeyFromSet();
+    _tryRender();
+}
+
+// Default brand set = all MAJORS that have at least one data point.
+function _defaultBrandSet() {
+    const out = new Set();
+    Object.keys(BRANDS).forEach(function(abbr) {
+        if (EXTRA_BRANDS[abbr]) return;
+        if (!(abbr in D.brand_size_data)) return;
+        out.add(abbr);
+    });
+    return out;
+}
+
+function _ensureBrandSetInitialised() {
+    if (!(selectedBrandSet instanceof Set) || selectedBrandSet.size === 0) {
+        selectedBrandSet = _defaultBrandSet();
+    }
+}
+
+// Map the current multi-select set back onto the legacy
+// selectedSubKey so the existing _renderStore / _renderBrand paths
+// keep working unchanged.  Single brand selected => that abbr; 0
+// or 2+ selected => 'ALL' (the aggregator path).  _avgAllBrands
+// then honours selectedBrandSet when selectedSubKey === 'ALL'.
+function _updateSubKeyFromSet() {
+    _ensureBrandSetInitialised();
+    if (selectedBrandSet.size === 1) {
+        selectedSubKey = Array.from(selectedBrandSet)[0];
+    } else {
+        selectedSubKey = 'ALL';
+    }
 }
 
 /* ── Mode: By Brand ───────────────────────────────────── */
@@ -2728,6 +2841,12 @@ function _buildSizeDropdown() {
     document.getElementById('size-reserved-only')
             .addEventListener('change', _buildSizeDropdown);
     _buildSizeDropdown();
+    // Nov-04: initialise the multi-select brand set to the default
+    // (all majors with data) before any renderer runs, so both
+    // By-Brand and By-Channel modes honour it from the very first
+    // paint.
+    selectedBrandSet = _defaultBrandSet();
+    _updateSubKeyFromSet();
     // Normal is the default pricing mode on first load so the chart
     // shows regular retail prices until the user flips Promo on.  We
     // click the button rather than set the state directly so the
@@ -2895,9 +3014,10 @@ def price_dashboard():
         bcolors_json        = json.dumps(BRAND_COLOURS),
         sizes_json          = json.dumps(data["sizes_with_data"]),
         popular_json        = json.dumps(data["popular_sizes"]),
-        extra_brands_json   = json.dumps(data.get("extra_brands", {})),
-        brand_freq_json     = json.dumps(data.get("brand_freq", {})),
-        base_rows           = base_rows,
+        extra_brands_json       = json.dumps(data.get("extra_brands", {})),
+        brand_freq_json         = json.dumps(data.get("brand_freq", {})),
+        brand_freq_latest_json  = json.dumps(data.get("brand_freq_latest", {})),
+        base_rows               = base_rows,
     )
 
 
