@@ -2745,12 +2745,19 @@ function _buildSizeDropdown() {
 
 # Nov-04 user ask: /price got slow after the Nov-03 brand-row
 # expansion (extras pushed the build_data inner loop from ~10 to
-# ~60 abbrs per month).  Add a filesystem-mtime cache so repeat
-# requests to the same data skip the full CSV reload + build_data
-# rebuild entirely.  Cache is invalidated the moment ANY source
-# CSV changes on disk (new crawl, operator edit, etc.), so stale
-# data is impossible by construction.
+# ~60 abbrs per month).  Add a 3-tier cache:
+#   1. In-memory (fastest)   -- served after the first in-process hit
+#   2. On-disk pickle.gz     -- survives Flask restarts
+#   3. Full rebuild          -- only when both above miss
+# Cache key = sorted tuple of every source CSV's (basename, mtime);
+# any crawler drop / edit flips the key and the cache rebuilds, so
+# stale data is impossible by construction.  The pickle cache is
+# ALSO writable from a standalone pre-build script
+# (build_price_dashboard_cache.py) that the crawler can call on its
+# way out, so a fresh crawl pre-warms the /price endpoint for the
+# very next browser request.
 _PRICE_CACHE = {"key": None, "monthly": None, "data": None}
+_PRICE_CACHE_FILE = os.path.join(_BASE, ".price_dashboard_cache.pkl.gz")
 
 def _price_cache_key():
     """Build a cheap fingerprint of every source CSV's (path, mtime).
@@ -2770,18 +2777,70 @@ def _price_cache_key():
     # Sort so file-system enumeration order doesn't matter.
     return tuple(sorted(key_parts))
 
+def save_price_cache_to_disk(key, data):
+    """Serialise (key, data) to the on-disk cache pickle so a Flask
+    restart (or a fresh crawl) can skip the full rebuild on the next
+    /price request.  Best-effort: failures print + swallow so the
+    HTTP path is never blocked on a disk error."""
+    try:
+        import pickle as _pk, gzip as _gz
+        tmp = _PRICE_CACHE_FILE + ".tmp"
+        with _gz.open(tmp, "wb", compresslevel=5) as _f:
+            _pk.dump({"version": 1, "key": key, "data": data},
+                     _f, protocol=_pk.HIGHEST_PROTOCOL)
+        os.replace(tmp, _PRICE_CACHE_FILE)
+        try:
+            _sz = os.path.getsize(_PRICE_CACHE_FILE)
+        except OSError:
+            _sz = -1
+        print(f"[price_compare] wrote disk cache -> "
+              f"{_PRICE_CACHE_FILE} ({_sz} bytes)", flush=True)
+        return True
+    except Exception as _e:
+        print(f"[price_compare] disk cache write failed: {_e}", flush=True)
+        return False
+
+def load_price_cache_from_disk():
+    """Return (key, data) from the on-disk cache, or (None, None) if
+    the file is missing / unreadable / an older version.  Caller is
+    expected to compare key against the fresh _price_cache_key()
+    before trusting the data."""
+    try:
+        if not os.path.exists(_PRICE_CACHE_FILE):
+            return None, None
+        import pickle as _pk, gzip as _gz
+        with _gz.open(_PRICE_CACHE_FILE, "rb") as _f:
+            blob = _pk.load(_f)
+        if not isinstance(blob, dict) or blob.get("version") != 1:
+            return None, None
+        return blob.get("key"), blob.get("data")
+    except Exception as _e:
+        print(f"[price_compare] disk cache read failed: {_e}", flush=True)
+        return None, None
+
 
 @app.route('/price')
 def price_dashboard():
     import time as _time
     _t0 = _time.monotonic()
     _key = _price_cache_key()
+    data = None
+    # Tier 1: in-memory (same key already served this session).
     if _PRICE_CACHE["key"] == _key and _PRICE_CACHE["data"] is not None:
-        monthly = _PRICE_CACHE["monthly"]
-        data    = _PRICE_CACHE["data"]
-        print(f"[price_compare] cache HIT ({len(_key)} csv fingerprints) — "
-              f"skipping load_all_months + build_data")
-    else:
+        data = _PRICE_CACHE["data"]
+        print(f"[price_compare] cache HIT (memory) — "
+              f"{len(_key)} csv fingerprints")
+    # Tier 2: on-disk pickle (survives Flask restarts + pre-build).
+    if data is None:
+        _dkey, _ddata = load_price_cache_from_disk()
+        if _dkey == _key and _ddata is not None:
+            data = _ddata
+            _PRICE_CACHE["key"]  = _key
+            _PRICE_CACHE["data"] = data
+            print(f"[price_compare] cache HIT (disk) in "
+                  f"{_time.monotonic() - _t0:.2f}s — {len(_key)} csv fingerprints")
+    # Tier 3: full rebuild (CSV read + build_data + write both caches).
+    if data is None:
         monthly = load_all_months()
         if not monthly:
             return ("<h2 style='padding:40px;font-family:sans-serif;color:#c00'>"
@@ -2792,7 +2851,7 @@ def price_dashboard():
         # per-month row counts for every store bucket so if a month's file
         # exists on disk but goes through with zero rows, it's visible in
         # the server log without needing a debugger.
-        print("[price_compare] load_all_months → month-key : t_rows / bj_rows / jx_rows / tw_rows")
+        print("[price_compare] load_all_months → month-key : t_rows / bj_rows / jx_rows / tw_rows / nwb_rows")
         for _mk in sorted(monthly.keys()):
             _md = monthly[_mk]
             print(f"[price_compare]   {_mk}: "
@@ -2803,11 +2862,13 @@ def price_dashboard():
                   f"nwb={len(_md.get('nwb_rows', []))}")
 
         data = build_data(monthly)
-        _PRICE_CACHE["key"]     = _key
-        _PRICE_CACHE["monthly"] = monthly
-        _PRICE_CACHE["data"]    = data
+        _PRICE_CACHE["key"]  = _key
+        _PRICE_CACHE["data"] = data
         print(f"[price_compare] cache MISS -> built in "
               f"{_time.monotonic() - _t0:.1f}s ({len(_key)} csv fingerprints)")
+        # Persist for next Flask restart / next /price request after
+        # a crawl drop (if the pre-build script didn't beat us to it).
+        save_price_cache_to_disk(_key, data)
     _t_build = _time.monotonic() - _t0
     chart_json = json.dumps({
         "months":          data["months"],

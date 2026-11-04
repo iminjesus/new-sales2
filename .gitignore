@@ -22,6 +22,13 @@ BobJane_*.csv
 .sap_pwd_current
 .sap_pwd_current.tmp
 
+# Pre-computed /price dashboard data cache (built by
+# build_price_dashboard_cache.py, or lazily by the first /price
+# request after a cache miss).  Invalidated automatically from the
+# source CSV mtimes, so there's no reason to commit it.
+.price_dashboard_cache.pkl.gz
+.price_dashboard_cache.pkl.gz.tmp
+
 # User-uploaded photos from /meeting (kept on disk, not tracked)
 static/meeting_photos/
 
