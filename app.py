@@ -24270,4 +24270,34 @@ if __name__ == "__main__":
             print(f"[warmup] material suggest cache failed: {e}")
     threading.Thread(target=_warmup_material_suggest, daemon=True).start()
 
+    # Nov-04 user ask: Ctrl+C on PowerShell/Windows frequently fails
+    # to break Werkzeug's dev-server accept loop (a known upstream
+    # issue -- the console control handler doesn't reliably forward
+    # SIGINT while threaded=True is holding request threads).  Add a
+    # two-strike SIGINT handler so one Ctrl+C asks for a graceful
+    # shutdown and a second Ctrl+C always hard-exits via os._exit,
+    # bypassing whatever thread is blocked.
+    import signal as _signal
+    _ctrl_c_count = [0]
+    def _handle_sigint(signum, frame):
+        _ctrl_c_count[0] += 1
+        if _ctrl_c_count[0] == 1:
+            print("\n[shutdown] Ctrl+C received -- asking Flask to stop "
+                  "(press Ctrl+C again to force kill)...", flush=True)
+            # Raise KeyboardInterrupt so Werkzeug's own cleanup runs
+            # in the main thread.  If it hangs, the second Ctrl+C
+            # below will take over.
+            raise KeyboardInterrupt
+        print("\n[shutdown] Second Ctrl+C -- force exiting (os._exit)",
+              flush=True)
+        os._exit(130)
+    try:
+        _signal.signal(_signal.SIGINT, _handle_sigint)
+        # Ctrl+Break also works on Windows and bypasses the console
+        # input buffer when Ctrl+C is swallowed.
+        if hasattr(_signal, "SIGBREAK"):
+            _signal.signal(_signal.SIGBREAK, _handle_sigint)
+    except Exception as _e:
+        print(f"[shutdown] signal handler install failed: {_e}")
+
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
