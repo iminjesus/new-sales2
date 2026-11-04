@@ -6722,11 +6722,16 @@ def _submitted_order_email_html(oid, order, base_url):
     # Route decision uses the same MD-gate rule the front-end shows:
     # any non-aged, non-Standard line with Proposed DC ≥ 64 % ⇒ MD.
     approval_block = ""
+    _hdr = order.get("header") or {}
+    _has_interstate = str(_hdr.get("has_interstate") or "").upper() == "Y"
+    _has_stockout   = str(_hdr.get("has_stockout")   or "").upper() == "Y"
+    _sto_n          = str(_hdr.get("stockout_count") or "0")
+    _sto_m          = str(_hdr.get("stockout_total") or "0")
     if order.get("needs_mgmt_approval") != "Y":
-        # Standard-pricing (no negotiated concession on any line) — no
-        # approver needs to act.  Say so at the top of the email so a
-        # recipient doesn't wait around for a Kenny/Justin nudge that
-        # will never come.
+        # Standard-pricing AND no inter-state / stock-out flag — no
+        # approver needs to act.  Say so at the top of the email so
+        # a recipient doesn't wait around for a Kenny/Justin nudge
+        # that will never come.
         approval_block = (
             '<div style="background:#f0fdf4;border:1px solid #16a34a;padding:6px 10px;'
             'margin:8px 0;border-radius:3px;font-size:12px;color:#166534">'
@@ -6753,12 +6758,31 @@ def _submitted_order_email_html(oid, order, base_url):
         route = (f"<b style='color:#7f1d1d'>MD APPROVAL REQUIRED — JJ only</b> "
                  f"({_md_lines} non-aged, non-Standard line{_s} at Proposed DC ≥ 64%)"
                  if _md_required
-                 else "Kenny or Justin can approve")
+                 else "<b>Justin / Kenny / JJ</b> can approve (any one)")
         reason_html = _esc_html(order.get("mgmt_reason") or "(no reason provided)")
+        # Nov-04 user ask: when the approval gate fires because of
+        # inter-state or stock-out, spell that out in the email so
+        # the approver sees exactly what triggered the request.  The
+        # gate can fire for multiple reasons at once, so stack the
+        # tags.
+        gate_tags = []
+        if _has_interstate:
+            gate_tags.append(
+                '<span style="background:#b91c1c;color:#fff;padding:1px 6px;'
+                'border-radius:3px;font-weight:700;font-size:11px;'
+                'margin-right:4px">⚑ INTER-STATE</span>'
+            )
+        if _has_stockout:
+            gate_tags.append(
+                '<span style="background:#d97706;color:#fff;padding:1px 6px;'
+                'border-radius:3px;font-weight:700;font-size:11px;'
+                f'margin-right:4px">⚑ STOCK-OUT {_esc_html(_sto_n)}/{_esc_html(_sto_m)}</span>'
+            )
+        gate_prefix = ("".join(gate_tags) + " " if gate_tags else "")
         approval_block = (
             '<div style="background:#fef3c7;border:1px solid #f59e0b;padding:6px 10px;'
             'margin:8px 0;border-radius:3px;font-size:12px;color:#92400e">'
-            f'<b>⚑ Approval requested</b> — {route}. '
+            f'{gate_prefix}<b>⚑ Approval requested</b> — {route}. '
             f'<span style="color:#78350f">Reason: {reason_html}</span></div>'
         )
     return f"""
@@ -6947,8 +6971,81 @@ def api_orders_submit():
             return tot
         except Exception: return 0.0
     has_additional = any(_add_sum(ln) > 0 for ln in lines)
-    needs_approval = "Y" if has_additional else "N"
+
+    # Nov-04 user ask: Standard-priced orders with inter-state or
+    # stock-out flags were slipping through with needs_approval = 'N'
+    # and no approver got the request mail.  Scan the payload for
+    # both conditions at submit time and roll them into
+    # needs_approval + mgmt_reason so the approver cohort gets the
+    # mail with the right explanation.
+    _mapped_plant = str(header.get("delivery_plant") or "").strip().upper()
+    if not _mapped_plant:
+        _state = str(header.get("ship_to_state") or header.get("state") or "").strip().upper()
+        _mapped_plant = {"NSW":"42R1","QLD":"42R0","VIC":"42R2","WA":"42R4",
+                         "SA":"42R2","TAS":"42R2","NT":"42R4","ACT":"42R1"}.get(_state, "")
+    _state_for_mapped = {"42R1":"NSW","42R0":"QLD","42R2":"VIC","42R4":"WA"}.get(_mapped_plant, "")
+    _stock_col_for_mapped = {"NSW":"stock_nsw","QLD":"stock_qld",
+                             "VIC":"stock_vic","WA":"stock_wa"}.get(_state_for_mapped, "")
+
+    def _fnum(v):
+        try:
+            s = str(v or "0").replace(",", "").replace("%", "").replace("$", "").strip()
+            return float(s or 0)
+        except Exception:
+            return 0.0
+
+    has_interstate = False
+    stockout_lines = 0
+    total_material_lines = 0
+    for _ln in lines:
+        _ov = str(_ln.get("plant_override") or "").strip().upper()
+        if _ov and _mapped_plant and _ov != _mapped_plant:
+            has_interstate = True
+        if "interstate delivery" in str(_ln.get("remark") or "").lower():
+            has_interstate = True
+        _mc = str(_ln.get("m_code") or "").strip()
+        _qty = _fnum(_ln.get("qty"))
+        if _mc and _qty > 0:
+            total_material_lines += 1
+            if _stock_col_for_mapped:
+                _sraw = str(_ln.get(_stock_col_for_mapped) or "").strip()
+                _head = _sraw.split("/")[0].replace(",", "").strip()
+                try:
+                    _atp = float(_head) if _head else float("nan")
+                except Exception:
+                    _atp = float("nan")
+                if _atp == _atp and _qty > _atp:
+                    stockout_lines += 1
+    has_stockout = stockout_lines > 0
+
+    needs_approval = "Y" if (has_additional or has_interstate or has_stockout) else "N"
+
+    # Nov-04: autogenerate mgmt_reason when the approval gate fires
+    # purely due to inter-state or stock-out and the BDE did not
+    # type a reason.  Avoids the "(no reason provided)" line on the
+    # approval email which previously read confusingly for the
+    # reviewer.
     mgmt_reason    = (header.get("mgmt_reason") or "").strip()
+    if needs_approval == "Y" and not mgmt_reason:
+        _auto_bits = []
+        if has_interstate:
+            _auto_bits.append("inter-state delivery requested")
+        if has_stockout:
+            _auto_bits.append(
+                f"stock-out at mapped plant on {stockout_lines}/{total_material_lines} line"
+                + ("s" if total_material_lines != 1 else "")
+            )
+        if _auto_bits:
+            mgmt_reason = "; ".join(_auto_bits).capitalize()
+            header["mgmt_reason"] = mgmt_reason
+            payload["header"] = header
+    # Stash the flags on the header so _submitted_order_email_html
+    # can mention them in the banner without re-scanning the payload.
+    header["has_interstate"]  = "Y" if has_interstate else "N"
+    header["has_stockout"]    = "Y" if has_stockout else "N"
+    header["stockout_count"]  = str(stockout_lines)
+    header["stockout_total"]  = str(total_material_lines)
+    payload["header"] = header
     # Rebate-able Y/N is REQUIRED on submit — the front-end enforces
     # it too but this backend gate protects against direct API POSTs.
     rebateable = str(header.get("rebateable") or "").upper().strip()
