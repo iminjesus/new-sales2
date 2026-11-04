@@ -1173,6 +1173,18 @@ body.left-hidden .show-tables-chip { display: inline-block; }
         <span class="row-label">Size</span>
         <select id="size-select"
                 style="padding:4px 24px 4px 10px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;font:inherit;font-size:12.5px;cursor:pointer;min-width:140px"></select>
+        <!-- Nov-04 user ask: digits-only quick search.  Typing
+             "1956515" picks 195/65R15 without going through the
+             dropdown.  Same normalisation the Tempe crawler uses -
+             strip every non-digit from both the input AND the
+             candidate size; starts-with match for responsive
+             typing; Enter commits + clears the box.  Blank input
+             does nothing so the dropdown stays authoritative. -->
+        <input id="size-search" type="text" inputmode="numeric"
+               placeholder="digits (e.g. 1956515)"
+               maxlength="12"
+               style="padding:4px 8px;margin-left:8px;border:1px solid #cbd5e1;border-radius:3px;background:#fff;font:inherit;font-size:12px;width:140px">
+        <span id="size-search-hint" style="margin-left:6px;font-size:11px;color:#6b7280;align-self:center"></span>
         <label style="font-size:11px;color:#444;margin-left:10px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;white-space:nowrap">
           <input type="checkbox" id="size-reserved-only" style="margin:0;cursor:pointer">
           Reserved only
@@ -2755,8 +2767,7 @@ function _renderBrandCheckboxRow(container) {
     // picked from ▾ More untouched.  Nov-04 user ask: unchecking a
     // major should narrow the view; clicking this button only ever
     // pads the selection back out to include the majors it is
-    // missing.  To clear extras, the operator unchecks them one by
-    // one (or refreshes the page).
+    // missing.
     (function() {
         const b = document.createElement('button');
         b.className = 'btn';
@@ -2770,6 +2781,25 @@ function _renderBrandCheckboxRow(container) {
             _defaultBrandSet().forEach(function(a) {
                 selectedBrandSet.add(a);
             });
+            _renderBrandCheckboxRow(container);
+            _updateSubKeyFromSet(); _tryRender();
+        };
+        container.appendChild(b);
+    }());
+
+    // Nov-04 user ask: "× Clear all" — bulk-uncheck every brand
+    // (majors + extras) in one click.  Lets the operator wipe the
+    // selection and start fresh instead of unticking 10-20 boxes
+    // by hand.  Pair with "+ ALL majors" to re-seed from scratch.
+    (function() {
+        const b = document.createElement('button');
+        b.className = 'btn';
+        b.textContent = '× Clear all';
+        b.style.cssText = 'font-weight:700;color:#991b1b;border-color:#fecaca';
+        b.title = 'Uncheck every brand in one click (majors AND extras). '
+                + 'Click "+ ALL majors" afterwards to re-add the majors.';
+        b.onclick = function() {
+            selectedBrandSet = new Set();
             _renderBrandCheckboxRow(container);
             _updateSubKeyFromSet(); _tryRender();
         };
@@ -3009,12 +3039,78 @@ function _buildSizeDropdown() {
     _setSize('ALL', sel);
 }
 
+// Nov-04 user ask: digits-only quick-search for the SIZE field.
+// Typing "1956515" matches "195/65R15"; "20555R16" matches
+// "205/55R16"; same normalisation the Tempe crawler uses on its
+// search box.  Narrows to a single match as the operator types
+// and auto-applies that size; shows the match count as a hint so
+// an ambiguous prefix is obvious.
+function _normaliseSizeDigits(s) {
+    return String(s || "").replace(/[^0-9]/g, "");
+}
+function _findSizeByDigits(digits) {
+    if (!digits) return [];
+    const sel = document.getElementById('size-select');
+    const matches = [];
+    // Walk the live <option> list so the search respects whatever
+    // the "Reserved only" checkbox is currently filtering to.
+    for (let i = 0; i < sel.options.length; i++) {
+        const v = sel.options[i].value;
+        if (!v || v === "ALL") continue;
+        const norm = _normaliseSizeDigits(v);
+        if (norm.indexOf(digits) === 0) matches.push(v);
+    }
+    return matches;
+}
+function _wireSizeSearch() {
+    const inp  = document.getElementById('size-search');
+    const hint = document.getElementById('size-search-hint');
+    const sel  = document.getElementById('size-select');
+    if (!inp || !sel) return;
+    const _apply = function(size) {
+        sel.value = size;
+        _setSize(size, sel);
+    };
+    inp.addEventListener('input', function() {
+        const digits = _normaliseSizeDigits(inp.value);
+        if (!digits) { hint.textContent = ""; return; }
+        const matches = _findSizeByDigits(digits);
+        if (matches.length === 0) {
+            hint.textContent = "no match";
+            hint.style.color = "#b91c1c";
+        } else if (matches.length === 1) {
+            hint.textContent = "→ " + matches[0];
+            hint.style.color = "#065f46";
+            _apply(matches[0]);
+        } else {
+            hint.textContent = matches.length + " matches (keep typing)";
+            hint.style.color = "#6b7280";
+        }
+    });
+    inp.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const digits = _normaliseSizeDigits(inp.value);
+            const matches = _findSizeByDigits(digits);
+            if (matches.length >= 1) {
+                _apply(matches[0]);
+                inp.value = "";
+                hint.textContent = "";
+            }
+        } else if (e.key === 'Escape') {
+            inp.value = "";
+            hint.textContent = "";
+        }
+    });
+}
+
 /* ── init ─────────────────────────────────────────────── */
 (function init() {
     const sel = document.getElementById('size-select');
     sel.addEventListener('change', function() {
         _setSize(sel.value, sel);
     });
+    _wireSizeSearch();
     document.getElementById('size-reserved-only')
             .addEventListener('change', _buildSizeDropdown);
     _buildSizeDropdown();
