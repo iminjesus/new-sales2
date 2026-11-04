@@ -564,6 +564,25 @@ def _run_pipeline_locked(sess, status, _reset_to_home):
         status_set("last_error", "")
         status_set("last_error_at", "")
 
+    # Nov-04 user ask: pre-build the /price dashboard data cache at
+    # the tail of every successful pipeline run so the next browser
+    # hit to /price serves from the disk cache (<100 ms) instead of
+    # paying the full CSV walk + build_data cost (~sec).  Best-
+    # effort: a failure here MUST NOT fail the pipeline.  Guarded
+    # by the same (sales+load) gate above so we don't rebuild on
+    # partial-failure slots.
+    if sales_ok and load_ok:
+        try:
+            log("pre-build: /price dashboard cache...")
+            import time as _time
+            _t0 = _time.monotonic()
+            from build_price_dashboard_cache import main as _bpc_main
+            _rc = _bpc_main()
+            log(f"pre-build: {'ok' if _rc == 0 else f'rc={_rc}'} in "
+                f"{_time.monotonic() - _t0:.1f}s")
+        except Exception as _e:
+            log(f"[warn] /price pre-build failed: {_e}")
+
 
 def run_slot(scheduled_at):
     """One hour slot's attempt → retry loop for multi-logon."""

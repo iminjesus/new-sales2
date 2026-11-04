@@ -698,9 +698,13 @@ def build_data(monthly):
             return t.upper()
         return ""
 
-    for size in sizes:
-        for abbr in abbrs:
-            d = size_data[size][abbr]
+    # Nov-04 perf fix: size_data is now lazy-initialised (only the
+    # (size, abbr) combos in _ever_populated exist as dict entries),
+    # so iterate the actual dict rather than the full sizes * abbrs
+    # product — otherwise an abbr that appears only for one size
+    # trips KeyError on sizes where it was never seen.
+    for size, _per_abbr in size_data.items():
+        for abbr, d in _per_abbr.items():
             for store_d, store_f in (("jax_d", "jax_f"), ("bj_d", "bj_f")):
                 descs = d[store_d]; flags = d[store_f]
                 prev_key = ""
@@ -714,24 +718,21 @@ def build_data(monthly):
                     if key:
                         prev_key = key
 
-    # brand_size_data: only combos that have at least one real price
+    # brand_size_data: only combos that have at least one real price.
+    # Same lazy-dict iteration as above.
     brand_size_data = {}
-    for abbr in abbrs:
-        for size in sizes:
-            d = size_data[size][abbr]
+    for size, _per_abbr in size_data.items():
+        for abbr, d in _per_abbr.items():
             if any(p is not None for p in d["tempe"] + d["bj"] + d["jax"] + d["tw"] + d["twi"]):
                 brand_size_data.setdefault(abbr, {})[size] = d
 
     _sizes_with_data = sorted({
-        size for size in sizes
-        for abbr in abbrs
+        size
+        for size, _per_abbr in size_data.items()
+        for abbr, d in _per_abbr.items()
         if any(p is not None for p in
-               size_data[size][abbr]["tempe"] +
-               size_data[size][abbr]["bj"] +
-               size_data[size][abbr]["jax"] +
-               size_data[size][abbr]["tw"] +
-               size_data[size][abbr]["twi"])
-    }, key=lambda s: sizes.index(s))
+               d["tempe"] + d["bj"] + d["jax"] + d["tw"] + d["twi"])
+    }, key=lambda s: sizes.index(s) if s in sizes else 999999)
     return {
         "months":          month_labels,
         "store_avg":       store_avg,
