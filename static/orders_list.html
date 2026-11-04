@@ -863,8 +863,16 @@ function renderRows(){
   );
   // Oct-29 user ask: "This week requested" — rolling 7-day window
   // ending today (NOT calendar week), excludes drafts + deleted.
-  const _weekAgo = new Date(_now.getFullYear(), _now.getMonth(),
-                            _now.getDate() - 7);
+  // Nov-04 user ask: the week window must be INTERSECTED with the
+  // current calendar month — a 7-day lookback that straddles the
+  // 1st of the month was pulling in last-month rows and making the
+  // "week" tile LARGER than the "month" tile, which read as
+  // obviously wrong.  Clamp the lower bound to the 1st of this
+  // month so the week count is at most the month count.
+  const _weekAgoRaw = new Date(_now.getFullYear(), _now.getMonth(),
+                               _now.getDate() - 7);
+  const _firstOfMonth = new Date(_now.getFullYear(), _now.getMonth(), 1);
+  const _weekAgo = (_weekAgoRaw < _firstOfMonth) ? _firstOfMonth : _weekAgoRaw;
   const _isThisWeek = r => {
     const t = String(r.submitted_at || "").slice(0, 10);
     if (!t) return false;
@@ -874,7 +882,7 @@ function renderRows(){
     return d >= _weekAgo && d <= _now;
   };
   const _msWeek = filtered.filter(r =>
-    _isThisWeek(r) && !r.deleted_at
+    _isThisWeek(r) && _isThisMonth(r) && !r.deleted_at
     && String(r.needs_mgmt_approval || "").toLowerCase() !== "temp");
   const _msPendingAppr = _msTotal.filter(r =>
     (r.has_additional_dc || r.has_interstate)
