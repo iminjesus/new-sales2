@@ -2826,19 +2826,25 @@ function _renderBrandCheckboxRow(container) {
         container.appendChild(b);
     }());
 
-    // Nov-04 user ask: "× Clear all" — bulk-uncheck every brand
-    // (majors + extras) in one click.  Lets the operator wipe the
-    // selection and start fresh instead of unticking 10-20 boxes
-    // by hand.  Pair with "+ ALL majors" to re-seed from scratch.
+    // Nov-04 user ask: "× Clear majors" — uncheck every MAJOR
+    // brand EXCEPT Hankook (our own brand stays pinned so the chart
+    // always has the Hankook reference line).  Extras in the ▾ More
+    // pane are untouched — that pane carries its own "× Clear
+    // extras" button.
     (function() {
         const b = document.createElement('button');
         b.className = 'btn';
-        b.textContent = '× Clear all';
+        b.textContent = '× Clear majors';
         b.style.cssText = 'font-weight:700;color:#991b1b;border-color:#fecaca';
-        b.title = 'Uncheck every brand in one click (majors AND extras). '
-                + 'Click "+ ALL majors" afterwards to re-add the majors.';
+        b.title = 'Uncheck every major brand except Hankook. '
+                + 'Extras in the ▾ More pane stay as-is.';
         b.onclick = function() {
-            selectedBrandSet = new Set();
+            Object.keys(BRANDS).forEach(function(abbr) {
+                if (abbr === 'HK') return;         // keep our own brand on
+                if (EXTRA_BRANDS[abbr]) return;    // extras handled elsewhere
+                selectedBrandSet.delete(abbr);
+            });
+            selectedBrandSet.add('HK');            // make sure HK is in
             _renderBrandCheckboxRow(container);
             _updateSubKeyFromSet(); _tryRender();
         };
@@ -2870,8 +2876,43 @@ function _renderBrandCheckboxRow(container) {
         //             what the chart will actually plot.
         //   ever    = BRAND_FREQ[abbr] > 0  (lifetime, size-agnostic).
         const _extraCounts    = _extraAbbrs.map(_brandCountForLabel);
-        const _hasCurrent     = _extraAbbrs.map(function(a, i) { return _extraCounts[i] > 0; });
-        const _hasEver        = _extraAbbrs.map(function(a) { return (+BRAND_FREQ[a] || 0) > 0; });
+        // Nov-04 user correction: yellow must mean "had data for
+        // THIS size under the CURRENT scope in some past month but
+        // not this month" — NOT the lifetime-anywhere BRAND_FREQ
+        // check that was flagging every brand that ever appeared
+        // on any size / store.  Walk D.size_data directly: compare
+        // latest-month cell vs. any earlier cell under the exact
+        // same store/brand filter the chart will use.
+        const _storeKeysForScope = (function() {
+            if (selectedMode === 'brand' && selectedSubKey && selectedSubKey !== 'ALL') {
+                return [_priceKey(selectedSubKey)];
+            }
+            // By-Channel OR store='ALL': every drawn store counts.
+            return ['tempe','bj','jax','tw','twi','nwb','nwbi'];
+        })();
+        const _sizesForScope = (selectedSize && selectedSize !== 'ALL')
+            ? [selectedSize] : Object.keys(D.size_data);
+        const _currentAndHist = function(abbr) {
+            let cur = false, hist = false;
+            for (let si = 0; si < _sizesForScope.length; si++) {
+                const d = (D.size_data[_sizesForScope[si]] || {})[abbr];
+                if (!d) continue;
+                for (let k = 0; k < _storeKeysForScope.length; k++) {
+                    const arr = d[_storeKeysForScope[k]] || [];
+                    const last = arr.length - 1;
+                    if (last < 0) continue;
+                    if (arr[last] != null) cur = true;
+                    for (let i = 0; i < last; i++) {
+                        if (arr[i] != null) { hist = true; break; }
+                    }
+                    if (cur && hist) return {cur: true, hist: true};
+                }
+            }
+            return {cur: cur, hist: hist};
+        };
+        const _ch = _extraAbbrs.map(_currentAndHist);
+        const _hasCurrent     = _ch.map(function(x) { return x.cur; });
+        const _hasEver        = _ch.map(function(x) { return x.cur || x.hist; });
         const _currentCount   = _hasCurrent.filter(Boolean).length;
         const _yellowCount    = _extraAbbrs.filter(function(a, i) {
             return !_hasCurrent[i] && _hasEver[i];
