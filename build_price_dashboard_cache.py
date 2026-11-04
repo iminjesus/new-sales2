@@ -31,7 +31,18 @@ import sys
 import time
 
 
-def main():
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.strip() if __doc__ else "")
+    ap.add_argument("--force", action="store_true",
+                    help="Rebuild the cache even when the on-disk fingerprint "
+                         "already matches the current source CSVs.  Default "
+                         "behaviour is to no-op in that case -- the "
+                         "orchestrator hook calls this on every pipeline "
+                         "success and the price CSVs don't change unless a "
+                         "crawler actually ran.")
+    args = ap.parse_args(argv)
+
     t0 = time.monotonic()
     # Import deferred so --help works even if openpyxl / Flask aren't
     # installed in this environment.
@@ -40,19 +51,47 @@ def main():
         load_all_months,
         build_data,
         save_price_cache_to_disk,
+        load_price_cache_from_disk,
     )
+    key = _price_cache_key()
+    if not key:
+        print("[build_cache] no source CSVs found; nothing to do.",
+              file=sys.stderr)
+        return 2
+
+    # Nov-04 user ask: skip when the disk cache's stored fingerprint
+    # already matches the current source CSVs.  The orchestrator
+    # hook calls this on every pipeline tick, but the price CSVs
+    # only change on manual crawler runs, so the vast majority of
+    # invocations no-op in ~5 ms instead of paying the full ~15 s
+    # build cost.  `--force` bypasses the skip for manual rebuilds.
+    if not args.force:
+        _dkey, _ = load_price_cache_from_disk()
+        if _dkey == key:
+            print(f"[build_cache] disk cache already matches "
+                  f"({len(key)} csv fingerprints) — skip "
+                  f"(--force to rebuild anyway)")
+            return 0
+
     monthly = load_all_months()
     if not monthly:
         print("[build_cache] no source CSVs found; nothing to do.",
               file=sys.stderr)
         return 2
-    key = _price_cache_key()
     print(f"[build_cache] {len(key)} csv fingerprints -> building data...",
           flush=True)
     data = build_data(monthly)
     print(f"[build_cache] build_data done in {time.monotonic() - t0:.1f}s; "
           f"writing disk cache...", flush=True)
     ok = save_price_cache_to_disk(key, data)
+    # Nov-04: drop large in-process references before returning so
+    # the orchestrator hook (which imports + calls main() in-
+    # process) sees the ~100-200 MB transient build footprint get
+    # garbage-collected instead of lingering in the long-lived
+    # orchestrator RSS.
+    del data, monthly
+    import gc as _gc
+    _gc.collect()
     if ok:
         print(f"[build_cache] done in {time.monotonic() - t0:.1f}s total.")
         return 0
