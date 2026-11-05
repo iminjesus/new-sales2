@@ -194,6 +194,12 @@ def load_stock(conn):
     # columns) that the operator may have added over time survive a
     # reload.  CREATE IF NOT EXISTS is a no-op on an existing table;
     # TRUNCATE empties the data in one atomic op and resets AUTO_INC.
+    #
+    # Nov-05 Phase 1: carry Block Qty + Location ID through so the
+    # SPRF / Ageing views can hide blocked rows in the main count
+    # AND surface them in a tooltip that breaks them down by ageing
+    # bucket × location.  CREATE adds the two columns for a fresh
+    # table; existing tables get them via the ALTER guards below.
     create_sql = f"""
     CREATE TABLE IF NOT EXISTS `{TABLE_NAME}` (
       interface_date DATE,
@@ -201,47 +207,77 @@ def load_stock(conn):
       material       VARCHAR(20),
       dot_no         VARCHAR(6),
       stock_qty      INT,
+      block_qty      INT        NOT NULL DEFAULT 0,
+      location_id    VARCHAR(20) NOT NULL DEFAULT '',
       INDEX idx_stock_plant_mat (plant, material),
-      INDEX idx_stock_dot       (dot_no)
+      INDEX idx_stock_dot       (dot_no),
+      INDEX idx_stock_block     (block_qty)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
     truncate_sql = f"TRUNCATE TABLE `{TABLE_NAME}`;"
 
-    # STR_TO_DATE handles the DD.MM.YYYY that comes out of SAP, and the
-    # numeric qty is REPLACE'd to strip thousand separators before the
-    # cast — SAP sometimes writes "1,234" instead of "1234" depending on
-    # user locale.  Any row with an unparseable date is skipped by the
-    # NULLIF chain (NULL isn't allowed in interface_date after we cast
-    # so we let it in as NULL; downstream code filters those out).
-    load_sql = f"""
-    LOAD DATA LOCAL INFILE '{mysql_path(CSV_PATH)}'
-    INTO TABLE `{TABLE_NAME}`
-    CHARACTER SET utf8mb4
-    FIELDS TERMINATED BY ','
-    OPTIONALLY ENCLOSED BY '"'
-    LINES TERMINATED BY '{LINES_TERMINATED_BY}'
-    IGNORE 1 LINES
-    (@interface_date, @plant, @material, @dot_no, @stock_qty)
-    SET
-      interface_date = STR_TO_DATE(TRIM(@interface_date), '%d.%m.%Y'),
-      plant          = TRIM(@plant),
-      material       = TRIM(@material),
-      dot_no         = TRIM(@dot_no),
-      stock_qty      = CAST(REPLACE(REPLACE(TRIM(@stock_qty), ',', ''), '"', '') AS SIGNED);
-    """
-
     cur = conn.cursor()
     try:
         cur.execute(create_sql)
+        # Nov-05: idempotent ADD COLUMN for existing deployments.  MySQL
+        # pre-8.0 lacks "IF NOT EXISTS" on ADD COLUMN; guard with a
+        # SHOW COLUMNS check so repeat runs are no-ops instead of errors.
+        for col, ddl in (
+            ("block_qty",   "INT NOT NULL DEFAULT 0"),
+            ("location_id", "VARCHAR(20) NOT NULL DEFAULT ''"),
+        ):
+            cur.execute(f"SHOW COLUMNS FROM `{TABLE_NAME}` LIKE %s", (col,))
+            if not cur.fetchone():
+                cur.execute(f"ALTER TABLE `{TABLE_NAME}` "
+                            f"ADD COLUMN `{col}` {ddl}")
+                print(f"[stock] added column: {col}")
+        # idx_stock_block too — only create if missing
+        try:
+            cur.execute(
+                "SELECT COUNT(*) FROM information_schema.statistics "
+                "WHERE table_schema = DATABASE() "
+                f" AND table_name = '{TABLE_NAME}' "
+                "  AND index_name = 'idx_stock_block'"
+            )
+            if (cur.fetchone() or (0,))[0] == 0:
+                cur.execute(f"CREATE INDEX idx_stock_block "
+                            f"ON `{TABLE_NAME}` (block_qty)")
+        except Exception as _e:
+            print(f"[stock] idx_stock_block add skipped: {_e}")
         cur.execute(truncate_sql)
+        # STR_TO_DATE handles the DD.MM.YYYY that comes out of SAP, and
+        # the numeric qty is REPLACE'd to strip thousand separators
+        # before the cast.  block_qty defaults to 0 when the CSV cell
+        # is blank or non-numeric.  location_id is TRIM'd verbatim.
+        load_sql = f"""
+        LOAD DATA LOCAL INFILE '{mysql_path(CSV_PATH)}'
+        INTO TABLE `{TABLE_NAME}`
+        CHARACTER SET utf8mb4
+        FIELDS TERMINATED BY ','
+        OPTIONALLY ENCLOSED BY '"'
+        LINES TERMINATED BY '{LINES_TERMINATED_BY}'
+        IGNORE 1 LINES
+        (@interface_date, @plant, @material, @dot_no, @stock_qty,
+         @block_qty, @location_id)
+        SET
+          interface_date = STR_TO_DATE(TRIM(@interface_date), '%d.%m.%Y'),
+          plant          = TRIM(@plant),
+          material       = TRIM(@material),
+          dot_no         = TRIM(@dot_no),
+          stock_qty      = CAST(REPLACE(REPLACE(TRIM(@stock_qty), ',', ''), '"', '') AS SIGNED),
+          block_qty      = COALESCE(NULLIF(CAST(REPLACE(REPLACE(TRIM(@block_qty), ',', ''), '"', '') AS SIGNED), NULL), 0),
+          location_id    = TRIM(@location_id);
+        """
         cur.execute(load_sql)
         conn.commit()
 
         cur.execute(f"SELECT COUNT(*) FROM `{TABLE_NAME}`;")
         cnt = cur.fetchone()[0]
+        cur.execute(f"SELECT COUNT(*) FROM `{TABLE_NAME}` WHERE block_qty > 0;")
+        blocked_rows = (cur.fetchone() or (0,))[0]
         cur.execute(f"SELECT plant, COUNT(*) FROM `{TABLE_NAME}` GROUP BY plant ORDER BY plant;")
         by_plant = cur.fetchall()
-        print(f"[stock] Loaded rows: {cnt}")
+        print(f"[stock] Loaded rows: {cnt}  (blocked: {blocked_rows})")
         for p, n in by_plant:
             print(f"        {p or '(none)':<6} {n:>10,}")
     finally:

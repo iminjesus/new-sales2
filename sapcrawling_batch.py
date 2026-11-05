@@ -106,36 +106,29 @@ KEEP_COLUMNS = {
     "dot no":         "dot_no",
     "dot no.":        "dot_no",
     "stock qty":      "stock_qty",
+    # Nov-05 Phase 1: carry Block Qty + Location ID through into the
+    # combined CSV so downstream UIs can either hide blocked rows
+    # (SPRF / Ageing Stock main counts) or surface them in a tooltip
+    # that breaks down the excluded qty by ageing bucket × location.
+    "block qty":      "block_qty",
+    "blocked qty":    "block_qty",
+    "location id":    "location_id",
+    "location":       "location_id",
 }
-OUTPUT_HEADER = ["interface_date", "plant", "material", "dot_no", "stock_qty"]
+OUTPUT_HEADER = ["interface_date", "plant", "material", "dot_no",
+                 "stock_qty", "block_qty", "location_id"]
 
-# Nov-05 user ask: ZSDM64300 output ships a "Block Qty" column
-# (count of units held in blocked status — QA, quality hold, etc.).
-# Every row whose Block Qty is > 0 is dropped before the per-plant
-# XLSX feeds the combined dot_stock.csv so the downstream `stock`
-# table stays blocked-free.  Kept as a filter only — never emitted
-# in OUTPUT_HEADER / the CSV.  Multiple header spellings because
-# SAP localisations differ ("Block Qty", "Blocked Qty", older
-# "Blocked Stock" layout, etc.); _norm_hdr collapses case +
-# underscores + dots before matching.
+# Nov-05 (updated): the earlier revision DROPPED every row with
+# Block Qty > 0.  Phase 1 now KEEPS them — the block_qty + location_
+# id columns ride along so the SPRF tooltip can report "excluded: 7
+# units @ G76 (24wk old), 3 units @ D66 (52wk old)".  The main
+# display still hides them via a WHERE block_qty = 0 clause in the
+# SPRF / Ageing queries (Phase 2).
 BLOCKED_HEADER_ALIASES = {
     "block qty", "blocked qty",
     "blocked stock", "block stock", "blocked stk", "block stk",
     "blocked", "block",
 }
-def _is_blocked(val) -> bool:
-    """True when the cell carries ANY blocked quantity (> 0).  Block
-    Qty is a count, not a 0/1 flag — a row with Block Qty = 7 is just
-    as blocked as one with Block Qty = 1 and must also be dropped."""
-    if val is None:
-        return False
-    s = str(val).strip().replace(",", ".")
-    if not s:
-        return False
-    try:
-        return float(s) > 0.0
-    except Exception:
-        return False
 
 
 # ================= HELPERS =================
@@ -538,44 +531,27 @@ def _norm_hdr(s):
 
 
 def extract_keep_rows(xlsx_path: str):
-    """From the raw ZSDM64300 grid, keep only the 5 output columns and
-    return them in OUTPUT_HEADER order.  Skips summary rows (blank
-    Material), header repeats, AND every row whose Block Qty > 0
-    (Nov-05 user ask — keep the downstream stock table blocked-free)."""
+    """From the raw ZSDM64300 grid, keep the 7 output columns in
+    OUTPUT_HEADER order.  Skips summary rows (blank Material) and
+    header repeats.  Nov-05 Phase 1: blocked rows are NO LONGER
+    dropped here — they ride through in the block_qty / location_id
+    columns so SPRF / Ageing views can surface them in a tooltip."""
     all_rows = read_xlsx_rows(xlsx_path)
     if not all_rows:
         return []
     header = all_rows[0]
-    # Locate each keep-column index by header text
     col_idx = {}
-    blocked_idx = -1
     for i, h in enumerate(header):
-        norm = _norm_hdr(h)
-        key = KEEP_COLUMNS.get(norm)
+        key = KEEP_COLUMNS.get(_norm_hdr(h))
         if key and key not in col_idx:
             col_idx[key] = i
-        if blocked_idx < 0 and norm in BLOCKED_HEADER_ALIASES:
-            blocked_idx = i
     missing = [k for k in OUTPUT_HEADER if k not in col_idx]
     if missing:
         print(f"  [WARN] {os.path.basename(xlsx_path)}: missing columns {missing}. "
               f"Available headers: {[_norm_hdr(h) for h in header]}")
-    if blocked_idx < 0:
-        # Not an error — the filter is defensive; older layouts simply
-        # pass every row through.  Loud WARN so a silent header-rename
-        # on SAP's side doesn't let blocked rows back in unnoticed.
-        print(f"  [WARN] {os.path.basename(xlsx_path)}: Block Qty column "
-              f"not found — blocked-stock filter is OFF for this file.  "
-              f"Headers seen: {[_norm_hdr(h) for h in header]}")
     out = []
-    dropped_blocked = 0
+    n_blocked = 0
     for r in all_rows[1:]:
-        # Drop rows whose Block Qty is > 0 before touching the output
-        # columns, so a blocked row costs nothing beyond the one cell
-        # read.  See _is_blocked for the "> 0" semantics.
-        if 0 <= blocked_idx < len(r) and _is_blocked(r[blocked_idx]):
-            dropped_blocked += 1
-            continue
         row = []
         keep = True
         for k in OUTPUT_HEADER:
@@ -587,8 +563,14 @@ def extract_keep_rows(xlsx_path: str):
             keep = False
         if keep:
             out.append(row)
-    if dropped_blocked:
-        print(f"  {os.path.basename(xlsx_path)}: dropped {dropped_blocked:,} blocked row(s)")
+            try:
+                if float(row[OUTPUT_HEADER.index("block_qty")].replace(",", ".") or 0) > 0:
+                    n_blocked += 1
+            except Exception:
+                pass
+    if n_blocked:
+        print(f"  {os.path.basename(xlsx_path)}: "
+              f"{n_blocked:,} blocked row(s) preserved (not dropped)")
     return out
 
 

@@ -29,9 +29,11 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 UNLOCK_DIR = os.path.join(BASE_DIR, "rawdata", "unlock")
 OUT_CSV    = os.path.join(UNLOCK_DIR, "dot_stock.csv")
 
-# 5-column schema the `stock` table expects — same order as
-# load_csv_to_mysql.load_stock's LOAD DATA.
-OUTPUT_HEADER = ["interface_date", "plant", "material", "dot_no", "stock_qty"]
+# Nov-05 Phase 1: 7-column schema (added block_qty + location_id).
+# Same order as load_csv_to_mysql.load_stock's LOAD DATA after the
+# auto-migration drops the matching columns onto the live table.
+OUTPUT_HEADER = ["interface_date", "plant", "material", "dot_no",
+                 "stock_qty", "block_qty", "location_id"]
 
 # Headers we recognise in the per-plant XLSX.  Case + underscores +
 # dots are collapsed by _norm_hdr so "DOT No.", "dot_no", "Dot  No"
@@ -43,6 +45,10 @@ KEEP_COLUMNS = {
     "dot no":         "dot_no",
     "dot no.":        "dot_no",
     "stock qty":      "stock_qty",
+    "block qty":      "block_qty",
+    "blocked qty":    "block_qty",
+    "location id":    "location_id",
+    "location":       "location_id",
 }
 # Nov-05: ZSDM64300 output ships the blocked quantity under the
 # header "Block Qty" (confirmed from the operator's screenshot).
@@ -89,43 +95,38 @@ def _read_rows(path: str):
 
 
 def extract_filtered(path: str):
-    """Return (kept_rows, blocked_count) for one per-plant XLSX."""
+    """Return (kept_rows, blocked_count) for one per-plant XLSX.
+    Nov-05 Phase 1: blocked rows are KEPT.  blocked_count is reported
+    as informational so the operator still sees how many rows carry
+    block_qty > 0 and will be hidden by downstream SPRF / Ageing
+    filters (the tooltip then breaks them down by ageing + location)."""
     rows = _read_rows(path)
     if not rows:
         return [], 0
     header = rows[0]
     col_idx: dict[str, int] = {}
-    blocked_idx = -1
     for i, h in enumerate(header):
-        norm = _norm_hdr(h)
-        key = KEEP_COLUMNS.get(norm)
+        key = KEEP_COLUMNS.get(_norm_hdr(h))
         if key and key not in col_idx:
             col_idx[key] = i
-        if blocked_idx < 0 and norm in BLOCKED_HEADER_ALIASES:
-            blocked_idx = i
     missing = [k for k in OUTPUT_HEADER if k not in col_idx]
     if missing:
         print(f"  [WARN] {os.path.basename(path)}: missing columns {missing}.  "
               f"Headers seen: {[_norm_hdr(h) for h in header]}")
-    if blocked_idx < 0:
-        print(f"  [WARN] {os.path.basename(path)}: no Blocked Stock column.  "
-              f"Headers seen: {[_norm_hdr(h) for h in header]}  "
-              f"— passing every row through unfiltered.")
-    kept, dropped = [], 0
+    bq_col = col_idx.get("block_qty", -1)
+    kept, blocked_count = [], 0
     for r in rows[1:]:
         if not r:
             continue
-        # Drop summary / blank-material rows (same rule the original
-        # crawl uses so our filtered CSV stays 1-for-1 comparable).
         mat_i = col_idx.get("material", -1)
         if mat_i < 0 or mat_i >= len(r) or not r[mat_i]:
             continue
-        if 0 <= blocked_idx < len(r) and _is_blocked(r[blocked_idx]):
-            dropped += 1
-            continue
-        kept.append([r[col_idx[k]] if 0 <= col_idx.get(k, -1) < len(r) else ""
-                     for k in OUTPUT_HEADER])
-    return kept, dropped
+        row = [r[col_idx[k]] if 0 <= col_idx.get(k, -1) < len(r) else ""
+               for k in OUTPUT_HEADER]
+        kept.append(row)
+        if 0 <= bq_col < len(r) and _is_blocked(r[bq_col]):
+            blocked_count += 1
+    return kept, blocked_count
 
 
 def rebuild_combined_csv() -> tuple[int, int]:
@@ -150,8 +151,10 @@ def rebuild_combined_csv() -> tuple[int, int]:
             total_kept    += len(kept)
             total_blocked += blocked
             print(f"  {os.path.basename(p):<40}  kept={len(kept):>6,}  "
-                  f"blocked-dropped={blocked:>5,}")
-    print(f"Wrote {OUT_CSV}  (kept={total_kept:,}, blocked-dropped={total_blocked:,})")
+                  f"blocked-in-kept={blocked:>5,}")
+    print(f"Wrote {OUT_CSV}  (kept={total_kept:,}, "
+          f"of which blocked={total_blocked:,} — hidden by downstream views, "
+          f"surfaced in tooltip)")
     return total_kept, total_blocked
 
 
