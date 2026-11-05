@@ -1246,25 +1246,35 @@ body.left-hidden .show-tables-chip { display: inline-block; }
 
       <hr class="divider">
 
-      <!-- Row 2: View mode -->
-      <div class="btn-row">
-        <span class="row-label">View</span>
-        <div class="btns" id="mode-btns">
-          <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Channel</button>
-          <button class="btn mode" id="btn-brand" onclick="onModeBrand(this)">By Brand</button>
-        </div>
-      </div>
+      <!-- Nov-05 user ask: the By Channel / By Brand view toggle
+           was removed — once STORE and PRICE became free multi-
+           select rows below, picking a store filter already does
+           what By Channel used to do, and picking many brands
+           does what By Brand used to do.  The chart always runs
+           under the unified "brand × store × price" cross-product
+           path now, so keeping the toggle was just visual noise.
+           The hidden #btn-brand button stays so the init handler
+           can still bootstrap the brand-mode render pipeline. -->
+      <button id="btn-brand" onclick="onModeBrand(this)" style="display:none"></button>
 
       <!-- Row 3: Normal / Promo pricing toggle.  BJ and JAX publish
            both a regular PRICE and a DISC_PRICE in their CSVs; this
            bar switches which one the chart + tables read.  Tempe /
            TempeWOS have no promo concept so the toggle is a no-op
            for those stores (both buttons show the same line). -->
+      <!-- Nov-05 user ask: Price = free multi-select.  Check one,
+           the other, or both; each adds its own line onto the chart. -->
       <div class="btn-row">
         <span class="row-label">Price</span>
         <div class="btns" id="pricing-btns">
-          <button class="btn mode" id="btn-normal" onclick="onPricingNormal(this)">Normal</button>
-          <button class="btn mode" id="btn-promo"  onclick="onPricingPromo(this)">Promo</button>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;cursor:pointer;padding:4px 10px;border:1.5px solid #94a3b8;border-radius:4px;background:#fff">
+            <input type="checkbox" id="chk-normal" checked onchange="onPricingToggle()">
+            <span>Normal</span>
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;cursor:pointer;padding:4px 10px;border:1.5px solid #94a3b8;border-radius:4px;background:#fff">
+            <input type="checkbox" id="chk-promo" onchange="onPricingToggle()">
+            <span>Promo</span>
+          </label>
           <span id="pricing-hint"
                 style="margin-left:10px;font-size:11px;color:#777;align-self:center">
             Promo = DISC_PRICE where available (BJ / JAX)
@@ -1802,7 +1812,13 @@ function _stockLabelsFor(abbr, size, store) {
    current pricingMode.  Only BJ and JAX have a separate promo array;
    Tempe / TempeWOS fall through so the toggle is a no-op for them. */
 function _priceKey(store) {
-    if (pricingMode === 'promo' && (store === 'bj' || store === 'jax')) {
+    return _priceKeyFor(store, pricingMode);
+}
+/* Nov-05: explicit-mode variant so the multi-select overlay loop
+   can request any (store, mode) combo without flipping the global
+   pricingMode. */
+function _priceKeyFor(store, mode) {
+    if (mode === 'promo' && (store === 'bj' || store === 'jax')) {
         return store + '_promo';
     }
     return store;
@@ -2016,9 +2032,13 @@ function _pointStyles(flags, prices, lineColour, stocks) {
 
 /* ── ALL sizes: average across every size ──────────────── */
 function _avgAllSizes(abbr, store) {
+    return _avgAllSizesFor(abbr, store, pricingMode);
+}
+/* Nov-05: explicit-mode variant for the multi-select overlay loop. */
+function _avgAllSizesFor(abbr, store, mode) {
     const nM = months.length;
     const sums = new Array(nM).fill(0), counts = new Array(nM).fill(0);
-    const storeKey = _priceKey(store);  // switches to <store>_promo in Promo mode
+    const storeKey = _priceKeyFor(store, mode);
     Object.values(D.size_data).forEach(function(sizeAbbrs) {
         const prices = ((sizeAbbrs[abbr] || {})[storeKey]) || [];
         prices.forEach(function(p, i) {
@@ -2270,7 +2290,47 @@ function _renderBrand() {
         }
     });
     if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
-    _render(SL[store] + ' \u2014 ' + sizeLabel + ' \u2014 Brand Comparison', ds);
+    // Nov-05: STORE + PRICE are now free multi-select.  The primary
+    // loop above drew one line per brand for the FIRST (store, mode).
+    // Loop over the remaining combos and append overlay lines.
+    // Siblings are skipped on overlays so the chart stays legible.
+    try {
+        const _combos = [];
+        selectedStoreSet.forEach(s => {
+            selectedPriceSet.forEach(m => {
+                if (s === store && m === pricingMode) return;
+                _combos.push({store: s, mode: m});
+            });
+        });
+        _combos.forEach(function(combo){
+            const sKey = _priceKeyFor(combo.store, combo.mode);
+            const dash = (_STORE_DASH[combo.store] || [5,5]).slice();
+            _brandIter.forEach(function(abbr){
+                const prices = selectedSize === 'ALL'
+                    ? _avgAllSizesFor(abbr, combo.store, combo.mode)
+                    : ((D.size_data[selectedSize] || {})[abbr] || {})[sKey];
+                if (!prices || prices.every(p => p === null)) return;
+                const c = '#' + (BCOLORS[abbr] || '555555');
+                const lbl = abbr + ' ' + (BRANDS[abbr]||'')
+                          + ' \u00b7 ' + (_STORE_LABEL[combo.store] || combo.store)
+                          + (combo.mode === 'promo' ? ' \u00b7 Promo' : '');
+                ds.push({
+                    label: lbl, data: prices,
+                    borderColor: c, backgroundColor: c+'22',
+                    borderDash: dash.length ? dash : [2,2],
+                    borderWidth: (combo.mode === 'promo') ? 1.2 : 1.6,
+                    pointRadius: prices.map(() => 2),
+                    pointHoverRadius: prices.map(() => 4),
+                    pointBackgroundColor: c, pointBorderColor: c,
+                    pointBorderWidth: 1,
+                    spanGaps: true, tension: .3, fill: false,
+                });
+            });
+        });
+    } catch (_e) { /* defensive \u2014 overlay failures never block primary */ }
+    const _storesLbl = Array.from(selectedStoreSet).map(s => _STORE_LABEL[s] || s).join(' + ');
+    const _modesLbl  = Array.from(selectedPriceSet).map(m => m === 'promo' ? 'Promo' : 'Normal').join(' + ');
+    _render(_storesLbl + ' \u2014 ' + sizeLabel + ' \u2014 ' + _modesLbl, ds);
     _renderTable();
 }
 
@@ -3085,51 +3145,104 @@ function _updateSubKeyFromSet() {
     }
 }
 
-/* ── Mode: By Brand ───────────────────────────────────── */
+/* ── Mode: By Brand (now the only view, Nov-05) ─────────
+   The old mode toggle is gone; STORE and PRICE rows are both free
+   multi-select so the operator overlays any combination they want.
+   selectedStoreSet drives the per-store line fan; selectedSubKey
+   stays in sync with the FIRST checked store so legacy code paths
+   (tables, summaries, chart title) that still read it keep working. */
+const _STORE_META = [
+    {key:'tempe', label:'Tempe',             c:'#2196F3'},
+    {key:'bj',    label:'Bob Jane',          c:'#4CAF50'},
+    {key:'jax',   label:'JAX',               c:'#FF9800'},
+    {key:'tw',    label:'TempeWOS Sell Out', c:'#9C27B0'},
+    {key:'twi',   label:'TempeWOS Sell In',  c:'#E040FB'},
+    {key:'nwb',   label:'NewBWOS Sell Out',  c:'#0D47A1'},
+    {key:'nwbi',  label:'NewBWOS Sell In',   c:'#42A5F5'},
+];
+const _STORE_LABEL   = Object.fromEntries(_STORE_META.map(s => [s.key, s.label]));
+const _STORE_COLOR   = Object.fromEntries(_STORE_META.map(s => [s.key, s.c]));
+// Dash patterns so overlaid stores stay distinguishable when a
+// brand is drawn across several stores on the same chart.  Order
+// matches _STORE_META so Tempe (primary) is solid, others dashed.
+const _STORE_DASH    = {tempe:[], bj:[6,3], jax:[10,5], tw:[2,2],
+                        twi:[8,4,2,4], nwb:[12,4], nwbi:[4,2,1,2]};
+let selectedStoreSet = new Set(['tempe']);
+let selectedPriceSet = new Set(['normal']);
+
+function _syncLegacyFromSets(){
+    // Keep single-value legacy globals in sync with the Set-based
+    // selections so unchanged render helpers keep working.
+    selectedSubKey = selectedStoreSet.size
+        ? (Array.from(selectedStoreSet)[0]) : 'tempe';
+    pricingMode    = selectedPriceSet.has('normal')
+        ? 'normal' : (selectedPriceSet.has('promo') ? 'promo' : 'normal');
+}
+
+function onPricingToggle(){
+    const n = document.getElementById('chk-normal');
+    const p = document.getElementById('chk-promo');
+    selectedPriceSet = new Set();
+    if (n && n.checked) selectedPriceSet.add('normal');
+    if (p && p.checked) selectedPriceSet.add('promo');
+    // Never let both go OFF — re-tick the Normal box as a safety net
+    // so the chart always has at least one mode to draw.
+    if (!selectedPriceSet.size){
+        selectedPriceSet.add('normal');
+        if (n) n.checked = true;
+    }
+    _syncLegacyFromSets();
+    _tryRender();
+}
+
 function onModeBrand(btn) {
-    if (_activeModeBtn) _activeModeBtn.classList.remove('active');
-    _activeModeBtn = btn; btn.classList.add('active');
-    selectedMode = 'brand'; selectedSubKey = null;
+    if (btn && _activeModeBtn) _activeModeBtn.classList.remove('active');
+    if (btn) { _activeModeBtn = btn; btn.classList.add('active'); }
+    selectedMode = 'brand';
+    _syncLegacyFromSets();
     if (_activeSubBtn) { _activeSubBtn.classList.remove('active'); _activeSubBtn = null; }
 
     document.getElementById('sub-label').textContent = 'Store';
     const subBtns = document.getElementById('sub-btns');
     subBtns.innerHTML = '';
 
-    [{key:'tempe', label:'Tempe',              c:'#2196F3'},
-     {key:'bj',    label:'Bob Jane',          c:'#4CAF50'},
-     {key:'jax',   label:'JAX',               c:'#FF9800'},
-     {key:'tw',    label:'TempeWOS Sell Out',  c:'#9C27B0'},
-     {key:'twi',   label:'TempeWOS Sell In',   c:'#E040FB'},
-     // Nov-03: NewBWOS sub-brand buttons for the By Channel view.
-     {key:'nwb',   label:'NewBWOS Sell Out',   c:'#0D47A1'},
-     {key:'nwbi',  label:'NewBWOS Sell In',    c:'#42A5F5'}].forEach(function(s) {
-        const b = document.createElement('button');
-        b.className = 'btn';
-        b.textContent = s.label;
-        b.style.borderColor = s.c; b.style.color = s.c;
-        b.onclick = function() {
-            if (_activeSubBtn) _activeSubBtn.classList.remove('active');
-            _activeSubBtn = b; b.classList.add('active');
-            selectedSubKey = s.key;
-            // Nov-04: refresh the brand row's (N) labels + gradient
-            // against the newly-selected store so a brand that has
-            // no data for this store reads "(0)" and fades out of
-            // the gradient instead of advertising a misleading
-            // across-channel count.
+    _STORE_META.forEach(function(s){
+        const wrap = document.createElement('label');
+        wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;'
+            + 'font-size:11.5px;font-weight:600;cursor:pointer;padding:4px 9px;'
+            + 'border:1.5px solid ' + s.c + ';color:' + s.c + ';'
+            + 'background:#fff;border-radius:4px;margin-right:4px';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.dataset.store = s.key;
+        cb.checked = selectedStoreSet.has(s.key);
+        cb.style.cssText = 'margin:0;cursor:pointer;accent-color:' + s.c;
+        cb.addEventListener('change', function(){
+            if (cb.checked) selectedStoreSet.add(s.key);
+            else            selectedStoreSet.delete(s.key);
+            // Never let the set go empty — re-tick the one just removed
+            // so the chart always has at least one store to draw.
+            if (!selectedStoreSet.size){
+                cb.checked = true;
+                selectedStoreSet.add(s.key);
+            }
+            _syncLegacyFromSets();
             try { _refreshBrandRowsForScope(); } catch (_e) {}
             _tryRender();
-        };
-        subBtns.appendChild(b);
+        });
+        const txt = document.createElement('span');
+        txt.textContent = s.label;
+        wrap.appendChild(cb); wrap.appendChild(txt);
+        subBtns.appendChild(wrap);
     });
     document.getElementById('sub-row').style.display = 'flex';
-    // Nov-04 user ask: BRAND multi-select row visible in By-Brand
-    // mode too, so the operator can scope which brand lines are
-    // drawn alongside the picked store.
+    // Nov-04 user ask: BRAND multi-select row visible so the operator
+    // can scope which brand lines are drawn alongside the picked
+    // store(s).
     const brandBtns = document.getElementById('brand-btns');
     _renderBrandCheckboxRow(brandBtns);
     document.getElementById('brand-row').style.display = 'flex';
-    if (subBtns.firstChild) subBtns.firstChild.click();
+    _tryRender();
 }
 
 /* ── Pricing: Normal / Promo toggle ───────────────────────
@@ -3387,12 +3500,12 @@ function _wireSizeSearch() {
     // paint.
     selectedBrandSet = _defaultBrandSet();
     _updateSubKeyFromSet();
-    // Normal is the default pricing mode on first load so the chart
-    // shows regular retail prices until the user flips Promo on.  We
-    // click the button rather than set the state directly so the
-    // button's "active" visual stays in sync.
-    document.getElementById('btn-normal').click();
-    // auto-select By Brand mode
+    // Normal is the default pricing mode on first load; the Price
+    // row now carries checkboxes so just ensure the Normal one is
+    // ticked (HTML already defaults it) and sync the state.
+    onPricingToggle();
+    // Bootstrap the By-Brand render pipeline (STORE checkboxes
+    // auto-populate selectedStoreSet, chart draws).
     document.getElementById('btn-brand').click();
 }());
 </script>
