@@ -11821,6 +11821,24 @@ async function wireStatusPanel(order){
     let combined = vals.join("|").replace(/\|+$/, "");
     // Everything empty (even after trim) => clear.
     if (!vals.some(Boolean)) combined = "";
+    // Nov-05 user ask: when Customer Pickup is marked on the order,
+    // remind CS to tick the Customer Pickup option on the SAP DO
+    // BEFORE saving the DO # here — the panel's own note already
+    // promises the prompt ("CS will be prompted to confirm before
+    // saving the SAP DO").  Only fires when a non-empty DO is being
+    // saved (clearing the DO needs no reminder).  A Cancel aborts
+    // the save so the operator can go back and amend the SAP DO
+    // first.  Mark-as-Y keeps its own fallback prompt.
+    const _cpFlag = String(document.getElementById("customer_pickup")?.value || "N").toUpperCase();
+    if (_cpFlag === "Y" && combined){
+      const ok = window.confirm(
+        "Customer Pickup is marked on this order.\n\n" +
+        "⚑ Before saving the SAP DO #, confirm you ticked the " +
+        "Customer Pickup option on the SAP DO screen.\n\n" +
+        "Click OK to save, Cancel to go back and amend."
+      );
+      if (!ok){ return; }
+    }
     btn.disabled = true;
     try {
       const r = await fetch(`/api/orders/detail/${id}/sd_no`, {
