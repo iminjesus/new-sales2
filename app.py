@@ -21067,6 +21067,46 @@ _ensure_meeting_plan_table()
 _ensure_request_log_table()
 _ensure_submitted_orders_table()
 
+
+def _ensure_stock_block_columns():
+    """Nov-05 Phase 1/2: the stock table gained block_qty +
+    location_id to carry ZSDM64300's Block Qty / Location ID
+    through the ingestion chain.  load_csv_to_mysql.load_stock
+    adds them idempotently at load time, but app.py's SPRF
+    queries hit the table immediately on startup — if the loader
+    hasn't run since the upgrade the SELECTs throw
+    ProgrammingError.  This helper mirrors the loader's ALTERs
+    so a plain Flask restart is enough to make the columns
+    available."""
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+        try:
+            cur.execute("SHOW TABLES LIKE 'stock'")
+            if not cur.fetchone():
+                # No stock table yet — loader will create it when
+                # the batch first lands.  Nothing to do here.
+                return
+            for col, ddl in (
+                ("block_qty",   "INT NOT NULL DEFAULT 0"),
+                ("location_id", "VARCHAR(20) NOT NULL DEFAULT ''"),
+            ):
+                cur.execute("SHOW COLUMNS FROM stock LIKE %s", (col,))
+                if not cur.fetchone():
+                    cur.execute(f"ALTER TABLE stock ADD COLUMN `{col}` {ddl}")
+                    print(f"[stock] added column at startup: {col}")
+            conn.commit()
+        finally:
+            try: cur.close()
+            except: pass
+            try: conn.close()
+            except: pass
+    except Exception as _e:
+        print(f"[stock] startup column check skipped: {_e}")
+
+
+_ensure_stock_block_columns()
+
 def _bde_from_request():
     """Best-effort 'who is logged in'.  Cloudflare Access (if it's in
     front of the app) injects Cf-Access-Authenticated-User-Email; behind
