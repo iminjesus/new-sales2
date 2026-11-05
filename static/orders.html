@@ -7179,6 +7179,26 @@ function newRow(){
       }
       openStockAgingPopover(cell, mcode, _stockPlantByCol[col], state);
     });
+    // Nov-05 user ask: hover the stock cell → show blocked-stock
+    // breakdown tooltip (QA / quality-hold qty excluded from the
+    // main number).  Click the tooltip → pin so it stays visible
+    // for screenshot / further inspection.  Debounced 220 ms so
+    // flicking the mouse over the row doesn't fire a fetch per
+    // cell.  Backed by the same data the dblclick popover uses,
+    // so the first hover primes the cache for both paths.
+    let _hoverTimer = null;
+    cell.addEventListener("mouseenter", () => {
+      const mcode = tr.querySelector('[data-col="m_code"]')?.value?.trim();
+      if (!mcode) return;
+      const state = col.replace("stock_", "").toUpperCase();
+      _hoverTimer = setTimeout(
+        () => showBlockedHoverTip(cell, mcode, _stockPlantByCol[col], state),
+        220);
+    });
+    cell.addEventListener("mouseleave", () => {
+      if (_hoverTimer){ clearTimeout(_hoverTimer); _hoverTimer = null; }
+      hideBlockedHoverTip();
+    });
   }
   /* Qty auto-default — delegated input listener on the row.  Fires
      once per material pick (gated by rowEl.dataset.qtyAutoDefault,
@@ -7552,6 +7572,147 @@ function _closeStockAging(){
 function _stockAgingKey(e){ if (e.key === "Escape") _closeStockAging(); }
 function _stockAgingClickAway(e){
   if (_stockAgeEl && !_stockAgeEl.contains(e.target)) _closeStockAging();
+}
+
+/* ───── Nov-05 blocked-stock hover tooltip ─────
+   Shows ⚑ Blocked breakdown on cell hover.  Click the tooltip to
+   pin it (sticky, dismissable with × and Esc).  Shares a per-
+   (mcode, plant) in-memory cache with the full ageing popover so
+   the first hover primes the double-click path too. */
+// `esc` is only defined inside other functions in this file, so
+// keep a local HTML-escaper here to avoid scope dependencies.
+const _bEsc = s => String(s == null ? "" : s).replace(/[&<>"']/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const _blockedCache = new Map();   // "mcode|plant" -> {total, by_bucket, detail, bucket_order}
+async function _fetchBlockedBreakdown(mcode, plant){
+  const key = mcode + "|" + plant;
+  if (_blockedCache.has(key)) return _blockedCache.get(key);
+  try {
+    const r = await fetch(
+      `/api/orders/stock_aging_by_material`
+      + `?m_code=${encodeURIComponent(mcode)}`
+      + `&plant=${encodeURIComponent(plant)}`,
+      {credentials: "same-origin"},
+    );
+    const d = await r.json();
+    const packed = {
+      total:        d.blocked_total || 0,
+      by_bucket:    d.blocked_by_bucket || {},
+      detail:       d.blocked_detail || [],
+      bucket_order: d.bucket_order || [],
+      shippable:    d.total || 0,
+    };
+    _blockedCache.set(key, packed);
+    return packed;
+  } catch(e){
+    const empty = {total: 0, by_bucket: {}, detail: [], bucket_order: [], shippable: 0, err: String(e)};
+    _blockedCache.set(key, empty);
+    return empty;
+  }
+}
+let _blkTipEl   = null;
+let _blkTipPin  = false;   // flipped true when the tooltip is clicked
+function hideBlockedHoverTip(force){
+  if (!_blkTipEl) return;
+  if (_blkTipPin && !force) return;           // pinned stays
+  _blkTipEl.remove(); _blkTipEl = null; _blkTipPin = false;
+  document.removeEventListener("keydown", _blkTipKey);
+  document.removeEventListener("mousedown", _blkTipClickAway, true);
+}
+function _blkTipKey(e){ if (e.key === "Escape") hideBlockedHoverTip(true); }
+function _blkTipClickAway(e){
+  // Only active when pinned — click anywhere outside closes.
+  if (_blkTipEl && !_blkTipEl.contains(e.target)) hideBlockedHoverTip(true);
+}
+function _renderBlockedTipHTML(mcode, plant, state, packed, pinned){
+  const parts = [];
+  parts.push(
+    `<div style="display:flex;align-items:center;justify-content:space-between;
+                 gap:8px;margin-bottom:4px">
+       <div style="font-weight:700;font-size:11.5px">
+         ${_bEsc(mcode)} · ${_bEsc(plant)} <span style="color:#64748b">(${_bEsc(state)})</span>
+       </div>
+       ${pinned
+         ? `<button onclick="hideBlockedHoverTip(true)" title="Close (Esc)"
+                     style="border:0;background:transparent;color:#94a3b8;
+                            cursor:pointer;font-size:14px;line-height:1">×</button>`
+         : `<span style="color:#94a3b8;font-size:10px">click to pin</span>`}
+     </div>`);
+  if (!packed.total){
+    parts.push(
+      `<div style="color:#059669;font-size:11px">
+         No blocked stock · shippable ${fmtQty(packed.shippable || 0)} u
+       </div>`);
+  } else {
+    // Group detail rows by bucket in the backend-sorted order.
+    const byBucket = {};
+    packed.detail.forEach(d => {
+      (byBucket[d.age_bucket] = byBucket[d.age_bucket] || []).push(d);
+    });
+    const lines = (packed.bucket_order || []).filter(b => byBucket[b]).map(b => {
+      const bSum = byBucket[b].reduce((a, d) => a + d.qty, 0);
+      const col  = _AGING_COLORS_ORDER[b] || "#b45309";
+      const rows = byBucket[b].map(d =>
+        `<div style="padding-left:8px;font-size:11px;color:#78350f">
+           • ${_bEsc(d.location_id || "(no loc)")} · DOT ${_bEsc(d.dot_no || "—")} · ${fmtQty(d.qty)} u
+         </div>`).join("");
+      return `
+        <div style="margin-top:3px">
+          <div style="font-size:11px;font-weight:700;color:${col}">
+            ${_bEsc(b)} — ${fmtQty(bSum)} u
+          </div>
+          ${rows}
+        </div>`;
+    }).join("");
+    parts.push(
+      `<div style="font-size:11.5px;font-weight:700;color:#78350f;margin-bottom:2px">
+         ⚑ Blocked: ${fmtQty(packed.total)} u  <span style="color:#059669;font-weight:400">(shippable ${fmtQty(packed.shippable || 0)})</span>
+       </div>
+       <div style="font-size:10.5px;color:#92400e;margin-bottom:4px">
+         Excluded from the cell number · QA / quality hold.
+       </div>
+       ${lines}`);
+  }
+  return parts.join("");
+}
+async function showBlockedHoverTip(anchorCell, mcode, plant, state){
+  // If a pinned tip is up, leave it alone.
+  if (_blkTipEl && _blkTipPin) return;
+  hideBlockedHoverTip(true);
+  const rect = anchorCell.getBoundingClientRect();
+  const tip = document.createElement("div");
+  tip.style.cssText = `
+    position:fixed; z-index:10000;
+    top:${Math.round(rect.bottom + 4)}px;
+    left:${Math.round(Math.min(rect.left, window.innerWidth - 300))}px;
+    width:280px; padding:8px 10px;
+    background:#fffbeb; border:1px solid #fcd34d;
+    border-radius:5px; box-shadow:0 4px 14px rgba(0,0,0,.12);
+    font-size:11.5px; color:#1e293b; cursor:pointer;
+  `;
+  tip.innerHTML =
+    `<div style="color:#94a3b8;font-size:11px">Loading…</div>`;
+  tip.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    _blkTipPin = true;
+    // Rebuild content with the × close button and attach the
+    // outside-click + Esc listeners now that it's sticky.
+    if (_blkTipEl && _blkTipEl.dataset.ready === "1"){
+      _blkTipEl.innerHTML = _blkTipEl._render(true);
+    }
+    document.addEventListener("keydown", _blkTipKey);
+    // Defer so the click that pinned doesn't also close.
+    setTimeout(() =>
+      document.addEventListener("mousedown", _blkTipClickAway, true), 0);
+  });
+  document.body.appendChild(tip);
+  _blkTipEl = tip;
+  const packed = await _fetchBlockedBreakdown(mcode, plant);
+  // Bail if the user already moved on and the tip was closed.
+  if (_blkTipEl !== tip) return;
+  tip._render = (pinned) => _renderBlockedTipHTML(mcode, plant, state, packed, pinned);
+  tip.dataset.ready = "1";
+  tip.innerHTML = tip._render(_blkTipPin);
 }
 async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
   _closeStockAging();
