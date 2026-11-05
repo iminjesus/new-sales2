@@ -7805,8 +7805,12 @@ function addBlockedToBottomPanel(mcode, plant, state, payload){
   try { group.scrollIntoView({block: "nearest"}); } catch(_e){}
 }
 async function showBlockedHoverTip(anchorCell, mcode, plant, state){
-  // If a pinned tip is up, leave it alone.
-  if (_blkTipEl && _blkTipPin) return;
+  // Already open on THIS same cell → no-op (don't flicker).
+  if (_blkTipEl && _blkTipEl._anchor === anchorCell) return;
+  // Nov-05 user ask: a new hover must dismiss the previous tip
+  // even when it was pinned — otherwise a pinned tip blocks the
+  // operator from ever seeing another cell's blocked detail, and
+  // the double-click-to-pin on the new cell becomes unreachable.
   hideBlockedHoverTip(true);
   const rect = anchorCell.getBoundingClientRect();
   const tip = document.createElement("div");
@@ -7836,6 +7840,7 @@ async function showBlockedHoverTip(anchorCell, mcode, plant, state){
     setTimeout(() =>
       document.addEventListener("mousedown", _blkTipClickAway, true), 0);
   });
+  tip._anchor = anchorCell;
   document.body.appendChild(tip);
   _blkTipEl = tip;
   const packed = await _fetchBlockedBreakdown(mcode, plant);
