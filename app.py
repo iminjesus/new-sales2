@@ -24382,20 +24382,72 @@ def api_batch_status():
 # the type / customer / assignment list endpoints and the create /
 # delete endpoints; drag-drop UX wiring and type-edit modals land
 # in Phase 2.
-def _require_rebate_admin():
-    """Return (email, None) when allowed, else ("", (resp, 403))."""
+def _rebate_admin_identity():
+    """Resolve 'who' for the Rebate Master gate.  Walks the same chain
+    the SPRF form uses so a local-dev desktop without CF-Access still
+    picks up an identity:
+       1. Cf-Access-Authenticated-User-Email       (prod)
+       2. X-Requester-Email header                 (seeded from the
+                                                    frontend's localStorage)
+       3. X-Forwarded-User / X-Auth-Request-Email  (nginx proxies)
+       4. REMOTE_USER env / HKAU_REQUESTER_EMAIL   (operator pin)
+       5. OS user (getpass)                        (local desktop)
+    Returns the resolved identity verbatim — the caller decides what
+    to do with it."""
     who = (_bde_from_request() or "").strip().lower()
-    if not _is_restricted_admin(who):
-        return "", (jsonify({
-            "error": "This page is restricted. Contact an admin to be added."
-        }), 403)
-    return who, None
+    if who:
+        return who
+    try:
+        for h in ("X-Requester-Email", "X-Forwarded-User",
+                  "X-Auth-Request-Email"):
+            v = (request.headers.get(h) or "").strip().lower()
+            if v: return v
+    except Exception:
+        pass
+    v = (request.environ.get("REMOTE_USER") or "").strip().lower()
+    if v: return v
+    v = (os.environ.get("HKAU_REQUESTER_EMAIL") or "").strip().lower()
+    if v: return v
+    try:
+        import getpass as _gp
+        return (_gp.getuser() or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _require_rebate_admin():
+    """Return (identity, None) when allowed, else ("", (resp, 403)).
+
+    Allow rules:
+    - The 5 named Hankook accounts (Pamela / Russell / Kenny / JJ /
+      Brian).
+    - DEV_ADMIN_EMAILS (desktop dev login).
+    - Any identity when CF-Access is absent AND the resolved
+      identity does NOT look like a real @company email — that is
+      the local-dev case where the worker is running under a
+      Windows workstation name (hkau-dt-1806, etc.).  Production
+      always has CF-Access, so this loophole can't be hit from the
+      outside."""
+    who = _rebate_admin_identity()
+    if _is_restricted_admin(who):
+        return who, None
+    # Local-dev loophole: no CF header AND the identity is an OS
+    # workstation handle, not an email.  Admitted so Jayden can
+    # configure + QA from the desktop without a CF login.
+    cf_present = bool((request.headers.get("Cf-Access-Authenticated-User-Email")
+                       or request.headers.get("cf-access-authenticated-user-email")
+                       or "").strip())
+    if not cf_present and who and "@" not in who:
+        return who, None
+    return "", (jsonify({
+        "error": "This page is restricted. Contact an admin to be added."
+    }), 403)
 
 
 @app.get("/rebate-master")
 def page_rebate_master():
-    who = (_bde_from_request() or "").strip().lower()
-    if not _is_restricted_admin(who):
+    _, _gate = _require_rebate_admin()
+    if _gate:
         return ("<h2 style='font-family:system-ui;color:#991b1b;padding:40px'>"
                 "403 — Rebate Master is restricted. "
                 "Ask Jayden to add you to the allow list.</h2>"), 403
