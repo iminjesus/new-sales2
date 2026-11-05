@@ -44,7 +44,12 @@ KEEP_COLUMNS = {
     "dot no.":        "dot_no",
     "stock qty":      "stock_qty",
 }
+# Nov-05: ZSDM64300 output ships the blocked quantity under the
+# header "Block Qty" (confirmed from the operator's screenshot).
+# Keep the older spellings too in case a different SAP layout /
+# localisation uses them.
 BLOCKED_HEADER_ALIASES = {
+    "block qty", "blocked qty",
     "blocked stock", "block stock", "blocked stk", "block stk",
     "blocked", "block",
 }
@@ -56,15 +61,18 @@ def _norm_hdr(s: str) -> str:
 
 
 def _is_blocked(val) -> bool:
-    """True iff the cell reads as the number 1 (so 1, 1.0, '1',
-    '1.000' all drop; blanks / 0 / 'X' / anything else keep)."""
+    """True when the cell carries ANY blocked quantity (> 0).  The
+    header is "Block Qty" — a count of units held in blocked status,
+    not a 0/1 flag — so a row with Block Qty = 7 is just as blocked
+    as one with Block Qty = 1 and must also be dropped.  Blanks,
+    zeros and non-numerics keep."""
     if val is None:
         return False
     s = str(val).strip().replace(",", ".")
     if not s:
         return False
     try:
-        return abs(float(s) - 1.0) < 1e-9
+        return float(s) > 0.0
     except Exception:
         return False
 
