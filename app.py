@@ -4047,6 +4047,68 @@ def api_orders_aged_stock_at_state():
     })
 
 
+@app.get("/api/orders/blocked_summary")
+def api_orders_blocked_summary():
+    """Compact blocked-stock breakdown for ONE m_code across all four
+    real plants.  Powers the SPRF cell red-number indicator + the
+    bottom-panel detail pane.  Shape:
+        {
+          "m_code": "1032199",
+          "by_state": {
+            "NSW": {"total": 10, "detail": [
+                       {"location_id": "G76", "dot_no": "3625",
+                        "age_bucket": "19-24M", "qty": 4}, …]},
+            …
+          }
+        }
+    Empty states come back as {total: 0, detail: []} so the frontend
+    can tell "we checked" from "no data".  Fires one SELECT + Python-
+    side grouping, much cheaper than four stock_aging_by_material
+    calls when every row on a 10-line SPRF needs the red-dot check."""
+    m_code = (request.args.get("m_code") or "").strip()
+    if not m_code:
+        return jsonify({"error": "m_code required"}), 400
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT s.plant, s.location_id, s.dot_no, "
+            "       SUM(s.block_qty) AS qty "
+            "FROM stock s "
+            "WHERE s.material = %s "
+            "  AND s.plant IN (" + ",".join(["%s"] * len(_ORDER_PLANT_STATE)) + ") "
+            "  AND s.block_qty > 0 "
+            "GROUP BY s.plant, s.location_id, s.dot_no",
+            (m_code,) + tuple(_ORDER_PLANT_STATE.keys()),
+        )
+        rows = cur.fetchall() or []
+    finally:
+        try: cur.close(); conn.close()
+        except: pass
+    by_state = {st: {"total": 0, "detail": []}
+                for st in _ORDER_PLANT_STATE.values()}
+    for r in rows:
+        st = _ORDER_PLANT_STATE.get(r.get("plant"))
+        if not st: continue
+        qty = int(float(r.get("qty") or 0))
+        if qty <= 0: continue
+        age = _dot_age_months(r.get("dot_no") or "")
+        bucket = _age_bucket(age)
+        by_state[st]["total"] += qty
+        by_state[st]["detail"].append({
+            "location_id": (r.get("location_id") or "").strip(),
+            "dot_no":      r.get("dot_no") or "",
+            "age_bucket":  bucket,
+            "qty":         qty,
+        })
+    # Sort each state's detail: oldest bucket first, then by location.
+    _bord = {b: i for i, b in enumerate(_AGING_BUCKETS + ["unknown"])}
+    for st in by_state:
+        by_state[st]["detail"].sort(
+            key=lambda d: (-_bord.get(d["age_bucket"], 0), d["location_id"]))
+    return jsonify({"m_code": m_code, "by_state": by_state})
+
+
 @app.get("/api/orders/stock_aging_by_material")
 def api_orders_stock_aging_by_material():
     """Aging bucket breakdown for one (material, plant).  Called when

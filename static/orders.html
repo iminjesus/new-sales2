@@ -670,6 +670,13 @@
      5-digit stock + "70.00%" DC values without the input text clipping. */
   table.lines th.stock,
   table.lines td.stock-cell{width:58px;min-width:58px}
+  /* Nov-05: red number on stock cells that carry blocked (QA / quality-
+     hold) stock, so the operator spots them without hovering.  Applied
+     via .has-blocked class set from the blocked-summary prefetch. */
+  table.lines tbody td.stock-cell.has-blocked input{
+    color:#dc2626 !important; font-weight:800;
+  }
+  table.lines tbody td.stock-cell.has-blocked span.unr{ color:#dc2626; }
   /* Qty is even narrower — the widest visible value is 3 digits
      ("218", "132") centre-aligned; 42 px covers header + values. */
   table.lines th.qty-hdr,
@@ -4946,6 +4953,12 @@ async function fillStockForRow(rowEl, mcode){
     // that the ::after pseudo-element reads for the second line.
     _setStockCell(el, atp, unr);
   }
+  // Nov-05: fetch blocked-stock summary once per material and tag
+  // every cell that carries blocked rows so the number paints red
+  // and the single-click handler knows to open the bottom panel
+  // instead of the RT pipeline popover.  Shared with the hover
+  // tooltip cache (_blockedCache) so later hovers are instant.
+  _applyBlockedRedClass(rowEl, mcode).catch(() => {});
   // Nov-03: fresh ATP numbers just landed — re-evaluate stock-out
   // for this row + the whole order.  Guards against "…" placeholders
   // being treated as 0 and tripping stock-out early.
@@ -7166,7 +7179,19 @@ function newRow(){
       if (_singleClickTimer) clearTimeout(_singleClickTimer);
       _singleClickTimer = setTimeout(() => {
         _singleClickTimer = null;
-        openStockRtPopover(cell, tr, state);
+        // Nov-05: when the cell carries blocked stock (red number),
+        // single-click routes to the bottom detail panel so the
+        // operator can accumulate multiple cells and screenshot.
+        // No-blocked cells keep the original RT pipeline popover.
+        if (cell.classList.contains("has-blocked")){
+          let payload = null;
+          try { payload = JSON.parse(cell.dataset.blocked || "{}"); }
+          catch(_e) { payload = null; }
+          addBlockedToBottomPanel(
+            mcode, _stockPlantByCol[col], state, payload || {});
+        } else {
+          openStockRtPopover(cell, tr, state);
+        }
       }, 250);
     });
     cell.addEventListener("dblclick", (ev) => {
@@ -7641,39 +7666,143 @@ function _renderBlockedTipHTML(mcode, plant, state, packed, pinned){
   if (!packed.total){
     parts.push(
       `<div style="color:#059669;font-size:11px">
-         No blocked stock · shippable ${fmtQty(packed.shippable || 0)} u
+         No blocked stock · shippable ${fmtQty(packed.shippable || 0)} units
        </div>`);
   } else {
-    // Group detail rows by bucket in the backend-sorted order.
-    const byBucket = {};
-    packed.detail.forEach(d => {
-      (byBucket[d.age_bucket] = byBucket[d.age_bucket] || []).push(d);
-    });
-    const lines = (packed.bucket_order || []).filter(b => byBucket[b]).map(b => {
-      const bSum = byBucket[b].reduce((a, d) => a + d.qty, 0);
-      const col  = _AGING_COLORS_ORDER[b] || "#b45309";
-      const rows = byBucket[b].map(d =>
-        `<div style="padding-left:8px;font-size:11px;color:#78350f">
-           • ${_bEsc(d.location_id || "(no loc)")} · DOT ${_bEsc(d.dot_no || "—")} · ${fmtQty(d.qty)} u
-         </div>`).join("");
+    // Nov-05 user ask: one line per blocked lot, bucket inline so
+    // there is no separate bucket header (less duplicated info).
+    // Order preserved from backend (oldest bucket first).
+    const lines = packed.detail.map(d => {
+      const col  = _AGING_COLORS_ORDER[d.age_bucket] || "#b45309";
       return `
-        <div style="margin-top:3px">
-          <div style="font-size:11px;font-weight:700;color:${col}">
-            ${_bEsc(b)} — ${fmtQty(bSum)} u
-          </div>
-          ${rows}
+        <div style="font-size:11px;color:#78350f;line-height:1.5">
+          • ${_bEsc(d.location_id || "(no loc)")} ·
+            <span style="color:${col};font-weight:700">${_bEsc(d.age_bucket)}</span>
+            · DOT ${_bEsc(d.dot_no || "—")} · ${fmtQty(d.qty)} units
         </div>`;
     }).join("");
     parts.push(
-      `<div style="font-size:11.5px;font-weight:700;color:#78350f;margin-bottom:2px">
-         ⚑ Blocked: ${fmtQty(packed.total)} u  <span style="color:#059669;font-weight:400">(shippable ${fmtQty(packed.shippable || 0)})</span>
-       </div>
-       <div style="font-size:10.5px;color:#92400e;margin-bottom:4px">
-         Excluded from the cell number · QA / quality hold.
+      `<div style="font-size:11.5px;font-weight:700;color:#78350f;margin-bottom:4px">
+         ⚑ Blocked: ${fmtQty(packed.total)} units
+         <span style="color:#059669;font-weight:400">(shippable ${fmtQty(packed.shippable || 0)})</span>
        </div>
        ${lines}`);
   }
   return parts.join("");
+}
+
+/* ───── Nov-05 cell red marker + bottom-panel detail ─────
+   Pre-fetches blocked summary for every state on a material resolve,
+   tags cells with .has-blocked (red number via CSS), and single-
+   clicking a red cell routes to the bottom detail panel instead of
+   the normal RT pipeline popover. */
+async function _applyBlockedRedClass(rowEl, mcode){
+  if (!mcode) return;
+  try {
+    const r = await fetch(
+      `/api/orders/blocked_summary?m_code=${encodeURIComponent(mcode)}`,
+      {credentials: "same-origin"});
+    const d = await r.json();
+    const byState = (d && d.by_state) || {};
+    const map = {NSW: "stock_nsw", QLD: "stock_qld",
+                 VIC: "stock_vic", WA:  "stock_wa"};
+    Object.entries(map).forEach(([st, col]) => {
+      const el = rowEl.querySelector(`[data-col="${col}"]`);
+      const td = el?.parentElement;
+      if (!td) return;
+      const total = (byState[st] && byState[st].total) || 0;
+      td.classList.toggle("has-blocked", total > 0);
+      // Stash payload so the bottom-panel click doesn't re-fetch.
+      try { td.dataset.blocked = JSON.stringify(byState[st] || {}); }
+      catch(_e) {}
+    });
+  } catch(_e) { /* best-effort — leave cells unmarked */ }
+}
+
+/* Bottom panel — fixed strip along the bottom of the viewport.
+   Each click on a red cell appends a line (compact, one row per
+   blocked lot).  Dedupe: clicking the same cell twice is a no-op.
+   Dismiss via × on the panel header or Escape. */
+let _blkPanel = null;
+function _ensureBlockedPanel(){
+  if (_blkPanel) return _blkPanel;
+  const p = document.createElement("div");
+  p.id = "blockedBottomPanel";
+  p.style.cssText = `
+    position:fixed; z-index:9998; left:0; right:0; bottom:0;
+    max-height:40vh; overflow:auto;
+    background:#fffbeb; border-top:2px solid #b45309;
+    box-shadow:0 -4px 14px rgba(0,0,0,.08);
+    font-size:12px; color:#1e293b; padding:8px 12px;
+  `;
+  p.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+      <b style="color:#78350f">⚑ Blocked stock details</b>
+      <span style="color:#92400e;font-size:11px">click a red stock cell to add</span>
+      <span style="flex:1"></span>
+      <button id="_blkPanelClear"
+              style="border:0;background:transparent;color:#92400e;
+                     font-size:11px;cursor:pointer">clear all</button>
+      <button id="_blkPanelClose"
+              style="border:0;background:transparent;color:#92400e;
+                     font-size:16px;line-height:1;cursor:pointer">×</button>
+    </div>
+    <div id="_blkPanelBody"></div>`;
+  document.body.appendChild(p);
+  p.querySelector("#_blkPanelClose").addEventListener("click", _hideBlockedPanel);
+  p.querySelector("#_blkPanelClear").addEventListener("click", () => {
+    p.querySelector("#_blkPanelBody").innerHTML = "";
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && _blkPanel) _hideBlockedPanel();
+  });
+  _blkPanel = p;
+  return p;
+}
+function _hideBlockedPanel(){
+  if (_blkPanel){ _blkPanel.remove(); _blkPanel = null; }
+}
+function addBlockedToBottomPanel(mcode, plant, state, payload){
+  const p = _ensureBlockedPanel();
+  const body = p.querySelector("#_blkPanelBody");
+  const key = `${mcode}|${plant}|${state}`;
+  if (body.querySelector(`[data-k="${CSS.escape(key)}"]`)) {
+    // Already there — flash the existing group briefly.
+    const existing = body.querySelector(`[data-k="${CSS.escape(key)}"]`);
+    existing.style.transition = "background .5s";
+    existing.style.background = "#fde68a";
+    setTimeout(() => existing.style.background = "transparent", 700);
+    return;
+  }
+  const total  = (payload && payload.total) || 0;
+  const detail = (payload && payload.detail) || [];
+  const lines = detail.map(d => {
+    const col = _AGING_COLORS_ORDER[d.age_bucket] || "#b45309";
+    return `
+      <div style="font-size:11.5px;color:#78350f;line-height:1.55">
+        • ${_bEsc(d.location_id || "(no loc)")} ·
+          <span style="color:${col};font-weight:700">${_bEsc(d.age_bucket)}</span>
+          · DOT ${_bEsc(d.dot_no || "—")} · ${fmtQty(d.qty)} units
+      </div>`;
+  }).join("") || `<div style="font-size:11px;color:#059669">No blocked stock.</div>`;
+  const group = document.createElement("div");
+  group.dataset.k = key;
+  group.style.cssText = "margin:6px 0;padding:6px 8px;border-left:3px solid #b45309;background:#fff";
+  group.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+      <b style="font-size:12px">${_bEsc(mcode)}</b>
+      <span style="color:#64748b;font-size:11px">${_bEsc(plant)} (${_bEsc(state)})</span>
+      <span style="flex:1"></span>
+      <span style="font-weight:700;color:#78350f">${fmtQty(total)} units blocked</span>
+      <button title="Remove"
+              style="border:0;background:transparent;color:#94a3b8;
+                     cursor:pointer;font-size:14px;line-height:1"
+              onclick="this.closest('[data-k]').remove()">×</button>
+    </div>
+    ${lines}`;
+  body.appendChild(group);
+  // Scroll the new entry into view within the panel.
+  try { group.scrollIntoView({block: "nearest"}); } catch(_e){}
 }
 async function showBlockedHoverTip(anchorCell, mcode, plant, state){
   // If a pinned tip is up, leave it alone.
@@ -7790,37 +7919,23 @@ async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
   const blocked_detail  = data.blocked_detail || [];
   let blockedBlock = "";
   if (blocked_total > 0) {
-    // Group detail rows by age bucket in the order returned (oldest
-    // first).  Within a bucket, show "location · DOT · qty".
-    const byBucket = {};
-    blocked_detail.forEach(d => {
-      if (!byBucket[d.age_bucket]) byBucket[d.age_bucket] = [];
-      byBucket[d.age_bucket].push(d);
-    });
-    const parts = (data.bucket_order || []).filter(b => byBucket[b]).map(b => {
-      const rows = byBucket[b].map(d =>
-        `<div style="padding-left:8px;font-size:11px;color:#78350f;">
-           • ${d.location_id || "(no loc)"} · DOT ${d.dot_no || "—"} · ${fmtQty(d.qty)} u
-         </div>`).join("");
-      const col = _AGING_COLORS_ORDER[b] || "#b45309";
-      const bSum = byBucket[b].reduce((a, d) => a + d.qty, 0);
+    // Nov-05: one-line-per-lot, bucket inline — no separate per-bucket
+    // header (less duplicated info).  Order preserved from backend
+    // (oldest bucket first).
+    const parts = blocked_detail.map(d => {
+      const col = _AGING_COLORS_ORDER[d.age_bucket] || "#b45309";
       return `
-        <div style="margin-top:3px;">
-          <div style="font-size:11px;font-weight:700;color:${col};">
-            ${b} — ${fmtQty(bSum)} u
-          </div>
-          ${rows}
+        <div style="font-size:11px;color:#78350f;line-height:1.5;">
+          • ${d.location_id || "(no loc)"} ·
+            <span style="color:${col};font-weight:700">${d.age_bucket}</span>
+            · DOT ${d.dot_no || "—"} · ${fmtQty(d.qty)} units
         </div>`;
     }).join("");
     blockedBlock = `
       <div style="margin-top:8px;padding:6px 8px;background:#fef3c7;
                   border-left:3px solid #b45309;border-radius:3px;">
-        <div style="font-size:11.5px;font-weight:700;color:#78350f;margin-bottom:2px;">
-          ⚑ Excluded — Blocked stock: ${fmtQty(blocked_total)} u
-        </div>
-        <div style="font-size:10.5px;color:#92400e;margin-bottom:4px;">
-          Not counted in the chart above (QA / quality hold).
-          Breakdown by location:
+        <div style="font-size:11.5px;font-weight:700;color:#78350f;margin-bottom:4px;">
+          ⚑ Excluded — Blocked stock: ${fmtQty(blocked_total)} units
         </div>
         ${parts}
       </div>`;
