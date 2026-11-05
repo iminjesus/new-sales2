@@ -90,13 +90,15 @@
              timestamp.  Values repaint from _rowsCache every time
              loadOrders runs. -->
         <div id="monthStats" style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
-          <!-- Nov-04 user ask: lifetime "Whole months" tile sitting
-               at the very left, so the month / week deltas read
-               against an absolute total.  Covers every submitted
-               SPRF in the loaded dataset (excludes drafts + deleted),
-               no date filter applied. -->
+          <!-- Nov-05 user ask: renamed "Whole months" to "YTD".
+               Value was stuck at 200 because it was a client-side
+               count of _rowsCache (the paginated list cap), not
+               the real total.  Now reads j.ytd_count from the
+               server — COUNT(*) under the same scope but without
+               the LIMIT, narrowed to the current calendar year,
+               excluding temp drafts and soft-deleted rows. -->
           <div style="padding:6px 12px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;color:#0f172a;font-weight:700">
-            Whole months: <span id="msAll" style="font-size:14px;font-weight:900">0</span>
+            YTD: <span id="msAll" style="font-size:14px;font-weight:900">0</span>
           </div>
           <div style="padding:6px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;color:#1e3a8a;font-weight:700">
             This month requested: <span id="msTotal" style="font-size:14px;font-weight:900">0</span>
@@ -381,6 +383,9 @@ async function loadOrders(){
       return;
     }
     _rowsCache = j.rows || [];
+    // Nov-05: YTD count comes from the server under the SAME scope
+    // the list uses, but without the LIMIT clipping it to 200.
+    window._ytdCount = (typeof j.ytd_count === "number") ? j.ytd_count : null;
     renderRows();
   } catch(e){
     body.innerHTML = `<tr><td colspan="22" class="empty">Load failed: ${e}</td></tr>`;
@@ -918,15 +923,16 @@ function renderRows(){
            here. */
         || (!r.has_additional_dc && !r.has_interstate))
   );
-  // Nov-04: lifetime "Whole months" tile -- every submitted SPRF
-  // in the loaded dataset (excludes drafts + deleted).  No date
-  // filter, so this is the absolute baseline the other tiles read
-  // as a fraction of.
-  const _msAll = filtered.filter(r =>
+  // Nov-05: YTD tile reads the server-side count (independent of
+  // the paginated list cap).  Fall back to the client-side count
+  // only when the server didn't send ytd_count (older backend).
+  const _msAllClient = filtered.filter(r =>
     !r.deleted_at
     && String(r.needs_mgmt_approval || "").toLowerCase() !== "temp"
   );
-  $("#msAll")           .textContent = _msAll.length;
+  $("#msAll").textContent = (typeof window._ytdCount === "number")
+    ? window._ytdCount
+    : _msAllClient.length;
   $("#msTotal")         .textContent = _msTotal.length;
   $("#msWeek")          .textContent = _msWeek.length;
   $("#msPendingAppr")   .textContent = _msPendingAppr.length;

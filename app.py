@@ -8028,7 +8028,33 @@ def api_orders_list():
             r["last_edited_by"]  = _last_edit
             r["requester_email"] = requester_by_id.get(r["id"], "")
             r["mod_log"]         = mod_log_by_id.get(r["id"], [])
-        return jsonify({"rows": rows, "count": len(rows)})
+        # Nov-05 user ask: YTD count tile.  The "Whole months" ->
+        # "YTD" tile on orders_list was reading _rowsCache.length,
+        # which is capped at `limit` (default 200) and so looked
+        # frozen on 200 whenever the dataset grew past that cap.
+        # Run a parallel COUNT(*) under the same where_sql + scope
+        # but WITHOUT the row LIMIT, narrowed to the current
+        # calendar year and excluding temp drafts + soft-deleted
+        # rows.  Any SQL error falls through to ytd_count = 0 so
+        # the main rows response is never blocked by this tile.
+        ytd_count = 0
+        try:
+            _ytd_where = where_sql + (" AND " if where_sql.strip() else "WHERE ")
+            _ytd_where += (
+                "YEAR(submitted_at) = YEAR(CURDATE()) "
+                "AND (needs_mgmt_approval IS NULL OR needs_mgmt_approval <> 'temp') "
+                "AND deleted_at IS NULL"
+            )
+            cur.execute(
+                f"SELECT COUNT(*) AS c FROM submitted_orders {_ytd_where}",
+                tuple(p),
+            )
+            _r = cur.fetchone()
+            ytd_count = int((_r or {}).get("c") or 0)
+        except Exception as _e:
+            print(f"[orders_list] ytd_count query failed: {_e}")
+        return jsonify({"rows": rows, "count": len(rows),
+                        "ytd_count": ytd_count})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"error": str(e), "rows": []}), 500
