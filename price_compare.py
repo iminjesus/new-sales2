@@ -1011,6 +1011,29 @@ body.left-hidden .show-tables-chip { display: inline-block; }
 /* mode buttons are slightly bigger */
 .btn.mode { font-size: 12px; padding: 5px 14px; font-weight: 600; }
 
+/* Nov-05 user ask: VIEW / STORE / PRICE buttons should all read
+   as "fully available", not grayed-out.  The active one keeps its
+   blue fill as the selection marker; non-active mode/store/pricing
+   buttons now carry a darker text + firmer border so they don't
+   look disabled.  Both views (By Channel / By Brand), all stores,
+   and both price modes stay clickable at any time (single-select
+   each). */
+#mode-btns .btn.mode:not(.active),
+#sub-btns  .btn:not(.active),
+#pricing-btns .btn.mode:not(.active) {
+    color: #0f172a;
+    border-color: #94a3b8;
+    background: #fff;
+    opacity: 1;
+}
+#mode-btns .btn.mode:not(.active):hover,
+#sub-btns  .btn:not(.active):hover,
+#pricing-btns .btn.mode:not(.active):hover {
+    background: #eff6ff;
+    border-color: #1F4E79;
+    color: #1F4E79;
+}
+
 /* divider between size row and mode rows */
 .divider { border: none; border-top: 1px solid #dde1e7; margin: 6px 0; }
 
@@ -1226,7 +1249,7 @@ body.left-hidden .show-tables-chip { display: inline-block; }
       <!-- Row 2: View mode -->
       <div class="btn-row">
         <span class="row-label">View</span>
-        <div class="btns">
+        <div class="btns" id="mode-btns">
           <button class="btn mode" id="btn-store" onclick="onModeStore(this)">By Channel</button>
           <button class="btn mode" id="btn-brand" onclick="onModeBrand(this)">By Brand</button>
         </div>
@@ -1239,7 +1262,7 @@ body.left-hidden .show-tables-chip { display: inline-block; }
            for those stores (both buttons show the same line). -->
       <div class="btn-row">
         <span class="row-label">Price</span>
-        <div class="btns">
+        <div class="btns" id="pricing-btns">
           <button class="btn mode" id="btn-normal" onclick="onPricingNormal(this)">Normal</button>
           <button class="btn mode" id="btn-promo"  onclick="onPricingPromo(this)">Promo</button>
           <span id="pricing-hint"
