@@ -4006,6 +4006,7 @@ def api_orders_aged_stock_at_state():
             "FROM stock s "
             "LEFT JOIN carrying_26 c ON c.m_code = s.material "
             "WHERE s.plant = %s AND s.stock_qty > 0 "
+            "  AND s.block_qty = 0 "
             "GROUP BY s.material, s.dot_no",
             (plant,),
         )
@@ -4057,24 +4058,38 @@ def api_orders_stock_aging_by_material():
     buckets the /stock aging popup uses (≤12M … 37M+, plus 'unknown'
     for malformed DOTs).  If plant isn't given, aggregates across all
     plants (NSW/QLD/VIC/WA) so the caller can also drive a nation-
-    wide view from the same endpoint."""
+    wide view from the same endpoint.
+
+    Nov-05 Phase 2: main buckets EXCLUDE rows with block_qty > 0 so
+    the chart matches what's actually shippable.  A parallel
+    `blocked` list rides along in the response — one entry per
+    (location_id, age_bucket) group with the summed blocked qty —
+    so the frontend can render a "excluded blocked" tooltip
+    alongside the chart without a second round trip."""
     m_code = (request.args.get("m_code") or "").strip()
     plant  = (request.args.get("plant")  or "").strip()
     if not m_code:
         return jsonify({"error": "m_code required"}), 400
 
-    where = ["s.material = %s", "s.stock_qty > 0"]
-    ps    = [m_code]
+    base_where = ["s.material = %s", "s.stock_qty > 0"]
+    base_ps    = [m_code]
     if plant:
-        where.append("s.plant = %s")
-        ps.append(plant)
+        base_where.append("s.plant = %s")
+        base_ps.append(plant)
     else:
         # Constrain to the four real plants so leaked test data
         # (fake 4-char plants) doesn't skew the totals.
-        where.append(
+        base_where.append(
             f"s.plant IN ({','.join(['%s'] * len(_ORDER_PLANT_STATE))})"
         )
-        ps.extend(_ORDER_PLANT_STATE.keys())
+        base_ps.extend(_ORDER_PLANT_STATE.keys())
+
+    # Non-blocked (shippable) main query.
+    main_where = base_where + ["s.block_qty = 0"]
+    # Blocked breakdown — group by location_id + dot_no so the age
+    # bucketing + per-location label can both happen on the Python
+    # side with the same _dot_age_months helpers as everywhere else.
+    blk_where = base_where + ["s.block_qty > 0"]
 
     conn = get_connection()
     cur  = conn.cursor(dictionary=True)
@@ -4082,11 +4097,19 @@ def api_orders_stock_aging_by_material():
         cur.execute(
             f"SELECT s.dot_no, SUM(s.stock_qty) AS qty "
             f"FROM stock s "
-            f"WHERE {' AND '.join(where)} "
+            f"WHERE {' AND '.join(main_where)} "
             f"GROUP BY s.dot_no",
-            tuple(ps),
+            tuple(base_ps),
         )
         rows = cur.fetchall() or []
+        cur.execute(
+            f"SELECT s.location_id, s.dot_no, SUM(s.block_qty) AS qty "
+            f"FROM stock s "
+            f"WHERE {' AND '.join(blk_where)} "
+            f"GROUP BY s.location_id, s.dot_no",
+            tuple(base_ps),
+        )
+        blocked_raw = cur.fetchall() or []
     finally:
         try: cur.close(); conn.close()
         except: pass
@@ -4097,13 +4120,42 @@ def api_orders_stock_aging_by_material():
         age = _dot_age_months(r["dot_no"])
         b   = _age_bucket(age)
         buckets[b] += int(r["qty"] or 0)
+
+    # Roll blocked rows up two ways:
+    # 1. blocked_by_bucket   — {bucket: qty}  (chart overlay)
+    # 2. blocked_detail      — [{location_id, dot_no, age_bucket, qty}]
+    #                          (the per-row tooltip text)
+    blocked_by_bucket = {b: 0 for b in _AGING_BUCKETS}
+    blocked_by_bucket["unknown"] = 0
+    blocked_detail = []
+    for r in blocked_raw:
+        age = _dot_age_months(r.get("dot_no") or "")
+        b   = _age_bucket(age)
+        qty = int(float(r.get("qty") or 0))
+        if qty <= 0:
+            continue
+        blocked_by_bucket[b] += qty
+        blocked_detail.append({
+            "location_id": (r.get("location_id") or "").strip(),
+            "dot_no":      r.get("dot_no") or "",
+            "age_bucket":  b,
+            "qty":         qty,
+        })
+    # Sort the detail list: oldest bucket first, then by location.
+    _bucket_ord = {b: i for i, b in enumerate(_AGING_BUCKETS + ["unknown"])}
+    blocked_detail.sort(key=lambda d: (-_bucket_ord.get(d["age_bucket"], 0),
+                                       d["location_id"]))
+
     return jsonify({
-        "m_code":       m_code,
-        "plant":        plant or None,
-        "state":        _ORDER_PLANT_STATE.get(plant, "") if plant else "",
-        "buckets":      buckets,
-        "bucket_order": _AGING_BUCKETS + ["unknown"],
-        "total":        sum(buckets.values()),
+        "m_code":            m_code,
+        "plant":             plant or None,
+        "state":             _ORDER_PLANT_STATE.get(plant, "") if plant else "",
+        "buckets":           buckets,
+        "bucket_order":      _AGING_BUCKETS + ["unknown"],
+        "total":             sum(buckets.values()),
+        "blocked_by_bucket": blocked_by_bucket,
+        "blocked_detail":    blocked_detail,
+        "blocked_total":     sum(blocked_by_bucket.values()),
     })
 
 
@@ -4114,7 +4166,13 @@ def api_orders_stock_by_material():
     the form only pays for one round trip when a whole page of rows
     resolves at once.  Reads the same `stock_qty` column the Stock page
     shows (ZSDM64300-derived), aggregated per (material, plant) and
-    folded to state.  Missing (material, plant) pairs come back as 0."""
+    folded to state.  Missing (material, plant) pairs come back as 0.
+
+    Nov-05 Phase 2: per-state count EXCLUDES rows with block_qty > 0
+    (QA / quality-hold stock the BDE can't actually ship).  The
+    blocked-breakdown tooltip data lives on
+    /api/orders/stock_aging_by_material so this response shape stays
+    flat for any existing caller."""
     codes = [c.strip() for c in request.args.getlist("m_code") if c.strip()]
     if not codes:
         return jsonify({})
@@ -4128,6 +4186,7 @@ def api_orders_stock_by_material():
             f"FROM stock "
             f"WHERE material IN ({ph}) "
             f"  AND plant IN ({','.join(['%s']*len(_ORDER_PLANT_STATE))}) "
+            f"  AND block_qty = 0 "
             f"GROUP BY material, plant",
             tuple(codes) + tuple(_ORDER_PLANT_STATE.keys()),
         )
@@ -10187,6 +10246,9 @@ def api_stock():
         # plant filter
         wh.append(f"s.plant IN ({','.join(['%s']*len(plants))})")
         params += plants
+        # Nov-05 Phase 2: hide blocked rows from the dashboard total
+        # so the number matches what's actually shippable.
+        wh.append("s.block_qty = 0")
 
         # product_group dropdown
         _add_multi(wh, params, "c.product_group ", prod_group)
@@ -11219,6 +11281,7 @@ def api_stock_aging():
             "       MAX(c.brand)     AS brand "
             f"FROM stock s {join_sql} "
             "WHERE s.plant = %s AND s.stock_qty > 0 "
+            "  AND s.block_qty = 0 "
             "GROUP BY s.material, s.dot_no"
         )
         cur.execute(sql, tuple(car_p) + (plant,))
@@ -11898,7 +11961,12 @@ def api_sales_stats_by_product_level():
                 out[b][st] = out[b].get(st, 0.0) + float(r['val'] or 0)
             return out
 
-        stock_by   = _agg("stock",    "stock_qty")
+        # Nov-05 Phase 2: cascade Stock + Aging exclude blocked rows
+        # so the operator sees shippable numbers.  _agg takes an
+        # extra_clause so this stays one-line; the aging query below
+        # gains its own AND block_qty = 0.
+        stock_by   = _agg("stock",    "stock_qty",
+                          extra_clause=" AND t.block_qty = 0")
         water_by   = _agg("incoming", "po_qty")
 
         # Aging breakdown — DOT-level pass over `stock`, then Python
@@ -11912,6 +11980,7 @@ def api_sales_stats_by_product_level():
             f"FROM stock t "
             f"JOIN {DEDUP_C} ON c.m_code = t.material "
             f"WHERE t.stock_qty > 0 "
+            f"  AND t.block_qty = 0 "
             f"GROUP BY {bucket_col}, t.plant, t.dot_no",
             inner_params,
         )
