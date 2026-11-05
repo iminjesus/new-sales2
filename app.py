@@ -6290,11 +6290,12 @@ def _ensure_submitted_orders_table():
             # SAP sales-doc number stamped by the CS after they
             # key the order into SAP.  Shown on orders_list for
             # cross-reference.
-            # Nov-04: bumped to VARCHAR(110) so two pipe-joined DOs
-            # (ZWH1 for rebateable + ZWH2 for non-rebateable, up to
-            # 50 chars each + "|") fit.  The auto-migrator in
+            # Nov-05: bumped to VARCHAR(254) so up to FIVE
+            # pipe-joined DOs (50 chars each + 4 pipes) fit — an
+            # order can now split into ZWH1 / ZWH2 plus extra SOs
+            # for interstate / consignment.  The auto-migrator in
             # ensure_schema widens the live column too.
-            ("sd_no",               "VARCHAR(110) NULL"),
+            ("sd_no",               "VARCHAR(254) NULL"),
             # Oct-21 user ask: free-form comment the CS types when
             # they key the order into SAP ("changed to RA18 per
             # customer request", "back-order split into 2 SDs",
@@ -6371,9 +6372,10 @@ def _ensure_submitted_orders_table():
                 )
         except Exception as _e:
             print(f"[submitted_orders] widen needs_mgmt_approval: {_e}")
-        # Nov-04: widen sd_no so two pipe-joined DOs fit (ZWH1 + ZWH2
-        # split).  Idempotent — the IF guard skips the ALTER when the
-        # column is already >= 110 chars.
+        # Nov-04/05: widen sd_no so up to FIVE pipe-joined DOs fit
+        # (ZWH1 / ZWH2 split + interstate / consignment extras).
+        # Idempotent — the IF guard skips the ALTER when the column
+        # is already >= 254 chars.
         try:
             cur.execute(
                 "SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH "
@@ -6386,10 +6388,10 @@ def _ensure_submitted_orders_table():
             _row = cur.fetchone() or (None, None)
             _dt  = (str(_row[0] or "")).lower()
             _len = int(_row[1] or 0)
-            if _dt in ("char", "varchar") and _len < 110:
+            if _dt in ("char", "varchar") and _len < 254:
                 cur.execute(
                     "ALTER TABLE submitted_orders "
-                    "MODIFY COLUMN sd_no VARCHAR(110) NULL"
+                    "MODIFY COLUMN sd_no VARCHAR(254) NULL"
                 )
         except Exception as _e:
             print(f"[submitted_orders] widen sd_no: {_e}")
@@ -8173,19 +8175,17 @@ def api_orders_set_sd_no(oid):
     as the Mark-as-Y flag just above), but every other viewer sees
     the saved value on the orders_list page."""
     payload = request.get_json(silent=True) or {}
-    # Nov-04: an order can split into TWO SAP SOs by Rebateable Y/N
-    # (ZWH1 vs ZWH2); the UI sends them pipe-joined as "DO1|DO2".
-    # Accept the single combined string here; trim each half and drop
-    # empty halves so "DO1|" and "|DO2" normalise cleanly.  Bumped
-    # the cap from 50 to 110 so two 40-char DOs + the "|" still fit.
+    # Nov-04/05: an order can split into up to FIVE SAP SOs
+    # (ZWH1 / ZWH2 + interstate / consignment extras); the UI sends
+    # them pipe-joined as "DO1|DO2|…|DO5".  Trim each slot to 50
+    # chars, keep interior empties (slot order matters for the
+    # orders_list render), drop trailing empties so "DO1||" ⇒ "DO1".
     _raw = (str(payload.get("sd_no") or "")).strip()
-    if "|" in _raw:
-        _p1, _, _p2 = _raw.partition("|")
-        _p1 = _p1.strip()[:50]
-        _p2 = _p2.strip()[:50]
-        val = (_p1 + "|" + _p2) if (_p1 and _p2) else (_p1 or _p2)
-    else:
-        val = _raw[:50]
+    _parts = [p.strip()[:50] for p in _raw.split("|")][:5]
+    # Strip trailing empty slots but preserve interior positions.
+    while _parts and not _parts[-1]:
+        _parts.pop()
+    val = "|".join(_parts)
     who     = (_bde_from_request() or "").strip().lower()
     if not _is_cs_user(who):
         return jsonify({"error": "only the CS team (Harry / HKCustomerService / Andy / Hayden Lee) can stamp an DO No."}), 403

@@ -2415,27 +2415,42 @@
          order has no DO.  Toggles between N and C. -->
     <button id="btnCancelOrder" class="primary mark-c" title="Flip the SAP flag to C (Cancelled) for orders that were approved but ultimately did not go through to SAP.">Mark as Cancelled</button>
     <!-- Nov-04 user ask: an order may split by Rebateable Y/N into
-         two SAP SOs (ZWH1 vs. ZWH2) and therefore two DOs.  Two
-         stacked inputs — DO No.1 (always) and DO No.2 (optional
-         second SO) — saved back to submitted_orders.sd_no as a
-         pipe-delimited string "DO1|DO2" so existing joins / selects
-         keep working and no DB migration is needed. -->
+         two SAP SOs (ZWH1 vs. ZWH2) and therefore two DOs.  Nov-05:
+         bumped to FIVE stacked DO inputs because interstate /
+         consignment splits can push the DO count higher (e.g. one
+         ZWH1 per state + a ZWH2 header).  All inputs persist back
+         to submitted_orders.sd_no as a pipe-delimited string
+         "DO1|DO2|…|DO5" so existing joins / selects keep working
+         and no column-split migration is needed. -->
     <span class="cs-lbl" style="margin-left:16px">DO No.</span>
-    <span style="display:inline-flex;flex-direction:column;gap:3px">
-      <span style="display:inline-flex;gap:4px;align-items:center">
-        <small style="color:#64748b;font-size:10px;width:48px;text-align:right">DO No.1</small>
-        <input id="sdNo" placeholder="SAP DO #" maxlength="40"
-               style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace;width:140px">
-      </span>
-      <span style="display:inline-flex;gap:4px;align-items:center">
-        <small style="color:#64748b;font-size:10px;width:48px;text-align:right">DO No.2</small>
-        <input id="sdNo2" placeholder="2nd SAP DO # (if split by Rebateable)" maxlength="40"
-               style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace;width:140px">
-      </span>
-    </span>
+    <span id="sdNoStack" style="display:inline-flex;flex-direction:column;gap:3px"></span>
     <button id="btnSaveSdNo" class="ghost"
             style="padding:4px 10px;font-size:12px">Save DO #</button>
     <span id="sdNoMeta" class="cs-meta"></span>
+    <script>
+      /* Build the 5 DO No. inputs once at parse time.  Ids stay
+         sdNo (first slot, legacy) + sdNo2..sdNo5 so the existing
+         Mark-as-Y gate / save wiring that references sdNo + sdNo2
+         keeps working, and the loop below picks up the rest. */
+      (function _buildSdNoStack(){
+        const stack = document.getElementById("sdNoStack");
+        if (!stack) return;
+        const SD_SLOTS = 5;
+        for (let i = 1; i <= SD_SLOTS; i++){
+          const id = (i === 1) ? "sdNo" : ("sdNo" + i);
+          const ph = (i === 1)
+            ? "SAP DO #"
+            : (i + "th SAP DO # (if additionally split)").replace(/^2th/, "2nd").replace(/^3th/, "3rd");
+          const row = document.createElement("span");
+          row.style.cssText = "display:inline-flex;gap:4px;align-items:center";
+          row.innerHTML =
+            '<small style="color:#64748b;font-size:10px;width:48px;text-align:right">DO No.' + i + '</small>' +
+            '<input id="' + id + '" placeholder="' + ph + '" maxlength="40" ' +
+                   'style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:3px;font-family:monospace;width:140px">';
+          stack.appendChild(row);
+        }
+      })();
+    </script>
     <span id="csMeta" class="cs-meta"></span>
     <!-- Oct-21 user ask: CS comment on changes made during SAP entry.
          Full-width row centered under the SAP-flag / DO No. row with
@@ -2450,33 +2465,11 @@
       <span id="csCommentMeta" class="cs-meta"></span>
     </div>
   </div>
-  <!-- Bottom-of-page Approve bar.
-       Appears ONLY when the current viewer is a named approver
-       (Justin / JJ / Kenny) AND the order is still Pending AND
-       they haven't already flipped their own slot.  Sits at the
-       very tail of the SPRF so the approver reads the entire
-       order top-to-bottom before deciding — no accidental clicks
-       from the top-panel chip row. -->
-  <div id="bottomApproveBar" hidden
-       style="margin-top:18px;padding:16px 20px;background:#f0fdf4;
-              border:2px solid #16a34a;border-radius:6px;
-              text-align:center;">
-    <div id="bottomApproveText"
-         style="color:#166534;font-size:13.5px;font-weight:700;margin-bottom:10px">
-      Review the order above, then click <b>Approve</b> to sign off — or <b>Reject</b> with a short reason.
-    </div>
-    <button id="btnBottomApprove" class="primary"
-            style="background:#059669;border-color:#047857;
-                   padding:8px 26px;font-size:14px;font-weight:800">
-      ✓ Approve this SPRF
-    </button>
-    <button id="btnBottomReject" class="primary"
-            style="background:#dc2626;border-color:#991b1b;
-                   padding:8px 26px;font-size:14px;font-weight:800;
-                   margin-left:10px">
-      ✕ Reject this SPRF
-    </button>
-  </div>
+  <!-- Nov-05 user ask: the tail-of-page "✓ Already approved by …"
+       ribbon duplicated the top-panel approval summary + the SAP
+       bar's approver meta; removed to cut the noise.  wireBottom
+       ApproveBar / wireRejectBtns are null-safe and no-op without
+       the markup, so no JS wiring needs to change. -->
 </div>
 
 <!-- shared datalists (populated on-input via debounced /suggest calls) -->
@@ -11281,20 +11274,25 @@ async function wireStatusPanel(order){
   //  should also [be] shown in the order page to all users, not
   //  only the inputter".  Only Harry (CS) can WRITE; every other
   //  viewer sees the read-only value and the dim SAP flag.
-  // Nov-04: sd_no stores up to TWO DO numbers pipe-joined ("DO1|DO2").
-  // Split here so each input gets its own value; the save path
-  // re-joins them with "|".
-  const sd2 = document.getElementById("sdNo2");
+  // Nov-04/05: sd_no stores up to FIVE DO numbers pipe-joined
+  // ("DO1|DO2|…|DO5").  Split here so each input gets its own value;
+  // the save path re-joins non-empty slots with "|".
+  const _sdSlots = [sd,
+                    document.getElementById("sdNo2"),
+                    document.getElementById("sdNo3"),
+                    document.getElementById("sdNo4"),
+                    document.getElementById("sdNo5")];
   if (sd){
     const _raw = (order.sd_no != null ? String(order.sd_no) : "");
     const _parts = _raw.split("|");
-    sd.value  = (_parts[0] || "").trim();
-    sd.dataset.saved = sd.value;
-    if (sd2){
-      sd2.value = (_parts[1] || "").trim();
-      sd2.dataset.saved = sd2.value;
-    }
+    _sdSlots.forEach(function(el, i){
+      if (!el) return;
+      el.value = (_parts[i] || "").trim();
+      el.dataset.saved = el.value;
+    });
   }
+  // Alias retained for the lock-for-non-CS block below (same element).
+  const sd2 = _sdSlots[1];
   // Oct-21 user ask: CS Comment field — seed for everyone, readable
   // by all SPRF viewers (shows the CS's SAP-entry notes); the input +
   // button are locked for non-CS viewers below alongside the DO No.
@@ -11324,18 +11322,13 @@ async function wireStatusPanel(order){
       : (order.rejected_by_name
           ? "Order was rejected — DO No. and SAP flag locked until it's revived + re-approved."
           : "DO No. and SAP flag unlock once the order has been approved.");
-    if (sd){
-      sd.readOnly = true;
-      sd.disabled = true;
-      sd.title    = _lockMsg;
-      sd.style.background = "#f3f4f6";
-    }
-    if (sd2){
-      sd2.readOnly = true;
-      sd2.disabled = true;
-      sd2.title    = _lockMsg;
-      sd2.style.background = "#f3f4f6";
-    }
+    _sdSlots.forEach(function(el){
+      if (!el) return;
+      el.readOnly = true;
+      el.disabled = true;
+      el.title    = _lockMsg;
+      el.style.background = "#f3f4f6";
+    });
     if (sdBtn){
       sdBtn.disabled = true;
       sdBtn.title    = _lockMsg;
@@ -11380,22 +11373,22 @@ async function wireStatusPanel(order){
     // Flipping TO Y requires an DO No. that's both typed AND saved.
     // Flipping back to N is a correction path and skips the gate.
     if (next === "Y"){
-      const sdInp   = document.getElementById("sdNo");
-      const sdInp2  = document.getElementById("sdNo2");
-      const sdVal   = (sdInp?.value || "").trim();
-      const sdSaved = (sdInp?.dataset.saved || "").trim();
-      const sd2Val   = (sdInp2?.value || "").trim();
-      const sd2Saved = (sdInp2?.dataset.saved || "").trim();
+      const _sdAll = ["sdNo","sdNo2","sdNo3","sdNo4","sdNo5"]
+                       .map(id => document.getElementById(id));
+      const sdInp = _sdAll[0];
+      const sdVal = (sdInp?.value || "").trim();
       if (!sdVal){
         const msg = "Please input and save the SAP DO No.1 before marking as Y.";
         if (typeof showNotice === "function") showNotice(msg); else alert(msg);
         try { sdInp && sdInp.focus(); } catch(_e){}
         return;
       }
-      if (sdVal !== sdSaved || sd2Val !== sd2Saved){
+      const _dirty = _sdAll.find(el => el &&
+        (el.value || "").trim() !== (el.dataset.saved || "").trim());
+      if (_dirty){
         const msg = "SAP DO No. has unsaved changes. Please click Save DO # first.";
         if (typeof showNotice === "function") showNotice(msg); else alert(msg);
-        try { (sdVal !== sdSaved ? sdInp : sdInp2)?.focus(); } catch(_e){}
+        try { _dirty.focus(); } catch(_e){}
         return;
       }
     }
@@ -11762,25 +11755,25 @@ async function wireStatusPanel(order){
 (function _wireSdNo(){
   const btn  = document.getElementById("btnSaveSdNo");
   const inp  = document.getElementById("sdNo");
-  const inp2 = document.getElementById("sdNo2");
+  const slots = [inp,
+                 document.getElementById("sdNo2"),
+                 document.getElementById("sdNo3"),
+                 document.getElementById("sdNo4"),
+                 document.getElementById("sdNo5")];
   const meta = document.getElementById("sdNoMeta");
   if (!btn || !inp) return;
 
   const _save = async () => {
     const id = window._currentOrderId;
     if (!id){ setStatus("Submit the order first before stamping an DO No.", "warn"); return; }
-    const v1 = (inp.value  || "").trim();
-    const v2 = (inp2 ? (inp2.value || "").trim() : "");
-    // Nov-04: pipe-join when BOTH inputs have a value, otherwise send
-    // just the first (or an empty string to clear).  Backend accepts
-    // either shape.  If the operator typed a 2nd DO without a 1st
-    // we still send it as "|DO2" so the backend doesn't silently
-    // discard it — the Mark-as-Y gate will then catch the missing #1.
-    let combined;
-    if (v1 && v2)       combined = v1 + "|" + v2;
-    else if (v1)        combined = v1;
-    else if (v2)        combined = "|" + v2;
-    else                combined = "";
+    const vals = slots.map(el => el ? (el.value || "").trim() : "");
+    // Nov-05: pipe-join every slot (empty ones become empty parts,
+    // then we strip trailing empties so "DO1||" ⇒ "DO1").  Interior
+    // empties are preserved so position stays stable — e.g. "DO1||DO3"
+    // means slot 2 is empty but slot 3 is a real DO.
+    let combined = vals.join("|").replace(/\|+$/, "");
+    // Everything empty (even after trim) => clear.
+    if (!vals.some(Boolean)) combined = "";
     btn.disabled = true;
     try {
       const r = await fetch(`/api/orders/detail/${id}/sd_no`, {
@@ -11795,22 +11788,23 @@ async function wireStatusPanel(order){
         if (meta) meta.textContent = combined
           ? ` · saved ${new Date().toISOString().slice(0,16).replace("T"," ")}`
           : " · cleared";
-        const _display = v1 && v2 ? (v1 + " / " + v2) : (v1 || v2);
+        const _display = vals.filter(Boolean).join(" / ");
         setStatus(_display ? `DO No. <b>${_display}</b> saved.` : "DO No. cleared.", "ok");
         // Mirror the just-persisted value onto dataset.saved so the
         // Mark-as-Y gate can compare live-input to last-saved and
         // detect "typed but not yet saved" the next time the CS
         // clicks the flag button.
-        inp.dataset.saved = v1;
-        if (inp2) inp2.dataset.saved = v2;
+        slots.forEach((el, i) => { if (el) el.dataset.saved = vals[i]; });
       }
     } catch (e){
       setStatus("DO No. save failed: " + e, "warn");
     } finally { btn.disabled = false; }
   };
   btn.addEventListener("click", _save);
-  inp.addEventListener("keydown",  (e) => { if (e.key === "Enter"){ e.preventDefault(); _save(); } });
-  if (inp2) inp2.addEventListener("keydown", (e) => { if (e.key === "Enter"){ e.preventDefault(); _save(); } });
+  slots.forEach(el => {
+    if (!el) return;
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter"){ e.preventDefault(); _save(); } });
+  });
 })();
 
 /* ────────────── CS Comment wiring (Oct-21 user ask) ──────────────
