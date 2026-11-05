@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rebate Master — Hankook Tyre Australia</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg:#f8fafc; --panel:#ffffff; --border:#e2e8f0;
+    --ink:#0f172a; --mute:#64748b; --accent:#2563eb; --accent2:#059669;
+    --row:#fafafa; --warn:#b45309;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+         background:var(--bg); color:var(--ink); font-size:13px; }
+  header { padding:10px 16px; background:#0f172a; color:#fff;
+           display:flex; align-items:center; gap:14px; }
+  header h1 { margin:0; font-size:15px; font-weight:800; letter-spacing:.3px; }
+  header .tag { background:#1e293b; padding:2px 8px; border-radius:3px;
+                font-size:11px; color:#cbd5e1; }
+  main { display:grid; grid-template-columns: 300px 1fr 320px;
+         gap:12px; padding:12px; min-height: calc(100vh - 48px); }
+  .pane { background:var(--panel); border:1px solid var(--border);
+          border-radius:6px; padding:10px; overflow:auto; }
+  .pane h2 { margin:0 0 8px 0; font-size:12px; text-transform:uppercase;
+             letter-spacing:.6px; color:var(--mute); font-weight:700;
+             border-bottom:1px solid var(--border); padding-bottom:6px; }
+  .search { width:100%; padding:5px 8px; border:1px solid var(--border);
+            border-radius:3px; font-size:12px; margin-bottom:8px; }
+  .cust-row { padding:6px 8px; border-radius:3px; cursor:pointer;
+              border-bottom:1px solid #f1f5f9; }
+  .cust-row:hover { background:#eff6ff; }
+  .cust-row.active { background:#dbeafe; font-weight:700; }
+  .cust-row .code { font-family:monospace; color:var(--mute); font-size:11px; }
+  .cust-row .name { color:var(--ink); }
+  .type-card { padding:8px 10px; margin-bottom:6px; border:1px solid var(--border);
+               border-radius:4px; cursor:grab; background:#fff;
+               transition:background .12s; }
+  .type-card:hover { background:#f0fdf4; border-color:#86efac; }
+  .type-card .nm { font-weight:700; font-size:12px; }
+  .type-card .br { display:inline-block; padding:1px 5px; font-size:10px;
+                   background:#1e293b; color:#fff; border-radius:3px;
+                   margin-left:4px; font-family:monospace; }
+  .type-card .ts { font-size:10.5px; color:var(--mute); margin-top:2px;
+                   font-family:monospace; }
+  .asn-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .asn-table th { background:#f1f5f9; padding:5px 8px; text-align:left;
+                  font-size:11px; color:var(--mute); text-transform:uppercase;
+                  letter-spacing:.4px; border-bottom:1px solid var(--border); }
+  .asn-table td { padding:5px 8px; border-bottom:1px solid #f1f5f9; }
+  .asn-table tr:hover td { background:var(--row); }
+  .asn-table .btn-del { color:#dc2626; cursor:pointer; background:none;
+                        border:0; font-size:12px; padding:0 4px; }
+  .empty { padding:30px 10px; text-align:center; color:var(--mute);
+           font-size:12px; font-style:italic; }
+  .pill { display:inline-block; padding:2px 7px; border-radius:11px;
+          background:#dbeafe; color:#1e40af; font-size:11px; font-weight:700;
+          margin-right:4px; }
+  .phase-note { background:#fef3c7; border-left:3px solid var(--warn);
+                padding:8px 10px; margin-bottom:10px; font-size:11.5px;
+                color:#78350f; border-radius:3px; }
+  .add-asn { background:#ecfdf5; border:1px dashed #86efac; padding:8px;
+             border-radius:4px; margin-top:8px; font-size:12px; }
+  .add-asn input, .add-asn select { padding:4px 6px; border:1px solid var(--border);
+                                     border-radius:3px; font-size:12px; margin:2px; }
+  .add-asn button { background:var(--accent2); color:#fff; border:0;
+                    padding:4px 10px; border-radius:3px; cursor:pointer;
+                    font-size:12px; font-weight:700; margin-top:4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚙ Rebate Master Builder</h1>
+  <span class="tag">RESTRICTED · Phase 1 (scaffold)</span>
+  <span style="flex:1"></span>
+  <span class="tag" id="meUser">—</span>
+</header>
+
+<main>
+  <!-- LEFT: customer list + search -->
+  <section class="pane" id="leftPane">
+    <h2>Customers</h2>
+    <input class="search" id="custSearch" placeholder="Search sold_to or name…">
+    <div id="custList"><div class="empty">Type ≥ 2 chars to search dc_basic_customer.</div></div>
+  </section>
+
+  <!-- CENTER: active customer's assignments (timeline-ish table) -->
+  <section class="pane" id="centerPane">
+    <h2 id="centerTitle">Select a customer on the left</h2>
+    <div class="phase-note">
+      <b>Phase 1:</b> view + add + delete assignments with a date range.
+      Phase 2 adds drag-drop from the right pane, inline edit, bulk ops,
+      and a visual timeline. New tables: <code>rebate_type_v2</code>,
+      <code>rebate_customer_assignment</code> (existing
+      <code>rebate_structure</code> / <code>rebate_customer_map</code>
+      untouched).
+    </div>
+    <div id="asnArea"></div>
+  </section>
+
+  <!-- RIGHT: rebate type catalogue -->
+  <section class="pane" id="rightPane">
+    <h2>Rebate Types <span id="typeCount" style="float:right;color:var(--mute);font-weight:400"></span></h2>
+    <input class="search" id="typeSearch" placeholder="Filter types…">
+    <div id="typeList"></div>
+  </section>
+</main>
+
+<script>
+/* ──────────── simple fetch helper ──────────── */
+async function j(url, opt) {
+  const r = await fetch(url, Object.assign({credentials:"same-origin"}, opt || {}));
+  const d = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data: d };
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function todayISO() { return new Date().toISOString().slice(0,10); }
+
+/* ──────────── state ──────────── */
+let TYPES = [];
+let TYPE_BY_ID = {};
+let activeSoldTo = null;
+let activeName   = "";
+
+/* ──────────── load types ──────────── */
+async function loadTypes() {
+  const {ok, data} = await j("/api/rebate_master/types");
+  if (!ok) { document.getElementById("typeList").innerHTML =
+    `<div class="empty">Load failed: ${esc(data.error || "")}</div>`; return; }
+  TYPES = data.types || [];
+  TYPE_BY_ID = {}; TYPES.forEach(t => TYPE_BY_ID[t.id] = t);
+  document.getElementById("typeCount").textContent = `(${TYPES.length})`;
+  renderTypes(document.getElementById("typeSearch").value);
+}
+function renderTypes(filter) {
+  const q = (filter || "").trim().toLowerCase();
+  const rows = TYPES.filter(t =>
+    !q || (t.type_name||"").toLowerCase().includes(q) || (t.brand||"").toLowerCase().includes(q));
+  document.getElementById("typeList").innerHTML = rows.length
+    ? rows.map(t => `
+        <div class="type-card" draggable="true" data-tid="${t.id}" title="Drag onto a customer (Phase 2)">
+          <div><span class="nm">${esc(t.type_name)}</span>${t.brand ? `<span class="br">${esc(t.brand)}</span>` : ""}</div>
+          ${t.tier_summary ? `<div class="ts">${esc(t.tier_summary)}</div>` : ""}
+        </div>`).join("")
+    : `<div class="empty">No types match "${esc(filter||"")}".</div>`;
+}
+document.getElementById("typeSearch").addEventListener("input", e => renderTypes(e.target.value));
+
+/* ──────────── customer search ──────────── */
+let _searchTimer = null;
+document.getElementById("custSearch").addEventListener("input", e => {
+  clearTimeout(_searchTimer);
+  const q = e.target.value.trim();
+  if (q.length < 2) {
+    document.getElementById("custList").innerHTML =
+      `<div class="empty">Type ≥ 2 chars to search dc_basic_customer.</div>`;
+    return;
+  }
+  _searchTimer = setTimeout(async () => {
+    const {ok, data} = await j("/api/rebate_master/customer_search?q=" + encodeURIComponent(q));
+    const rows = (ok ? (data.rows || []) : []);
+    document.getElementById("custList").innerHTML = rows.length
+      ? rows.map(r => `
+          <div class="cust-row ${activeSoldTo === r.sold_to ? "active" : ""}"
+               data-sold="${esc(r.sold_to)}" data-name="${esc(r.sold_to_name||"")}">
+            <div class="code">${esc(r.sold_to)}</div>
+            <div class="name">${esc(r.sold_to_name || "—")}</div>
+          </div>`).join("")
+      : `<div class="empty">No matches.</div>`;
+  }, 180);
+});
+document.getElementById("custList").addEventListener("click", e => {
+  const row = e.target.closest(".cust-row");
+  if (!row) return;
+  activeSoldTo = row.dataset.sold;
+  activeName   = row.dataset.name;
+  document.querySelectorAll(".cust-row").forEach(el => el.classList.remove("active"));
+  row.classList.add("active");
+  loadAssignments();
+});
+
+/* ──────────── assignments table ──────────── */
+async function loadAssignments() {
+  if (!activeSoldTo) return;
+  document.getElementById("centerTitle").innerHTML =
+    `Assignments — <span class="pill">${esc(activeSoldTo)}</span> ${esc(activeName)}`;
+  const {ok, data} = await j("/api/rebate_master/assignments?sold_to=" + encodeURIComponent(activeSoldTo));
+  const rows = (ok ? (data.assignments || []) : []);
+  const typeOpts = TYPES.map(t =>
+    `<option value="${t.id}">${esc(t.type_name)}${t.brand ? ` (${esc(t.brand)})` : ""}</option>`).join("");
+  document.getElementById("asnArea").innerHTML = `
+    <table class="asn-table">
+      <thead><tr>
+        <th>Rebate Type</th><th>Brand</th><th>Start</th><th>End</th>
+        <th>Note</th><th>Set by</th><th></th>
+      </tr></thead>
+      <tbody>${rows.length ? rows.map(r => `
+        <tr>
+          <td><b>${esc(r.type_name || "—")}</b>
+              ${r.tier_summary ? `<div style="font-family:monospace;color:var(--mute);font-size:10.5px">${esc(r.tier_summary)}</div>` : ""}
+          </td>
+          <td>${esc(r.brand || "")}</td>
+          <td>${esc(r.start_date || "")}</td>
+          <td>${esc(r.end_date || "—")}</td>
+          <td>${esc(r.note || "")}</td>
+          <td style="font-size:11px;color:var(--mute)">${esc(r.created_by || "")}</td>
+          <td><button class="btn-del" data-aid="${r.id}" title="Soft-delete">✕</button></td>
+        </tr>`).join("") : `
+        <tr><td colspan="7" class="empty">No assignments yet for ${esc(activeSoldTo)}.</td></tr>`}
+      </tbody>
+    </table>
+    <div class="add-asn">
+      <b>+ Add assignment</b><br>
+      <select id="newTid">${typeOpts}</select>
+      <input id="newStart" type="date" value="${todayISO()}">
+      <input id="newEnd"   type="date" placeholder="End (optional)">
+      <input id="newNote"  placeholder="Note" style="width:200px">
+      <button id="btnAddAsn">Add</button>
+    </div>`;
+  document.getElementById("btnAddAsn").addEventListener("click", addAssignment);
+  document.querySelectorAll(".btn-del").forEach(b =>
+    b.addEventListener("click", () => deleteAssignment(b.dataset.aid)));
+}
+async function addAssignment() {
+  const body = {
+    sold_to: activeSoldTo,
+    sold_to_name: activeName,
+    rebate_type_id: +document.getElementById("newTid").value,
+    start_date: document.getElementById("newStart").value,
+    end_date:   document.getElementById("newEnd").value || null,
+    note:       document.getElementById("newNote").value,
+  };
+  if (!body.rebate_type_id || !body.start_date) {
+    alert("Pick a rebate type and a start date."); return;
+  }
+  const {ok, data} = await j("/api/rebate_master/assign", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  if (!ok) { alert("Add failed: " + (data.error || "")); return; }
+  loadAssignments();
+}
+async function deleteAssignment(aid) {
+  if (!confirm("Soft-delete this assignment?")) return;
+  const {ok, data} = await j(`/api/rebate_master/assignment/${aid}/delete`, {method: "POST"});
+  if (!ok) { alert("Delete failed: " + (data.error || "")); return; }
+  loadAssignments();
+}
+
+/* ──────────── init ──────────── */
+loadTypes();
+</script>
+</body>
+</html>

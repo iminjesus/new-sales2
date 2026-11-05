@@ -6149,6 +6149,23 @@ PRICE_EDITOR_EMAILS = {
 DEV_ADMIN_EMAILS = {
     "jayden.bhang@gmail.com",
 }
+# Nov-05 user ask: a NEW restricted-admin menu bucket for the
+# Rebate Master builder (and any future admin-only tooling that is
+# narrower than system monitoring).  Only these 5 people can hit
+# the /rebate-master page and its /api/rebate_master/* endpoints;
+# every other caller — including the dev admin desktop login
+# (jayden.bhang@gmail.com) — gets a 403.  System monitoring stays
+# open to DEV_ADMIN_EMAILS as before.
+RESTRICTED_ADMIN_EMAILS = {
+    "pamela.lau@hankooktyre.com.au",
+    "russell.ng@hankooktyre.com.au",
+    "kenny.kim@hankooktyre.com.au",
+    "jj.cho@hankooktyre.com.au",
+    "brian.park@hankooktyre.com.au",
+}
+_RESTRICTED_ADMIN_LOWER = {e.lower() for e in RESTRICTED_ADMIN_EMAILS}
+def _is_restricted_admin(email: str) -> bool:
+    return (email or "").strip().lower() in _RESTRICTED_ADMIN_LOWER
 # State-manager scope mapping — key is the manager's mail id (lower-
 # case), value is the state code (or list of state codes) whose
 # ship-to orders they can see IN ADDITION to their own rows.  Empty
@@ -6420,6 +6437,84 @@ def _ensure_submitted_orders_table():
             """)
         except Exception as _e:
             print(f"[sprf_attachment] schema init failed: {_e}")
+        # ──────────────────────────────────────────────────────────
+        # Nov-05 user ask: Rebate Master Builder (restricted-admin).
+        # NEW tables parallel to rebate_structure / rebate_customer_map
+        # so the existing read paths used by /api/rebate_structure_check
+        # and /api/rebate_calc stay untouched.  The master screen is
+        # drag-drop, period-aware (arbitrary date ranges), and sources
+        # rebate types by seeding once from the existing structure_name
+        # catalogue.
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS rebate_type_v2 (
+                    id             INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    type_name      VARCHAR(64)  NOT NULL,
+                    brand          VARCHAR(8)   NOT NULL DEFAULT '',
+                    description    VARCHAR(255) NOT NULL DEFAULT '',
+                    color          VARCHAR(16)  NOT NULL DEFAULT '',
+                    tier_summary   VARCHAR(255) NOT NULL DEFAULT '',
+                    source         VARCHAR(16)  NOT NULL DEFAULT 'manual',
+                    created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_by     VARCHAR(120) NOT NULL DEFAULT '',
+                    updated_at     DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+                    updated_by     VARCHAR(120) NOT NULL DEFAULT '',
+                    archived       CHAR(1)      NOT NULL DEFAULT 'N',
+                    UNIQUE KEY uk_rtv2_name (type_name)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            # One-time seed: copy distinct structure_name rows from the
+            # existing rebate_structure table.  INSERT IGNORE so a
+            # re-run never duplicates or overwrites hand-edited types.
+            # Only runs when rebate_type_v2 is empty AND the source
+            # table exists — a fresh DB without the loader having run
+            # yet simply gets an empty type catalogue.
+            cur.execute("SELECT COUNT(*) FROM rebate_type_v2")
+            _n_types = (cur.fetchone() or (0,))[0]
+            if _n_types == 0:
+                cur.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = DATABASE() "
+                    "  AND table_name = 'rebate_structure' LIMIT 1"
+                )
+                if cur.fetchone():
+                    # Build a one-row-per-structure summary.  tier_summary
+                    # renders like "@1000:1.5%, @5000:2.0%" so the chip
+                    # face shows its shape at a glance.
+                    cur.execute(
+                        "SELECT structure_name, brand, "
+                        "       GROUP_CONCAT(CONCAT('@', threshold, ':', rate, '%') "
+                        "                    ORDER BY tier_order SEPARATOR ', ') "
+                        "FROM rebate_structure "
+                        "GROUP BY structure_name, brand"
+                    )
+                    for _nm, _br, _ts in cur.fetchall() or []:
+                        cur.execute(
+                            "INSERT IGNORE INTO rebate_type_v2 "
+                            "(type_name, brand, tier_summary, source, created_by) "
+                            "VALUES (%s, %s, %s, 'seed', 'system')",
+                            (_nm, _br or "", (_ts or "")[:255])
+                        )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS rebate_customer_assignment (
+                    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    sold_to         VARCHAR(64)  NOT NULL,
+                    sold_to_name    VARCHAR(255) NOT NULL DEFAULT '',
+                    rebate_type_id  INT UNSIGNED NOT NULL,
+                    start_date      DATE         NOT NULL,
+                    end_date        DATE         NULL,
+                    note            VARCHAR(500) NOT NULL DEFAULT '',
+                    created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_by      VARCHAR(120) NOT NULL DEFAULT '',
+                    updated_at      DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+                    updated_by      VARCHAR(120) NOT NULL DEFAULT '',
+                    archived        CHAR(1)      NOT NULL DEFAULT 'N',
+                    INDEX idx_rca_sold (sold_to, start_date),
+                    INDEX idx_rca_type (rebate_type_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+        except Exception as _e:
+            print(f"[rebate_master] schema init failed: {_e}")
         conn.commit(); cur.close(); conn.close()
     except Exception as e:
         print(f"[submitted_orders] schema init failed: {e}")
@@ -24269,6 +24364,182 @@ def api_batch_status():
         try: conn.close()
         except Exception: pass
 # === BATCH STATUS ENDPOINT END =============================================
+
+
+# === REBATE MASTER (restricted-admin) =======================================
+# Nov-05 user ask: Phase 1 scaffold for the Rebate Master Builder.
+# Access is gated to RESTRICTED_ADMIN_EMAILS — every other caller
+# (even DEV_ADMIN_EMAILS) gets 403.  Phase 1 ships the page shell,
+# the type / customer / assignment list endpoints and the create /
+# delete endpoints; drag-drop UX wiring and type-edit modals land
+# in Phase 2.
+def _require_rebate_admin():
+    """Return (email, None) when allowed, else ("", (resp, 403))."""
+    who = (_bde_from_request() or "").strip().lower()
+    if not _is_restricted_admin(who):
+        return "", (jsonify({
+            "error": "This page is restricted. Contact an admin to be added."
+        }), 403)
+    return who, None
+
+
+@app.get("/rebate-master")
+def page_rebate_master():
+    who = (_bde_from_request() or "").strip().lower()
+    if not _is_restricted_admin(who):
+        return ("<h2 style='font-family:system-ui;color:#991b1b;padding:40px'>"
+                "403 — Rebate Master is restricted. "
+                "Ask Jayden to add you to the allow list.</h2>"), 403
+    try:
+        with open(os.path.join(BASE_DIR, "static", "rebate_master.html"),
+                  "r", encoding="utf-8") as _f:
+            return _f.read()
+    except Exception as _e:
+        return f"<pre>rebate_master.html load failed: {_e}</pre>", 500
+
+
+@app.get("/api/rebate_master/types")
+def api_rebate_master_types():
+    _, _gate = _require_rebate_admin()
+    if _gate: return _gate
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT id, type_name, brand, description, color, tier_summary, "
+            "       source, created_at, created_by, updated_at, updated_by "
+            "FROM rebate_type_v2 WHERE archived = 'N' "
+            "ORDER BY brand, type_name"
+        )
+        return jsonify({"ok": True, "types": cur.fetchall() or []})
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/rebate_master/assignments")
+def api_rebate_master_assignments():
+    """List customer × rebate-type assignments, newest first.  Filter by
+    ?sold_to=... to narrow to one customer; omit for the full table."""
+    _, _gate = _require_rebate_admin()
+    if _gate: return _gate
+    sold_to = (request.args.get("sold_to") or "").strip()
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        where = "WHERE a.archived = 'N' "
+        args = ()
+        if sold_to:
+            where += "AND a.sold_to = %s "
+            args = (sold_to,)
+        cur.execute(
+            "SELECT a.id, a.sold_to, a.sold_to_name, a.rebate_type_id, "
+            "       t.type_name, t.brand, t.color, t.tier_summary, "
+            "       a.start_date, a.end_date, a.note, "
+            "       a.created_at, a.created_by, a.updated_at, a.updated_by "
+            "FROM rebate_customer_assignment a "
+            "LEFT JOIN rebate_type_v2 t ON t.id = a.rebate_type_id "
+            + where +
+            "ORDER BY a.sold_to, a.start_date DESC, a.id DESC",
+            args
+        )
+        return jsonify({"ok": True, "assignments": cur.fetchall() or []})
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.get("/api/rebate_master/customer_search")
+def api_rebate_master_customer_search():
+    """Autocomplete against dc_basic_customer for the left-pane picker.
+    ?q=<code-or-name-substring>, returns up to 30 (sold_to, name) rows."""
+    _, _gate = _require_rebate_admin()
+    if _gate: return _gate
+    q = (request.args.get("q") or "").strip()
+    if not q:
+        return jsonify({"ok": True, "rows": []})
+    conn = get_connection(); cur = conn.cursor(dictionary=True)
+    try:
+        like = f"%{q}%"
+        cur.execute(
+            "SELECT DISTINCT sold_to, sold_to_name "
+            "FROM dc_basic_customer "
+            "WHERE sold_to LIKE %s OR sold_to_name LIKE %s "
+            "ORDER BY sold_to LIMIT 30",
+            (like, like)
+        )
+        return jsonify({"ok": True, "rows": cur.fetchall() or []})
+    except Exception as _e:
+        # dc_basic_customer may not carry the expected columns on every
+        # deployment; fall back to an empty result rather than 500.
+        return jsonify({"ok": True, "rows": [], "warn": str(_e)})
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.post("/api/rebate_master/assign")
+def api_rebate_master_assign():
+    """Create one assignment row.
+       Body: { sold_to, sold_to_name?, rebate_type_id, start_date,
+               end_date?, note? }"""
+    who, _gate = _require_rebate_admin()
+    if _gate: return _gate
+    p = request.get_json(silent=True) or {}
+    sold_to = str(p.get("sold_to") or "").strip()[:64]
+    name    = str(p.get("sold_to_name") or "").strip()[:255]
+    tid     = int(p.get("rebate_type_id") or 0)
+    start   = str(p.get("start_date") or "").strip()[:10]
+    end     = (str(p.get("end_date") or "").strip()[:10]) or None
+    note    = str(p.get("note") or "").strip()[:500]
+    if not (sold_to and tid and start):
+        return jsonify({"error": "sold_to, rebate_type_id and start_date are required"}), 400
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO rebate_customer_assignment "
+            "(sold_to, sold_to_name, rebate_type_id, start_date, end_date, "
+            " note, created_by, updated_by) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (sold_to, name, tid, start, end, note, who, who)
+        )
+        conn.commit()
+        return jsonify({"ok": True, "id": cur.lastrowid})
+    except Exception as _e:
+        return jsonify({"error": str(_e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+
+
+@app.post("/api/rebate_master/assignment/<int:aid>/delete")
+def api_rebate_master_assignment_delete(aid):
+    """Soft-delete (archived='Y') so the audit trail survives."""
+    who, _gate = _require_rebate_admin()
+    if _gate: return _gate
+    conn = get_connection(); cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE rebate_customer_assignment "
+            "SET archived='Y', updated_by=%s WHERE id=%s",
+            (who, aid)
+        )
+        conn.commit()
+        return jsonify({"ok": True, "rows": cur.rowcount})
+    except Exception as _e:
+        return jsonify({"error": str(_e)}), 500
+    finally:
+        try: cur.close()
+        except: pass
+        try: conn.close()
+        except: pass
+# === REBATE MASTER END ======================================================
 
 
 if __name__ == "__main__":
