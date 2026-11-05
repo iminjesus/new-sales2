@@ -1268,11 +1268,11 @@ body.left-hidden .show-tables-chip { display: inline-block; }
         <span class="row-label">Price</span>
         <div class="btns" id="pricing-btns">
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;cursor:pointer;padding:4px 10px;border:1.5px solid #94a3b8;border-radius:4px;background:#fff">
-            <input type="checkbox" id="chk-normal" checked onchange="onPricingToggle()">
+            <input type="checkbox" id="chk-normal" onchange="onPricingToggle()">
             <span>Normal</span>
           </label>
           <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;cursor:pointer;padding:4px 10px;border:1.5px solid #94a3b8;border-radius:4px;background:#fff">
-            <input type="checkbox" id="chk-promo" onchange="onPricingToggle()">
+            <input type="checkbox" id="chk-promo" checked onchange="onPricingToggle()">
             <span>Promo</span>
           </label>
           <span id="pricing-hint"
@@ -2292,8 +2292,10 @@ function _renderBrand() {
     if (!ds.length) { _noData(SL[store] + ' — ' + sizeLabel + ': no data'); return; }
     // Nov-05: STORE + PRICE are now free multi-select.  The primary
     // loop above drew one line per brand for the FIRST (store, mode).
-    // Loop over the remaining combos and append overlay lines.
-    // Siblings are skipped on overlays so the chart stays legible.
+    // Loop over the remaining combos and append overlay lines PLUS
+    // per-product sibling lines so Bob Jane / JAX / etc. don't
+    // collapse into a single averaged line when they carry several
+    // distinct products (K415 OPTIMO vs K435 KINERGY ECO2 etc.).
     try {
         const _combos = [];
         selectedStoreSet.forEach(s => {
@@ -2305,27 +2307,70 @@ function _renderBrand() {
         _combos.forEach(function(combo){
             const sKey = _priceKeyFor(combo.store, combo.mode);
             const dash = (_STORE_DASH[combo.store] || [5,5]).slice();
-            _brandIter.forEach(function(abbr){
-                const prices = selectedSize === 'ALL'
-                    ? _avgAllSizesFor(abbr, combo.store, combo.mode)
-                    : ((D.size_data[selectedSize] || {})[abbr] || {})[sKey];
-                if (!prices || prices.every(p => p === null)) return;
-                const c = '#' + (BCOLORS[abbr] || '555555');
-                const lbl = abbr + ' ' + (BRANDS[abbr]||'')
-                          + ' \u00b7 ' + (_STORE_LABEL[combo.store] || combo.store)
-                          + (combo.mode === 'promo' ? ' \u00b7 Promo' : '');
-                ds.push({
-                    label: lbl, data: prices,
-                    borderColor: c, backgroundColor: c+'22',
-                    borderDash: dash.length ? dash : [2,2],
-                    borderWidth: (combo.mode === 'promo') ? 1.2 : 1.6,
-                    pointRadius: prices.map(() => 2),
-                    pointHoverRadius: prices.map(() => 4),
-                    pointBackgroundColor: c, pointBorderColor: c,
-                    pointBorderWidth: 1,
-                    spanGaps: true, tension: .3, fill: false,
+            // Flip pricingMode briefly so _extraSeries / _seriesKey
+            // helpers (which read the global) pick up this combo's
+            // promo arrays when needed.  Restored in the finally.
+            const _savedMode = pricingMode;
+            pricingMode = combo.mode;
+            try {
+                _brandIter.forEach(function(abbr){
+                    const prices = selectedSize === 'ALL'
+                        ? _avgAllSizesFor(abbr, combo.store, combo.mode)
+                        : ((D.size_data[selectedSize] || {})[abbr] || {})[sKey];
+                    if (!prices || prices.every(p => p === null)) return;
+                    const c = '#' + (BCOLORS[abbr] || '555555');
+                    const primaryPat = (selectedSize !== 'ALL')
+                        ? (_seriesPattern(abbr, selectedSize, combo.store) || '')
+                        : '';
+                    const lbl = abbr + ' ' + (BRANDS[abbr]||'')
+                              + (primaryPat ? ' \u2014 ' + primaryPat : '')
+                              + ' \u00b7 ' + (_STORE_LABEL[combo.store] || combo.store)
+                              + (combo.mode === 'promo' ? ' \u00b7 Promo' : '');
+                    ds.push({
+                        label: lbl, data: prices,
+                        borderColor: c, backgroundColor: c+'22',
+                        borderDash: dash.length ? dash : [2,2],
+                        borderWidth: (combo.mode === 'promo') ? 1.2 : 1.6,
+                        pointRadius: prices.map(() => 2),
+                        pointHoverRadius: prices.map(() => 4),
+                        pointBackgroundColor: c, pointBorderColor: c,
+                        pointBorderWidth: 1,
+                        spanGaps: true, tension: .3, fill: false,
+                    });
+                    // Per-product sibling lines for this overlay combo,
+                    // matching what the primary loop already does for
+                    // the main (store, mode) \u2014 so Bob Jane / JAX /
+                    // TempeWOS / NewBWOS all surface every distinct
+                    // product on the chart instead of one averaged
+                    // blob.  Only meaningful when a specific size is
+                    // selected (ALL-sizes collapses pattern info).
+                    if (selectedSize !== 'ALL'){
+                        const extras = _extraSeries(abbr, selectedSize,
+                                                    combo.store, primaryPat, prices);
+                        const _dashPatterns = [[2,3], [10,4], [4,2,1,2], [6,6,2,6]];
+                        extras.forEach(function(series, si){
+                            const sLbl = abbr + ' ' + (BRANDS[abbr]||'')
+                                       + ' \u2014 ' + series.pattern
+                                       + ' \u00b7 ' + (_STORE_LABEL[combo.store] || combo.store)
+                                       + (combo.mode === 'promo' ? ' \u00b7 Promo' : '');
+                            ds.push({
+                                label: sLbl, data: series.prices,
+                                borderColor: c, backgroundColor: c+'22',
+                                borderDash: _dashPatterns[si % _dashPatterns.length],
+                                borderWidth: 1.1,
+                                pointRadius: series.prices.map(() => 1.6),
+                                pointHoverRadius: series.prices.map(() => 3.5),
+                                pointBackgroundColor: c, pointBorderColor: c,
+                                pointBorderWidth: 1,
+                                spanGaps: true, tension: .3, fill: false,
+                                _descs: series.descs,
+                            });
+                        });
+                    }
                 });
-            });
+            } finally {
+                pricingMode = _savedMode;
+            }
         });
     } catch (_e) { /* defensive \u2014 overlay failures never block primary */ }
     const _storesLbl = Array.from(selectedStoreSet).map(s => _STORE_LABEL[s] || s).join(' + ');
@@ -3106,9 +3151,16 @@ function _refreshBrandRowsForScope() {
     }
 }
 
-// Default brand set = all MAJORS that have at least one data point.
+// Nov-05 user ask: default brand = Hankook (HK) alone.  The
+// operator can add any other majors or extras via the row below.
+// Fallback to all majors only when HK has no data at all, so a
+// dataset without HK still shows SOMETHING on first paint.
 function _defaultBrandSet() {
     const out = new Set();
+    if ('HK' in (D && D.brand_size_data || {})) {
+        out.add('HK');
+        return out;
+    }
     Object.keys(BRANDS).forEach(function(abbr) {
         if (EXTRA_BRANDS[abbr]) return;
         if (!(abbr in D.brand_size_data)) return;
@@ -3167,8 +3219,13 @@ const _STORE_COLOR   = Object.fromEntries(_STORE_META.map(s => [s.key, s.c]));
 // matches _STORE_META so Tempe (primary) is solid, others dashed.
 const _STORE_DASH    = {tempe:[], bj:[6,3], jax:[10,5], tw:[2,2],
                         twi:[8,4,2,4], nwb:[12,4], nwbi:[4,2,1,2]};
-let selectedStoreSet = new Set(['tempe']);
-let selectedPriceSet = new Set(['normal']);
+// Nov-05 user ask: default selection captures the main competitor-
+// pricing use case — compare Bob Jane + JAX consumer prices (PROMO
+// where available) against TempeWOS Sell In + NewBWOS Sell In
+// wholesale.  Normal is unchecked; the operator can tick it back
+// on anytime.
+let selectedStoreSet = new Set(['bj', 'jax', 'twi', 'nwbi']);
+let selectedPriceSet = new Set(['promo']);
 
 function _syncLegacyFromSets(){
     // Keep single-value legacy globals in sync with the Set-based
