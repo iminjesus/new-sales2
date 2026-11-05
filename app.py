@@ -6164,8 +6164,17 @@ RESTRICTED_ADMIN_EMAILS = {
     "brian.park@hankooktyre.com.au",
 }
 _RESTRICTED_ADMIN_LOWER = {e.lower() for e in RESTRICTED_ADMIN_EMAILS}
+_DEV_ADMIN_LOWER        = {e.lower() for e in DEV_ADMIN_EMAILS}
 def _is_restricted_admin(email: str) -> bool:
-    return (email or "").strip().lower() in _RESTRICTED_ADMIN_LOWER
+    """Gate for the restricted-admin menu (Rebate Master, …).
+
+    Nov-05: the desktop dev admin (DEV_ADMIN_EMAILS) is let through
+    too so Jayden can configure + QA from the working machine.  The
+    5 named Hankook users are still the primary audience; the dev
+    bypass only matters while Pamela et al. aren't using the page
+    themselves.  Any other caller is 403'd."""
+    e = (email or "").strip().lower()
+    return (e in _RESTRICTED_ADMIN_LOWER) or (e in _DEV_ADMIN_LOWER)
 # State-manager scope mapping — key is the manager's mail id (lower-
 # case), value is the state code (or list of state codes) whose
 # ship-to orders they can see IN ADDITION to their own rows.  Empty
