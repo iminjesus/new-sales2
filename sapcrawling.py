@@ -109,6 +109,24 @@ KEEP_COLUMNS = {
 }
 OUTPUT_HEADER = ["interface_date", "plant", "material", "dot_no", "stock_qty"]
 
+# Nov-05: same blocked-stock filter the batch twin applies.  See
+# sapcrawling_batch.py for the long-form comment.
+BLOCKED_HEADER_ALIASES = {
+    "block qty", "blocked qty",
+    "blocked stock", "block stock", "blocked stk", "block stk",
+    "blocked", "block",
+}
+def _is_blocked(val) -> bool:
+    if val is None:
+        return False
+    s = str(val).strip().replace(",", ".")
+    if not s:
+        return False
+    try:
+        return float(s) > 0.0
+    except Exception:
+        return False
+
 
 # ================= HELPERS =================
 def wait(sec=0.3):
@@ -512,34 +530,47 @@ def _norm_hdr(s):
 def extract_keep_rows(xlsx_path: str):
     """From the raw ZSDM64300 grid, keep only the 5 output columns and
     return them in OUTPUT_HEADER order.  Skips summary rows (blank
-    Material) and header repeats."""
+    Material), header repeats, AND every row whose Block Qty > 0
+    (Nov-05 user ask — mirrors sapcrawling_batch.py)."""
     all_rows = read_xlsx_rows(xlsx_path)
     if not all_rows:
         return []
     header = all_rows[0]
-    # Locate each keep-column index by header text
     col_idx = {}
+    blocked_idx = -1
     for i, h in enumerate(header):
-        key = KEEP_COLUMNS.get(_norm_hdr(h))
+        norm = _norm_hdr(h)
+        key = KEEP_COLUMNS.get(norm)
         if key and key not in col_idx:
             col_idx[key] = i
+        if blocked_idx < 0 and norm in BLOCKED_HEADER_ALIASES:
+            blocked_idx = i
     missing = [k for k in OUTPUT_HEADER if k not in col_idx]
     if missing:
         print(f"  [WARN] {os.path.basename(xlsx_path)}: missing columns {missing}. "
               f"Available headers: {[_norm_hdr(h) for h in header]}")
+    if blocked_idx < 0:
+        print(f"  [WARN] {os.path.basename(xlsx_path)}: Block Qty column "
+              f"not found — blocked-stock filter is OFF for this file.  "
+              f"Headers seen: {[_norm_hdr(h) for h in header]}")
     out = []
+    dropped_blocked = 0
     for r in all_rows[1:]:
+        if 0 <= blocked_idx < len(r) and _is_blocked(r[blocked_idx]):
+            dropped_blocked += 1
+            continue
         row = []
         keep = True
         for k in OUTPUT_HEADER:
             i = col_idx.get(k, -1)
             val = r[i].strip() if 0 <= i < len(r) else ""
             row.append(val)
-        # Drop rows without a material or stock qty (totals / blanks)
         if not row[OUTPUT_HEADER.index("material")]:
             keep = False
         if keep:
             out.append(row)
+    if dropped_blocked:
+        print(f"  {os.path.basename(xlsx_path)}: dropped {dropped_blocked:,} blocked row(s)")
     return out
 
 
