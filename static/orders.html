@@ -7618,6 +7618,52 @@ async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
         </div>
       </div>`;
   }).join("");
+  // Nov-05 Phase 2b: blocked-stock tooltip section.  Backend returns
+  //   blocked_total       — scalar sum of all QA / quality-hold qty
+  //   blocked_by_bucket   — {age_bucket: qty}  (same bucket keys as main)
+  //   blocked_detail      — [{location_id, dot_no, age_bucket, qty}, …]
+  //                         sorted oldest-bucket-first.  Grouped on
+  //                         the frontend by bucket for a tidy nested
+  //                         list; absent rows mean "no blocked here".
+  const blocked_total   = data.blocked_total || 0;
+  const blocked_detail  = data.blocked_detail || [];
+  let blockedBlock = "";
+  if (blocked_total > 0) {
+    // Group detail rows by age bucket in the order returned (oldest
+    // first).  Within a bucket, show "location · DOT · qty".
+    const byBucket = {};
+    blocked_detail.forEach(d => {
+      if (!byBucket[d.age_bucket]) byBucket[d.age_bucket] = [];
+      byBucket[d.age_bucket].push(d);
+    });
+    const parts = (data.bucket_order || []).filter(b => byBucket[b]).map(b => {
+      const rows = byBucket[b].map(d =>
+        `<div style="padding-left:8px;font-size:11px;color:#78350f;">
+           • ${d.location_id || "(no loc)"} · DOT ${d.dot_no || "—"} · ${fmtQty(d.qty)} u
+         </div>`).join("");
+      const col = _AGING_COLORS_ORDER[b] || "#b45309";
+      const bSum = byBucket[b].reduce((a, d) => a + d.qty, 0);
+      return `
+        <div style="margin-top:3px;">
+          <div style="font-size:11px;font-weight:700;color:${col};">
+            ${b} — ${fmtQty(bSum)} u
+          </div>
+          ${rows}
+        </div>`;
+    }).join("");
+    blockedBlock = `
+      <div style="margin-top:8px;padding:6px 8px;background:#fef3c7;
+                  border-left:3px solid #b45309;border-radius:3px;">
+        <div style="font-size:11.5px;font-weight:700;color:#78350f;margin-bottom:2px;">
+          ⚑ Excluded — Blocked stock: ${fmtQty(blocked_total)} u
+        </div>
+        <div style="font-size:10.5px;color:#92400e;margin-bottom:4px;">
+          Not counted in the chart above (QA / quality hold).
+          Breakdown by location:
+        </div>
+        ${parts}
+      </div>`;
+  }
   pop.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;
                 margin-bottom:6px;">
@@ -7629,9 +7675,10 @@ async function openStockAgingPopover(anchorCell, mcode, plant, stateLabel){
                      color:#94a3b8;cursor:pointer;line-height:1;">×</button>
     </div>
     <div style="font-size:11px;color:#666;margin-bottom:6px;">
-      Total: <b>${fmtQty(data.total || 0)}</b>
+      Total (shippable): <b>${fmtQty(data.total || 0)}</b>
     </div>
-    ${summary || `<div style="color:#94a3b8;font-size:11.5px;">No stock at this plant.</div>`}`;
+    ${summary || `<div style="color:#94a3b8;font-size:11.5px;">No stock at this plant.</div>`}
+    ${blockedBlock}`;
 }
 
 function addRow(){
