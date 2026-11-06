@@ -3734,6 +3734,22 @@ async function applyAdditionalDCToRow(rowEl){
       "source=" + (data && data.source));
   } catch (_e) {}
   if (data && data.matched && data.additional_dc != null){
+    // Nov-05 user ask: Cashback promo returns a flat dollar amount
+    // on data.cashback_amount instead of a percentage.  Clear
+    // sp_dc% (no percentage applies), stash the amount on the row
+    // for recalcRow to deduct from Proposed Unit Price, and write a
+    // "Cashback $N" tag onto the Remark cell.
+    if (data.is_cashback && (+data.cashback_amount || 0) > 0){
+      spEl.value = "";
+      spEl.dataset.autoSpDc = "1";
+      spEl.dataset.originalSpDc = "0";
+      spEl.title = `Cashback $${(+data.cashback_amount).toFixed(2)} — deducted from Proposed Unit Price`;
+      rowEl.dataset.promo = "CASHBACK";
+      rowEl.dataset.cashbackAmount = String(+data.cashback_amount);
+      setRemark(rowEl, `Cashback ($${(+data.cashback_amount).toFixed(2)})`);
+      // Kick a re-calc so the deduction lands immediately.
+      try { recalcRow(rowEl); } catch (_e) {}
+    } else {
     spEl.value = fmtPct(data.additional_dc);
     spEl.dataset.autoSpDc = "1";
     /* Remember the contract-side percentage so the sp_dc "Enter"
@@ -3745,11 +3761,13 @@ async function applyAdditionalDCToRow(rowEl){
     // Stash the matched promo bucket on the row so updateTotals can
     // count SOVD-eligible qty (SOVD TTL box at the top of the form).
     rowEl.dataset.promo = (data.promo || "").toUpperCase();
+    delete rowEl.dataset.cashbackAmount;
     // Remark badge — "Trueblu" for the HK-PCLT SOVD ladder,
     // "443 (12%)" for the flat 443 promo, "Special (30%)" for a
     // per-material special.  Blank promo name gets a plain
     // percentage tag so the reader still sees the DC source.
     setRemarkFromPromo(rowEl, data.promo, data.additional_dc);
+    }
   } else {
     // No match — clear the auto-value so a previously-eligible row
     // that no longer qualifies (qty dropped below threshold, e.g.)
@@ -3761,6 +3779,12 @@ async function applyAdditionalDCToRow(rowEl){
       delete spEl.dataset.originalSpDc;
     }
     delete rowEl.dataset.promo;
+    // Nov-05: also drop any stale cashback amount so a row that
+    // no longer qualifies stops deducting money.
+    if (rowEl.dataset.cashbackAmount){
+      delete rowEl.dataset.cashbackAmount;
+      try { recalcRow(rowEl); } catch (_e) {}
+    }
     /* Clear the remark unless the row is aged (aging tag lives on
        independently) or the BDE has typed sp_dc manually. */
     if (!rowEl.dataset.agingTier
@@ -5032,9 +5056,21 @@ function recalcRow(row){
   // Concession stack — MTH, Volume and Additional Special DC%
   // compound on top of Current Price into the Proposed Unit Price.
   const concessionF  = (1 - mthDC/100) * (1 - volDC/100) * (1 - addDC/100);
-  const proposedPrice = currentPrice * concessionF;
+  let proposedPrice = currentPrice * concessionF;
+  // Nov-05 user ask: when the matched promo is "Cashback", the
+  // dc_additional_customer row's additional_dc value is a flat
+  // MONEY amount (e.g. $50) to subtract from the Proposed Unit
+  // Price — not a percentage.  The backend returns this as
+  // data.cashback_amount and the row stashes it on dataset.
+  // Subtract after the percentage chain so it reads "Normal
+  // proposed - cashback" exactly.  Clamp at 0 so a bizarre
+  // large cashback can't push the price negative.
+  const cashback = parseFloat(row.dataset.cashbackAmount || "0") || 0;
+  if (cashback > 0) {
+    proposedPrice = Math.max(0, proposedPrice - cashback);
+  }
   const proposedDC    = list > 0 ? (100 * (1 - proposedPrice / list)) : currentDC;
-  const addSupport    = 100 * (1 - concessionF);   // same as (curr - prop)/curr
+  const addSupport    = 100 * (1 - (list > 0 ? proposedPrice / currentPrice : concessionF));
   const totalAmount = q * proposedPrice;
 
   row.querySelector('[data-col="current_dc"]').value    = fmtPct(currentDC);

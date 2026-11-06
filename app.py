@@ -5924,14 +5924,29 @@ def api_orders_additional_dc():
             add_dc = None
         if add_dc is None:
             return jsonify(out)
-        # additional_dc stored positive on the feed (30.00 = 30%
-        # discount); pass through as-is.
-        out["additional_dc"] = abs(add_dc)
+        _promo_txt = (row.get("promo") or "").strip()
+        # Nov-05 user ask: when the matching row's promo is "Cashback",
+        # treat additional_dc as a flat MONEY amount to deduct from
+        # the Proposed Unit Price, not a percentage off.  Return the
+        # amount on a dedicated field + a flag so the frontend knows
+        # to skip the sp_dc% autofill and instead subtract after the
+        # pricing chain runs.
+        _is_cashback = _promo_txt.upper() == "CASHBACK"
+        if _is_cashback:
+            out["additional_dc"]   = 0.0
+            out["cashback_amount"] = abs(add_dc)
+            out["is_cashback"]     = True
+        else:
+            # additional_dc stored positive on the feed (30.00 = 30%
+            # discount); pass through as-is.
+            out["additional_dc"]   = abs(add_dc)
+            out["cashback_amount"] = 0.0
+            out["is_cashback"]     = False
         out["matched"]       = True
         out["min_qty"]       = row.get("min_qty")
         out["source"]        = row.get("source")
         out["tier"]          = row.get("tier")
-        out["promo"]         = (row.get("promo") or "")
+        out["promo"]         = _promo_txt
 
         # Oct-20 user ask: per-material ATD / ATM Base DC override.
         # When THIS material actually earns a promo DC for an ATD or
