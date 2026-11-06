@@ -90,6 +90,15 @@
              timestamp.  Values repaint from _rowsCache every time
              loadOrders runs. -->
         <div id="monthStats" style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px">
+          <!-- Nov-06 user ask: "Today requested" tile sits at the
+               very left of the row, so the deltas further right
+               (week / month / YTD) read as "today vs the longer
+               rolling windows that include today".  Rolling
+               calendar-day window: anything with submitted_at on
+               the viewer's local date, excludes drafts + deleted. -->
+          <div style="padding:6px 12px;background:#fef9c3;border:1px solid #fde047;border-radius:6px;color:#713f12;font-weight:700">
+            Today requested: <span id="msToday" style="font-size:14px;font-weight:900">0</span>
+          </div>
           <!-- Nov-05 user ask: renamed "Whole months" to "YTD".
                Value was stuck at 200 because it was a client-side
                count of _rowsCache (the paginated list cap), not
@@ -908,6 +917,14 @@ function renderRows(){
   const _msWeek = filtered.filter(r =>
     _isThisWeek(r) && _isThisMonth(r) && !r.deleted_at
     && String(r.needs_mgmt_approval || "").toLowerCase() !== "temp");
+  // Nov-06: "Today requested" = submitted_at on the viewer's local
+  // date.  Uses the same draft / delete exclusion as the week /
+  // month tiles so the deltas stay comparable.
+  const _todayISO = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,"0")}-${String(_now.getDate()).padStart(2,"0")}`;
+  const _msToday = filtered.filter(r =>
+    String(r.submitted_at || "").slice(0, 10) === _todayISO
+    && !r.deleted_at
+    && String(r.needs_mgmt_approval || "").toLowerCase() !== "temp");
   const _msPendingAppr = _msTotal.filter(r =>
     (r.has_additional_dc || r.has_interstate)
     && !r.approved_by_name && !r.rejected_by_name
@@ -933,6 +950,7 @@ function renderRows(){
   $("#msAll").textContent = (typeof window._ytdCount === "number")
     ? window._ytdCount
     : _msAllClient.length;
+  $("#msToday")         .textContent = _msToday.length;
   $("#msTotal")         .textContent = _msTotal.length;
   $("#msWeek")          .textContent = _msWeek.length;
   $("#msPendingAppr")   .textContent = _msPendingAppr.length;
