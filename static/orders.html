@@ -7360,12 +7360,31 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
   };
   const mcode = rowEl.querySelector('[data-col="m_code"]')?.value?.trim() || "";
   const _plantFor = {NSW: "42R1", QLD: "42R0", VIC: "42R2", WA: "42R4"}[stateLabel] || "";
-  const _row = (lbl, val, hint) => `
-    <div style="display:flex;justify-content:space-between;align-items:baseline;
-                padding:3px 0;border-bottom:1px dashed #e2e8f0;">
-      <span style="color:#334155">${lbl}${hint ? ` <small style="color:#94a3b8">${hint}</small>` : ""}</span>
-      <b style="font-variant-numeric:tabular-nums">${fmtQty(val)}</b>
+  // Nov-06 user ask: highlight the "At dock" + "On water" lines
+  // and make it obvious they open an extra calendar when double-
+  // clicked.  `opts.highlight` paints them blue bold with a pale
+  // blue tint; `opts.marker` adds a small "dbl-click" badge beside
+  // the label so the affordance is visible even on first open.
+  const _row = (lbl, val, hint, opts) => {
+    opts = opts || {};
+    const rowStyle = opts.highlight
+      ? 'display:flex;justify-content:space-between;align-items:baseline;'
+        + 'padding:4px 6px;border-radius:3px;background:#eff6ff;'
+        + 'border-bottom:1px solid #bfdbfe;'
+      : 'display:flex;justify-content:space-between;align-items:baseline;'
+        + 'padding:3px 0;border-bottom:1px dashed #e2e8f0;';
+    const lblColor = opts.highlight ? '#1e40af' : '#334155';
+    const lblWeight = opts.highlight ? '700' : '400';
+    const valColor = opts.highlight ? '#1e40af' : '';
+    const marker = opts.marker
+      ? ' <span style="font-size:9px;background:#dbeafe;color:#1e40af;padding:1px 5px;border-radius:9px;font-weight:700;margin-left:4px">dbl-click ⇲</span>'
+      : '';
+    return `
+    <div style="${rowStyle}">
+      <span style="color:${lblColor};font-weight:${lblWeight}">${lbl}${hint ? ` <small style="color:#94a3b8">${hint}</small>` : ""}${marker}</span>
+      <b style="font-variant-numeric:tabular-nums${valColor ? ';color:'+valColor : ''}">${fmtQty(val)}</b>
     </div>`;
+  };
   const rect = anchorCell.getBoundingClientRect();
   const pop  = document.createElement("div");
   pop.style.cssText = `
@@ -7393,13 +7412,14 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
     ${_row("Unrestricted",      b.unrestricted, "")}
     ${_row("On Order",          b.on_order,     "")}
     <div id="_stockRtPipelineHdr"
-         title="Double-click to open the incoming calendar"
-         style="margin-top:6px;padding-top:4px;border-top:1px solid #cbd5e1;color:#64748b;font-size:11px;cursor:pointer;user-select:none">
-      In-transit pipeline <span style="opacity:.55">· double-click for calendar ⇲</span>
+         title="Double-click the In-transit pipeline block to open the incoming calendar"
+         style="margin-top:6px;padding:4px 6px 2px;border-top:1px solid #cbd5e1;color:#1e40af;font-size:11.5px;cursor:pointer;user-select:none;font-weight:700;display:flex;align-items:center;justify-content:space-between">
+      <span>In-transit pipeline</span>
+      <span style="font-size:10px;background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:9px;font-weight:700">double-click for calendar ⇲</span>
     </div>
     <div id="_stockRtPipeline" style="cursor:pointer" title="Double-click to open the incoming calendar">
-      ${_row("At dock",           b.at_dock,  "")}
-      ${_row("On water",          b.on_water, "")}
+      ${_row("At dock",           b.at_dock,  "", {highlight:true, marker:true})}
+      ${_row("On water",          b.on_water, "", {highlight:true})}
       ${_row("Factory",           b.factory,  "")}
       <!-- Oct-28 user ask: show the sum of the three in-transit
            lines at the top of the pipeline block, bolded, so the
