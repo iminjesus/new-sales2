@@ -7360,11 +7360,9 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
   };
   const mcode = rowEl.querySelector('[data-col="m_code"]')?.value?.trim() || "";
   const _plantFor = {NSW: "42R1", QLD: "42R0", VIC: "42R2", WA: "42R4"}[stateLabel] || "";
-  // Nov-06 user ask: highlight the "At dock" + "On water" lines
-  // and make it obvious they open an extra calendar when double-
-  // clicked.  `opts.highlight` paints them blue bold with a pale
-  // blue tint; `opts.marker` adds a small "dbl-click" badge beside
-  // the label so the affordance is visible even on first open.
+  // Nov-08 user ask: highlight the "At dock" + "On water" lines with
+  // blue only — no "dbl-click" badge, no explanatory text.  The blue
+  // treatment alone is the affordance now.
   const _row = (lbl, val, hint, opts) => {
     opts = opts || {};
     const rowStyle = opts.highlight
@@ -7376,12 +7374,9 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
     const lblColor = opts.highlight ? '#1e40af' : '#334155';
     const lblWeight = opts.highlight ? '700' : '400';
     const valColor = opts.highlight ? '#1e40af' : '';
-    const marker = opts.marker
-      ? ' <span style="font-size:9px;background:#dbeafe;color:#1e40af;padding:1px 5px;border-radius:9px;font-weight:700;margin-left:4px">dbl-click ⇲</span>'
-      : '';
     return `
     <div style="${rowStyle}">
-      <span style="color:${lblColor};font-weight:${lblWeight}">${lbl}${hint ? ` <small style="color:#94a3b8">${hint}</small>` : ""}${marker}</span>
+      <span style="color:${lblColor};font-weight:${lblWeight}">${lbl}${hint ? ` <small style="color:#94a3b8">${hint}</small>` : ""}</span>
       <b style="font-variant-numeric:tabular-nums${valColor ? ';color:'+valColor : ''}">${fmtQty(val)}</b>
     </div>`;
   };
@@ -7398,7 +7393,7 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
   `;
   pop.innerHTML = `
     <div id="_stockRtDragHandle"
-         title="Drag to move; double-click In-transit pipeline to open the incoming calendar"
+         title="Drag to move"
          style="font-weight:700;font-size:12.5px;margin-bottom:6px;
                 cursor:move;user-select:none;
                 display:flex;justify-content:space-between;align-items:baseline;
@@ -7412,13 +7407,11 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
     ${_row("Unrestricted",      b.unrestricted, "")}
     ${_row("On Order",          b.on_order,     "")}
     <div id="_stockRtPipelineHdr"
-         title="Double-click the In-transit pipeline block to open the incoming calendar"
-         style="margin-top:6px;padding:4px 6px 2px;border-top:1px solid #cbd5e1;color:#1e40af;font-size:11.5px;cursor:pointer;user-select:none;font-weight:700;display:flex;align-items:center;justify-content:space-between">
-      <span>In-transit pipeline</span>
-      <span style="font-size:10px;background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:9px;font-weight:700">double-click for calendar ⇲</span>
+         style="margin-top:6px;padding:4px 6px 2px;border-top:1px solid #cbd5e1;color:#1e40af;font-size:11.5px;cursor:pointer;user-select:none;font-weight:700">
+      In-transit pipeline
     </div>
-    <div id="_stockRtPipeline" style="cursor:pointer" title="Double-click to open the incoming calendar">
-      ${_row("At dock",           b.at_dock,  "", {highlight:true, marker:true})}
+    <div id="_stockRtPipeline" style="cursor:pointer">
+      ${_row("At dock",           b.at_dock,  "", {highlight:true})}
       ${_row("On water",          b.on_water, "", {highlight:true})}
       ${_row("Factory",           b.factory,  "")}
       <!-- Oct-28 user ask: show the sum of the three in-transit
@@ -7437,10 +7430,7 @@ function openStockRtPopover(anchorCell, rowEl, stateLabel){
         </b>
       </div>
     </div>
-    <div id="_stockRtCal"></div>
-    <div style="margin-top:6px;font-size:10.5px;color:#94a3b8">
-      Double-click the cell to see the DOT-age breakdown instead.
-    </div>`;
+    <div id="_stockRtCal"></div>`;
   document.body.appendChild(pop);
   _stockRtEl = pop;
   // Oct-28 user ask: double-click anywhere on the "In-transit pipeline"
