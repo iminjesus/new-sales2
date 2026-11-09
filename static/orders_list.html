@@ -893,17 +893,26 @@ function renderRows(){
   // "week" tile LARGER than the "month" tile, which read as
   // obviously wrong.  Clamp the lower bound to the 1st of this
   // month so the week count is at most the month count.
-  const _weekAgoRaw = new Date(_now.getFullYear(), _now.getMonth(),
-                               _now.getDate() - 7);
-  const _firstOfMonth = new Date(_now.getFullYear(), _now.getMonth(), 1);
-  const _weekAgo = (_weekAgoRaw < _firstOfMonth) ? _firstOfMonth : _weekAgoRaw;
+  // Nov-09 user ask: "This week" must be calendar-week aligned to
+  // MONDAY — not a rolling 7-day lookback — so on a Monday the
+  // week count equals the day count (both start from today), and
+  // the week never pulls in rows from the previous week.  Clamp
+  // to the 1st of the month so the week bound never crosses a
+  // month boundary (same guard the old rolling window had).
+  const _dayOfWeek     = _now.getDay();   // 0=Sun … 1=Mon … 6=Sat
+  const _daysSinceMon  = (_dayOfWeek === 0) ? 6 : (_dayOfWeek - 1);
+  const _mondayOfWeek  = new Date(_now.getFullYear(), _now.getMonth(),
+                                   _now.getDate() - _daysSinceMon);
+  const _firstOfMonth  = new Date(_now.getFullYear(), _now.getMonth(), 1);
+  const _weekStart     = (_mondayOfWeek < _firstOfMonth)
+                         ? _firstOfMonth : _mondayOfWeek;
   const _isThisWeek = r => {
     const t = String(r.submitted_at || "").slice(0, 10);
     if (!t) return false;
     const [yy, mm, dd] = t.split("-").map(n => +n);
     if (!yy || !mm || !dd) return false;
     const d = new Date(yy, mm - 1, dd);
-    return d >= _weekAgo && d <= _now;
+    return d >= _weekStart && d <= _now;
   };
   const _msWeek = filtered.filter(r =>
     _isThisWeek(r) && _isThisMonth(r) && !r.deleted_at
