@@ -16099,8 +16099,17 @@ def profit_monthly():
                 for _efm in sorted(st_months):
                     if not (1 <= _efm <= 12):
                         continue
-                    if out[_efm - 1]["gross"] != 0:
-                        continue    # profit table already has this month
+                    # Nov-09 fix: also fall back when the profit row
+                    # exists but is partial (gross > 0 yet cogs = 0 —
+                    # happens when the month-end roll-up ran against
+                    # an incomplete day's data and landed a half-
+                    # filled row).  Previously "gross != 0: continue"
+                    # left COGS at 0 for the whole month, which drew
+                    # the Nov bar on the dashboard as a sliver of
+                    # Sales Deduction with no red COGS segment.
+                    _prow = out[_efm - 1]
+                    if (_prow["gross"] or 0) > 0 and (_prow["cogs"] or 0) > 0:
+                        continue    # profit table already has a complete month
                     st_joins, st_wh, st_params = _thismonth_query_stack(
                         f, top_sold_to, month=_efm,
                     )
