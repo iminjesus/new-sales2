@@ -428,13 +428,6 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
-    /* Nov-09: anchor for #approvalPanel's position:absolute below —
-       the panel is a child of the right-side subgrid and the subgrid
-       has only 11 rows defined, so an auto-placed panel was
-       overlapping the Reason textarea cell on row 11.  Pulling it
-       out with position:absolute relative to .meta puts it directly
-       below the whole details grid instead. */
-    position:relative;
     /* 11 explicit rows for subgrid, mirroring the Oct-13 revised
        pairing table (Approval route now takes two rows so Total DC
        / Additional DC badges land on a separate line):
@@ -2044,6 +2037,16 @@
                Shown on a hydrated SPRF only (needs an order id to
                upload against). -->
           <div id="attachStrip-reason" class="sprf-attach-strip" data-source="reason" hidden></div>
+          <!-- Nov-09 user ask: Approval status (approver chips +
+               "Approved by X" banner) lives INSIDE the Reason cell
+               now, as the last block below the textarea / attach
+               strip, so it stacks naturally within the same yellow
+               cell instead of trying to find its own row in the
+               11-row subgrid and overlapping other elements. -->
+          <div id="approvalPanel" hidden
+               style="padding:8px 10px;background:#fffbeb;border-top:1px solid #f59e0b;">
+            <div id="approvalRow" style="display:flex;gap:14px;font-size:12px;color:#78350f;flex-wrap:wrap"></div>
+          </div>
         </div>
         <!-- Oct-28 user ask: Approver Feedback — a textarea the three
              MGMT approvers (Justin/Kenny/JJ) can use to send a message
@@ -2077,18 +2080,13 @@
             </button>
           </div>
         </div>
-        <!-- Approval-status band — auto-shows on submitted orders that
-             carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
-             line).  Standard-pricing submissions leave it hidden. -->
-        <!-- Nov-09: approvalPanel is positioned absolute (anchored to
-             the .meta grid above) so it drops BELOW the whole details
-             grid instead of fighting for a cell inside the 11-row
-             subgrid.  This was dropping an amber band over the Reason
-             textarea on row 11 and blocking click-through. -->
-        <div id="approvalPanel" hidden
-             style="position:absolute;left:0;right:0;top:100%;z-index:3;padding:8px 10px;background:#fffbeb;border:1px solid #f59e0b;border-radius:3px;margin-top:6px">
-          <div id="approvalRow" style="display:flex;gap:14px;font-size:12px;color:#78350f;flex-wrap:wrap"></div>
-        </div>
+        <!-- Approval-status band (#approvalPanel + #approvalRow)
+             lives inside the Reason cell above — Nov-09 restructure
+             so it stays within the same yellow cell as the Reason
+             textarea instead of fighting for a row in the 11-row
+             subgrid.  Original markup kept this as a separate
+             bottom-of-grid block; the original-location copy was
+             moved into .val-reason above. -->
       </div>
     </div>
   </div>
