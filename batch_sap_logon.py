@@ -598,6 +598,32 @@ def _launch_logon():
     raise NoSapError("SAP Logon didn't become scriptable within 30 s")
 
 
+def _kill_saplogon():
+    """Nov-10: taskkill every saplogon.exe process on the box.  Used
+    by the ensure_sap_session retry loop when a prior launch left a
+    hung instance that never became scriptable — the only way to let
+    the next launch actually succeed is to kill the ghost first.
+    Also knocks out any lingering sapgui.exe (child process) so a
+    stuck child can't block the new parent."""
+    for exe in ("saplogon.exe", "sapgui.exe"):
+        try:
+            # /F = force kill, /T = tree (children too), /IM by image name.
+            # Silent — discard stdout/stderr so a "no such process" spam
+            # doesn't fill the log.
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/IM", exe],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            _slog(f"  [kill_saplogon] taskkill {exe} fired")
+        except Exception as _e:
+            _slog(f"  [kill_saplogon] taskkill {exe} raised: {_e!r}")
+    # Small pause so Windows finishes releasing the COM handles the
+    # killed process was holding.
+    time.sleep(1.5)
+
+
 def _open_connection(sap):
     """Open the SAP_CONN entry from SAP Logon.  Returns the new session.
 
@@ -1375,9 +1401,31 @@ def ensure_sap_session():
                 raise  # caller handles the email + wait + retry
             except Exception as e:
                 last_err = e
-                _slog(f"attempt {attempt}/3 raised: {e!r} — "
-                      f"retrying (saplogon.exe NOT touched).")
-                time.sleep(2.0)
+                # Nov-10 user ask: operator reported SAP consistently
+                # fails to recover overnight — log analysis showed
+                # ensure_sap_session repeatedly raising
+                # "SAP Logon didn't become scriptable within 30 s"
+                # for hours.  Root cause: saplogon.exe was hung after
+                # the first launch, and every retry just tried to
+                # launch another one on top without killing the hung
+                # process first.  Now: on "didn't become scriptable"
+                # failures, taskkill saplogon.exe before the next
+                # retry so a fresh process can actually come up.
+                _emsg = str(e).lower()
+                if ("didn't become scriptable" in _emsg
+                        or "not reachable after launch" in _emsg
+                        or "gui scripting not reachable" in _emsg):
+                    _slog(f"attempt {attempt}/3 raised: {e!r} — "
+                          f"killing hung saplogon.exe before retry.")
+                    try:
+                        _kill_saplogon()
+                    except Exception as _ke:
+                        _slog(f"  [kill_saplogon] failed: {_ke!r}")
+                    time.sleep(3.0)
+                else:
+                    _slog(f"attempt {attempt}/3 raised: {e!r} — "
+                          f"retrying (saplogon.exe NOT touched).")
+                    time.sleep(2.0)
         raise NoSapError(
             f"ensure_sap_session failed after 3 attempts.  Last error: {last_err!r}"
         )
