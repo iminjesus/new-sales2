@@ -11123,6 +11123,56 @@ function wireApprovalPanel(order, who){
       + ` — <b>Justin / Kenny / JJ</b> can approve (any one).`;
   }
   panel.hidden = false;
+  // Nov-09 user ask: on an APPROVED / rejected order the mgmt_reason
+  // textarea is redundant with the "👁 Reason from requester (view)"
+  // block the approval panel already renders.  Hide the whole yellow
+  // Reason-textarea cell (lbl + val) so the approval panel alone
+  // carries the Reason on sign-off orders, and give the panel the
+  // full right-pane width.
+  try {
+    const _approved = !!order.approved_by_name;
+    const _rejected = !!order.rejected_by_name;
+    const _shouldHideReason = _approved || _rejected;
+    const _lblReason = document.querySelector(".lbl-reason");
+    const _valReason = document.querySelector(".val-reason");
+    if (_lblReason) _lblReason.style.display = _shouldHideReason ? "none" : "";
+    if (_valReason){
+      // Keep the approval panel visible even when its parent (.val-
+      // reason) is hidden — move it to the end of the right-pane
+      // subgrid so it renders full-width on its own row.
+      if (_shouldHideReason){
+        const _parentGrid = _valReason.parentElement;
+        if (_parentGrid && panel.parentElement !== _parentGrid){
+          _parentGrid.appendChild(panel);
+          panel.style.gridColumn = "1 / -1";
+          panel.style.background = "#fffbeb";
+          panel.style.border = "1px solid #f59e0b";
+          panel.style.borderRadius = "3px";
+          panel.style.padding = "8px 10px";
+          panel.style.marginTop = "6px";
+          panel.style.borderTop = "";
+        }
+        _valReason.style.display = "none";
+      } else {
+        _valReason.style.display = "";
+        // Panel back inside val-reason when NOT hidden, so it stacks
+        // under the textarea again on a Pending order.
+        if (panel.parentElement === _valReason.parentElement
+            && _valReason.parentElement !== null){
+          _valReason.appendChild(panel);
+          panel.style.gridColumn = "";
+          panel.style.background = "#fffbeb";
+          panel.style.border = "";
+          panel.style.borderRadius = "";
+          panel.style.padding = "8px 10px";
+          panel.style.marginTop = "";
+          panel.style.borderTop = "1px solid #f59e0b";
+        }
+      }
+    }
+  } catch (_e) {
+    console.warn("[wireApprovalPanel] reason-hide pass skipped:", _e);
+  }
   const esc = s => String(s || "").replace(/[&<>"']/g,
     ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
   const chip = (nm, done, at) => {
