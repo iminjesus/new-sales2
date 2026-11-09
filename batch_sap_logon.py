@@ -669,7 +669,12 @@ def _handle_multi_logon(session):
     # Oct-28: iterate every popup window — SAP occasionally puts the
     # multi-logon dialog on wnd[2] when wnd[1] is already used for a
     # licence/disclaimer panel.
-    for wi in (1, 2, 3):
+    # Nov-09: widened the scan range to wnd[1..5] because a reported
+    # morning failure pattern (download never kicks off until manual
+    # stop+start) is consistent with a multi-logon dialog landing on
+    # a window index the handler didn't check (licence panel + GDPR
+    # consent + news-of-the-day can push the real dialog to wnd[4]).
+    for wi in (1, 2, 3, 4, 5):
         try:
             dlg = session.findById(f"wnd[{wi}]")
         except Exception:
