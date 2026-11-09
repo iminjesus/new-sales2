@@ -223,6 +223,17 @@
      Reject note) must give an unmistakable visual cue when focused
      so the writer always knows WHERE their text is landing.  Strong
      ring + warm pulse the first ~1.4 s after focus. */
+  /* Nov-09: the Reason + Special-Instruction textareas were
+     reported as unresponsive on specific material picks.  Debug
+     showed a sibling DIV sitting on top of them (same stacking
+     context, later in DOM order → painted over the textarea).
+     Lift both with position:relative + z-index:2 so any sibling
+     without an explicit higher z-index stays underneath. */
+  textarea#mgmt_reason,
+  textarea#special_instruction {
+    position: relative;
+    z-index: 2;
+  }
   #mgmt_reason:focus,
   #special_instruction:focus,
   #approver_feedback:focus,
