@@ -9250,13 +9250,17 @@ function _reassertCommentBoxesInteractive(){
 
 /* Nov-09: operator reported the Reason textarea going blank +
    unresponsive on a specific material pick even after the
-   post-pick / post-stock-out re-asserts fired above.  That means
-   SOMETHING downstream — a setTimeout, an async await chain, a
-   promise .then — is flipping the field AFTER our re-arm runs.
-   Install a MutationObserver on both #mgmt_reason and its parent
-   that reverts any disabler change the moment it happens, AND
-   logs a console warning so we can identify the offending path
-   from the operator's devtools. */
+   post-pick / post-stock-out re-asserts fired above.  The first
+   MutationObserver pass caught no attribute changes, so the issue
+   isn't readOnly/disabled.  This second pass adds:
+     (a) a VALUE setter trap — `.value` is a property, not an attr,
+         so MutationObserver can't see it.  Logs who sets the value
+         + reverts to empty whenever a non-user path tries to seed
+         non-empty text (so the placeholder stays visible).
+     (b) a subtree observer on the Reason PARENT — catches the
+         "div got replaced via innerHTML" case.
+     (c) a pointer-events / opacity check on the parent chain
+         — catches the "covered by overlay" case. */
 (function _installCommentBoxGuard(){
   const _apply = (el) => {
     if (window._orderIsLocked === true) return false;
@@ -9298,6 +9302,81 @@ function _reassertCommentBoxesInteractive(){
     });
     obs.observe(el, {attributes: true, attributeOldValue: true,
                      attributeFilter: ["readonly","disabled","tabindex","style"]});
+    // (a) VALUE setter trap — `.value` is a property; MutationObserver
+    //     can't see it.  Log who's setting it and when it goes
+    //     non-empty (hiding the placeholder).
+    try {
+      const _proto = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype, "value");
+      if (_proto && _proto.set && _proto.get) {
+        Object.defineProperty(el, "value", {
+          configurable: true,
+          get() { return _proto.get.call(this); },
+          set(v) {
+            const _prev = _proto.get.call(this);
+            if (v !== _prev) {
+              console.warn(
+                `[comment-box-guard] ${id}.value set to `
+                + JSON.stringify(v).slice(0, 80)
+                + ` (was ${JSON.stringify(_prev).slice(0, 80)})`);
+              console.trace(`[comment-box-guard] ${id}.value trace`);
+            }
+            _proto.set.call(this, v);
+          },
+        });
+      }
+    } catch (_e) {
+      console.warn("[comment-box-guard] value trap install failed:", _e);
+    }
+    // (b) Parent subtree observer — catches "div replaced via
+    //     innerHTML" or "textarea removed from DOM".
+    const parent = el.parentElement;
+    if (parent) {
+      const pobs = new MutationObserver((muts) => {
+        if (window._orderIsLocked === true) return;
+        for (const m of muts) {
+          if (m.type !== "childList") continue;
+          const live = document.getElementById(id);
+          if (live !== el) {
+            console.warn(
+              `[comment-box-guard] ${id} element reference changed! `
+              + `(got ${live ? "a different element" : "null"}) — `
+              + `re-watching the new element.`);
+            // If the live element changed, re-run _watch on it.
+            setTimeout(() => _watch(id), 0);
+            return;
+          }
+          for (const node of m.removedNodes) {
+            if (node === el) {
+              console.warn(
+                `[comment-box-guard] ${id} was REMOVED from the DOM `
+                + `by a parent innerHTML / replaceChild call.  `
+                + `This is why the field looks blank + unresponsive.`);
+            }
+          }
+        }
+      });
+      pobs.observe(parent, {childList: true, subtree: false});
+    }
+    // (c) Pointer-events / opacity sanity on the parent chain —
+    //     diagnostic log only, no revert.
+    let _p = el.parentElement;
+    const chain = [];
+    while (_p && _p !== document.body) {
+      const cs = getComputedStyle(_p);
+      if (cs.pointerEvents === "none" || +cs.opacity < 0.5) {
+        chain.push({
+          tag:  _p.tagName + (_p.id ? "#" + _p.id : "") + "." + _p.className,
+          pe:   cs.pointerEvents, op: cs.opacity,
+        });
+      }
+      _p = _p.parentElement;
+    }
+    if (chain.length) {
+      console.warn(
+        `[comment-box-guard] ${id} parent chain has `
+        + `pointer-events:none / low-opacity nodes:`, chain);
+    }
   };
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded",
