@@ -9474,9 +9474,16 @@ function _recomputeInterstateOrderFlag(){
   // but is now interstate (plant pick happened post-hydrate OR was
   // saved before this feature existed) must unhide the approval
   // panel so any approver can click Approve.
+  // Nov-09: same gate as the stock-out branch — only un-hide on a
+  // HYDRATED order (window._currentOrderId set).  On a fresh SPRF
+  // the panel has no approver chips to render; un-hiding it dropped
+  // an empty amber band into the right-side subgrid where it
+  // overlapped the Reason textarea cell.
   try {
     const panel = document.getElementById("approvalPanel");
-    if (panel && anyInterstate) panel.hidden = false;
+    if (panel && anyInterstate && window._currentOrderId){
+      panel.hidden = false;
+    }
   } catch (_e) {}
 }
 
