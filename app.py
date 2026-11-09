@@ -7499,6 +7499,15 @@ def api_orders_submit():
     if needs_approval == "Y":
         to_list += MGMT_APPROVER_EMAILS
     cc = [submitted_by_email] if submitted_by_email else []
+    # Nov-09 user ask: when the SPRF is submitted by someone else on
+    # the BDE's behalf (e.g. Luca submitting for Paul Buckley), the
+    # BDE whose name appears on the form MUST also receive the mail.
+    # Resolve BDE name → email via _BDE_DIRECTORY and drop onto Cc
+    # when it's a different address than the submitter's.
+    _bde_email = (_lookup_bde_email(submitted_by_bde) or "").strip().lower()
+    if (_bde_email
+            and _bde_email not in [str(x).lower() for x in (to_list + cc)]):
+        cc.append(_bde_email)
     cc += SPRF_READONLY_CC
     # Oct-22: CC the BDE's regional manager (BDE_MANAGER_CC map).
     _mgr = _bde_manager_email(submitted_by_bde)
