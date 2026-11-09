@@ -9219,9 +9219,17 @@ function _recomputeStockOutOrderFlag(){
   try { if (typeof updateTotals === "function") updateTotals(); } catch (_e) {}
   // Standard-priced order with stock-out now needs approval; make
   // sure the panel is visible so an approver can click Approve.
+  // Nov-09: GATE this on the order being hydrated (window._currentOrderId
+  // present).  On a FRESH SPRF the panel has no approver chips to
+  // render yet, and un-hiding it was dropping an empty amber band
+  // into the right-side subgrid where it visually overlapped the
+  // Reason textarea cell and blocked click-through on exactly the
+  // stock-out materials that triggered it.
   try {
     const panel = document.getElementById("approvalPanel");
-    if (panel && stockoutCount > 0) panel.hidden = false;
+    if (panel && stockoutCount > 0 && window._currentOrderId){
+      panel.hidden = false;
+    }
   } catch (_e) {}
   // Nov-09 user ask: operator reported Reason / Notes textarea going
   // blank + unresponsive after certain material picks on a fresh
