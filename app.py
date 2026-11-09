@@ -16136,16 +16136,26 @@ def profit_monthly():
                     # valid reference.
                     prev_sd_ratio = 0.0
                     prev_op_ratio = 0.0
+                    prev_cogs_ratio = 0.0
                     for look in range(_efm - 1, 0, -1):
                         pr = out[look - 1]
                         if (pr["gross"] or 0) > 0 \
-                                and (pr["sd"] or pr["op_cost"]) > 0:
-                            prev_sd_ratio = (pr["sd"] or 0)      / pr["gross"]
-                            prev_op_ratio = (pr["op_cost"] or 0) / pr["gross"]
+                                and (pr["sd"] or pr["op_cost"] or pr["cogs"]) > 0:
+                            prev_sd_ratio   = (pr["sd"]      or 0) / pr["gross"]
+                            prev_op_ratio   = (pr["op_cost"] or 0) / pr["gross"]
+                            prev_cogs_ratio = (pr["cogs"]    or 0) / pr["gross"]
                             break
+                    # Nov-09 user ask: when sales_thismonth.cogs is
+                    # null / 0 for the month (SAP feed sometimes omits
+                    # COGS on the current month until the roll-up
+                    # catches up), estimate it from the previous
+                    # month's COGS / gross ratio — same pattern sd +
+                    # op_cost already use.  Keeps the Profit (Monthly)
+                    # chart from drawing a sliver-only November bar.
+                    _cogs_final = c if c > 0 else round(g_adj * prev_cogs_ratio, 2)
                     out[_efm - 1].update(
                         gross=round(g_adj, 2),
-                        cogs=c,
+                        cogs=_cogs_final,
                         sd=round(g_adj * prev_sd_ratio, 2),
                         op_cost=round(g_adj * prev_op_ratio, 2),
                         estimated=True,
