@@ -9240,8 +9240,72 @@ function _reassertCommentBoxesInteractive(){
     if (_el.disabled) _el.disabled = false;
     if (_el.tabIndex < 0) _el.tabIndex = 0;
     if (_el.style.pointerEvents === "none") _el.style.pointerEvents = "auto";
+    // Also undo any opacity / display tricks that might hide the
+    // field without touching the readOnly / disabled flags.
+    if (_el.style.display === "none") _el.style.display = "";
+    if (_el.style.visibility === "hidden") _el.style.visibility = "";
+    if (_el.style.opacity && +_el.style.opacity < 0.5) _el.style.opacity = "";
   }
 }
+
+/* Nov-09: operator reported the Reason textarea going blank +
+   unresponsive on a specific material pick even after the
+   post-pick / post-stock-out re-asserts fired above.  That means
+   SOMETHING downstream — a setTimeout, an async await chain, a
+   promise .then — is flipping the field AFTER our re-arm runs.
+   Install a MutationObserver on both #mgmt_reason and its parent
+   that reverts any disabler change the moment it happens, AND
+   logs a console warning so we can identify the offending path
+   from the operator's devtools. */
+(function _installCommentBoxGuard(){
+  const _apply = (el) => {
+    if (window._orderIsLocked === true) return false;
+    let changed = false;
+    if (el.readOnly)   { el.readOnly = false; changed = true; }
+    if (el.disabled)   { el.disabled = false; changed = true; }
+    if (el.tabIndex < 0) { el.tabIndex = 0; changed = true; }
+    if (el.style.pointerEvents === "none") {
+      el.style.pointerEvents = "auto"; changed = true;
+    }
+    return changed;
+  };
+  const _watch = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    // Initial pass + repaint a few times during the first 2 s of life
+    // to catch late async disablers from material-pick side effects.
+    _apply(el);
+    [50, 150, 400, 1000, 2000].forEach(ms =>
+      setTimeout(() => {
+        if (_apply(el)) console.warn(
+          `[comment-box-guard] re-opened ${id} after ${ms} ms — `
+          + `something downstream flipped it.`);
+      }, ms));
+    const obs = new MutationObserver((muts) => {
+      if (window._orderIsLocked === true) return;
+      let flipped = false;
+      for (const m of muts) {
+        if (m.type !== "attributes") continue;
+        if (!["readonly","disabled","tabindex","style"].includes(m.attributeName)) continue;
+        if (_apply(el)) {
+          console.warn(
+            `[comment-box-guard] ${id} ${m.attributeName} changed `
+            + `(oldValue=${JSON.stringify(m.oldValue)}) — reverted.`);
+          flipped = true;
+        }
+      }
+      return flipped;
+    });
+    obs.observe(el, {attributes: true, attributeOldValue: true,
+                     attributeFilter: ["readonly","disabled","tabindex","style"]});
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded",
+      () => { _watch("mgmt_reason"); _watch("special_instruction"); });
+  } else {
+    _watch("mgmt_reason"); _watch("special_instruction");
+  }
+})();
 
 // Convenience: refresh all three (highlight + remark + order flag)
 // for a single row.  Call this wherever an existing interstate hook
