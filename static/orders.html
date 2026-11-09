@@ -428,6 +428,13 @@
   /* two-column meta block (Customer | Order#) */
   .meta{
     display:grid;grid-template-columns:1fr 1fr;gap:0;
+    /* Nov-09: anchor for #approvalPanel's position:absolute below —
+       the panel is a child of the right-side subgrid and the subgrid
+       has only 11 rows defined, so an auto-placed panel was
+       overlapping the Reason textarea cell on row 11.  Pulling it
+       out with position:absolute relative to .meta puts it directly
+       below the whole details grid instead. */
+    position:relative;
     /* 11 explicit rows for subgrid, mirroring the Oct-13 revised
        pairing table (Approval route now takes two rows so Total DC
        / Additional DC badges land on a separate line):
@@ -2073,8 +2080,13 @@
         <!-- Approval-status band — auto-shows on submitted orders that
              carry additional DC (sp_dc / add_dc / aging_dc > 0 on any
              line).  Standard-pricing submissions leave it hidden. -->
+        <!-- Nov-09: approvalPanel is positioned absolute (anchored to
+             the .meta grid above) so it drops BELOW the whole details
+             grid instead of fighting for a cell inside the 11-row
+             subgrid.  This was dropping an amber band over the Reason
+             textarea on row 11 and blocking click-through. -->
         <div id="approvalPanel" hidden
-             style="grid-column: span 4;padding:8px 10px;background:#fffbeb;border:1px solid #f59e0b;border-radius:3px;margin-top:6px">
+             style="position:absolute;left:0;right:0;top:100%;z-index:3;padding:8px 10px;background:#fffbeb;border:1px solid #f59e0b;border-radius:3px;margin-top:6px">
           <div id="approvalRow" style="display:flex;gap:14px;font-size:12px;color:#78350f;flex-wrap:wrap"></div>
         </div>
       </div>
