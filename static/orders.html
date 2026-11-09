@@ -10857,12 +10857,21 @@ function renderAllAttachStrips(order, who){
   const oid  = (order || {}).id || null;
   const isApprover = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
   // Visible sources depend on viewer:
-  //   reason  — ALWAYS visible on new OR hydrated SPRF (BDE attaches
-  //              support files to their Reason; a new SPRF stages the
-  //              files locally and uploads them on Submit).
+  //   reason  — on a HYDRATED SPRF always visible so the BDE can
+  //              see / add / remove support files.  On a FRESH SPRF
+  //              only visible when a file has actually been staged
+  //              locally (pending upload) — hiding it otherwise
+  //              keeps the Reason textarea cell uncluttered.
+  //              (Nov-09 fix: the always-visible pattern dropped an
+  //              empty attach strip on top of the Reason textarea
+  //              on a fresh SPRF, blocking click-through.)
   //   approver_feedback — only when the Feedback box is visible.
   //   approve / reject  — only when the matching modal is open.
-  _renderAttachStrip("attachStrip-reason",            oid, atts, who, true);
+  const _hasPendingReason = !!(window._pendingAttachments
+                               && Array.isArray(window._pendingAttachments.reason)
+                               && window._pendingAttachments.reason.length);
+  const _reasonStripVisible = !!oid || _hasPendingReason;
+  _renderAttachStrip("attachStrip-reason",            oid, atts, who, _reasonStripVisible);
   _renderAttachStrip("attachStrip-approver_feedback", oid, atts, who, isApprover);
   _renderAttachStrip("attachStrip-approve",           oid, atts, who, isApprover);
   _renderAttachStrip("attachStrip-reject",            oid, atts, who, isApprover);
