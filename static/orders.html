@@ -4850,6 +4850,12 @@ function applyMaterial(rowEl, data){
   // /api/orders/additional_dc — the reloaded dc_additional_customer
   // table now optionally gates rows by pattern (and material).
   rowEl.dataset.pattern       = data.pattern || "";
+  // Nov-09: defensive — some material picks have been reported
+  // leaving the Reason / Notes textarea blank + unresponsive.
+  // Re-assert the two always-editable comment boxes immediately
+  // after the pick so any wire* bulk loop that fires downstream
+  // can't leave them locked.
+  try { _reassertCommentBoxesInteractive(); } catch (_e) {}
   recalcRow(rowEl);
   // Now that brand + line are known, drop the correct customer Base DC
   // into this row's base_dc cell — Current Price then updates via
@@ -9206,6 +9212,35 @@ function _recomputeStockOutOrderFlag(){
     const panel = document.getElementById("approvalPanel");
     if (panel && stockoutCount > 0) panel.hidden = false;
   } catch (_e) {}
+  // Nov-09 user ask: operator reported Reason / Notes textarea going
+  // blank + unresponsive after certain material picks on a fresh
+  // SPRF (stock-out LF line triggered the approval banner, and a
+  // wire* bulk loop somewhere downstream left it readOnly / disabled
+  // on this one material only).  Belt-and-braces: re-open the two
+  // free-text boxes on every stock-out recompute so they stay
+  // interactive no matter which path flipped them.  Skip when the
+  // order is a hydrated already-approved one (lockFormForApproval
+  // is authoritative then).
+  try { _reassertCommentBoxesInteractive(); } catch (_e) {}
+}
+
+/* Re-arm the two always-editable comment boxes (Reason / Notes for
+   Approver + Special Instruction) regardless of which code path
+   last touched them.  Called from any hook that might indirectly
+   trigger a bulk readOnly / disabled loop (material pick, stock-out
+   recompute, etc.).  No-op once the SPRF is locked by
+   lockFormForApproval (approved orders). */
+function _reassertCommentBoxesInteractive(){
+  // An approved / locked SPRF stays locked — never override that.
+  if (window._orderIsLocked === true) return;
+  for (const _id of ["mgmt_reason", "special_instruction"]){
+    const _el = document.getElementById(_id);
+    if (!_el) continue;
+    if (_el.readOnly) _el.readOnly = false;
+    if (_el.disabled) _el.disabled = false;
+    if (_el.tabIndex < 0) _el.tabIndex = 0;
+    if (_el.style.pointerEvents === "none") _el.style.pointerEvents = "auto";
+  }
 }
 
 // Convenience: refresh all three (highlight + remark + order flag)
@@ -11442,6 +11477,10 @@ async function _confirmAndRevive(order, who){
    Update dimmed alongside Submit, the Edit chip hidden, and every
    input read-only.  Idempotent — safe to call twice. */
 function lockFormForApproval(){
+  // Nov-09: flag the SPRF as locked so the Reason/Note re-asserter
+  // (which runs on every stock-out recompute) knows to back off
+  // instead of re-opening the fields it just locked.
+  window._orderIsLocked = true;
   const sBtn = document.getElementById("btnSubmit");
   const dBtn = document.getElementById("btnSaveTemp");
   const eBtn = document.getElementById("btnEdit");
