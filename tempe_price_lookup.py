@@ -438,6 +438,26 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
                 r"(?:^|[^A-Z0-9])" + _esc + r"(?:[^A-Z0-9]|$)",
                 rpat_search,
             ) is not None
+            # Nov-09 user ask: Hankook writes RA58C / RA58S / etc. as
+            # a C-load (commercial) variant of the base pattern RA58;
+            # Tempe's catalog carries only the base name.  When the
+            # SPRF pattern is 3+ chars with a single trailing letter
+            # and the strict token miss would leave an obvious match
+            # behind, retry with the trailing letter sheared off.
+            # Only shear FROM the SPRF side — never add a suffix to
+            # a CSV token — so K137 (SPRF) can never slide onto a
+            # K137A (CSV) row and reopen the K127 ambiguity the Oct-27
+            # strictening closed.
+            if (not has_pattern
+                    and len(np_pattern) >= 4
+                    and np_pattern[-1].isalpha()
+                    and np_pattern[-2].isdigit()):
+                _base = np_pattern[:-1]
+                _esc_b = re.escape(_base)
+                has_pattern = re.search(
+                    r"(?:^|[^A-Z0-9])" + _esc_b + r"(?:[^A-Z0-9]|$)",
+                    rpat_search,
+                ) is not None
         else:
             has_pattern = False
         has_load    = bool(ul_load) and rl.upper() == ul_load.upper()
