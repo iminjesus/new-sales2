@@ -11223,8 +11223,17 @@ function wireApprovalPanel(order, who){
     _mgmtEdit = `${_mEditF[1]} ${_mEditF[2]}`;
     _mgmtMain = (_mEditF[3] || "").trim();
   }
-  const requesterReasonBlock = _mgmtText
-    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#f1f5f9;border:1px solid #94a3b8;border-left-width:4px;border-radius:0 4px 4px 0;color:#334155;font-size:12.5px;line-height:1.5;white-space:pre-wrap;cursor:default" title="Read-only mirror of the Reason / Notes for Approver textarea above - click into the yellow box to edit.">`
+  // Nov-10 user ask: on a PENDING order the yellow Reason textarea
+  // on the left is STILL visible (editable), so the mirrored
+  // "Reason from requester (view)" block on the right would be an
+  // exact duplicate.  Only render the view block when the Reason
+  // textarea itself has been hidden (approved / rejected orders —
+  // the same gate wireApprovalPanel uses above).
+  const _approvedForView = !!order.approved_by_name;
+  const _rejectedForView = !!order.rejected_by_name;
+  const _showReasonView  = _mgmtText && (_approvedForView || _rejectedForView);
+  const requesterReasonBlock = _showReasonView
+    ? `<div style="width:100%;margin-bottom:8px;padding:8px 12px;background:#f1f5f9;border:1px solid #94a3b8;border-left-width:4px;border-radius:0 4px 4px 0;color:#334155;font-size:12.5px;line-height:1.5;white-space:pre-wrap;cursor:default">`
       + `👁 <b>Reason from requester (view):</b> ${esc(_mgmtMain || _mgmtText)}`
       + (_mgmtMain && _mgmtEdit
           ? `<div style="margin-top:4px;font-size:11px;color:#64748b;font-style:italic">last edit by ${esc(_mgmtEdit)}</div>`
