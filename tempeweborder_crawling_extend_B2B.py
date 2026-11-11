@@ -461,7 +461,11 @@ def _merged_size_queries():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-size", default="",
-                        help="Run one digit-code query and exit (e.g. 2156515).")
+                        help="Run only these digit-code queries and exit.  "
+                             "Comma-separate for several, e.g. 2156515,2254517.")
+    parser.add_argument("--limit", type=int, default=0,
+                        help="Stop after this many sizes from the full merged list "
+                             "(ignored when --test-size is set).")
     parser.add_argument("--headless", action="store_true",
                         help="Run Chrome headless.")
     parser.add_argument("--debug", action="store_true",
@@ -469,11 +473,17 @@ def main():
     args = parser.parse_args()
 
     if args.test_size:
-        queries = [(args.test_size, args.test_size)]
-        print(f"[sweep] TEST mode — one size: {args.test_size}")
+        # Comma-separated → list of (digits, label) with label = digits.
+        _codes = [c.strip() for c in args.test_size.split(",") if c.strip()]
+        queries = [(c, c) for c in _codes]
+        print(f"[sweep] TEST mode — {len(queries)} size(s): {_codes}")
     else:
         queries = _merged_size_queries()
-        print(f"[sweep] full mode — {len(queries)} sizes")
+        if args.limit > 0:
+            queries = queries[:args.limit]
+            print(f"[sweep] LIMITED mode — first {len(queries)} of merged list")
+        else:
+            print(f"[sweep] full mode — {len(queries)} sizes")
 
     driver = init_driver(headless=args.headless)
     wait = WebDriverWait(driver, 25)
