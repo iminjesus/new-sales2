@@ -298,87 +298,85 @@ def wait_for_results_table(driver, max_total_s=25):
     return None, []
 
 
-def _cell_text(row, idx):
-    if idx is None or idx < 0:
-        return ""
-    try:
-        tds = row.find_elements(By.TAG_NAME, "td")
-        if 0 <= idx < len(tds):
-            return _clean(tds[idx].text)
-    except Exception:
-        pass
-    return ""
-
-
 def _parse_stock_badge(txt):
+    """Stock cell text looks like "2\\nMore Available" or "8+\\nAt
+    Other Locations".  Return the leading quantity ("2", "8+")."""
     if not txt:
         return ""
-    m = re.match(r"\s*(\d+\+?|\d+)", txt)
+    m = re.search(r"(\d+\+?)", txt)
     return m.group(1) if m else ""
 
 
-def _extract_tooltip_branches(driver, row, stock_col_idx):
-    """Hover the Stock cell, parse the tooltip for per-branch qty.
-    Returns (bri, syd, mel)."""
-    if stock_col_idx is None or stock_col_idx < 0:
-        return "", "", ""
+_BRANCH_RE = re.compile(
+    r"(Sydney|Melbourne|Brisbane)\s*[:\-]?\s*</span>\s*<span[^>]*>\s*([^<\s]+)",
+    re.IGNORECASE,
+)
+
+
+def _parse_tooltip_html(html):
+    """Return {branch_lower: qty_str} from the already-rendered
+    <div class="tooltip-text"> DOM.  The site renders:
+        <div><span>Tempe Tyres Sydney: </span><span>2</span></div>
+        <div><span>Tempe Tyres Melbourne: </span><span>Call</span></div>
+        <div><span>Tempe Tyres Brisbane: </span><span>1</span></div>
+    "Call" means "call branch for availability" — preserve verbatim
+    so the dashboard can distinguish it from "0"."""
+    out = {}
+    if not html:
+        return out
+    for m in _BRANCH_RE.finditer(html):
+        name = m.group(1).strip().lower()
+        qty  = m.group(2).strip().strip(":").strip()
+        if name and name not in out:
+            out[name] = qty
+    return out
+
+
+def _extract_row_by_data_label(row):
+    """Pull every data cell out of the row by walking its .d-desktop
+    children and keying on data-label.  Returns a dict with raw
+    text + stock tooltip HTML.  Returns None on an empty / no-
+    results placeholder row."""
+    out = {
+        "sku": "", "brand": "", "size": "", "model": "", "description": "",
+        "stock_text": "", "retail": "", "buy": "", "tooltip_html": "",
+    }
+    seen_any = False
     try:
-        tds = row.find_elements(By.TAG_NAME, "td")
-        if stock_col_idx >= len(tds):
-            return "", "", ""
-        cell = tds[stock_col_idx]
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", cell)
-        time.sleep(0.15)
-        ActionChains(driver).move_to_element(cell).perform()
-        time.sleep(0.7)
-        tip_text = ""
-        for sel in [
-            ".tooltip:not([style*='display: none']) .tooltip-inner",
-            ".tippy-box .tippy-content",
-            "[role='tooltip']",
-            ".popover.show .popover-body",
-            ".popover-body",
-        ]:
-            try:
-                for t in driver.find_elements(By.CSS_SELECTOR, sel):
-                    if t.is_displayed():
-                        tip_text = _clean(t.text)
-                        if tip_text:
-                            break
-                if tip_text:
-                    break
-            except Exception:
+        for td in row.find_elements(By.CSS_SELECTOR, "td.d-desktop"):
+            label = (td.get_attribute("data-label") or "").strip().lower()
+            if not label:
                 continue
-        if not tip_text:
-            for attr in ("title", "aria-label", "data-original-title"):
-                v = cell.get_attribute(attr) or ""
-                if v and any(k in v.lower() for k in ("sydney", "melbourne", "brisbane")):
-                    tip_text = v
-                    break
-        if not tip_text:
-            return "", "", ""
-        def _grab(name):
-            m = re.search(rf"{name}\s*[:\-]?\s*(\d+\+?)", tip_text, re.IGNORECASE)
-            return m.group(1) if m else ""
-        return _grab("Brisbane"), _grab("Sydney"), _grab("Melbourne")
-    except Exception:
-        return "", "", ""
+            seen_any = True
+            text = _clean(td.text)
+            if label == "sku":           out["sku"] = text
+            elif label == "brand":       out["brand"] = text
+            elif label == "size":        out["size"] = text
+            elif label == "model":       out["model"] = text
+            elif label == "description": out["description"] = text
+            elif label == "stock":
+                out["stock_text"] = text
+                try:
+                    tip = td.find_element(By.CSS_SELECTOR, ".tooltip-text")
+                    out["tooltip_html"] = tip.get_attribute("innerHTML") or ""
+                except Exception:
+                    pass
+            elif label == "retail price": out["retail"] = text
+            elif label == "buy price":    out["buy"] = text
+    except StaleElementReferenceException:
+        return None
+    return out if seen_any else None
 
 
 def scrape_rows(driver, table, rows, debug=False):
-    cols = _resolve_columns_for(table)
-    if debug:
-        print(f"    [DIAG] resolved columns: {cols}")
-        if rows:
-            try:
-                _html = rows[0].get_attribute('outerHTML')
-                print(f"    [DIAG] row[0] FULL outerHTML ({len(_html)} chars):")
-                print(_html)
-            except Exception:
-                pass
-    results = []
-    # Re-query rows once more RIGHT before iteration — the earlier
-    # list may be stale after `_resolve_columns_for` churn.
+    if debug and rows:
+        try:
+            _html = rows[0].get_attribute('outerHTML')
+            print(f"    [DIAG] row[0] FULL outerHTML ({len(_html)} chars):")
+            print(_html)
+        except Exception:
+            pass
+    # Re-query rows just before the loop so a stale list doesn't bite.
     try:
         rows = table.find_elements(By.CSS_SELECTOR, "tbody tr")
         if not rows:
@@ -386,24 +384,36 @@ def scrape_rows(driver, table, rows, debug=False):
                     if r.find_elements(By.TAG_NAME, "td")]
     except StaleElementReferenceException:
         return []
+    results = []
     for ri, row in enumerate(rows):
         try:
-            sku    = _cell_text(row, cols.get("sku"))
-            brand  = _cell_text(row, cols.get("brand"))
-            size   = _cell_text(row, cols.get("size"))
-            model  = _cell_text(row, cols.get("model"))
-            desc   = _cell_text(row, cols.get("description")) or model
-            stock_txt = _cell_text(row, cols.get("stock_cell"))
-            retail = _cell_text(row, cols.get("retail_price"))
-            buy    = _cell_text(row, cols.get("buy_price"))
+            raw = _extract_row_by_data_label(row)
+            if raw is None:
+                # Placeholder row ("No products found") or layout
+                # only has mobile cells.  Skip silently.
+                continue
+            sku    = raw["sku"]
+            brand  = raw["brand"]
+            size   = raw["size"]
+            model  = raw["model"]
+            desc   = raw["description"] or model
             if debug and ri == 0:
-                print(f"    [DIAG] row 0: sku={sku!r} brand={brand!r} "
+                print(f"    [DIAG] row 0 parsed: sku={sku!r} brand={brand!r} "
                       f"size={size!r} model={model!r} desc={desc!r} "
-                      f"stock={stock_txt!r} retail={retail!r} buy={buy!r}")
-            # Skip empty rows (e.g. a "no results" placeholder <tr>).
+                      f"stock={raw['stock_text']!r} retail={raw['retail']!r} "
+                      f"buy={raw['buy']!r}")
             if not sku and not brand:
                 continue
-            size_norm = extract_size_from_desc(size) or extract_size_from_desc(desc) or size
+            # Normalise SIZE: prefer the dedicated Size cell, then the
+            # description, then the raw label.
+            size_norm = (extract_size_from_desc(size)
+                         or extract_size_from_desc(desc)
+                         or size)
+            # Build DESCRIPTION the legacy way: brand + model + size +
+            # description collapsed + de-duped tokens.  The
+            # DESCRIPTION cell on this site usually equals
+            # "<size> <load/speed> <model>" so the cleaner knocks the
+            # leading SIZE chunk off.
             parts = []
             for p in (brand, model, desc):
                 p = _clean(p)
@@ -419,11 +429,15 @@ def scrape_rows(driver, table, rows, debug=False):
                 s = _clean(s).replace("$", "").replace(",", "")
                 m = re.search(r"\d+(?:\.\d+)?", s)
                 return m.group(0) if m else ""
-            cost  = _money(buy)
-            price = _money(retail)
-            stock = _parse_stock_badge(stock_txt)
-            bri, syd, mel = _extract_tooltip_branches(
-                driver, row, cols.get("stock_cell"))
+            price = _money(raw["retail"])   # RETAIL PRICE → DR
+            cost  = _money(raw["buy"])      # BUY PRICE   → SI
+            stock = _parse_stock_badge(raw["stock_text"])
+            # Per-branch qty parsed from the already-rendered tooltip
+            # HTML — no hover required.
+            branches = _parse_tooltip_html(raw["tooltip_html"])
+            bri = branches.get("brisbane", "")
+            syd = branches.get("sydney", "")
+            mel = branches.get("melbourne", "")
             results.append({
                 "sku":         sku,
                 "size":        size_norm,
