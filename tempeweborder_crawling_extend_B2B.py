@@ -299,12 +299,29 @@ def wait_for_results_table(driver, max_total_s=25):
 
 
 def _parse_stock_badge(txt):
-    """Stock cell text looks like "2\\nMore Available" or "8+\\nAt
-    Other Locations".  Return the leading quantity ("2", "8+")."""
+    """Stock cell text looks like "2\\nMore Available", "8+\\nAt
+    Other Locations", or "Call\\nFor Availability".  Return the
+    leading quantity ("2", "8+").  Nov-11: a bare "Call" badge
+    means "call branch to confirm" and the operator treats it as
+    zero stock, so we emit "0" instead of "Call" so the dashboard
+    buckets it like any other OOS row."""
     if not txt:
         return ""
     m = re.search(r"(\d+\+?)", txt)
-    return m.group(1) if m else ""
+    if m:
+        return m.group(1)
+    if re.search(r"call", txt, re.IGNORECASE):
+        return "0"
+    return ""
+
+
+def _call_to_zero(v):
+    """Per-branch qty may come back as "Call" from the tooltip.
+    Normalise it to "0" so downstream consumers aren't surprised."""
+    s = (v or "").strip()
+    if s.lower() in ("call", "call for availability", "call branch"):
+        return "0"
+    return s
 
 
 _BRANCH_RE = re.compile(
@@ -433,11 +450,13 @@ def scrape_rows(driver, table, rows, debug=False):
             cost  = _money(raw["buy"])      # BUY PRICE   → SI
             stock = _parse_stock_badge(raw["stock_text"])
             # Per-branch qty parsed from the already-rendered tooltip
-            # HTML — no hover required.
+            # HTML — no hover required.  Nov-11: "Call" ("call branch
+            # for availability") is treated as 0 so downstream rollups
+            # don't try to add a non-numeric branch value.
             branches = _parse_tooltip_html(raw["tooltip_html"])
-            bri = branches.get("brisbane", "")
-            syd = branches.get("sydney", "")
-            mel = branches.get("melbourne", "")
+            bri = _call_to_zero(branches.get("brisbane", ""))
+            syd = _call_to_zero(branches.get("sydney",   ""))
+            mel = _call_to_zero(branches.get("melbourne",""))
             results.append({
                 "sku":         sku,
                 "size":        size_norm,
