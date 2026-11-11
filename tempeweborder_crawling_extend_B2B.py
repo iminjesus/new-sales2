@@ -371,8 +371,9 @@ def scrape_rows(driver, table, rows, debug=False):
         print(f"    [DIAG] resolved columns: {cols}")
         if rows:
             try:
-                print(f"    [DIAG] row[0] outerHTML (first 500 chars): "
-                      f"{rows[0].get_attribute('outerHTML')[:500]}")
+                _html = rows[0].get_attribute('outerHTML')
+                print(f"    [DIAG] row[0] FULL outerHTML ({len(_html)} chars):")
+                print(_html)
             except Exception:
                 pass
     results = []
