@@ -4552,25 +4552,32 @@ function _renderTempeRefOnRow(rowEl, j){
                    ? ` ${src.month_label}` : "";
     let s = `(${label}${monthTag}: ${parts.join("/")}`;
     // Nov-02 user ask: per-warehouse stock display.  The lookup
-    // backend sets src.stock_w1 + src.stock_w2 when the CSV carries
-    // the branch columns (STOCK_BRISBANE / STOCK_SYDNEY for Tempe,
+    // backend sets src.stock_w1 + src.stock_w2 (and Nov-11:
+    // src.stock_w3) when the CSV carries the branch columns
+    // (STOCK_BRISBANE / STOCK_SYDNEY / STOCK_MELBOURNE for Tempe,
     // STOCK_SYDNEY / STOCK_MELBOURNE for Newbee).  Older CSVs
     // without those columns fall back to the single-stock format so
     // the chip still reads correctly.
     const w1 = _normStock(src.stock_w1);
     const w2 = _normStock(src.stock_w2);
-    const hasWh = (w1 !== "" || w2 !== "");
+    const w3 = _normStock(src.stock_w3);
+    const hasWh = (w1 !== "" || w2 !== "" || w3 !== "");
     if (hasWh) {
-      // Label letters per source: dealer / consumer -> "B/S"
-      // (Brisbane/Sydney); newbdealer -> "S/M" (Sydney/Melbourne).
-      // Fall back to generic "W1/W2" for anything else so a future
-      // source doesn't break display.
-      let L1 = "W1", L2 = "W2";
+      // Label letters per source: dealer / consumer -> "B/S[/M]"
+      // (Brisbane/Sydney [/Melbourne]); newbdealer -> "S/M"
+      // (Sydney/Melbourne).  Fall back to generic "W1/W2[/W3]" for
+      // anything else so a future source doesn't break display.
+      let L1 = "W1", L2 = "W2", L3 = "W3";
       if (/^NewB/i.test(label))        { L1 = "S"; L2 = "M"; }
-      else if (/^Tempe/i.test(label))  { L1 = "B"; L2 = "S"; }
-      const z1 = _isZero(w1), z2 = _isZero(w2);
-      if (z1 && z2)   s += " ~OOS";
-      else            s += ` ~${L1}:${w1 || "0"} ${L2}:${w2 || "0"}`;
+      else if (/^Tempe/i.test(label))  { L1 = "B"; L2 = "S"; L3 = "M"; }
+      const z1 = _isZero(w1), z2 = _isZero(w2), z3 = _isZero(w3);
+      const hasW3 = (w3 !== "");
+      if (z1 && z2 && (!hasW3 || z3)) {
+        s += " ~OOS";
+      } else {
+        s += ` ~${L1}:${w1 || "0"} ${L2}:${w2 || "0"}`;
+        if (hasW3) s += ` ${L3}:${w3 || "0"}`;
+      }
     } else {
       const stk = _normStock(src.stock);
       // Nov-03 user ask: Tempe retail/consumer feed scrapes stock
@@ -4706,8 +4713,8 @@ function _renderTempeRefOnRow(rowEl, j){
   _lines.push("Legend: EC = end consumer (Tempe retail),  SI = dealer sell-in,  DR = dealer retail");
   _lines.push("         * = load/speed differs,  ? = pattern differs,"
             + "  ~Qty N(+) = stock on hand,  ~OOS = out of stock,"
-            + "  ~B:N S:N = per-branch stock (Brisbane/Sydney for Tempe,"
-            + " Sydney/Melbourne for Newbee)");
+            + "  ~B:N S:N M:N = per-branch stock (Brisbane/Sydney/Melbourne"
+            + " for Tempe B2B, Sydney/Melbourne for Newbee)");
   remEl.title = _lines.join("\n");
 }
 

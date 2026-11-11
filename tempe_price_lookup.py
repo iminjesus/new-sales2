@@ -400,16 +400,24 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
                 price = _nums[0][1]
         stock = _pick_col(r, stock_col) if stock_col else ""
         # Nov-02 user ask: per-warehouse stock capture.  stock_cols_wh
-        # is a 2-tuple of column names ("STOCK_BRISBANE","STOCK_SYDNEY")
-        # for Tempe, ("STOCK_SYDNEY","STOCK_MELBOURNE") for Newbee.
-        # When present, the row's stock_w1 / stock_w2 values are
-        # surfaced in the entry dict alongside the legacy single
-        # STOCK column so the SPRF chip can show the branch split.
+        # is a tuple of column names: ("STOCK_BRISBANE","STOCK_SYDNEY")
+        # for the legacy Tempe feed, ("STOCK_SYDNEY","STOCK_MELBOURNE")
+        # for Newbee.  Nov-11: the new Tempe B2B crawler also exposes
+        # STOCK_MELBOURNE so stock_cols_wh can now be a 3-tuple —
+        # stock_w3 picks up that third branch when present.  Older
+        # CSVs without a third slot leave stock_w3 as "", which the
+        # frontend chip renderer treats as "no third branch" and
+        # keeps the old 2-column B/S layout.
         stock_w1 = ""
         stock_w2 = ""
+        stock_w3 = ""
         if stock_cols_wh:
-            stock_w1 = _pick_col(r, stock_cols_wh[0]) if stock_cols_wh[0] else ""
-            stock_w2 = _pick_col(r, stock_cols_wh[1]) if stock_cols_wh[1] else ""
+            if len(stock_cols_wh) >= 1 and stock_cols_wh[0]:
+                stock_w1 = _pick_col(r, stock_cols_wh[0])
+            if len(stock_cols_wh) >= 2 and stock_cols_wh[1]:
+                stock_w2 = _pick_col(r, stock_cols_wh[1])
+            if len(stock_cols_wh) >= 3 and stock_cols_wh[2]:
+                stock_w3 = _pick_col(r, stock_cols_wh[2])
         # Oct-27-pm user ask: JAX / Bob Jane rows carry a PROMO text
         # column (e.g. "SAVE $20", "Trade price") beside the DISC
         # price.  Expose it on the entry dict so the SPRF chip can
@@ -465,6 +473,7 @@ def _best_match(rows, size_variants: set, np_pattern: str, ul_load: str,
             "stock":            stock,
             "stock_w1":         stock_w1,
             "stock_w2":         stock_w2,
+            "stock_w3":         stock_w3,
             "promo_text":       promo_text,
             "description":      desc,
             "brand":            brand,
@@ -565,7 +574,12 @@ def lookup_tempe_prices(size: str, pattern: str = "",
             # crawlers (base + extend).  Older CSVs without these
             # columns return "" via _pick_col, so the chip renderer
             # just falls back to the legacy single STOCK display.
-            stock_cols_wh = ("STOCK_BRISBANE", "STOCK_SYDNEY")
+            # Nov-11: the new B2B crawler also populates
+            # STOCK_MELBOURNE for Tempe; include it as the 3rd slot
+            # (older 2-col CSVs leave stock_w3 as "" so the chip
+            # still renders cleanly as B/S).
+            stock_cols_wh = ("STOCK_BRISBANE", "STOCK_SYDNEY",
+                             "STOCK_MELBOURNE")
             label      = "dealer"
         elif kind == "consumer":
             # Oct-27: the consumer (retail-site) CSV now carries a
