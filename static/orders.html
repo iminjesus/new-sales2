@@ -11111,7 +11111,13 @@ function wireApprovalPanel(order, who){
   // the approval panel.
   const _anyInterstate = !!window._orderHasInterstate
     || $$("#linesBody tr").some(tr => typeof _isInterstateLine === "function" && _isInterstateLine(tr));
-  if (_nma !== "Y" && !_isRejected && !_anyInterstate){
+  // Nov-16: stock-out on a Standard order also requires approval
+  // (same STANDARD + stock-out amber chip the top banner shows).
+  // Keep the approval panel visible on those so the approver can
+  // sign off; otherwise the top banner says "approval needed" but
+  // the chips + Approve button sit hidden with no way to act.
+  const _anyStockOut = !!window._orderHasStockOut || !!order.has_stockout;
+  if (_nma !== "Y" && !_isRejected && !_anyInterstate && !_anyStockOut){
     panel.hidden = true;
     const el = $("#approvalPathText");
     if (el) el.innerHTML =
@@ -11286,7 +11292,16 @@ function wireToolbarApproveBtn(btn, order, who){
   const _anyInterstate = !!window._orderHasInterstate
     || !!order.has_interstate
     || $$("#linesBody tr").some(tr => typeof _isInterstateLine === "function" && _isInterstateLine(tr));
-  if (order.needs_mgmt_approval !== "Y" && !_anyInterstate) return hide();
+  // Nov-16 user ask: Standard-priced orders carrying a stock-out
+  // line also need an approver's sign-off (same STANDARD + stock-
+  // out amber chip the top banner already shows).  The Approve
+  // button was hidden on those because the old gate only looked at
+  // needs_mgmt_approval + interstate.  Fold the stock-out flag in
+  // so the approvers (Justin / JJ / Kenny) can actually act.
+  const _anyStockOut = !!window._orderHasStockOut
+    || !!order.has_stockout;
+  if (order.needs_mgmt_approval !== "Y"
+      && !_anyInterstate && !_anyStockOut) return hide();
   if (order.approved_by_name)             return hide();
   const myMissing = (who.is_approver_a && order.approved_a !== "Y")
                  || (who.is_approver_b && order.approved_b !== "Y")
@@ -11463,7 +11478,12 @@ function wireRejectBtns(order, who){
   const tool = document.getElementById("btnToolbarReject");
   const bot  = document.getElementById("btnBottomReject");
   const hide = (b) => { if (b) b.hidden = true; };
-  if (order.needs_mgmt_approval !== "Y") { hide(tool); hide(bot); return; }
+  // Nov-16: same fold-in as wireToolbarApproveBtn — Reject must also
+  // be reachable on Standard-priced interstate OR stock-out orders.
+  const _anyInterstate = !!window._orderHasInterstate || !!order.has_interstate;
+  const _anyStockOut   = !!window._orderHasStockOut   || !!order.has_stockout;
+  if (order.needs_mgmt_approval !== "Y"
+      && !_anyInterstate && !_anyStockOut) { hide(tool); hide(bot); return; }
   if (order.approved_by_name || order.rejected_by_name) { hide(tool); hide(bot); return; }
   const canReject = !!(who && (who.is_approver_a || who.is_approver_b || who.is_approver_c));
   [tool, bot].forEach(btn => {
