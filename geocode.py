@@ -223,58 +223,49 @@ def copy_source_through_channel2(src_path, tpl_path):
     src_wb = load_workbook(src_path, data_only=True)
     tpl_wb = load_workbook(tpl_path)
 
-    # Pick the right Customer Master sheet in the source.  The raw
-    # workbook commonly ships with more than one -- the live data on
-    # one sheet, and archived snapshots named like
-    # "Customer Master(Last)", "Customer Master(Old)", "Customer
-    # Master_2611", etc., on the others.  Prefer the exact "Customer
-    # Master" name; if that is missing, prefer any sheet whose name
-    # starts with "Customer Master" and does NOT carry an obvious
-    # archive marker (last / old / backup / archive / prev / bak)
-    # or a date-looking suffix; fall back to the active sheet only
-    # when no better candidate exists, and WARN LOUDLY.
+    # Pick the right Customer Master sheet in the source.  In this
+    # workbook's convention, "(Last)" means the LATEST snapshot of the
+    # customer list, not an archive -- so when the raw file ships with
+    # both "Customer Master" and "Customer Master(Last)", the "(Last)"
+    # sheet is the one the operator just produced and wants read.
+    # Priority:
+    #   1. "Customer Master(Last)" exact (preferred when present)
+    #   2. "Customer Master"       exact
+    #   3. only one sheet in the workbook -- use it, whatever it is
+    #   4. any sheet whose name starts with "Customer Master"
+    #   5. active sheet (last resort; warn loudly)
+    LAST_SHEET = CUSTOMER_SHEET + "(Last)"
+
     def _pick_source_sheet(wb):
         names = wb.sheetnames
-        # 1. exact match
+        # 1. prefer "Customer Master(Last)" when present
+        for n in names:
+            if n.strip() == LAST_SHEET:
+                return wb[n], "last-exact"
+        # 2. then plain "Customer Master"
         for n in names:
             if n.strip() == CUSTOMER_SHEET:
                 return wb[n], "exact"
-        # 2. starts-with match, no archive marker
-        ARCHIVE_MARKERS = ("last", "old", "backup", "archive", "prev", "bak",
-                           "copy", "deleted", "snapshot")
-        candidates = []
-        for n in names:
-            low = n.strip().lower()
-            if not low.startswith("customer master"):
-                continue
-            tail = low[len("customer master"):].strip(" _-()[]")
-            # skip archive-marker sheets at this stage
-            if any(m in tail for m in ARCHIVE_MARKERS):
-                continue
-            candidates.append(n)
-        if candidates:
-            # prefer the SHORTEST plain candidate (plain "Customer Master"
-            # over "Customer Master abc") and otherwise the first one
-            candidates.sort(key=lambda n: (len(n), names.index(n)))
-            return wb[candidates[0]], "startswith"
-        # 3. any sheet starting with "customer master", including archives
+        # 3. only one sheet -- use whatever is there
+        if len(names) == 1:
+            return wb[names[0]], "only-sheet"
+        # 4. any starts-with
         for n in names:
             if n.strip().lower().startswith("customer master"):
-                return wb[n], "archive-fallback"
-        # 4. give up -- caller handles the "active sheet" case
+                return wb[n], "startswith"
+        # 5. last resort
         return wb.active, "active-fallback"
 
     print(f"  Source sheets: {src_wb.sheetnames}")
     src_ws, pick_reason = _pick_source_sheet(src_wb)
-    if pick_reason == "exact":
-        print(f"  Source sheet: '{src_ws.title}' (exact match)")
+    if pick_reason == "last-exact":
+        print(f"  Source sheet: '{src_ws.title}' (preferred: 'Customer Master(Last)')")
+    elif pick_reason == "exact":
+        print(f"  Source sheet: '{src_ws.title}' (exact 'Customer Master'; no '(Last)' present)")
+    elif pick_reason == "only-sheet":
+        print(f"  Source sheet: '{src_ws.title}' (only sheet in workbook)")
     elif pick_reason == "startswith":
-        print(f"  Source sheet: '{src_ws.title}' (starts-with match, no archive marker)")
-    elif pick_reason == "archive-fallback":
-        print(f"  !!! WARNING: using archive-marker sheet '{src_ws.title}'")
-        print(f"  !!! No clean 'Customer Master' sheet exists in {src_path}")
-        print(f"  !!! Available sheets: {src_wb.sheetnames}")
-        print(f"  !!! Rename the live sheet to 'Customer Master' or delete the archive.")
+        print(f"  Source sheet: '{src_ws.title}' (starts-with 'Customer Master')")
     else:
         print(f"  !!! WARNING: no 'Customer Master' sheet in source; using active '{src_ws.title}'")
         print(f"  !!! Available sheets: {src_wb.sheetnames}")
