@@ -3121,6 +3121,32 @@ async function resolveCustomer(kind, field, value){
   applyCustomer(data, kind);
 }
 
+/* Nov-17 user ask: expand the SAP Terms of Payment code with a short
+   English description so operators do not have to memorise the SAP
+   codes.  Keyed on the bare code (upper-case).  Add entries here as
+   finance confirms the remaining codes in use; anything NOT in the
+   map still shows as the raw code (no "- undefined" tail).
+
+   The helper is idempotent: passing an already-expanded string like
+   "E131 - End of Next Month (30 days)" re-extracts the leading code
+   and re-applies the current description, so re-hydrating a saved
+   SPRF never drifts and future description edits propagate on the
+   next open. */
+const PAYMENT_TERMS_DESCRIPTIONS = {
+  "E131": "End of Next Month (30 days)",
+  "E231": "End of Next Month of the Next (60 days)",
+};
+function _formatPaymentTerms(raw){
+  const s = String(raw == null ? "" : raw).trim();
+  if (!s) return "";
+  // Extract the leading code -- SAP terms are a letter + digits,
+  // sometimes with a trailing letter (e.g. E131, ZB00).
+  const m = s.match(/^\s*([A-Za-z]+\d+[A-Za-z]?)\b/);
+  const code = (m ? m[1] : s).toUpperCase();
+  const desc = PAYMENT_TERMS_DESCRIPTIONS[code];
+  return desc ? `${code} - ${desc}` : code;
+}
+
 function applyCustomer(row, kind){
   if(!row) return;
   const set = (id, v) => { const el = document.getElementById(id.replace("#","")); if(!el) return; el.value = v ?? ""; };
@@ -3196,8 +3222,10 @@ function applyCustomer(row, kind){
   set("customer_group",  row.customer_group || row.sold_to_group || "");
   // Nov-17: SAP Terms of Payment (sold-to-side -- shows for every
   // lookup regardless of lock state so the agreed payment terms are
-  // always visible once a Sold-to is picked).
-  set("payment_terms",   row.payment_terms || "");
+  // always visible once a Sold-to is picked).  Expanded with an
+  // English description from PAYMENT_TERMS_DESCRIPTIONS so operators
+  // do not need to memorise the SAP codes.
+  set("payment_terms",   _formatPaymentTerms(row.payment_terms));
   // BDE / salesman — the Order# column has its own bde_name input.
   set("bde_name",        row.bde_name || row.salesman_name || "");
   setStatus(`Loaded <b>${row.ship_to_name||row.sold_to_name||"—"}</b> · BDE: ${row.bde_name||row.salesman_name||"—"}`, "ok");
@@ -9005,7 +9033,7 @@ function exportOrderToExcel(){
             ${kv("Ship-to Name",    h.ship_to_name)}
             ${kv("Address",         h.ship_to_address)}
             ${kv("Phone / Email",   h.phone_email)}
-            ${kv("Payment Terms",   h.payment_terms)}
+            ${kv("Payment Terms",   _formatPaymentTerms(h.payment_terms))}
             ${kv("Mobile",          h.mobile)}
             ${kv("Customer Group",  h.customer_group)}
             ${kv("State",           h.ship_to_state)}
@@ -10091,6 +10119,14 @@ async function hydrateSubmittedOrder(oid, editMode){
     if (el.type === "checkbox") el.checked = (v === "Y" || v === true || v === "true");
     else el.value = v || "";
   });
+  // Nov-17: re-expand Payment Terms with its description -- the saved
+  // header may carry either the bare SAP code (older rows) or an
+  // already-formatted "CODE - Description" string (rows saved after
+  // the formatter shipped).  _formatPaymentTerms handles both.
+  try {
+    const _pt = $("#payment_terms");
+    if (_pt) _pt.value = _formatPaymentTerms(_pt.value);
+  } catch (_e) {}
   // Rebate-able Y/N — hydrate the picker + wrapper from the persisted
   // flag (data.rebateable is the DB column, falls back to the header
   // snapshot in payload_json for older rows).  setRebate handles the
