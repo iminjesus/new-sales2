@@ -1820,6 +1820,16 @@
         <div class="lbl full-row">Phone No (Email)</div>
         <div class="val full-row"><input id="phone_email" placeholder="—"/></div>
 
+        <!-- Nov-17 user ask: show the Sold-to's SAP Terms of Payment
+             code (ZB00 / ZB30 / etc.) so CS can confirm the agreed
+             payment terms at a glance.  Value comes from
+             /api/orders/customer (payment_terms field) when a Sold-to
+             is picked; read-only -- editing is a Customer-Master job,
+             not an SPRF one. -->
+        <div class="lbl full-row">Payment Terms</div>
+        <div class="val full-row"><input id="payment_terms" placeholder="—" readonly
+             title="SAP Terms of Payment -- read-only; edit in Customer Master"/></div>
+
         <div class="lbl full-row">Mobile Number</div>
         <div class="val full-row"><input id="mobile" placeholder="—"/></div>
 
@@ -3105,7 +3115,8 @@ function applyCustomer(row, kind){
     // left on the form before the lock engaged, so the BDE starts
     // from a clean blank Ship-to row.
     ["ship_to", "ship_to_name", "ship_to_address",
-     "ship_to_state", "delivery_plant", "phone_email", "mobile"].forEach(id => {
+     "ship_to_state", "delivery_plant", "phone_email", "mobile",
+     "payment_terms"].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.value = "";
     });
@@ -3115,6 +3126,10 @@ function applyCustomer(row, kind){
   // customer_group / BDE name / Base DC come from the Sold-to side
   // (the house account under the lock) and stay filled either way.
   set("customer_group",  row.customer_group || row.sold_to_group || "");
+  // Nov-17: SAP Terms of Payment (sold-to-side -- shows for every
+  // lookup regardless of lock state so the agreed payment terms are
+  // always visible once a Sold-to is picked).
+  set("payment_terms",   row.payment_terms || "");
   // BDE / salesman — the Order# column has its own bde_name input.
   set("bde_name",        row.bde_name || row.salesman_name || "");
   setStatus(`Loaded <b>${row.ship_to_name||row.sold_to_name||"—"}</b> · BDE: ${row.bde_name||row.salesman_name||"—"}`, "ok");
@@ -8922,6 +8937,7 @@ function exportOrderToExcel(){
             ${kv("Ship-to Name",    h.ship_to_name)}
             ${kv("Address",         h.ship_to_address)}
             ${kv("Phone / Email",   h.phone_email)}
+            ${kv("Payment Terms",   h.payment_terms)}
             ${kv("Mobile",          h.mobile)}
             ${kv("Customer Group",  h.customer_group)}
             ${kv("State",           h.ship_to_state)}
@@ -9051,6 +9067,11 @@ const HEADER_FIELDS = [
   "sold_to", "ship_to", "customer_group",
   "sold_to_name", "ship_to_name", "ship_to_address",
   "phone_email", "mobile",
+  /* Nov-17: SAP Terms of Payment -- read-only display copied from
+     /api/orders/customer when a Sold-to is picked; round-tripped so a
+     re-opened SPRF shows the same terms even after the customer row
+     has been revised later. */
+  "payment_terms",
   "po_number", "doc_date", "bde_name",
   /* Requester = the signed-in user actually filling the SPRF.
      Auto-populated from /api/orders/whoami on page load. */

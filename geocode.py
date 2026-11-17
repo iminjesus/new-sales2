@@ -102,6 +102,13 @@ FLAT_FILE_COLUMNS = [
     "Address 1",
     "City",
     "E-Mail Address",
+    # Nov-17 user ask: surface the Customer Master "Terms of Payment"
+    # field (SAP payment-terms code, e.g. ZB00 / ZB30) so the SPRF can
+    # show the Sold-to's agreed payment terms next to the Phone row.
+    # Placed immediately after E-Mail so the previous columns keep
+    # their byte positions and only existing downstream consumers that
+    # read past E-Mail need to know about the new column.
+    "Payment Terms",
     "Telephone",
     "Mobile Phone",
 ]
@@ -149,6 +156,9 @@ CUSTOMER_COLUMN_ALIASES = {
     "BDE State":       ["BDE State", "BDE_State", "BDE state"],
     "Salesman Name":   ["Salesman Name", "Salesman", "SalesmanName"],
     "E-Mail Address":  ["E-Mail Address", "Email Address", "E-mail", "Email"],
+    "Payment Terms":   ["Terms of Payment", "Terms of payment",
+                        "Payment Terms", "PaymentTerms", "Payment Term",
+                        "PmntTerms", "TermsOfPayment"],
     "Mobile Phone":    ["Mobile Phone", "Mobile", "Mobile Number"],
     "Telephone":       ["Telephone", "Phone", "Phone Number"],
     "Postal Code":     ["Postal Code", "PostalCode", "Postcode", "Post Code"],

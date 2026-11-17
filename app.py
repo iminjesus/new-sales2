@@ -2650,6 +2650,14 @@ def api_orders_customer():
             "e_mail_address":  "e_mail_address",
             "e_mailaddress":   "e_mailaddress",
             "emailaddress":    "emailaddress",
+            # Nov-17 user ask: Customer Master's "Terms of Payment"
+            # field (SAP payment-terms code, e.g. ZB00 / ZB30) now flows
+            # into the customer table as `payment_terms` so the SPRF
+            # can show it next to the Phone row.  geocode.py writes it
+            # into customer_YYMM.csv; _ensure_customer_payment_terms_column
+            # keeps the column present in the schema even before the
+            # operator re-imports.
+            "payment_terms":   "payment_terms",
         }
         select_cols = [c for c in wanted if c in cols]
         if not select_cols:
@@ -2759,6 +2767,9 @@ def api_orders_customer():
         # been through the geocode.py re-export yet.
         out["delivery_plant"] = (out.get("delivery_plant")
                                  or out.get("delivering_plant") or "")
+        # Nov-17: surface Terms of Payment (SAP code).  Empty when the
+        # column is missing or the row carries no code.
+        out["payment_terms"]  = out.get("payment_terms") or ""
         return jsonify(out)
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -21431,6 +21442,45 @@ def _ensure_stock_block_columns():
 
 
 _ensure_stock_block_columns()
+
+
+def _ensure_customer_payment_terms_column():
+    """Nov-17 user ask: SPRF now surfaces the Sold-to customer's
+    SAP "Terms of Payment" code (ZB00 / ZB30 / etc.) next to the
+    Phone row.  geocode.py writes a new "Payment Terms" column into
+    customer_<yyMM>.csv; the customer table in MySQL needs a matching
+    `payment_terms` column (VARCHAR(10)) before app.py's customer
+    SELECTs can read it.  This helper adds the column idempotently
+    at startup so a Flask restart is enough to get the schema in
+    sync -- the operator still has to re-import the CSV (via the
+    usual Workbench LOAD DATA path) to populate the values."""
+    try:
+        conn = get_connection()
+        cur  = conn.cursor()
+        try:
+            cur.execute("SHOW TABLES LIKE 'customer'")
+            if not cur.fetchone():
+                # No customer table yet -- first-time setup elsewhere.
+                return
+            cur.execute("SHOW COLUMNS FROM customer LIKE %s",
+                        ("payment_terms",))
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE customer "
+                            "ADD COLUMN `payment_terms` VARCHAR(10) "
+                            "NOT NULL DEFAULT ''")
+                print("[customer] added column at startup: payment_terms")
+            conn.commit()
+        finally:
+            try: cur.close()
+            except: pass
+            try: conn.close()
+            except: pass
+    except Exception as _e:
+        print(f"[customer] payment_terms column check skipped: {_e}")
+
+
+_ensure_customer_payment_terms_column()
+
 
 def _bde_from_request():
     """Best-effort 'who is logged in'.  Cloudflare Access (if it's in
