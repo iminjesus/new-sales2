@@ -47,6 +47,12 @@ from datetime import date
 import requests
 from openpyxl import load_workbook
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # ──────────────────────────────────────────────────────────────────────
 #  CONFIG
 # ──────────────────────────────────────────────────────────────────────
@@ -209,7 +215,7 @@ def copy_source_through_channel2(src_path, tpl_path):
     from openpyxl.utils import range_boundaries, get_column_letter
     from openpyxl.formula.translate import Translator
 
-    print(f"\nStage 1 — copy source → template")
+    print(f"\nStage 1 -- copy source -> template")
     print(f"  Source  : {src_path}")
     print(f"  Template: {tpl_path}")
 
@@ -330,7 +336,7 @@ def copy_source_through_channel2(src_path, tpl_path):
         new_ref = (f"{get_column_letter(min_col)}{min_row}:"
                    f"{get_column_letter(max_col)}{new_last}")
         tbl.ref = new_ref
-        print(f"  Extended table '{tbl.name}' → {new_ref}")
+        print(f"  Extended table '{tbl.name}' -> {new_ref}")
 
     # Save template back in place (fall back to <name>_updated.xlsx when
     # the user left the file open in Excel).
@@ -341,7 +347,7 @@ def copy_source_through_channel2(src_path, tpl_path):
     except PermissionError:
         alt = os.path.splitext(tpl_path)[0] + "_updated.xlsx"
         tpl_wb.save(alt)
-        print(f"  Source template was locked — saved copy to: {alt}")
+        print(f"  Source template was locked -- saved copy to: {alt}")
         return alt
 
 
@@ -495,7 +501,7 @@ def main():
     # ── Stage 0: pick the two workbooks ───────────────────────────
     src_path = pick_file("Please locate most recent customer master file")
     if not src_path:
-        print("No source Customer Master file selected — exiting.")
+        print("No source Customer Master file selected -- exiting.")
         return
     if not os.path.exists(src_path):
         print(f"Source file not found: {src_path}")
@@ -503,7 +509,7 @@ def main():
 
     tpl_path = pick_file("Please locate the Geolocation template file for the customer master file")
     if not tpl_path:
-        print("No template file selected — exiting.")
+        print("No template file selected -- exiting.")
         return
     if not os.path.exists(tpl_path):
         print(f"Template file not found: {tpl_path}")
@@ -646,7 +652,7 @@ def main():
             if src == "api":
                 print(f"  -> lat={lat}, lon={lon}")
     except KeyboardInterrupt:
-        print("\nInterrupted — saving what we have.")
+        print("\nInterrupted -- saving what we have.")
 
     # ── Save the workbook back in place ────────────────────────────
     try:
@@ -655,7 +661,7 @@ def main():
     except PermissionError:
         alt = os.path.splitext(xlsx_path)[0] + "_updated.xlsx"
         wb.save(alt)
-        print(f"Source file was locked — saved copy to: {alt}")
+        print(f"Source file was locked -- saved copy to: {alt}")
 
     # ── Flat-file export ───────────────────────────────────────────
     today = date.today()
@@ -717,9 +723,9 @@ def main():
     # Channel2 value, the local script hasn't been updated to this
     # version.  Rerun from a fresh checkout of geocode.py.
     print("=" * 70)
-    print("[flat] channel2 override — hard-wired to 'Channel' column:")
+    print("[flat] channel2 override -- hard-wired to 'Channel' column:")
     if _channel_idx is None:
-        print("  ✗ NO 'Channel' header found in Customer Master.")
+        print("  [X] NO 'Channel' header found in Customer Master.")
         print("    Headers scanned (first 60):")
         for i, h in enumerate(cm_headers[:60]):
             print(f"      col {_col_letter(i+1)}  {h!r}")
@@ -728,7 +734,7 @@ def main():
             marker = "←PICKED" if ii == _channel_idx else "        "
             print(f"  {marker}  col {_col_letter(ii+1)}  header={hh!r}")
         if len(_ch_matches) > 1:
-            print(f"  (first-occurrence wins — col {_col_letter(_channel_idx+1)})")
+            print(f"  (first-occurrence wins -- col {_col_letter(_channel_idx+1)})")
     print("=" * 70)
 
     # Oct-15 diagnostic: print the resolved mapping flat-column →
@@ -737,22 +743,22 @@ def main():
     # the result doesn't match expectation.  Especially useful when
     # the workbook ships duplicate "Channel" / "Channel2" headers
     # and the alias order has to pick between them.
-    print("[flat] column mapping (output col → source col):")
+    print("[flat] column mapping (output col -> source col):")
     for col in FLAT_FILE_COLUMNS:
         if col in ("Longitude", "Latitude"):
-            print(f"  {col:<16} ← [from Location Master]")
+            print(f"  {col:<16} <- [from Location Master]")
             continue
         i = cm_col_idx.get(col)
         if i is None:
-            print(f"  {col:<16} ← MISSING (no header matched)")
+            print(f"  {col:<16} <- MISSING (no header matched)")
         else:
             src_hdr = cm_headers[i] if i < len(cm_headers) else "?"
-            print(f"  {col:<16} ← col {_col_letter(i+1)} "
+            print(f"  {col:<16} <- col {_col_letter(i+1)} "
                   f"(header: {src_hdr!r})")
 
     missing_cm_cols = [c for c, i in cm_col_idx.items() if i is None]
     if missing_cm_cols:
-        print(f"[flat] WARNING — Customer Master is missing: {missing_cm_cols}")
+        print(f"[flat] WARNING -- Customer Master is missing: {missing_cm_cols}")
         print("       Those columns in the output will be blank; add header")
         print("       aliases to CUSTOMER_COLUMN_ALIASES if your workbook uses")
         print("       different names.")
@@ -800,7 +806,7 @@ def main():
                     out_row.append("" if v is None else v)
             w.writerow(out_row)
             written += 1
-    print(f"[flat] wrote {written} rows → {out_path}")
+    print(f"[flat] wrote {written} rows -> {out_path}")
 
 
 if __name__ == "__main__":
