@@ -1644,22 +1644,50 @@
 <div id="mktPriceOverlay" role="dialog" aria-modal="true" aria-labelledby="mktPriceTitle"
      style="position:fixed;inset:0;background:rgba(15,23,42,0.35);display:none;
             align-items:center;justify-content:center;z-index:1500;padding:20px;">
-  <div style="background:#fff;border:1px solid #334155;border-radius:8px;
-              width:66vw;height:66vh;max-width:1600px;display:flex;
+  <!-- Nov-17 resize: `resize:both` + `overflow:hidden` on the modal
+       body gives a browser-native drag handle at the bottom-right
+       corner so the operator can pull the window bigger or smaller.
+       The maximize button in the header toggles a `.maximized` class
+       that forces 100vw/100vh so a one-click full-screen is available
+       without manual dragging. -->
+  <div id="mktPriceBox"
+       style="background:#fff;border:1px solid #334155;border-radius:8px;
+              width:66vw;height:66vh;min-width:420px;min-height:280px;
+              max-width:98vw;max-height:98vh;display:flex;
               flex-direction:column;box-shadow:0 24px 50px rgba(15,23,42,0.35);
-              overflow:hidden">
+              overflow:hidden;resize:both">
     <div id="mktPriceTitle"
          style="background:#0f172a;color:#fff;padding:8px 14px;font-weight:800;
                 font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <span>📊 Market Price Review — <span id="mktPriceSizeLbl" style="opacity:.85;font-weight:600">—</span></span>
-      <button type="button" id="mktPriceClose" aria-label="Close"
-              style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.5);
-                     padding:2px 10px;border-radius:4px;font-weight:700;cursor:pointer">✕</button>
+      <span style="display:flex;align-items:center;gap:6px">
+        <button type="button" id="mktPriceMax" aria-label="Maximize"
+                title="Maximize / restore (double-click the title bar also toggles)"
+                style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.5);
+                       padding:2px 10px;border-radius:4px;font-weight:700;cursor:pointer;
+                       font-family:'Segoe UI Symbol',sans-serif">⛶</button>
+        <button type="button" id="mktPriceClose" aria-label="Close"
+                style="background:transparent;color:#fff;border:1px solid rgba(255,255,255,0.5);
+                       padding:2px 10px;border-radius:4px;font-weight:700;cursor:pointer">✕</button>
+      </span>
     </div>
     <iframe id="mktPriceFrame" src="about:blank" title="Market Price Review"
             style="flex:1 1 auto;width:100%;border:none;background:#fff"></iframe>
   </div>
 </div>
+<style>
+  #mktPriceOverlay #mktPriceBox.maximized{
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    border-radius: 0;
+    resize: none;   /* no drag handle while maximized */
+  }
+  #mktPriceOverlay #mktPriceBox.maximized #mktPriceTitle{
+    border-radius: 0;
+  }
+</style>
 
 <!-- Oct-30 user ask: OE Search modal.  Type a vehicle name -> list of
      OE sizes.  Double-click a row to drop the size into a line's
@@ -12765,9 +12793,12 @@ async function seedRequester(){
   const menuBtn  = document.getElementById("mktCtxOpen");
   const menuSize = document.getElementById("mktCtxSize");
   const overlay  = document.getElementById("mktPriceOverlay");
+  const box      = document.getElementById("mktPriceBox");
   const frame    = document.getElementById("mktPriceFrame");
   const sizeLbl  = document.getElementById("mktPriceSizeLbl");
   const closeBtn = document.getElementById("mktPriceClose");
+  const maxBtn   = document.getElementById("mktPriceMax");
+  const titleBar = document.getElementById("mktPriceTitle");
   if (!menu || !overlay || !frame) return;
 
   let pendingSize = "";
@@ -12776,7 +12807,103 @@ async function seedRequester(){
   function hideOverlay(){
     overlay.style.display = "none";
     try { frame.src = "about:blank"; } catch (_e) {}
+    // Reset size / position / maximized state so the next open starts
+    // from the default 66vw x 66vh centered box.
+    try {
+      box.classList.remove("maximized");
+      overlay.style.padding = "";
+      box.style.transform = "";
+      box.style.width     = "";
+      box.style.height    = "";
+      if (maxBtn) maxBtn.textContent = "⛶";
+    } catch (_e) {}
   }
+
+  // Drag-to-move: mousedown on the title bar (not on the buttons)
+  // starts a drag; the box is offset from its centered position via
+  // CSS transform so the existing flex-centering stays intact and
+  // the first open after close recentres cleanly.  Disabled while
+  // the modal is maximized.
+  (function wireDrag(){
+    if (!titleBar) return;
+    let dragging = false;
+    let startX = 0, startY = 0;    // mouse at mousedown
+    let origDX = 0, origDY = 0;    // box translate at mousedown
+
+    function parseTranslate(t){
+      // Accepts "translate(12px, -3px)" or "none" / "".
+      const m = String(t || "").match(/translate\(\s*(-?[\d.]+)px\s*,\s*(-?[\d.]+)px\s*\)/);
+      return m ? [parseFloat(m[1]), parseFloat(m[2])] : [0, 0];
+    }
+
+    titleBar.addEventListener("mousedown", function(ev){
+      if (ev.button !== 0) return;
+      if (ev.target.closest("button")) return;      // let button clicks work
+      if (box.classList.contains("maximized")) return;
+      dragging = true;
+      startX = ev.clientX; startY = ev.clientY;
+      const cur = parseTranslate(box.style.transform);
+      origDX = cur[0]; origDY = cur[1];
+      titleBar.style.cursor = "grabbing";
+      ev.preventDefault();
+    });
+    document.addEventListener("mousemove", function(ev){
+      if (!dragging) return;
+      const dx = origDX + (ev.clientX - startX);
+      const dy = origDY + (ev.clientY - startY);
+      box.style.transform = `translate(${dx}px, ${dy}px)`;
+    });
+    document.addEventListener("mouseup", function(){
+      if (!dragging) return;
+      dragging = false;
+      titleBar.style.cursor = "";
+    });
+    titleBar.style.cursor = "move";
+    titleBar.style.userSelect = "none";
+  })();
+
+  // Maximize / restore: button + title-bar double-click.  Saves the
+  // pre-maximize size + transform so a restore puts the box back
+  // exactly where it was.  Also zeroes the overlay padding while
+  // maximized so 100vw x 100vh on the box doesn't overflow the
+  // 20px-padded overlay.
+  (function wireMaximize(){
+    if (!maxBtn) return;
+    let saved = null;
+    function toggle(){
+      if (box.classList.contains("maximized")){
+        // restore
+        box.classList.remove("maximized");
+        overlay.style.padding = "";       // back to the CSS default (20px)
+        if (saved){
+          box.style.width     = saved.w || "";
+          box.style.height    = saved.h || "";
+          box.style.transform = saved.t || "";
+        }
+        maxBtn.textContent = "⛶";
+        maxBtn.setAttribute("aria-label", "Maximize");
+      } else {
+        // maximize
+        saved = {
+          w: box.style.width,
+          h: box.style.height,
+          t: box.style.transform,
+        };
+        box.classList.add("maximized");
+        overlay.style.padding = "0";      // let the box fill edge-to-edge
+        box.style.transform = "";
+        maxBtn.textContent = "🗗";
+        maxBtn.setAttribute("aria-label", "Restore");
+      }
+    }
+    maxBtn.addEventListener("click", function(ev){ ev.preventDefault(); toggle(); });
+    if (titleBar){
+      titleBar.addEventListener("dblclick", function(ev){
+        if (ev.target.closest("button")) return;
+        toggle();
+      });
+    }
+  })();
 
   // Right-click on a material line → position the menu at the cursor.
   document.getElementById("linesBody").addEventListener("contextmenu", function(ev){
