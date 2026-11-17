@@ -9479,23 +9479,44 @@ def api_orders_approve(oid):
             _has_stockout_now = False
         # Also flip the stored needs_mgmt_approval to 'Y' in the same
         # UPDATE for inter-state / stock-out saved-N rows so follow-up
-        # reads see a consistent state.
+        # reads see a consistent state.  Nov-17: always emit the flip
+        # (not only when _needs_now) so a re-approved row that sat at
+        # 'R' lands cleanly on 'Y' instead of leaving a contradictory
+        # "rejected" state field behind an approved record.
         _needs_now = _has_interstate_now or _has_stockout_now
-        _nma_set = ", needs_mgmt_approval = 'Y'" if _needs_now else ""
+        _nma_set = ", needs_mgmt_approval = 'Y'"
         # Set the named slot AND, if no earlier approver has locked
         # the order yet, record this caller as the official
         # approved_by.  A COALESCE-guarded UPDATE means the SECOND
         # approver doesn't overwrite the FIRST — first-wins.
+        #
+        # Nov-17 user ask: when the order was Rejected earlier and the
+        # same (or another) approver now approves it, the previous
+        # rejection must be CLEARED -- otherwise rejected_by_name /
+        # rejected_at linger and every downstream gate (DO# save on
+        # backend, SAP-flag gate, SPRF detail-page unlock JS, orders
+        # list "Rejected" chip, "Approved · DO not entered" tile
+        # counter) keeps reading the row as rejected.  Null out the
+        # reject-side columns in the same UPDATE so the invariant
+        # "approved ⇒ not rejected" holds at the database level.  The
+        # WHERE clause is widened to allow the re-approve path:
+        # needs_mgmt_approval='R' is accepted when the caller is a
+        # MGMT approver, alongside the existing 'Y' and _needs_now
+        # branches.
         cur.execute(
             f"UPDATE submitted_orders SET {approver_col} = 'Y', "
             f"  {approver_col}_at = NOW(), "
             f"  approved_by_email = COALESCE(approved_by_email, %s), "
             f"  approved_by_name  = COALESCE(approved_by_name,  %s), "
             f"  approved_at       = COALESCE(approved_at,       NOW()), "
-            f"  approval_note     = COALESCE(approval_note,     %s) "
+            f"  approval_note     = COALESCE(approval_note,     %s), "
+            f"  rejected_by_email = NULL, "
+            f"  rejected_by_name  = NULL, "
+            f"  rejected_at       = NULL, "
+            f"  reject_note       = NULL "
             f"  {_nma_set} "
             f"WHERE id = %s "
-            f"  AND (needs_mgmt_approval = 'Y' OR %s = 1)",
+            f"  AND (needs_mgmt_approval IN ('Y','R') OR %s = 1)",
             (who, approver_name, approval_note, oid, 1 if _needs_now else 0),
         )
         if cur.rowcount == 0:
