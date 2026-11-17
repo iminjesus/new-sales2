@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RMA — Experimental</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root{
+      --bg:#f8fafc; --card:#fff; --border:#cbd5e1; --ink:#0f172a;
+      --muted:#64748b; --accent:#0f172a; --ok:#15803d; --warn:#b45309;
+      --err:#b91c1c; --highlight:#fef3c7;
+    }
+    html,body{background:var(--bg);color:var(--ink);font:13px/1.45 "Segoe UI",system-ui,sans-serif;margin:0;padding:0}
+    header{background:var(--accent);color:#fff;padding:10px 18px;display:flex;align-items:center;gap:16px;
+           box-shadow:0 1px 0 #0003}
+    header h1{font-size:15px;font-weight:800;margin:0;letter-spacing:.02em}
+    header .pill{background:#334155;color:#cbd5e1;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:.04em}
+    .tabs{display:flex;gap:4px;margin-left:auto}
+    .tabs button{background:transparent;color:#cbd5e1;border:1px solid transparent;padding:6px 14px;
+                 font:inherit;font-weight:700;border-radius:4px;cursor:pointer}
+    .tabs button.active{background:#fff;color:var(--accent);border-color:#fff}
+
+    main{max-width:1200px;margin:0 auto;padding:16px 18px 40px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:6px;padding:14px 16px;margin-bottom:16px;
+          box-shadow:0 1px 2px #0001}
+    .card h2{font-size:13px;font-weight:800;margin:0 0 10px;color:var(--accent);
+             padding-bottom:6px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px}
+    .card h2 small{color:var(--muted);font-weight:500;font-size:11px}
+
+    .row{display:grid;gap:10px}
+    .row.cols-2{grid-template-columns:1fr 1fr}
+    .row.cols-3{grid-template-columns:1fr 1fr 1fr}
+    .row.cols-4{grid-template-columns:1fr 1fr 1fr 1fr}
+    @media(max-width:720px){ .row.cols-2,.row.cols-3,.row.cols-4{grid-template-columns:1fr} }
+
+    label{display:block;font-weight:700;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
+    input,select,textarea,button{font:inherit;color:var(--ink)}
+    input[type=text],input[type=date],input[type=email],input[type=number],select,textarea{
+      width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:4px;background:#fff;box-sizing:border-box
+    }
+    input[readonly],input[disabled]{background:#f1f5f9;color:#475569}
+    textarea{min-height:60px;resize:vertical}
+
+    .btn{background:var(--accent);color:#fff;border:1px solid var(--accent);padding:6px 14px;border-radius:4px;
+         font-weight:700;cursor:pointer;font-size:12.5px}
+    .btn.secondary{background:#fff;color:var(--accent)}
+    .btn.ok{background:var(--ok);border-color:var(--ok)}
+    .btn.warn{background:var(--warn);border-color:var(--warn)}
+    .btn.err{background:var(--err);border-color:var(--err)}
+    .btn:disabled{opacity:.55;cursor:not-allowed}
+
+    table.grid{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    table.grid th,table.grid td{border:1px solid #e2e8f0;padding:4px 8px;text-align:left;vertical-align:top}
+    table.grid th{background:#f1f5f9;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;font-size:10.5px}
+    table.grid td input{border:none;width:100%;background:transparent;padding:2px 0}
+    table.grid td.num{text-align:right}
+    table.grid tr.autofilled td{background:#fef9e7}
+
+    .toast{position:fixed;bottom:14px;right:14px;max-width:420px;padding:10px 14px;background:#0f172a;color:#fff;
+           border-radius:4px;box-shadow:0 10px 24px #0004;z-index:2000;font-size:12.5px;display:none}
+    .toast.ok{background:#15803d}
+    .toast.warn{background:#b45309}
+    .toast.err{background:#b91c1c}
+
+    .check{display:inline-flex;align-items:center;gap:6px;margin-right:12px;font-weight:600}
+    .check input{width:auto;transform:scale(1.1)}
+
+    .legend{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4}
+    .chip{display:inline-block;padding:1px 8px;border-radius:10px;background:#e2e8f0;color:#0f172a;font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+    .chip.ok{background:#dcfce7;color:#166534}
+    .chip.err{background:#fee2e2;color:#991b1b}
+
+    .view{display:none}
+    .view.active{display:block}
+
+    pre.hint{background:#f1f5f9;border:1px dashed #cbd5e1;padding:8px 10px;border-radius:4px;font-size:11px;white-space:pre-wrap;color:#334155}
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>RMA Request</h1>
+  <span class="pill">EXPERIMENTAL · not production</span>
+  <div class="tabs">
+    <button data-tab="form"     class="active">New RMA</button>
+    <button data-tab="list">List</button>
+    <button data-tab="upload">Upload Billing</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ─────────── NEW RMA FORM ─────────── -->
+<section id="view-form" class="view active">
+
+  <div class="card">
+    <h2>1. Locate the billing <small>enter a Billing Doc (invoice) or Original DO to auto-fill the rest</small></h2>
+    <div class="row cols-4">
+      <div>
+        <label>Billing Doc / Invoice</label>
+        <input type="text" id="lookup_billing_doc" placeholder="e.g. 9027286402">
+      </div>
+      <div>
+        <label>-- or -- Original DO</label>
+        <input type="text" id="lookup_do_no" placeholder="e.g. 8130163226">
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="btn" id="btn_lookup">🔎 Look up & auto-fill</button>
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="btn secondary" id="btn_clear">↺ Reset form</button>
+      </div>
+    </div>
+    <div id="lookup_status" class="legend"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Request header</h2>
+    <div class="row cols-4">
+      <div>
+        <label>Request date</label>
+        <input type="date" id="h_request_date">
+      </div>
+      <div>
+        <label>RMA Number <small>(leave blank = auto)</small></label>
+        <input type="text" id="h_rma_number" placeholder="RMA-2611-0001">
+      </div>
+      <div>
+        <label>RMA Type</label>
+        <select id="h_rma_type">
+          <option value="Return for Credit">Return for Credit</option>
+          <option value="Return for Replacement">Return for Replacement</option>
+          <option value="Warranty Claim">Warranty Claim</option>
+          <option value="Mis-shipment Return">Mis-shipment Return</option>
+        </select>
+      </div>
+      <div>
+        <label>Approval Required</label>
+        <select id="h_approval_route">
+          <option value="Call Centre">Call Centre</option>
+          <option value="OD & MD">OD & MD</option>
+          <option value="Regional Sales &amp; Finance">Regional Sales &amp; Finance</option>
+          <option value="National Office">National Office</option>
+        </select>
+      </div>
+    </div>
+    <div class="row cols-3" style="margin-top:10px">
+      <div>
+        <label>Requestor name</label>
+        <input type="text" id="h_requestor_name" placeholder="Your name">
+      </div>
+      <div>
+        <label>Requestor email</label>
+        <input type="email" id="h_requestor_email" placeholder="you@hankooktyre.com.au">
+      </div>
+      <div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. Customer <small>auto-filled from the billing + customer tables</small></h2>
+    <div class="row cols-4">
+      <div><label>Sold-to</label><input type="text" id="h_sold_to" readonly></div>
+      <div><label>Ship-to</label><input type="text" id="h_ship_to" readonly></div>
+      <div style="grid-column:span 2"><label>Customer name</label><input type="text" id="h_customer_name"></div>
+    </div>
+    <div class="row cols-4" style="margin-top:10px">
+      <div style="grid-column:span 2"><label>Address</label><input type="text" id="h_customer_address"></div>
+      <div><label>State</label><input type="text" id="h_customer_state"></div>
+      <div><label>Postcode</label><input type="text" id="h_customer_postcode"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>4. Line items <small>one row per returned material; auto-filled from the billing lookup</small></h2>
+    <table class="grid" id="lines_tbl">
+      <thead>
+        <tr>
+          <th style="width:28px"></th>
+          <th>Billing Doc</th>
+          <th>Original DO</th>
+          <th>Material</th>
+          <th>Description</th>
+          <th>Tyre Size</th>
+          <th>Pattern</th>
+          <th class="num" style="width:70px">Qty</th>
+          <th>Billing Date</th>
+        </tr>
+      </thead>
+      <tbody id="lines_body">
+        <!-- rows injected by JS -->
+      </tbody>
+    </table>
+    <div style="margin-top:8px">
+      <button class="btn secondary" id="btn_add_line">+ Add line</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>5. Reason &amp; condition</h2>
+    <div>
+      <label>Reason for return</label>
+      <select id="h_reason_code">
+        <option value="">(pick one)</option>
+        <option value="customer_cancelled">Customer Cancelled</option>
+        <option value="end_user_cancelled_fee">End User Cancelled (Fee)</option>
+        <option value="customer_ordered_wrong">Customer Ordered Wrong</option>
+        <option value="sales_keyed_wrong">Sales Keyed Wrong (No Fee)</option>
+        <option value="bde_sent_wrong">BDE Sent Wrong Tyre (No Fee)</option>
+        <option value="delivered_wrong_store">Delivered to Wrong Store (No Fee)</option>
+        <option value="mispick">Mispick By Warehouse (No Fee)</option>
+        <option value="mislabelled">Mislabelled Tyre (No Fee)</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div style="margin-top:10px">
+      <label>Condition of tyres</label>
+      <div>
+        <label class="check"><input type="checkbox" id="h_condition_new"> New / unfitted</label>
+        <label class="check"><input type="checkbox" id="h_condition_fitted"> Fitted</label>
+        <label class="check"><input type="checkbox" id="h_condition_dirty"> Dirty / marked</label>
+        <label class="check"><input type="checkbox" id="h_condition_label_on" checked> Factory label still intact</label>
+      </div>
+      <div class="legend">Dirty / fitted / label-removed tyres cannot be returned to the warehouse.</div>
+    </div>
+    <div style="margin-top:10px">
+      <label>Special instructions</label>
+      <textarea id="h_special_instructions" placeholder="Anything the approver or warehouse needs to know (e.g. pickup window, customer contact)."></textarea>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row cols-4">
+      <div>
+        <button class="btn err" id="btn_cancel">✕ Cancel</button>
+      </div>
+      <div></div>
+      <div>
+        <button class="btn secondary" id="btn_save_draft">💾 Save draft</button>
+      </div>
+      <div>
+        <button class="btn ok" id="btn_submit">✓ Submit RMA</button>
+      </div>
+    </div>
+  </div>
+
+</section>
+
+<!-- ─────────── LIST ─────────── -->
+<section id="view-list" class="view">
+  <div class="card">
+    <h2>Recent RMA requests <small>newest first, last 50</small></h2>
+    <table class="grid" id="list_tbl">
+      <thead>
+        <tr>
+          <th>ID</th><th>RMA #</th><th>Date</th><th>Customer</th>
+          <th>Sold-to</th><th>Ship-to</th><th>Type</th><th>Reason</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="list_body"></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ─────────── UPLOAD BILLING CSV ─────────── -->
+<section id="view-upload" class="view">
+  <div class="card">
+    <h2>Upload a daily billing CSV <small>same format as start_batch.bat's ZSDR24030 output</small></h2>
+    <p class="legend">
+      This appends rows into <code>so_do_billing_test</code>, de-duplicated on
+      (billing_doc + material).  Re-uploading a CSV that overlaps with a
+      previous one simply refreshes the existing rows.  Required columns:
+      Billing Doc (<code>vbeln</code>), Material (<code>matnr</code>).
+      Recommended: Billing Date, Sold-to, Ship-to, Qty, Net Value, DO.
+    </p>
+    <div class="row cols-4">
+      <div style="grid-column:span 2">
+        <label>CSV file</label>
+        <input type="file" id="upload_file" accept=".csv,.txt">
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button class="btn" id="btn_upload">⬆ Upload</button>
+      </div>
+    </div>
+    <pre class="hint" id="upload_result" style="display:none"></pre>
+  </div>
+</section>
+
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script>
+/* ─────── tiny utilities ─────── */
+const $ = sel => document.querySelector(sel);
+const $$ = sel => document.querySelectorAll(sel);
+
+function toast(msg, kind){
+  const el = $("#toast");
+  el.className = "toast " + (kind || "");
+  el.textContent = msg;
+  el.style.display = "block";
+  clearTimeout(window._toastT);
+  window._toastT = setTimeout(() => { el.style.display = "none"; }, 3500);
+}
+
+function setTab(name){
+  $$(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + name));
+  if (name === "list") loadList();
+}
+$$(".tabs button").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+
+/* seed request date */
+$("#h_request_date").value = new Date().toISOString().slice(0, 10);
+
+/* ─────── lines table ─────── */
+function makeLineRow(data){
+  data = data || {};
+  const tr = document.createElement("tr");
+  if (data.__autofilled) tr.classList.add("autofilled");
+  tr.innerHTML = `
+    <td><button type="button" class="btn err" style="padding:1px 7px;font-size:10px" data-act="del">×</button></td>
+    <td><input data-k="billing_doc" value="${esc(data.billing_doc)}"></td>
+    <td><input data-k="do_no"       value="${esc(data.do_no)}"></td>
+    <td><input data-k="material"    value="${esc(data.material)}"></td>
+    <td><input data-k="description" value="${esc(data.description)}"></td>
+    <td><input data-k="tyre_size"   value="${esc(data.tyre_size)}"></td>
+    <td><input data-k="pattern"     value="${esc(data.pattern)}"></td>
+    <td class="num"><input data-k="qty" type="number" step="1" min="0"
+         value="${data.qty != null ? data.qty : ''}"></td>
+    <td><input data-k="billing_date" value="${esc(data.billing_date)}"></td>
+  `;
+  tr.querySelector("[data-act='del']").addEventListener("click", () => {
+    tr.remove();
+    if (!$("#lines_body").children.length) addEmptyLine();
+  });
+  return tr;
+}
+function esc(s){ return (s == null ? "" : String(s)).replace(/"/g, "&quot;"); }
+function addEmptyLine(){ $("#lines_body").appendChild(makeLineRow({})); }
+$("#btn_add_line").addEventListener("click", addEmptyLine);
+addEmptyLine();
+
+function collectLines(){
+  const rows = [];
+  $$("#lines_body tr").forEach(tr => {
+    const o = {};
+    tr.querySelectorAll("input[data-k]").forEach(inp => {
+      o[inp.dataset.k] = inp.value.trim();
+    });
+    // require at least a material OR a billing_doc to count
+    if (o.material || o.billing_doc) rows.push(o);
+  });
+  return rows;
+}
+function setLines(arr){
+  $("#lines_body").innerHTML = "";
+  (arr || []).forEach(a => {
+    a.__autofilled = true;
+    $("#lines_body").appendChild(makeLineRow(a));
+  });
+  if (!$("#lines_body").children.length) addEmptyLine();
+}
+
+/* ─────── header helpers ─────── */
+const HEADER_IDS = [
+  "h_rma_number", "h_request_date", "h_rma_type", "h_approval_route",
+  "h_requestor_name", "h_requestor_email",
+  "h_sold_to", "h_ship_to", "h_customer_name", "h_customer_address",
+  "h_customer_state", "h_customer_postcode",
+  "h_reason_code", "h_special_instructions",
+];
+const HEADER_CHECK_IDS = ["h_condition_new", "h_condition_fitted",
+                          "h_condition_dirty", "h_condition_label_on"];
+
+function readHeader(){
+  const h = {};
+  HEADER_IDS.forEach(id => { h[id.replace(/^h_/, "")] = $("#" + id).value; });
+  HEADER_CHECK_IDS.forEach(id => { h[id.replace(/^h_/, "")] = $("#" + id).checked; });
+  return h;
+}
+
+function fillHeader(hdr){
+  if (!hdr) return;
+  if (hdr.sold_to          != null) $("#h_sold_to").value          = hdr.sold_to;
+  if (hdr.ship_to          != null) $("#h_ship_to").value          = hdr.ship_to;
+  if (hdr.customer_name    != null) $("#h_customer_name").value    = hdr.customer_name;
+  if (hdr.customer_address != null) $("#h_customer_address").value = hdr.customer_address;
+  if (hdr.customer_state   != null) $("#h_customer_state").value   = hdr.customer_state;
+  if (hdr.customer_postcode!= null) $("#h_customer_postcode").value= hdr.customer_postcode;
+}
+
+/* ─────── lookup ─────── */
+$("#btn_lookup").addEventListener("click", async () => {
+  const billing = $("#lookup_billing_doc").value.trim();
+  const dono    = $("#lookup_do_no").value.trim();
+  if (!billing && !dono){
+    toast("Enter either a Billing Doc or an Original DO.", "warn"); return;
+  }
+  const qs = new URLSearchParams();
+  if (billing) qs.set("billing_doc", billing);
+  else         qs.set("do_no", dono);
+  $("#lookup_status").textContent = "Looking up...";
+  try {
+    const r = await fetch("/rma/api/lookup?" + qs.toString());
+    const j = await r.json();
+    if (!r.ok || j.error){
+      $("#lookup_status").textContent = "⚠ " + (j.error || ("HTTP " + r.status));
+      toast(j.error || "Lookup failed", "err"); return;
+    }
+    fillHeader(j.header);
+    setLines(j.lines);
+    $("#lookup_status").innerHTML =
+      `<span class="chip ok">Found</span> ${j.lines.length} line(s) for ` +
+      `${j.header.billing_doc ? "billing " + j.header.billing_doc : "DO " + j.header.do_no} · ` +
+      `${j.header.customer_name || ""} (${j.header.ship_to || j.header.sold_to || "—"})`;
+    toast("Auto-filled from billing data", "ok");
+  } catch (e){
+    $("#lookup_status").textContent = "⚠ " + e.message;
+    toast("Lookup error: " + e.message, "err");
+  }
+});
+
+$("#btn_clear").addEventListener("click", () => {
+  if (!confirm("Clear the whole form?")) return;
+  HEADER_IDS.forEach(id => { $("#" + id).value = ""; });
+  HEADER_CHECK_IDS.forEach(id => { $("#" + id).checked = (id === "h_condition_label_on"); });
+  $("#h_request_date").value = new Date().toISOString().slice(0, 10);
+  $("#h_rma_type").value = "Return for Credit";
+  $("#h_approval_route").value = "Call Centre";
+  $("#lookup_billing_doc").value = "";
+  $("#lookup_do_no").value = "";
+  $("#lookup_status").textContent = "";
+  $("#lines_body").innerHTML = "";
+  addEmptyLine();
+});
+
+$("#btn_cancel").addEventListener("click", () => {
+  if (confirm("Discard changes and go back to the list?")) setTab("list");
+});
+
+/* ─────── save / submit ─────── */
+async function send(status){
+  const header = readHeader();
+  header.status = status;
+  const lines  = collectLines();
+  if (!lines.length){ toast("Add at least one line.", "warn"); return; }
+  const r = await fetch("/rma/api/save", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({header, lines}),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error){ toast(j.error || ("HTTP " + r.status), "err"); return; }
+  toast(`Saved RMA ${j.rma_number} (id=${j.id})`, "ok");
+  $("#h_rma_number").value = j.rma_number;
+}
+$("#btn_save_draft").addEventListener("click", () => send("draft"));
+$("#btn_submit").addEventListener("click", () => {
+  if (!$("#h_reason_code").value){ toast("Pick a reason for return.", "warn"); return; }
+  send("submitted");
+});
+
+/* ─────── list ─────── */
+async function loadList(){
+  const r = await fetch("/rma/api/list");
+  const j = await r.json();
+  const body = $("#list_body"); body.innerHTML = "";
+  if (!j.ok || !j.rows || !j.rows.length){
+    body.innerHTML = `<tr><td colspan="9" style="color:#64748b;text-align:center">No RMA requests yet.</td></tr>`;
+    return;
+  }
+  j.rows.forEach(row => {
+    const tr = document.createElement("tr");
+    const statusChip = row.status === "submitted"
+      ? `<span class="chip ok">Submitted</span>`
+      : row.status === "draft"
+        ? `<span class="chip">Draft</span>`
+        : `<span class="chip err">${esc(row.status)}</span>`;
+    tr.innerHTML = `
+      <td>${row.id}</td>
+      <td>${esc(row.rma_number)}</td>
+      <td>${esc(row.request_date || "")}</td>
+      <td>${esc(row.customer_name)}</td>
+      <td>${esc(row.sold_to)}</td>
+      <td>${esc(row.ship_to)}</td>
+      <td>${esc(row.rma_type)}</td>
+      <td>${esc(row.reason_code)}</td>
+      <td>${statusChip}</td>
+    `;
+    body.appendChild(tr);
+  });
+}
+
+/* ─────── upload billing csv ─────── */
+$("#btn_upload").addEventListener("click", async () => {
+  const f = $("#upload_file").files[0];
+  if (!f){ toast("Pick a CSV first.", "warn"); return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  const r = await fetch("/rma/api/upload_billing", {method: "POST", body: fd});
+  const j = await r.json();
+  const pre = $("#upload_result");
+  pre.style.display = "block";
+  pre.textContent = JSON.stringify(j, null, 2);
+  if (r.ok && j.ok){
+    toast(`Uploaded: ${j.inserted} new, ${j.updated} updated`, "ok");
+  } else {
+    toast(j.error || ("HTTP " + r.status), "err");
+  }
+});
+</script>
+</body>
+</html>
