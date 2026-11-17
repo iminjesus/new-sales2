@@ -3557,6 +3557,44 @@ function _wireSizeSearch() {
     // paint.
     selectedBrandSet = _defaultBrandSet();
     _updateSubKeyFromSet();
+    // Nov-17 user ask: honour URL query params so an external page
+    // (SPRF's right-click "Market Price Review") can open this page
+    // in an iframe pre-pointed at a specific size + brand + store +
+    // pricing-mode combo.  Applied AFTER the default state is in
+    // place but BEFORE the final btn-brand.click() so onModeBrand
+    // rebuilds the checkbox rows from the preset sets in one pass.
+    // Accepted params (all optional, all case-tolerant):
+    //   size=<any size the dropdown holds>   e.g. 225/50R17
+    //   price=normal|promo|normal,promo       e.g. price=promo
+    //   stores=<csv of _STORE_META keys>      e.g. twi,nwbi
+    //   brands=<csv of brand abbrs>           e.g. HK,KH,DL,YO
+    try {
+        const _qp = new URLSearchParams(location.search);
+        const _qSize = (_qp.get('size') || '').trim();
+        if (_qSize) {
+            selectedSize = _qSize;
+            try { sel.value = _qSize; } catch (_e) {}
+        }
+        const _qPrice = (_qp.get('price') || _qp.get('mode') || '').toLowerCase();
+        if (_qPrice) {
+            const want = _qPrice.split(',').map(s => s.trim()).filter(Boolean);
+            const n = document.getElementById('chk-normal');
+            const p = document.getElementById('chk-promo');
+            if (n) n.checked = want.includes('normal') || want.includes('standard');
+            if (p) p.checked = want.includes('promo');
+        }
+        const _qStores = (_qp.get('stores') || '').toLowerCase();
+        if (_qStores) {
+            const VALID = new Set(['tempe', 'bj', 'jax', 'tw', 'twi', 'nwb', 'nwbi']);
+            const keys = _qStores.split(',').map(s => s.trim()).filter(k => VALID.has(k));
+            if (keys.length) selectedStoreSet = new Set(keys);
+        }
+        const _qBrands = (_qp.get('brands') || '').toUpperCase();
+        if (_qBrands) {
+            const b = _qBrands.split(',').map(s => s.trim()).filter(Boolean);
+            if (b.length) selectedBrandSet = new Set(b);
+        }
+    } catch (_e) { /* defensive -- missing param is harmless */ }
     // Normal is the default pricing mode on first load; the Price
     // row now carries checkboxes so just ensure the Normal one is
     // ticked (HTML already defaults it) and sync the state.
