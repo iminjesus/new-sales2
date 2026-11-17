@@ -132,9 +132,18 @@ CUSTOMER_COLUMN_ALIASES = {
                         "Delivering Pl.", "Delivery Pl.",
                         "Delv. Plant", "Delv Plant",
                         "Plant", "DlvPlt"],
-    "Sold-to":         ["Sold-to", "Sold to", "SoldTo"],
+    # Nov-17 user ask: both the "Sold-to" and the "Ship-to" output
+    # columns must carry the Customer (col D) code -- that is the
+    # dealer's own, current account number.  The source workbook also
+    # has "Sold-to" (col AK) and "Ship-to" (col AJ) headers; those can
+    # drift from the live Customer code when a dealer is re-keyed (e.g.
+    # BEACH ROAD TYRES MALAGA, where D=A033848 is the current code but
+    # AJ/AK still show the old A033821).  Putting "Customer" first in
+    # both alias lists makes the lookup pick col D whenever it exists
+    # and keeps the legacy header spellings as fall-backs.
+    "Sold-to":         ["Customer", "Sold-to", "Sold to", "SoldTo"],
     "Sold-to Name":    ["Sold-to Name", "Sold to Name", "SoldToName"],
-    "Ship-to":         ["Ship-to", "Ship to", "ShipTo", "Customer"],
+    "Ship-to":         ["Customer", "Ship-to", "Ship to", "ShipTo"],
     "Ship-to State":   ["Ship-to State", "Ship to State", "ShipToState", "State"],
     "Name":            ["Name", "Ship-to Name", "Ship to Name"],
     "BDE State":       ["BDE State", "BDE_State", "BDE state"],
