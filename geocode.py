@@ -582,16 +582,43 @@ def main():
     def _row_key(row, idx_map):
         return _norm_key([row[idx_map[c]] if idx_map[c] < len(row) else "" for c in ADDRESS_COLUMNS])
 
-    lm_keys = {_row_key(r, lm_addr_idx) for r in lm_rows}
+    def _key_is_blank(k):
+        return all((p is None or str(p).strip() == "") for p in k)
+
+    # Build lm_keys from NON-BLANK LM rows only.  Any LM row that has a
+    # completely empty address is a junk / stale row (e.g. a worksheet
+    # that was pre-padded with blank rows); if we let its all-blank key
+    # into lm_keys, every CM customer with the same blank key would be
+    # falsely flagged "already in LM" and Pass 1 would skip appending it.
+    lm_rows_blank_count = 0
+    lm_keys = set()
+    for r in lm_rows:
+        k = _row_key(r, lm_addr_idx)
+        if _key_is_blank(k):
+            lm_rows_blank_count += 1
+            continue
+        lm_keys.add(k)
+    print(f"[Location Master] {len(lm_rows)} rows "
+          f"({len(lm_keys)} with an address, {lm_rows_blank_count} blank)")
+    print(f"[Customer Master] {len(cm_rows)} rows")
+
     missing = []
+    cm_blank_count = 0
+    cm_already_in_lm = 0
     for r in cm_rows:
         if all((r[cm_addr_idx[c]] if cm_addr_idx[c] < len(r) else None) in (None, "", " ")
                for c in ADDRESS_COLUMNS):
+            cm_blank_count += 1
             continue  # skip blank rows
         k = _row_key(r, cm_addr_idx)
-        if k not in lm_keys:
-            lm_keys.add(k)
-            missing.append(k)
+        if k in lm_keys:
+            cm_already_in_lm += 1
+            continue
+        lm_keys.add(k)
+        missing.append(k)
+
+    print(f"[Customer Master] {cm_blank_count} blank, "
+          f"{cm_already_in_lm} already in LM, {len(missing)} new")
 
     if missing:
         start_row = lm_ws.max_row + 1
@@ -606,6 +633,12 @@ def main():
                 new_row[lm_addr_idx[addr_col]] = k[col_i]
             lm_rows.append(new_row)
         print(f"[Location Master] appended {len(missing)} missing addresses from Customer Master")
+        # Show the first few newly-appended keys so the operator can
+        # confirm the newest customer is in the batch.
+        for k in missing[:5]:
+            print(f"  + {' | '.join(k)}")
+        if len(missing) > 5:
+            print(f"  ... and {len(missing) - 5} more")
     else:
         print("[Location Master] no missing addresses from Customer Master")
 
@@ -615,6 +648,7 @@ def main():
 
     session = requests.Session()
     pending = []
+    skipped_blank = 0
     for i, r in enumerate(lm_rows):
         lat = r[lat_idx] if lat_idx < len(r) else None
         lon = r[lon_idx] if lon_idx < len(r) else None
@@ -622,9 +656,15 @@ def main():
             continue
         parts = {c: (r[lm_addr_idx[c]] if lm_addr_idx[c] < len(r) else "") for c in ADDRESS_COLUMNS}
         key_tuple = _norm_key([parts[c] for c in ADDRESS_COLUMNS])
+        # Skip LM rows that have no address at all -- Google would never
+        # return a result anyway; this avoids 1,600+ wasted API calls
+        # (and cents) per run on stale blank rows that sit in the sheet.
+        if _key_is_blank(key_tuple):
+            skipped_blank += 1
+            continue
         pending.append((i, parts, key_tuple))
 
-    print(f"To geocode: {len(pending)}")
+    print(f"To geocode: {len(pending)} ({skipped_blank} LM rows skipped as blank)")
 
     try:
         for n, (row_i, parts, key_tuple) in enumerate(pending, start=1):
@@ -773,14 +813,25 @@ def main():
     print("[flat] version: v3 (Oct-15 hard-wired Channel source)")
 
     written = 0
+    skipped_blank_key = 0
+    cust_id_idx = cm_col_idx.get("Customer")
     with open(out_path, "w", newline="", encoding="utf-8") as f_out:
         w = csv.writer(f_out)
         w.writerow(FLAT_FILE_COLUMNS)
         for r in cm_rows:
             key = _row_key(r, cm_addr_idx)
-            # Skip rows with no address at all — they're usually
-            # "Delete" markers or empty footers.
+            # Skip rows with no address at all -- they're usually
+            # "Delete" markers or empty footers.  Log a few examples
+            # so the operator can see whether a customer they expected
+            # to land in the CSV was dropped here for a blank address.
             if all(k == "" for k in key):
+                if skipped_blank_key < 10:
+                    cust_id = ""
+                    if cust_id_idx is not None and cust_id_idx < len(r):
+                        cust_id = r[cust_id_idx] or ""
+                    print(f"[flat] skipping row (blank address key): "
+                          f"customer={cust_id!r}")
+                skipped_blank_key += 1
                 continue
             lat, lon = loc_by_key.get(key, (None, None))
             out_row = []
@@ -794,7 +845,7 @@ def main():
                     # cm_col_idx assignment can leak through.  Pulls
                     # directly from the source column whose header
                     # literally equals "Channel" (case / whitespace
-                    # insensitive) — never "Channel2".
+                    # insensitive) -- never "Channel2".
                     if _channel_idx is not None and _channel_idx < len(r):
                         v = r[_channel_idx]
                         out_row.append("" if v is None else v)
@@ -806,6 +857,8 @@ def main():
                     out_row.append("" if v is None else v)
             w.writerow(out_row)
             written += 1
+    if skipped_blank_key:
+        print(f"[flat] skipped {skipped_blank_key} rows with blank address key")
     print(f"[flat] wrote {written} rows -> {out_path}")
 
 
