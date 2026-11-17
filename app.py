@@ -6049,12 +6049,37 @@ BDE_MANAGER_CC = {
 }
 
 
+def _bde_name_variants(bde_name):
+    """Return every normalised (upper-case, single-space) key spelling
+    worth trying for a human BDE name: the string as given, plus the
+    reversed first-last/last-first swap when there are exactly two
+    tokens.  Covers the common SPRF intake drift where a form carries
+    "George Makris" while BDE_MANAGER_CC is keyed "MAKRIS GEORGE" (or
+    vice versa).  Empty input returns an empty list."""
+    import re as _re_bn
+    raw = _re_bn.sub(r"\s+", " ", (bde_name or "").strip().upper())
+    if not raw:
+        return []
+    out = [raw]
+    toks = raw.split(" ")
+    if len(toks) == 2:
+        swapped = f"{toks[1]} {toks[0]}"
+        if swapped != raw:
+            out.append(swapped)
+    return out
+
+
 def _bde_manager_email(bde_name) -> str:
     """Return the manager's email for a BDE display name, or '' if
-    the BDE isn't in BDE_MANAGER_CC.  Case / whitespace tolerant."""
-    import re as _re_bde
-    key = _re_bde.sub(r"\s+", " ", (bde_name or "").strip().upper())
-    return BDE_MANAGER_CC.get(key, "")
+    the BDE isn't in BDE_MANAGER_CC.  Case / whitespace tolerant and,
+    Nov-17, name-order tolerant: tries both "FIRST LAST" and
+    "LAST FIRST" so a form that typed George Makris still finds the
+    MAKRIS GEORGE row."""
+    for key in _bde_name_variants(bde_name):
+        v = BDE_MANAGER_CC.get(key)
+        if v:
+            return v
+    return ""
 
 
 def _bdes_under_manager(email: str):
@@ -6070,6 +6095,79 @@ def _bdes_under_manager(email: str):
         return []
     return [bde for bde, mgr in BDE_MANAGER_CC.items()
             if (mgr or "").strip().lower() == e]
+
+
+def _boss_chain_emails(bde_name):
+    """Nov-17 user ask: notify every boss in the chain above a BDE,
+    not only their immediate line manager.  Walks BDE_MANAGER_CC
+    recursively -- BDE -> SM -> SM's boss -> ... -- and returns the
+    de-duplicated list of boss emails (lower-case) in boss-first order.
+    Stops at any name that isn't itself a key in BDE_MANAGER_CC, so
+    an SM whose entry says their boss is e.g. a MGMT approver who
+    isn't keyed again terminates the walk cleanly.  Loop-safe (a
+    cycle in the map -- bad data -- is caught by the visited set)."""
+    out, visited = [], set()
+    current = (bde_name or "").strip()
+    while current:
+        # Normalise to the key format we look names up by.
+        cur_key_variants = _bde_name_variants(current)
+        if any(k in visited for k in cur_key_variants):
+            break
+        for k in cur_key_variants:
+            visited.add(k)
+        mgr = _bde_manager_email(current)
+        if not mgr:
+            break
+        mgr_lc = mgr.strip().lower()
+        if mgr_lc and mgr_lc not in out:
+            out.append(mgr_lc)
+        # Climb one level: find the manager's display name by inverting
+        # _BDE_DIRECTORY (defined further down in this module); any
+        # match whose email equals `mgr` becomes the next step.  The
+        # directory lookup is best-effort -- if the manager isn't in
+        # the directory, the walk simply ends.
+        next_name = ""
+        try:
+            next_name = (_EMAIL_TO_DIR.get(mgr_lc, {}) or {}).get("name", "")
+        except Exception:
+            next_name = ""
+        if not next_name:
+            break
+        current = next_name
+    return out
+
+
+def _customer_bde_name(customer_no: str) -> str:
+    """Given a ship-to / sold-to code, return the BDE (salesman)
+    display name assigned to that customer in the `customer` table, or
+    '' when the code is unknown.  Ship-to wins over sold-to when both
+    columns match (ship-to is the delivery party and that is whose BDE
+    the user cares about).  Used by the submit/update mail builders so
+    the BDE who OWNS the ship-to -- not only the one who typed the
+    SPRF -- gets looped into the boss-chain CC."""
+    cust = (customer_no or "").strip()
+    if not cust:
+        return ""
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT salesman_name FROM customer "
+            "WHERE ship_to=%s LIMIT 1",
+            (cust,))
+        r = cur.fetchone()
+        if not r:
+            cur.execute(
+                "SELECT salesman_name FROM customer "
+                "WHERE sold_to=%s LIMIT 1",
+                (cust,))
+            r = cur.fetchone()
+        cur.close(); conn.close()
+        if r and r[0]:
+            return str(r[0]).strip()
+    except Exception:
+        pass
+    return ""
 # Oct-22 user ask: single-CS-at-a-time soft lock on orders waiting
 # for SAP entry.  TTL = after this many minutes of inactivity on the
 # claimed lock, another CS user can take it over.  Keeps a tab
@@ -7509,10 +7607,27 @@ def api_orders_submit():
             and _bde_email not in [str(x).lower() for x in (to_list + cc)]):
         cc.append(_bde_email)
     cc += SPRF_READONLY_CC
-    # Oct-22: CC the BDE's regional manager (BDE_MANAGER_CC map).
-    _mgr = _bde_manager_email(submitted_by_bde)
-    if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-        cc.append(_mgr)
+    # Nov-17 user ask: notify EVERY boss up the chain, for both the
+    # requester's BDE AND the BDE who owns the Ship-to on this SPRF.
+    # Paul Buckley was missing George Makris's submissions because
+    # (a) the lookup wasn't name-order tolerant and (b) only the
+    # immediate manager (one level) was Cc'd.  _boss_chain_emails
+    # walks BDE -> SM -> SM's boss recursively and dedupes.
+    _boss_cc = []
+    _boss_cc += _boss_chain_emails(submitted_by_bde)
+    _st_bde = _customer_bde_name(header.get("ship_to") or header.get("sold_to") or "")
+    if _st_bde:
+        _boss_cc += _boss_chain_emails(_st_bde)
+        # The Ship-to-owning BDE themselves should see it too when
+        # they aren't the one who typed the SPRF.
+        _st_bde_email = (_lookup_bde_email(_st_bde) or "").strip().lower()
+        if _st_bde_email and _st_bde_email not in _boss_cc:
+            _boss_cc.append(_st_bde_email)
+    _have = {str(x).lower() for x in (to_list + cc)}
+    for _m in _boss_cc:
+        if _m and _m not in _have:
+            cc.append(_m)
+            _have.add(_m)
     # COD + Credit Card orders go to the accounts team too so they can
     # settle remittance (COD) or capture the card charge (Credit Card)
     # against the SPRF the sales side just submitted.  Dedupe so a
@@ -8412,9 +8527,20 @@ def api_orders_status(oid):
             # flag land.  Submit-only cohort filtered after assembly.
             to_list = ([bde_email] if bde_email else []) + list(CS_TEAM_EMAILS)
             cc = []
-            _mgr = _bde_manager_email(_snap_for_mail.get("submitted_by_bde"))
-            if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-                cc.append(_mgr)
+            # Nov-17: whole boss chain + Ship-to BDE's chain on Cc.
+            _bchain = []
+            _bchain += _boss_chain_emails(_snap_for_mail.get("submitted_by_bde"))
+            _st_bde = _customer_bde_name(_snap_for_mail.get("ship_to")
+                                         or _snap_for_mail.get("sold_to") or "")
+            if _st_bde:
+                _bchain += _boss_chain_emails(_st_bde)
+                _st_eml = (_lookup_bde_email(_st_bde) or "").strip().lower()
+                if _st_eml and _st_eml not in _bchain:
+                    _bchain.append(_st_eml)
+            _have = {str(x).lower() for x in (to_list + cc)}
+            for _m in _bchain:
+                if _m and _m not in _have:
+                    cc.append(_m); _have.add(_m)
             to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
             _subj_sd_raw = _snap_for_mail.get('sd_no') or ''
             _subj_sd = (" / ".join(p.strip() for p in _subj_sd_raw.split("|")
@@ -9109,10 +9235,19 @@ def api_orders_update(oid):
         to_list += MGMT_APPROVER_EMAILS
     cc = [who] if who else []
     cc += SPRF_READONLY_CC
-    # Oct-22: CC the BDE's regional manager.
-    _mgr = _bde_manager_email(submitted_by_bde)
-    if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-        cc.append(_mgr)
+    # Nov-17: whole boss chain + Ship-to BDE's chain on Cc.
+    _bchain = []
+    _bchain += _boss_chain_emails(submitted_by_bde)
+    _st_bde = _customer_bde_name(header.get("ship_to") or header.get("sold_to") or "")
+    if _st_bde:
+        _bchain += _boss_chain_emails(_st_bde)
+        _st_eml = (_lookup_bde_email(_st_bde) or "").strip().lower()
+        if _st_eml and _st_eml not in _bchain:
+            _bchain.append(_st_eml)
+    _have = {str(x).lower() for x in (to_list + cc)}
+    for _m in _bchain:
+        if _m and _m not in _have:
+            cc.append(_m); _have.add(_m)
     # Oct-22 user ask: the submit-only cohort (JJ / Justin / Kenny /
     # Brian / Pamela / Russell) gets stripped from every non-submit
     # mail unless they themselves are the requester.  update() is a
@@ -9404,10 +9539,20 @@ def api_orders_approve(oid):
         to_list = list(CS_TEAM_EMAILS) + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
         cc      = [bde_email] if bde_email else []
         cc     += SPRF_READONLY_CC
-        # Oct-22: CC the BDE's regional manager.
-        _mgr = _bde_manager_email(order_snapshot.get("submitted_by_bde"))
-        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-            cc.append(_mgr)
+        # Nov-17: whole boss chain + Ship-to BDE's chain on Cc.
+        _bchain = []
+        _bchain += _boss_chain_emails(order_snapshot.get("submitted_by_bde"))
+        _st_bde = _customer_bde_name(order_snapshot.get("ship_to")
+                                     or order_snapshot.get("sold_to") or "")
+        if _st_bde:
+            _bchain += _boss_chain_emails(_st_bde)
+            _st_eml = (_lookup_bde_email(_st_bde) or "").strip().lower()
+            if _st_eml and _st_eml not in _bchain:
+                _bchain.append(_st_eml)
+        _have = {str(x).lower() for x in (to_list + cc)}
+        for _m in _bchain:
+            if _m and _m not in _have:
+                cc.append(_m); _have.add(_m)
         # Oct-22 user ask: approve is a non-submit event — strip the
         # submit-only cohort unless they themselves submitted the SPRF.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
@@ -9816,10 +9961,20 @@ def api_orders_reject(oid):
         bde_email = (snap.get("submitted_by_email") or "").strip().lower()
         to_list = list(CS_TEAM_EMAILS) + [e for e in MGMT_APPROVER_EMAILS if e.lower() != who]
         cc      = ([bde_email] if bde_email else []) + list(SPRF_READONLY_CC)
-        # Oct-22: CC the BDE's regional manager.
-        _mgr = _bde_manager_email(snap.get("submitted_by_bde"))
-        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-            cc.append(_mgr)
+        # Nov-17: whole boss chain + Ship-to BDE's chain on Cc.
+        _bchain = []
+        _bchain += _boss_chain_emails(snap.get("submitted_by_bde"))
+        _st_bde = _customer_bde_name(snap.get("ship_to")
+                                     or snap.get("sold_to") or "")
+        if _st_bde:
+            _bchain += _boss_chain_emails(_st_bde)
+            _st_eml = (_lookup_bde_email(_st_bde) or "").strip().lower()
+            if _st_eml and _st_eml not in _bchain:
+                _bchain.append(_st_eml)
+        _have = {str(x).lower() for x in (to_list + cc)}
+        for _m in _bchain:
+            if _m and _m not in _have:
+                cc.append(_m); _have.add(_m)
         # Oct-22 user ask: reject is a non-submit event.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF REJECTED {order_no}] {rejector_name} · "
@@ -9927,10 +10082,19 @@ def api_orders_cancel(oid):
         bde_email = (row.get("submitted_by_email") or "").strip().lower()
         to_list = list(CS_TEAM_EMAILS) + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
-        # Oct-22: CC the BDE's regional manager.
-        _mgr = _bde_manager_email(row.get("submitted_by_bde"))
-        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-            cc.append(_mgr)
+        # Nov-17: whole boss chain + Ship-to BDE's chain on Cc.
+        _bchain = []
+        _bchain += _boss_chain_emails(row.get("submitted_by_bde"))
+        _st_bde = _customer_bde_name(row.get("ship_to") or row.get("sold_to") or "")
+        if _st_bde:
+            _bchain += _boss_chain_emails(_st_bde)
+            _st_eml = (_lookup_bde_email(_st_bde) or "").strip().lower()
+            if _st_eml and _st_eml not in _bchain:
+                _bchain.append(_st_eml)
+        _have = {str(x).lower() for x in (to_list + cc)}
+        for _m in _bchain:
+            if _m and _m not in _have:
+                cc.append(_m); _have.add(_m)
         # Oct-22 user ask: cancel is a non-submit event.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF DELETED {order_no}] by {who or 'requester'} · "
@@ -10019,10 +10183,19 @@ def api_orders_revive(oid):
         bde_email = (snap.get("submitted_by_email") or "").strip().lower()
         to_list = list(CS_TEAM_EMAILS) + list(MGMT_APPROVER_EMAILS)
         cc      = ([bde_email] if bde_email and bde_email != who else []) + list(SPRF_READONLY_CC)
-        # Oct-22: CC the BDE's regional manager.
-        _mgr = _bde_manager_email(snap.get("submitted_by_bde"))
-        if _mgr and _mgr.lower() not in [str(x).lower() for x in (to_list + cc)]:
-            cc.append(_mgr)
+        # Nov-17: whole boss chain + Ship-to BDE's chain on Cc.
+        _bchain = []
+        _bchain += _boss_chain_emails(snap.get("submitted_by_bde"))
+        _st_bde = _customer_bde_name(snap.get("ship_to") or snap.get("sold_to") or "")
+        if _st_bde:
+            _bchain += _boss_chain_emails(_st_bde)
+            _st_eml = (_lookup_bde_email(_st_bde) or "").strip().lower()
+            if _st_eml and _st_eml not in _bchain:
+                _bchain.append(_st_eml)
+        _have = {str(x).lower() for x in (to_list + cc)}
+        for _m in _bchain:
+            if _m and _m not in _have:
+                cc.append(_m); _have.add(_m)
         # Oct-22 user ask: revive is a non-submit event.
         to_list, cc = _filter_notify_recipients(to_list, cc, requester_email=bde_email)
         subject = (f"[SPRF REVIVED {order_no}] by {who or 'requester'} · "
