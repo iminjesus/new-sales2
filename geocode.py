@@ -771,7 +771,7 @@ def main():
             print(f"      col {_col_letter(i+1)}  {h!r}")
     else:
         for (ii, hh) in _ch_matches:
-            marker = "←PICKED" if ii == _channel_idx else "        "
+            marker = "<<PICKED" if ii == _channel_idx else "        "
             print(f"  {marker}  col {_col_letter(ii+1)}  header={hh!r}")
         if len(_ch_matches) > 1:
             print(f"  (first-occurrence wins -- col {_col_letter(_channel_idx+1)})")
