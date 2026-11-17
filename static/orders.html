@@ -12842,7 +12842,15 @@ async function seedRequester(){
   function hideMenu(){ menu.style.display = "none"; pendingSize = ""; }
   function hideOverlay(){
     overlay.style.display = "none";
-    try { frame.src = "about:blank"; } catch (_e) {}
+    // Nov-17 fix: do NOT set frame.src = "about:blank" here.  Each
+    // iframe src change pushes a joint-session history entry onto the
+    // parent window, and the browser can then show the SPRF page as
+    // "navigated" (user reported: closing the popup bounces the
+    // parent to the Submitted Orders list).  Hiding the overlay is
+    // enough -- the iframe content stays loaded but invisible, and
+    // the next open uses location.replace() so no history entries
+    // accumulate on repeated open/close cycles either.
+    //
     // Reset size / position / maximized state so the next open starts
     // from the default 66vw x 66vh centered box.
     try {
@@ -12982,7 +12990,21 @@ async function seedRequester(){
               + "&stores="+ encodeURIComponent(STORE_PRESET)
               + "&brands="+ encodeURIComponent(BRAND_PRESET);
     sizeLbl.textContent = size;
-    frame.src = url;
+    // Nov-17 fix: use location.replace() (not frame.src = ...) so
+    // the iframe navigation does not push onto the parent window's
+    // joint session history.  Fall back to src assignment on the
+    // very first open when the iframe is still at about:blank and
+    // contentWindow.location.replace can throw on some browsers.
+    let used = false;
+    try {
+      const cw = frame.contentWindow;
+      if (cw && cw.location && typeof cw.location.replace === "function"
+          && String(cw.location.href || "") !== "about:blank"){
+        cw.location.replace(url);
+        used = true;
+      }
+    } catch (_e) { /* cross-origin or not-yet-loaded -- fall through */ }
+    if (!used) frame.src = url;
     overlay.style.display = "flex";
   });
 
