@@ -223,16 +223,68 @@ def copy_source_through_channel2(src_path, tpl_path):
     src_wb = load_workbook(src_path, data_only=True)
     tpl_wb = load_workbook(tpl_path)
 
-    src_ws = src_wb[CUSTOMER_SHEET] if CUSTOMER_SHEET in src_wb.sheetnames else src_wb.active
+    # Pick the right Customer Master sheet in the source.  The raw
+    # workbook commonly ships with more than one -- the live data on
+    # one sheet, and archived snapshots named like
+    # "Customer Master(Last)", "Customer Master(Old)", "Customer
+    # Master_2611", etc., on the others.  Prefer the exact "Customer
+    # Master" name; if that is missing, prefer any sheet whose name
+    # starts with "Customer Master" and does NOT carry an obvious
+    # archive marker (last / old / backup / archive / prev / bak)
+    # or a date-looking suffix; fall back to the active sheet only
+    # when no better candidate exists, and WARN LOUDLY.
+    def _pick_source_sheet(wb):
+        names = wb.sheetnames
+        # 1. exact match
+        for n in names:
+            if n.strip() == CUSTOMER_SHEET:
+                return wb[n], "exact"
+        # 2. starts-with match, no archive marker
+        ARCHIVE_MARKERS = ("last", "old", "backup", "archive", "prev", "bak",
+                           "copy", "deleted", "snapshot")
+        candidates = []
+        for n in names:
+            low = n.strip().lower()
+            if not low.startswith("customer master"):
+                continue
+            tail = low[len("customer master"):].strip(" _-()[]")
+            # skip archive-marker sheets at this stage
+            if any(m in tail for m in ARCHIVE_MARKERS):
+                continue
+            candidates.append(n)
+        if candidates:
+            # prefer the SHORTEST plain candidate (plain "Customer Master"
+            # over "Customer Master abc") and otherwise the first one
+            candidates.sort(key=lambda n: (len(n), names.index(n)))
+            return wb[candidates[0]], "startswith"
+        # 3. any sheet starting with "customer master", including archives
+        for n in names:
+            if n.strip().lower().startswith("customer master"):
+                return wb[n], "archive-fallback"
+        # 4. give up -- caller handles the "active sheet" case
+        return wb.active, "active-fallback"
+
+    print(f"  Source sheets: {src_wb.sheetnames}")
+    src_ws, pick_reason = _pick_source_sheet(src_wb)
+    if pick_reason == "exact":
+        print(f"  Source sheet: '{src_ws.title}' (exact match)")
+    elif pick_reason == "startswith":
+        print(f"  Source sheet: '{src_ws.title}' (starts-with match, no archive marker)")
+    elif pick_reason == "archive-fallback":
+        print(f"  !!! WARNING: using archive-marker sheet '{src_ws.title}'")
+        print(f"  !!! No clean 'Customer Master' sheet exists in {src_path}")
+        print(f"  !!! Available sheets: {src_wb.sheetnames}")
+        print(f"  !!! Rename the live sheet to 'Customer Master' or delete the archive.")
+    else:
+        print(f"  !!! WARNING: no 'Customer Master' sheet in source; using active '{src_ws.title}'")
+        print(f"  !!! Available sheets: {src_wb.sheetnames}")
+
     if CUSTOMER_SHEET not in tpl_wb.sheetnames:
         raise RuntimeError(
             f"Template is missing the '{CUSTOMER_SHEET}' sheet. "
             f"Available sheets: {tpl_wb.sheetnames}"
         )
     tpl_ws = tpl_wb[CUSTOMER_SHEET]
-    if src_ws.title != CUSTOMER_SHEET:
-        print(f"  (source: '{CUSTOMER_SHEET}' not found; using active sheet "
-              f"'{src_ws.title}')")
 
     # Find the Channel2 column in the source so we know where to stop
     # the copy.  Column-letter match tolerates spelling drift
