@@ -737,7 +737,48 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted -- saving what we have.")
 
-    # ── Save the workbook back in place ────────────────────────────
+    # Build lat/lon lookup from the (now-fresh) Location Master
+    # so each Customer Master row carries the coords for its address.
+    loc_by_key = {}
+    for r in lm_rows:
+        key = _row_key(r, lm_addr_idx)
+        lat = r[lat_idx] if lat_idx < len(r) else None
+        lon = r[lon_idx] if lon_idx < len(r) else None
+        loc_by_key[key] = (lat, lon)
+
+    # ── Write Lat/Long back into the Customer Master sheet of the
+    # template.  The CM table carries blank Latitude / Longitude columns
+    # (AP / AQ in the user's Pamela template) that used to be filled in
+    # by hand; when we have the coords from the Location Master join,
+    # push them into CM so the operator opening the template sees the
+    # numbers next to every customer row, not just in the flat CSV.
+    cm_lat_idx = _lookup_header(cm_headers, ["Latitude", "lat"])
+    cm_lon_idx = _lookup_header(cm_headers, ["Longitude", "lon", "lng"])
+    if cm_lat_idx is None or cm_lon_idx is None:
+        print(f"[CM lat/lon] WARNING -- no Latitude/Longitude column on "
+              f"Customer Master; skipping write-back "
+              f"(lat_idx={cm_lat_idx}, lon_idx={cm_lon_idx})")
+    else:
+        filled, blank = 0, 0
+        for cm_row_i, r in enumerate(cm_rows):
+            key = _row_key(r, cm_addr_idx)
+            lat, lon = loc_by_key.get(key, (None, None))
+            if lat is None and lon is None:
+                blank += 1
+                continue
+            # cm_rows is 0-indexed, sheet rows are 1-based with a header
+            # row at row 1, so sheet row = cm_row_i + 2.
+            if lat is not None:
+                cm_ws.cell(row=cm_row_i + 2, column=cm_lat_idx + 1, value=lat)
+            if lon is not None:
+                cm_ws.cell(row=cm_row_i + 2, column=cm_lon_idx + 1, value=lon)
+            filled += 1
+        print(f"[CM lat/lon] wrote {filled} rows (cols "
+              f"{_col_letter(cm_lat_idx+1)}/{_col_letter(cm_lon_idx+1)}), "
+              f"{blank} rows had no match in Location Master")
+
+    # ── Save the workbook back in place (now carrying the CM lat/lon
+    # write-back too) ──────────────────────────────────────────────
     try:
         wb.save(xlsx_path)
         print(f"Workbook saved: {xlsx_path}")
@@ -756,15 +797,6 @@ def main():
         print(f"[flat] can't write to {OUTPUT_DIR}: {e}")
         out_path = os.path.join(os.getcwd(), fname)
         print(f"[flat] falling back to {out_path}")
-
-    # Build lat/lon lookup from the (now-fresh) Location Master
-    # so each Customer Master row carries the coords for its address.
-    loc_by_key = {}
-    for r in lm_rows:
-        key = _row_key(r, lm_addr_idx)
-        lat = r[lat_idx] if lat_idx < len(r) else None
-        lon = r[lon_idx] if lon_idx < len(r) else None
-        loc_by_key[key] = (lat, lon)
 
     # Column lookup from Customer Master for every FLAT_FILE_COLUMNS
     # entry.  Longitude / Latitude are joined in separately.
