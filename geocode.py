@@ -582,6 +582,15 @@ def main():
     print(f"\nStage 2+: running geocode + flat-file pipeline on template")
     print(f"  Working file: {xlsx_path}")
 
+    # Resolve _col_letter EARLY so every later diagnostic in this
+    # function can use it without worrying about Python's local-variable
+    # binding rules (any later `def _col_letter = ...` would turn every
+    # earlier reference into an UnboundLocalError).
+    try:
+        from openpyxl.utils import get_column_letter as _col_letter
+    except Exception:
+        _col_letter = lambda n: str(n)
+
     wb = load_workbook(xlsx_path)
     if LOCATION_SHEET not in wb.sheetnames:
         print(f"Sheet '{LOCATION_SHEET}' not found. Available: {wb.sheetnames}")
@@ -825,13 +834,6 @@ def main():
     # downstream.  Walk the headers manually so a workbook with both
     # columns never accidentally picks up Channel2.
     def _nrm2(s): return "" if s is None else " ".join(str(s).strip().split()).lower()
-    # Resolve _col_letter FIRST so the override banner below can use
-    # it without triggering an UnboundLocalError (Oct-15 bug — the
-    # import was below the banner originally).
-    try:
-        from openpyxl.utils import get_column_letter as _col_letter
-    except Exception:
-        _col_letter = lambda n: str(n)
     _channel_idx = None
     _ch_matches  = []
     for i, h in enumerate(cm_headers):
