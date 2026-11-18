@@ -577,14 +577,33 @@ def main():
     # previous unattended run.
     _kill_excel("pre-flight: clear Excel locks before SAP sales export")
 
-    SapGuiAuto = win32com.client.GetObject("SAPGUI")
+    # Nov-18: GetObject("SAPGUI") throws a bare COM "Invalid syntax" on a
+    # box where the SAP GUI isn't running or scripting is disabled -- the
+    # downstream "No SAP connection" guard never gets to fire.  Wrap the
+    # call so the operator sees the real remedy instead of a Win32 error.
+    try:
+        SapGuiAuto = win32com.client.GetObject("SAPGUI")
+    except Exception as e:
+        raise RuntimeError(
+            "Could not attach to SAP GUI via COM.\n"
+            "  * Is SAP Logon open on this desktop?  "
+            "If not, start SAP Logon, open a connection and log in, then re-run.\n"
+            "  * Is SAP GUI scripting enabled?  In SAP GUI: Options → Accessibility & Scripting → "
+            "Scripting → tick 'Enable scripting', and uncheck 'Notify when a script attaches'.\n"
+            f"  * Underlying COM error: {e}"
+        ) from e
     app = SapGuiAuto.GetScriptingEngine
 
     if app.Children.Count == 0:
-        raise RuntimeError("No SAP connection found. Open SAP GUI and log in first.")
+        raise RuntimeError(
+            "SAP GUI is running but has no open connection.  "
+            "Pick a connection from SAP Logon, log in, then re-run this script.")
     conn = app.Children(0)
     if conn.Children.Count == 0:
-        raise RuntimeError("No SAP session found.")
+        raise RuntimeError(
+            "SAP GUI connection is open but has no session.  "
+            "Log in to the SAP connection (usually done automatically after "
+            "picking a tile in SAP Logon), then re-run.")
     session = conn.Children(0)
 
     try:
