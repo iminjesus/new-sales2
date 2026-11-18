@@ -438,6 +438,21 @@ def try_set_layout_on_selection(session, layout_name: str) -> bool:
                 pass
     return False
 
+def _layout_name_variants(layout_name: str):
+    """Build a set of normalised layout-name spellings to try when
+    matching popup rows.  SAP sometimes stores the technical name
+    without the leading '/', with different case, or with trailing
+    spaces; the match must tolerate every variant the user might
+    type into LAYOUT_NAME at the top of this script."""
+    s = (layout_name or "").strip()
+    if not s:
+        return set()
+    bare = s.lstrip("/")
+    out = {s, bare, "/" + bare, s.upper(), bare.upper(), "/" + bare.upper(),
+           s.lower(), bare.lower(), "/" + bare.lower()}
+    return {v.strip().lower() for v in out if v}
+
+
 def apply_layout_via_dialog(session, layout_name: str) -> bool:
     """After the report has executed and the ALV grid is showing, open
     the 'Choose Layout' dialog and select the row whose name matches
@@ -447,12 +462,21 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
       3. Menu-path walk ('Settings' → 'Layout' → 'Choose').
     Then in the popup, tries to find the layout by scanning the ALV
     list or by typing into the search box.  Returns False on any
-    failure — caller may proceed with the default layout."""
+    failure — caller may proceed with the default layout.
+
+    Nov-18: verbose diagnostics -- each step prints what it tried so a
+    silent failure for a layout the user KNOWS exists becomes visible
+    (we had /RSM_RAW silently falling through to default).  When the
+    match fails, dumps the first 20 variant names visible in the
+    popup so the operator can see the exact spelling SAP uses."""
     if not layout_name:
         return False
 
+    want_variants = _layout_name_variants(layout_name)
+
     # ---- 1. Open the 'Choose Layout' dialog --------------------------------
     opened = False
+    opened_via = ""
     grid_ids = [
         "wnd[0]/usr/cntlGRID1/shellcont/shell",
         "wnd[0]/usr/cntlCONTAINER/shellcont/shell",
@@ -467,6 +491,7 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
                 session.findById(gid).pressToolbarButton(btn)
                 wait(0.6)
                 opened = True
+                opened_via = f"toolbar {btn} on {gid}"
                 break
             except:
                 continue
@@ -477,6 +502,7 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
             session.findById("wnd[0]").sendVKey(33)   # Ctrl+F9
             wait(0.6)
             opened = True
+            opened_via = "Ctrl+F9"
         except:
             pass
     if not opened:
@@ -486,15 +512,17 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
         if item is not None:
             try:
                 item.select(); wait(0.6); opened = True
+                opened_via = "menu Settings->Layout->Choose"
             except:
                 pass
 
     if not opened or not exists(session, "wnd[1]"):
+        print(f"  [layout] could not open 'Choose Layout' popup "
+              f"(tried toolbar, Ctrl+F9, menu).")
         return False
+    print(f"  [layout] opened 'Choose Layout' popup via {opened_via}")
 
     # ---- 2. Find the row for layout_name in the popup ----------------------
-    lname = layout_name.strip().lower()
-
     # (a) ALV grid inside popup — scan rows/cols for the name
     popup_grid_ids = [
         "wnd[1]/usr/cntlG_ALV_LAYOUT/shellcont/shell",
@@ -507,19 +535,69 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
         try:
             grid = session.findById(gid)
             row_cnt = int(getattr(grid, "RowCount", 0) or 0)
+            print(f"  [layout] popup grid {gid} has {row_cnt} row(s)")
+            # First-pass: look for an exact variant match.
             for r in range(row_cnt):
                 for col in ("VARIANT", "TEXT", "LTEXT", "NAME"):
                     try:
                         val = grid.getCellValue(r, col)
-                        if val and val.strip().lower() == lname:
+                    except Exception:
+                        continue
+                    if not val:
+                        continue
+                    norm = val.strip().lower()
+                    if norm in want_variants:
+                        try:
                             grid.setCurrentCell(r, col)
                             grid.doubleClickCurrentCell()
                             wait(0.5)
-                            print(f"  Layout '{layout_name}' applied via popup grid")
+                            print(f"  [layout] applied '{val}' (row {r}, col {col})")
                             return True
-                    except:
+                        except Exception as _e:
+                            print(f"  [layout] click row {r} col {col} failed: {_e}")
+                            continue
+            # Second-pass: tolerate "RSM_RAW" vs "/RSM_RAW" spacing/case
+            # even where the stored name has stray whitespace.
+            target_bare = layout_name.strip().lstrip("/").lower()
+            for r in range(row_cnt):
+                for col in ("VARIANT", "TEXT", "LTEXT", "NAME"):
+                    try:
+                        val = grid.getCellValue(r, col)
+                    except Exception:
                         continue
-        except:
+                    if not val:
+                        continue
+                    bare = val.strip().lstrip("/").lower()
+                    if bare == target_bare:
+                        try:
+                            grid.setCurrentCell(r, col)
+                            grid.doubleClickCurrentCell()
+                            wait(0.5)
+                            print(f"  [layout] applied '{val}' (tolerant match, row {r} col {col})")
+                            return True
+                        except Exception:
+                            continue
+            # Still nothing -- dump the first 20 VARIANT names to the log
+            # so the operator can see the spelling SAP has for this layout.
+            print(f"  [layout] no popup row matched '{layout_name}'. "
+                  f"First visible variants:")
+            shown = 0
+            for r in range(row_cnt):
+                if shown >= 20:
+                    break
+                row_bits = []
+                for col in ("VARIANT", "TEXT", "LTEXT", "NAME"):
+                    try:
+                        v = grid.getCellValue(r, col)
+                    except Exception:
+                        v = ""
+                    if v:
+                        row_bits.append(f"{col}={v!r}")
+                if row_bits:
+                    print(f"    row {r:>3}: {'  '.join(row_bits)}")
+                    shown += 1
+        except Exception as _e:
+            print(f"  [layout] grid scan failed on {gid}: {_e}")
             continue
 
     # (b) Search box in popup — type name + Enter
@@ -531,9 +609,10 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
                 session.findById(wid).Text = layout_name
                 session.findById("wnd[1]/tbar[0]/btn[0]").press()  # Enter
                 wait(0.5)
-                print(f"  Layout '{layout_name}' applied via popup search")
+                print(f"  [layout] applied via popup search box ({wid})")
                 return True
-            except:
+            except Exception as _e:
+                print(f"  [layout] search-box attempt via {wid} failed: {_e}")
                 continue
 
     # Give up — close popup gracefully so caller can continue
@@ -782,11 +861,21 @@ def _export_second_layout(session, layout_name, out_csv, d_from, d_to, fmt):
             f"-> Defaults -> Date format and add that format to DATE_FORMATS.")
     msg = sbar_text(session)
 
-    if apply_layout_via_dialog(session, layout_name):
-        wait(0.6)
-    else:
-        print(f"  [WARN] Could not auto-apply layout '{layout_name}' -- "
-              f"exported rows may have the default column set, not /RSM_RAW.")
+    # Nov-18: layout MUST be applied for the second pass -- otherwise
+    # we export the previous layout's column set (JAYDENSQL) under the
+    # /RSM_RAW filename, which silently breaks the downstream RMA
+    # ingest.  Refuse to proceed if auto-apply fails; the verbose
+    # dump from apply_layout_via_dialog will have printed the exact
+    # layout names visible in the popup so the operator knows what
+    # to put in LAYOUT_NAME_RSM_RAW.
+    if not apply_layout_via_dialog(session, layout_name):
+        raise RuntimeError(
+            f"Could not auto-apply layout '{layout_name}' in the Choose "
+            f"Layout popup.  Scroll up in this log -- the matcher prints "
+            f"the first 20 variants it saw so you can check the exact "
+            f"technical name (the 'VARIANT' column).  Update "
+            f"LAYOUT_NAME_RSM_RAW in sapcrawling_sales1_batch.py and retry.")
+    wait(0.6)
 
     if not trigger_export(session):
         raise RuntimeError("Could not trigger export on second pass.")
