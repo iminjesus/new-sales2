@@ -70,6 +70,34 @@
     .chip.ok{background:#dcfce7;color:#166534}
     .chip.err{background:#fee2e2;color:#991b1b}
 
+    /* Approver chip -- within-14-days = green/Jack, older = orange/Kenny. */
+    .apv-chip{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:4px;
+              font-weight:700;font-size:12.5px;border:1px solid;min-height:30px;line-height:1.2}
+    .apv-chip .apv-icon{display:inline-flex;align-items:center;justify-content:center;
+                        width:22px;height:22px;border-radius:50%;font-size:14px;font-weight:800}
+    .apv-chip .apv-lbl{flex:1}
+    .apv-chip .apv-days{font-size:10.5px;color:inherit;opacity:.85;font-weight:600;white-space:nowrap}
+    .apv-none{background:#f1f5f9;border-color:#cbd5e1;color:#64748b}
+    .apv-none .apv-icon{background:#cbd5e1;color:#fff}
+    .apv-green{background:#dcfce7;border-color:#166534;color:#166534}
+    .apv-green .apv-icon{background:#15803d;color:#fff}
+    .apv-orange{background:#fef3c7;border-color:#b45309;color:#78350f}
+    .apv-orange .apv-icon{background:#b45309;color:#fff}
+
+    /* Photo grid for tyre pics. */
+    .photo-strip{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+    .photo-strip.expanded .photo-thumb{width:300px;height:300px}
+    .photo-thumb{position:relative;width:120px;height:120px;border:1px solid var(--border);
+                 border-radius:4px;overflow:hidden;background:#f1f5f9}
+    .photo-thumb img{width:100%;height:100%;object-fit:cover;cursor:zoom-in}
+    .photo-thumb .ph-del{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.6);color:#fff;
+                         border:none;border-radius:3px;padding:1px 6px;font-size:11px;cursor:pointer;font-weight:700}
+    .photo-thumb .ph-name{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.55);color:#fff;
+                          font-size:10px;padding:2px 4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .photo-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;
+                    align-items:center;justify-content:center;z-index:2100;padding:20px;cursor:zoom-out}
+    .photo-lightbox img{max-width:95vw;max-height:95vh;box-shadow:0 10px 30px #000}
+
     .view{display:none}
     .view.active{display:block}
 
@@ -137,13 +165,17 @@
         </select>
       </div>
       <div>
-        <label>Approval Required</label>
-        <select id="h_approval_route">
-          <option value="Call Centre">Call Centre</option>
-          <option value="OD & MD">OD & MD</option>
-          <option value="Regional Sales &amp; Finance">Regional Sales &amp; Finance</option>
-          <option value="National Office">National Office</option>
-        </select>
+        <label>Approver <small>(auto by Billing Date age)</small></label>
+        <!-- Derived from the earliest billing_date on the lines.
+             Within 14 days -> Jack Nguyen; older -> Kenny Kim.  The
+             chip is coloured + iconed so CST can confirm the routing
+             at a glance; the plain text (hidden input) is what the
+             backend persists on save. -->
+        <div id="approver_chip" class="apv-chip apv-none">
+          <span class="apv-icon">?</span>
+          <span class="apv-lbl">(set a Billing Date to compute)</span>
+        </div>
+        <input type="hidden" id="h_approval_route" value="">
       </div>
     </div>
     <div class="row cols-3" style="margin-top:10px">
@@ -225,11 +257,31 @@
       </div>
       <div class="legend">Dirty / fitted / label-removed tyres cannot be returned to the warehouse.</div>
     </div>
+
+    <!-- Nov-18 user ask: photo upload for every RMA (tyre pictures are
+         always needed).  Sits next to the Condition checkboxes.  Click
+         a thumbnail to zoom.  Expand toggle swaps between a compact
+         strip (default) and a larger-thumbnail view. -->
+    <div style="margin-top:10px">
+      <label style="display:flex;align-items:center;gap:10px">
+        <span>Tyre photos</span>
+        <button type="button" class="btn secondary" id="btn_photo_pick" style="padding:3px 10px;font-size:11px">+ Add photos</button>
+        <button type="button" class="btn secondary" id="btn_photo_expand" style="padding:3px 10px;font-size:11px">⤢ Expand</button>
+        <span id="photo_count" class="legend" style="margin:0"></span>
+      </label>
+      <input type="file" id="photo_input" accept="image/*" multiple style="display:none">
+      <div id="photo_strip" class="photo-strip"></div>
+      <div class="legend">Photos are uploaded immediately; they attach to this RMA on Save/Submit.</div>
+    </div>
+
     <div style="margin-top:10px">
       <label>Special instructions</label>
       <textarea id="h_special_instructions" placeholder="Anything the approver or warehouse needs to know (e.g. pickup window, customer contact)."></textarea>
     </div>
   </div>
+
+  <!-- Fullscreen zoom view used by clicking any thumbnail. -->
+  <div id="photo_lightbox" class="photo-lightbox"><img id="photo_lightbox_img" src="" alt=""></div>
 
   <div class="card">
     <div class="row cols-4">
@@ -513,6 +565,184 @@ $("#btn_upload").addEventListener("click", async () => {
     toast(j.error || ("HTTP " + r.status), "err");
   }
 });
+
+/* ─────── approver routing by Billing Date age ─────── */
+/* Business rule (Nov-18):
+     oldest billing_date on the lines, compared to TODAY:
+       within 14 days   -> Jack Nguyen can approve (green chip)
+       15+ days         -> Kenny Kim must approve  (orange chip)
+   Updates the hidden h_approval_route field so the backend persists
+   the derived approver on save/submit.  Fires on every lookup, line
+   add/remove, and billing_date edit. */
+const APPROVER_WITHIN   = { email: "jack.nguyen@hankooktyre.com.au", name: "Jack Nguyen",   label: "Approver: Jack Nguyen" };
+const APPROVER_OVER     = { email: "kenny.kim@hankooktyre.com.au",  name: "Kenny Kim",     label: "Approver: Kenny Kim"   };
+const APPROVER_THRESHOLD_DAYS = 14;
+
+function recomputeApprover(){
+  const chip = $("#approver_chip");
+  const hidden = $("#h_approval_route");
+
+  // Oldest billing_date across every line that carries one.
+  let oldest = null;
+  $$("#lines_body tr input[data-k='billing_date']").forEach(inp => {
+    const v = (inp.value || "").trim();
+    if (!v) return;
+    // Accept YYYY-MM-DD or YYYY/MM/DD or DD.MM.YYYY.
+    let d = null;
+    const iso = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    const slash = v.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+    const dmy = v.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+    const dmy2 = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if      (iso)   d = new Date(+iso[1],   +iso[2]-1,   +iso[3]);
+    else if (slash) d = new Date(+slash[1], +slash[2]-1, +slash[3]);
+    else if (dmy)   d = new Date(+dmy[3],   +dmy[2]-1,   +dmy[1]);
+    else if (dmy2)  d = new Date(+dmy2[3],  +dmy2[2]-1,  +dmy2[1]);
+    if (d && !isNaN(d.getTime())){
+      if (!oldest || d < oldest) oldest = d;
+    }
+  });
+
+  if (!oldest){
+    chip.className = "apv-chip apv-none";
+    chip.innerHTML = `<span class="apv-icon">?</span>
+                      <span class="apv-lbl">(set a Billing Date to compute)</span>`;
+    hidden.value = "";
+    return;
+  }
+
+  const today = new Date();
+  const d1 = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const d0 = new Date(oldest.getFullYear(), oldest.getMonth(), oldest.getDate());
+  const days = Math.floor((d1 - d0) / (1000*60*60*24));
+
+  if (days <= APPROVER_THRESHOLD_DAYS){
+    chip.className = "apv-chip apv-green";
+    chip.innerHTML = `<span class="apv-icon">✓</span>
+                      <span class="apv-lbl">Within 14 days — ${APPROVER_WITHIN.label}</span>
+                      <span class="apv-days">${days} day${days===1?"":"s"} old</span>`;
+    hidden.value = APPROVER_WITHIN.email;
+  } else {
+    chip.className = "apv-chip apv-orange";
+    chip.innerHTML = `<span class="apv-icon">!</span>
+                      <span class="apv-lbl">Over 14 days — ${APPROVER_OVER.label}</span>
+                      <span class="apv-days">${days} days old</span>`;
+    hidden.value = APPROVER_OVER.email;
+  }
+}
+// Any edit to a billing_date cell re-computes.  Delegated so dynamically
+// added rows work too.
+$("#lines_body").addEventListener("input", (ev) => {
+  const t = ev.target;
+  if (t && t.dataset && t.dataset.k === "billing_date") recomputeApprover();
+});
+
+/* Patch setLines + addEmptyLine to also re-compute after the lines
+   table mutates.  We replace the original references at the bottom of
+   the script because the earlier function definitions are already
+   wired to the DOM. */
+const _origSetLines = setLines;
+setLines = function(arr){ _origSetLines(arr); recomputeApprover(); };
+const _origAddEmpty = addEmptyLine;
+addEmptyLine = function(){ _origAddEmpty(); recomputeApprover(); };
+
+/* ─────── photo upload ─────── */
+/* Staging list: photos uploaded BEFORE a save/submit are kept here
+   with their server-returned IDs.  The IDs are sent with the save
+   payload so the backend can link them to the new rma_id.  On a
+   fresh load / Reset / Cancel this resets to []. */
+let _photos = [];
+
+function renderPhotoStrip(){
+  const strip = $("#photo_strip");
+  strip.innerHTML = "";
+  _photos.forEach((p, i) => {
+    const d = document.createElement("div");
+    d.className = "photo-thumb";
+    d.innerHTML = `
+      <img src="${p.url}" alt="${esc(p.name)}">
+      <button type="button" class="ph-del" data-i="${i}" title="Remove">×</button>
+      <div class="ph-name">${esc(p.name)}</div>`;
+    d.querySelector("img").addEventListener("click", () => {
+      $("#photo_lightbox_img").src = p.url;
+      $("#photo_lightbox").style.display = "flex";
+    });
+    d.querySelector(".ph-del").addEventListener("click", () => {
+      _photos.splice(i, 1);
+      renderPhotoStrip();
+    });
+    strip.appendChild(d);
+  });
+  $("#photo_count").textContent = _photos.length
+    ? `${_photos.length} photo${_photos.length===1?"":"s"} ready to attach`
+    : "No photos yet";
+}
+renderPhotoStrip();
+
+$("#btn_photo_pick").addEventListener("click", () => $("#photo_input").click());
+$("#photo_input").addEventListener("change", async (ev) => {
+  const files = Array.from(ev.target.files || []);
+  ev.target.value = "";                               // allow re-pick same file
+  for (const f of files){
+    const fd = new FormData();
+    fd.append("file", f);
+    try {
+      const r = await fetch("/rma/api/photo/upload", {method: "POST", body: fd});
+      const j = await r.json();
+      if (!r.ok || !j.ok){
+        toast(`Upload failed: ${j.error || r.status}`, "err");
+        continue;
+      }
+      _photos.push({photo_id: j.photo_id, url: j.url, name: j.name || f.name});
+    } catch (e){
+      toast("Upload error: " + e.message, "err");
+    }
+  }
+  renderPhotoStrip();
+});
+
+$("#btn_photo_expand").addEventListener("click", () => {
+  const strip = $("#photo_strip");
+  const expanded = strip.classList.toggle("expanded");
+  $("#btn_photo_expand").textContent = expanded ? "⤡ Collapse" : "⤢ Expand";
+});
+
+$("#photo_lightbox").addEventListener("click", (ev) => {
+  // click anywhere on the backdrop (including the img) closes.
+  $("#photo_lightbox").style.display = "none";
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") $("#photo_lightbox").style.display = "none";
+});
+
+/* Reset / Cancel buttons should also clear the photo buffer. */
+const _origClear = $("#btn_clear").onclick;                 // noop; cleared via listener below
+$("#btn_clear").addEventListener("click", () => {
+  _photos = []; renderPhotoStrip(); recomputeApprover();
+});
+$("#btn_cancel").addEventListener("click", () => {
+  _photos = []; renderPhotoStrip();
+});
+
+/* Patch the save path so the staged photo IDs ride along.  Replaces
+   the send() function defined earlier. */
+const _origSend = send;
+send = async function(status){
+  const header = readHeader();
+  header.status = status;
+  const lines  = collectLines();
+  if (!lines.length){ toast("Add at least one line.", "warn"); return; }
+  const photo_ids = _photos.map(p => p.photo_id);
+  const r = await fetch("/rma/api/save", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({header, lines, photo_ids}),
+  });
+  const j = await r.json();
+  if (!r.ok || j.error){ toast(j.error || ("HTTP " + r.status), "err"); return; }
+  toast(`Saved RMA ${j.rma_number} (id=${j.id})`, "ok");
+  $("#h_rma_number").value = j.rma_number;
+};
+
 </script>
 </body>
 </html>

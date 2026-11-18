@@ -41,9 +41,11 @@ from __future__ import annotations
 import csv
 import io
 import json
+import mimetypes
 import os
 import re
 import sys
+import uuid
 from datetime import date, datetime
 
 try:
@@ -71,6 +73,14 @@ DB_CFG = {
 }
 PORT = int(os.getenv("RMA_PORT", "5555"))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PHOTO_DIR = os.getenv("RMA_PHOTO_DIR",
+                      os.path.join(BASE_DIR, "rma_uploads"))
+PHOTO_MAX_BYTES = 15 * 1024 * 1024    # 15 MB per file
+PHOTO_ALLOWED_MIMES = {
+    "image/jpeg", "image/png", "image/webp", "image/heic",
+    "image/gif", "image/bmp",
+}
+os.makedirs(PHOTO_DIR, exist_ok=True)
 
 
 # ---------- db ----------
@@ -159,6 +169,23 @@ def ensure_schema():
             INDEX idx_rma (rma_id),
             CONSTRAINT fk_rma FOREIGN KEY (rma_id)
                 REFERENCES rma_request_test(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """,
+        # Uploaded tyre photos.  Rows inserted with rma_id = NULL on
+        # upload; save_rma() patches them to point at the new RMA.
+        # file_path is relative to PHOTO_DIR.
+        """
+        CREATE TABLE IF NOT EXISTS rma_photo_test (
+            id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+            photo_id      CHAR(36)     NOT NULL,
+            rma_id        BIGINT NULL,
+            original_name VARCHAR(255) NOT NULL DEFAULT '',
+            file_path     VARCHAR(500) NOT NULL DEFAULT '',
+            mime_type     VARCHAR(80)  NOT NULL DEFAULT '',
+            byte_size     BIGINT       NOT NULL DEFAULT 0,
+            uploaded_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_photo_id (photo_id),
+            INDEX idx_rma_photos (rma_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """,
     ]
@@ -528,6 +555,7 @@ def save_rma():
         return jsonify({"error": f"invalid JSON: {e}"}), 400
     h = payload.get("header") or {}
     lines = payload.get("lines") or []
+    photo_ids = payload.get("photo_ids") or []
     if not lines:
         return jsonify({"error": "at least one line is required"}), 400
 
@@ -592,11 +620,106 @@ def save_rma():
                     ln.get("billing_date") or None,
                     float(ln.get("amount") or 0),
                 ))
+        # Link any staged photos to this new RMA.  A photo_id that
+        # doesn't exist or was already linked to another RMA is just
+        # silently skipped (WHERE rma_id IS NULL guard).
+        if photo_ids:
+            ph_list = [p for p in photo_ids
+                       if isinstance(p, str) and re.match(r"^[0-9a-f]{32}$", p)]
+            if ph_list:
+                ph_in = ",".join(["%s"] * len(ph_list))
+                cur.execute(
+                    f"UPDATE rma_photo_test SET rma_id=%s "
+                    f"WHERE photo_id IN ({ph_in}) AND rma_id IS NULL",
+                    tuple([rma_id] + ph_list))
         conn.commit()
     finally:
         cur.close(); conn.close()
 
     return jsonify({"ok": True, "id": rma_id, "rma_number": rma_number})
+
+
+@app.post("/rma/api/photo/upload")
+def photo_upload():
+    """Stage a tyre photo.  Returns {ok, photo_id, url, name, bytes}.
+    Rows are created with rma_id = NULL; they get linked on save_rma.
+    Stale orphans could be swept periodically -- left as a Phase-2
+    chore (none accumulates in the normal flow because the browser
+    only uploads when the operator is actively filling the form)."""
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"error": "no file posted"}), 400
+    data = f.read()
+    if len(data) > PHOTO_MAX_BYTES:
+        return jsonify({"error": f"file too large "
+                                 f"({len(data)} > {PHOTO_MAX_BYTES} bytes)"}), 413
+    mime = (f.mimetype or "").lower()
+    if not mime:
+        mime = mimetypes.guess_type(f.filename or "")[0] or ""
+    if mime and mime not in PHOTO_ALLOWED_MIMES:
+        return jsonify({"error": f"mime type not allowed: {mime}"}), 415
+
+    photo_id = uuid.uuid4().hex
+    orig = os.path.basename(f.filename or "photo")
+    # Strip path traversal / weird chars from the filename kept on disk;
+    # the original goes into the DB for the UI display.
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", orig)[:100] or "photo"
+    ext  = ""
+    if "." in safe:
+        ext = "." + safe.rsplit(".", 1)[-1].lower()[:8]
+    file_name = f"{photo_id}{ext}"
+    fs_path   = os.path.join(PHOTO_DIR, file_name)
+    with open(fs_path, "wb") as out:
+        out.write(data)
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO rma_photo_test "
+            "(photo_id, rma_id, original_name, file_path, mime_type, byte_size) "
+            "VALUES (%s, NULL, %s, %s, %s, %s)",
+            (photo_id, orig, file_name, mime, len(data)))
+        conn.commit()
+    finally:
+        cur.close(); conn.close()
+
+    return jsonify({
+        "ok": True,
+        "photo_id": photo_id,
+        "url": f"/rma/api/photo/{photo_id}",
+        "name": orig,
+        "bytes": len(data),
+    })
+
+
+@app.get("/rma/api/photo/<photo_id>")
+def photo_get(photo_id):
+    """Serve a staged or linked photo by id.  Enforces id shape to
+    stop path traversal -- the stored file name is also under PHOTO_DIR
+    which is a fixed directory, but the hex check is cheap belt-and-
+    braces."""
+    if not re.match(r"^[0-9a-f]{32}$", photo_id or ""):
+        return jsonify({"error": "bad photo_id"}), 400
+    conn = get_conn()
+    cur = conn.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT file_path, mime_type FROM rma_photo_test "
+                    "WHERE photo_id=%s", (photo_id,))
+        row = cur.fetchone()
+    finally:
+        cur.close(); conn.close()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    fs_path = os.path.join(PHOTO_DIR, row["file_path"])
+    if not os.path.exists(fs_path):
+        return jsonify({"error": "file missing on disk"}), 410
+    mime = row["mime_type"] or (mimetypes.guess_type(row["file_path"])[0]
+                                or "application/octet-stream")
+    with open(fs_path, "rb") as f:
+        body = f.read()
+    return Response(body, mimetype=mime,
+                    headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.get("/rma/api/list")
@@ -634,13 +757,19 @@ def get_rma(rid):
         cur.execute("SELECT * FROM rma_request_line_test WHERE rma_id=%s "
                     "ORDER BY id", (rid,))
         lines = cur.fetchall()
-        for row in (header, *lines):
+        cur.execute("SELECT photo_id, original_name, mime_type, byte_size, "
+                    "       uploaded_at "
+                    "FROM rma_photo_test WHERE rma_id=%s ORDER BY id", (rid,))
+        photos = cur.fetchall()
+        for p in photos:
+            p["url"] = f"/rma/api/photo/{p['photo_id']}"
+        for row in (header, *lines, *photos):
             for k, v in list(row.items()):
                 if v is not None and hasattr(v, "isoformat"):
                     row[k] = v.isoformat()
                 elif isinstance(v, (bytes, bytearray)):
                     row[k] = v.decode("utf-8", errors="replace")
-        return jsonify({"ok": True, "header": header, "lines": lines})
+        return jsonify({"ok": True, "header": header, "lines": lines, "photos": photos})
     finally:
         cur.close(); conn.close()
 

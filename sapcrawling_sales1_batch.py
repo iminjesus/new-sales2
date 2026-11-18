@@ -30,6 +30,15 @@ SAP_EXPORT_GLOB = "EXPORT_*.xlsx"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_CSV  = os.path.join(BASE_DIR, "rawdata", "unlock", "sales_thismonth.csv")
 
+# Nov-18 user ask: ZSDR24030 under layout /JAYDENSQL (the OUT_CSV above)
+# only carries aggregated billing-line columns; it does NOT expose the
+# full Billing Doc / SO / DO chain the RMA flow needs.  /RSM_RAW is the
+# raw-level layout that includes Vbeln (billing doc), Vgbel (preceding
+# delivery / DO) and the sales-doc link, so we do a SECOND pass with
+# that layout and save it next to the first file under a different name.
+# Downstream RMA flow reads this file into so_do_billing_test.
+OUT_CSV_RSM_RAW = os.path.join(BASE_DIR, "rawdata", "unlock", "sales_rsm_raw.csv")
+
 DELETE_XLSX_AFTER_CONVERT = False
 MIN_CSV_SIZE = 200  # bytes
 
@@ -50,6 +59,12 @@ DATE_FORMATS = [
 # with '/' and is usually uppercase — 'Layout Description' is only a label).
 # Set to "" or None to skip auto-layout and use the SAP default.
 LAYOUT_NAME = "/JAYDENSQL"
+
+# Nov-18: second layout that exposes Billing Doc / DO / SO columns.
+# Needed by the RMA flow in rma_experimental.py.  If this layout
+# does not exist on the operator's account, the second pass is
+# skipped with a warning; it never fails the pipeline.
+LAYOUT_NAME_RSM_RAW = "/RSM_RAW"
 
 
 # ================= DATE HELPERS =================
@@ -667,6 +682,90 @@ def main():
             os.remove(xlsx_path)
         except Exception as e:
             print("[WARN] Could not delete XLSX:", e)
+
+    # ---- Nov-18: second-pass export under /RSM_RAW layout --------------
+    # Billing-level raw layout needed by the RMA tool (so_do_billing_test).
+    # Isolated from the main JAYDENSQL path above: if anything fails
+    # here we log and carry on so this helper feed never breaks the
+    # existing stock + sales pipeline.  Reuses the same SAP session and
+    # the same date window the first pass accepted.
+    try:
+        _export_second_layout(session, LAYOUT_NAME_RSM_RAW, OUT_CSV_RSM_RAW,
+                              d_from, d_to, accepted_fmt)
+    except Exception as e:
+        print(f"[WARN] /RSM_RAW second pass failed (non-fatal): {e}")
+
+
+def _export_second_layout(session, layout_name, out_csv, d_from, d_to, fmt):
+    """Run ZSDR24030 a SECOND time with a different display layout and
+    convert the resulting XLSX to its own CSV.  Mirrors the main pass
+    but shorter -- date formats are already known, so one attempt is
+    enough.  Called from main() AFTER the JAYDENSQL CSV has been
+    successfully produced; any exception here is caught by the caller
+    and reported as non-fatal."""
+    print()
+    print("=" * 70)
+    print(f"Second pass: layout='{layout_name}' -> {out_csv}")
+    print("=" * 70)
+
+    ensure_out_dir(out_csv)
+    _kill_excel(f"pre-flight: clear Excel locks before {layout_name} export")
+
+    date_from = d_from.strftime(fmt)
+    date_to   = d_to.strftime(fmt)
+    print(f"Date window re-used: {date_from} ~ {date_to}")
+
+    start_tcode(session, TCODE)
+    set_selection_fields(session, date_from, date_to)
+    try_set_layout_on_selection(session, layout_name)
+
+    export_start_ts = time.time()
+    session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
+    wait(2.0)
+    close_popups(session, 4)
+
+    msg = sbar_text(session)
+    if sbar_is_error(session) and looks_like_date_format_error(msg):
+        raise RuntimeError(f"SAP rejected date format on second pass: {msg}")
+    if msg:
+        print(f"  F8 status: {msg}")
+
+    if apply_layout_via_dialog(session, layout_name):
+        wait(0.6)
+    else:
+        print(f"  [WARN] Could not auto-apply layout '{layout_name}' -- "
+              f"exported rows may have the default column set, not /RSM_RAW.")
+
+    if not trigger_export(session):
+        raise RuntimeError("Could not trigger export on second pass.")
+
+    xlsx_path = ""
+    for _ in range(40):
+        xlsx_path = newest_export_xlsx(export_start_ts)
+        if xlsx_path and os.path.exists(xlsx_path):
+            s1 = os.path.getsize(xlsx_path)
+            wait(0.8)
+            s2 = os.path.getsize(xlsx_path)
+            if s2 >= s1 and s2 > 500:
+                break
+        wait(0.6)
+
+    if not xlsx_path:
+        raise RuntimeError(f"Could not find second-pass XLSX in {SAP_EXPORT_DIR}")
+
+    print("Detected second XLSX:", xlsx_path)
+    _kill_excel("pre-convert: release lock on just-saved /RSM_RAW XLSX")
+    xlsx_to_csv(xlsx_path, out_csv)
+    if not file_ok(out_csv, MIN_CSV_SIZE):
+        raise RuntimeError("Second-pass CSV conversion failed or file too small.")
+    _kill_excel("post-convert: close every Excel window on the box")
+    print("Second CSV saved:", out_csv)
+    if DELETE_XLSX_AFTER_CONVERT:
+        try:
+            os.remove(xlsx_path)
+        except Exception as e:
+            print("[WARN] Could not delete second XLSX:", e)
+
 
 if __name__ == "__main__":
     main()
