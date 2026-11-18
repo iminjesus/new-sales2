@@ -717,11 +717,17 @@ def main():
 
 def _export_second_layout(session, layout_name, out_csv, d_from, d_to, fmt):
     """Run ZSDR24030 a SECOND time with a different display layout and
-    convert the resulting XLSX to its own CSV.  Mirrors the main pass
-    but shorter -- date formats are already known, so one attempt is
-    enough.  Called from main() AFTER the JAYDENSQL CSV has been
-    successfully produced; any exception here is caught by the caller
-    and reported as non-fatal."""
+    convert the resulting XLSX to its own CSV.  Called from main() AFTER
+    the JAYDENSQL CSV has been successfully produced; any exception
+    here is caught by the caller and reported as non-fatal.
+
+    `fmt` is the date format the primary pass accepted (passed in to
+    avoid a second negotiation round in the normal flow).  When called
+    from the standalone helper (run_rsm_raw_now.py), we may not know
+    the operator's profile format yet, so this function loops over
+    DATE_FORMATS starting with `fmt` and falls through to the full
+    candidate list on a date-format rejection -- same policy as the
+    primary pass in main()."""
     print()
     print("=" * 70)
     print(f"Second pass: layout='{layout_name}' -> {out_csv}")
@@ -730,24 +736,51 @@ def _export_second_layout(session, layout_name, out_csv, d_from, d_to, fmt):
     ensure_out_dir(out_csv)
     _kill_excel(f"pre-flight: clear Excel locks before {layout_name} export")
 
-    date_from = d_from.strftime(fmt)
-    date_to   = d_to.strftime(fmt)
-    print(f"Date window re-used: {date_from} ~ {date_to}")
+    # Order: the caller's `fmt` first (fast path from main()), then the
+    # rest of DATE_FORMATS as fall-backs for the standalone test driver.
+    tried = []
+    candidates = []
+    if fmt:
+        candidates.append(fmt)
+    for f in DATE_FORMATS:
+        if f not in candidates:
+            candidates.append(f)
 
-    start_tcode(session, TCODE)
-    set_selection_fields(session, date_from, date_to)
-    try_set_layout_on_selection(session, layout_name)
+    export_start_ts = None
+    accepted_fmt    = None
+    for i, candidate in enumerate(candidates, 1):
+        date_from = d_from.strftime(candidate)
+        date_to   = d_to.strftime(candidate)
+        print(f"[Attempt {i}/{len(candidates)}] date format = {candidate} -> "
+              f"{date_from} ~ {date_to}")
 
-    export_start_ts = time.time()
-    session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
-    wait(2.0)
-    close_popups(session, 4)
+        start_tcode(session, TCODE)
+        set_selection_fields(session, date_from, date_to)
+        try_set_layout_on_selection(session, layout_name)
 
+        export_start_ts = time.time()
+        session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
+        wait(2.0)
+        close_popups(session, 4)
+
+        msg = sbar_text(session)
+        if sbar_is_error(session) and looks_like_date_format_error(msg):
+            print(f"  [X] SAP rejected: {msg}")
+            tried.append(candidate)
+            continue
+        accepted_fmt = candidate
+        if msg:
+            print(f"  [OK] format {candidate} accepted (status: {msg})")
+        else:
+            print(f"  [OK] format {candidate} accepted")
+        break
+
+    if not accepted_fmt:
+        raise RuntimeError(
+            f"SAP rejected every candidate date format on second pass "
+            f"(tried: {tried}).  Check System -> User Profile -> Own Data "
+            f"-> Defaults -> Date format and add that format to DATE_FORMATS.")
     msg = sbar_text(session)
-    if sbar_is_error(session) and looks_like_date_format_error(msg):
-        raise RuntimeError(f"SAP rejected date format on second pass: {msg}")
-    if msg:
-        print(f"  F8 status: {msg}")
 
     if apply_layout_via_dialog(session, layout_name):
         wait(0.6)
