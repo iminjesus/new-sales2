@@ -438,6 +438,54 @@ def try_set_layout_on_selection(session, layout_name: str) -> bool:
                 pass
     return False
 
+def _walk_popup_for_grids(session, root_id: str = "wnd[1]", max_depth: int = 12):
+    """Walk wnd[1]'s control tree looking for any GuiShell whose SubType
+    looks like an ALV grid.  Returns the full IDs of every match, in
+    tree order.  Also finds nested shell containers (shellcont/shell)
+    which the hard-coded popup_grid_ids list keeps missing because
+    SAP picks a different container name per release.
+
+    Logs the first few candidates it finds so an operator debugging a
+    new SAP version can see them in the console."""
+    found = []
+
+    def _walk(node, depth):
+        if depth > max_depth or len(found) >= 30:
+            return
+        try:
+            t  = getattr(node, "Type", "") or ""
+            st = getattr(node, "SubType", "") or ""
+            nid = getattr(node, "Id", "")
+        except Exception:
+            t = st = nid = ""
+        if t == "GuiShell":
+            # SubType is typically 'GridView' for ALV grids in popups.
+            if "grid" in (st or "").lower():
+                found.append(nid)
+        try:
+            kids = node.Children
+            cnt = int(getattr(kids, "Count", 0) or 0)
+        except Exception:
+            cnt = 0
+        for i in range(cnt):
+            try:
+                _walk(kids(i), depth + 1)
+            except Exception:
+                continue
+
+    try:
+        root = session.findById(root_id)
+    except Exception:
+        return found
+    _walk(root, 0)
+    if found:
+        print(f"  [layout] walker found {len(found)} GridView shell(s) under "
+              f"{root_id}: {found[:3]}{'...' if len(found) > 3 else ''}")
+    else:
+        print(f"  [layout] walker found NO GridView shell under {root_id}")
+    return found
+
+
 def _layout_name_variants(layout_name: str):
     """Build a set of normalised layout-name spellings to try when
     matching popup rows.  SAP sometimes stores the technical name
@@ -524,11 +572,22 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
 
     # ---- 2. Find the row for layout_name in the popup ----------------------
     # (a) ALV grid inside popup — scan rows/cols for the name
-    popup_grid_ids = [
+    #
+    # Nov-18: start with the hard-coded ID list, then walk wnd[1]'s
+    # control tree for any GuiShell of SubType 'GridView' or similar.
+    # The Choose Layout popup's grid lives under a different container
+    # id on every SAP release (e.g. CUST_CONTAINER / CUSTOM / SUB1),
+    # so a static list keeps missing new variants.
+    popup_grid_ids = list(_walk_popup_for_grids(session))
+    for gid_fallback in (
         "wnd[1]/usr/cntlG_ALV_LAYOUT/shellcont/shell",
         "wnd[1]/usr/cntlCONTAINER1/shellcont/shell",
         "wnd[1]/usr/cntlSHELL/shellcont/shell",
-    ]
+    ):
+        if gid_fallback not in popup_grid_ids:
+            popup_grid_ids.append(gid_fallback)
+    print(f"  [layout] scanning {len(popup_grid_ids)} candidate grid(s) "
+          f"in wnd[1]")
     for gid in popup_grid_ids:
         if not exists(session, gid):
             continue
@@ -600,25 +659,126 @@ def apply_layout_via_dialog(session, layout_name: str) -> bool:
             print(f"  [layout] grid scan failed on {gid}: {_e}")
             continue
 
-    # (b) Search box in popup — type name + Enter
-    for wid in ("wnd[1]/usr/ctxt%%DYN001-LOW",
-                "wnd[1]/usr/txtRSVAR-VARIANT",
-                "wnd[1]/usr/txtV-LOW"):
-        if exists(session, wid):
+    # (b) Search box in popup — try hard-coded IDs first, then walk
+    #     wnd[1] for any GuiCTextField / GuiTextField so new SAP
+    #     popups with different field ids still get a shot.
+    search_wids = ["wnd[1]/usr/ctxt%%DYN001-LOW",
+                   "wnd[1]/usr/txtRSVAR-VARIANT",
+                   "wnd[1]/usr/txtV-LOW"]
+    for wid in list(_walk_popup_for_text_fields(session)):
+        if wid not in search_wids:
+            search_wids.append(wid)
+    for wid in search_wids:
+        if not exists(session, wid):
+            continue
+        for try_name in (layout_name, layout_name.lstrip("/"),
+                         layout_name.upper(), layout_name.lstrip("/").upper()):
             try:
-                session.findById(wid).Text = layout_name
+                session.findById(wid).Text = try_name
                 session.findById("wnd[1]/tbar[0]/btn[0]").press()  # Enter
                 wait(0.5)
-                print(f"  [layout] applied via popup search box ({wid})")
-                return True
+                # Enter may close the popup (success) or just move the
+                # cursor (fail).  If wnd[1] is gone, we succeeded.
+                if not exists(session, "wnd[1]"):
+                    print(f"  [layout] applied via popup search box "
+                          f"({wid}, typed {try_name!r})")
+                    return True
             except Exception as _e:
-                print(f"  [layout] search-box attempt via {wid} failed: {_e}")
+                print(f"  [layout] search-box attempt via {wid} "
+                      f"with {try_name!r} failed: {_e}")
                 continue
 
-    # Give up — close popup gracefully so caller can continue
+    # Still here -- dump the whole wnd[1] control tree so we can see
+    # what the popup actually contains, then close it.
+    print(f"  [layout] no match found.  Full wnd[1] control tree:")
+    _dump_control_tree(session, "wnd[1]", limit=60)
     try: session.findById("wnd[1]/tbar[0]/btn[12]").press()   # Cancel
     except: pass
     return False
+
+
+def _walk_popup_for_text_fields(session, root_id: str = "wnd[1]", max_depth: int = 12):
+    """Yield IDs of every GuiCTextField / GuiTextField in the popup.
+    Lets the search-box fallback find a typing target without relying
+    on hard-coded IDs."""
+    found = []
+
+    def _walk(node, depth):
+        if depth > max_depth or len(found) >= 50:
+            return
+        try:
+            t = getattr(node, "Type", "") or ""
+            nid = getattr(node, "Id", "")
+        except Exception:
+            t = nid = ""
+        if t in ("GuiCTextField", "GuiTextField"):
+            found.append(nid)
+        try:
+            kids = node.Children
+            cnt = int(getattr(kids, "Count", 0) or 0)
+        except Exception:
+            cnt = 0
+        for i in range(cnt):
+            try:
+                _walk(kids(i), depth + 1)
+            except Exception:
+                continue
+
+    try:
+        root = session.findById(root_id)
+    except Exception:
+        return found
+    _walk(root, 0)
+    return found
+
+
+def _dump_control_tree(session, root_id: str, limit: int = 40):
+    """Print every control under root_id with its Id, Type, SubType
+    and (where safe) Text.  Used as a last-resort diagnostic when the
+    layout matcher can't find a grid or search box it knows how to
+    drive -- the dump tells the operator what is actually on screen."""
+    shown = [0]
+
+    def _walk(node, depth):
+        if shown[0] >= limit:
+            return
+        try:
+            nid = getattr(node, "Id", "")
+            t   = getattr(node, "Type", "") or ""
+            st  = getattr(node, "SubType", "") or ""
+        except Exception:
+            nid = t = st = ""
+        txt = ""
+        try:
+            txt = getattr(node, "Text", "") or ""
+            if len(txt) > 50:
+                txt = txt[:47] + "..."
+        except Exception:
+            pass
+        indent = "  " * depth
+        line = f"    {indent}{t}"
+        if st:  line += f"[{st}]"
+        if txt: line += f"  text={txt!r}"
+        line += f"  id={nid}"
+        print(line)
+        shown[0] += 1
+        try:
+            kids = node.Children
+            cnt = int(getattr(kids, "Count", 0) or 0)
+        except Exception:
+            cnt = 0
+        for i in range(cnt):
+            if shown[0] >= limit:
+                return
+            try:
+                _walk(kids(i), depth + 1)
+            except Exception:
+                continue
+
+    try:
+        _walk(session.findById(root_id), 0)
+    except Exception as e:
+        print(f"    (dump failed: {e})")
 
 
 # ================= MAIN =================
