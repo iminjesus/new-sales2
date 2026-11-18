@@ -12990,20 +12990,24 @@ async function seedRequester(){
               + "&stores="+ encodeURIComponent(STORE_PRESET)
               + "&brands="+ encodeURIComponent(BRAND_PRESET);
     sizeLbl.textContent = size;
-    // Nov-17 fix: use location.replace() (not frame.src = ...) so
-    // the iframe navigation does not push onto the parent window's
-    // joint session history.  Fall back to src assignment on the
-    // very first open when the iframe is still at about:blank and
-    // contentWindow.location.replace can throw on some browsers.
+    // Nov-18 fix: ALWAYS use location.replace() for the iframe, even
+    // on the very first open when it is still at about:blank.  The
+    // previous guard ("skip replace if href === 'about:blank'") made
+    // the first open fall through to `frame.src = url`, which pushes
+    // a joint-session history entry onto the parent window -- and
+    // that is what was still popping the SPRF back to /orders_list
+    // for the user when the popup closed.  location.replace() works
+    // fine on about:blank in every modern browser and does NOT push
+    // a history entry.  The try/catch keeps it safe if a cross-origin
+    // iframe ever gets in the way.
     let used = false;
     try {
       const cw = frame.contentWindow;
-      if (cw && cw.location && typeof cw.location.replace === "function"
-          && String(cw.location.href || "") !== "about:blank"){
+      if (cw && cw.location && typeof cw.location.replace === "function"){
         cw.location.replace(url);
         used = true;
       }
-    } catch (_e) { /* cross-origin or not-yet-loaded -- fall through */ }
+    } catch (_e) { /* cross-origin or disposed -- fall through */ }
     if (!used) frame.src = url;
     overlay.style.display = "flex";
   });
