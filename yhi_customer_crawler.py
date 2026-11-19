@@ -65,7 +65,7 @@ from selenium.common.exceptions import (
 BASE_URL = "https://www.yhi.com.au/customer-search"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FLUSH_EVERY = 10              # write CSV to disk every N pages
-PAGE_WAIT_SEC = 12
+PAGE_WAIT_SEC = 25            # was 12; some SPA sites need longer first paint
 INTER_PAGE_DELAY = 0.8        # courtesy delay between page navigations
 
 
@@ -113,10 +113,13 @@ def make_driver(headless: bool = True) -> webdriver.Chrome:
 # ------------------------------------------------------------------
 def wait_for_results(driver, timeout: int = PAGE_WAIT_SEC) -> bool:
     """Return True once the store list has rendered.  Detects the list
-    by looking for any element whose text includes "#00" + digits (the
-    SAP code pattern visible in the screenshots).  Falls back to a
-    plain readyState check if the SAP code pattern never appears."""
+    by looking for ANY element whose text starts with "#" + digits
+    (the SAP code pattern visible in the screenshots).  Along the way
+    we scroll the viewport to the bottom + back to the top to trigger
+    IntersectionObserver / lazy-load patterns that only fetch cards
+    once the list enters the viewport."""
     end = time.time() + timeout
+    _scrolled_once = False
     while time.time() < end:
         try:
             rs = driver.execute_script("return document.readyState")
@@ -126,12 +129,28 @@ def wait_for_results(driver, timeout: int = PAGE_WAIT_SEC) -> bool:
             # Look for the account-number style "#0000104333".
             try:
                 hits = driver.find_elements(By.XPATH,
-                    "//*[starts-with(normalize-space(text()), '#00')]")
-                if hits:
+                    "//*[starts-with(normalize-space(text()), '#')]")
+                good = []
+                for h in hits:
+                    t = _text(h)
+                    if _RE_SAP.search(t):
+                        good.append(h)
+                if len(good) >= 2:          # need at least 2 cards
                     return True
             except Exception:
                 pass
-        time.sleep(0.4)
+            # First-time trigger: scroll to the bottom so any lazy
+            # list below the fold hydrates, then scroll back up.
+            if not _scrolled_once:
+                try:
+                    driver.execute_script(
+                        "window.scrollTo(0, document.body.scrollHeight);")
+                    time.sleep(0.6)
+                    driver.execute_script("window.scrollTo(0, 0);")
+                    _scrolled_once = True
+                except Exception:
+                    pass
+        time.sleep(0.5)
     return False
 
 
