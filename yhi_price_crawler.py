@@ -78,19 +78,10 @@ TYRE_SEARCH_INPUT_SELECTORS = (
     "input[type='text']",
 )
 RESULT_ROW_SELECTORS = (
-    ".component-tyre-search-result-item",
-    ".component-product-item",
-    ".component-product-row",
-    "[class*='tyre-search-result']",
-    "[class*='product-item']",
+    ".component-product-row",    # confirmed from live DOM Nov-19
+    # Fall-backs in case YHI renames the component later.
     "[class*='product-row']",
-    "[class*='search-result-item']",
-    # Last-resort generic patterns: a list/table row that carries a
-    # price AND a "Local"/"Interstate" stock indicator is almost
-    # certainly a result row.
-    ".result-item",
-    ".result-row",
-    "tbody tr",
+    "[class*='tyre-search-result']",
 )
 STOCK_EXPAND_PATTERNS = (
     # Link text that opens the per-warehouse breakdown.
@@ -213,6 +204,156 @@ _RE_ETA    = re.compile(r"ETA\s+([A-Z]{3})\s+(\d{1,2}/\d{1,2}/\d{4})", re.IGNORE
 # rim diameter in "195/65 R15 91V".
 _RE_SI_LR = re.compile(r"\bR\s*\d{2}(?:\.\d+)?\s+([0-9]{2,3}[A-Z])\b",
                        re.IGNORECASE)
+
+
+def _text_of(root, selector, default=""):
+    """Helper: return .text of the first element matching `selector`
+    under `root`, or `default` when the selector doesn't match."""
+    try:
+        return (root.find_element(By.CSS_SELECTOR, selector).text or "").strip()
+    except Exception:
+        return default
+
+
+def _extract_row_dom(row) -> dict:
+    """Extract fields from the live DOM of a .component-product-row
+    element.  Structure confirmed Nov-19 from the operator's live
+    yhi_tyres_first_row.html dump:
+
+        <div class="component-product-row">
+          <div class="product-status"> ... </div>
+          <div class="product-image">   ...  </div>
+          <div class="product-details">
+            <p class="h6 brand">ATLAS</p>
+            <p class="h1 name">AS380</p>
+            <p>  (attribute line, e.g. 'RUNFLAT - BMW', or empty)  </p>
+          </div>
+          <div class="front-rear-specs">
+            <div class="front-details">
+              <div class="product-specs">
+                <p class="h5">
+                  <span class="medium">175/65</span>
+                  <span class="medium">R14</span>
+                  <span>82T</span>           <- SI/LR
+                </p>
+              </div>
+              <div class="stock-levels">
+                <div class="stock-color" ...></div>
+                <div class="tooltip-wrapper">
+                  <div class="stock-level-status">
+                    <span class="h5 medium"> 63 </span>
+                    <span class="h5">Local</span>    <- or 'Interstate' / 'Supplier Stock'
+                  </div>
+                </div>
+              </div>
+              <div class="price">
+                <p class="">
+                  <span>$</span>
+                  <span>24</span>
+                  <span>.84</span>
+                  <span>+</span>
+                </p>
+              </div>
+              <div class="add-to-cart"> ... </div>
+            </div>
+          </div>
+        </div>
+
+    Querying the sub-elements directly instead of parsing the row's
+    .text means we never misread a stray page-level number as this
+    row's stock, and we can pull the price out of the broken-up span
+    structure cleanly."""
+    import re as _re
+
+    # brand + pattern
+    brand   = _text_of(row, ".product-details .brand")
+    pattern = _text_of(row, ".product-details .name")
+
+    # attribute line: any <p> inside .product-details that is NOT
+    # .brand / .name.  Operator asked to keep the WHOLE line as-is in
+    # attribute_desc and additionally split it on the YHI bullet into
+    # up to 3 attr_* fields.
+    attribute_desc = ""
+    try:
+        details_ps = row.find_elements(By.CSS_SELECTOR, ".product-details p")
+        for p in details_ps:
+            cls = (p.get_attribute("class") or "").lower()
+            if "brand" in cls or "name" in cls:
+                continue
+            txt = (p.text or "").strip(" -\t·•*|")
+            if txt:
+                attribute_desc = txt
+                break
+    except Exception:
+        pass
+
+    attrs = []
+    if attribute_desc:
+        pieces = _re.split(r"\s*[·•*|]\s*", attribute_desc)
+        for p in pieces:
+            p = p.strip(" -\t·•*|")
+            if p:
+                attrs.append(p)
+
+    # SI/LR -- the LAST <span> inside .product-specs is '82T' / '91V'.
+    si_lr = ""
+    try:
+        spec_spans = row.find_elements(
+            By.CSS_SELECTOR, ".product-specs span")
+        if spec_spans:
+            last = (spec_spans[-1].text or "").strip().upper()
+            if _re.match(r"^\d{2,3}[A-Z]$", last):
+                si_lr = last
+    except Exception:
+        pass
+
+    # Price: assemble from the per-span rendering "$ / 24 / .84 / +".
+    price = ""
+    try:
+        price_spans = row.find_elements(By.CSS_SELECTOR, ".price span")
+        parts = []
+        for s in price_spans:
+            t = (s.text or "").strip()
+            if t and t not in ("$", "+"):
+                parts.append(t)
+        joined = "".join(parts).replace(",", "")
+        if joined:
+            m = _re.match(r"^(\d+)(\.\d{1,2})?$", joined)
+            if m:
+                price = m.group(1) + (m.group(2) or "")
+    except Exception:
+        pass
+
+    # Stock badge: '63 Local' / 'N Interstate' / 'N Supplier Stock'
+    stock_local = ""
+    stock_inter = ""
+    stock_supp  = ""
+    try:
+        status = row.find_element(
+            By.CSS_SELECTOR, ".stock-level-status")
+        status_txt = (status.text or "").strip()
+        m = _RE_LOCAL.search(status_txt)
+        if m: stock_local = m.group(1)
+        m = _RE_INTER.search(status_txt)
+        if m: stock_inter = m.group(1)
+        m = _RE_SUPPLIER.search(status_txt)
+        if m: stock_supp  = m.group(1)
+    except Exception:
+        pass
+
+    return {
+        "brand":          brand,
+        "pattern":        pattern,
+        "attribute_desc": attribute_desc,
+        "attr_1": attrs[0] if len(attrs) > 0 else "",
+        "attr_2": attrs[1] if len(attrs) > 1 else "",
+        "attr_3": attrs[2] if len(attrs) > 2 else "",
+        "si_lr":          si_lr,
+        "price":          price,
+        "stock_local":      stock_local,
+        "stock_interstate": stock_inter,
+        "stock_supplier":   stock_supp,
+    }
 
 
 def _parse_row(row_text: str) -> dict:
@@ -443,82 +584,86 @@ def search_size(driver, digits: str) -> bool:
 
 
 def expand_stock(driver, row) -> dict:
-    """Hover/click the 'N Local' label inside `row` to open the per-
-    warehouse breakdown, scrape it, close the popup.  Returns a dict
-    of parsed stock fields (blanks when the expand failed)."""
+    """Hover the '.stock-level-status' badge inside `row` to open the
+    per-warehouse tooltip, scrape its text, then move away so the
+    tooltip dismisses.  Returns a dict of parsed stock fields (blanks
+    when the hover didn't surface a tooltip).  DOM shape confirmed
+    from the live dump:
+        <div class="stock-levels">
+          <div class="stock-color"></div>
+          <div class="tooltip-wrapper">
+            <div class="stock-level-status">
+              <span>63</span>
+              <span>Local</span>
+            </div>
+            <!-- tooltip body appears on hover, typically as a sibling
+                 or descendant of .tooltip-wrapper -->
+          </div>
+        </div>
+    """
     blank = {
         "stock_sydney": "", "stock_melbourne": "", "stock_brisbane": "",
         "stock_adelaide": "", "stock_perth": "", "stock_launceston": "",
         "stock_on_order": "", "eta_syd": "", "eta_mel": "",
         "eta_bri": "", "eta_per": "",
     }
-    # Find the clickable local-stock element inside this row.
+    # Anchor: the stock pill itself.
     anchor = None
-    for sel in STOCK_EXPAND_PATTERNS:
-        try:
-            els = row.find_elements(By.CSS_SELECTOR, sel)
-            for e in els:
-                try:
-                    t = _text(e).lower()
-                    if t and ("local" in t or "interstate" in t):
-                        anchor = e; break
-                except Exception:
-                    continue
-            if anchor is not None:
-                break
-        except Exception:
-            continue
-    # Fallback: any element inside the row whose visible text matches "N Local".
-    if anchor is None:
-        try:
-            all_in = row.find_elements(By.XPATH, ".//*")
-            for e in all_in:
-                t = _text(e)
-                if _RE_LOCAL.search(t) or _RE_INTER.search(t):
-                    # Prefer leaf-ish nodes (shorter text) so we click
-                    # the actual pill, not the whole row.
-                    if 0 < len(t) < 25:
-                        anchor = e; break
-        except Exception:
-            pass
+    try:
+        anchor = row.find_element(By.CSS_SELECTOR, ".stock-level-status")
+    except Exception:
+        pass
     if anchor is None:
         return blank
 
-    # Hover + click (the breakdown is usually on hover OR click).
     try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});",
+                              anchor)
         ActionChains(driver).move_to_element(anchor).perform()
-        time.sleep(0.5)
-        try:
-            anchor.click()
-        except Exception:
-            driver.execute_script("arguments[0].click();", anchor)
-        time.sleep(0.6)
+        # Allow the tooltip component to mount + fetch per-warehouse
+        # breakdown (the data is usually laid out server-side on hover
+        # or injected client-side with a short delay).
+        time.sleep(0.8)
     except Exception:
         pass
 
-    # Collect text from any now-visible tooltip / popup near the anchor.
+    # Look for the tooltip body in several places.
     popup_text = ""
-    for sel in (".tooltip", ".popup", "[class*='tooltip']",
-                "[class*='popup']", "[class*='stock-breakdown']",
-                "[class*='stock-popup']"):
+    tooltip_sels = (
+        # Scoped to this row first so adjacent rows cannot pollute.
+        (row, ".tooltip-wrapper .tooltip"),
+        (row, ".tooltip-wrapper > div:not(.stock-level-status)"),
+        (row, "[role='tooltip']"),
+        (row, "[class*='tooltip-content']"),
+        # Fall back to document-level overlay containers.
+        (driver, ".tooltip[class*='show']"),
+        (driver, "[class*='tooltip-content']"),
+        (driver, "[role='tooltip']"),
+    )
+    for scope, sel in tooltip_sels:
         try:
-            cand = driver.find_elements(By.CSS_SELECTOR, sel)
-            for c in cand:
+            cands = scope.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            cands = []
+        for c in cands:
+            try:
                 if not c.is_displayed():
                     continue
-                t = _text(c)
-                if t and ("sydney" in t.lower() or "melbourne" in t.lower()
-                          or "brisbane" in t.lower()
-                          or "launceston" in t.lower()):
-                    popup_text = t; break
-            if popup_text:
+            except Exception:
+                pass
+            t = _text(c)
+            if t and any(city in t.lower()
+                         for city in ("sydney", "melbourne", "brisbane",
+                                      "adelaide", "perth", "launceston")):
+                popup_text = t
                 break
-        except Exception:
-            continue
+        if popup_text:
+            break
 
-    # Close popup (click outside or Escape).
+    # Move the mouse away so the tooltip dismisses before the next row.
     try:
-        ActionChains(driver).send_keys(Keys.ESCAPE).perform()
+        ActionChains(driver).move_by_offset(400, 400).perform()
+        time.sleep(0.2)
     except Exception:
         pass
 
@@ -578,11 +723,13 @@ def crawl_size(driver, digits: str, size_label: str, sink,
     out_rows = []
     for row in rows:
         try:
-            txt = _text(row)
-        except Exception:
+            parsed = _extract_row_dom(row)
+        except Exception as e:
+            _log(f"[row] DOM extract failed: {e}")
             continue
-        parsed = _parse_row(txt)
-        # Don't try to expand if there's no local stock to click.
+        # Expand the stock tooltip only when there IS a local or
+        # interstate figure to drill into.  'Supplier Stock' rows
+        # have no per-warehouse popup to expand.
         if parsed.get("stock_local") or parsed.get("stock_interstate"):
             try:
                 stock_detail = expand_stock(driver, row)
