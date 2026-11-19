@@ -270,9 +270,13 @@ def _extract_row_dom(row) -> dict:
     pattern = _text_of(row, ".product-details .name")
 
     # attribute line: any <p> inside .product-details that is NOT
-    # .brand / .name.  Operator asked to keep the WHOLE line as-is in
-    # attribute_desc and additionally split it on the YHI bullet into
-    # up to 3 attr_* fields.
+    # .brand / .name AND does NOT carry size / price characters.
+    # (Belt-and-braces: a few early rows ended up with attribute_desc
+    # of the shape "175/65 R14 82T $ 24 .84 +", suggesting a sibling
+    # <p> occasionally contains the full-row readout.  Reject anything
+    # that has a size pattern, '$', or more than 3 digits in a row --
+    # a real attribute line is text like "RUNFLAT - BMW" or
+    # "MADE IN THAILAND".)
     attribute_desc = ""
     try:
         details_ps = row.find_elements(By.CSS_SELECTOR, ".product-details p")
@@ -281,9 +285,16 @@ def _extract_row_dom(row) -> dict:
             if "brand" in cls or "name" in cls:
                 continue
             txt = (p.text or "").strip(" -\t·•*|")
-            if txt:
-                attribute_desc = txt
-                break
+            if not txt:
+                continue
+            if _RE_SIZE_SPEC.search(txt):
+                continue
+            if "$" in txt:
+                continue
+            if _re.search(r"\d{4,}", txt):
+                continue
+            attribute_desc = txt
+            break
     except Exception:
         pass
 
@@ -583,82 +594,151 @@ def search_size(driver, digits: str) -> bool:
     return False
 
 
+_TOOLTIP_DUMPED = [False]      # one-shot tooltip HTML dump
+
+# JS payload: dispatches a sequence of mouseover + mouseenter events
+# on the anchor so React/Vue hover handlers mount the tooltip reliably
+# (ActionChains hover was intermittently not firing against the YHI
+# component's listener).
+_JS_HOVER = """
+const el = arguments[0];
+const bbox = el.getBoundingClientRect();
+const x = bbox.left + bbox.width / 2;
+const y = bbox.top  + bbox.height / 2;
+const opts = {bubbles: true, cancelable: true,
+              clientX: x, clientY: y, view: window};
+['pointerover', 'mouseover', 'mouseenter', 'mousemove'].forEach(evt => {
+  el.dispatchEvent(new MouseEvent(evt, opts));
+});
+"""
+
+
 def expand_stock(driver, row) -> dict:
-    """Hover the '.stock-level-status' badge inside `row` to open the
-    per-warehouse tooltip, scrape its text, then move away so the
-    tooltip dismisses.  Returns a dict of parsed stock fields (blanks
-    when the hover didn't surface a tooltip).  DOM shape confirmed
-    from the live dump:
-        <div class="stock-levels">
-          <div class="stock-color"></div>
-          <div class="tooltip-wrapper">
-            <div class="stock-level-status">
-              <span>63</span>
-              <span>Local</span>
-            </div>
-            <!-- tooltip body appears on hover, typically as a sibling
-                 or descendant of .tooltip-wrapper -->
-          </div>
-        </div>
-    """
+    """Trigger a hover on the '.stock-level-status' pill inside `row`
+    and read the resulting tooltip.  Returns per-warehouse fields
+    plus a 'stock_total' sum.  First call that lands on an empty
+    tooltip dumps the whole .tooltip-wrapper outerHTML to
+    yhi_tyres_stock_popup.html so we can diagnose any remaining
+    mismatch."""
     blank = {
         "stock_sydney": "", "stock_melbourne": "", "stock_brisbane": "",
         "stock_adelaide": "", "stock_perth": "", "stock_launceston": "",
-        "stock_on_order": "", "eta_syd": "", "eta_mel": "",
-        "eta_bri": "", "eta_per": "",
+        "stock_on_order": "",
+        "stock_total": "",
+        "eta_syd": "", "eta_mel": "", "eta_bri": "", "eta_per": "",
     }
+
     # Anchor: the stock pill itself.
-    anchor = None
     try:
         anchor = row.find_element(By.CSS_SELECTOR, ".stock-level-status")
     except Exception:
-        pass
-    if anchor is None:
         return blank
+    try:
+        wrapper = row.find_element(By.CSS_SELECTOR, ".tooltip-wrapper")
+    except Exception:
+        wrapper = None
 
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});",
                               anchor)
-        ActionChains(driver).move_to_element(anchor).perform()
-        # Allow the tooltip component to mount + fetch per-warehouse
-        # breakdown (the data is usually laid out server-side on hover
-        # or injected client-side with a short delay).
-        time.sleep(0.8)
     except Exception:
         pass
 
-    # Look for the tooltip body in several places.
+    # Fire a synthetic mouseover sequence via JS (the YHI hover
+    # listeners sometimes miss Selenium-generated native events).
+    try:
+        driver.execute_script(_JS_HOVER, anchor)
+    except Exception:
+        pass
+    # Also follow up with a physical hover for engines where JS events
+    # alone don't flip React's hover state.
+    try:
+        ActionChains(driver).move_to_element(anchor).perform()
+    except Exception:
+        pass
+    time.sleep(1.0)
+
+    # Search for the tooltip body -- first inside the row's own
+    # .tooltip-wrapper, then document-wide (a few Vue tooltip plugins
+    # portal the body to document.body instead of a sibling).
     popup_text = ""
-    tooltip_sels = (
-        # Scoped to this row first so adjacent rows cannot pollute.
-        (row, ".tooltip-wrapper .tooltip"),
-        (row, ".tooltip-wrapper > div:not(.stock-level-status)"),
+    popup_html = ""
+    scope_sel_pairs = []
+    if wrapper is not None:
+        scope_sel_pairs.append((wrapper, "*"))
+    scope_sel_pairs += [
+        (row, ".tooltip"),
         (row, "[role='tooltip']"),
         (row, "[class*='tooltip-content']"),
-        # Fall back to document-level overlay containers.
-        (driver, ".tooltip[class*='show']"),
-        (driver, "[class*='tooltip-content']"),
         (driver, "[role='tooltip']"),
-    )
-    for scope, sel in tooltip_sels:
+        (driver, "[class*='tooltip-content']"),
+        (driver, ".popper, .popover"),
+    ]
+    for scope, sel in scope_sel_pairs:
         try:
             cands = scope.find_elements(By.CSS_SELECTOR, sel)
         except Exception:
             cands = []
         for c in cands:
             try:
-                if not c.is_displayed():
-                    continue
+                t = (c.text or "").strip()
             except Exception:
-                pass
-            t = _text(c)
+                t = ""
             if t and any(city in t.lower()
                          for city in ("sydney", "melbourne", "brisbane",
                                       "adelaide", "perth", "launceston")):
                 popup_text = t
+                try:
+                    popup_html = c.get_attribute("outerHTML") or ""
+                except Exception:
+                    popup_html = ""
                 break
         if popup_text:
             break
+
+    # Diagnostic: on the FIRST row where the popup lands blank, dump
+    # the row's .tooltip-wrapper AND the document body overlay area
+    # so we can see where the tooltip body is actually rendered.
+    if not popup_text and not _TOOLTIP_DUMPED[0] and wrapper is not None:
+        _TOOLTIP_DUMPED[0] = True
+        try:
+            dump_path = os.path.join(BASE_DIR, "yhi_tyres_stock_popup.html")
+            parts = []
+            try:
+                parts.append("<!-- row.tooltip-wrapper outerHTML -->\n" +
+                             (wrapper.get_attribute("outerHTML") or ""))
+            except Exception:
+                pass
+            # Also append a chunk of body-level overlay candidates.
+            try:
+                body = driver.find_element(By.TAG_NAME, "body")
+                for sel in ("[role='tooltip']", "[class*='tooltip']",
+                            "[class*='popover']", "[class*='popper']"):
+                    for el in body.find_elements(By.CSS_SELECTOR, sel):
+                        try:
+                            parts.append(f"\n<!-- body overlay: '{sel}' -->\n" +
+                                         (el.get_attribute("outerHTML") or ""))
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+            with open(dump_path, "w", encoding="utf-8") as f:
+                f.write("\n\n".join(parts))
+            _log(f"[tooltip-debug] no breakdown found; dumped tooltip "
+                 f"candidates to {dump_path}")
+        except Exception as e:
+            _log(f"[tooltip-debug] dump failed: {e}")
+    elif popup_html and not _TOOLTIP_DUMPED[0]:
+        # Dump the SUCCESSFUL tooltip once so we have a reference for
+        # the DOM shape.
+        _TOOLTIP_DUMPED[0] = True
+        try:
+            dump_path = os.path.join(BASE_DIR, "yhi_tyres_stock_popup.html")
+            with open(dump_path, "w", encoding="utf-8") as f:
+                f.write(popup_html)
+            _log(f"[tooltip-debug] captured tooltip HTML to {dump_path}")
+        except Exception:
+            pass
 
     # Move the mouse away so the tooltip dismisses before the next row.
     try:
@@ -669,7 +749,23 @@ def expand_stock(driver, row) -> dict:
 
     if not popup_text:
         return blank
-    return _parse_stock_popup(popup_text)
+    parsed = _parse_stock_popup(popup_text)
+    # Compute stock_total as sum of the six warehouse figures (NOT
+    # counting On Order -- that is incoming stock, not current).
+    try:
+        total = 0
+        for k in ("stock_sydney", "stock_melbourne", "stock_brisbane",
+                  "stock_adelaide", "stock_perth", "stock_launceston"):
+            v = parsed.get(k, "") or ""
+            if v.isdigit():
+                total += int(v)
+        parsed["stock_total"] = str(total) if total else ""
+    except Exception:
+        parsed["stock_total"] = ""
+    # Include other blank keys to match CsvSink.HEAD.
+    for k, v in blank.items():
+        parsed.setdefault(k, v)
+    return parsed
 
 
 _DEBUG_DUMPED = [False]      # one-shot flag so we only dump once
@@ -763,6 +859,7 @@ class CsvSink:
             "stock_local", "stock_interstate", "stock_supplier",
             "stock_sydney", "stock_melbourne", "stock_brisbane",
             "stock_adelaide", "stock_perth", "stock_launceston",
+            "stock_total",                          # sum of the 6 cities
             "stock_on_order",
             "eta_syd", "eta_mel", "eta_bri", "eta_per",
             "crawled_at"]
