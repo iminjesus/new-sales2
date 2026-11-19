@@ -207,65 +207,106 @@ _RE_ETA    = re.compile(r"ETA\s+([A-Z]{3})\s+(\d{1,2}/\d{1,2}/\d{4})", re.IGNORE
 
 def _parse_row(row_text: str) -> dict:
     """Parse one tyre-result-row's visible text into header fields.
-    Structure observed in the screenshot:
-        <brand>
-        <pattern>
-        [NEW] [SALE]
-        195/65 R15 91V
-        161 Local
-        $31.54+
-        [ADD TO CART]
-    """
-    lines = [ln.strip() for ln in (row_text or "").splitlines() if ln.strip()]
-    # Strip the button + tags that are not substantive.
-    filt = [ln for ln in lines
-            if ln.upper() not in ("ADD TO CART", "SALE", "NEW",
-                                  "MADE IN THAILAND", "MADE IN CHINA",
-                                  "MADE IN KOREA", "MADE IN VIETNAM")]
 
-    brand   = ""
-    pattern = ""
+    Row layouts observed:
+
+        ATLAS                 <- brand
+        SPORT GREEN           <- pattern
+        225/45 R17 94W        <- size
+        118 Local             <- stock
+        $43.81+               <- price
+
+        PIRELLI               <- brand
+        P7 CINTURATO (*)      <- pattern
+        RUNFLAT - BMW         <- attribute desc (bullet-separated)
+        225/45 R17 91Y        <- size
+        7 Local
+        $143.97+
+
+        ATLAS                 <- brand
+        FORCE UHP             <- pattern
+        - MADE IN THAILAND    <- attribute (single, with leading bullet)
+        225/45 R17 94W
+        76 Local
+        $41.61+
+
+    'ADD TO CART', 'SALE' and 'NEW' are button / badge texts that
+    carry no row content, so they are dropped first.  The remaining
+    lines are classified by what REGEX they match (size / stock /
+    price); anything left over is treated as brand, pattern, and
+    attribute text in that order.
+
+    attribute_desc = the raw joined attribute line(s), e.g.
+        'RUNFLAT - BMW' or 'MADE IN THAILAND' or ''.
+    attr_1 / attr_2 / attr_3 = that same string split on the YHI
+    bullet separator (U+00B7, also ASCII '*' / '-' / '|' tolerated),
+    first three only.
+    """
+    import re as _re
+    lines = [ln.strip() for ln in (row_text or "").splitlines() if ln.strip()]
+    filt = [ln for ln in lines
+            if ln.upper() not in ("ADD TO CART", "SALE", "NEW")]
+
     size_spec = ""
     load_speed = ""
     price = ""
     stock_local = ""
     stock_inter = ""
 
-    # Brand + pattern: first 2 non-tag lines.
-    if filt:
-        brand = filt[0]
-    if len(filt) > 1:
-        pattern = filt[1]
+    size_idx = stock_idx = price_idx = None
 
-    # Size + load/speed: match the size regex against any line.
-    for ln in filt:
-        m = _RE_SIZE_SPEC.search(ln)
-        if m:
-            w, a, r = m.group(1), m.group(2), m.group(3)
-            size_spec = f"{w}/{a}R{r}"
-            load_speed = (m.group(4) or "").upper()
-            break
+    for i, ln in enumerate(filt):
+        if size_idx is None:
+            m = _RE_SIZE_SPEC.search(ln)
+            if m:
+                w, a, r = m.group(1), m.group(2), m.group(3)
+                size_spec  = f"{w}/{a}R{r}"
+                load_speed = (m.group(4) or "").upper()
+                size_idx = i
+                continue
+        if stock_idx is None:
+            m = _RE_LOCAL.search(ln)
+            if m:
+                stock_local = m.group(1); stock_idx = i; continue
+            m = _RE_INTER.search(ln)
+            if m:
+                stock_inter = m.group(1); stock_idx = i; continue
+        if price_idx is None:
+            m = _RE_PRICE.search(ln)
+            if m:
+                price = m.group(1).replace(",", "")
+                price_idx = i
+                continue
 
-    # Local / Interstate stock figure (both reported shortly after size).
-    for ln in filt:
-        m = _RE_LOCAL.search(ln)
-        if m:
-            stock_local = m.group(1); break
-    for ln in filt:
-        m = _RE_INTER.search(ln)
-        if m:
-            stock_inter = m.group(1); break
+    # Everything NOT already classified is brand / pattern / attributes
+    # in top-to-bottom order.
+    used = {size_idx, stock_idx, price_idx} - {None}
+    leftover = [ln for i, ln in enumerate(filt) if i not in used]
 
-    # Price: first $ figure in the row text.
-    for ln in filt:
-        m = _RE_PRICE.search(ln)
-        if m:
-            price = m.group(1).replace(",", "")
-            break
+    brand   = leftover[0] if len(leftover) >= 1 else ""
+    pattern = leftover[1] if len(leftover) >= 2 else ""
+    attribute_lines = leftover[2:] if len(leftover) >= 3 else []
+    attribute_desc  = " ".join(attribute_lines)
+
+    # Split attributes on the YHI bullet (U+00B7 '-') -- also tolerate
+    # ASCII '*', '|' and '-' between two whole words in case the UI
+    # renders the separator differently on some locales.
+    attrs = []
+    if attribute_desc:
+        # Collapse weird whitespace, then split on bullet variants.
+        pieces = _re.split(r"\s*[·•*|]\s*", attribute_desc)
+        for p in pieces:
+            p = p.strip(" -\t·•*|")
+            if p:
+                attrs.append(p)
 
     return {
         "brand":       brand,
         "pattern":     pattern,
+        "attribute_desc": attribute_desc,
+        "attr_1": attrs[0] if len(attrs) > 0 else "",
+        "attr_2": attrs[1] if len(attrs) > 1 else "",
+        "attr_3": attrs[2] if len(attrs) > 2 else "",
         "size_spec":   size_spec,
         "load_speed":  load_speed,
         "price":       price,
@@ -548,7 +589,9 @@ def crawl_size(driver, digits: str, size_label: str, sink,
 class CsvSink:
     HEAD = ["store_code", "store_name",
             "query_digits", "query_size",
-            "brand", "pattern", "size_spec", "load_speed",
+            "brand", "pattern",
+            "attribute_desc", "attr_1", "attr_2", "attr_3",
+            "size_spec", "load_speed",
             "price",
             "stock_local", "stock_interstate",
             "stock_sydney", "stock_melbourne", "stock_brisbane",
