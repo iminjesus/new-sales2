@@ -92,15 +92,11 @@ STOCK_EXPAND_PATTERNS = (
     "[class*='stock-popup']",
 )
 
-CITY_KEYS = {
-    "sydney":    "stock_sydney",
-    "melbourne": "stock_melbourne",
-    "brisbane":  "stock_brisbane",
-    "adelaide":  "stock_adelaide",
-    "perth":     "stock_perth",
-    "launceston":"stock_launceston",
-    # NZ warehouses might show up differently; capture generically later
-}
+KNOWN_CITIES = ("sydney", "melbourne", "brisbane", "adelaide",
+                "perth", "launceston")
+# Operator asked to drop the 'stock_' prefix.  Columns now land as
+# 'sydney', 'melbourne', ... directly.
+CITY_KEYS = {c: c for c in KNOWN_CITIES}
 
 
 def _ts() -> str:
@@ -265,6 +261,20 @@ def _extract_row_dom(row) -> dict:
     structure cleanly."""
     import re as _re
 
+    # Status pill (NEW / SALE / etc.) -- sits in .product-status.
+    # When a row carries no pill the extractor returns "".
+    status_tag = ""
+    try:
+        pills = row.find_elements(By.CSS_SELECTOR, ".product-status .status-pill")
+        parts = []
+        for p in pills:
+            t = (p.text or "").strip()
+            if t:
+                parts.append(t.upper())
+        status_tag = " / ".join(parts)
+    except Exception:
+        pass
+
     # brand + pattern
     brand   = _text_of(row, ".product-details .brand")
     pattern = _text_of(row, ".product-details .name")
@@ -353,6 +363,7 @@ def _extract_row_dom(row) -> dict:
         pass
 
     return {
+        "status_tag":     status_tag,
         "brand":          brand,
         "pattern":        pattern,
         "attribute_desc": attribute_desc,
@@ -500,13 +511,19 @@ def _parse_stock_popup(txt: str) -> dict:
           ETA MEL 12/12/2026
           ETA BRI 10/12/2026
           ETA PER 12/12/2026
-    """
-    out = {
-        "stock_sydney": "", "stock_melbourne": "", "stock_brisbane": "",
-        "stock_adelaide": "", "stock_perth": "", "stock_launceston": "",
-        "stock_on_order": "", "eta_syd": "", "eta_mel": "",
-        "eta_bri": "", "eta_per": "",
-    }
+
+    Dynamic: whatever cities appear are captured, keyed by
+    lower-case city name.  'On Order' has its own slot, and ETA
+    lines are matched back to their state code.
+
+    If the operator hover-stacked tooltips so the text contains the
+    same city twice, the LAST occurrence wins (so the latest row's
+    tooltip dominates).  The expand_stock() path also now dismisses
+    the tooltip explicitly so this stacking should not happen going
+    forward."""
+    out = {c: "" for c in KNOWN_CITIES}
+    out.update({"on_order": "", "eta_syd": "", "eta_mel": "",
+                "eta_bri": "", "eta_per": ""})
     for raw in (txt or "").splitlines():
         ln = raw.strip()
         if not ln:
@@ -514,17 +531,13 @@ def _parse_stock_popup(txt: str) -> dict:
         m = _RE_CITY_N.match(ln)
         if m:
             qty, city = m.group(1), m.group(2).lower()
-            key = CITY_KEYS.get(city)
-            if key:
-                out[key] = qty
-            else:
-                # Unknown city -- stash under stock_<city_lower>
-                out[f"stock_{city}"] = qty
+            # Store every city dynamically (known or not).
+            out[city] = qty
             continue
         if "on order" in ln.lower():
             m2 = re.search(r"(\d{1,6})", ln)
             if m2:
-                out["stock_on_order"] = m2.group(1)
+                out["on_order"] = m2.group(1)
             continue
         em = _RE_ETA.search(ln)
         if em:
@@ -612,6 +625,34 @@ const opts = {bubbles: true, cancelable: true,
 });
 """
 
+# Nov-19: the YHI tooltip component does NOT dismiss on
+# ActionChains.move_by_offset; previous rows' tooltips stacked
+# visually.  We now explicitly fire pointerleave + mouseleave +
+# mouseout on both the anchor AND its tooltip-wrapper parent so the
+# component's hover state resets.  The sequence of bubbles=false
+# events reaches the same listener chain the browser would use on a
+# real mouse-out.
+_JS_UNHOVER = """
+const el = arguments[0];
+const bbox = el.getBoundingClientRect();
+const opts = {bubbles: true, cancelable: true,
+              clientX: bbox.left + bbox.width + 400,
+              clientY: bbox.top  + bbox.height + 400,
+              view: window};
+['pointerout', 'pointerleave', 'mouseout', 'mouseleave'].forEach(evt => {
+  el.dispatchEvent(new MouseEvent(evt, opts));
+});
+let p = el.parentElement;
+let hops = 0;
+while (p && hops < 4) {
+  ['pointerleave', 'mouseleave', 'mouseout'].forEach(evt => {
+    p.dispatchEvent(new MouseEvent(evt, opts));
+  });
+  p = p.parentElement;
+  hops += 1;
+}
+"""
+
 
 def expand_stock(driver, row) -> dict:
     """Trigger a hover on the '.stock-level-status' pill inside `row`
@@ -620,13 +661,11 @@ def expand_stock(driver, row) -> dict:
     tooltip dumps the whole .tooltip-wrapper outerHTML to
     yhi_tyres_stock_popup.html so we can diagnose any remaining
     mismatch."""
-    blank = {
-        "stock_sydney": "", "stock_melbourne": "", "stock_brisbane": "",
-        "stock_adelaide": "", "stock_perth": "", "stock_launceston": "",
-        "stock_on_order": "",
-        "stock_total": "",
+    blank = {c: "" for c in KNOWN_CITIES}
+    blank.update({
+        "on_order": "", "total_stock": "",
         "eta_syd": "", "eta_mel": "", "eta_bri": "", "eta_per": "",
-    }
+    })
 
     # Anchor: the stock pill itself.
     try:
@@ -740,28 +779,40 @@ def expand_stock(driver, row) -> dict:
         except Exception:
             pass
 
-    # Move the mouse away so the tooltip dismisses before the next row.
+    # Dismiss the tooltip so the NEXT row's hover does not stack on
+    # top.  Fires explicit mouseout + mouseleave events on the anchor
+    # and bubbles them up to the tooltip-wrapper, which is what the
+    # YHI component listens on.  Belt-and-braces: also push the
+    # cursor to screen (0,0) via ActionChains so a race on the JS
+    # path doesn't leave the pill in a lingering hover state.
     try:
-        ActionChains(driver).move_by_offset(400, 400).perform()
-        time.sleep(0.2)
+        driver.execute_script(_JS_UNHOVER, anchor)
     except Exception:
         pass
+    try:
+        # Click a neutral spot (the body) to flush any stuck hover.
+        body = driver.find_element(By.TAG_NAME, "body")
+        ActionChains(driver).move_to_element_with_offset(body, 5, 5).perform()
+    except Exception:
+        pass
+    time.sleep(0.3)
 
     if not popup_text:
         return blank
     parsed = _parse_stock_popup(popup_text)
-    # Compute stock_total as sum of the six warehouse figures (NOT
-    # counting On Order -- that is incoming stock, not current).
+    # Compute total stock as the sum of ALL numeric warehouse figures
+    # (whichever cities were listed), excluding On Order (which is
+    # incoming, not current).
     try:
         total = 0
-        for k in ("stock_sydney", "stock_melbourne", "stock_brisbane",
-                  "stock_adelaide", "stock_perth", "stock_launceston"):
-            v = parsed.get(k, "") or ""
-            if v.isdigit():
+        for k, v in list(parsed.items()):
+            if k in ("on_order",) or k.startswith("eta_"):
+                continue
+            if isinstance(v, str) and v.isdigit():
                 total += int(v)
-        parsed["stock_total"] = str(total) if total else ""
+        parsed["total_stock"] = str(total) if total else ""
     except Exception:
-        parsed["stock_total"] = ""
+        parsed["total_stock"] = ""
     # Include other blank keys to match CsvSink.HEAD.
     for k, v in blank.items():
         parsed.setdefault(k, v)
@@ -852,15 +903,16 @@ def crawl_size(driver, digits: str, size_label: str, sink,
 class CsvSink:
     HEAD = ["store_code", "store_name",
             "query_digits", "query_size",
+            "status_tag",                            # NEW / SALE / ...
             "brand", "pattern",
             "attribute_desc", "attr_1", "attr_2", "attr_3",
             "si_lr",
             "price",
             "stock_local", "stock_interstate", "stock_supplier",
-            "stock_sydney", "stock_melbourne", "stock_brisbane",
-            "stock_adelaide", "stock_perth", "stock_launceston",
-            "stock_total",                          # sum of the 6 cities
-            "stock_on_order",
+            "sydney", "melbourne", "brisbane",
+            "adelaide", "perth", "launceston",
+            "total_stock",                           # sum of per-city stock
+            "on_order",
             "eta_syd", "eta_mel", "eta_bri", "eta_per",
             "crawled_at"]
 
