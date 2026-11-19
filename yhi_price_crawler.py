@@ -654,6 +654,98 @@ while (p && hops < 4) {
 """
 
 
+def _scan_for_tooltip(driver, row, wrapper):
+    """Find the stock-breakdown tooltip wherever it was mounted.
+    Returns (popup_text, popup_outerHTML) on hit, or ('', '').
+
+    A real tooltip body contains at least TWO of the six warehouse
+    names -- single-city text elsewhere on the page (promotional
+    banners etc.) won't match."""
+    CITIES_RE = re.compile(r"\b(sydney|melbourne|brisbane|adelaide|perth|launceston)\b",
+                           re.IGNORECASE)
+
+    def _check(c):
+        try:
+            if not c.is_displayed():
+                return None
+        except Exception:
+            pass
+        try:
+            t = (c.text or "").strip()
+        except Exception:
+            return None
+        if not t:
+            return None
+        cities = set(m.group(1).lower() for m in CITIES_RE.finditer(t))
+        if len(cities) < 2:
+            return None
+        try:
+            html = c.get_attribute("outerHTML") or ""
+        except Exception:
+            html = ""
+        return (t, html)
+
+    # 1. Scoped to the row's tooltip-wrapper first (fast path when
+    #    the tooltip renders as a sibling of .stock-level-status).
+    scope_sel = []
+    if wrapper is not None:
+        scope_sel.append((wrapper, "div"))
+    scope_sel += [
+        (row, ".tooltip"),
+        (row, "[role='tooltip']"),
+        (row, "[class*='tooltip']"),
+        (row, "[class*='popover']"),
+        (row, "[class*='popper']"),
+    ]
+    for scope, sel in scope_sel:
+        try:
+            cands = scope.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            cands = []
+        for c in cands:
+            r = _check(c)
+            if r is not None:
+                return r
+
+    # 2. Document-wide fallback.  Scan by selector first, then do an
+    #    XPath contains() sweep as the last-resort catchall.
+    for sel in ("[role='tooltip']",
+                "[class*='tooltip-content']",
+                "[class*='stock-breakdown']",
+                "[class*='stock-popup']",
+                ".tooltip",
+                ".popover",
+                ".popper",
+                "div[class*='popup']"):
+        try:
+            cands = driver.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            cands = []
+        for c in cands:
+            r = _check(c)
+            if r is not None:
+                return r
+
+    # 3. XPath catchall: any element containing BOTH 'Sydney' and
+    #    'Melbourne' as substrings in its text.  Expensive but only
+    #    runs when nothing above matched.
+    try:
+        cands = driver.find_elements(
+            By.XPATH,
+            "//*[contains(., 'Sydney') and contains(., 'Melbourne') "
+            "and contains(., 'Brisbane')]")
+        # Prefer the SMALLEST such element (most-specific container).
+        cands.sort(key=lambda e: len((e.text or "")))
+        for c in cands:
+            r = _check(c)
+            if r is not None:
+                return r
+    except Exception:
+        pass
+
+    return ("", "")
+
+
 def expand_stock(driver, row) -> dict:
     """Trigger a hover on the '.stock-level-status' pill inside `row`
     and read the resulting tooltip.  Returns per-warehouse fields
@@ -695,45 +787,23 @@ def expand_stock(driver, row) -> dict:
         ActionChains(driver).move_to_element(anchor).perform()
     except Exception:
         pass
-    time.sleep(1.0)
 
-    # Search for the tooltip body -- first inside the row's own
-    # .tooltip-wrapper, then document-wide (a few Vue tooltip plugins
-    # portal the body to document.body instead of a sibling).
+    # Poll for the tooltip for up to 3s.  Vue / React tooltip
+    # components usually mount+render within ~200ms, but the FIRST
+    # hover on a freshly-loaded search result sometimes takes a bit
+    # longer because the component is lazy-loaded.  We watch the
+    # whole document for any element whose text contains BOTH a
+    # known city AND the word 'Launceston' or 'Perth' or 'Melbourne'
+    # (two cities = guaranteed to be the warehouse tooltip, not some
+    # unrelated 'Sydney' text elsewhere on the page).
     popup_text = ""
     popup_html = ""
-    scope_sel_pairs = []
-    if wrapper is not None:
-        scope_sel_pairs.append((wrapper, "*"))
-    scope_sel_pairs += [
-        (row, ".tooltip"),
-        (row, "[role='tooltip']"),
-        (row, "[class*='tooltip-content']"),
-        (driver, "[role='tooltip']"),
-        (driver, "[class*='tooltip-content']"),
-        (driver, ".popper, .popover"),
-    ]
-    for scope, sel in scope_sel_pairs:
-        try:
-            cands = scope.find_elements(By.CSS_SELECTOR, sel)
-        except Exception:
-            cands = []
-        for c in cands:
-            try:
-                t = (c.text or "").strip()
-            except Exception:
-                t = ""
-            if t and any(city in t.lower()
-                         for city in ("sydney", "melbourne", "brisbane",
-                                      "adelaide", "perth", "launceston")):
-                popup_text = t
-                try:
-                    popup_html = c.get_attribute("outerHTML") or ""
-                except Exception:
-                    popup_html = ""
-                break
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        popup_text, popup_html = _scan_for_tooltip(driver, row, wrapper)
         if popup_text:
             break
+        time.sleep(0.2)
 
     # Diagnostic: on the FIRST row where the popup lands blank, dump
     # the row's .tooltip-wrapper AND the document body overlay area
