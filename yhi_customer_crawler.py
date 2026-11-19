@@ -292,47 +292,79 @@ def total_pages(driver) -> int:
     return max(nums) if nums else 0
 
 
+def _wait_new_first_card(driver, before: str, timeout: float = 15) -> bool:
+    """Block until the FIRST card's text differs from `before` -- a
+    strong signal the new page has rendered."""
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            first = driver.find_element(By.CSS_SELECTOR, CARD_SELECTOR)
+            txt = _text(first)
+            if txt and txt != before:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
 def click_next(driver, current_page: int) -> bool:
-    """Click the Next arrow in the pagination bar and wait for the new
-    cards to render.  Confirms success by waiting until the FIRST card
-    on the page changes (new page means new first store code)."""
-    # Record the current first-card text to detect the swap.
+    """Advance to the next page.  Strategy order:
+       1. Click the specific page-number button (page N+1) if visible.
+       2. Click the NEXT arrow (last .pagination-item-control).
+    Confirms success by waiting until the first-card text changes.
+    Nov-19: URL-based pagination is NOT supported by the YHI page
+    (confirmed by observation: ?page=2 is ignored, the list depends
+    on in-page state), so we rely on DOM clicks here."""
     before = ""
     try:
         first = driver.find_element(By.CSS_SELECTOR, CARD_SELECTOR)
         before = _text(first)
     except Exception:
         pass
+    target_page = current_page + 1
 
-    # The pagination strip has prev-arrow, [1][2][3]...[365], next-arrow.
-    # NEXT is the LAST .pagination-item-control.
+    # Strategy 1: click the specific page-number button.  More
+    # reliable mid-crawl because the pagination strip reshapes around
+    # the current page (PREV 1 ... 27 28 [29] 30 ... 365 NEXT), and
+    # clicking "30" always advances by exactly one page.
+    try:
+        items = driver.find_elements(By.CSS_SELECTOR, PAGE_NUMBER_SELECTOR)
+    except Exception:
+        items = []
+    for it in items:
+        t = _text(it)
+        if t == str(target_page):
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", it)
+                it.click()
+                if _wait_new_first_card(driver, before):
+                    return True
+            except Exception:
+                pass
+            break   # found the right page number but click failed -- fall through
+
+    # Strategy 2: NEXT arrow (last .pagination-item-control).
     try:
         ctrls = driver.find_elements(By.CSS_SELECTOR, NEXT_PAGE_SELECTOR)
     except Exception:
         ctrls = []
     if not ctrls:
+        _log(f"[next] no .pagination-item-control elements on page {current_page}")
         return False
     nxt = ctrls[-1]
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", nxt)
-        nxt.click()
-    except Exception:
-        return False
-
-    # Wait until the first-card text actually changes (strong signal
-    # the new page has rendered).  Plain wait_for_results isn't enough
-    # because the previous page's cards are still in the DOM for a
-    # moment during the swap.
-    end = time.time() + 15
-    while time.time() < end:
         try:
-            first = driver.find_element(By.CSS_SELECTOR, CARD_SELECTOR)
-            if _text(first) and _text(first) != before:
-                return True
+            nxt.click()
         except Exception:
-            pass
-        time.sleep(0.3)
-    return False
+            # Overlay or sticky header covers it -- fall back to a JS click
+            driver.execute_script("arguments[0].click();", nxt)
+        return _wait_new_first_card(driver, before)
+    except Exception as e:
+        _log(f"[next] click failed on page {current_page}: {e}")
+        return False
 
 
 # ------------------------------------------------------------------
@@ -372,6 +404,10 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0,
                     help="Only crawl the first N pages (0 = all).")
+    ap.add_argument("--start", type=int, default=1,
+                    help="Start from this page number (default 1).  Use "
+                         "together with --manual: before pressing ENTER, "
+                         "manually navigate the browser to that page.")
     ap.add_argument("--debug", action="store_true",
                     help="Dump the first page's HTML to yhi_page1.html "
                          "for selector tuning.")
@@ -479,7 +515,10 @@ def main() -> None:
             last = min(last, args.limit) if last else args.limit
             _log(f"[opts] limit active -- stopping after page {last}")
 
-        page = 1
+        page = max(1, args.start)
+        if page != 1:
+            _log(f"[opts] --start {page} -- browser should be manually "
+                 f"advanced to page {page} BEFORE pressing ENTER.")
         while True:
             if last and page > last:
                 break
