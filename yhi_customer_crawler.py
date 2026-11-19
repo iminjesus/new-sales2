@@ -68,6 +68,13 @@ FLUSH_EVERY = 10              # write CSV to disk every N pages
 PAGE_WAIT_SEC = 25            # was 12; some SPA sites need longer first paint
 INTER_PAGE_DELAY = 0.8        # courtesy delay between page navigations
 
+# Nov-19 user ask: known CSS class names extracted from the YHI
+# customer-search JS chunk.  Using the exact names gets us a
+# deterministic extractor instead of the adaptive guesswork.
+CARD_SELECTOR        = ".component-customer-search-result-item"
+NEXT_PAGE_SELECTOR   = ".pagination-item-control"    # prev / next arrows
+PAGE_NUMBER_SELECTOR = ".pagination-item"            # numbered pages
+
 
 def _ts() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M")
@@ -112,44 +119,32 @@ def make_driver(headless: bool = True) -> webdriver.Chrome:
 # Page detection + waiting
 # ------------------------------------------------------------------
 def wait_for_results(driver, timeout: int = PAGE_WAIT_SEC) -> bool:
-    """Return True once the store list has rendered.  Detects the list
-    by looking for ANY element whose text starts with "#" + digits
-    (the SAP code pattern visible in the screenshots).  Along the way
-    we scroll the viewport to the bottom + back to the top to trigger
-    IntersectionObserver / lazy-load patterns that only fetch cards
-    once the list enters the viewport."""
+    """Return True once at least 2 '.component-customer-search-result-item'
+    cards are on the page.  Scrolls to the bottom + back once during the
+    wait to trigger IntersectionObserver / lazy-load patterns that gate
+    the next fetch on the list entering the viewport."""
     end = time.time() + timeout
     _scrolled_once = False
     while time.time() < end:
         try:
+            cards = driver.find_elements(By.CSS_SELECTOR, CARD_SELECTOR)
+            if len(cards) >= 2:
+                return True
+        except Exception:
+            pass
+        try:
             rs = driver.execute_script("return document.readyState")
         except Exception:
             rs = ""
-        if rs == "complete":
-            # Look for the account-number style "#0000104333".
+        if rs == "complete" and not _scrolled_once:
             try:
-                hits = driver.find_elements(By.XPATH,
-                    "//*[starts-with(normalize-space(text()), '#')]")
-                good = []
-                for h in hits:
-                    t = _text(h)
-                    if _RE_SAP.search(t):
-                        good.append(h)
-                if len(good) >= 2:          # need at least 2 cards
-                    return True
+                driver.execute_script(
+                    "window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(0.6)
+                driver.execute_script("window.scrollTo(0, 0);")
+                _scrolled_once = True
             except Exception:
                 pass
-            # First-time trigger: scroll to the bottom so any lazy
-            # list below the fold hydrates, then scroll back up.
-            if not _scrolled_once:
-                try:
-                    driver.execute_script(
-                        "window.scrollTo(0, document.body.scrollHeight);")
-                    time.sleep(0.6)
-                    driver.execute_script("window.scrollTo(0, 0);")
-                    _scrolled_once = True
-                except Exception:
-                    pass
         time.sleep(0.5)
     return False
 
@@ -169,84 +164,17 @@ def _text(el) -> str:
         return ""
 
 
-def discover_card_selector(driver) -> str | None:
-    """Pick the CSS selector that returns the most 'card-like' elements
-    (each containing at least one SAP code AND one address postcode)."""
-    candidates = [
-        "div.store",
-        "div.customer",
-        "div.store-card",
-        "div.customer-card",
-        "div.store-item",
-        "div.customer-item",
-        "li.store",
-        "li.customer",
-        "article",
-        "div.card",
-        # last-resort: any direct-child div of the main content area
-    ]
-    best = (None, 0)
-    for sel in candidates:
-        try:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-        except Exception:
-            continue
-        score = 0
-        for el in els[:80]:
-            txt = _text(el)
-            if _RE_SAP.search(txt) and _RE_POSTCODE.search(txt):
-                score += 1
-        if score > best[1]:
-            best = (sel, score)
-    if best[0]:
-        _log(f"[discover] card selector = '{best[0]}' with {best[1]} hits")
-        return best[0]
-
-    # Fallback: scan every element with class 'login'-adjacent parent
-    # structure -- each store card has a Login button, so the LI/DIV
-    # containing that button is likely the card.
+def extract_cards_text(driver) -> list[str]:
+    """Return the raw .text of every .component-customer-search-result-item
+    element on the current page."""
     try:
-        logins = driver.find_elements(By.XPATH,
-            "//a[normalize-space(text())='Login'] | //button[normalize-space(text())='Login']")
-        if logins:
-            _log(f"[discover] found {len(logins)} Login buttons -- using parent heuristic")
-            return "__login_parent__"
-    except Exception:
-        pass
-    return None
-
-
-def extract_cards_text(driver, card_sel: str) -> list[str]:
-    """Return the raw .text of every card on the current page."""
-    if card_sel == "__login_parent__":
-        try:
-            logins = driver.find_elements(By.XPATH,
-                "//a[normalize-space(text())='Login'] | //button[normalize-space(text())='Login']")
-        except Exception:
-            return []
-        out = []
-        for btn in logins:
-            # Walk up to the nearest ancestor that contains BOTH the
-            # SAP code and an address postcode.
-            node = btn
-            for _ in range(8):
-                try:
-                    node = node.find_element(By.XPATH, "..")
-                except Exception:
-                    break
-                txt = _text(node)
-                if _RE_SAP.search(txt) and _RE_POSTCODE.search(txt):
-                    out.append(txt)
-                    break
-        return out
-    try:
-        els = driver.find_elements(By.CSS_SELECTOR, card_sel)
+        els = driver.find_elements(By.CSS_SELECTOR, CARD_SELECTOR)
     except Exception:
         return []
     out = []
     for el in els:
         txt = _text(el)
-        if _RE_SAP.search(txt):
+        if txt:
             out.append(txt)
     return out
 
@@ -298,64 +226,60 @@ def parse_card(txt: str) -> dict:
 # Pagination
 # ------------------------------------------------------------------
 def total_pages(driver) -> int:
-    """Read the max page number from the pagination strip."""
+    """Read the max page number from the '.pagination-item' strip."""
     try:
-        buttons = driver.find_elements(By.XPATH,
-            "//*[self::a or self::button][translate(normalize-space(text()), "
-            "'0123456789', '9999999999') = translate(normalize-space(text()), "
-            "'0123456789', '9999999999') and normalize-space(text())!='']")
+        items = driver.find_elements(By.CSS_SELECTOR, PAGE_NUMBER_SELECTOR)
     except Exception:
-        buttons = []
+        items = []
     nums = []
-    for b in buttons:
-        t = _text(b)
+    for it in items:
+        t = _text(it)
         if t.isdigit() and 1 <= len(t) <= 4:
             nums.append(int(t))
-    # The pagination strip has "1 2 3 4 ... 365 NEXT".
     return max(nums) if nums else 0
 
 
-def goto_page(driver, page_num: int) -> bool:
-    """Try URL-based pagination first (?page=N); fall back to clicking
-    the NEXT button or the numbered pagination link."""
-    # (1) URL rewrite
-    url_with = f"{BASE_URL}?page={page_num}"
+def click_next(driver, current_page: int) -> bool:
+    """Click the Next arrow in the pagination bar and wait for the new
+    cards to render.  Confirms success by waiting until the FIRST card
+    on the page changes (new page means new first store code)."""
+    # Record the current first-card text to detect the swap.
+    before = ""
     try:
-        driver.get(url_with)
-        if wait_for_results(driver, timeout=8):
-            # Sanity: confirm the page param stuck.
-            return True
+        first = driver.find_element(By.CSS_SELECTOR, CARD_SELECTOR)
+        before = _text(first)
     except Exception:
         pass
-    # (2) click the numbered link
-    try:
-        el = driver.find_element(By.XPATH,
-            f"//a[normalize-space(text())='{page_num}'] | "
-            f"//button[normalize-space(text())='{page_num}']")
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
-        el.click()
-        time.sleep(1.0)
-        return wait_for_results(driver, timeout=8)
-    except Exception:
-        return False
 
-
-def click_next(driver) -> bool:
+    # The pagination strip has prev-arrow, [1][2][3]...[365], next-arrow.
+    # NEXT is the LAST .pagination-item-control.
     try:
-        nxt = driver.find_element(By.XPATH,
-            "//a[contains(translate(normalize-space(text()), "
-            "'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'NEXT')] | "
-            "//button[contains(translate(normalize-space(text()), "
-            "'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'), 'NEXT')]")
+        ctrls = driver.find_elements(By.CSS_SELECTOR, NEXT_PAGE_SELECTOR)
     except Exception:
+        ctrls = []
+    if not ctrls:
         return False
+    nxt = ctrls[-1]
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});", nxt)
         nxt.click()
-        time.sleep(1.0)
-        return wait_for_results(driver, timeout=8)
     except Exception:
         return False
+
+    # Wait until the first-card text actually changes (strong signal
+    # the new page has rendered).  Plain wait_for_results isn't enough
+    # because the previous page's cards are still in the DOM for a
+    # moment during the swap.
+    end = time.time() + 15
+    while time.time() < end:
+        try:
+            first = driver.find_element(By.CSS_SELECTOR, CARD_SELECTOR)
+            if _text(first) and _text(first) != before:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
 
 
 # ------------------------------------------------------------------
@@ -395,15 +319,23 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0,
                     help="Only crawl the first N pages (0 = all).")
-    ap.add_argument("--start", type=int, default=1,
-                    help="Start from this page number (default 1).")
     ap.add_argument("--debug", action="store_true",
                     help="Dump the first page's HTML to yhi_page1.html "
-                         "so you can send it back for selector tuning "
-                         "if extraction looks wrong.")
+                         "for selector tuning.")
     ap.add_argument("--head", action="store_true",
-                    help="Show the browser window (non-headless).")
+                    help="Show the browser window (non-headless).  "
+                         "Implied by --manual.")
+    ap.add_argument("--manual", action="store_true",
+                    help="Manual-passthrough mode: open a visible Chrome "
+                         "window, let the OPERATOR click through any "
+                         "reCAPTCHA / 'verify you are human' challenge, "
+                         "then press Enter in the terminal to start "
+                         "scraping.  Use this when headless is being "
+                         "blocked by bot detection.")
     args = ap.parse_args()
+
+    if args.manual:
+        args.head = True   # manual mode must be visible
 
     out_path = os.path.join(BASE_DIR, f"YHI_customers_{_ts()}.csv")
     _log(f"Output: {out_path}")
@@ -413,9 +345,30 @@ def main() -> None:
     try:
         _log(f"Opening {BASE_URL}")
         drv.get(BASE_URL)
-        if not wait_for_results(drv, timeout=PAGE_WAIT_SEC):
-            _log("[warn] store list did not appear within timeout -- "
-                 "trying to continue anyway")
+
+        if args.manual:
+            print("\n" + "=" * 70)
+            print("  MANUAL PASSTHROUGH MODE")
+            print("=" * 70)
+            print("  The browser window is now open at:")
+            print(f"    {BASE_URL}")
+            print()
+            print("  In that window:")
+            print("   1. Wait for the store list to load (JAX TYRES MITCHELL etc.).")
+            print("   2. If the site shows any 'verify you are human' / reCAPTCHA")
+            print("      challenge, complete it manually.")
+            print("   3. When you can SEE the store cards on screen, come back")
+            print("      here and press ENTER to start the automated crawl.")
+            print("=" * 70)
+            try:
+                input("  Ready?  Press ENTER to start scraping...  ")
+            except EOFError:
+                pass
+        else:
+            if not wait_for_results(drv, timeout=PAGE_WAIT_SEC):
+                _log("[warn] store list did not appear within timeout -- "
+                     "trying to continue anyway.  If 0 rows are collected, "
+                     "re-run with --manual to pass any human-check by hand.")
 
         if args.debug:
             dump_path = os.path.join(BASE_DIR, "yhi_page1.html")
@@ -423,35 +376,29 @@ def main() -> None:
                 f.write(drv.page_source)
             _log(f"[debug] wrote page 1 HTML to {dump_path}")
 
-        card_sel = discover_card_selector(drv)
-        if not card_sel:
-            _log("[fatal] could not discover a card selector on page 1. "
-                 "Re-run with --debug and share the dumped yhi_page1.html.")
-            return
+        # Quick sanity-check: how many cards are visible right now?
+        try:
+            _initial = len(drv.find_elements(By.CSS_SELECTOR, CARD_SELECTOR))
+            _log(f"[init] {_initial} card(s) visible on page 1")
+        except Exception:
+            pass
 
         last = total_pages(drv) or 0
         if last:
-            _log(f"[discover] pagination reports {last} pages total")
+            _log(f"[init] pagination reports {last} pages total")
         else:
-            _log("[discover] could not read total page count -- will "
-                 "use click-next fallback")
+            _log("[init] could not read total page count -- will crawl "
+                 "until Next-click fails")
 
         if args.limit:
             last = min(last, args.limit) if last else args.limit
             _log(f"[opts] limit active -- stopping after page {last}")
 
-        start_page = max(args.start, 1)
-        page = start_page
-        if page != 1:
-            _log(f"Jumping to start page {page}")
-            if not goto_page(drv, page):
-                _log(f"[fatal] could not jump to page {page}")
-                return
-
+        page = 1
         while True:
             if last and page > last:
                 break
-            cards = extract_cards_text(drv, card_sel)
+            cards = extract_cards_text(drv)
             rows = []
             for txt in cards:
                 row = parse_card(txt)
@@ -462,10 +409,9 @@ def main() -> None:
                  f"(total {sink.count})")
 
             if not rows:
-                _log("[warn] 0 rows on this page -- likely rate-limited or "
-                     "selector drift.  Pausing 5 s and retrying once.")
+                _log("[warn] 0 rows on this page -- waiting 5s and retrying.")
                 time.sleep(5)
-                cards = extract_cards_text(drv, card_sel)
+                cards = extract_cards_text(drv)
                 if cards:
                     rows = [dict(**parse_card(t), page=page) for t in cards]
                     sink.write_many(rows)
@@ -476,15 +422,15 @@ def main() -> None:
                          f"Stopping.")
                     break
 
-            # Advance.
+            # Advance to next page.
             page += 1
             if last and page > last:
                 break
             time.sleep(INTER_PAGE_DELAY)
-            if not goto_page(drv, page):
-                if not click_next(drv):
-                    _log(f"[fatal] could not navigate to page {page}. Stop.")
-                    break
+            if not click_next(drv, page - 1):
+                _log(f"[fatal] could not click Next after page {page - 1}. "
+                     f"Stopping.")
+                break
 
         _log(f"Done.  Wrote {sink.count} row(s) to {out_path}")
 
@@ -494,7 +440,11 @@ def main() -> None:
     finally:
         sink.close()
         try:
-            drv.quit()
+            if not args.manual:
+                drv.quit()
+            else:
+                _log("Browser left open for your review (manual mode).  "
+                     "Close it manually when you're done.")
         except Exception:
             pass
 
