@@ -347,23 +347,38 @@ def main() -> None:
         drv.get(BASE_URL)
 
         if args.manual:
-            print("\n" + "=" * 70)
-            print("  MANUAL PASSTHROUGH MODE")
-            print("=" * 70)
-            print("  The browser window is now open at:")
-            print(f"    {BASE_URL}")
+            print("\n" + "=" * 72)
+            print("  MANUAL PASSTHROUGH MODE  --  login required")
+            print("=" * 72)
+            print("  The browser window is now open.  yhi.com.au serves the")
+            print("  customer-search list ONLY TO LOGGED-IN USERS, so:")
             print()
-            print("  In that window:")
-            print("   1. Wait for the store list to load (JAX TYRES MITCHELL etc.).")
-            print("   2. If the site shows any 'verify you are human' / reCAPTCHA")
-            print("      challenge, complete it manually.")
-            print("   3. When you can SEE the store cards on screen, come back")
-            print("      here and press ENTER to start the automated crawl.")
-            print("=" * 70)
+            print("   1. In the Chrome window that just opened, click 'Login'")
+            print("      (top-right) or go to  https://www.yhi.com.au/login")
+            print("   2. Enter your YHI credentials and sign in.")
+            print("   3. Once you are at ANY logged-in page, come back here")
+            print("      and press ENTER.  The script will then navigate the")
+            print("      browser to /customer-search itself and start scraping.")
+            print()
+            print("   (Do NOT close the browser.  The script needs it open.)")
+            print("=" * 72)
             try:
-                input("  Ready?  Press ENTER to start scraping...  ")
+                input("  Logged in?  Press ENTER to start scraping...  ")
             except EOFError:
                 pass
+            # Re-navigate to the search page using the now-logged-in
+            # session cookies.  Operator may be on /home, /profile or
+            # wherever after login; forcing the URL here means they do
+            # not have to click through to the search page themselves.
+            _log(f"Navigating logged-in session to {BASE_URL}")
+            try:
+                drv.get(BASE_URL)
+            except Exception as e:
+                _log(f"[warn] could not navigate: {e}")
+            if not wait_for_results(drv, timeout=PAGE_WAIT_SEC):
+                _log("[warn] store list still did not render.  If the "
+                     "browser shows a login prompt, log in again and "
+                     "re-run with --manual.")
         else:
             if not wait_for_results(drv, timeout=PAGE_WAIT_SEC):
                 _log("[warn] store list did not appear within timeout -- "
