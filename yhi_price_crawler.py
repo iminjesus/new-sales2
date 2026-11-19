@@ -83,6 +83,14 @@ RESULT_ROW_SELECTORS = (
     ".component-product-row",
     "[class*='tyre-search-result']",
     "[class*='product-item']",
+    "[class*='product-row']",
+    "[class*='search-result-item']",
+    # Last-resort generic patterns: a list/table row that carries a
+    # price AND a "Local"/"Interstate" stock indicator is almost
+    # certainly a result row.
+    ".result-item",
+    ".result-row",
+    "tbody tr",
 )
 STOCK_EXPAND_PATTERNS = (
     # Link text that opens the per-warehouse breakdown.
@@ -458,7 +466,11 @@ def expand_stock(driver, row) -> dict:
     return _parse_stock_popup(popup_text)
 
 
-def crawl_size(driver, digits: str, size_label: str, sink) -> int:
+_DEBUG_DUMPED = [False]      # one-shot flag so we only dump once
+
+
+def crawl_size(driver, digits: str, size_label: str, sink,
+               verbose: bool = False) -> int:
     """Run one size through the search + extraction + stock-expand
     pipeline and append rows to `sink`.  Returns the row count."""
     _log(f"Searching for digits='{digits}' ({size_label})...")
@@ -474,6 +486,33 @@ def crawl_size(driver, digits: str, size_label: str, sink) -> int:
 
     rows, used_sel = _find_all(driver, RESULT_ROW_SELECTORS)
     _log(f"  selector='{used_sel}' -> {len(rows)} row(s)")
+
+    # Nov-19: first-row introspection -- on the very first search that
+    # returns rows, dump the first row's raw text + outerHTML snippet
+    # to disk so the operator can see what the parser has to work with.
+    # Also lets me (the author) pin precise sub-selectors when the
+    # adaptive wrapper selection lands on a container that misses the
+    # price / size / stock.
+    if rows and (verbose or not _DEBUG_DUMPED[0]):
+        _DEBUG_DUMPED[0] = True
+        try:
+            first = rows[0]
+            t = _text(first)
+            html = first.get_attribute("outerHTML") or ""
+            print("-" * 60)
+            print(f"[introspect] first row .text (selector '{used_sel}'):")
+            for ln in t.splitlines():
+                print(f"    | {ln}")
+            print(f"[introspect] first row outerHTML (first 1200 chars):")
+            print("    " + html[:1200].replace("\n", " "))
+            # Also save to a file -- easier to upload back for tuning.
+            dump = os.path.join(BASE_DIR, "yhi_tyres_first_row.html")
+            with open(dump, "w", encoding="utf-8") as f:
+                f.write(html)
+            print(f"[introspect] wrote full outerHTML to: {dump}")
+            print("-" * 60)
+        except Exception as e:
+            print(f"[introspect] could not read first row: {e}")
 
     out_rows = []
     for row in rows:
