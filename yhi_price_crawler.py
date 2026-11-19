@@ -608,6 +608,35 @@ def search_size(driver, digits: str) -> bool:
 
 
 _TOOLTIP_DUMPED = [False]      # one-shot tooltip HTML dump
+_LAST_ANCHOR = [None]          # pointer to the previously-hovered pill
+
+# JS payload: thoroughly dismiss the LAST hovered pill by firing
+# pointerleave + mouseleave + mouseout on it AND on every ancestor
+# up to document.body.  Then hover a neutral invisible target so the
+# browser's :hover CSS state drops off the pill entirely.  Called at
+# the START of each expand_stock() iteration instead of at the end
+# of the previous one -- that way a wholesome mouseleave is the last
+# event before the next mouseenter, which is what the YHI component
+# listens for.
+_JS_DISMISS_LAST = """
+const prev = arguments[0];
+if (!prev) { return; }
+const opts = {bubbles: true, cancelable: true, view: window};
+['pointerout', 'pointerleave', 'mouseout', 'mouseleave'].forEach(evt => {
+  prev.dispatchEvent(new MouseEvent(evt, opts));
+});
+let p = prev.parentElement;
+let hops = 0;
+while (p && hops < 12 && p !== document.body) {
+  ['pointerleave', 'mouseleave', 'mouseout'].forEach(evt => {
+    p.dispatchEvent(new MouseEvent(evt, opts));
+  });
+  p = p.parentElement;
+  hops += 1;
+}
+document.body.dispatchEvent(new MouseEvent('mouseover',
+  {bubbles: true, cancelable: true, clientX: 2, clientY: 2}));
+"""
 
 # JS payload: dispatches a sequence of mouseover + mouseenter events
 # on the anchor so React/Vue hover handlers mount the tooltip reliably
@@ -769,9 +798,31 @@ def expand_stock(driver, row) -> dict:
     except Exception:
         wrapper = None
 
+    # STEP 1: fully dismiss the PREVIOUS row's tooltip before hovering
+    # the new pill.  Doing it here (rather than at the end of the
+    # previous call) means the last event the YHI component sees is
+    # the dismiss, immediately before our new mouseenter arrives.
+    try:
+        if _LAST_ANCHOR[0] is not None:
+            driver.execute_script(_JS_DISMISS_LAST, _LAST_ANCHOR[0])
+            # Give the component's teardown handler time to unmount
+            # the stale tooltip before the new hover fires.
+            time.sleep(0.5)
+    except Exception:
+        pass
+
     try:
         driver.execute_script("arguments[0].scrollIntoView({block:'center'});",
                               anchor)
+    except Exception:
+        pass
+
+    # Nudge the cursor to a far-off neutral spot FIRST so we start
+    # from a known no-hover state, then do the real hover.
+    try:
+        body = driver.find_element(By.TAG_NAME, "body")
+        ActionChains(driver).move_to_element_with_offset(body, 5, 5).perform()
+        time.sleep(0.15)
     except Exception:
         pass
 
@@ -787,6 +838,8 @@ def expand_stock(driver, row) -> dict:
         ActionChains(driver).move_to_element(anchor).perform()
     except Exception:
         pass
+    # Record this anchor so the NEXT call can dismiss its tooltip.
+    _LAST_ANCHOR[0] = anchor
 
     # Poll for the tooltip for up to 3s.  Vue / React tooltip
     # components usually mount+render within ~200ms, but the FIRST
