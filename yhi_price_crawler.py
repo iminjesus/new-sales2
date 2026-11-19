@@ -198,102 +198,122 @@ _RE_SIZE_SPEC = re.compile(
     r"\b(\d{3})\s*/\s*(\d{2})\s*R\s*(\d{2}(?:\.\d+)?)\s*([0-9]{2,3}[A-Z]?)?",
     re.IGNORECASE,
 )
-_RE_PRICE  = re.compile(r"\$\s*([0-9]{1,3}(?:,\d{3})*(?:\.\d{1,2})?)")
-_RE_LOCAL  = re.compile(r"(\d{1,5})\s+Local", re.IGNORECASE)
-_RE_INTER  = re.compile(r"(\d{1,5})\s+Interstate", re.IGNORECASE)
+# Nov-19: YHI renders prices as e.g. "$ 41 .61 +" -- spaces around the
+# decimal point.  Accept both that form and the normal "$41.61" form.
+_RE_PRICE  = re.compile(
+    r"\$\s*([0-9]{1,3}(?:,?\d{3})*)\s*(?:[.,]\s*(\d{1,2}))?"
+)
+_RE_LOCAL  = re.compile(r"\b(\d{1,5})\s+Local\b", re.IGNORECASE)
+_RE_INTER  = re.compile(r"\b(\d{1,5})\s+Interstate\b", re.IGNORECASE)
+_RE_SUPPLIER = re.compile(r"\b(\d{1,5})\s+Supplier\s+Stock\b", re.IGNORECASE)
 _RE_CITY_N = re.compile(r"^\s*(\d{1,5})\s+([A-Za-z]+)\s*$")
 _RE_ETA    = re.compile(r"ETA\s+([A-Z]{3})\s+(\d{1,2}/\d{1,2}/\d{4})", re.IGNORECASE)
+# Speed index + load rating pattern inside a size phrase: digits then
+# a single letter (e.g. 91V, 94W, 105H).  Appears right after the
+# rim diameter in "195/65 R15 91V".
+_RE_SI_LR = re.compile(r"\bR\s*\d{2}(?:\.\d+)?\s+([0-9]{2,3}[A-Z])\b",
+                       re.IGNORECASE)
 
 
 def _parse_row(row_text: str) -> dict:
-    """Parse one tyre-result-row's visible text into header fields.
+    """Parse one tyre-result-row's visible text into fields.
 
-    Row layouts observed:
+    Columns captured per row:
+      * brand            e.g. 'PIRELLI'
+      * pattern          e.g. 'P7 CINTURATO (*)'
+      * attribute_desc   raw attribute line ONLY when one exists -- e.g.
+                         'MADE IN THAILAND' or 'RUNFLAT - BMW'; never the
+                         size line and never the price line.
+      * attr_1, attr_2, attr_3: attribute_desc split on the YHI bullet.
+      * si_lr            the speed-index + load-rating pill, e.g. '91V'
+                         or '94W' (extracted from the row's size phrase
+                         but the size itself is NOT stored, since
+                         query_size already carries it).
+      * price            numeric string with dot decimal only, no '$',
+                         no trailing '+', no thousands commas -- e.g.
+                         '41.61'.
+      * stock_local, stock_interstate, stock_supplier -- integer
+                         strings pulled from one of 'N Local' /
+                         'N Interstate' / 'N Supplier Stock' badges.
 
-        ATLAS                 <- brand
-        SPORT GREEN           <- pattern
-        225/45 R17 94W        <- size
-        118 Local             <- stock
-        $43.81+               <- price
+    Rows render like one of:
+        PIRELLI
+        P7 CINTURATO (*)
+        RUNFLAT - BMW        <- attribute line (U+00B7 bullet)
+        225/45 R17 91Y       <- size + SI/LR
+        7 Local              <- stock badge
+        $143.97+             <- price pill
 
-        PIRELLI               <- brand
-        P7 CINTURATO (*)      <- pattern
-        RUNFLAT - BMW         <- attribute desc (bullet-separated)
-        225/45 R17 91Y        <- size
-        7 Local
-        $143.97+
-
-        ATLAS                 <- brand
-        FORCE UHP             <- pattern
-        - MADE IN THAILAND    <- attribute (single, with leading bullet)
-        225/45 R17 94W
-        76 Local
-        $41.61+
-
-    'ADD TO CART', 'SALE' and 'NEW' are button / badge texts that
-    carry no row content, so they are dropped first.  The remaining
-    lines are classified by what REGEX they match (size / stock /
-    price); anything left over is treated as brand, pattern, and
-    attribute text in that order.
-
-    attribute_desc = the raw joined attribute line(s), e.g.
-        'RUNFLAT - BMW' or 'MADE IN THAILAND' or ''.
-    attr_1 / attr_2 / attr_3 = that same string split on the YHI
-    bullet separator (U+00B7, also ASCII '*' / '-' / '|' tolerated),
-    first three only.
+    YHI occasionally emits the size + price on a SINGLE visual line
+    with weird spacing, e.g. '225/45 R17 94W   $ 41 .61 +'.  The
+    parser therefore looks for each pattern independently per line
+    AND once across the whole row text, picking whichever extraction
+    yields the SI/LR and the price.
     """
     import re as _re
-    lines = [ln.strip() for ln in (row_text or "").splitlines() if ln.strip()]
+    raw   = row_text or ""
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    # 'ADD TO CART', 'SALE' and 'NEW' are button / badge texts with
+    # no data content -- drop them before classifying.
     filt = [ln for ln in lines
             if ln.upper() not in ("ADD TO CART", "SALE", "NEW")]
 
-    size_spec = ""
-    load_speed = ""
+    si_lr = ""
     price = ""
-    stock_local = ""
-    stock_inter = ""
+    stock_local    = ""
+    stock_inter    = ""
+    stock_supplier = ""
 
-    size_idx = stock_idx = price_idx = None
+    # SI/LR: extracted from the first line that carries a size phrase.
+    # The size string itself is NOT kept -- query_size has it.
+    joined = " ".join(filt)
+    m = _RE_SI_LR.search(joined)
+    if m:
+        si_lr = m.group(1).upper()
 
-    for i, ln in enumerate(filt):
-        if size_idx is None:
-            m = _RE_SIZE_SPEC.search(ln)
-            if m:
-                w, a, r = m.group(1), m.group(2), m.group(3)
-                size_spec  = f"{w}/{a}R{r}"
-                load_speed = (m.group(4) or "").upper()
-                size_idx = i
-                continue
-        if stock_idx is None:
+    # Price: accept both '$41.61' and '$ 41 .61'.
+    m = _RE_PRICE.search(joined)
+    if m:
+        whole, frac = m.group(1), m.group(2)
+        whole = whole.replace(",", "")
+        if frac:
+            price = f"{whole}.{frac}"
+        else:
+            price = whole
+
+    # Stock badges -- one of these three (per-row, not the global search
+    # count; we match the badges on isolated text to avoid stray big
+    # numbers elsewhere on the page).
+    for ln in filt:
+        if not stock_local:
             m = _RE_LOCAL.search(ln)
-            if m:
-                stock_local = m.group(1); stock_idx = i; continue
+            if m: stock_local = m.group(1)
+        if not stock_inter:
             m = _RE_INTER.search(ln)
-            if m:
-                stock_inter = m.group(1); stock_idx = i; continue
-        if price_idx is None:
-            m = _RE_PRICE.search(ln)
-            if m:
-                price = m.group(1).replace(",", "")
-                price_idx = i
-                continue
+            if m: stock_inter = m.group(1)
+        if not stock_supplier:
+            m = _RE_SUPPLIER.search(ln)
+            if m: stock_supplier = m.group(1)
 
-    # Everything NOT already classified is brand / pattern / attributes
-    # in top-to-bottom order.
-    used = {size_idx, stock_idx, price_idx} - {None}
-    leftover = [ln for i, ln in enumerate(filt) if i not in used]
+    # Figure out which lines were 'consumed' (size / stock / price) so
+    # the remaining lines can be split into brand + pattern + attributes.
+    def _consumed(ln):
+        if _RE_SIZE_SPEC.search(ln):     return True
+        if _RE_PRICE.search(ln):         return True
+        if _RE_LOCAL.search(ln):         return True
+        if _RE_INTER.search(ln):         return True
+        if _RE_SUPPLIER.search(ln):      return True
+        return False
 
-    brand   = leftover[0] if len(leftover) >= 1 else ""
-    pattern = leftover[1] if len(leftover) >= 2 else ""
-    attribute_lines = leftover[2:] if len(leftover) >= 3 else []
-    attribute_desc  = " ".join(attribute_lines)
+    carrier_lines = [ln for ln in filt if not _consumed(ln)]
+    brand   = carrier_lines[0] if len(carrier_lines) >= 1 else ""
+    pattern = carrier_lines[1] if len(carrier_lines) >= 2 else ""
+    attribute_lines = carrier_lines[2:] if len(carrier_lines) >= 3 else []
+    attribute_desc  = " ".join(attribute_lines).strip()
 
-    # Split attributes on the YHI bullet (U+00B7 '-') -- also tolerate
-    # ASCII '*', '|' and '-' between two whole words in case the UI
-    # renders the separator differently on some locales.
+    # Split attributes on the YHI bullet (U+00B7) or an ASCII fallback.
     attrs = []
     if attribute_desc:
-        # Collapse weird whitespace, then split on bullet variants.
         pieces = _re.split(r"\s*[·•*|]\s*", attribute_desc)
         for p in pieces:
             p = p.strip(" -\t·•*|")
@@ -301,17 +321,17 @@ def _parse_row(row_text: str) -> dict:
                 attrs.append(p)
 
     return {
-        "brand":       brand,
-        "pattern":     pattern,
+        "brand":          brand,
+        "pattern":        pattern,
         "attribute_desc": attribute_desc,
         "attr_1": attrs[0] if len(attrs) > 0 else "",
         "attr_2": attrs[1] if len(attrs) > 1 else "",
         "attr_3": attrs[2] if len(attrs) > 2 else "",
-        "size_spec":   size_spec,
-        "load_speed":  load_speed,
-        "price":       price,
-        "stock_local": stock_local,
+        "si_lr":          si_lr,
+        "price":          price,
+        "stock_local":      stock_local,
         "stock_interstate": stock_inter,
+        "stock_supplier":   stock_supplier,
     }
 
 
@@ -591,9 +611,9 @@ class CsvSink:
             "query_digits", "query_size",
             "brand", "pattern",
             "attribute_desc", "attr_1", "attr_2", "attr_3",
-            "size_spec", "load_speed",
+            "si_lr",
             "price",
-            "stock_local", "stock_interstate",
+            "stock_local", "stock_interstate", "stock_supplier",
             "stock_sydney", "stock_melbourne", "stock_brisbane",
             "stock_adelaide", "stock_perth", "stock_launceston",
             "stock_on_order",
