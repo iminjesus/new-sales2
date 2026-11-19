@@ -316,8 +316,29 @@ def _parse_stock_popup(txt: str) -> dict:
 
 
 # ------------------------------------------------------------------
+_RE_ZERO_RESULTS = re.compile(
+    r"\b0\s+RESULTS?\s+FOUND\b|\bNO\s+RESULTS?\s+FOUND\b|"
+    r"\bPLEASE\s+CHANGE\s+YOUR\s+SEARCH\b",
+    re.IGNORECASE,
+)
+
+
+def _empty_state_visible(driver) -> bool:
+    """Return True when the /tyres search results panel is currently
+    showing an explicit 'no results' message -- we should short-
+    circuit the result wait in that case so the next size starts
+    immediately instead of blocking the full timeout."""
+    try:
+        body_txt = (driver.find_element(By.TAG_NAME, "body").text or "")
+    except Exception:
+        return False
+    return bool(_RE_ZERO_RESULTS.search(body_txt))
+
+
 def search_size(driver, digits: str) -> bool:
-    """Type the size digits into the search box and wait for results."""
+    """Type the size digits into the search box and wait for either
+    (a) at least one result row, or (b) an explicit '0 results found'
+    message -- whichever comes first."""
     inp, sel = _find_first(driver, TYRE_SEARCH_INPUT_SELECTORS)
     if inp is None:
         _log(f"[search] could not find a search input on /tyres")
@@ -336,12 +357,17 @@ def search_size(driver, digits: str) -> bool:
         _log(f"[search] typing failed: {e}")
         return False
 
-    # Wait up to 20s for at least one result row to appear.
+    # Wait up to 20s but also peek for a "0 results" message so we
+    # can bail out in under a second when YHI NZ doesn't carry that
+    # size.
     end = time.time() + 20
     while time.time() < end:
         rows, _ = _find_all(driver, RESULT_ROW_SELECTORS)
         if rows:
             return True
+        if _empty_state_visible(driver):
+            _log(f"[search] 0 results for digits='{digits}' -- skipping")
+            return False
         time.sleep(0.3)
     _log(f"[search] no result rows after 20s for digits='{digits}'")
     return False
