@@ -292,6 +292,32 @@ def total_pages(driver) -> int:
     return max(nums) if nums else 0
 
 
+def current_page_from_dom(driver) -> int:
+    """Return the page number the pagination strip currently highlights
+    as active, or 0 if no active marker is detected.  Looks for any
+    .pagination-item with an 'active', 'current', 'selected' or
+    'is-active' modifier class; falls back to the first numbered item
+    whose aria-current attribute is set.  Nov-19: added because
+    --start was just a CSV label -- scraper has to know the REAL
+    page the browser is on, not whatever counter we incremented."""
+    try:
+        items = driver.find_elements(By.CSS_SELECTOR, PAGE_NUMBER_SELECTOR)
+    except Exception:
+        items = []
+    for it in items:
+        try:
+            cls = (it.get_attribute("class") or "").lower()
+            ac  = (it.get_attribute("aria-current") or "").lower()
+        except Exception:
+            cls = ac = ""
+        if ("active" in cls or "current" in cls or "selected" in cls
+                or ac in ("page", "true")):
+            t = _text(it)
+            if t.isdigit():
+                return int(t)
+    return 0
+
+
 def _wait_new_first_card(driver, before: str, timeout: float = 15) -> bool:
     """Block until the FIRST card's text differs from `before` -- a
     strong signal the new page has rendered."""
@@ -515,10 +541,21 @@ def main() -> None:
             last = min(last, args.limit) if last else args.limit
             _log(f"[opts] limit active -- stopping after page {last}")
 
-        page = max(1, args.start)
-        if page != 1:
-            _log(f"[opts] --start {page} -- browser should be manually "
-                 f"advanced to page {page} BEFORE pressing ENTER.")
+        # Read the ACTUAL active page from the pagination strip rather
+        # than trusting a counter.  --start N is accepted but if the
+        # browser is not actually on page N (operator forgot to click
+        # through), we refuse to run so the CSV never gets mislabelled
+        # rows.
+        dom_page = current_page_from_dom(drv) or 1
+        _log(f"[init] browser is currently on page {dom_page}")
+        if args.start > 1 and dom_page != args.start:
+            _log(f"[fatal] --start {args.start} but the browser is on "
+                 f"page {dom_page}.  Click page {args.start} in the "
+                 f"browser's pagination strip, then rerun with --manual "
+                 f"--start {args.start}.")
+            return
+        page = dom_page
+
         while True:
             if last and page > last:
                 break
@@ -547,14 +584,22 @@ def main() -> None:
                     break
 
             # Advance to next page.
-            page += 1
-            if last and page > last:
+            next_target = page + 1
+            if last and next_target > last:
                 break
             time.sleep(INTER_PAGE_DELAY)
-            if not click_next(drv, page - 1):
-                _log(f"[fatal] could not click Next after page {page - 1}. "
+            if not click_next(drv, page):
+                _log(f"[fatal] could not click Next after page {page}. "
                      f"Stopping.")
                 break
+            # Re-read the active page from the DOM so we never drift
+            # from what the browser actually shows.
+            new_page = current_page_from_dom(drv) or (page + 1)
+            if new_page == page:
+                _log(f"[warn] active page didn't advance from {page} "
+                     f"after Next -- treating as end of list.")
+                break
+            page = new_page
 
         _log(f"Done.  Wrote {sink.count} row(s) to {out_path}")
 
