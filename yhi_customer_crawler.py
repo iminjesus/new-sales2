@@ -74,6 +74,19 @@ INTER_PAGE_DELAY = 0.8        # courtesy delay between page navigations
 CARD_SELECTOR        = ".component-customer-search-result-item"
 NEXT_PAGE_SELECTOR   = ".pagination-item-control"    # prev / next arrows
 PAGE_NUMBER_SELECTOR = ".pagination-item"            # numbered pages
+# Nov-19: the list only fetches after the user touches the search
+# input -- the page is coded to wait for a keystroke event instead of
+# auto-loading.  We need to focus this input and send a dummy char
+# + backspace to trigger the onChange handler.  Operator confirmed
+# this manually: typing 'Y' and deleting it made the full list appear.
+SEARCH_INPUT_SELECTORS = (
+    ".component-customer-search-bar input",
+    ".search-bar input",
+    "input[placeholder*='Customer Search']",
+    "input[placeholder*='Search']",
+    "input[type='text']",
+    "input[type='search']",
+)
 
 
 def _ts() -> str:
@@ -177,6 +190,46 @@ def extract_cards_text(driver) -> list[str]:
         if txt:
             out.append(txt)
     return out
+
+
+def trigger_search_list(driver) -> bool:
+    """Focus the search input and send a dummy keystroke + backspace so
+    the page's onChange handler fires and the full list fetches.  The
+    operator confirmed manually that typing 'Y' and immediately
+    deleting it reveals the whole 4,376-store list; this reproduces
+    that interaction programmatically."""
+    inp = None
+    for sel in SEARCH_INPUT_SELECTORS:
+        try:
+            cand = driver.find_elements(By.CSS_SELECTOR, sel)
+        except Exception:
+            cand = []
+        for c in cand:
+            try:
+                if c.is_displayed() and c.is_enabled():
+                    inp = c
+                    _log(f"[trigger] search input found via '{sel}'")
+                    break
+            except Exception:
+                continue
+        if inp is not None:
+            break
+    if inp is None:
+        _log("[trigger] could not find a search input to poke")
+        return False
+
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", inp)
+        inp.click()
+        time.sleep(0.2)
+        inp.send_keys("y")
+        time.sleep(0.3)
+        inp.send_keys(Keys.BACK_SPACE)
+        time.sleep(0.3)
+        return True
+    except Exception as e:
+        _log(f"[trigger] keystroke failed: {e}")
+        return False
 
 
 def parse_card(txt: str) -> dict:
@@ -350,31 +403,48 @@ def main() -> None:
             print("\n" + "=" * 72)
             print("  MANUAL PASSTHROUGH MODE  --  login required")
             print("=" * 72)
-            print("  The browser window is now open.  yhi.com.au serves the")
-            print("  customer-search list ONLY TO LOGGED-IN USERS, so:")
+            print("  yhi.com.au only returns the store list AFTER you have:")
+            print("     (a) logged in, AND")
+            print("     (b) interacted with the search box on the page.")
             print()
-            print("   1. In the Chrome window that just opened, click 'Login'")
-            print("      (top-right) or go to  https://www.yhi.com.au/login")
-            print("   2. Enter your YHI credentials and sign in.")
-            print("   3. Once you are at ANY logged-in page, come back here")
-            print("      and press ENTER.  The script will then navigate the")
-            print("      browser to /customer-search itself and start scraping.")
+            print("  In the browser window that just opened, do these 3 steps:")
+            print()
+            print("   1. Click 'Login' (top-right) and sign in with YHI creds.")
+            print("   2. Navigate to  https://www.yhi.com.au/customer-search")
+            print("      (type it in the address bar, or click the menu).")
+            print("   3. STOP there -- do NOT touch the search box.  Come back")
+            print("      here and press ENTER.  The script will poke the search")
+            print("      box automatically (sends 'y' + BACKSPACE), which makes")
+            print("      the full list of ~4,376 stores appear.")
             print()
             print("   (Do NOT close the browser.  The script needs it open.)")
             print("=" * 72)
             try:
-                input("  Logged in?  Press ENTER to start scraping...  ")
+                input("  Done 1+2?  Press ENTER to start scraping...  ")
             except EOFError:
                 pass
-            # Re-navigate to the search page using the now-logged-in
-            # session cookies.  Operator may be on /home, /profile or
-            # wherever after login; forcing the URL here means they do
-            # not have to click through to the search page themselves.
-            _log(f"Navigating logged-in session to {BASE_URL}")
+
+            # Check we are on /customer-search; if not, navigate once.
+            # Then trigger the search so the list fetches.
             try:
-                drv.get(BASE_URL)
-            except Exception as e:
-                _log(f"[warn] could not navigate: {e}")
+                cur = (drv.current_url or "").lower()
+            except Exception:
+                cur = ""
+            if "customer-search" not in cur:
+                _log(f"Browser is at '{cur}' -- navigating to {BASE_URL}")
+                try:
+                    drv.get(BASE_URL)
+                    time.sleep(2)
+                except Exception as e:
+                    _log(f"[warn] navigate failed: {e}")
+
+            # Trigger the search-box onChange so the list hydrates.
+            _log("Triggering search box to force list fetch...")
+            if not trigger_search_list(drv):
+                _log("[warn] could not drive the search box.  If the page is "
+                     "still empty, click it yourself, type a character and "
+                     "delete it, then re-run the script.")
+            # Now wait for cards.
             if not wait_for_results(drv, timeout=PAGE_WAIT_SEC):
                 _log("[warn] store list still did not render.  If the "
                      "browser shows a login prompt, log in again and "
