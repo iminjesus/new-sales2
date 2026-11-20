@@ -524,21 +524,43 @@ def _parse_stock_popup(txt: str) -> dict:
     out = {c: "" for c in KNOWN_CITIES}
     out.update({"on_order": "", "eta_syd": "", "eta_mel": "",
                 "eta_bri": "", "eta_per": ""})
-    for raw in (txt or "").splitlines():
-        ln = raw.strip()
-        if not ln:
-            continue
-        m = _RE_CITY_N.match(ln)
-        if m:
-            qty, city = m.group(1), m.group(2).lower()
-            # Store every city dynamically (known or not).
-            out[city] = qty
-            continue
-        if "on order" in ln.lower():
-            m2 = re.search(r"(\d{1,6})", ln)
-            if m2:
-                out["on_order"] = m2.group(1)
-            continue
+
+    # YHI's tooltip is rendered with each number and each label in
+    # separate <span> elements, so Selenium's .text returns them on
+    # ALTERNATING lines:
+    #     63
+    #     Sydney
+    #     31
+    #     Melbourne
+    #     ...
+    #     50
+    #     On Order
+    #     ETA BRI 12/12/2026
+    # We therefore walk line-pairs: if line N is just a number and
+    # line N+1 is a label we recognise, that is one (qty, label)
+    # entry.  Still handle the single-line "63 Sydney" form too for
+    # robustness (some pages may render it that way).
+    lines = [raw.strip() for raw in (txt or "").splitlines() if raw.strip()]
+
+    KNOWN_LABELS = set(KNOWN_CITIES)   # lower-cased
+
+    def _stash(qty, label):
+        lab = (label or "").strip().lower()
+        if not qty or not lab:
+            return
+        if "order" in lab:
+            out["on_order"] = qty
+            return
+        # Any city word -- known or novel -- is stored.  A novel city
+        # drops under its lower-cased name without an existing column,
+        # which the DictWriter's extrasaction='ignore' quietly drops.
+        out[lab] = qty
+
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+
+        # ETA line (anywhere it appears, on its own line in practice).
         em = _RE_ETA.search(ln)
         if em:
             code, dt = em.group(1).upper(), em.group(2)
@@ -546,6 +568,27 @@ def _parse_stock_popup(txt: str) -> dict:
                        "BRI": "eta_bri", "PER": "eta_per"}
             if code in mapping:
                 out[mapping[code]] = dt
+            i += 1
+            continue
+
+        # Single-line "63 Sydney" / "50 On Order"
+        m = _RE_CITY_N.match(ln)
+        if m:
+            _stash(m.group(1), m.group(2))
+            i += 1
+            continue
+
+        # Two-line form: line N is a pure number, line N+1 is the label.
+        if ln.isdigit() and i + 1 < len(lines):
+            nxt = lines[i + 1]
+            # Label line must be a word / a few words (letters + spaces).
+            if re.match(r"^[A-Za-z][A-Za-z ]{1,24}$", nxt):
+                _stash(ln, nxt)
+                i += 2
+                continue
+
+        i += 1
+
     return out
 
 
