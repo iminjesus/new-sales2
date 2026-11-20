@@ -108,14 +108,22 @@ def _log(msg: str) -> None:
 
 
 # ------------------------------------------------------------------
-def _load_size_list():
-    """Import the Tempe master size list.  SEARCH_QUERIES is a list of
-    (digits, display) tuples."""
+def _load_size_list(merged: bool = True):
+    """Return the list of (digits, display) size tuples to crawl.
+
+    When `merged` is True (default), we call
+    tempeweborder_crawling._merged_search_queries() which returns the
+    24 base sizes PLUS every historical size seen in any past
+    Tempeweborder_*.csv / NewbeeWeborder_*.csv in the project root
+    (~400 total).  When False, just the 24 base sizes."""
     try:
+        if merged:
+            from tempeweborder_crawling import _merged_search_queries
+            return _merged_search_queries()
         from tempeweborder_crawling import SEARCH_QUERIES
         return SEARCH_QUERIES[:]
     except Exception as e:
-        _log(f"[fatal] could not import SEARCH_QUERIES: {e}")
+        _log(f"[fatal] could not import size list: {e}")
         sys.exit(1)
 
 
@@ -1040,6 +1048,11 @@ def crawl_size(driver, digits: str, size_label: str, sink,
         _log(f"[nav] get(/tyres) failed: {e}")
         return 0
     time.sleep(2)
+    # Nov-20: the previous size's last anchor + tooltip text are now
+    # stale (new page load).  Reset them so expand_stock() treats the
+    # next row as a 'first row' (longer wait, no staleness guard).
+    _LAST_ANCHOR[0]     = None
+    _LAST_POPUP_TEXT[0] = ""
     if not search_size(driver, digits):
         return 0
 
@@ -1157,7 +1170,14 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sizes", default="",
                     help="Comma-separated digit codes to crawl (overrides "
-                         "the default 24-size list).  e.g. 1956515,2254517")
+                         "the default extended ~400-size list).  "
+                         "e.g. 1956515,2254517")
+    ap.add_argument("--base-sizes", action="store_true",
+                    help="Use only the 24 base sizes from "
+                         "tempeweborder_crawling.SEARCH_QUERIES instead "
+                         "of the full extended list (which pulls in "
+                         "every historical size seen in past "
+                         "Tempeweborder_*/NewbeeWeborder_*.csv files).")
     ap.add_argument("--limit", type=int, default=0,
                     help="Only crawl the first N sizes (0 = all).")
     ap.add_argument("--debug", action="store_true",
@@ -1169,7 +1189,7 @@ def main() -> None:
         want = [s.strip() for s in args.sizes.split(",") if s.strip()]
         size_list = [(d, d) for d in want]
     else:
-        size_list = _load_size_list()
+        size_list = _load_size_list(merged=not args.base_sizes)
     if args.limit:
         size_list = size_list[:args.limit]
 
