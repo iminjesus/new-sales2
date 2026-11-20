@@ -858,49 +858,74 @@ def expand_stock(driver, row) -> dict:
             break
         time.sleep(0.2)
 
-    # Diagnostic: on the FIRST row where the popup lands blank, dump
-    # the row's .tooltip-wrapper AND the document body overlay area
-    # so we can see where the tooltip body is actually rendered.
-    if not popup_text and not _TOOLTIP_DUMPED[0] and wrapper is not None:
+    # Diagnostic -- always runs on the FIRST row.  Writes a dump
+    # containing: (a) the row's outerHTML, (b) the row's
+    # .tooltip-wrapper outerHTML, (c) ALL potential tooltip
+    # candidates document-wide at the moment of the hover, (d) the
+    # text our scanner actually captured (if any), and (e) any
+    # element on the page whose text contains at least 3 city names.
+    # Enough signal to pin the extraction in one more commit.
+    if not _TOOLTIP_DUMPED[0]:
         _TOOLTIP_DUMPED[0] = True
         try:
             dump_path = os.path.join(BASE_DIR, "yhi_tyres_stock_popup.html")
             parts = []
+            parts.append(f"<!-- scanner returned popup_text (len={len(popup_text)}): -->")
+            parts.append(f"<!--\n{popup_text[:1500]}\n-->")
             try:
-                parts.append("<!-- row.tooltip-wrapper outerHTML -->\n" +
-                             (wrapper.get_attribute("outerHTML") or ""))
+                parts.append("\n<!-- row outerHTML (first 3000 chars) -->")
+                row_html = row.get_attribute("outerHTML") or ""
+                parts.append(row_html[:3000])
             except Exception:
                 pass
-            # Also append a chunk of body-level overlay candidates.
+            if wrapper is not None:
+                try:
+                    parts.append("\n<!-- row.tooltip-wrapper outerHTML -->")
+                    parts.append(wrapper.get_attribute("outerHTML") or "")
+                except Exception:
+                    pass
+            # Document-wide candidates.
             try:
                 body = driver.find_element(By.TAG_NAME, "body")
                 for sel in ("[role='tooltip']", "[class*='tooltip']",
-                            "[class*='popover']", "[class*='popper']"):
+                            "[class*='popover']", "[class*='popper']",
+                            "[class*='stock-popup']",
+                            "[class*='stock-breakdown']"):
                     for el in body.find_elements(By.CSS_SELECTOR, sel):
                         try:
-                            parts.append(f"\n<!-- body overlay: '{sel}' -->\n" +
-                                         (el.get_attribute("outerHTML") or ""))
+                            parts.append(f"\n<!-- body overlay sel='{sel}' -->")
+                            parts.append(el.get_attribute("outerHTML") or "")
                         except Exception:
                             continue
             except Exception:
                 pass
+            # XPath-based "contains 3 cities" probe so we see which
+            # containers ACTUALLY carry the breakdown text, if any.
+            try:
+                xp = ("//*[contains(., 'Sydney') and contains(., 'Melbourne') "
+                      "and contains(., 'Brisbane')]")
+                xcands = driver.find_elements(By.XPATH, xp)
+                parts.append(f"\n<!-- XPath 3-city candidates: {len(xcands)} -->")
+                for i, el in enumerate(xcands[:5]):
+                    parts.append(f"\n<!-- xcand #{i} tag={el.tag_name} "
+                                 f"class={el.get_attribute('class')!r} "
+                                 f"text={(el.text or '')[:200]!r} -->")
+                    try:
+                        parts.append(el.get_attribute("outerHTML")[:1500] or "")
+                    except Exception:
+                        pass
+            except Exception as _e:
+                parts.append(f"\n<!-- XPath probe error: {_e} -->")
             with open(dump_path, "w", encoding="utf-8") as f:
-                f.write("\n\n".join(parts))
-            _log(f"[tooltip-debug] no breakdown found; dumped tooltip "
-                 f"candidates to {dump_path}")
+                f.write("\n".join(parts))
+            if popup_text:
+                _log(f"[tooltip-debug] captured tooltip (len={len(popup_text)}); "
+                     f"dumped to {dump_path}")
+            else:
+                _log(f"[tooltip-debug] NO breakdown found; dumped candidates "
+                     f"to {dump_path}")
         except Exception as e:
             _log(f"[tooltip-debug] dump failed: {e}")
-    elif popup_html and not _TOOLTIP_DUMPED[0]:
-        # Dump the SUCCESSFUL tooltip once so we have a reference for
-        # the DOM shape.
-        _TOOLTIP_DUMPED[0] = True
-        try:
-            dump_path = os.path.join(BASE_DIR, "yhi_tyres_stock_popup.html")
-            with open(dump_path, "w", encoding="utf-8") as f:
-                f.write(popup_html)
-            _log(f"[tooltip-debug] captured tooltip HTML to {dump_path}")
-        except Exception:
-            pass
 
     # Dismiss the tooltip so the NEXT row's hover does not stack on
     # top.  Fires explicit mouseout + mouseleave events on the anchor
