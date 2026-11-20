@@ -1121,10 +1121,12 @@ class CsvSink:
             "si_lr",
             "price",
             "stock_local",
-            # stock_interstate + stock_supplier dropped Nov-20 at
-            # operator's request -- unused downstream.
+            # Nov-20: stock_interstate dropped (unused downstream).
+            # stock_supplier is back by operator ask, placed between
+            # launceston and total_stock.
             "sydney", "melbourne", "brisbane",
             "adelaide", "perth", "launceston",
+            "stock_supplier",
             "total_stock",                           # sum of per-city stock
             "on_order",
             "eta_syd", "eta_mel", "eta_bri", "eta_per",
