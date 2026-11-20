@@ -1037,7 +1037,8 @@ _DEBUG_DUMPED = [False]      # one-shot flag so we only dump once
 
 
 def crawl_size(driver, digits: str, size_label: str, sink,
-               verbose: bool = False) -> int:
+               verbose: bool = False,
+               no_stock_detail: bool = False) -> int:
     """Run one size through the search + extraction + stock-expand
     pipeline and append rows to `sink`.  Returns the row count."""
     _log(f"Searching for digits='{digits}' ({size_label})...")
@@ -1100,7 +1101,13 @@ def crawl_size(driver, digits: str, size_label: str, sink,
         # interstate OR supplier stock.  YHI underlines all three
         # types, suggesting a per-warehouse breakdown tooltip is
         # available even when the primary count is 'Supplier Stock'.
-        if (parsed.get("stock_local")
+        if no_stock_detail:
+            # Fast mode: keep only the top-level stock badge the row
+            # already carries (stock_local / stock_interstate /
+            # stock_supplier).  Per-warehouse breakdown, total_stock,
+            # on_order and ETA columns stay blank.  Cuts ~2s/row.
+            stock_detail = {}
+        elif (parsed.get("stock_local")
                 or parsed.get("stock_interstate")
                 or parsed.get("stock_supplier")):
             try:
@@ -1183,6 +1190,14 @@ def main() -> None:
     ap.add_argument("--debug", action="store_true",
                     help="Dump the /tyres page's HTML after login so "
                          "selectors can be tuned if extraction fails.")
+    ap.add_argument("--no-stock-detail", action="store_true",
+                    help="Skip the per-row tooltip hover.  Captures only "
+                         "brand/pattern/size/price plus the top-level "
+                         "stock_local/stock_interstate/stock_supplier "
+                         "badge the row already carries; per-warehouse "
+                         "breakdown, total_stock, on_order and ETA columns "
+                         "stay blank.  Saves ~2s/row (a ~400-size full "
+                         "run drops from ~2h to ~7 min).")
     args = ap.parse_args()
 
     if args.sizes:
@@ -1236,9 +1251,12 @@ def main() -> None:
             except Exception as e:
                 _log(f"[debug] dump failed: {e}")
 
+        if args.no_stock_detail:
+            _log("Mode  : FAST (no per-warehouse stock breakdown)")
         for i, (digits, label) in enumerate(size_list, 1):
             try:
-                n = crawl_size(drv, digits, label, sink)
+                n = crawl_size(drv, digits, label, sink,
+                               no_stock_detail=args.no_stock_detail)
                 _log(f"[{i}/{len(size_list)}] {label} -> {n} row(s) "
                      f"(total {sink.count})")
             except Exception as e:
