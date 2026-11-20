@@ -110,23 +110,44 @@ def month_label(yyyymm: str) -> str:
 
 
 def _files_by_month(prefix: str):
-    """Return [(yyyymm, path), ...] sorted newest-month-first.  When
-    multiple files share a month-key, keep the one with the newest
-    mtime (crawler re-runs within the same month)."""
+    """Return [(yyyymm, path), ...] -- ALL files for `prefix`, ordered
+    newest-month-first and within a month newest-mtime-first.
+
+    Nov-20 user ask: tempeweborder_crawling_extend.py occasionally
+    finishes a run with an incomplete result set (one or two sizes
+    dropped under rate-limit).  The SPRF chip used to show blanks
+    for those sizes when the newest in-month CSV was the incomplete
+    one, because the previous logic kept ONLY the mtime-newest file
+    per month.  Now we return every file -- the consumer loop walks
+    them newest-first and returns the first file in which the size
+    matches, so an older within-month file fills the gap when the
+    newest is missing data for that specific size.
+
+    Return shape stays (yyyymm, path) so no callers need updating;
+    the same yyyymm just appears multiple times when a month has
+    several files, with the newest mtime coming first.
+    """
     pl = prefix.lower()
-    by_month: dict = {}
+    # Collect (yyyymm, path, mtime) first, then sort.
+    bucket: list = []
     try:
         for name in os.listdir(_BASE):
             nl = name.lower()
             if not (nl.startswith(pl + "_") and nl.endswith(".csv")):
                 continue
             fp = os.path.join(_BASE, name)
+            try:
+                mt = os.path.getmtime(fp)
+            except OSError:
+                mt = 0
             mk = _month_key_from_name(name)
-            if mk not in by_month or os.path.getmtime(fp) > os.path.getmtime(by_month[mk]):
-                by_month[mk] = fp
+            bucket.append((mk, mt, fp))
     except OSError:
         return []
-    return sorted(by_month.items(), key=lambda t: t[0], reverse=True)
+    # Sort by (month desc, mtime desc).  The tuple (-int(mk or 0), -mt)
+    # trick handles the sentinel "000000" cleanly -- it still sorts last.
+    bucket.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    return [(mk, fp) for mk, _mt, fp in bucket]
 
 
 def _load(path: str):
