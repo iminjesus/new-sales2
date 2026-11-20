@@ -6040,13 +6040,23 @@ HARRY_CS_EMAIL       = "harry.jallis@hankooktyre.com.au"
 # BDE name typed with slight whitespace variations still matches.
 # Add new BDE→manager rows here; the fan-out code reads this map
 # only — no further edit needed.
+# Nov-20: value can now be either a single email string OR a list of
+# emails.  Lists let a BDE have more than one manager-level CC --
+# needed for BDEs who report to one SM but another SM / MGMT level
+# wants to be looped in as well (Makris -> Paul + Justin; Carbony ->
+# Calvin + Justin).  The helpers below normalise both shapes into a
+# list of strings so every caller sees the same type.
 BDE_MANAGER_CC = {
     # Paul Buckley manages:
-    "MAKRIS GEORGE":    "paul.buckley@hankooktyre.com.au",
+    "MAKRIS GEORGE":    ["paul.buckley@hankooktyre.com.au",
+                         "justin.harding@hankooktyre.com.au"],
     # Oct-27: Alessio Borghese seat taken over by Luca Borghese
     # (Luca already had an entry; Alessio's entry removed).
     "BORGHESE LUCA":    "paul.buckley@hankooktyre.com.au",
     "VALLIS BRETT":     "paul.buckley@hankooktyre.com.au",
+    # Nov-20: Brian Jung (jung.brian@) is the new NSW BDE reporting
+    # to Paul.  Both name orders are accepted via _bde_name_variants.
+    "JUNG BRIAN":       "paul.buckley@hankooktyre.com.au",
     # Aaron Marsh manages:
     "MACLURE ADAM":     "aaron.marsh@hankooktyre.com.au",
     "SPIRES STEVEN":    "aaron.marsh@hankooktyre.com.au",
@@ -6055,9 +6065,33 @@ BDE_MANAGER_CC = {
     "DUCIE ROBERT":     "calvin.hobkirk@hankooktyre.com.au",
     "BILSTON KELLEY":   "calvin.hobkirk@hankooktyre.com.au",
     "GULTJAEFF JASON":  "calvin.hobkirk@hankooktyre.com.au",
+    # Nov-20: Robert Carbony reports to Calvin but Justin must also
+    # be looped in on every SPRF.
+    "CARBONY ROBERT":   ["calvin.hobkirk@hankooktyre.com.au",
+                         "justin.harding@hankooktyre.com.au"],
     # Asim Qureshi manages:
     "DAIS JIM":         "asim.qureshi@hankooktyre.com.au",
 }
+
+
+def _manager_emails(v):
+    """Normalise a BDE_MANAGER_CC value (which may be a string OR a
+    list of strings) into a clean list of lower-cased emails."""
+    if not v:
+        return []
+    if isinstance(v, str):
+        items = [v]
+    else:
+        try:
+            items = list(v)
+        except Exception:
+            return []
+    out = []
+    for e in items:
+        e = (e or "").strip().lower()
+        if e and e not in out:
+            out.append(e)
+    return out
 
 
 def _bde_name_variants(bde_name):
@@ -6080,17 +6114,24 @@ def _bde_name_variants(bde_name):
     return out
 
 
-def _bde_manager_email(bde_name) -> str:
-    """Return the manager's email for a BDE display name, or '' if
-    the BDE isn't in BDE_MANAGER_CC.  Case / whitespace tolerant and,
-    Nov-17, name-order tolerant: tries both "FIRST LAST" and
-    "LAST FIRST" so a form that typed George Makris still finds the
-    MAKRIS GEORGE row."""
+def _bde_manager_emails(bde_name) -> list:
+    """Return every manager email mapped for a BDE display name, or
+    [] when the BDE isn't in BDE_MANAGER_CC.  Case / whitespace
+    tolerant and (Nov-17) name-order tolerant.  Nov-20: values in
+    the map can be a string OR a list; we always return a list."""
     for key in _bde_name_variants(bde_name):
         v = BDE_MANAGER_CC.get(key)
         if v:
-            return v
-    return ""
+            return _manager_emails(v)
+    return []
+
+
+def _bde_manager_email(bde_name) -> str:
+    """Legacy shim: callers that only want ONE manager email get the
+    first entry.  Kept so old call sites keep working during the
+    transition to multi-manager support."""
+    emails = _bde_manager_emails(bde_name)
+    return emails[0] if emails else ""
 
 
 def _bdes_under_manager(email: str):
@@ -6098,53 +6139,60 @@ def _bdes_under_manager(email: str):
     by the BDEs reporting to them, not just their own rows.  Returns
     the list of upper-case BDE display names reporting to the given
     manager email (empty when the caller isn't in BDE_MANAGER_CC's
-    value side).  Driven by inverting BDE_MANAGER_CC so adding a new
-    report to the map here is enough to extend the manager's scope on
-    the Submitted Orders list."""
+    value side).  Nov-20: BDE_MANAGER_CC values can be a list of
+    emails -- a BDE whose entry includes this manager anywhere in
+    the list is treated as reporting to them."""
     e = (email or "").strip().lower()
     if not e:
         return []
     return [bde for bde, mgr in BDE_MANAGER_CC.items()
-            if (mgr or "").strip().lower() == e]
+            if e in _manager_emails(mgr)]
 
 
 def _boss_chain_emails(bde_name):
     """Nov-17 user ask: notify every boss in the chain above a BDE,
     not only their immediate line manager.  Walks BDE_MANAGER_CC
-    recursively -- BDE -> SM -> SM's boss -> ... -- and returns the
-    de-duplicated list of boss emails (lower-case) in boss-first order.
-    Stops at any name that isn't itself a key in BDE_MANAGER_CC, so
-    an SM whose entry says their boss is e.g. a MGMT approver who
-    isn't keyed again terminates the walk cleanly.  Loop-safe (a
-    cycle in the map -- bad data -- is caught by the visited set)."""
+    recursively -- BDE -> every manager -> each manager's own
+    managers -> ... -- and returns the de-duplicated list of boss
+    emails (lower-case) in boss-first order.  Stops at any name that
+    isn't itself a key in BDE_MANAGER_CC, so an SM whose entry says
+    their boss is e.g. a MGMT approver who isn't keyed again
+    terminates the walk cleanly.  Nov-20: a single BDE_MANAGER_CC
+    entry may list multiple managers (e.g. Makris -> Paul + Justin);
+    EACH of them is added to the chain and then walked individually,
+    so Justin being a terminal node doesn't stop us from also walking
+    Paul's own ancestors (if any)."""
     out, visited = [], set()
-    current = (bde_name or "").strip()
-    while current:
-        # Normalise to the key format we look names up by.
-        cur_key_variants = _bde_name_variants(current)
-        if any(k in visited for k in cur_key_variants):
-            break
-        for k in cur_key_variants:
+    # Queue of (display_name) to walk.  Seed with the BDE itself.
+    queue = [(bde_name or "").strip()]
+    while queue:
+        current = queue.pop(0)
+        if not current:
+            continue
+        cur_keys = _bde_name_variants(current)
+        if any(k in visited for k in cur_keys):
+            continue
+        for k in cur_keys:
             visited.add(k)
-        mgr = _bde_manager_email(current)
-        if not mgr:
-            break
-        mgr_lc = mgr.strip().lower()
-        if mgr_lc and mgr_lc not in out:
-            out.append(mgr_lc)
-        # Climb one level: find the manager's display name by inverting
-        # _BDE_DIRECTORY (defined further down in this module); any
-        # match whose email equals `mgr` becomes the next step.  The
-        # directory lookup is best-effort -- if the manager isn't in
-        # the directory, the walk simply ends.
-        next_name = ""
-        try:
-            next_name = (_EMAIL_TO_DIR.get(mgr_lc, {}) or {}).get("name", "")
-        except Exception:
-            next_name = ""
-        if not next_name:
-            break
-        current = next_name
+        mgrs = _bde_manager_emails(current)
+        if not mgrs:
+            continue
+        for mgr_lc in mgrs:
+            if mgr_lc and mgr_lc not in out:
+                out.append(mgr_lc)
+            # Climb one level for THIS manager.  _EMAIL_TO_DIR
+            # stores a (name, state, role) tuple; the name is at
+            # index 0.  Earlier versions of this code used
+            # .get('name') on the tuple, which raised and was
+            # swallowed -- so the chain never climbed past the first
+            # hop.  Fixed Nov-20.
+            try:
+                entry = _EMAIL_TO_DIR.get(mgr_lc)
+                nxt = entry[0] if entry else ""
+            except Exception:
+                nxt = ""
+            if nxt:
+                queue.append(nxt)
     return out
 
 
@@ -20796,6 +20844,9 @@ _BDE_DIRECTORY = [
     ("Borghese Luca",    "luca.borghese@hankooktyre.com.au",    "NSW", "BDE"),
     ("Vallis Brett",     "brett.vallis@hankooktyre.com.au",     "NSW", "BDE"),
     ("Makris George",    "george.makris@hankooktyre.com.au",    "NSW", "BDE"),
+    # Nov-20: Brian Jung joined the NSW BDE roster.  Reports to
+    # Paul Buckley (BDE_MANAGER_CC entry 'JUNG BRIAN' -> Paul).
+    ("Jung Brian",       "brian.jung@hankooktyre.com.au",       "NSW", "BDE"),
     # QLD
     ("Marsh Aaron",      "aaron.marsh@hankooktyre.com.au",      "QLD", "SM"),
     ("Spires Steven",    "steven.spires@hankooktyre.com.au",    "QLD", "BDE"),
@@ -20807,6 +20858,9 @@ _BDE_DIRECTORY = [
     ("Bilston Kelley",   "kelley.bilston@hankooktyre.com.au",   "VIC", "BDE"),
     # Nicola Bellotto retired; Robert Ducie took over the VIC BDE seat.
     ("Ducie Robert",     "robert.ducie@hankooktyre.com.au",     "VIC", "BDE"),
+    # Nov-20: Robert Carbony joined -- reports to Calvin AND Justin
+    # (BDE_MANAGER_CC entry 'CARBONY ROBERT' -> [Calvin, Justin]).
+    ("Carbony Robert",   "robert.carbony@hankooktyre.com.au",   "VIC", "BDE"),
     ("Gultjaeff Jason",  "jason.gultjaeff@hankooktyre.com.au",  "SA",  "BDE"),
     # WA
     ("Asim Qureshi",     "asim.qureshi@hankooktyre.com.au",     "WA",  "SM"),
