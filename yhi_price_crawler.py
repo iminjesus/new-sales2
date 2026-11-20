@@ -1083,7 +1083,13 @@ def crawl_size(driver, digits: str, size_label: str, sink,
         # Expand the stock tooltip only when there IS a local or
         # interstate figure to drill into.  'Supplier Stock' rows
         # have no per-warehouse popup to expand.
-        if parsed.get("stock_local") or parsed.get("stock_interstate"):
+        # Try the hover on any stock badge the row carries -- local,
+        # interstate OR supplier stock.  YHI underlines all three
+        # types, suggesting a per-warehouse breakdown tooltip is
+        # available even when the primary count is 'Supplier Stock'.
+        if (parsed.get("stock_local")
+                or parsed.get("stock_interstate")
+                or parsed.get("stock_supplier")):
             try:
                 stock_detail = expand_stock(driver, row)
             except Exception:
