@@ -652,6 +652,7 @@ def search_size(driver, digits: str) -> bool:
 
 _TOOLTIP_DUMPED = [False]      # one-shot tooltip HTML dump
 _LAST_ANCHOR = [None]          # pointer to the previously-hovered pill
+_LAST_POPUP_TEXT = [""]        # text of the last captured tooltip (for staleness guard)
 
 # JS payload: thoroughly dismiss the LAST hovered pill by firing
 # pointerleave + mouseleave + mouseout on it AND on every ancestor
@@ -884,22 +885,36 @@ def expand_stock(driver, row) -> dict:
     # Record this anchor so the NEXT call can dismiss its tooltip.
     _LAST_ANCHOR[0] = anchor
 
-    # Poll for the tooltip for up to 3s.  Vue / React tooltip
-    # components usually mount+render within ~200ms, but the FIRST
-    # hover on a freshly-loaded search result sometimes takes a bit
-    # longer because the component is lazy-loaded.  We watch the
-    # whole document for any element whose text contains BOTH a
-    # known city AND the word 'Launceston' or 'Perth' or 'Melbourne'
-    # (two cities = guaranteed to be the warehouse tooltip, not some
-    # unrelated 'Sydney' text elsewhere on the page).
+    # Poll for the tooltip for up to 5s on the first row, 3s after.
+    # Vue / React tooltip components usually mount+render within
+    # ~200ms, but the VERY FIRST hover on a freshly-loaded search
+    # result page can take noticeably longer.  We also require the
+    # captured text to DIFFER from the last row's -- otherwise we
+    # are reading a stuck/stacked tooltip that never dismissed and
+    # should give it more time to update.
     popup_text = ""
     popup_html = ""
-    deadline = time.time() + 3.0
+    is_first_row = (_LAST_ANCHOR[0] is None)
+    deadline = time.time() + (5.0 if is_first_row else 3.0)
     while time.time() < deadline:
         popup_text, popup_html = _scan_for_tooltip(driver, row, wrapper)
-        if popup_text:
+        if popup_text and popup_text != _LAST_POPUP_TEXT[0]:
             break
-        time.sleep(0.2)
+        # If we only see the previous row's text, fire another hover
+        # kick and keep polling.
+        if popup_text == _LAST_POPUP_TEXT[0]:
+            try:
+                driver.execute_script(_JS_HOVER, anchor)
+            except Exception:
+                pass
+        time.sleep(0.3)
+    # If the polling loop exited with only the stale text, treat the
+    # row as "no fresh tooltip" rather than record last row's figures.
+    if popup_text and popup_text == _LAST_POPUP_TEXT[0]:
+        popup_text = ""
+        popup_html = ""
+    if popup_text:
+        _LAST_POPUP_TEXT[0] = popup_text
 
     # Diagnostic -- always runs on the FIRST row.  Writes a dump
     # containing: (a) the row's outerHTML, (b) the row's
@@ -1099,7 +1114,9 @@ class CsvSink:
             "attribute_desc", "attr_1", "attr_2", "attr_3",
             "si_lr",
             "price",
-            "stock_local", "stock_interstate", "stock_supplier",
+            "stock_local",
+            # stock_interstate + stock_supplier dropped Nov-20 at
+            # operator's request -- unused downstream.
             "sydney", "melbourne", "brisbane",
             "adelaide", "perth", "launceston",
             "total_stock",                           # sum of per-city stock
