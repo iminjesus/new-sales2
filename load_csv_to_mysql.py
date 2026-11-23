@@ -427,56 +427,21 @@ STOCK_RT_GLOB    = "rt_stock_*.csv"
 STOCK_RT_ALIAS   = os.path.join(STOCK_RT_DIR, "rt_stock.csv")
 STOCK_RT_TABLE   = "stock_rt"
 
-# Nov-23 user ask: the orchestrator now rotates through plants, writing
-# rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv one plant per 10-min tick.  Keep
-# the plant list in sync with batch_orchestrator._PLANT_ROTATION so the
-# loader picks up every file the rotation produces.  42R3 is not used.
-STOCK_RT_PLANTS  = ("42R0", "42R1", "42R2", "42R4")
-
 
 def _pick_latest_rt_stock_csv():
-    """Return the newest all-plants rt_stock_*.csv path, or the plain
-    alias rt_stock.csv as a fallback.  Returns None when neither exists.
-    PER-PLANT files (rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv) are deliberately
-    SKIPPED here -- they're handled by _pick_latest_per_plant_csvs()
-    and the per-plant branch of load_stock_rt()."""
+    """Return the newest rt_stock_*.csv path, or the plain alias
+    rt_stock.csv as a fallback.  Returns None when neither exists."""
     import glob as _g
-    import re as _re
     files = _g.glob(os.path.join(STOCK_RT_DIR, STOCK_RT_GLOB))
-    per_plant_re = _re.compile(
-        r"^rt_stock_42R[0-9A-Z]_\d{8}_\d{4}\.csv$", _re.IGNORECASE)
-    # Exclude the alias AND every per-plant file -- the dated all-plants
-    # files follow pattern rt_stock_<YYYYMMDD>.csv (no plant code in
-    # the filename), which per_plant_re does not match.
-    dated = [p for p in files
-             if os.path.basename(p) != "rt_stock.csv"
-             and not per_plant_re.match(os.path.basename(p))]
+    # Exclude the alias (rt_stock.csv) from the dated-set sort so the
+    # DATED file always wins when both exist with the same mtime.
+    dated = [p for p in files if os.path.basename(p) != "rt_stock.csv"]
     if dated:
         dated.sort(key=lambda p: os.path.getmtime(p), reverse=True)
         return dated[0]
     if os.path.exists(STOCK_RT_ALIAS):
         return STOCK_RT_ALIAS
     return None
-
-
-def _pick_latest_per_plant_csvs():
-    """Return {plant_code: newest_csv_path} for each plant that has at
-    least one rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv file in STOCK_RT_DIR.
-    Plants with no file are simply absent from the returned dict."""
-    import glob as _g
-    import re as _re
-    per_plant_re = _re.compile(
-        r"^rt_stock_(42R[0-9A-Z])_\d{8}_\d{4}\.csv$", _re.IGNORECASE)
-    out = {}
-    for p in _g.glob(os.path.join(STOCK_RT_DIR, "rt_stock_*.csv")):
-        m = per_plant_re.match(os.path.basename(p))
-        if not m:
-            continue
-        plant = m.group(1).upper()
-        prev = out.get(plant)
-        if prev is None or os.path.getmtime(p) > os.path.getmtime(prev):
-            out[plant] = p
-    return out
 
 
 def load_stock_rt(conn):
@@ -502,27 +467,60 @@ def load_stock_rt(conn):
         than today, so the operator sees that RT crawl is failing
         instead of a silent 'Loaded rows: NNNN' repeat.
     """
-    # Nov-23 user ask: the orchestrator now rotates through plants,
-    # dropping rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv one plant per tick.
-    # When those files exist, run the per-plant branch (DELETE WHERE
-    # plant=X + LOAD, per-plant batch_status stamps).  Only fall back
-    # to the old all-plants TRUNCATE path when no per-plant files are
-    # present -- preserves back-compat with a manual all-plants run
-    # of sapcrawling_stock_rt_batch.py (no --plant flag).
-    per_plant = _pick_latest_per_plant_csvs()
-    if per_plant:
-        _load_stock_rt_per_plant(conn, per_plant)
-        return
-
     csv_path = _pick_latest_rt_stock_csv()
     if not csv_path:
         print(f"[stock_rt] no rt_stock_*.csv in {STOCK_RT_DIR} — skipping")
         return
-    _load_stock_rt_all_plants(conn, csv_path)
 
+    # Skip when the file we'd reload matches what's already in MySQL.
+    try:
+        csv_mtime = int(os.path.getmtime(csv_path))
+    except Exception:
+        csv_mtime = 0
+    try:
+        _cur = conn.cursor()
+        _cur.execute("SHOW TABLES LIKE 'batch_status'")
+        if _cur.fetchone():
+            _cur.execute(
+                "SELECT v FROM batch_status WHERE k = 'stock_rt_loaded_mtime'"
+            )
+            _row = _cur.fetchone()
+            prior_mtime = int(_row[0]) if _row and _row[0] else 0
+            if csv_mtime and prior_mtime == csv_mtime:
+                print(f"[stock_rt] {os.path.basename(csv_path)} is "
+                      f"unchanged since the last load (mtime={csv_mtime}) "
+                      f"— skipping reload.  MySQL already has this snapshot.")
+                _cur.close()
+                return
+        _cur.close()
+    except Exception as _e:
+        # batch_status missing or unreadable → fall through and reload
+        # anyway (first run of the day, or operator wiped the status).
+        pass
 
-def _stock_rt_create_sql() -> str:
-    return f"""
+    # Loud warn when the CSV's date is older than today.  Format of
+    # the dated filename is rt_stock_YYYYMMDD.csv.
+    import re as _re_dt
+    from datetime import date as _d_cls2
+    _m = _re_dt.search(r"rt_stock_(\d{8})\.csv$", csv_path)
+    if _m:
+        try:
+            _file_d = _d_cls2(int(_m.group(1)[:4]),
+                              int(_m.group(1)[4:6]),
+                              int(_m.group(1)[6:8]))
+            if _file_d < _d_cls2.today():
+                print(f"[stock_rt] [WARN] newest rt_stock CSV is "
+                      f"{_file_d.isoformat()} (not today).  The RT "
+                      f"crawl has not produced a fresh file yet — "
+                      f"check batch_orchestrator.log for ZMMR40430 "
+                      f"errors.  Reloading the stale file anyway "
+                      f"since this is the first load after a restart.")
+        except Exception:
+            pass
+
+    print(f"[stock_rt] loading from {csv_path}")
+
+    create_sql = f"""
     CREATE TABLE IF NOT EXISTS `{STOCK_RT_TABLE}` (
       plant         VARCHAR(10),
       material      VARCHAR(20),
@@ -543,10 +541,22 @@ def _stock_rt_create_sql() -> str:
       INDEX idx_stock_rt_plant (plant, material)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """
+    truncate_sql = f"TRUNCATE TABLE `{STOCK_RT_TABLE}`;"
 
+    # Derive snapshot_date from the filename (rt_stock_YYYYMMDD.csv)
+    # when possible; fall back to today's date when the alias is used.
+    import re as _re_dt
+    from datetime import date as _d_cls
+    m = _re_dt.search(r"rt_stock_(\d{8})\.csv$", csv_path)
+    if m:
+        try:
+            snap = _d_cls(int(m.group(1)[:4]), int(m.group(1)[4:6]), int(m.group(1)[6:8]))
+        except Exception:
+            snap = _d_cls.today()
+    else:
+        snap = _d_cls.today()
 
-def _stock_rt_load_sql(csv_path: str, snap_iso: str) -> str:
-    return f"""
+    load_sql = f"""
     LOAD DATA LOCAL INFILE '{mysql_path(csv_path)}'
     INTO TABLE `{STOCK_RT_TABLE}`
     CHARACTER SET utf8mb4
@@ -572,227 +582,53 @@ def _stock_rt_load_sql(csv_path: str, snap_iso: str) -> str:
       on_water      = CAST(REPLACE(REPLACE(TRIM(@on_water),     ',', ''), '"', '') AS SIGNED),
       factory       = CAST(REPLACE(REPLACE(TRIM(@factory),      ',', ''), '"', '') AS SIGNED),
       avg_3m        = CAST(REPLACE(REPLACE(TRIM(@avg_3m),       ',', ''), '"', '') AS DECIMAL(14,2)),
-      snapshot_date = '{snap_iso}';
+      snapshot_date = '{snap.isoformat()}';
     """
 
-
-def _ensure_batch_status_table(cur):
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS batch_status ("
-        "  k VARCHAR(64) PRIMARY KEY,"
-        "  v TEXT NULL,"
-        "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP "
-        "    ON UPDATE CURRENT_TIMESTAMP"
-        ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-    )
-
-
-def _stamp_batch_status_pairs(cur, pairs):
-    """Upsert a list of (key, value) tuples into batch_status."""
-    if not pairs:
-        return
-    sql = ("INSERT INTO batch_status (k, v) VALUES "
-           + ", ".join(["(%s, %s)"] * len(pairs))
-           + " ON DUPLICATE KEY UPDATE v = VALUES(v)")
-    flat = [v for kv in pairs for v in kv]
-    cur.execute(sql, flat)
-
-
-def _refresh_global_stock_rt_csv_at(cur):
-    """Recompute batch_status.stock_rt_csv_at as the MIN (oldest) of all
-    per-plant stock_rt_csv_at_<PLANT> stamps so the SPRF global "Stock
-    Info updated" label shows the worst-case freshness across plants.
-    Noop when no per-plant stamps exist yet (keeps whatever prior value)."""
-    cur.execute(
-        "SELECT MIN(v) FROM batch_status WHERE k LIKE 'stock_rt_csv_at_42R%'"
-    )
-    row = cur.fetchone()
-    worst = (row[0] if row else None) or ""
-    if worst:
-        _stamp_batch_status_pairs(cur, [("stock_rt_csv_at", worst)])
-
-
-def _load_stock_rt_per_plant(conn, per_plant_dict):
-    """Per-plant path: DELETE WHERE plant=X + LOAD DATA per plant.
-    Each plant's rows are replaced atomically (one plant at a time);
-    the other plants' rows stay put, so a failed plant leaves the
-    other three fresh instead of wiping the whole snapshot."""
-    import re as _re_dt
-    from datetime import date as _d_cls
-    from datetime import datetime as _dt_stamp
-
     cur = conn.cursor()
     try:
-        cur.execute(_stock_rt_create_sql())
-        _ensure_batch_status_table(cur)
-        conn.commit()
-
-        # Read every per-plant last-loaded mtime in one shot so the
-        # "skip unchanged" check doesn't need a round-trip per plant.
-        cur.execute(
-            "SELECT k, v FROM batch_status WHERE k LIKE 'stock_rt_loaded_mtime_42R%'"
-        )
-        prior_mtimes = {}
-        for k, v in (cur.fetchall() or []):
-            try:
-                prior_mtimes[k.split("_")[-1]] = int(v or 0)
-            except Exception:
-                pass
-
-        plants_loaded = []
-        for plant in sorted(per_plant_dict.keys()):
-            csv_path = per_plant_dict[plant]
-            try:
-                csv_mtime = int(os.path.getmtime(csv_path))
-            except Exception:
-                csv_mtime = 0
-
-            if csv_mtime and prior_mtimes.get(plant) == csv_mtime:
-                print(f"[stock_rt][{plant}] {os.path.basename(csv_path)} "
-                      f"unchanged since last load (mtime={csv_mtime}) "
-                      f"— skipping.")
-                continue
-
-            # snapshot_date from filename (rt_stock_42R0_YYYYMMDD_HHMM.csv),
-            # fall back to today when the pattern doesn't match.
-            m = _re_dt.search(r"rt_stock_42R[0-9A-Z]_(\d{8})_\d{4}\.csv$",
-                              csv_path, _re_dt.IGNORECASE)
-            if m:
-                try:
-                    snap = _d_cls(int(m.group(1)[:4]),
-                                  int(m.group(1)[4:6]),
-                                  int(m.group(1)[6:8]))
-                except Exception:
-                    snap = _d_cls.today()
-            else:
-                snap = _d_cls.today()
-
-            print(f"[stock_rt][{plant}] loading from {csv_path}")
-            # DELETE WHERE plant=X then LOAD -- one plant at a time so
-            # the other three plants' rows stay live throughout.
-            cur.execute(
-                f"DELETE FROM `{STOCK_RT_TABLE}` WHERE plant = %s", (plant,))
-            cur.execute(_stock_rt_load_sql(csv_path, snap.isoformat()))
-
-            cur.execute(
-                f"SELECT COUNT(*) FROM `{STOCK_RT_TABLE}` WHERE plant = %s",
-                (plant,))
-            loaded_n = cur.fetchone()[0]
-            print(f"[stock_rt][{plant}] rows now in table: {loaded_n:,}")
-
-            csv_at = (_dt_stamp.fromtimestamp(csv_mtime)
-                      .strftime("%Y-%m-%d %H:%M:%S") if csv_mtime else "")
-            _stamp_batch_status_pairs(cur, [
-                (f"stock_rt_loaded_mtime_{plant}", str(csv_mtime)),
-                (f"stock_rt_loaded_from_{plant}",  os.path.basename(csv_path)),
-                (f"stock_rt_csv_at_{plant}",       csv_at),
-            ])
-            plants_loaded.append(plant)
-
-        # Refresh the global stock_rt_csv_at = MIN of per-plant stamps
-        # whether or not THIS call loaded a new plant -- picks up any
-        # fresh stamps written by past loads too.
-        _refresh_global_stock_rt_csv_at(cur)
-        conn.commit()
-
-        if plants_loaded:
-            print(f"[stock_rt] per-plant: loaded {plants_loaded}")
-        else:
-            print(f"[stock_rt] per-plant: no new files (all 4 plants in sync)")
-    finally:
-        cur.close()
-
-
-def _load_stock_rt_all_plants(conn, csv_path):
-    """Original all-plants path: TRUNCATE + LOAD DATA.  Used only for
-    back-compat when no per-plant files have been written yet (e.g.
-    the operator ran sapcrawling_stock_rt_batch.py without --plant)."""
-    import re as _re_dt
-    from datetime import date as _d_cls
-    from datetime import datetime as _dt_stamp
-
-    try:
-        csv_mtime = int(os.path.getmtime(csv_path))
-    except Exception:
-        csv_mtime = 0
-    try:
-        _cur = conn.cursor()
-        _cur.execute("SHOW TABLES LIKE 'batch_status'")
-        if _cur.fetchone():
-            _cur.execute(
-                "SELECT v FROM batch_status WHERE k = 'stock_rt_loaded_mtime'"
-            )
-            _row = _cur.fetchone()
-            prior_mtime = int(_row[0]) if _row and _row[0] else 0
-            if csv_mtime and prior_mtime == csv_mtime:
-                print(f"[stock_rt] {os.path.basename(csv_path)} is "
-                      f"unchanged since the last load (mtime={csv_mtime}) "
-                      f"— skipping reload.  MySQL already has this snapshot.")
-                _cur.close()
-                return
-        _cur.close()
-    except Exception:
-        pass
-
-    _m = _re_dt.search(r"rt_stock_(\d{8})\.csv$", csv_path)
-    if _m:
-        try:
-            _file_d = _d_cls(int(_m.group(1)[:4]),
-                             int(_m.group(1)[4:6]),
-                             int(_m.group(1)[6:8]))
-            if _file_d < _d_cls.today():
-                print(f"[stock_rt] [WARN] newest rt_stock CSV is "
-                      f"{_file_d.isoformat()} (not today).  The RT "
-                      f"crawl has not produced a fresh file yet — "
-                      f"check batch_orchestrator.log for ZMMR40430 "
-                      f"errors.  Reloading the stale file anyway "
-                      f"since this is the first load after a restart.")
-        except Exception:
-            pass
-
-    print(f"[stock_rt] loading (all-plants) from {csv_path}")
-
-    m = _re_dt.search(r"rt_stock_(\d{8})\.csv$", csv_path)
-    if m:
-        try:
-            snap = _d_cls(int(m.group(1)[:4]),
-                          int(m.group(1)[4:6]),
-                          int(m.group(1)[6:8]))
-        except Exception:
-            snap = _d_cls.today()
-    else:
-        snap = _d_cls.today()
-
-    cur = conn.cursor()
-    try:
-        cur.execute(_stock_rt_create_sql())
-        cur.execute(f"TRUNCATE TABLE `{STOCK_RT_TABLE}`;")
-        cur.execute(_stock_rt_load_sql(csv_path, snap.isoformat()))
+        cur.execute(create_sql)
+        cur.execute(truncate_sql)
+        cur.execute(load_sql)
         conn.commit()
 
         cur.execute(f"SELECT COUNT(*) FROM `{STOCK_RT_TABLE}`;")
         cnt = cur.fetchone()[0]
-        cur.execute(f"SELECT plant, COUNT(*) FROM `{STOCK_RT_TABLE}` "
-                    f"GROUP BY plant ORDER BY plant;")
+        cur.execute(f"SELECT plant, COUNT(*) FROM `{STOCK_RT_TABLE}` GROUP BY plant ORDER BY plant;")
         by_plant = cur.fetchall()
         print(f"[stock_rt] Loaded rows: {cnt}")
         for p, n in by_plant:
             print(f"           {p or '(none)':<6} {n:>10,}")
 
+        # Oct-22: stamp the loaded CSV's mtime so subsequent runs can
+        # detect "same file — skip reload".  Written to batch_status
+        # if the table exists; silent no-op otherwise (first-run of a
+        # brand-new deployment that hasn't started the orchestrator).
+        # Oct-22: also stamp stock_rt_csv_at (when SAP exported the
+        # CSV, local Sydney time) so the SPRF "Stock Info updated"
+        # label works for manual loads too, not only when the hourly
+        # batch's RT crawl succeeds.  batch_status is created here if
+        # the orchestrator hasn't made it yet.
         try:
-            csv_at = (_dt_stamp.fromtimestamp(csv_mtime)
-                      .strftime("%Y-%m-%d %H:%M:%S") if csv_mtime else "")
-            _ensure_batch_status_table(cur)
-            _stamp_batch_status_pairs(cur, [
-                ("stock_rt_loaded_mtime", str(csv_mtime)),
-                ("stock_rt_loaded_from",  os.path.basename(csv_path)),
-                ("stock_rt_csv_at",       csv_at),
-            ])
-            # An all-plants load resets every per-plant stamp to the
-            # same value so SPRF's per-warehouse badges stay in sync.
-            now_pairs = [(f"stock_rt_csv_at_{p}", csv_at)
-                         for p in STOCK_RT_PLANTS]
-            _stamp_batch_status_pairs(cur, now_pairs)
+            from datetime import datetime as _dt_stamp
+            csv_at = (_dt_stamp.fromtimestamp(csv_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                      if csv_mtime else "")
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS batch_status ("
+                "  k VARCHAR(64) PRIMARY KEY,"
+                "  v TEXT NULL,"
+                "  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP "
+                "    ON UPDATE CURRENT_TIMESTAMP"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            )
+            cur.execute(
+                "INSERT INTO batch_status (k, v) VALUES "
+                "('stock_rt_loaded_mtime', %s), "
+                "('stock_rt_loaded_from',  %s), "
+                "('stock_rt_csv_at',       %s) "
+                "ON DUPLICATE KEY UPDATE v = VALUES(v)",
+                (str(csv_mtime), os.path.basename(csv_path), csv_at),
+            )
             conn.commit()
             print(f"[stock_rt] stamped stock_rt_csv_at = {csv_at}")
         except Exception as _e:

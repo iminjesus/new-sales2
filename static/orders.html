@@ -6214,15 +6214,7 @@ window.addEventListener("beforeunload", () => {
    data was last loaded into MySQL.  Fetches /api/batch_status once
    on page load and formats the Sydney timestamp as a short
    "YYYY-MM-DD HH:MM" string next to the stock columns.  Silent on
-   failure — the label stays hidden rather than showing an error.
-
-   Nov-23: batch_status now carries a per-plant freshness map
-   (stock_rt_per_plant = {42R0: "YYYY-MM-DD HH:MM", 42R1: "...", ...})
-   because the RT crawl rotates one plant per 10-min tick instead of
-   doing the whole 42R0..42R4 sweep at once.  The label expands to
-   four per-warehouse badges (NSW / QLD / VIC / WA) with per-badge
-   age colouring, plus the global "oldest-plant" freshness check that
-   drives the heartbeat/red-today warning. */
+   failure — the label stays hidden rather than showing an error. */
 document.addEventListener("DOMContentLoaded", async () => {
   /* Always show the label (it used to stay hidden whenever the hourly
      RT crawl hadn't stamped a time, so users never saw it).  Red when
@@ -6230,59 +6222,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   const label = document.getElementById("stockRtFreshness");
   const at    = document.getElementById("stockRtFreshnessAt");
   if (!label || !at) return;
-  let ts = "";           // global "oldest plant" ts, used for the red-today / heartbeat check
+  let ts = "";
   let hb = "";
-  let perPlant = {};
   try {
     const r = await fetch("/api/batch_status", {credentials: "same-origin", cache: "no-store"});
     if (r.ok) {
       const j = await r.json();
       ts = String(j.stock_rt_updated_at || "").trim();
       hb = String(j.heartbeat_at         || "").trim();
-      perPlant = j.stock_rt_per_plant || {};
     }
   } catch (_e) { /* fall through to "unknown" */ }
-
-  /* Per-plant badges.  Plant codes map to AU states:
-       42R1 → NSW, 42R0 → QLD, 42R2 → VIC, 42R4 → WA
-     Order matches the SPRF stock-column order NSW / QLD / VIC / WA.
-     Red per-badge when that plant is more than 60 min stale (vs the
-     RT rotation's ~40-min full cycle); grey when ≤ 60 min. */
-  const STATE_ORDER  = [["42R1","NSW"], ["42R0","QLD"], ["42R2","VIC"], ["42R4","WA"]];
-  const nowMs = Date.now();
-  const toSydMs = (s) => {
-    if (!s) return NaN;
-    // Server returns "YYYY-MM-DD HH:MM" (per-plant trim) or full seconds.
-    const t = s.replace(" ", "T") + ":00+10:00";
-    return Date.parse(t);
-  };
-  const badgeParts = STATE_ORDER.map(([plant, state]) => {
-    const pts   = String(perPlant[plant] || "").trim();
-    const hhmm  = pts.length >= 16 ? pts.slice(11, 16) : "";
-    if (!hhmm) return `<span style="opacity:.55">${state} —</span>`;
-    const ageMs = nowMs - toSydMs(pts);
-    const ageMin = isNaN(ageMs) ? 0 : ageMs / 60000;
-    const stale = ageMin > 60;
-    const colour = stale ? "color:#dc2626;font-weight:600" : "color:#334155";
-    return `<span style="${colour}" title="Plant ${plant} ${state} — last stock_rt load: ${pts} (${Math.max(0,Math.round(ageMin))} min ago)">${state} ${hhmm}</span>`;
-  });
-  at.innerHTML = badgeParts.join(' <span style="opacity:.4">·</span> ');
-
-  /* Global freshness check (uses the oldest-plant ts the API returns
-     as stock_rt_updated_at).  Drives the red-today tooltip + heartbeat
-     warning.  When no per-plant data at all, show the legacy "unknown"
-     single-badge path. */
-  if (!ts && !Object.keys(perPlant).some(k => perPlant[k])) {
-    at.textContent = "unknown";
-    at.style.color = "#dc2626";
-  } else if (ts) {
+  if (ts) {
+    // "2026-10-22 09:11:49" → "2026-10-22 09:11"
+    at.textContent = ts.length >= 16 ? ts.slice(0, 16) : ts;
     const d = new Date();
     const today = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
                 + "-" + String(d.getDate()).padStart(2, "0");
     if (ts.slice(0, 10) !== today) {
-      /* Oldest plant isn't from today — mark the whole strip red. */
       at.style.color = "#dc2626";
-      label.title = "Oldest stock_rt plant is not from today — the SAP RT rotation may be failing on that plant.";
+      label.title = "Stock data is not from today — the SAP stock interface may have failed.";
     }
     /* Oct-23 user ask: heartbeat check — orchestrator writes
        batch_status.heartbeat_at every 60 s.  If it's stale by more
@@ -6292,12 +6250,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       const hbMs = Date.parse(hb.replace(" ", "T") + "+10:00");  // Sydney stamp
       const ageMin = isNaN(hbMs) ? 0 : (Date.now() - hbMs) / 60000;
       if (ageMin > 10) {
-        at.innerHTML = at.innerHTML +
-          ` <span style="color:#dc2626">⚠ batch_orchestrator heartbeat stale (${Math.round(ageMin)} min)</span>`;
+        at.textContent = (at.textContent || "") +
+          `   ⚠ batch_orchestrator heartbeat stale (${Math.round(ageMin)} min)`;
+        at.style.color = "#dc2626";
         label.title = (label.title || "") +
           "\nOrchestrator heartbeat has not updated in 10+ minutes — the Windows watchdog should restart it shortly.";
       }
     }
+  } else {
+    at.textContent = "unknown";
+    at.style.color = "#dc2626";
   }
   label.hidden = false;
   positionStockFreshness();

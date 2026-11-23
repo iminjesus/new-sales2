@@ -24837,28 +24837,11 @@ def potential_customers_stats():
 # at …" since Orders / Incoming aren't refreshed on the hourly batch.
 # Reads only — no auth, no writes.  Minimal payload.
 # ---------------------------------------------------------------------------
-_STOCK_RT_PLANTS_API = ("42R0", "42R1", "42R2", "42R4")
-
-
 def _stock_rt_freshness(cur, rows):
     """Best-known 'as of' time of the stock_rt data, 'YYYY-MM-DD HH:MM:SS'
-    (Sydney), or None.
-
-    Nov-23: the orchestrator now rotates through plants one per 10-min
-    tick, stamping stock_rt_csv_at_<PLANT> per load.  The GLOBAL
-    freshness is the OLDEST (MIN) of the per-plant stamps -- SPRF's
-    "Stock Info updated" badge should surface the worst case, since
-    one stale plant means some lines on the dashboard are showing
-    out-of-date stock.  Falls back to the old stock_rt_csv_at /
-    stock_rt_updated_at keys for back-compat with the all-plants
-    path, and to the table's UPDATE_TIME when batch_status is empty.
-    """
-    per_plant = [str(rows.get(f"stock_rt_csv_at_{p}") or "").strip()
-                 for p in _STOCK_RT_PLANTS_API]
-    per_plant = [c for c in per_plant if c]
-    if per_plant:
-        # Fixed format YYYY-MM-DD HH:MM:SS → lexical min == oldest.
-        return min(per_plant)
+    (Sydney), or None.  Order: CSV export time stamped by the loader →
+    hourly-batch success stamp (whichever is newer) → stock_rt table
+    (MySQL UPDATE_TIME, else snapshot_date)."""
     cands = [str(rows.get(k) or "").strip()
              for k in ("stock_rt_csv_at", "stock_rt_updated_at")]
     cands = [c for c in cands if c]
@@ -24881,17 +24864,6 @@ def _stock_rt_freshness(cur, rows):
     return None
 
 
-def _stock_rt_per_plant(rows):
-    """Return {PLANT: 'YYYY-MM-DD HH:MM' or ''} for the 4 live plants.
-    Reads batch_status.stock_rt_csv_at_<PLANT>; empty when not stamped
-    yet.  Used by SPRF to render the per-warehouse freshness strip."""
-    out = {}
-    for p in _STOCK_RT_PLANTS_API:
-        ts = str(rows.get(f"stock_rt_csv_at_{p}") or "").strip()
-        out[p] = ts[:16] if len(ts) >= 16 else ts
-    return out
-
-
 @app.get("/api/batch_status")
 def api_batch_status():
     conn = get_connection()
@@ -24905,7 +24877,6 @@ def api_batch_status():
             return jsonify({
                 "stock_updated_at":    None,
                 "stock_rt_updated_at": _stock_rt_freshness(cur, {}),
-                "stock_rt_per_plant":  _stock_rt_per_plant({}),
                 "sales_updated_at":    None,
                 "last_error":          None,
                 "last_error_at":       None,
@@ -24918,11 +24889,6 @@ def api_batch_status():
             # the loaded CSV's own export time, then the batch stamp,
             # then the stock_rt table itself.
             "stock_rt_updated_at": _stock_rt_freshness(cur, rows),
-            # Nov-23: per-plant freshness map.  Keys are 42R0/42R1/42R2/42R4,
-            # values are 'YYYY-MM-DD HH:MM' (Sydney) of the last loader
-            # stamp, or '' when that plant has never been stamped yet.
-            # SPRF renders four small badges from this.
-            "stock_rt_per_plant":  _stock_rt_per_plant(rows),
             "stock_updated_at":    rows.get("stock_updated_at")    or None,
             # Oct-22: RT stock (ZMMR40430) last-successful-load timestamp.
             # Surfaced on the SPRF near the per-row state-stock columns

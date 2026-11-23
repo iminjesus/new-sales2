@@ -74,20 +74,10 @@ LOG_FILE = os.path.join(BASE_DIR, "batch_orchestrator.log")
 
 # Business-hours window (Sydney local time, inclusive)
 RUN_HOURS = list(range(8, 19))   # 8, 9, 10, …, 18
-# Nov-23 user ask: drop from every 15 min to every 10 min, and have the
-# RT stock step refresh ONE plant per tick (rotation below) instead of
-# the whole 42R0..42R4 range.  Each plant therefore refreshes every
-# ~40 min (4 plants × 10-min cadence), which is a big improvement over
-# the previous state where the all-plants crawl was often too slow to
-# finish once per day.  DOT stock stays once-per-day (its own gate),
-# sales still runs every tick (the ZSDR24030 query is small).
-RUN_MINUTES = [0, 10, 20, 30, 40, 50]
-
-# Plant rotation for the RT stock step.  42R3 is NOT used (deprecated
-# plant code).  Kept in sync with load_csv_to_mysql.STOCK_RT_PLANTS so
-# the loader's per-plant batch_status stamps and this tick-scheduler
-# agree on the plant set.
-_PLANT_ROTATION = ("42R0", "42R1", "42R2", "42R4")
+# Oct-29 user ask: fire every 15 minutes within business hours instead
+# of once per hour.  Minute slots inside each RUN_HOUR → 08:00, 08:15,
+# 08:30, 08:45, 09:00, …, 18:45.  Keeps the 08-18 business-hours gate.
+RUN_MINUTES = [0, 15, 30, 45]
 
 # Multi-logon retry cadence
 MULTI_LOGON_RETRY_MIN = 5
@@ -197,12 +187,10 @@ def _is_business_day(d: date) -> bool:
 def _next_run_at(now):
     """Return the next datetime (Sydney TZ) at which a batch should fire.
 
-    Nov-23 user ask: fire every 10 minutes within business hours (was
-    15 min).  Slots are the cross product of RUN_HOURS × RUN_MINUTES
-    (= 08:00, 08:10, …, 18:50).  "Nothing left today" rolls to the
-    first slot of the next business day.  The tighter cadence pairs
-    with the single-plant RT rotation so each plant refreshes roughly
-    every 40 min."""
+    Oct-29 user ask: fire every 15 minutes within business hours.  Slots
+    are the cross product of RUN_HOURS × RUN_MINUTES (= 08:00, 08:15,
+    …, 18:45).  "Nothing left today" rolls to the first slot of the
+    next business day."""
     d = now.date()
     # Flatten RUN_HOURS × RUN_MINUTES into (h, m) tuples in order so we
     # can scan them left-to-right for the first slot still ahead.
@@ -298,26 +286,6 @@ def status_get(key):
         return row[0] if row else None
     except Exception:
         return None
-
-
-def _pick_stalest_plant() -> str:
-    """Return the plant whose stock_rt is oldest, from _PLANT_ROTATION.
-
-    Reads batch_status.stock_rt_csv_at_<PLANT> for each plant -- the
-    loader stamps that key with the CSV's mtime formatted
-    'YYYY-MM-DD HH:MM:SS'.  Plants with no stamp yet (fresh install,
-    newly-added plant) win over every stamped plant since an empty
-    string sorts before any valid timestamp string.  Tie goes to the
-    first plant in _PLANT_ROTATION order (deterministic -- no random
-    jitter needed, since even on a brand-new install the four plants
-    all stamp distinct timestamps on their first loads)."""
-    stamps = {}
-    for p in _PLANT_ROTATION:
-        stamps[p] = (status_get(f"stock_rt_csv_at_{p}") or "").strip()
-    # Prefer the plant with the earliest (smallest) timestamp string.
-    # Stable: Python sort within the comprehension is stable, and
-    # _PLANT_ROTATION order carries through on ties.
-    return min(_PLANT_ROTATION, key=lambda p: stamps[p])
 
 
 # ── Email ────────────────────────────────────────────────────────────
@@ -536,24 +504,19 @@ def _run_pipeline_locked(sess, status, _reset_to_home):
     except Exception as e:
         log(f"[warn] _reset_to_home between crawls failed: {e}")
 
-    # Nov-23: RT stock rotation — each tick refreshes the stalest ONE
-    # plant (not the full 42R0..42R4 sweep).  The crawler writes one
-    # per-plant CSV rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv; the loader
-    # does DELETE WHERE plant=X + LOAD so the other three plants' rows
-    # stay live across the refresh.  Per-plant freshness is tracked in
-    # batch_status.stock_rt_csv_at_<PLANT>; the SPRF freshness strip
-    # reads those stamps.  Oldest-plant selection is self-healing: if
-    # one tick's crawl fails, that plant stays stalest and gets picked
-    # again on the next tick.
-    plant = _pick_stalest_plant()
-    log(f"stock_rt rotation: picked stalest plant = {plant}")
+    # Oct-21: RT stock (ZMMR40430) — writes rawdata/unlock/rt_stock_<YYYYMMDD>.csv
+    # which load_csv_to_mysql picks up as the newest and loads into the
+    # stock_rt table.  Sits between the DOT-aging stock crawl above and
+    # the sales crawl below; failures here are logged but do NOT abort
+    # the pipeline (sales + loader must still run even if the RT feed
+    # misses one hour).
     try:
         _reset_to_home(sess)
     except Exception as e:
         log(f"[warn] _reset_to_home before stock_rt failed: {e}")
     rt_ok = _run_step(
-        f"sapcrawling_stock_rt_batch.main(plant={plant!r}) - ZMMR40430 RT stock + ATP",
-        lambda: __import__("sapcrawling_stock_rt_batch").main(plant=plant),
+        "sapcrawling_stock_rt_batch.main - ZMMR40430 RT stock + ATP",
+        lambda: __import__("sapcrawling_stock_rt_batch").main(),
         timeout_min=STEP_TIMEOUT_MIN["stock_rt"],
     )
     try:
@@ -592,12 +555,7 @@ def _run_pipeline_locked(sess, status, _reset_to_home):
     if sales_ok and load_ok:
         status_set("sales_updated_at", now_syd_str)
     if rt_ok and load_ok:
-        # Global stamp kept for back-compat (SPRF uses it as a fallback
-        # on rows where no per-plant stamp exists yet).  The per-plant
-        # stock_rt_csv_at_<PLANT> is stamped by the loader itself from
-        # the CSV mtime -- authoritative over this wall-clock value.
         status_set("stock_rt_updated_at", now_syd_str)
-        status_set(f"stock_rt_updated_at_{plant}", now_syd_str)
     # Clear last_error when THE RELEVANT crawls for this slot all
     # succeeded.  DOT stock may be legitimately skipped (not failed),
     # so don't require stock_ok on skip hours — just require that
