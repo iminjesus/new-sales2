@@ -49,12 +49,11 @@ Pre-req:
 """
 
 # ================= CONFIG =================
-# Nov-23 user ask: switch RT stock crawl from ZMMR40430 to ZMMR40330.
-# Their manual single-plant test on ZMMR40330 came back with clean
-# stock extraction, and SAP finishes the per-plant query fast enough
-# that we can afford to loop plants here rather than feeding SAP a
-# plant RANGE (which was the slow path on ZMMR40430).
-TCODE          = "ZMMR40330"
+# Nov-23 user ask: keep the original ZMMR40430 TCODE (the per-plant
+# loop below is what makes the SAP query small enough to finish in
+# reasonable time -- the TCODE itself was never the bottleneck, the
+# all-plants RANGE was).
+TCODE          = "ZMMR40430"
 SALES_ORG      = "4200"
 DISTRIBUTE_CH  = "d1"
 
@@ -101,13 +100,9 @@ DATE_FORMATS = [
 
 # ALV Grid saved layout to auto-apply after F8 (Settings → Layout →
 # Choose).  Use the TECHNICAL name from the first column of the layout
-# dialog -- the operator's saved layout carries On Order, Stock, ATP Qt,
-# At dock, On water, Factory, 3M Avrg.  Nov-23: TCODE switched to
-# ZMMR40330; the same /ART  TH layout name is tried first (the operator
-# usually names saved layouts the same across related transactions), with
-# a silent fall-back to "no layout" if ZMMR40330 does not have a layout
-# by that name on this box.  Adjust here if the layout dialog's technical
-# name differs on ZMMR40330.
+# dialog — ZMMR40430 ships the layout with TWO spaces between 'ART'
+# and 'TH' ("/ART  TH"), not an underscore and not one space.  Carries
+# On Order, Stock, ATP Qt, At dock, On water, Factory, 3M Avrg.
 LAYOUT_NAME = "/ART  TH"
 
 # Field-ID candidates for the ZMMR40430 selection screen.  First
@@ -514,7 +509,7 @@ def _select_radio_by_text(session, wanted_text):
 
 
 def set_selection_screen(session, valid_on_str, plant: str = ""):
-    """Fill the ZMMR40330 selection screen.  Plant (single) + Sales Org
+    """Fill the ZMMR40430 selection screen.  Plant (single) + Sales Org
     + Distribute Channel + Valid On + 'Unrestricted Use' radio +
     'No Zero' tick.
 

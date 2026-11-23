@@ -6214,7 +6214,16 @@ window.addEventListener("beforeunload", () => {
    data was last loaded into MySQL.  Fetches /api/batch_status once
    on page load and formats the Sydney timestamp as a short
    "YYYY-MM-DD HH:MM" string next to the stock columns.  Silent on
-   failure — the label stays hidden rather than showing an error. */
+   failure — the label stays hidden rather than showing an error.
+
+   Nov-23: the crawler now scrapes the 4 plants sequentially (each
+   plant's XLSX lands a few minutes apart), so the API returns per-
+   plant freshness alongside the global min-of-all stamp.  Render
+   both: four per-warehouse badges "NSW HH:MM · QLD HH:MM · VIC HH:MM
+   · WA HH:MM" in NSW/QLD/VIC/WA column order, with any individual
+   plant >45 min stale shown in red.  The whole strip also goes red
+   when the oldest plant isn't from today or when the orchestrator
+   heartbeat is stale. */
 document.addEventListener("DOMContentLoaded", async () => {
   /* Always show the label (it used to stay hidden whenever the hourly
      RT crawl hadn't stamped a time, so users never saw it).  Red when
@@ -6224,17 +6233,54 @@ document.addEventListener("DOMContentLoaded", async () => {
   if (!label || !at) return;
   let ts = "";
   let hb = "";
+  let perPlant = {};
   try {
     const r = await fetch("/api/batch_status", {credentials: "same-origin", cache: "no-store"});
     if (r.ok) {
       const j = await r.json();
       ts = String(j.stock_rt_updated_at || "").trim();
       hb = String(j.heartbeat_at         || "").trim();
+      perPlant = j.stock_rt_per_plant || {};
     }
   } catch (_e) { /* fall through to "unknown" */ }
-  if (ts) {
-    // "2026-10-22 09:11:49" → "2026-10-22 09:11"
+
+  /* Per-plant badges in NSW / QLD / VIC / WA column order.  Each
+     badge is just HH:MM to keep the strip compact; the full ts goes
+     in the title tooltip so a hover shows the full date + minute.
+     A plant stamped >45 min ago (vs the 15-min orchestrator cadence)
+     is rendered in red so a stuck plant is immediately visible. */
+  const STATE_ORDER = [["42R1","NSW"], ["42R0","QLD"], ["42R2","VIC"], ["42R4","WA"]];
+  const nowMs = Date.now();
+  const toSydMs = (s) => {
+    if (!s) return NaN;
+    return Date.parse(s.replace(" ", "T") + ":00+10:00");
+  };
+  const hasAnyPlant = STATE_ORDER.some(([p]) => String(perPlant[p] || "").trim());
+  if (hasAnyPlant) {
+    const parts = STATE_ORDER.map(([plant, state]) => {
+      const pts  = String(perPlant[plant] || "").trim();
+      const hhmm = pts.length >= 16 ? pts.slice(11, 16) : "";
+      if (!hhmm) return `<span style="opacity:.55">${state} —</span>`;
+      const ageMs  = nowMs - toSydMs(pts);
+      const ageMin = isNaN(ageMs) ? 0 : ageMs / 60000;
+      const stale  = ageMin > 45;
+      const style  = stale ? "color:#dc2626;font-weight:700" : "color:#334155";
+      return `<span style="${style}" title="Plant ${plant} ${state} — last load: ${pts} (${Math.max(0,Math.round(ageMin))} min ago)">${state} ${hhmm}</span>`;
+    });
+    at.innerHTML = parts.join(' <span style="opacity:.4">·</span> ');
+  } else if (ts) {
+    // Fallback to the single global ts when per-plant data isn't available
+    // yet (first run after upgrade before the crawler has written any
+    // rt_stock_<PLANT>.xlsx).
     at.textContent = ts.length >= 16 ? ts.slice(0, 16) : ts;
+  } else {
+    at.textContent = "unknown";
+    at.style.color = "#dc2626";
+  }
+
+  /* Global-freshness colouring + heartbeat check still drive the
+     top-level warning tooltip + colour on the strip. */
+  if (ts) {
     const d = new Date();
     const today = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0")
                 + "-" + String(d.getDate()).padStart(2, "0");
@@ -6250,16 +6296,12 @@ document.addEventListener("DOMContentLoaded", async () => {
       const hbMs = Date.parse(hb.replace(" ", "T") + "+10:00");  // Sydney stamp
       const ageMin = isNaN(hbMs) ? 0 : (Date.now() - hbMs) / 60000;
       if (ageMin > 10) {
-        at.textContent = (at.textContent || "") +
-          `   ⚠ batch_orchestrator heartbeat stale (${Math.round(ageMin)} min)`;
-        at.style.color = "#dc2626";
+        at.innerHTML = (at.innerHTML || "") +
+          ` <span style="color:#dc2626">⚠ batch_orchestrator heartbeat stale (${Math.round(ageMin)} min)</span>`;
         label.title = (label.title || "") +
           "\nOrchestrator heartbeat has not updated in 10+ minutes — the Windows watchdog should restart it shortly.";
       }
     }
-  } else {
-    at.textContent = "unknown";
-    at.style.color = "#dc2626";
   }
   label.hidden = false;
   positionStockFreshness();
@@ -11281,29 +11323,68 @@ function wireApprovalPanel(order, who){
         const _parentGrid = _valReason.parentElement;
         if (_parentGrid && panel.parentElement !== _parentGrid){
           _parentGrid.appendChild(panel);
-          panel.style.gridColumn = "1 / -1";
-          panel.style.background = "#fffbeb";
-          panel.style.border = "1px solid #f59e0b";
-          panel.style.borderRadius = "3px";
-          panel.style.padding = "8px 10px";
-          panel.style.marginTop = "6px";
-          panel.style.borderTop = "";
         }
+        // Nov-23 user ask: let the approval panel occupy the full
+        // vertical space of the Rebate-able row (9) PLUS both
+        // Payment Method rows (10, 11) on the right pane, instead of
+        // forcing the Rebate-able row alone to grow tall when reject
+        // reason + approver chips + mgmt_reason are all stacked.
+        // grid-row: 9 / -1 spans from Rebate-able down to the end of
+        // the right pane; grid-column: 1 / -1 spans the full right-
+        // pane width.  Special Instruction (row 9 right) is hidden
+        // alongside Reason (rows 10-11 right) when the order has a
+        // decision stamped -- on a rejected / approved order the
+        // requester's instruction is also no longer actionable.
+        panel.style.gridColumn = "1 / -1";
+        panel.style.gridRow    = "9 / -1";
+        panel.style.background = "#fffbeb";
+        panel.style.border = "1px solid #f59e0b";
+        panel.style.borderRadius = "3px";
+        panel.style.padding = "8px 10px";
+        panel.style.marginTop = "";
+        panel.style.borderTop = "";
+        panel.style.alignSelf = "stretch";
         _valReason.style.display = "none";
+        // Hide Special Instruction's label + textarea cells on the
+        // right pane so they don't fight for row 9 with the panel.
+        const _siLbl = document.getElementById("special_instruction");
+        if (_siLbl){
+          const _siCell = _siLbl.closest(".val");
+          if (_siCell) _siCell.style.display = "none";
+          // The matching .lbl is the previous sibling in the subgrid.
+          const _siLblCell = _siCell && _siCell.previousElementSibling;
+          if (_siLblCell && _siLblCell.classList.contains("lbl")){
+            _siLblCell.style.display = "none";
+          }
+        }
       } else {
         _valReason.style.display = "";
+        // Restore Special Instruction cells (they were hidden on the
+        // rejected/approved branch above; a pending order needs them
+        // visible so the requester can still type an instruction).
+        const _siLbl = document.getElementById("special_instruction");
+        if (_siLbl){
+          const _siCell = _siLbl.closest(".val");
+          if (_siCell) _siCell.style.display = "";
+          const _siLblCell = _siCell && _siCell.previousElementSibling;
+          if (_siLblCell && _siLblCell.classList.contains("lbl")){
+            _siLblCell.style.display = "";
+          }
+        }
         // Panel back inside val-reason when NOT hidden, so it stacks
         // under the textarea again on a Pending order.
         if (panel.parentElement === _valReason.parentElement
             && _valReason.parentElement !== null){
           _valReason.appendChild(panel);
           panel.style.gridColumn = "";
+          panel.style.gridRow    = "";
           panel.style.background = "#fffbeb";
           panel.style.border = "";
           panel.style.borderRadius = "";
           panel.style.padding = "8px 10px";
           panel.style.marginTop = "";
           panel.style.borderTop = "1px solid #f59e0b";
+          panel.style.alignSelf = "";
         }
       }
     }

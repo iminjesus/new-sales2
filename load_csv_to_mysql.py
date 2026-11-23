@@ -629,6 +629,38 @@ def load_stock_rt(conn):
                 "ON DUPLICATE KEY UPDATE v = VALUES(v)",
                 (str(csv_mtime), os.path.basename(csv_path), csv_at),
             )
+            # Nov-23 user ask: the crawler now scrapes plants one at a
+            # time, saving each plant's export to rt_stock_<PLANT>.xlsx
+            # BEFORE merging them into the combined CSV.  Those XLSX
+            # mtimes carry each plant's own "last interfaced at" time,
+            # which differs by a few minutes across the 4 plants (sequential
+            # scrape).  Stamp each plant's XLSX mtime so SPRF can show
+            # per-warehouse freshness instead of one global number.
+            try:
+                from datetime import datetime as _dt_pp
+                pp_pairs = []
+                for _plant in ("42R0", "42R1", "42R2", "42R4"):
+                    _px = os.path.join(STOCK_RT_DIR,
+                                       f"rt_stock_{_plant}.xlsx")
+                    if not os.path.exists(_px):
+                        continue
+                    try:
+                        _pm = int(os.path.getmtime(_px))
+                    except Exception:
+                        continue
+                    _pa = _dt_pp.fromtimestamp(_pm).strftime(
+                        "%Y-%m-%d %H:%M:%S")
+                    pp_pairs.append((f"stock_rt_csv_at_{_plant}", _pa))
+                if pp_pairs:
+                    _sql = ("INSERT INTO batch_status (k, v) VALUES "
+                            + ", ".join(["(%s, %s)"] * len(pp_pairs))
+                            + " ON DUPLICATE KEY UPDATE v = VALUES(v)")
+                    _flat = [v for kv in pp_pairs for v in kv]
+                    cur.execute(_sql, _flat)
+                    for _k, _v in pp_pairs:
+                        print(f"[stock_rt] stamped {_k} = {_v}")
+            except Exception as _e:
+                print(f"[stock_rt] (couldn't stamp per-plant times: {_e})")
             conn.commit()
             print(f"[stock_rt] stamped stock_rt_csv_at = {csv_at}")
         except Exception as _e:

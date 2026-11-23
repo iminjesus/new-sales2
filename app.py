@@ -24837,6 +24837,9 @@ def potential_customers_stats():
 # at …" since Orders / Incoming aren't refreshed on the hourly batch.
 # Reads only — no auth, no writes.  Minimal payload.
 # ---------------------------------------------------------------------------
+_STOCK_RT_PLANTS_API = ("42R0", "42R1", "42R2", "42R4")
+
+
 def _stock_rt_freshness(cur, rows):
     """Best-known 'as of' time of the stock_rt data, 'YYYY-MM-DD HH:MM:SS'
     (Sydney), or None.  Order: CSV export time stamped by the loader →
@@ -24864,6 +24867,18 @@ def _stock_rt_freshness(cur, rows):
     return None
 
 
+def _stock_rt_per_plant(rows):
+    """Return {PLANT: 'YYYY-MM-DD HH:MM' or ''} for 42R0/42R1/42R2/42R4.
+    Values come from batch_status.stock_rt_csv_at_<PLANT> which the
+    loader stamps with each per-plant rt_stock_<PLANT>.xlsx mtime.
+    Blank when a plant hasn't been stamped yet (fresh install)."""
+    out = {}
+    for p in _STOCK_RT_PLANTS_API:
+        ts = str(rows.get(f"stock_rt_csv_at_{p}") or "").strip()
+        out[p] = ts[:16] if len(ts) >= 16 else ts
+    return out
+
+
 @app.get("/api/batch_status")
 def api_batch_status():
     conn = get_connection()
@@ -24877,6 +24892,7 @@ def api_batch_status():
             return jsonify({
                 "stock_updated_at":    None,
                 "stock_rt_updated_at": _stock_rt_freshness(cur, {}),
+                "stock_rt_per_plant":  _stock_rt_per_plant({}),
                 "sales_updated_at":    None,
                 "last_error":          None,
                 "last_error_at":       None,
@@ -24889,6 +24905,11 @@ def api_batch_status():
             # the loaded CSV's own export time, then the batch stamp,
             # then the stock_rt table itself.
             "stock_rt_updated_at": _stock_rt_freshness(cur, rows),
+            # Nov-23: per-plant freshness map (from each rt_stock_<PLANT>.xlsx
+            # mtime the loader stamps after a successful load).  Keys
+            # 42R0/42R1/42R2/42R4; values 'YYYY-MM-DD HH:MM' or ''.
+            # SPRF reads this to render NSW/QLD/VIC/WA badges.
+            "stock_rt_per_plant":  _stock_rt_per_plant(rows),
             "stock_updated_at":    rows.get("stock_updated_at")    or None,
             # Oct-22: RT stock (ZMMR40430) last-successful-load timestamp.
             # Surfaced on the SPRF near the per-row state-stock columns
