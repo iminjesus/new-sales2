@@ -49,14 +49,26 @@ Pre-req:
 """
 
 # ================= CONFIG =================
-TCODE          = "ZMMR40430"
+# Nov-23 user ask: switch RT stock crawl from ZMMR40430 to ZMMR40330.
+# Their manual single-plant test on ZMMR40330 came back with clean
+# stock extraction, and SAP finishes the per-plant query fast enough
+# that we can afford to loop plants here rather than feeding SAP a
+# plant RANGE (which was the slow path on ZMMR40430).
+TCODE          = "ZMMR40330"
 SALES_ORG      = "4200"
 DISTRIBUTE_CH  = "d1"
 
-# Plants to pull — the ZMMR40430 selection screen accepts a plant
-# RANGE (LOW..HIGH), so one F8 covers every plant from 42R0 to 42R4.
-PLANT_LOW      = "42R0"
-PLANT_HIGH     = "42R4"
+# Plants to pull.  Nov-23 user ask: do NOT feed the selection screen
+# a range -- it was timing out when SAP had to compute all 4 plants
+# in one query.  Instead, run ONE F8 per plant and MERGE the per-plant
+# XLSX exports into the combined rt_stock_<YYYYMMDD>.csv the loader
+# picks up (same filename and columns as before, so the loader + SPRF
+# stay untouched).  42R3 is deliberately excluded (deprecated plant).
+PLANTS         = ("42R0", "42R1", "42R2", "42R4")
+# Kept for back-compat with any caller that imports these two names
+# directly.  Not used by the per-plant loop in main().
+PLANT_LOW      = PLANTS[0]
+PLANT_HIGH     = PLANTS[-1]
 
 # Oct-22 user ask: pin Storage Location to 5530 so SAP can prune the
 # search up front — the full-plant scan (every location) takes ~20
@@ -89,9 +101,13 @@ DATE_FORMATS = [
 
 # ALV Grid saved layout to auto-apply after F8 (Settings → Layout →
 # Choose).  Use the TECHNICAL name from the first column of the layout
-# dialog — ZMMR40430 ships the layout with TWO spaces between 'ART'
-# and 'TH' ("/ART  TH"), not an underscore and not one space.  Carries
-# On Order, Stock, ATP Qt, At dock, On water, Factory, 3M Avrg.
+# dialog -- the operator's saved layout carries On Order, Stock, ATP Qt,
+# At dock, On water, Factory, 3M Avrg.  Nov-23: TCODE switched to
+# ZMMR40330; the same /ART  TH layout name is tried first (the operator
+# usually names saved layouts the same across related transactions), with
+# a silent fall-back to "no layout" if ZMMR40330 does not have a layout
+# by that name on this box.  Adjust here if the layout dialog's technical
+# name differs on ZMMR40330.
 LAYOUT_NAME = "/ART  TH"
 
 # Field-ID candidates for the ZMMR40430 selection screen.  First
@@ -497,12 +513,18 @@ def _select_radio_by_text(session, wanted_text):
     return _walk(root)
 
 
-def set_selection_screen(session, valid_on_str):
-    """Fill the ZMMR40430 selection screen.  Plant range + Sales Org
+def set_selection_screen(session, valid_on_str, plant: str = ""):
+    """Fill the ZMMR40330 selection screen.  Plant (single) + Sales Org
     + Distribute Channel + Valid On + 'Unrestricted Use' radio +
-    'No Zero' tick."""
-    _try_set_text(session, ZMMR_FIELDS["plant_low"],    PLANT_LOW)
-    _try_set_text(session, ZMMR_FIELDS["plant_high"],   PLANT_HIGH)
+    'No Zero' tick.
+
+    Nov-23: `plant` is a single code (e.g. "42R0"); both plant_low and
+    plant_high are set to that code so SAP processes exactly one plant
+    per F8.  The caller loops over every plant in PLANTS and merges
+    the per-plant exports at the end."""
+    _plant = (plant or PLANT_LOW).strip().upper()
+    _try_set_text(session, ZMMR_FIELDS["plant_low"],    _plant)
+    _try_set_text(session, ZMMR_FIELDS["plant_high"],   _plant)
     # Oct-22 user ask: Storage Location pinned to 5530 (prunes the
     # SAP search up front; full-plant scan took ~20 min).
     _try_set_text(session, ZMMR_FIELDS["storage_loc_low"], STORAGE_LOCATION)
@@ -1039,10 +1061,138 @@ def _dated_csv_path(d: date) -> str:
     return os.path.join(UNLOCK_DIR, f"rt_stock_{d.strftime('%Y%m%d')}.csv")
 
 
+def _scrape_one_plant_to_xlsx(session, plant, valid_dt, accepted_fmt):
+    """Run ONE plant through the full ZMMR40330 export flow and copy
+    the resulting XLSX to UNLOCK_DIR/rt_stock_<PLANT>.xlsx.
+
+    Returns (xlsx_dest, accepted_fmt):
+      xlsx_dest     — absolute path of the per-plant XLSX just written
+      accepted_fmt  — the SAP date format SAP accepted on this run.
+                      Callers pass it back in on the next plant so the
+                      DATE_FORMATS loop runs only once per orchestrator
+                      tick (SAP user profile doesn't change mid-run).
+
+    Raises RuntimeError if SAP does not produce an XLSX.  The caller
+    stops the whole run on any plant's failure -- leaving yesterday's
+    combined CSV in place so the loader keeps serving stable (if
+    stale-by-a-day) data rather than wiping the snapshot.
+    """
+    plant = plant.strip().upper()
+
+    # Negotiate the SAP date format on the first plant; reuse the
+    # already-accepted format on subsequent plants.
+    export_start_ts = None
+    if accepted_fmt is None:
+        for i, fmt in enumerate(DATE_FORMATS, 1):
+            valid_on_str = valid_dt.strftime(fmt)
+            print(f"    [date fmt try {i}/{len(DATE_FORMATS)}] {fmt} -> {valid_on_str}")
+            start_tcode(session, TCODE)
+            set_selection_screen(session, valid_on_str, plant=plant)
+            try_set_layout_on_selection(session, LAYOUT_NAME)
+            export_start_ts = time.time()
+            session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
+            wait(2.0); close_popups(session, 4)
+            msg = sbar_text(session)
+            if sbar_is_error(session) and looks_like_date_format_error(msg):
+                print(f"      SAP rejected date format: {msg}")
+                continue
+            accepted_fmt = fmt
+            print(f"      format {fmt} accepted" + (f" (status: {msg})" if msg else ""))
+            break
+        if not accepted_fmt:
+            raise RuntimeError(
+                "None of the candidate date formats were accepted by SAP.")
+    else:
+        valid_on_str = valid_dt.strftime(accepted_fmt)
+        print(f"    date fmt (reused) = {accepted_fmt} -> {valid_on_str}")
+        start_tcode(session, TCODE)
+        set_selection_screen(session, valid_on_str, plant=plant)
+        try_set_layout_on_selection(session, LAYOUT_NAME)
+        export_start_ts = time.time()
+        session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
+        wait(2.0); close_popups(session, 4)
+
+    # Apply the saved ALV layout (Settings → Layout → Choose).  Silent
+    # fall-through when ZMMR40330 does not carry a layout by that name
+    # -- SAP's default layout still exports the columns we parse.
+    if apply_layout_via_dialog(session, LAYOUT_NAME):
+        wait(0.6)
+    else:
+        print(f"    [note] layout '{LAYOUT_NAME}' not found — using SAP default")
+
+    _dismiss_office_popup_background(timeout_sec=120)
+    if not trigger_export(session):
+        raise RuntimeError(f"[{plant}] Could not trigger export.")
+
+    xlsx_path = ""
+    for _ in range(50):
+        try:
+            xlsx_path = newest_export_xlsx(export_start_ts)
+            if xlsx_path and os.path.exists(xlsx_path):
+                s1 = os.path.getsize(xlsx_path); wait(0.8)
+                if os.path.exists(xlsx_path):
+                    s2 = os.path.getsize(xlsx_path)
+                    if s2 >= s1 and s2 > 500:
+                        break
+        except (FileNotFoundError, OSError):
+            xlsx_path = ""
+        wait(0.6)
+    if not xlsx_path:
+        print(f"\n  ==== C:\\temp listing (± 5 min window) for plant {plant} ====")
+        recent = _list_recent_xlsx(export_start_ts)
+        if not recent:
+            print(f"    (nothing modified in the last 5 min)")
+        for mtime, p, size in recent:
+            try: ts_str = datetime.fromtimestamp(mtime).isoformat()
+            except Exception: ts_str = "?"
+            print(f"    {ts_str}  {size:>10,}  {os.path.basename(p)}")
+        print(f"  ==== end listing ====\n")
+        raise RuntimeError(
+            f"[{plant}] SAP export XLSX not found in {SAP_EXPORT_DIR}")
+
+    xlsx_dest = os.path.join(UNLOCK_DIR, f"rt_stock_{plant}.xlsx")
+    print(f"  [{plant}] source XLSX: {xlsx_path}  "
+          f"({os.path.getsize(xlsx_path):,} bytes)  →  {xlsx_dest}")
+    import shutil
+    _copied = False
+    for _try in range(3):
+        try:
+            shutil.copy2(xlsx_path, xlsx_dest)
+            _copied = True
+            break
+        except PermissionError as _pe:
+            print(f"    [copy retry {_try+1}/3] PermissionError: {_pe} — "
+                  "killing Excel to release the lock…")
+            _kill_excel("permission-retry: release lock on source XLSX")
+            wait(1.0)
+        except FileNotFoundError as _fe:
+            print(f"    [copy error] FileNotFoundError: {_fe}")
+            print(f"    xlsx_path was: {xlsx_path!r}; exists? "
+                  f"{os.path.exists(xlsx_path)}")
+            raise
+    if not _copied:
+        raise RuntimeError(
+            f"[{plant}] Could not copy {xlsx_path} to {xlsx_dest} after 3 tries.")
+    _kill_excel(f"after copy of plant {plant} XLSX")
+    return xlsx_dest, accepted_fmt
+
+
 def main():
+    """Per-plant loop over PLANTS, merging the exports into one CSV.
+
+    Nov-23 user ask: the old all-plants range query (42R0..42R4 on
+    ZMMR40430) was timing out.  Running ZMMR40330 one plant at a time
+    completes fast; the per-plant XLSXs are then concatenated into
+    rt_stock_<YYYYMMDD>.csv (same filename and columns the loader +
+    SPRF have always read), so nothing downstream changes.  Any one
+    plant's failure fails the whole run -- the loader then keeps
+    yesterday's combined CSV, rather than TRUNCATEing the table with
+    a partial snapshot.
+    """
+    import shutil
     ensure_dir(UNLOCK_DIR)
     valid_dt = today_date()
-    print(f"ZMMR40430 RT stock crawl · plants={PLANT_LOW}..{PLANT_HIGH} · valid={valid_dt.isoformat()}")
+    print(f"{TCODE} RT stock crawl · plants={list(PLANTS)} · valid={valid_dt.isoformat()}")
 
     _kill_excel("pre-flight: clear Excel locks before SAP export")
 
@@ -1053,137 +1203,46 @@ def main():
         session.findById("wnd[0]").maximize()
     except: pass
 
-    # Loop over date formats until SAP accepts one.  Each attempt
-    # restarts the TCODE so the selection screen is clean before
-    # re-entering plant / sales-org / channel / valid-on.
-    export_start_ts = None
-    accepted_fmt    = None
-    for i, fmt in enumerate(DATE_FORMATS, 1):
-        valid_on_str = valid_dt.strftime(fmt)
-        print(f"  [Attempt {i}/{len(DATE_FORMATS)}] date format = {fmt} -> {valid_on_str}")
+    per_plant_xlsxs = []
+    accepted_fmt = None
+    for i, plant in enumerate(PLANTS, 1):
+        print(f"\n  ── Plant {i}/{len(PLANTS)}: {plant} ──")
+        xlsx_dest, accepted_fmt = _scrape_one_plant_to_xlsx(
+            session, plant, valid_dt, accepted_fmt)
+        per_plant_xlsxs.append((plant, xlsx_dest))
 
-        start_tcode(session, TCODE)
-        set_selection_screen(session, valid_on_str)
-        try_set_layout_on_selection(session, LAYOUT_NAME)
-
-        export_start_ts = time.time()
-        session.findById("wnd[0]/tbar[1]/btn[8]").press()   # F8
-        wait(2.0); close_popups(session, 4)
-
-        msg = sbar_text(session)
-        if sbar_is_error(session) and looks_like_date_format_error(msg):
-            print(f"    SAP rejected date format: {msg}")
-            continue
-
-        accepted_fmt = fmt
-        if msg:
-            print(f"    format {fmt} accepted (status: {msg})")
-        else:
-            print(f"    format {fmt} accepted")
-        break
-
-    if not accepted_fmt:
-        raise RuntimeError(
-            "None of the candidate date formats were accepted by SAP."
-        )
-
-    if apply_layout_via_dialog(session, LAYOUT_NAME):
-        wait(0.6)
-    else:
-        print(f"  [WARN] Could not auto-apply layout '{LAYOUT_NAME}' — using SAP default")
-
-    # Oct-22: arm the Office popup dismisser so the un-activated-Office
-    # Activation Wizard that pops up when SAP opens Excel inline on the
-    # just-saved XLSX gets auto-dismissed without a human click.
-    _dismiss_office_popup_background(timeout_sec=120)
-    if not trigger_export(session):
-        raise RuntimeError("Could not trigger export (no path worked).")
-
-    xlsx_path = ""
-    for _ in range(50):
-        try:
-            xlsx_path = newest_export_xlsx(export_start_ts)
-            if xlsx_path and os.path.exists(xlsx_path):
-                s1 = os.path.getsize(xlsx_path); wait(0.8)
-                # Belt-and-braces: between s1 and s2 the file may have
-                # been renamed / deleted (Excel juggles temp names),
-                # so re-exists before the second getsize.
-                if os.path.exists(xlsx_path):
-                    s2 = os.path.getsize(xlsx_path)
-                    if s2 >= s1 and s2 > 500:
-                        break
-        except (FileNotFoundError, OSError):
-            # File vanished mid-poll — reset and retry.
-            xlsx_path = ""
-        wait(0.6)
-    if not xlsx_path:
-        # Oct-22 diagnostic: dump every recently-modified file in
-        # SAP_EXPORT_DIR so a "file not found" failure shows what SAP
-        # actually wrote (if anything).  Often reveals one of:
-        #   • SAP wrote the file but with an unexpected name (e.g.
-        #     "ZMMR40430.xlsx" instead of "EXPORT_<ts>.xlsx") — our
-        #     newest_export_xlsx now matches *.xlsx too but a legacy
-        #     pattern mismatch would still show here.
-        #   • SAP opened Excel INLINE (XXL path) and no file ever
-        #     hit disk — the folder listing stays empty.
-        #   • A dialog is still open waiting for user input — then
-        #     this listing shows the previous run's file, not today's.
-        print(f"\n  ==== C:\\temp listing (± 5 min window) ====")
-        recent = _list_recent_xlsx(export_start_ts)
-        if not recent:
-            print(f"    (nothing modified in the last 5 min)")
-        for mtime, p, size in recent:
-            try:
-                ts_str = datetime.fromtimestamp(mtime).isoformat()
-            except Exception:
-                ts_str = "?"
-            print(f"    {ts_str}  {size:>10,}  {os.path.basename(p)}")
-        print(f"  ==== end listing ====\n")
-        raise RuntimeError(f"SAP export XLSX not found in {SAP_EXPORT_DIR}")
-
-    # Oct-22: same ordering fix as export_only() — don't kill Excel
-    # before the copy; killing it while Excel holds the file can
-    # unlink the file on un-activated-Office boxes.  Copy first with
-    # a retry on PermissionError; kill Excel afterwards.
-    print(f"  Source XLSX: {xlsx_path}  ({os.path.getsize(xlsx_path):,} bytes)")
-    import shutil
-    _copied = False
-    for _try in range(3):
-        try:
-            shutil.copy2(xlsx_path, OUT_XLSX)
-            _copied = True
-            break
-        except PermissionError as _pe:
-            print(f"  [copy retry {_try+1}/3] PermissionError: {_pe} — "
-                  "killing Excel to release the lock…")
-            _kill_excel("permission-retry: release lock on source XLSX")
-            wait(1.0)
-        except FileNotFoundError as _fe:
-            print(f"  [copy error] FileNotFoundError: {_fe}")
-            print(f"  xlsx_path was: {xlsx_path!r}")
-            print(f"  exists? {os.path.exists(xlsx_path)}")
-            raise
-    if not _copied:
-        raise RuntimeError(
-            f"Could not copy {xlsx_path} to {OUT_XLSX} after 3 tries.")
-    print(f"  rt_stock XLSX -> {OUT_XLSX}")
-    _kill_excel("after copy of rt_stock XLSX")
-
-    # Convert to a dated CSV so the loader can pick the newest file
-    # by default without needing a specific filename.  Also drops a
-    # convenience alias rt_stock.csv for one-off manual testing.
+    # Merge every per-plant XLSX into the single combined CSV.  Order
+    # matches PLANTS (42R0 first, 42R4 last) so a visual diff of the
+    # resulting CSV groups rows by plant in a predictable order.
     _kill_excel("pre-convert: release lock before openpyxl load")
     dated_csv = _dated_csv_path(valid_dt)
-    n = xlsx_to_csv(OUT_XLSX, dated_csv)
+    combined_rows = []
+    for plant, xlsx_path in per_plant_xlsxs:
+        rows = extract_rows(xlsx_path)
+        print(f"  [{plant}] extracted {len(rows):,} rows from "
+              f"{os.path.basename(xlsx_path)}")
+        combined_rows.extend(rows)
+
+    ensure_dir(os.path.dirname(dated_csv))
+    with open(dated_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(OUTPUT_HEADER)
+        for r in combined_rows:
+            w.writerow(r)
+
+    # Convenience alias for manual testing / the operator's XLSX-upload
+    # path; the loader itself picks the newest dated CSV.
     try:
         shutil.copy2(dated_csv, os.path.join(UNLOCK_DIR, "rt_stock.csv"))
-    except Exception: pass
+    except Exception:
+        pass
     _kill_excel("post-convert: close every Excel window on the box")
 
     size = os.path.getsize(dated_csv)
     if size < MIN_CSV_SIZE:
-        raise RuntimeError(f"rt_stock CSV too small ({size} bytes).")
-    print(f"\nDone.  {n:,} rows written to {dated_csv}.")
+        raise RuntimeError(f"rt_stock combined CSV too small ({size} bytes).")
+    print(f"\nDone.  {len(combined_rows):,} rows "
+          f"({len(per_plant_xlsxs)} plants merged) written to {dated_csv}.")
     print(f"Run load_csv_to_mysql.py next to push into MySQL stock_rt table.")
 
 
