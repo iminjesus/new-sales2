@@ -1,4 +1,4 @@
-"""Load a manually-downloaded SAP stock XLSX into `stock_rt`.
+r"""Load a manually-downloaded SAP stock XLSX into `stock_rt`.
 
 Why this exists
 ---------------
@@ -10,7 +10,7 @@ to `load_csv_to_mysql.load_stock_rt()`.
 When that SAP export is too slow / hangs (SAP server load,
 Factory/On-water column recomputation, etc.) the operator can still
 pull the same report manually, save it as an XLSX, and drop it into
-`E:\work\2025\01. work\Data_Anal_Website\stock.XLSX`.  This script
+`E:\01. work\2025\Data_Anal_Website\stock.XLSX`.  This script
 takes that XLSX and does the same `stock_rt` reload the CSV loader
 would have done, so SPRF keeps showing fresh numbers until the
 automated pipeline is working again.
@@ -83,7 +83,7 @@ STOCK_RT_TABLE = "stock_rt"
 
 # Default operator path -- the XLSX the user keeps dropping the manual
 # SAP export into.  Overridable with --xlsx.
-DEFAULT_XLSX = r"E:\work\2025\01. work\Data_Anal_Website\stock.XLSX"
+DEFAULT_XLSX = r"E:\01. work\2025\Data_Anal_Website\stock.XLSX"
 
 
 CREATE_SQL = f"""
