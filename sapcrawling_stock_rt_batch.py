@@ -497,12 +497,20 @@ def _select_radio_by_text(session, wanted_text):
     return _walk(root)
 
 
-def set_selection_screen(session, valid_on_str):
+def set_selection_screen(session, valid_on_str,
+                         plant_low: str = PLANT_LOW,
+                         plant_high: str = PLANT_HIGH):
     """Fill the ZMMR40430 selection screen.  Plant range + Sales Org
     + Distribute Channel + Valid On + 'Unrestricted Use' radio +
-    'No Zero' tick."""
-    _try_set_text(session, ZMMR_FIELDS["plant_low"],    PLANT_LOW)
-    _try_set_text(session, ZMMR_FIELDS["plant_high"],   PLANT_HIGH)
+    'No Zero' tick.
+
+    Nov-23: plant_low/plant_high now parameters (default to the module
+    constants, so the all-plants batch keeps working unchanged).  The
+    per-plant rotation path sets both to the same code so a single
+    plant's data comes back -- much smaller / faster SAP query than
+    the full 42R0..42R4 sweep."""
+    _try_set_text(session, ZMMR_FIELDS["plant_low"],    plant_low)
+    _try_set_text(session, ZMMR_FIELDS["plant_high"],   plant_high)
     # Oct-22 user ask: Storage Location pinned to 5530 (prunes the
     # SAP search up front; full-plant scan took ~20 min).
     _try_set_text(session, ZMMR_FIELDS["storage_loc_low"], STORAGE_LOCATION)
@@ -1035,14 +1043,49 @@ def xlsx_to_csv(xlsx_path, csv_path):
 
 
 # ================= MAIN =================
-def _dated_csv_path(d: date) -> str:
+def _dated_csv_path(d: date, plant: str = "") -> str:
+    """CSV output path.
+
+    Without `plant`: rt_stock_<YYYYMMDD>.csv -- back-compat shape the
+    all-plants loader has always picked up.
+
+    With `plant`   : rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv -- per-plant
+    rotation writes minute-stamped files so several plants can co-exist
+    in UNLOCK_DIR without overwriting each other, and so the loader's
+    "already-loaded this exact file?" mtime check works even when two
+    plants finish in the same minute of the same day.
+    """
+    if plant:
+        return os.path.join(
+            UNLOCK_DIR,
+            f"rt_stock_{plant}_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
     return os.path.join(UNLOCK_DIR, f"rt_stock_{d.strftime('%Y%m%d')}.csv")
 
 
-def main():
+def main(plant: str = ""):
+    """Run one ZMMR40430 export + CSV conversion.
+
+    `plant` empty (default): cover the full 42R0..42R4 range in one
+    SAP query -- the original ~20-min path, still used by manual runs
+    and by any caller that does not pass --plant.
+
+    `plant` set (e.g. "42R0"): narrow the SAP range to that single
+    plant.  The query is ~1/4 the size, so it finishes in a few
+    minutes instead of hanging the whole pipeline; the orchestrator's
+    10-min rotation uses this mode and picks the stalest plant each
+    tick.  The output CSV is written as rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv
+    so the loader can DELETE + INSERT just that plant's rows.
+    """
+    plant = (plant or "").strip().upper()
+    _plant_low  = plant if plant else PLANT_LOW
+    _plant_high = plant if plant else PLANT_HIGH
+
     ensure_dir(UNLOCK_DIR)
     valid_dt = today_date()
-    print(f"ZMMR40430 RT stock crawl · plants={PLANT_LOW}..{PLANT_HIGH} · valid={valid_dt.isoformat()}")
+    if plant:
+        print(f"ZMMR40430 RT stock crawl · plant={plant} (single) · valid={valid_dt.isoformat()}")
+    else:
+        print(f"ZMMR40430 RT stock crawl · plants={PLANT_LOW}..{PLANT_HIGH} · valid={valid_dt.isoformat()}")
 
     _kill_excel("pre-flight: clear Excel locks before SAP export")
 
@@ -1063,7 +1106,8 @@ def main():
         print(f"  [Attempt {i}/{len(DATE_FORMATS)}] date format = {fmt} -> {valid_on_str}")
 
         start_tcode(session, TCODE)
-        set_selection_screen(session, valid_on_str)
+        set_selection_screen(session, valid_on_str,
+                             plant_low=_plant_low, plant_high=_plant_high)
         try_set_layout_on_selection(session, LAYOUT_NAME)
 
         export_start_ts = time.time()
@@ -1170,14 +1214,23 @@ def main():
     _kill_excel("after copy of rt_stock XLSX")
 
     # Convert to a dated CSV so the loader can pick the newest file
-    # by default without needing a specific filename.  Also drops a
-    # convenience alias rt_stock.csv for one-off manual testing.
+    # by default without needing a specific filename.
+    #
+    # Per-plant mode: minute-stamped filename rt_stock_<PLANT>_<YYYYMMDD_HHMM>.csv
+    # -- the loader globs these per plant, loads each plant into its
+    # own partition via DELETE + INSERT.  No alias is written in this
+    # mode so a partial per-plant run never masquerades as the full
+    # all-plants snapshot.
+    #
+    # All-plants mode: back-compat rt_stock_<YYYYMMDD>.csv plus the
+    # rt_stock.csv alias the manual loader has always picked up.
     _kill_excel("pre-convert: release lock before openpyxl load")
-    dated_csv = _dated_csv_path(valid_dt)
+    dated_csv = _dated_csv_path(valid_dt, plant=plant)
     n = xlsx_to_csv(OUT_XLSX, dated_csv)
-    try:
-        shutil.copy2(dated_csv, os.path.join(UNLOCK_DIR, "rt_stock.csv"))
-    except Exception: pass
+    if not plant:
+        try:
+            shutil.copy2(dated_csv, os.path.join(UNLOCK_DIR, "rt_stock.csv"))
+        except Exception: pass
     _kill_excel("post-convert: close every Excel window on the box")
 
     size = os.path.getsize(dated_csv)
@@ -1297,10 +1350,21 @@ def export_only():
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] in ("--export-only", "-x",
-                                             "--xport"):
+    # Simple argv parser -- stdlib only, keeps the batch step easy to
+    # drive from the orchestrator and from the operator's shell.
+    _argv = sys.argv[1:]
+    _plant = ""
+    for _i, _a in enumerate(_argv):
+        if _a == "--plant" and _i + 1 < len(_argv):
+            _plant = _argv[_i + 1].strip().upper()
+            break
+        if _a.startswith("--plant="):
+            _plant = _a.split("=", 1)[1].strip().upper()
+            break
+
+    if "--export-only" in _argv or "-x" in _argv or "--xport" in _argv:
         export_only()
-    elif len(sys.argv) > 1 and sys.argv[1] in ("--dump-only", "-d"):
+    elif "--dump-only" in _argv or "-d" in _argv:
         # Just dump the current SAP screen and exit.  Zero cost on
         # SAP; use this when you want to know what controls are on
         # screen without triggering any export.
@@ -1308,4 +1372,4 @@ if __name__ == "__main__":
         session = sap.Children(0).Children(0)
         dump_screen(session)
     else:
-        main()
+        main(plant=_plant)
