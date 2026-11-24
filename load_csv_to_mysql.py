@@ -378,6 +378,19 @@ def load_sales(conn):
             )
             print(f"  Cleared month={this_m}: {cur.rowcount} rows (reload target)")
 
+            # Nov-24: numeric columns can arrive with thousands separators
+            # ("2,672.56") when SAP's user profile uses the US grouping
+            # format.  MySQL rejects those as DECIMAL values, so strip the
+            # commas (+ stray spaces, $ sign) in Python before executemany.
+            # Done per-column rather than globally so a text field that
+            # legitimately contains a comma (unlikely, but safe) is left
+            # alone.
+            _NUMERIC_SALES_COLS = {"qty", "amt", "cogs", "dc_rate", "p_rate"}
+            def _normalize_num(s):
+                if not s:
+                    return s
+                return s.replace(",", "").replace("$", "").replace(" ", "").strip()
+
             batch = []
             for row in reader:
                 if not any(v.strip() for v in row):
@@ -392,6 +405,8 @@ def load_sales(conn):
                         if not raw:
                             broke = True
                             break  # 합계/소계 행 → 건너뜀
+                    elif db_col in _NUMERIC_SALES_COLS:
+                        raw = _normalize_num(raw)
                     values.append(raw if raw != "" else None)
                 if broke:
                     continue
