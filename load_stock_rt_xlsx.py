@@ -322,16 +322,27 @@ def main() -> int:
                 "    ON UPDATE CURRENT_TIMESTAMP"
                 ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
             )
-            cur.execute(
-                "INSERT INTO batch_status (k, v) VALUES "
-                "('stock_rt_loaded_mtime', %s), "
-                "('stock_rt_loaded_from',  %s), "
-                "('stock_rt_csv_at',       %s) "
-                "ON DUPLICATE KEY UPDATE v = VALUES(v)",
-                (str(xlsx_mtime), os.path.basename(xlsx), csv_at),
-            )
+            # Nov-24: SPRF's "Stock Info updated" strip now reads the
+            # four per-plant keys (stock_rt_csv_at_42R0 etc.) and only
+            # falls back to the global stock_rt_csv_at when no per-plant
+            # data is present.  A manual XLSX load carries ALL plants in
+            # one file, so stamp every per-plant key with the SAME file
+            # mtime -- otherwise the SPRF strip keeps showing the stale
+            # per-plant times the hourly crawler left behind.
+            _plant_pairs = [(f"stock_rt_csv_at_{_p}", csv_at)
+                            for _p in ("42R0", "42R1", "42R2", "42R4")]
+            _rows = [("stock_rt_loaded_mtime", str(xlsx_mtime)),
+                     ("stock_rt_loaded_from",  os.path.basename(xlsx)),
+                     ("stock_rt_csv_at",       csv_at)] + _plant_pairs
+            _sql = ("INSERT INTO batch_status (k, v) VALUES "
+                    + ", ".join(["(%s, %s)"] * len(_rows))
+                    + " ON DUPLICATE KEY UPDATE v = VALUES(v)")
+            _flat = [v for kv in _rows for v in kv]
+            cur.execute(_sql, _flat)
             conn.commit()
             print(f"[stock_rt_xlsx] stamped stock_rt_csv_at = {csv_at}")
+            for _p in ("42R0", "42R1", "42R2", "42R4"):
+                print(f"[stock_rt_xlsx] stamped stock_rt_csv_at_{_p} = {csv_at}")
         except Exception as e:
             print(f"[stock_rt_xlsx] (couldn't stamp batch_status: {e})")
     finally:

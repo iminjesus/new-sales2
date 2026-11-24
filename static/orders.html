@@ -446,7 +446,13 @@
        Approval route, Base DC and Payment Method each span their
        two allotted rows via grid-row: span 2.  Special Instruction
        is now a single row. */
-    grid-template-rows: repeat(11, auto);
+    /* Nov-24: bumped to 13 rows to accommodate Payment Terms (Nov-17)
+       and Customer Pickup (Oct-22) that were added AFTER the original
+       11-row schema.  With only 11 explicit rows, Customer Pickup (now
+       row 11 in the left pane) and Payment Method (now rows 12-13)
+       would push past the subgrid's row ceiling and Customer Pickup
+       in particular silently disappeared from the live SPRF. */
+    grid-template-rows: repeat(13, auto);
     background:var(--panel);border-left:1px solid var(--border);border-right:1px solid var(--border);
   }
   .meta .col{border-top:1px solid var(--border);display:contents;}
