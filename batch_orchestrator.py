@@ -99,7 +99,14 @@ MULTI_LOGON_MAX_RETRIES_PER_HOUR = 11
 STEP_TIMEOUT_MIN = {
     "sap_attach":  5,
     "dot_stock":  20,
-    "stock_rt":   15,
+    # Nov-25: bumped stock_rt from 15 → 30 min.  The crawler now loops
+    # ZMMR40430 once per plant (42R0 / 42R1 / 42R2 / 42R4) and merges
+    # the four per-plant XLSXs, so a worst-case tick runs 4 F8s + 4
+    # XLSX copies + merge.  Each plant alone is ~5 min when SAP is
+    # responsive and can double on a busy SAP; 30 min keeps us comfortably
+    # above the typical 20-min walk and still well under the 15-minute
+    # scheduler cadence's follow-on window.
+    "stock_rt":   30,
     "sales":      15,
     "mysql_load": 10,
 }
