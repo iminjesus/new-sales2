@@ -139,16 +139,24 @@ CUSTOMER_COLUMN_ALIASES = {
                         "Delivering Pl.", "Delivery Pl.",
                         "Delv. Plant", "Delv Plant",
                         "Plant", "DlvPlt"],
-    # Nov-17 user ask: both the "Sold-to" and the "Ship-to" output
-    # columns must carry the Customer (col D) code -- that is the
-    # dealer's own, current account number.  The source workbook also
-    # has "Sold-to" (col AK) and "Ship-to" (col AJ) headers; those can
-    # drift from the live Customer code when a dealer is re-keyed (e.g.
-    # BEACH ROAD TYRES MALAGA, where D=A033848 is the current code but
-    # AJ/AK still show the old A033821).  Putting "Customer" first in
-    # both alias lists makes the lookup pick col D whenever it exists
-    # and keeps the legacy header spellings as fall-backs.
-    "Sold-to":         ["Customer", "Sold-to", "Sold to", "SoldTo"],
+    # "Ship-to" stays pinned to the Customer column (col D) -- that's
+    # the dealer's own live account number, authoritative over the
+    # workbook's own "Ship-to" header (col AJ) which can go stale
+    # when a dealer is re-keyed (BEACH ROAD TYRES MALAGA, where
+    # D=A033848 is the current code but AJ still shows A033821).
+    #
+    # Nov-26 user ask: "Sold-to" is a DIFFERENT ENTITY from Ship-to
+    # for multi-store chains (TYREPOWER TULLY: Customer=A028948 is
+    # the local store = ship-to, Sold-to=734504 = TYREPOWER MARKETING
+    # (QLD) LTD is the billing parent).  The Nov-17 change had
+    # Sold-to reading from col D too, which collapsed every chain's
+    # Sold-to to its local store code.  Flip the alias order so the
+    # workbook's own "Sold-to" header wins; keep "Customer" as the
+    # last fall-back for workbooks that ship without a dedicated
+    # Sold-to column.  Standalone dealers (Sold-to = Ship-to) still
+    # work: the workbook's Sold-to carries the same code as Customer
+    # on those rows.
+    "Sold-to":         ["Sold-to", "Sold to", "SoldTo", "Customer"],
     "Sold-to Name":    ["Sold-to Name", "Sold to Name", "SoldToName"],
     "Ship-to":         ["Customer", "Ship-to", "Ship to", "ShipTo"],
     "Ship-to State":   ["Ship-to State", "Ship to State", "ShipToState", "State"],
